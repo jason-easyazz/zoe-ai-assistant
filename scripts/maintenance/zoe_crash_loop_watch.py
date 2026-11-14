@@ -30,6 +30,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -128,7 +129,16 @@ def _http_class(code: int) -> str:
 
 
 def _telegram_result(text: str, report=None) -> str:
-    """One send to every recipient; the outcome class above. Never raises, never reports the token."""
+    """One send to every recipient; the outcome class above (delivered = at least one recipient got it). Never raises,
+    never reports the token."""
+    return _telegram_all(text, report)[0]
+
+
+def _telegram_all(text: str, report=None) -> "tuple[str, int, int]":
+    """Send to EVERY recipient (never stop at the first success: the others would never hear). Returns
+    (outcome class, recipients delivered, recipients failed). delivered = at least one succeeded; a failed recipient
+    beside a delivered one is a PARTIAL delivery, reported by count (the alert is not re-sent: the ones who have it
+    would get it twice). No recipient id ever leaves this function."""
     if report is None:
         def report(line: str) -> None:
             print(line, file=sys.stderr)
@@ -137,7 +147,7 @@ def _telegram_result(text: str, report=None) -> str:
             env = dict(re.findall(r"^(\w+)=(.*)$", fh.read(), re.M))
     except Exception as exc:
         report(f"crash-watch: cannot read telegram env ({exc}); alert NOT delivered")
-        return "config"
+        return "config", 0, 0
     # The BOT FILE's token wins; an environment token is only a fallback for a file that has none. The bot file is the one
     # token that is provably live (the bot itself runs on it). The environment is whatever the calling process happened to
     # load: from 2026-10-27 zoe-data's unit loaded a retired agent's env file whose revoked token overrode this file's valid
@@ -153,8 +163,9 @@ def _telegram_result(text: str, report=None) -> str:
         report("crash-watch: NO ALERT RECIPIENT CONFIGURED — a crash loop would go "
                "unreported. Set ZOE_ALERT_TELEGRAM_CHAT_IDS (comma-separated chat "
                f"ids) in {TELEGRAM_ENV} or the environment.")
-        return "config"
+        return "config", 0, 0
     fails: list[str] = []
+    ok = 0
     for chat_id in users:
         try:
             data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
@@ -162,8 +173,9 @@ def _telegram_result(text: str, report=None) -> str:
                 f"https://api.telegram.org/bot{token}/sendMessage", data=data)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 if resp.status == 200:
-                    return "delivered"
-                fails.append("server")
+                    ok += 1
+                else:
+                    fails.append("server")
         except urllib.error.HTTPError as exc:      # before URLError: it is a subclass
             report(f"crash-watch: telegram send failed: HTTP Error {exc.code}")
             fails.append(_http_class(exc.code))
@@ -176,7 +188,9 @@ def _telegram_result(text: str, report=None) -> str:
         except Exception as exc:
             report(f"crash-watch: telegram send failed: {exc}")
             fails.append("network")
-    return min(fails, key=_PRIORITY.index) if fails else "network"
+    if ok:
+        return "delivered", ok, len(fails)
+    return (min(fails, key=_PRIORITY.index) if fails else "network"), 0, len(fails)
 
 
 # ── the shared owner-alert delivery helper ────────────────────────────────────────────────────────────────────────
@@ -223,9 +237,10 @@ def _stderr_log(line: str) -> None:
     print(line, file=sys.stderr)
 
 
-def _ops_transport(text: str) -> str:
-    """The default transport: the ops Telegram path, one outcome class, no report lines (the class is the reason)."""
-    return _telegram_result(text, report=lambda _line: None)
+def _ops_transport(text: str):
+    """The default transport: the ops Telegram path, no report lines (the class is the reason). Returns the outcome
+    class, or (class, delivered, failed) so a PARTIAL delivery is counted."""
+    return _telegram_all(text, report=lambda _line: None)
 
 
 def _live_outbox_under_test() -> bool:
@@ -296,13 +311,24 @@ def _backoff(tries: int) -> float:
     return float(min(RETRY_BASE_S * (2 ** max(0, tries - 1)), RETRY_MAX_S))
 
 
+#: recipients that did NOT get the alert on the last _attempt while at least one did (a partial delivery); 0 otherwise.
+_last_partial = threading.local()
+
+
 def _attempt(transport, text: str, attempts: int, sleep) -> tuple[str, int]:
     """Up to ``attempts`` sends; only a TRANSIENT class is retried. (outcome class, attempts used). An Exception from
-    the transport is a network failure; a BaseException (the process being killed) propagates: the claim stays on disk."""
+    the transport is a network failure; a BaseException (the process being killed) propagates: the claim stays on disk.
+    A transport may return the class alone or (class, delivered, failed)."""
     res = "network"
+    _last_partial.failed = 0
     for i in range(attempts):
         try:
-            res = str(transport(text))
+            got = transport(text)
+            if isinstance(got, tuple):
+                res = str(got[0])
+                _last_partial.failed = int(got[2]) if res == "delivered" and len(got) > 2 else 0
+            else:
+                res = str(got)
         except Exception:
             res = "network"
         if res not in TRANSIENT:
@@ -317,13 +343,31 @@ def _claimed(ent: dict, now: float) -> bool:
     return bool(c) and float(c.get("until") or 0) > now
 
 
+def _family(code: str) -> str:
+    """Alerts that answer each other share a family and are sent in the order they were raised: the main loop alert and
+    its recovery; each watched unit's loop alert and its recovery. Any other code is its own family."""
+    code = str(code or "")
+    if code in ("crash_loop", "recovered"):
+        return "main"
+    for p in ("unit_crash_loop", "unit_recovered"):
+        if code == p or code.startswith(p + "."):
+            return "unit" + code[len(p):]
+    return code
+
+
 def _claim_due(box: dict, now: float, inline: str = "") -> list[dict]:
     """(a) Claim unclaimed entries, OLDEST FIRST (so a "recovered" never overtakes the loop alert it answers), at most
     DRAIN_LIMIT: on a fresh raise (``inline`` = its code) every pending entry, since the path is being tried anyway; on a
     drain only the DUE ones (their backoff). Returns snapshots {code, text, rev, claim, inline} to send outside the lock."""
-    due = sorted((e for e in box["entries"]
-                  if (inline or float(e.get("next_ts") or 0) <= now) and not _claimed(e, now)),
-                 key=lambda e: float(e.get("first_ts") or 0))[:DRAIN_LIMIT]
+    due, held = [], set()
+    for e in sorted(box["entries"], key=lambda e: float(e.get("first_ts") or 0)):
+        fam = _family(e.get("code"))
+        ready = (inline or float(e.get("next_ts") or 0) <= now) and not _claimed(e, now)
+        if ready and fam not in held and len(due) < DRAIN_LIMIT:
+            due.append(e)
+        else:
+            held.add(fam)       # an EARLIER alert of this family is still waiting (backoff, another sender's lease, the
+            #                     limit): nothing later in the family may go first - a recovery never overtakes its outage
     out = []
     for e in due:
         cid = uuid.uuid4().hex
@@ -339,6 +383,7 @@ def _send_claimed(claims: list[dict], transport, sleep) -> list[tuple[dict, str,
     done = []
     for c in claims:
         res, used = _attempt(transport, c["text"], 3 if c["inline"] else 1, sleep)
+        c["partial"] = int(getattr(_last_partial, "failed", 0) or 0)
         done.append((c, res, used))
         if res not in ("delivered", "uncertain"):
             break
@@ -371,6 +416,10 @@ def _record(box: dict, claims: list[dict], done: list[tuple[dict, str, int]], no
             else:
                 entries.remove(e)
             _marker(log, res, code, e["tries"], "-", len(entries))
+            if res == "delivered" and c.get("partial"):       # some recipients did not get it: counted, never silent
+                _bump(box, "partial")
+                box["totals"]["partial_recipients"] = int(box["totals"].get("partial_recipients") or 0) + int(c["partial"])
+                _marker(log, "partial", code, e["tries"], f"failed_recipients_{int(c['partial'])}", len(entries))
             if res == "delivered" and box.get("broken"):
                 br = box.pop("broken")
                 for sp in box.get("spells") or []:

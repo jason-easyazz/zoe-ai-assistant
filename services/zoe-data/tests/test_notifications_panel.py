@@ -512,6 +512,23 @@ def test_a_spell_that_healed_before_any_tick_still_leaves_a_resolved_row(env, mo
     assert run(ns.sync_alerting_broken()) == 1
     (data,) = env.rows("SELECT data FROM notifications")[0]
     assert json.loads(data)["resolved"] is True
+    # a healed spell must stop READING as broken (review of PR 2458): the kept row says alerts work again
+    title, message = env.rows("SELECT title, message FROM notifications")[0]
+    assert title == ns.ALERTING_HEALED_TITLE and message == ns.ALERTING_HEALED_MESSAGE
+    assert "not getting through" not in title and "refusing" not in message
+    assert run(ns.sync_alerting_broken()) == 0                                # a later tick neither re-creates nor rewrites it
+    assert env.rows("SELECT title FROM notifications")[0][0] == ns.ALERTING_HEALED_TITLE
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 1
+
+
+def test_an_open_spell_still_reads_as_broken(env, monkeypatch):
+    import kv_miss_alert
+
+    env.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (MEMBER,))
+    monkeypatch.setattr(kv_miss_alert, "alerting_spells", lambda: [{"since": SINCE, "reason": "auth", "healed": None}])
+    assert run(ns.sync_alerting_broken()) == 1
+    title, message = env.rows("SELECT title, message FROM notifications")[0]
+    assert title == ns.ALERTING_TITLE and message == ns.ALERTING_MESSAGE["auth"]
 
 
 def test_never_broken_creates_nothing(env, monkeypatch):

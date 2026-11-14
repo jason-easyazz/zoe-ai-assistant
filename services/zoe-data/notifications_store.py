@@ -190,6 +190,8 @@ async def refresh(user_id: str) -> None:
 
 ALERTING_TYPE = "ops_alerting_broken"
 ALERTING_TITLE = "Phone alerts are not getting through"
+ALERTING_HEALED_TITLE = "Phone alerts are working again"
+ALERTING_HEALED_MESSAGE = "Zoe can reach your phone again. Any alerts that were held have been sent."
 ALERTING_MESSAGE = {
     "auth": "Telegram is refusing the sign-in of Zoe's alert bot, so Zoe cannot warn your phone about problems. "
             "The alerts are being kept and will be sent once the bot's token is fixed.",
@@ -252,8 +254,10 @@ async def _resolve_alerting(uid: str, since: int, reason: str, healed: int) -> N
             row = await cur.fetchone()
             if row is None or _parse(row[0]).get("resolved"):
                 return
-            await db.execute("UPDATE notifications SET data = ? WHERE id = ? AND user_id = ?",
-                             (json.dumps({"reason": reason, "since": since, "resolved": True, "healed_at": healed}), nid, uid))
+            # the row stays (it is the record of the spell) but must stop READING as broken once it healed
+            await db.execute("UPDATE notifications SET title = ?, message = ?, data = ? WHERE id = ? AND user_id = ?",
+                             (ALERTING_HEALED_TITLE, ALERTING_HEALED_MESSAGE,
+                              json.dumps({"reason": reason, "since": since, "resolved": True, "healed_at": healed}), nid, uid))
             await db.commit()
 
 

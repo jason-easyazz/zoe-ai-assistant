@@ -251,3 +251,86 @@ def test_broken_spells_are_recorded_and_kept_after_heal(box):
     mod.drain(transport=Transport("delivered"), now=T0 + 99999, log=box["log"])
     assert mod.alerting_broken() is None
     assert mod.alerting_spells() == [{"since": T0, "reason": "auth", "healed": T0 + 99999}]
+
+
+# ── review round 2 (PR 2458) ──────────────────────────────────────────────────────────────────────────────────────
+def test_every_recipient_is_sent_to_and_a_partial_delivery_is_counted(tmp_path, monkeypatch):
+    """The first HTTP 200 used to end the loop, so the other recipients never heard. All are tried; delivered = at least
+    one got it; a recipient that did not is counted, never silent, and nobody who has it is sent it twice."""
+    env = tmp_path / "bot.env"
+    env.write_text("TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS=101,102,103\n")
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(env))
+    monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    asked: list[str] = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=0):
+        chat = dict(p.split("=") for p in req.data.decode().split("&"))["chat_id"]
+        asked.append(chat)
+        if chat == "102":
+            raise urllib.error.HTTPError(req.full_url, 400, "bad", {}, io.BytesIO(b""))
+        return Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen)
+    assert mod._telegram_all("x", report=lambda _l: None) == ("delivered", 2, 1)
+    assert asked == ["101", "102", "103"]                       # nobody is skipped after the first success
+    assert mod._telegram_result("x", report=lambda _l: None) == "delivered"
+
+
+def test_a_partial_delivery_is_marked_and_totalled_and_not_resent(box):
+    lines: list[str] = []
+    calls: list[str] = []
+
+    def transport(text):
+        calls.append(text)
+        return ("delivered", 1, 2)
+
+    assert mod.deliver("health", "one", transport=transport, now=T0, sleep=lambda _s: None, log=lines.append)[0] == "delivered"
+    st = mod.outbox_status()
+    assert st["pending"] == 0 and st["totals"].get("partial") == 1 and st["totals"].get("partial_recipients") == 2
+    assert any("event=partial" in ln and "failed_recipients_2" in ln for ln in lines)
+    assert mod.drain(transport=transport, now=T0 + 9999, sleep=lambda _s: None, log=lines.append) == {}
+    assert calls == ["one"]                                     # the ones who have it never get it twice
+
+
+def test_all_recipients_failing_is_not_delivered(box):
+    out = mod.deliver("health", "one", transport=lambda _t: ("network", 0, 2), now=T0, sleep=lambda _s: None, log=lambda _l: None)
+    assert out[0] == "queued" and mod.outbox_status()["pending"] == 1 and not mod.outbox_status()["totals"].get("partial")
+
+
+def test_a_recovery_never_overtakes_its_outage_alert_and_other_units_are_not_blocked(box):
+    """The loop alert is in backoff when the recovery is raised: the recovery must wait for it. Another unit's alert
+    is not held up by that."""
+    quiet = dict(sleep=lambda _s: None, log=lambda _l: None)
+    down = Transport("auth")
+    assert mod.deliver("unit_crash_loop.alpha", "alpha down", transport=down, now=T0, **quiet)[0] == "queued"
+    sent: list[str] = []
+
+    def ok(text):
+        sent.append(text)
+        return "delivered"
+
+    # a drain BEFORE the loop alert is due again: the recovery (due now) and nothing of that family may go
+    box_path = Path(mod.OUTBOX_PATH)
+    data = json.loads(box_path.read_text())
+    data["entries"].append({"code": "unit_recovered.alpha", "text": "alpha back", "first_ts": T0 + 1, "last_raised_ts": T0 + 1,
+                            "raised": 1, "tries": 0, "next_ts": T0 + 1, "rev": 0})
+    data["entries"].append({"code": "unit_crash_loop.beta", "text": "beta down", "first_ts": T0 + 2, "last_raised_ts": T0 + 2,
+                            "raised": 1, "tries": 0, "next_ts": T0 + 2, "rev": 0})
+    box_path.write_text(json.dumps(data))
+    mod.drain(transport=ok, now=T0 + 5, **quiet)
+    assert sent == ["beta down"]                                 # alpha's recovery waited; beta was not blocked
+    mod.drain(transport=ok, now=T0 + 99999, **quiet)
+    assert sent == ["beta down", "alpha down", "alpha back"]     # the outage first, then its recovery
+    assert mod._family("crash_loop") == mod._family("recovered") == "main"
+    assert mod._family("unit_crash_loop.alpha") == mod._family("unit_recovered.alpha") != mod._family("unit_recovered.beta")
+    assert mod._family("health") == "health"
