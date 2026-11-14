@@ -1604,6 +1604,17 @@ class MemoryService:
             _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
         except Exception:  # noqa: BLE001
             _event = None
+        if _event is None and source in MEMORY_OPT_OUT_SOURCES:
+            # a present emergency the converter declined (a bystander, two people): as mined it reads as a STANDING condition
+            # ("... cannot get up" under Routines; QA round 10a), so an automatic writer does not file it (medical_safety.unfiled_emergency)
+            try:
+                _unfiled = _ms.unfiled_emergency(text, anchor_text if anchor_text is not None else source_excerpt)
+            except Exception:  # noqa: BLE001
+                _unfiled = False
+            if _unfiled:
+                self._bump("emergency_unfiled", source)
+                logger.info("MEDICAL_EVENT_UNFILED user=%s source=%s", user_id, source)
+                return None
         _mined = None
         if _event is not None:
             logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)

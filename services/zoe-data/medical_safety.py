@@ -300,8 +300,46 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
     return None
 
 
+# A RECALL QUESTION about the past ("did i have chest pain last month?", "have i ever had chest pain?", "has my wife had chest pain?")
+# asks what memory holds; it reports nothing happening now (QA round 10a: three such questions got "Ring 000 now"). The tense is the
+# module's own: the inverted question form of _PAST_RE's perfect ("has had" -> "has <who> had") and the past auxiliary "did". It
+# loses the floor ONLY when EVERY clause of the turn is one, with no present marker and no present-tense verb anywhere: any
+# present relevance ("have i had chest pain today?", "my chest hurts, did i have a heart attack?"), or anything else in the turn
+# that is not such a question, keeps the floor. If in doubt, the floor fires.
+_RQ_FILLER = r"(?:hey|hi|ok|okay|so|um+|uh+|oh|well|zoe|quick question)"
+_RQ_FILLER_ONLY_RE = re.compile(rf"^(?:{_RQ_FILLER}\s*)+$")
+_RECALL_Q_RE = re.compile(rf"^(?:{_RQ_FILLER}\s+)*"
+                          r"(?:did\s+(?:\w+\s+){1,3}?(?:ever\s+)?\w+|(?:have|has|had)\s+(?:\w+\s+){1,3}?(?:ever\s+)?had)(?!\w)")
+_PRESENT_MARK_RE = re.compile(r"(?<!\w)(?:just|now|still|again|today|tonight|this\s+(?:morning|afternoon|evening|week)|since|"
+                              r"all\s+day|at\s+the\s+moment|currently|right\s+now|anymore)(?!\w)")
+_PRESENT_VERB_RE = re.compile(r"(?<!\w)(?:am|is|are|isnt|arent|cant|cannot|wont|feel|feels|feeling|hurts?|hurting|keeps?|"
+                              r"do|does|dont|doesnt|having|(?:i|he|she|they|we|you)\s+(?:have|has|got))(?!\w)")
+_CLAUSE_RE = re.compile(r"[.!?;,\n]+|\s+(?:and|but|because|cos|so|then)\s+")
+
+
+def _recall_question(s: str) -> bool:
+    """Is the (folded) turn ONLY a recall question about the past (above)? Pure; False whenever in doubt."""
+    if _PRESENT_MARK_RE.search(s):
+        return False
+    clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip()]
+    if not clauses:
+        return False
+    clauses = [c for c in clauses if not _RQ_FILLER_ONLY_RE.match(c)]       # "hey zoe, did i ..."
+    if not clauses:
+        return False
+    for c in clauses:
+        m = _RECALL_Q_RE.match(c)
+        if not m or _PRESENT_VERB_RE.search(c[m.end():]):
+            return False
+    return True
+
+
 def detect(text: str) -> Verdict:
     """The class of one turn (``NONE`` = leave it to the brain). Pure; never raises."""
+    return _detect(text, recall_gate=True)
+
+
+def _detect(text: str, *, recall_gate: bool) -> Verdict:
     try:
         s = _fold(text)
         if not s:
@@ -310,6 +348,9 @@ def detect(text: str) -> Verdict:
         c = _canon(s)
         ing = _ingestion_all(s, rx)
         call = _flag(s, rx, "call") or _pair(c, rx, "call")
+        recall_q = recall_gate and _recall_question(s)
+        if recall_q:
+            call = None      # a symptom ASKED ABOUT in the past is answered from memory; an ingestion is never withheld
         if ing and ing.key == "object_minor" and not call:
             # a coin AND a stated sign (drooling, pain, cant swallow): the number now, not "ring if there is..."
             if _stated_sign(s, rx):
@@ -323,7 +364,7 @@ def detect(text: str) -> Verdict:
             first = min(ask.start(), ev.start())
             key = "emergency_number_poison" if rx["poison_event"].search(s[first:]) else "emergency_number"
             return Verdict("number", key, lead=s[:first])
-        soon = _flag(s, rx, "soon") or _pair(c, rx, "soon")
+        soon = None if recall_q else (_flag(s, rx, "soon") or _pair(c, rx, "soon"))
         if soon:
             return soon
         return _glucose(s, rx) or NONE
@@ -488,6 +529,31 @@ def _only_person(said: str, subject: str) -> bool:
                          said, re.IGNORECASE)
 
 
+def _present_emergency(fact: str, said: str) -> Optional[Verdict]:
+    """The call-now verdict when ``said`` (ONE turn) and the ``fact`` mined from it are the SAME call-now emergency said NOW (no past
+    time, no condition, in either), else None. The first half of ``emergency_event``'s rule. Pure."""
+    one = (said or "").strip()
+    if not one or "\n" in one or _not_now(one) or _not_now(fact):
+        return None
+    v = detect(one)
+    if v.cls != "red_call":
+        return None
+    fv = detect(fact or "")
+    return v if fv.cls == "red_call" and fv.key == v.key else None
+
+
+def unfiled_emergency(fact: str, said: str = "") -> bool:
+    """A mined fact that IS a present call-now emergency of its turn (``_present_emergency``) that ``emergency_event`` declined to
+    convert (a bystander, more than one person, a subject it cannot tie to the turn: QA round 10a). Stored as mined it reads as a
+    standing condition ("<name> fell over and cannot get up" under Routines, "wife has chest pain" as an attribute), so an AUTOMATIC
+    writer does not store it at all until the structured-claims redesign files it against the right person. The spoken reply is
+    unaffected. Pure; never raises."""
+    try:
+        return _present_emergency(fact, said) is not None and emergency_event(fact, said) is None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency).",
     "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. Only under THE CONSERVATIVE
@@ -497,13 +563,8 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     try:
         one = (said or "").strip()
         # one check, "is this happening now to this person": present (no past time), actual (no condition), then one named person
-        if not one or "\n" in one or _not_now(one) or _not_now(fact):
-            return None
-        v = detect(one)
-        if v.cls != "red_call":
-            return None
-        fv = detect(fact or "")
-        if fv.cls != "red_call" or fv.key != v.key:
+        v = _present_emergency(fact, one)
+        if v is None:
             return None
         subject = _subject(fact)
         if subject is None or not _only_person(one, subject) or _names_another(fact, one, subject):
@@ -558,6 +619,11 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
             return None
         v = detect(text)
         if not v.cls:
+            held = _detect(text, recall_gate=False)
+            if held.cls in ("red_call", "red_soon"):
+                # a recall question about the past: answered from memory, not the floor (a fixed code, never the words)
+                logger.info("MEDICAL_SAFETY_RECALL_QUESTION user=%s cls=%s key=%s mode=%s",
+                            (user_id or "guest").strip() or "guest", held.cls, held.key, m)
             return None
         logger.info("MEDICAL_SAFETY user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest", v.cls, v.key, m)
         if m != "enforce":
