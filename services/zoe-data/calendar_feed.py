@@ -287,41 +287,51 @@ class _Item:
     hash: str
 
 
-def plan(parsed: list, *, policy: str, w0: date, w1: date, report: SyncReport) -> "dict[tuple[str, str], _Item]":
-    """The kept items by key. Counts ``seen``, ``skipped`` (with reasons) and ``rrule_unsupported`` into ``report``."""
+def plan(parsed: list, *, policy: str, w0: date, w1: date, report: SyncReport,
+         outside: Optional[dict] = None) -> "dict[tuple[str, str], _Item]":
+    """The kept items by key. Counts ``seen``, ``skipped`` (with reasons) and ``rrule_unsupported`` into ``report``. ``outside``
+    receives the items the feed still carries that fall outside the window, by key (the caller decides what a stored copy of one
+    becomes: it must never keep its old time)."""
     c, why = report.counts, report.skipped
     c["seen"] = len(parsed)
     best: dict = {}
+    far: dict = {}
     for p in parsed:
         ev = p["event"]
         if not ev.get("external_uid"):
             why["no_uid"] = why.get("no_uid", 0) + 1
             continue
+        target = best
         if not in_window(ev, w0, w1):
             why["out_of_window"] = why.get("out_of_window", 0) + 1
-            continue
+            target = far
         k = _key(ev["external_uid"], ev.get("recurrence_id"))
-        if k in best:
-            why["duplicate"] = why.get("duplicate", 0) + 1
-            if int(ev.get("sequence") or 0) < int(best[k]["event"].get("sequence") or 0):
+        if k in target:
+            if target is best:
+                why["duplicate"] = why.get("duplicate", 0) + 1
+            if int(ev.get("sequence") or 0) < int(target[k]["event"].get("sequence") or 0):
                 continue
-        best[k] = p
-    out: dict = {}
-    for k, p in best.items():
-        ev = p["event"]
-        values = {col: ev.get(col) for col in _BASE_COLS}
-        values["all_day"] = 1 if ev.get("all_day") else 0
-        for col in _PARSED_EXTRA:
-            v = ev.get(col)
-            values[col] = json.dumps(v) if col in ("rdates", "exdates") and v is not None else v
-        values["visibility"] = clamp_visibility(policy, ev.get("visibility"))
-        values["provider_updated_at"] = ev.get("provider_updated_at")
-        values["category"] = values.get("category") or "general"
-        if rrule_unsupported(ev):
-            c["rrule_unsupported"] = c.get("rrule_unsupported", 0) + 1
-        out[k] = _Item(k, values, p["attendees"], p["alarms"], content_hash(values, p["attendees"], p["alarms"]))
+        target[k] = p
+    out = {k: _item(k, p, policy, c) for k, p in best.items()}
+    if outside is not None:
+        outside.update({k: _item(k, p, policy, None) for k, p in far.items() if k not in out})
     c["skipped"] = sum(why.values())
     return out
+
+
+def _item(k: "tuple[str, str]", p: dict, policy: str, counts: Optional[dict]) -> _Item:
+    ev = p["event"]
+    values = {col: ev.get(col) for col in _BASE_COLS}
+    values["all_day"] = 1 if ev.get("all_day") else 0
+    for col in _PARSED_EXTRA:
+        v = ev.get(col)
+        values[col] = json.dumps(v) if col in ("rdates", "exdates") and v is not None else v
+    values["visibility"] = clamp_visibility(policy, ev.get("visibility"))
+    values["provider_updated_at"] = ev.get("provider_updated_at")
+    values["category"] = values.get("category") or "general"
+    if counts is not None and rrule_unsupported(ev):
+        counts["rrule_unsupported"] = counts.get("rrule_unsupported", 0) + 1
+    return _Item(k, values, p["attendees"], p["alarms"], content_hash(values, p["attendees"], p["alarms"]))
 
 
 # -- the engine -------------------------------------------------------------------------------------------------------------------
@@ -333,6 +343,18 @@ async def _account(account_id: str) -> Optional[dict]:
     if row is None:
         return None
     return {"user_id": str(row[0]), "provider": str(row[1]), "kind": str(row[2]), "status": str(row[3])}
+
+
+async def _failures_since_success(account_id: str) -> int:
+    """Failed runs of the account since its last good one (``sync_runs``; 0 when none). The run being recorded is still
+    ``running``, so it is not counted."""
+    async with _db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM sync_runs WHERE account_id = ? AND outcome = 'error' AND started_at >= COALESCE("
+            "(SELECT MAX(started_at) FROM sync_runs WHERE account_id = ? AND outcome IN ('ok', 'partial')), '')",
+            (account_id, account_id))
+        row = await cur.fetchone()
+    return int(row[0] or 0) if row else 0
 
 
 async def _calendar(user_id: str, account_id: str) -> Optional[dict]:
@@ -568,7 +590,9 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
         return rep
 
     async def failed(error_class: str, error_code: Optional[str], retry_after: Optional[int] = None) -> SyncReport:
-        failures = (cal_row or {}).get("failures", 0) + 1
+        # the failures so far come from the run log, which is written from the very first run: a feed that has only ever
+        # failed (no calendar row yet) still backs off further each time, across a restart too
+        failures = max((cal_row or {}).get("failures", 0), await _failures_since_success(account_id)) + 1
         if cal_row is not None and writes:
             async def bump(db, _w):
                 await db.execute("UPDATE calendars SET consecutive_failures = consecutive_failures + 1, last_sync_status = ?, "
@@ -649,7 +673,11 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
         logger.warning("CALENDAR_FEED parse failed account=%s (%s)", account_id, type(exc).__name__)
         return await failed("provider", "parse_failed")
 
-    items = plan(parsed, policy=policy, w0=w0, w1=w1, report=rep)
+    outside: dict = {}
+    items = plan(parsed, policy=policy, w0=w0, w1=w1, report=rep, outside=outside)
+    # an event the provider MOVED outside the window must never keep its old time: this stage (no deletes) rewrites the stored
+    # copy with what the feed now says; it is still out of the window, so no reader lists it there
+    items.update({k: it for k, it in outside.items() if k in stored})
     # this stage never deletes: a stored key the feed no longer carries stays as it is, and is counted
     rep.counts["absent"] = sum(1 for k in stored if k not in items)
 

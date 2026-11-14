@@ -498,6 +498,39 @@ def test_window_prune_and_unsupported_rules_are_counted(db):
 
 
 @needs_ics
+def test_an_event_moved_outside_the_window_never_keeps_its_old_time(db):
+    """No deletes yet: the stored copy is rewritten with the provider's new time, so no reader shows the stale one."""
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    f.body = ics(vevent("u-1@example.test", "Club practice", "20280601T010000Z", "20280601T020000Z", seq=1), *THREE[1:])
+    r = sync(a, f)
+    assert (r.counts.get("updated"), r.counts.get("absent"), r.skipped) == (1, 0, {"out_of_window": 1})
+    assert db.one("SELECT start_date FROM events WHERE external_uid = 'u-1@example.test'") == "2028-06-01"
+    assert "Club practice" not in {o["title"] for o in _december(db)}
+
+
+def _december(db):
+    async def window():
+        async with db_compat.get_compat_db() as d:
+            return await calendar_read.events_in_window(d, "ann", "2026-12-01", "2026-12-31")
+    return run(window())
+
+
+@needs_ics
+def test_moved_outside_the_window_negative_control(db, monkeypatch):
+    """Without carrying the out-of-window items, the stored copy keeps its December time and is still served."""
+    real = feed.plan
+    monkeypatch.setattr(feed, "plan", lambda parsed, outside=None, **kw: real(parsed, **kw))
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    f.body = ics(vevent("u-1@example.test", "Club practice", "20280601T010000Z", "20280601T020000Z", seq=1), *THREE[1:])
+    sync(a, f)
+    assert "Club practice" in {o["title"] for o in _december(db)}
+
+
+@needs_ics
 def test_an_attendee_who_is_a_member_is_linked(db):
     run(mi.add("ben", "email", "Ben.Member@example.org"))
     a = account()
@@ -615,6 +648,24 @@ def test_a_429_waits_out_retry_after_and_failures_back_off(db):
     r = sync(account(), Feed(status="rate_limited", retry_after_s=7200))
     assert (r.error_class, r.backoff_until) == ("rate_limited", "2026-12-01T02:00:00Z")
     assert [feed.backoff_seconds(n) for n in (1, 2, 3, 9)] == [1800, 3600, 7200, 21600]
+
+
+def test_a_feed_that_has_only_ever_failed_still_backs_off_further(db):
+    """No calendar row exists before the first success; the failure count comes from the run log, so it holds across a restart
+    (nothing in the process carries it)."""
+    a = account()
+    assert [sync(a, Feed(status="server_error")).backoff_until for _ in range(3)] == [
+        "2026-12-01T00:30:00Z", "2026-12-01T01:00:00Z", "2026-12-01T02:00:00Z"]
+    assert db.one("SELECT COUNT(*) FROM calendars") == 0
+
+
+def test_failure_count_negative_control(db, monkeypatch):
+    """Counting from the calendar row alone, a feed that never succeeded backs off 30 minutes every time."""
+    async def none(_account_id):
+        return 0
+    monkeypatch.setattr(feed, "_failures_since_success", none)
+    a = account()
+    assert {sync(a, Feed(status="server_error")).backoff_until for _ in range(3)} == {"2026-12-01T00:30:00Z"}
 
 
 @needs_ics
