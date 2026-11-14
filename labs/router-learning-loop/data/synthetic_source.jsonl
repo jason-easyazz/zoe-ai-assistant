@@ -1,0 +1,164 @@
+{"id": "syn-0001", "text": "what's happening on my calendar tomorrow", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0002", "text": "book the plumber in for wednesday arvo", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0003", "text": "have I got anything on monday night", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0004", "text": "move my haircut to next friday", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0005", "text": "put the school concert in the diary for the 12th", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0006", "text": "am I busy saturday morning", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0007", "text": "what's my next appointment", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0008", "text": "is there a meeting on thursday", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0009", "text": "add footy training tuesday at 5 to the calendar", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0010", "text": "what's on the schedule for the weekend", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0011", "text": "cancel my appointment on friday", "label": "calendar", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0012", "text": "add toilet paper to the shopping list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0013", "text": "pop cheese on the grocery list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0014", "text": "what's left on the shopping list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0015", "text": "take milk off the list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0016", "text": "add nappies and wipes to the list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0017", "text": "put sunscreen on the list for the shops", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0018", "text": "clear the shopping list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0019", "text": "read out my todo list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0020", "text": "add call the bank to my todo list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0021", "text": "is butter already on the list", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0022", "text": "we need more dishwashing tablets", "label": "lists", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0023", "text": "remind me to ring the vet tomorrow", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0024", "text": "set a reminder for the car rego on monday", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0025", "text": "remind me at 6 to take my tablets", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0026", "text": "nudge me about the parcel this afternoon", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0027", "text": "what have you got me reminding me about", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0028", "text": "remind me to put the bins out on wednesday night", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0029", "text": "can you remind me to text mum later", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0030", "text": "delete the reminder about the dentist", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0031", "text": "remind me in an hour to check the oven", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0032", "text": "set a reminder to pay the power bill friday", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0033", "text": "don't let me forget the library books", "label": "reminders", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0034", "text": "start a timer for twenty minutes", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0035", "text": "set a 3 minute timer for the tea", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0036", "text": "how much time is left on the timer", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0037", "text": "stop the timer", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0038", "text": "put a timer on for the rice, 12 minutes", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0039", "text": "timer for half an hour please", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0040", "text": "cancel the pasta timer", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0041", "text": "set two timers, one for 5 and one for 10", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0042", "text": "give me a 90 second timer", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0043", "text": "how long's left on the roast timer", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0044", "text": "pause the timer", "label": "timers", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0045", "text": "will it rain tomorrow", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0046", "text": "how hot's it going to get today", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0047", "text": "what's the temperature right now", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0048", "text": "is it windy outside", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0049", "text": "should I bring an umbrella to work", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0050", "text": "what's the forecast for the weekend", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0051", "text": "is it going to storm tonight", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0052", "text": "how cold will it be in the morning", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0053", "text": "what's the uv like today", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0054", "text": "is it sunny in fremantle", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0055", "text": "will the weekend be fine for a barbecue", "label": "weather", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0056", "text": "what's the time", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0057", "text": "tell me the time please", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0058", "text": "what day of the week is it", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0059", "text": "what's today's date", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0060", "text": "what month is it", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0061", "text": "is it past midday", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0062", "text": "what's the time in london", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0063", "text": "what year is it", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0064", "text": "how many days until friday", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0065", "text": "what time is it in sydney", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0066", "text": "what's the date tomorrow", "label": "time", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0067", "text": "when's my brother's birthday", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0068", "text": "what's my sister's phone number", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0069", "text": "who is my neighbour", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0070", "text": "tell me about my aunt", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0071", "text": "my cousin's name is lily", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0072", "text": "what do you know about my boss", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0073", "text": "remember that my friend joe lives in bunbury", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0074", "text": "what's my nephew's name", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0075", "text": "my partner's birthday is in march", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0076", "text": "who's coming to the party", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0077", "text": "add my workmate sam as a contact", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0078", "text": "what did I tell you about my holiday plans", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0079", "text": "remember I like my coffee black", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0080", "text": "do you remember my favourite food", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0081", "text": "what have I told you about my job", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0082", "text": "remember that I'm vegetarian", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0083", "text": "what do you know about my hobbies", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0084", "text": "recall what I said about the car", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0085", "text": "remember my shoe size is 9", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0086", "text": "what did we talk about yesterday", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0087", "text": "don't forget I'm away next week", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0088", "text": "what's my favourite movie again", "label": "memory", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0089", "text": "make a note that the plumber's number is on the fridge", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0090", "text": "write down the alarm code", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0091", "text": "note that the spare key is under the pot", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0092", "text": "find my note about the insurance", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0093", "text": "what did my note say about the bike", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0094", "text": "save a note: buy a birthday card", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0095", "text": "search notes for the recipe", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0096", "text": "take a note, the car needs a service in june", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0097", "text": "read me my last note", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0098", "text": "where did I note the password for the router", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0099", "text": "note to self, call the council", "label": "notes", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0100", "text": "add to my journal that I went for a long walk", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0101", "text": "journal entry, felt pretty good today", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0102", "text": "what did I write in my journal yesterday", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0103", "text": "log in my diary that work was stressful", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0104", "text": "put in my journal that the kids were great", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0105", "text": "read me my journal from monday", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0106", "text": "write a diary entry about the beach trip", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0107", "text": "add a journal note, slept badly", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0108", "text": "what's in my diary this week", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0109", "text": "journal that I finished the book", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0110", "text": "I want to add something to my journal", "label": "journal", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0111", "text": "play some jazz", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0112", "text": "put on my workout playlist", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0113", "text": "next song please", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0114", "text": "turn it up a bit", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0115", "text": "stop the music", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0116", "text": "play something by the beatles", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0117", "text": "shuffle my favourites", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0118", "text": "what song is this", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0119", "text": "play some relaxing music for dinner", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0120", "text": "resume the music", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0121", "text": "play triple j", "label": "music", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0122", "text": "turn on the bedroom lights", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0123", "text": "switch off the lounge lights", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0124", "text": "set the aircon to 22", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0125", "text": "turn the heater off", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0126", "text": "dim the hallway lights to half", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0127", "text": "lock the front door", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0128", "text": "turn on the outside lights", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0129", "text": "is the garage door open", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0130", "text": "switch the fan on", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0131", "text": "turn all the lights off", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0132", "text": "make the kitchen lights brighter", "label": "smart_home", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0133", "text": "how are you today", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0134", "text": "tell me a joke", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0135", "text": "what's the meaning of life", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0136", "text": "I'm feeling a bit tired", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0137", "text": "what's your favourite colour", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0138", "text": "can you help me think through a decision", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0139", "text": "how does a rainbow form", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0140", "text": "good morning zoe", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0141", "text": "that was funny", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0142", "text": "what should I cook for dinner tonight", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0143", "text": "tell me about the roman empire", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0144", "text": "hey there, how's your day been", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0145", "text": "hi zoe, what's up", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0146", "text": "how's things with you", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0147", "text": "g'day mate, you good", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0148", "text": "evening zoe, how are you going", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0149", "text": "what's new with you", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0150", "text": "nice to talk to you", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0151", "text": "you're doing great, thanks", "label": "chat", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0152", "text": "what do you know about my uncle", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0153", "text": "what do we know about my friend amy", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0154", "text": "tell me what you know about my neighbour", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "syn-0155", "text": "who's my sister married to", "label": "people", "signal": "brain_paraphrase", "confidence": 0.9, "channel": "synthetic"}
+{"id": "ctl-forget-1", "text": "turn on the porch light", "label": "smart_home", "signal": "owner_confirmed", "confidence": 1.0, "channel": "synthetic"}
+{"id": "ctl-forget-2", "text": "add jam to the shopping list", "label": "lists", "signal": "followup_success", "confidence": 0.85, "channel": "synthetic"}
+{"id": "ctl-forget-key", "text": "remind me to call the school", "label": "reminders", "signal": "explicit_correction", "confidence": 0.95, "channel": "synthetic"}
+{"id": "ctl-frozen", "text": "set a timer for 10 minutes", "label": "timers", "signal": "owner_confirmed", "confidence": 1.0, "channel": "synthetic"}
+{"id": "ctl-belief", "text": "what's the weather doing", "label": "weather", "signal": "router_belief", "confidence": 0.99, "channel": "synthetic"}
+{"id": "ctl-unknown", "text": "play the radio", "label": "music", "signal": "vibes", "confidence": 1.0, "channel": "synthetic"}
+{"id": "ctl-dup", "text": "turn on the bedroom lights", "label": "smart_home", "signal": "brain_tool", "confidence": 0.9, "channel": "synthetic"}
+{"id": "ctl-conflict-a", "text": "how long until dinner", "label": "timers", "signal": "followup_success", "confidence": 0.85, "channel": "synthetic"}
+{"id": "ctl-conflict-b", "text": "how long until dinner", "label": "time", "signal": "brain_tool", "confidence": 0.9, "channel": "synthetic"}

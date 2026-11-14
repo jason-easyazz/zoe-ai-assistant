@@ -213,6 +213,9 @@ credentials/
 !scripts/perf/zmb/arms/mpa_snapshot.json
 # The self-heal lab's example config (paths and flags only, no secrets): setup copies it from a clean clone.
 !labs/self-heal/self-heal.example.json
+# The router learning-loop lab: measured results are synthetic numbers (tracked); its scratch workdir is not.
+!labs/router-learning-loop/results/*.json
+labs/router-learning-loop/run/
 !services/zoe-ui/dist/js/widgets/widget-manifest.json
 # zoe-core's Pi project settings: compaction sized for ONE 8192-token llama-server
 # slot (Pi 0.82.1 defaults reserve 16384 / keep 20000 assume a 128k+ window).
