@@ -818,3 +818,34 @@ def test_alert_section_never_crashes_and_renders_sections(tmp_path, monkeypatch)
                       "window": {"since": "a", "until": "b", "long_since": "c"}})
     assert f"== {sc.ALERTS} ==" in text and f"== {sc.PERFORMANCE} ==" in text
     assert text.index(sc.ALERTS) < text.index(sc.PERFORMANCE)
+
+
+# ── the QA round row ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _round(path, line, extra=None):
+    import json
+
+    path.write_text(json.dumps({"round": "x", "scorecard": line, "cases": [{"id": "a.b", "why": "Secret words"}], **(extra or {})}))
+
+
+def test_qa_round_unmeasured_when_no_result(tmp_path):
+    m = sc.m_qa_round(str(tmp_path))
+    assert m["status"] == "unmeasured" and m["value"] == "unmeasured" and "no round result" in m["reason"]
+    assert sc.m_qa_round(str(tmp_path / "missing"))["status"] == "unmeasured"
+
+
+def test_qa_round_reads_the_newest_line_and_only_counts(tmp_path):
+    old, new = tmp_path / "round-9-lab.json", tmp_path / "round-10a-lab.json"
+    _round(old, "QA_ROUND round=9 mode=lab calendar=1/2")
+    _round(new, "QA_ROUND round=10a mode=lab calendar=6/7 lists=3/3 memory=0/0+8nr")
+    os.utime(old, (1, 1))
+    m = sc.m_qa_round(str(tmp_path))
+    assert m["status"] == "measured" and m["value"] == "round=10a mode=lab calendar=6/7 lists=3/3 memory=0/0+8nr" and m["n"] == 10
+    assert "Secret" not in str(m)
+
+
+@pytest.mark.parametrize("line", ["QA_ROUND round=1 mode=lab calendar=1/2 why=Secret words", "free text", ""])
+def test_qa_round_malformed_line_is_unmeasured_and_never_printed(tmp_path, line):
+    _round(tmp_path / "round-1-lab.json", line)
+    m = sc.m_qa_round(str(tmp_path))
+    assert m["status"] == "unmeasured" and "Secret" not in str(m)
