@@ -22,7 +22,7 @@ import os
 import re
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import brain_slot_guard
 import digest_pack
@@ -148,6 +148,89 @@ def _name_from_pending_slug(entity_id: str) -> str:
     return s.replace("_", " ").strip()
 
 
+async def _store(call: Callable, /, **kw: Any) -> Any:
+    """One ``leased_drawers`` read OFF the event loop (A6 step 2): ``MemoryService._run_sync``, the executor + lease
+    search and ingest use, so the store call (and any compaction-gate wait) no longer holds the single worker."""
+    from memory_service import MemoryService
+    return await MemoryService._run_sync(functools.partial(call, **kw))
+
+
+_WRITE_ADMIT_S = 0.5   # under the owner lock a write waits at most this long for the store's lease, never for a compaction
+_WRITE_TRIES = 3
+
+
+def _live_ids(col: Any, user_id: str, ids: list, prior_status: list) -> set:
+    """The ids that are still live for ``user_id`` NOW, by the read path's own predicate (``MemoryService._filter_visible``:
+    expiry, owner visibility, status). A row whose status is the one the pass read (deep sleep reads ``pending`` rows) counts
+    as unchanged; any other non-readable status - rejected (a soft forget), archived, superseded, disputed - is skipped."""
+    import datetime as _dt
+    from memory_service import MemoryService
+
+    cur = col.get(ids=list(ids), include=["documents", "metadatas"])
+    want = dict(zip(ids, prior_status))
+    metas = []
+    for rid, meta in zip(cur.get("ids") or [], cur.get("metadatas") or []):
+        m = dict(meta or {})
+        if str(m.get("status", "approved") or "approved").strip().lower() == want.get(rid):
+            m["status"] = "approved"   # unchanged since the pass read it: judge it as the row the pass is updating
+        metas.append(m)
+    probe = {"ids": cur.get("ids") or [], "documents": cur.get("documents") or [], "metadatas": metas}
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return {r.id for r in MemoryService._filter_visible(probe, user_id, now)}
+
+
+def _status_of(meta: Any) -> str:
+    return str((meta or {}).get("status", "approved") or "approved").strip().lower()
+
+
+async def _under_owner_lock(svc: Any, user_id: str, fn: Callable[[], Any]) -> Any:
+    """Run ``fn`` in the executor under the owner's memory lock (``svc._user_locks[user_id]``, the key ``erase_rows`` and
+    ``review`` take), BOUNDED: the compaction gate is waited for OUTSIDE the lock, and inside it the lease admission gives up
+    after ``_WRITE_ADMIT_S`` (then the lock is released and the gate waited for again). So a forget never queues behind a
+    store maintenance wait, only behind one admitted re-check + write."""
+    from memory_service import MemoryServiceError, _wait_for_maintenance_gate, collection_op
+
+    def _bounded() -> Any:
+        with collection_op(timeout=_WRITE_ADMIT_S):
+            return fn()
+
+    loop = asyncio.get_running_loop()
+    locks = getattr(svc, "_user_locks", None)
+    for attempt in range(_WRITE_TRIES):
+        await loop.run_in_executor(None, _wait_for_maintenance_gate)
+        try:
+            if locks is None:
+                return await loop.run_in_executor(None, _bounded)
+            async with locks.setdefault(user_id, asyncio.Lock()):
+                return await loop.run_in_executor(None, _bounded)
+        except MemoryServiceError:
+            if attempt == _WRITE_TRIES - 1:
+                raise
+
+
+async def _store_upsert(svc: Any, user_id: str, col: Any, *, ids: list, documents: list, metadatas: list,
+                        prior_status: Optional[list] = None) -> None:
+    """A pass's ``col.upsert`` off the loop: re-checked and written under the owner's lock (``_under_owner_lock``), only
+    for rows still live (``_live_ids``). Off the loop a pass's write can interleave with a forget, so a row erased or
+    soft-forgotten since the pass read it is never written back (forgotten means forever); a live row gets exactly the
+    old write. ``prior_status`` = each row's status as the pass READ it (default: the status being written)."""
+    prior = list(prior_status) if prior_status is not None else [_status_of(m) for m in metadatas]
+    # The lock is keyed by the row's STORED owner - the key ``review`` (soft forget) takes from the row and ``erase_rows`` is
+    # called with - so an alias spelling of the pass's user id still serialises with a forget of the same rows.
+    owners: dict = {}
+    for k, m in enumerate(metadatas):
+        owners.setdefault(str((m or {}).get("user_id") or (m or {}).get("wing") or user_id), []).append(k)
+    for owner, idx in owners.items():
+        def _write(idx: list = idx) -> None:
+            live = _live_ids(col, user_id, [ids[k] for k in idx], [prior[k] for k in idx])
+            keep = [k for k in idx if ids[k] in live]
+            if keep:
+                col.upsert(ids=[ids[k] for k in keep], documents=[documents[k] for k in keep],
+                           metadatas=[metadatas[k] for k in keep])
+
+        await _under_owner_lock(svc, owner, _write)
+
+
 async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
     """Idle pass: re-link ``person_pending`` facts to a real ``people.id``.
 
@@ -180,7 +263,8 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
         svc = get_memory_service()
         col = leased_drawers(svc)   # per-call lease: never a handle across an await
         # Owner + status scoped scan: only THIS user's still-pending person facts.
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"entity_type": {"$eq": "person_pending"}},
@@ -2704,7 +2788,8 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
         # ChromaDB $gte only supports int/float — filter by user_id only, then
         # post-filter by added_at date in Python (ISO strings compare correctly
         # lexicographically for same-length prefix matching).
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"user_id": {"$eq": user_id}},
             include=["documents", "metadatas"],
         )
@@ -2753,7 +2838,7 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
                 linked += 1
 
                 # Write related_ids on neighbours (bidirectional)
-                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
+                nb_result = await _store(col.get, ids=neighbour_ids, include=["metadatas", "documents"])
                 nb_ids = nb_result.get("ids") or []
                 nb_docs = nb_result.get("documents") or []
                 nb_metas = nb_result.get("metadatas") or []
@@ -2765,11 +2850,11 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
                     nm["related_ids"] = ",".join(i for i in nb_related if i)
                     new_nb_metas.append(nm)
                 if nb_ids:
-                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+                    await _store_upsert(svc, user_id, col, ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
 
             # Mark as REM-processed
             meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+            await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta])
 
     except Exception as exc:
         logger.warning("REM reinforce pass failed user=%s: %s", user_id, exc)
@@ -2844,7 +2929,8 @@ async def _deep_sleep_pass(user_id: str) -> dict:
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=14)).isoformat() + "Z"
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [{"user_id": {"$eq": user_id}}, {"status": {"$eq": "pending"}}]},
             include=["documents", "metadatas"],
         )
@@ -2864,12 +2950,12 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], prior_status=["pending"])
                 promoted += 1
             elif added_at and added_at < cutoff:
                 meta["status"] = "archived"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], prior_status=["pending"])
                 archived += 1
 
     except Exception as exc:
@@ -2933,7 +3019,8 @@ async def _synthesis_pass(user_id: str) -> dict:
     synthesized = 0
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"status": {"$eq": "approved"}},
@@ -2981,6 +3068,14 @@ async def _synthesis_pass(user_id: str) -> dict:
                     logger.debug("synthesis: dropped non-fact insight: %s", _log_redaction.utterance_tag(synthesis_text))
                     continue
 
+                # Every source must still be live right before a memory DERIVED from them is made (a forget since the scan
+                # wins). The re-check holds the owner lock; ingest takes the same lock itself, so it runs just after.
+                source_ids = [mid for mid, _ in sample]
+                live = await _under_owner_lock(
+                    svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                if set(source_ids) - set(live or ()):
+                    logger.info("synthesis: skipped, a source is no longer live user=%s n=%d", user_id, len(source_ids))
+                    continue
                 ref = await svc.ingest(
                     synthesis_text,
                     user_id=user_id,
@@ -2992,13 +3087,12 @@ async def _synthesis_pass(user_id: str) -> dict:
                 )
                 if ref:
                     # Link synthesized memory back to source cluster
-                    source_ids = [mid for mid, _ in sample]
-                    col_result = col.get(ids=[ref.id], include=["metadatas", "documents"])
+                    col_result = await _store(col.get, ids=[ref.id], include=["metadatas", "documents"])
                     if col_result.get("ids"):
                         sm = dict((col_result["metadatas"] or [{}])[0])
                         sm["related_ids"] = ",".join(source_ids)
                         sm["concept_tags"] = tag
-                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+                        await _store_upsert(svc, user_id, col, ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
                     synthesized += 1
             except Exception as exc:
                 logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
