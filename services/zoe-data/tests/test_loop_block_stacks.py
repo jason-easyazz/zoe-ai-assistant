@@ -66,7 +66,14 @@ def _field(line: str, name: str) -> str:
 async def _blocked(caplog, fn, *args, expect: int = 1) -> list[str]:
     event_loop_lag.reset_for_test()
     task = asyncio.create_task(event_loop_lag.monitor(0.02))
-    await asyncio.sleep(0.1)
+    # The watcher idles in a 0.5 s wait while the monitor has no thread id (reset_for_test clears it). A block that starts and
+    # ends inside that one wait is reported fp=unseen, so the blocker starts only once the watcher has had time to see the id.
+    for _ in range(200):
+        if event_loop_lag._beat.tid is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert event_loop_lag._beat.tid is not None
+    await asyncio.sleep(0.6)
     fn(*args)
     for _ in range(40):  # the watcher logs once it sees the loop tick again
         await asyncio.sleep(0.05)
