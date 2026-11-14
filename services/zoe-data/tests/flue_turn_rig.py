@@ -61,7 +61,10 @@ def install(monkeypatch, blocks: "dict[str, str] | None" = None, *, delay_s: "di
         return _Plan(b) if b else None
 
     async def register_apply(*_a, **_k):
-        calls.append("register_apply")
+        d = delay_s.get("register_apply", 0.0)
+        if d:
+            await asyncio.sleep(d)
+        calls.append("register_apply")   # recorded when the request is STORED (the end of the call)
         return None
 
     async def spec(*_a, **_k):
@@ -80,6 +83,23 @@ def install(monkeypatch, blocks: "dict[str, str] | None" = None, *, delay_s: "di
     monkeypatch.setattr(flue_fastpath_context, "block_for", stub("fastpath"))
     monkeypatch.setattr(voice_session_bridge, "block_for", stub("bridge"))
     monkeypatch.setattr(conversation_notes, "block_for", stub("notes"))
+
+    def draft_stub(name):
+        """prepare_block (the prefetch's pure read): records the read, and ``<name>_commit`` when its state change lands."""
+        async def _f(*_a, **_k):
+            from turn_draft import TurnDraft
+
+            calls.append(name)
+            d = delay_s.get(name, 0.0)
+            if d:
+                await asyncio.sleep(d)
+            draft = TurnDraft(blocks.get(name, ""))
+            draft.on_commit(lambda: calls.append(f"{name}_commit"))
+            return draft
+        return _f
+
+    monkeypatch.setattr(voice_session_bridge, "prepare_block", draft_stub("bridge"))
+    monkeypatch.setattr(conversation_notes, "prepare_block", draft_stub("notes"))
     monkeypatch.setattr(zfc, "_identity_context_block", stub("identity"))
     monkeypatch.setattr(named_guests, "brain_block", stub("named_guest"))
     monkeypatch.setattr(zfc, "_now_card_context_block", stub("now_card"))
