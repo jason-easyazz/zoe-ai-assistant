@@ -1,5 +1,5 @@
 """The distress hand-off (``distress_handoff``): detector, per-tier precision/recall, language independence, the fixed reply, the notification.
-Synthetic phrases only (``fixtures/distress_labelled.json``, 343 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
+Synthetic phrases only (``fixtures/distress_labelled.json``, 444 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
 from __future__ import annotations
 
 import ast
@@ -22,6 +22,11 @@ NEVER_WAKE = "I want to go to sleep and never wake up"
 IDEATION_MISSES = {"i keep thinking i should kill myself",                # no "should" desire (a bare "I should die" is common hyperbole)
                    "been feeling suicidal since monday and i dont know why"}   # no subject: a bare form would also fire on "she has been feeling suicidal"
 KNOWN_MISSES = {NEVER_WAKE, "he is dying of cancer and I am scared"} | IDEATION_MISSES      # the limits stated in docs/knowledge/distress-handoff.md
+OVERDOSE = [(lang, label, t) for s in ("overdose_4", "overdose_4_probe") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+# Over-triggers that were ALREADY there before the intent cues (overdose_bare has no required subject; overdose_now takes "all my tablets"
+# and the inner "i" of "i think i took..."). Kept on purpose: the safe direction, and weakening the floor is an owner decision.
+OVERDOSE_PREEXISTING_HANDOFF = {"my friend took too many pills on purpose", "my brother overdosed last year", "i think i took too many painkillers, is that bad",
+                                "i overdosed on chocolate", "i took all my tablets to the pharmacy to get them checked", "i took all my tablets on time today"}
 
 
 def run(coro):
@@ -146,7 +151,7 @@ def test_every_idiom_alone_is_none_and_never_voids_a_handoff_in_the_next_or_prev
     """The CLASS behind the fail-open finding, generated from the data: every lexicon idiom x every hand-off row of the labelled set, both orders."""
     assert len(IDIOMS) >= 35 and all(re.search(dh._strip(i), _sample(i)) for i in IDIOMS)      # the generator really produces each idiom
     assert [i for i in IDIOM_SAMPLES if dh.detect(i).tier != "none"] == []
-    cues = sorted({t for _l, label, t in ROWS if label == "handoff" and dh.detect(t).tier == "handoff"})
+    cues = sorted({t for _l, label, t in ROWS + OVERDOSE if label == "handoff" and dh.detect(t).tier == "handoff"})
     assert len(cues) >= 150
     bad = [(i, c) for i in IDIOM_SAMPLES for c in cues
            if dh.detect(f"{i}. {c}.").tier != "handoff" or dh.detect(f"{c}. {i}.").tier != "handoff"]
@@ -397,3 +402,27 @@ def test_no_gap_line_for_the_gentle_tier_a_dry_run_or_a_chosen_notify_off(monkey
         monkeypatch.setenv("ZOE_DISTRESS_NOTIFY", "off")              # the owner chose no notice
         run(dh.handle("I want to die", "member_1"))
     assert not [r for r in caplog.records if "DISTRESS_NO_CONTACT" in r.getMessage()]
+
+
+def test_an_intentional_overdose_is_a_handoff_and_accident_story_fiction_and_idiom_stay_below_it():
+    """The live gap (2026-11-14): "took too many on purpose" / "took them all to make it stop" scored NONE and reached the brain. Quantity + an intent
+    marker (or a strong intent with no quantity) in the speaker's own words hands off; an accident, someone else, the distant past, fiction,
+    general knowledge and idioms stay gentle or none. The rows that already handed off before these cues are pinned, never silently accepted."""
+    fire = [t for _l, label, t in OVERDOSE if label == "handoff"]
+    assert len(fire) >= 50 and [t for t in fire if dh.detect(t).tier != "handoff"] == []
+    must_not = [t for _l, label, t in OVERDOSE if label != "handoff"]
+    assert len(must_not) >= 50
+    assert {t for t in must_not if dh.detect(t).tier == "handoff"} == OVERDOSE_PREEXISTING_HANDOFF
+
+
+@pytest.mark.parametrize("text,tier", [
+    ("i took too many on purpose", "handoff"), ("i took them all to make it stop", "handoff"), ("i overdosed", "handoff"),
+    ("i took too many pills", "handoff"), ("i want to overdose", "handoff"), ("i took all my tablets", "handoff"),      # unchanged: no intent word needed
+    ("ive taken an overdose", "handoff"), ("im overdosing", "handoff"), ("i took them all, i want it to stop", "handoff"),
+    ("i took too many by accident", "none"), ("i think i took too many", "none"), ("did i take too many", "none"),        # the medical floor's, never grabbed here
+    ("i didnt take them all on purpose", "none"), ("i took my pills on purpose today", "none"), ("i took my pills to stop the pain", "none"),
+    ("i took 2 panadol to stop the pain", "none"), ("i took too many photos on purpose", "none"), ("i ate too many cookies on purpose", "none"),
+    ("my friend took them all to end it", "gentle"), ("years ago i took too many on purpose", "gentle"), ("i took too many on purpose years ago", "gentle"),
+])
+def test_the_overdose_intent_cues_and_their_guards(text, tier):
+    assert dh.detect(text).tier == tier
