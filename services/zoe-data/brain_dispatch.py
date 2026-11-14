@@ -1029,15 +1029,38 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
 def _route() -> tuple:
     """This turn's lane decision, taken ONCE: ``(use_flue, observed)``. ``observed`` is the failover breaker view
     (``_observe_circuit`` also claims the half-open probe, so it is never taken twice) or None when failover is off. The lanes
-    reuse it, and the child floor reads from it whether this turn will reach the Flue seam's floors."""
-    if not use_flue_brain():
-        return (False, None)
-    return (True, _observe_circuit() if failover_enabled() else None)
+    reuse it, and the child floor reads from it whether this turn will reach the Flue seam's floors. NEVER raises: any error is
+    ``_ROUTE_UNKNOWN`` - the lanes then decide and observe for themselves, exactly as before ``_route`` existed."""
+    try:
+        if not use_flue_brain():
+            return (False, None)
+        return (True, _observe_circuit() if failover_enabled() else None)
+    except Exception as exc:  # noqa: BLE001 - a routing read must never fail the turn before any lane runs
+        logger.warning("BRAIN_ROUTE unknown (%s)", type(exc).__name__)
+        return _ROUTE_UNKNOWN
+
+
+#: the route could not be read: the lanes take their own decision and observation; the child floor never defers
+_ROUTE_UNKNOWN = (None, None)
+
+
+def _lane_choice(route: tuple) -> tuple:
+    """``(use_flue, failover, observed)`` for the lanes. A known route is reused as is; ``_ROUTE_UNKNOWN`` re-reads the lane the old
+    way, and the failover wrappers observe the breaker inside their own try (``observed`` None). A lane read that fails again
+    takes the fallback lane rather than failing the turn."""
+    if route is not _ROUTE_UNKNOWN:
+        return route[0], route[1] is not None, route[1]
+    try:
+        use_flue = bool(use_flue_brain())
+        return use_flue, bool(use_flue and failover_enabled()), None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("BRAIN_ROUTE fallback (%s)", type(exc).__name__)
+        return False, False, None
 
 
 def _floors_live(route: tuple) -> bool:
-    """Will this turn actually reach the Flue seam, where the distress / medical floors run? Not on another lane, and not when
-    the failover breaker is open (that turn goes to the fallback lane)."""
+    """Will this turn actually reach the Flue seam, where the distress / medical floors run? Not on another lane, not when the
+    failover breaker is open (that turn goes to the fallback lane), and not when the route is unknown."""
     try:
         use_flue, observed = route
         return bool(use_flue) and not (observed is not None and observed[0])
@@ -1102,9 +1125,9 @@ async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id
 
 
 def _brain_streaming_lanes(message: str, session_id: str, user_id: str = "", *, _route_: tuple, **kwargs: Any) -> AsyncIterator[str]:
-    use_flue, observed = _route_
+    use_flue, failover, observed = _lane_choice(_route_)
     if use_flue:
-        if observed is not None:
+        if failover:
             return _provenance_tracked_stream(_claim_guarded(
                 _flue_streaming_with_failover(message, session_id, user_id, _observed=observed, **kwargs),
                 message, user_id, kwargs, session_id),
@@ -1135,10 +1158,10 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     reply = ""
     started = _receipts_begin()
     implied = _take_deferred_write()
-    use_flue, observed = route
+    use_flue, failover, observed = _lane_choice(route)
     try:
         if use_flue:
-            if observed is not None:
+            if failover:
                 reply = await _flue_oneshot_with_failover(message, session_id, user_id, _observed=observed, **kwargs)
             else:
                 reply = await _flue_oneshot_labeled(message, session_id, user_id, **kwargs)

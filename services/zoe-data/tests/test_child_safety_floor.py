@@ -614,3 +614,44 @@ def test_the_breaker_is_observed_once_per_turn(monkeypatch):
     monkeypatch.setattr(bd, "_flue_streaming_with_failover", fake_failover)
     assert asyncio.run(_collect("hello there", "s1", "adult-a")) == ["ok"]
     assert calls == [1] and seen == [(False, 5)]                  # one observe, and the lane reuses it
+
+
+# 17. a route read that raises never fails the turn: the lanes decide for themselves, the child floor never defers -----------
+def _boom(*_a, **_k):
+    raise RuntimeError("synthetic route failure")
+
+
+def test_observe_raising_lanes_take_their_own_view(monkeypatch, caplog, _clean):
+    seen = []
+    monkeypatch.setattr(bd, "use_flue_brain", lambda: True)
+    monkeypatch.setattr(bd, "failover_enabled", lambda: True)
+    monkeypatch.setattr(bd, "_observe_circuit", _boom)
+
+    async def fake_failover(message, session_id, user_id, _observed=None, **kw):
+        seen.append(_observed)
+        yield "normal reply"
+
+    monkeypatch.setattr(bd, "_flue_streaming_with_failover", fake_failover)
+    with caplog.at_level(logging.WARNING, logger="brain_dispatch"):
+        assert asyncio.run(_collect("hello there", "s1", "adult-a")) == ["normal reply"]
+    assert seen == [None]                                        # the wrapper observes inside its own try, as before
+    assert "BRAIN_ROUTE unknown (RuntimeError)" in [r.getMessage() for r in caplog.records]
+    assert not [r for r in caplog.records if "synthetic" in r.getMessage()]   # codes only
+    _clean["kid-a"] = "child"
+    assert asyncio.run(_collect("what do i do the kitchen is on fire", "s1", "kid-a")) == [csf.URGENT_REPLY]   # never defers
+
+
+def test_use_flue_raising_takes_the_fallback_lane(monkeypatch, _clean):
+    calls = _lanes(monkeypatch)
+    monkeypatch.setattr(bd, "use_flue_brain", _boom)
+    assert asyncio.run(_collect("hello there", "s1", "adult-a")) == ["step one, ", "step two"]
+    assert asyncio.run(bd.brain_oneshot("hello there", "s1", "adult-a")) == "steps" and len(calls) == 2
+    _clean["kid-a"] = "child"
+    assert asyncio.run(_collect(ASKS["fire"][0], "s1", "kid-a")) == [reply_of("fire")]
+    assert asyncio.run(bd.brain_oneshot(ASKS["fire"][0], "s1", "kid-a")) == reply_of("fire") and len(calls) == 2
+
+
+def test_known_route_is_unchanged():
+    assert bd._lane_choice((True, (False, 2))) == (True, True, (False, 2))
+    assert bd._lane_choice((True, None)) == (True, False, None) and bd._lane_choice((False, None)) == (False, False, None)
+    assert bd._floors_live(bd._ROUTE_UNKNOWN) is False
