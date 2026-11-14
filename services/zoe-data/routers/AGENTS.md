@@ -106,7 +106,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 
 Match the existing router style: APIRouter per module, explicit auth dependencies, structured error responses.
 
-SQL reaches Postgres via `db_pool._adapt_params` (placeholders + `datetime('now')`, and bare `NOW()` → `NOW()::text` as a VALUE only — an operand of `+`/`-`/`AT TIME ZONE` stays a timestamp, pinned by `../tests/test_db_pool_now_arithmetic.py`) — write portable SQL, never SQLite-only syntax (`COLLATE NOCASE` → `lower(col)`); `../tests/test_memories_people_postgres_order.py` sweeps the service for it because the SQLite-backed unit lane cannot catch it (`/api/memories/people` 500ed in prod while CI stayed green, 2026-09-25).
+SQL reaches Postgres via `db_pool._adapt_params` (placeholders + `datetime('now')`, and bare `NOW()` → `NOW()::text` as a VALUE only — an operand of `+`/`-`/`AT TIME ZONE` stays a timestamp, pinned by `../tests/test_db_pool_now_arithmetic.py`; the text rewrite is memoised per SQL string (`_adapt_sql`, 2048 entries), so it must stay a pure function of the SQL text, never of params, time or env: `../tests/test_db_pool_adapt_sql_cache.py`) — write portable SQL, never SQLite-only syntax (`COLLATE NOCASE` → `lower(col)`); `../tests/test_memories_people_postgres_order.py` sweeps the service for it because the SQLite-backed unit lane cannot catch it (`/api/memories/people` 500ed in prod while CI stayed green, 2026-09-25).
 
 ## Verification
 
