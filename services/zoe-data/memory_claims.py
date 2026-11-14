@@ -334,12 +334,20 @@ class Norm:
         return (self.value, *self.alts)
 
 
-_TOKEN_RE = re.compile(r"\d+(?:[.,:]\d+)*|[^\W\d_]+|[$€£%]")
+#: a number may start with its decimal point (".50" is 0.50: dropping the point read "$.50" as 50)
+_TOKEN_RE = re.compile(r"\d+(?:[.,:]\d+)*|\.\d+|[^\W\d_]+|[$€£%]")
 _AMPM_RE = re.compile(r"\b([ap])\.\s?m\.?", re.IGNORECASE)
-_DECIMAL_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+_DECIMAL_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+")
 
 
-_NEGATIVE_RE = re.compile(r"(?<![\w])[-\u2212]\s*\d")
+#: a NEGATIVE value, which no stored attribute holds: a minus (hyphen, U+2212, an en / em dash used as one) that does not
+#: follow a word character, then optionally a currency marker ("-$50", "-US$50", "−$50", "–$50"), then the digits or a
+#: leading decimal point; and an accounting negative "($50)" / "(50)". A range or a hyphenated word ("10-$50",
+#: "pay-$50") has a word character before the dash and is NOT read as a sign ("$-50" is two tokens and abstains anyway).
+_SIGN = r"[-\u2212\u2013\u2014]"
+_CUR_MARK = r"(?:(?:us|nz|au|a)?\s*[$€£]|aud|usd|nzd|eur|gbp)"
+_NEGATIVE_RE = re.compile(rf"(?<![\w.]){_SIGN}\s*(?:{_CUR_MARK}\s*)?\.?\d"
+                          rf"|\(\s*(?:{_CUR_MARK}\s*)?\.?\d[\d.,]*\s*(?:{_CUR_MARK}\s*)?\)", re.IGNORECASE)
 
 
 def _toks(text: str) -> list:
@@ -464,6 +472,8 @@ def norm_date(text: str) -> Optional[Norm]:
     order with ordinal or numeric days ("the twentieth of November", "December 19"), day-only ("the 19th"), month-only
     ("January"), month + year. Only the parts said are kept; a 2-digit year, a relative date ("next friday") or a lone
     weekday is ``None``."""
+    if _NEGATIVE_RE.search(str(text or "")):
+        return None
     raw = str(text or "").strip()
     m_iso = _ISO_RE.fullmatch(raw)
     if m_iso:
@@ -688,6 +698,8 @@ _HOUR_WORDS = {w: i for w, i in _SMALL.items() if 1 <= i <= 12}
 def norm_time(text: str) -> Optional[Norm]:
     """A time of day: "5pm", "5:30", "17:00", "five pm", "noon". Resolved as ``{"h": 0-23, "mi"}``; an hour of 1-12 with
     no am/pm is UNRESOLVED ``{"h12", "mi"}`` - it inherits a stored row's half of the day (``resolve_time``) or abstains."""
+    if _NEGATIVE_RE.search(str(text or "")):
+        return None
     toks = [t for t in _toks(text) if t not in ("at", "o", "clock")]
     if toks in (["noon"], ["midday"]):
         return Norm({"h": 12, "mi": 0}, "time")

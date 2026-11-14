@@ -396,3 +396,51 @@ def test_spelled_numbers_it_cannot_read_with_certainty_abstain(text):
 def test_scale_words_after_numerals_and_inside_spelled_numbers(text, v, scale):
     got = mc.normalise("amount", text)
     assert got.value["v"] == v and got.scale == scale
+
+
+# -- a leading decimal point, and a sign before the currency (review of PR 2477, round 2) -------------------------
+
+@pytest.mark.parametrize("text", ["$.50", ".50", ".5", "0.50", "$0.50", "$ .50", "$.5"])
+def test_a_leading_decimal_point_is_kept(text):
+    assert mc.normalise("amount", text).value == {"v": "0.5", "cur": "AUD"}
+
+
+@pytest.mark.parametrize("attribute, text, want", [
+    ("measure", ".5 km", {"v": "0.5", "u": "km"}), ("age", ".5", {"v": 0.5}), ("count", ".5", None),
+    ("event_date", "the .5th", None), ("time_of_day", ".30", None), ("time_of_day", ".30pm", None),
+])
+def test_a_leading_decimal_point_in_the_other_normalisers(attribute, text, want):
+    got = mc.normalise(attribute, text)
+    assert (got.value if got else None) == want
+
+
+@pytest.mark.parametrize("text", [
+    "-$50", "-US$50", "−$50", "–$50", "—$50", "- $ 50", "-A$50", "-AUD 50", "-.5", "-$.50", "$-50",
+    "($50)", "(50)", "(US$50)", "($ 50 )",
+])
+def test_a_negative_amount_abstains_wherever_the_sign_sits(text):
+    assert mc.normalise("amount", text) is None
+
+
+@pytest.mark.parametrize("attribute, text", [
+    ("count", "–2"), ("count", "-2 dogs"), ("count", "(3)"), ("measure", "–5 km"), ("measure", "−.5 km"),
+    ("age", "−3"), ("age", "–3"), ("event_date", "-5th"), ("time_of_day", "-5pm"),
+])
+def test_a_negative_value_abstains_in_the_other_normalisers(attribute, text):
+    assert mc.normalise(attribute, text) is None
+
+
+@pytest.mark.parametrize("attribute, text, want", [
+    # a dash after a word character is a range or a hyphenated word, never a sign: these abstain for OTHER reasons
+    ("amount", "10-$50", None),               # two numbers: a range is not one amount
+    ("amount", "pay-$50", None),              # "pay" is no amount word
+    ("amount", "5-10 dollars", None),
+    # and hyphens that are no sign at all still read
+    ("amount", "twenty-one dollars", {"v": "21", "cur": "AUD"}),
+    ("event_date", "2026-12-19", {"y": 2026, "m": 12, "d": 19}),
+    ("event_date", "twenty-first of may", {"m": 5, "d": 21}),
+    ("age", "twenty-one", {"v": 21.0}),
+])
+def test_a_range_or_hyphenated_word_is_not_a_negative(attribute, text, want):
+    got = mc.normalise(attribute, text)
+    assert (got.value if got else None) == want
