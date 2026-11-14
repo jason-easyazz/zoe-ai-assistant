@@ -1,4 +1,4 @@
-"""Child safety floor: a child asking HOW to use a hazard gets one fixed "ask a grown-up" line, never the steps (QA round 10a, 2026-11-14).
+"""Child safety floor: a child asking about a hazard gets one fixed "ask a grown-up" line, never the steps (QA round 10a, 2026-11-14).
 
 THE MISS. A speaker who said they were ten asked how to use the gas stove and which knife was sharpest, and the brain gave the
 steps. No floor covered those classes (``distress_handoff`` / ``medical_safety`` match none of them), and the account had an adult
@@ -6,16 +6,22 @@ role, so nothing knew the speaker was a child: the asks that were refused were r
 
 WHAT IT DOES. ``check`` (sync, pure, run on every brain turn by ``brain_dispatch``) reads the turn's own words. It records an explicit
 OWN-age statement for this ``(user, session)`` in process memory (never a memory fact; a later own age at or over the adult age clears
-it), then asks whether the turn is a how-to ask about one hazard class. Every other turn returns ``None`` there and nothing changes.
-On a hazard how-to, ``resolve`` decides whether the speaker is a child - the session declaration, else the member record
-(``member_register.audience`` = child: a child role or a minor mode) - and a child gets the class's fixed line; the brain is not asked.
+it), then asks whether the turn is a REQUEST or QUESTION that names a hazard (``hazard_class``). Every other turn returns ``None``
+there and nothing changes. There is deliberately no "how-to" phrase list: for a child, a hazard word in any request or question is
+enough (over-refusing a child is the safe side). A STATEMENT that only mentions a hazard ("dad used the drill today") is not a request.
+``resolve`` then decides who is speaking. FAIL SAFE: the session declaration or a child record (minor mode, or a role in
+``manner_block.CHILD_ROLES``) refuses; a role in ``manner_block.ADULT_ROLES`` passes; a guest / empty id passes (unchanged; an owner
+decision); and a member who COULD be a child - no ``auth_users`` row, a role in neither set, a lookup that raises or exceeds
+``LOOKUP_BUDGET_S`` - refuses too (``source=unverified``). Any error inside ``resolve`` refuses (``source=error``). An adult hit by a
+lookup failure on a hazard ask therefore gets the cautious line: the accepted cost.
 Deferred untouched: a turn the distress hand-off or the medical floor matches (they own it, and run first on the brain lane), a danger
-or injury report ("the stove is on", "I cut my finger"), a factual question with no how-to cue ("why is fire hot"), an adult, and an
-adult talking ABOUT a child ("my daughter is 10" is not the speaker's own age). Age is never inferred from a voice or a topic.
+or injury report ("the stove is on", "I cut my finger"), a factual question ("why is fire hot", "what is a knife made of", "how does a
+drill work"), an adult, and an adult talking ABOUT a child ("my daughter is 10" is not the speaker's own age). Age is never inferred
+from a voice or a topic.
 
 WORDS ARE DATA: ``lexicons_data/<lang>.json`` "child_safety" (English today; a language with no entry falls back to the English one).
 FLAG ``ZOE_CHILD_SAFETY_FLOOR`` off | shadow | enforce (DEFAULT enforce like the other floors; an unknown value enforces). The log is
-one line, ``CHILD_SAFETY_FLOOR class=<id> source=<role|declared> mode=<m> n=<count this session>``: never the words or the age.
+one line, ``CHILD_SAFETY_FLOOR class=<id> source=<role|declared|unverified|error> mode=<m> n=<count>``: never the words or the age.
 No alert, no notification, no stored row. NEVER raises.
 """
 from __future__ import annotations
@@ -34,8 +40,10 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_CHILD_SAFETY_FLOOR"
 LEXICON_KEY = "child_safety"
 FALLBACK_LANG = "en"
+FALLBACK_REPLY = "That one needs a grown-up. Can you ask one to help you?"
 MAX_CHARS = 2000
 SESSION_TTL_S = 12 * 3600
+LOOKUP_BUDGET_S = 0.5
 MAX_SESSIONS = 2048
 #: (user, session) -> {"child": True|False|None, "t": monotonic, "n": refusals}; process memory only, bounded, expires
 _SESSIONS: "OrderedDict[tuple[str, str], dict]" = OrderedDict()
@@ -76,7 +84,8 @@ def _rx(lang: str) -> Optional[dict]:
     w = lambda body: re.compile(rf"(?<!\w)(?:{body})(?!\w)")  # noqa: E731
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
-            "howto": w(e["howto"]), "benign": w(e["benign"]), "report": w(e["report"]),
+            "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
+            "factual": re.compile(e["factual"]), "benign": w(e["benign"]), "report": w(e["report"]),
             "classes": [(c["id"], w(c["terms"]), c["reply"]) for c in e["classes"]]}
 
 
@@ -99,10 +108,19 @@ def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
     return max(found)[1] if found else None
 
 
+def is_request(s: str, rx: dict) -> bool:
+    """A request or question: a ``?``, an ``ask`` cue anywhere, or an ``opener`` as the first word. A plain statement is not one."""
+    head = rx["lead"].sub("", s, count=1)
+    return "?" in s or bool(rx["ask"].search(s)) or bool(rx["opener"].match(head))
+
+
 def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
-    """(class id, fixed reply) when ``s`` asks HOW to use / do one hazard and reports no danger, else None."""
+    """(class id, fixed reply) when ``s`` is a request or question naming one hazard and reports no danger, else None."""
+    core = re.sub(r"[\s.,!?;:]+$", "", rx["lead"].sub("", s, count=1))
+    if rx["factual"].match(core):
+        return None
     s = rx["benign"].sub(" ", s)
-    if not rx["howto"].search(s) or rx["report"].search(s):
+    if not is_request(s, rx) or rx["report"].search(s):
         return None
     for cid, terms, reply in rx["classes"]:
         if terms.search(s):
@@ -134,7 +152,7 @@ def _entry(key: tuple) -> dict:
 
 
 def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -> Optional[Pending]:
-    """The sync pre-check. None = not a hazard how-to (or the floor is off): the turn goes on exactly as before. NEVER raises."""
+    """The sync pre-check. None = not a hazard request (or the floor is off): the turn goes on exactly as before. NEVER raises."""
     try:
         if mode() == "off":
             return None
@@ -161,16 +179,35 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -
         return None
 
 
-async def _role_child(user_id: str) -> bool:
-    import member_register
+async def _who(user_id: str) -> str:
+    """``child`` | ``adult`` | ``guest`` | ``unverified`` (could be a child: no account, a role in neither set, a failed or slow lookup)."""
+    import asyncio
 
-    return await member_register.audience(user_id) == member_register.AUDIENCE_CHILD
+    import manner_block
+
+    uid = (user_id or "").strip()
+    if not uid or manner_block.is_guest(uid):
+        return "guest"
+    try:
+        import enrollment_state
+
+        minor, role = await asyncio.wait_for(enrollment_state._account_facts(uid), timeout=LOOKUP_BUDGET_S)
+    except Exception as exc:  # noqa: BLE001 - not knowing is not "adult"
+        logger.warning("CHILD_SAFETY_FLOOR lookup failed (%s)", type(exc).__name__)
+        return "unverified"
+    if minor or role in manner_block.CHILD_ROLES:
+        return "child"
+    return "adult" if role in manner_block.ADULT_ROLES else "unverified"
+
+
+_SOURCE = {"child": "role", "unverified": "unverified"}
 
 
 async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
-    """The fixed reply when the speaker of a hazard how-to is a child and the floor ENFORCES, else None (ask the brain). NEVER raises."""
+    """The fixed reply when the speaker of a hazard ask is (or could be) a child and the floor ENFORCES, else None (ask the brain).
+    NEVER raises; an error refuses."""
     try:
-        source = "declared" if p.declared else ("role" if await _role_child((user_id or "").strip()) else "")
+        source = "declared" if p.declared else _SOURCE.get(await _who(user_id), "")
         if not source:
             return None
         n = 1
@@ -181,6 +218,6 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
         m = mode()
         logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s n=%d", p.cls, source, m, n)
         return p.reply if m == "enforce" and p.reply else None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("child_safety_floor resolve failed (%s)", type(exc).__name__)
-        return None
+    except Exception as exc:  # noqa: BLE001 - fail SAFE: a hazard ask we could not clear gets the cautious line
+        logger.warning("CHILD_SAFETY_FLOOR class=%s source=error (%s)", getattr(p, "cls", "?"), type(exc).__name__)
+        return getattr(p, "reply", "") or FALLBACK_REPLY

@@ -1024,7 +1024,7 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
 
 
 def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> Any:
-    """``child_safety_floor.check`` (sync, pure): None on every turn that is not a hazard how-to, so those turns are dispatched exactly as before."""
+    """``child_safety_floor.check`` (sync, pure): None on every turn that is not a hazard request, so those turns are dispatched exactly as before."""
     try:
         import child_safety_floor
 
@@ -1033,11 +1033,20 @@ def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict
         return None
 
 
-async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> AsyncIterator[str]:
-    """A hazard how-to: a child gets the floor's fixed line and no lane is dispatched; anyone else gets the lanes unchanged."""
-    import child_safety_floor
+async def _child_floor_reply(floor: Any, user_id: str) -> str:
+    """``child_safety_floor.resolve``, failing SAFE: if it cannot answer, the hazard ask gets the floor's cautious line, never the brain."""
+    try:
+        import child_safety_floor
 
-    reply = await child_safety_floor.resolve(floor, user_id)
+        return await child_safety_floor.resolve(floor, user_id) or ""
+    except Exception:  # noqa: BLE001
+        logger.warning("CHILD_SAFETY_FLOOR source=error (dispatch)")
+        return getattr(floor, "reply", "") or "That one needs a grown-up. Can you ask one to help you?"
+
+
+async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> AsyncIterator[str]:
+    """A hazard ask: a child (or a speaker the floor could not clear) gets its fixed line and no lane runs; an adult gets the lanes unchanged."""
+    reply = await _child_floor_reply(floor, user_id)
     if reply:
         yield reply
         return
@@ -1075,9 +1084,7 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     kwargs = _sanitize_kwargs(kwargs)
     floor = _child_floor_check(message, session_id, user_id, kwargs)
     if floor is not None:
-        import child_safety_floor
-
-        reply = await child_safety_floor.resolve(floor, user_id)
+        reply = await _child_floor_reply(floor, user_id)
         if reply:
             return reply
     token = _provenance_begin(user_id)

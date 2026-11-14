@@ -1653,7 +1653,7 @@
   ]
  },
  "child_safety": {
-  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. 'howto' marks an ask for instructions; 'benign' how-to phrases (spell, draw) are removed first; a 'report' (an injury, a hazard that is already on) is never refused. A class fires on a how-to plus one of its 'terms'; 'reply' is the whole fixed answer.",
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. A class fires on one of its 'terms' in a REQUEST or QUESTION: a '?', an 'ask' cue anywhere, or an 'opener' as the first word (after 'lead_strip'). A STATEMENT that only mentions a hazard is not one. 'factual' questions (why..., what is it made of, how does it work) and 'benign' ones (spell, draw) are removed first; a 'report' (an injury, a hazard that is already on) is never refused. 'reply' is the whole fixed answer.",
   "adult_age": 18,
   "max_school_year": 12,
   "number_words": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen",
@@ -1669,7 +1669,10 @@
    "(?:i am|im|i m) in (?:year|yr|grade|class) {AGE}(?! of)(?!\\w)",
    "(?:i am|im|i m) in (?:kindy|kindergarten|prep|primary school|elementary school|middle school)(?!\\w)"
   ],
-  "howto": "how (?:do|can|could|would|should) (?:i|you|we)|how to|how much|how many|show me how|teach me|tell me how|help me|can i|could i|may i|should i|am i allowed to|is it (?:ok|okay|safe|alright) (?:to|if i)|whats the (?:best|easiest|right|safest) way to|best way to|steps (?:to|for)|instructions (?:to|for)|which (?:\\w+ )?(?:is|are) (?:the )?(?:sharpest|best|strongest|hottest)|i (?:want|wanna|need) to (?:use|light|turn on|switch on|climb|try|mix|eat|drink|take|get on|go on)|lets (?:use|light|turn on|climb|mix)",
+  "lead_strip": "^(?:(?:hey|hi|ok|okay|um|so|and) )*(?:zoe )?[,. ]*",
+  "opener": "how|what|whats|which|where|when|who|can|could|may|should|would|will|do|does|is|are|am|tell|show|explain|teach|help|walk|give|get|bring|find|grab|pass|turn|switch|light|start|use|open|plug|make|let|lets|please|try",
+  "ask": "can i|could i|may i|should i|can you|could you|will you|would you|how (?:do|can|to|would|should|much|many)|show me|tell me|teach me|help me|walk me|explain|i (?:want|wanna|need|would like|d like) to|let me|lets|please|is it (?:ok|okay|safe|alright)|am i allowed|instructions|steps",
+  "factual": "^(?:why|whys) .*|^what (?:is|are|was|were) (?:a |an |the )?.{0,40}(?:made of|made from|called)$|^how (?:does|do) .{0,40} work$",
   "benign": "how (?:do|can|would) (?:i|you|we) (?:spell|say|pronounce|draw|write|paint|colou?r|sing)",
   "report": "i cut|cut (?:my|myself)|bleed\\w*|blood|burnt|burned|burn(?:ed|t)? (?:my|myself)|i burn|hurts?|hurting|stings?|on fire|smoke|smoky|smells? (?:like )?(?:gas|smoke|burning)|swallowed|ate|drank|emergency|fell|fallen|stuck|electric shock|got (?:a )?shock|electrocuted|(?:stove|oven|gas|cooktop|hob|heater|iron|bbq|barbecue|grill|fire|candle|burner)s? (?:is|are|was|were|has been|have been) (?:still )?(?:on|lit|burning|left on)|left (?:the \\w+ )?on|(?:wont|cant|doesnt) (?:turn|switch) off",
   "classes": [
@@ -1690,8 +1693,13 @@
    },
    {
     "id": "blades",
-    "terms": "knife|knives|blades?|razors?|box cutter|stanley knife|cleaver|machete|axe|hatchet|chainsaw|hacksaw|handsaw",
+    "terms": "knife|knives|blades?|razors?|box cutter|stanley knife|cleaver|machete|axe|hatchet",
     "reply": "That one needs a grown-up. Can you ask one to help you with anything sharp?"
+   },
+   {
+    "id": "power_tools",
+    "terms": "(?<!fire )drills?|power drill|(?:circular|table|mitre|miter|jig|chain|band|hand|hack|power|electric) ?saws?|nail ?guns?|sanders?|angle grinders?|grinders?|lawn ?mowers?|mowers?|hedge trimmers?|whipper snippers?|line trimmers?|soldering irons?|heat guns?|power tools?",
+    "reply": "That one needs a grown-up. Can you ask one to help you with power tools?"
    },
    {
     "id": "electricity",
