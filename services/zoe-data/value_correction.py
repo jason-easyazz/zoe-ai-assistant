@@ -955,8 +955,9 @@ def forget_user(user_id) -> int:
 
 def forget_matching(user_id, matches) -> int:
     """Drop the member's remembered corrections whose subject or values ``matches(text)`` - a callable, or anything with ``.search``
-    (a compiled name pattern, the forget ledger's ``LedgerPattern``). An entry the matcher cannot judge is dropped, and a matcher
-    that cannot be used at all drops every entry of the member (over-forget). Returns the entries dropped. Never raises."""
+    (a compiled name pattern, the forget ledger's ``LedgerPattern``). The matcher sees the entry's words AND every form of its subject
+    (``subject_forms``, the one normaliser all forget paths share). An entry the matcher cannot judge is dropped, and a matcher that
+    cannot be used at all drops every entry of the member (over-forget). Returns the entries dropped. Never raises."""
     uid = _uid(user_id)
     try:
         entries = list(_REMEMBERED.get(uid) or ()) if uid else []
@@ -965,8 +966,13 @@ def forget_matching(user_id, matches) -> int:
         test = matches.search if hasattr(matches, "search") else matches
 
         def doomed(c) -> bool:
+            # the entry's own words, then EVERY form its subject may take (``subject_forms``): "ashas swimming" is a correction of
+            # Asha's row, so "forget Asha" must reach it although the literal subject never matches \bAsha\b
             try:
-                return bool(test(_entry_text(c)))
+                if test(_entry_text(c)):
+                    return True
+                forms = subject_forms(c.subject)
+                return any(test(f) for f in forms) if forms else True
             except Exception:  # noqa: BLE001
                 return True
         keep = [(t, c) for t, c in entries if not doomed(c)]
@@ -997,6 +1003,44 @@ def forget_subject(user_id, name) -> int:
         return _drop_all(uid)
 
 
+def subject_forms(subject) -> list:
+    """Every form the correction machinery lets ``subject`` take, as plain strings - THE one normaliser every forget path uses.
+    The subject as said and without its determiner ("the book club" -> "book club"); for "<owner>'s <noun>" (``owner_noun``) the
+    owner alone, the owner with its noun and the possessive both with and without the apostrophe; for a word that may be a lazily
+    typed possessive or a name with a stray s (``_may_be_lazy``: "ashas", "kais") the word without its s; each also through the
+    people graph's ``fold_name`` (case, accents, apostrophe / hyphen styles, whitespace). Never raises: [] when unreadable."""
+    try:
+        s = " ".join(str(subject or "").split())
+        if not s:
+            return []
+        base = re.sub(r"(?i)^(?:the|my|our)\s+", "", s)
+        forms = [s, base]
+        on = owner_noun(s)
+        if on:
+            owner, noun = on
+            forms += [owner, f"{owner} {noun}", f"{owner}'s {noun}"]
+            if _may_be_lazy(owner):
+                forms += [owner[:-1], f"{owner[:-1]} {noun}", f"{owner[:-1]}'s {noun}"]
+        else:
+            words = base.split()
+            if len(words) == 1 and _may_be_lazy(words[0]):
+                forms.append(words[0][:-1])
+        try:
+            from people_graph import fold_name
+
+            forms += [fold_name(f) for f in forms]
+        except Exception:  # noqa: BLE001
+            pass
+        out: list = []
+        for f in forms:
+            f = " ".join(str(f or "").split())
+            if f and f not in out:
+                out.append(f)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _names_subject(subject: str, text: str, folded: set) -> bool:
     """Does ``text`` name the correction's subject in ANY form the correction machinery itself accepts? Its own matchers
     (``_subject_re`` lazy and exact: case, the possessive with or without its apostrophe, "my <relation>", "the <noun>"), plus the
@@ -1007,18 +1051,13 @@ def _names_subject(subject: str, text: str, folded: set) -> bool:
         return False
     if _subject_re(s, True).search(text) or _subject_re(s, False).search(text):
         return True
-    on = owner_noun(s)
-    words = [on[0]] if on else [w for w in re.sub(r"(?i)^(?:the|my|our)\s+", "", s).split() if w]
     try:
         from people_graph import fold_name
 
-        keys = [fold_name(w) for w in words]
-        keys = [k for k in keys if k]
-        if keys and all(set(k.split()) <= folded for k in keys):
-            return True
-        if on:
-            stem = fold_name(on[0])
-            return bool(stem) and (stem in folded or (stem.endswith("s") and stem[:-1] in folded))
+        for form in subject_forms(s):
+            key = set(fold_name(form).split())
+            if key and key <= folded:
+                return True
     except Exception:  # noqa: BLE001 - cannot tell: drop
         return True
     return False

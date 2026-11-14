@@ -491,6 +491,55 @@ def test_the_old_ordering_leaks_on_a_notes_failure(forget_env, monkeypatch):
     assert "Wynne" in _subjects(A)
 
 
+# ── Codex P1 PRRT_kwDOPZpkks63dHC7: the entity path shares the subject normaliser ─────────────────
+
+@pytest.mark.parametrize("subject", ["ashas swimming", "Asha's swimming", "asha's  Swimming", "ashas", "Asha"])
+def test_an_entity_forget_reaches_every_subject_form(subject):
+    """The thread's example through the REAL entity path (the cascade's ``_clear`` with the ledger's name pattern for "Asha"):
+    the apostrophe-free possessive "ashas swimming" names Asha's row, so forgetting Asha drops it; member B keeps theirs."""
+    import memory_forget_cascade as cascade
+
+    vc.reset_state()
+    vc._remember(A, vc.Correction(subject, "wednesday", "thursday"), f"{subject} is on wednesday not thursday")
+    vc._remember(A, vc.Correction("Wren", "4", "3"), "wren is 4 not 3")
+    vc._remember(B, vc.Correction(subject, "wednesday", "thursday"), f"{subject} is on wednesday not thursday")
+
+    async def mutes():
+        return 0
+    run(cascade._clear(A, cascade._name_re("Asha"), mutes, cascade.CascadeResult(), only=frozenset({"restraint_mutes"})))
+    assert _subjects(A) == ["Wren"] and _subjects(B) == [subject]
+
+
+def test_the_literal_subject_was_the_entity_leak():
+    """Negative control: the name pattern alone, tested against the literal subject only (the old check), misses the thread's
+    example - so the test above measures the shared forms, not luck."""
+    import memory_forget_cascade as cascade
+
+    rx = cascade._name_re("Asha")
+    assert not rx.search(vc._entry_text(vc.Correction("ashas swimming", "wednesday", "thursday")))
+    assert any(rx.search(f) for f in vc.subject_forms("ashas swimming"))
+
+
+def test_forget_subject_and_the_ledger_pattern_use_the_same_forms():
+    class _Ledger:                               # the LedgerPattern shape: .search only, no name
+        def search(self, text):
+            return re.search(r"\basha\b", text, re.I)
+    vc.reset_state()
+    vc._remember(A, vc.Correction("ashas swimming", "wednesday", "thursday"), "ashas swimming is on wednesday not thursday")
+    vc._remember(A, vc.Correction("kais", "21", "22"), "kais 21 not 22")
+    assert vc.forget_matching(A, _Ledger()) == 1
+    assert vc.forget_subject(A, "Kai") == 1 and _subjects(A) == []
+
+
+def test_an_unrelated_name_drops_nothing():
+    import memory_forget_cascade as cascade
+
+    vc.reset_state()
+    vc._remember(A, vc.Correction("ashas swimming", "wednesday", "thursday"), "ashas swimming is on wednesday not thursday")
+    assert vc.forget_matching(A, cascade._name_re("Ash")) == 0 and vc.forget_matching(A, cascade._name_re("Sam")) == 0
+    assert _subjects(A) == ["ashas swimming"]
+
+
 # ── the call sites, by AST, each with its break-the-fix control ─────────────────────────────
 
 CALL_SITES = (
