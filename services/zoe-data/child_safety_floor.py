@@ -100,6 +100,10 @@ def _rx(lang: str) -> Optional[dict]:
             "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
             # a question word at the start of ANY clause ("im 10, which knife is sharpest"; "im 9 and where do you keep the matches")
             "clause_q": re.compile(rf"(?:[,;:.!?]\s*|(?<!\w)(?:{e['clause_break']})\s+)(?:{e['clause_opener']})(?!\w)"),
+            "clause_split": re.compile(rf"[,;:.!?]+|(?<!\w)(?:{e['clause_break']})(?!\w)"),
+            "back_ref": w("|".join(e["back_refs"].split())),
+            # later-clause openers skip auxiliaries and the question words (clause_q owns those, with its "what a ..." exclusion)
+            "aux": frozenset(e["aux_openers"].split()) | {re.match(r"[a-z]+", q).group(0) for q in e["clause_opener"].split("|")},
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
@@ -119,8 +123,8 @@ def _not_own(s: str, pos: int, rx: dict) -> bool:
 
 
 def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
-    """True = the speaker states their own age as a child's, False = as an adult's, None = no own-age statement. The LAST one wins.
-    A quoted or reported age is not the speaker's own and counts as neither."""
+    """True = the speaker states their own age as a child's ANYWHERE in the turn ("im 40 no wait im 10", "im 10, im 40"), False = only
+    as an adult's, None = no own-age statement. A quoted or reported-about-someone-else age counts as neither."""
     found: list[tuple[int, bool]] = []
     for r in rx["own"]:
         found += [(m.start(), _age(m.group("age"), rx["nums"]) < rx["adult"]) for m in r.finditer(s) if not _not_own(s, m.start(), rx)]
@@ -131,20 +135,27 @@ def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
             year = m.groupdict().get("age")
             if year is None or _age(year, rx["nums"]) <= rx["max_year"]:
                 found.append((m.start(), True))
-    return max(found)[1] if found else None
+    return any(child for _pos, child in found) if found else None   # any child age declares a child, whatever follows (sticky)
 
 
 def is_request(s: str, rx: dict) -> bool:
-    """A request or question: a ``?``, an ``ask`` cue anywhere, an ``opener`` as the first word, or a question word opening any later
-    clause (``clause_q``). A plain statement is not one."""
-    head = rx["lead"].sub("", s, count=1)
-    return "?" in s or bool(rx["ask"].search(s)) or bool(rx["opener"].match(head)) or bool(rx["clause_q"].search(s))
+    """A request or question: a ``?``, an ``ask`` cue anywhere, an ``opener`` as the first word, a question word opening any later
+    clause (``clause_q``), or an imperative opener starting any later clause ("why is fire hot, get me the big knife"; an auxiliary
+    such as "is" / "do" counts only at the turn start, so "dad used the drill and is tired" stays a statement). A plain statement is
+    not one."""
+    if "?" in s or rx["ask"].search(s) or rx["clause_q"].search(s) or rx["opener"].match(rx["lead"].sub("", s, count=1)):
+        return True
+    for c in clauses(s, rx)[1:]:
+        m = rx["opener"].match(rx["lead"].sub("", c, count=1))
+        if m and m.group(0) not in rx["aux"]:
+            return True
+    return False
 
 
 def _cue_before(s: str, pos: int, rx: dict) -> bool:
-    """A request cue (the same ``ask`` / ``opener`` set ``is_request`` uses) BEFORE ``pos``: then the words after it are the ask."""
-    head = rx["lead"].sub("", s[:pos], count=1)
-    return bool(rx["ask"].search(s[:pos])) or bool(head and rx["opener"].match(head))
+    """Is there an ask BEFORE ``pos``? Exactly ``is_request`` on the words before it - ONE cue test, no second copy - so a clause-start
+    question word counts too ("im 10, which scissors will cut my hair")."""
+    return is_request(s[:pos].strip(), rx)
 
 
 def in_progress(s: str, rx: dict) -> bool:
@@ -155,26 +166,45 @@ def in_progress(s: str, rx: dict) -> bool:
     return False
 
 
+def clauses(s: str, rx: dict) -> list[str]:
+    """The turn's clauses, split the way the ask detection splits them (punctuation, and / so / but / then ...)."""
+    return [c.strip() for c in rx["clause_split"].split(s) if c and c.strip()]
+
+
+def _clause_clears(c: str, rx: dict) -> bool:
+    """May this ONE clause stand without a refusal? It is exempt (a pure factual question, an art / spelling ask whose hazard is only
+    the object, a report with no request cue before it) or it names no hazard and is not a request pointing back at one ("how do i
+    use one"). Every exemption is judged per clause, so an exempt clause never shields another clause's ask."""
+    core = re.sub(r"[\s.,!?;:\"]+$", "", rx["lead"].sub("", c, count=1))
+    if not core:
+        return True
+    if rx["factual"].match(core) and not rx["ask"].search(core) and not rx["factual_not"].search(core):
+        return True   # "why is fire hot": a pure factual question; "how does it work" / "how do I" / "can I" never match
+    if rx["benign"].fullmatch(core) and not rx["body"].search(core):
+        return True   # "how do i draw a knife": the hazard is only the OBJECT; "draw a knife across my hand" / "paint with bleach" never match
+    rep = rx["report"].search(c)
+    if rep and not _cue_before(c, rep.start(), rx):
+        return True   # a report ("i cut my finger") - unless a request cue came FIRST ("how do i cut my bread with a knife")
+    if any(terms.search(c) for _cid, terms, _r in rx["classes"]):
+        return False
+    return not (is_request(c, rx) and rx["back_ref"].search(c))
+
+
 def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
-    """(class id, fixed reply) when ``s`` is a request or question naming one hazard and reports no danger, else None."""
-    core = re.sub(r"[\s.,!?;:\"]+$", "", rx["lead"].sub("", s, count=1))
-    live = in_progress(s, rx)
-    if live and (is_request(s, rx) or rx["live_ask"].search(s)):
+    """(class id, fixed reply) when ``s`` is a request or question naming a hazard that no exemption covers in EVERY clause, else None."""
+    if in_progress(s, rx) and (is_request(s, rx) or rx["live_ask"].search(s)):
         # a hazard IN PROGRESS plus ANY request cue, anywhere ("the stove is on fire what do i do"): the urgent line, noun or not
         return next(((cid, rx["urgent"]) for cid, terms, _r in rx["classes"] if terms.search(s)), ("live", rx["urgent"]))
-    if rx["factual"].match(core) and not rx["ask"].search(core) and not rx["factual_not"].search(core):
-        return None   # "why is fire hot": a pure factual question; "how does it work" / "how do I" / "can I" never match
-    if rx["benign"].fullmatch(core) and not rx["body"].search(core):
-        return None   # "how do i draw a knife": the hazard is only the OBJECT; "draw a knife across my hand" / "paint with bleach" never match
-    if not is_request(s, rx):
+    if not is_request(s, rx) or not any(terms.search(s) for _cid, terms, _r in rx["classes"]):
         return None
-    rep = rx["report"].search(s)
-    if rep and not live and not _cue_before(s, rep.start(), rx):
-        return None   # a report ("i cut my finger") - unless a request cue came FIRST ("how do i cut my bread with a knife")
+    blocking = [c for c in clauses(s, rx) if not _clause_clears(c, rx)]
+    if not blocking:
+        return None   # every clause is exempt or harmless: "why is fire hot, how do i spell cat"
     for cid, terms, reply in rx["classes"]:
-        if terms.search(s):
-            return cid, (rx["urgent"] if live else reply)   # a live hazard: "move away", never only "ask a grown-up to help"
-    return None
+        if any(terms.search(c) for c in blocking):
+            return cid, reply
+    # the blocking clause points back ("how do i spell knife and how do i use one"): the hazard named elsewhere in the turn
+    return next(((cid, reply) for cid, terms, reply in rx["classes"] if terms.search(s)), None)
 
 
 def _owned_by_other_floor(text: str, floors_live: bool = True) -> bool:

@@ -223,7 +223,7 @@ def _observe_circuit() -> tuple[bool, int]:
     The probe's own outcome supersedes: success closes the breaker for
     everyone, another transport failure re-arms it.
     """
-    global _flue_circuit_open_until, _flue_circuit_generation
+    global _flue_circuit_open_until, _flue_circuit_generation, _probe_claim
     with _breaker_lock:
         now = _monotonic()
         deadline = _flue_circuit_open_until
@@ -232,9 +232,27 @@ def _observe_circuit() -> tuple[bool, int]:
         if deadline:
             # Lapsed: claim the single half-open probe.
             ttl = _cooldown_s()
+            _probe_claim = (_flue_circuit_generation + 1, deadline, _flue_circuit_generation)
             _flue_circuit_generation += 1
             _flue_circuit_open_until = (now + ttl) if ttl > 0 else 0.0
         return False, _flue_circuit_generation
+
+
+#: the half-open probe claim this process last made: ``(claimed_generation, lapsed_deadline, generation_before)``
+_probe_claim: Optional[tuple] = None
+
+
+def _release_probe(observed: Optional[tuple]) -> None:
+    """Undo a half-open probe claim that will never dial Flue (the child floor answered the turn): the breaker goes back to exactly
+    the state before the claim - same lapsed deadline, same generation - so the next real turn is the probe. Neither a success nor
+    a failure is recorded. A no-op unless ``observed`` is the claim and nothing has moved the breaker since."""
+    global _flue_circuit_open_until, _flue_circuit_generation, _probe_claim
+    if not observed or observed[0]:
+        return
+    with _breaker_lock:
+        claim = _probe_claim
+        if claim and claim[0] == observed[1] == _flue_circuit_generation:
+            _flue_circuit_open_until, _flue_circuit_generation, _probe_claim = claim[1], claim[2], None
 
 
 def _open_circuit(observed_generation: int) -> None:
@@ -1112,6 +1130,7 @@ async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id
     """A hazard ask: a child (or a speaker the floor could not clear) gets its fixed line and no lane runs; an adult gets the lanes unchanged."""
     reply = await _child_floor_reply(floor, user_id)
     if reply:
+        _release_probe(route[1])   # this turn never dials Flue: the half-open probe it may have claimed goes back unused
         yield reply
         return
     inner = _brain_streaming_lanes(message, session_id, user_id, _route_=route, **kwargs)
@@ -1153,6 +1172,7 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     if floor is not None:
         reply = await _child_floor_reply(floor, user_id)
         if reply:
+            _release_probe(route[1])   # this turn never dials Flue: the half-open probe it may have claimed goes back unused
             return reply
     token = _provenance_begin(user_id)
     reply = ""
