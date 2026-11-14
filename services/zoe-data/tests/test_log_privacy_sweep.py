@@ -170,13 +170,70 @@ def test_memory_row_line_carries_a_tag_not_the_row_text_on_every_handler():
         assert log_redaction.utterance_tag(row_text) in st.getvalue()
 
 
+def _claim_md(**over):
+    claim = {"subj": "user", "pred": "residence", "obj": "Zorblax-tangerine-9137", "pol": "affirm", "mod": "asserted",
+             "tense": "current", "quote": "I live at Zorblax-tangerine-9137"}
+    claim.update(over)
+    import json
+    return {"claim": json.dumps(claim), "claim_lexical": "promote", "claim_structural": "anchor"}
+
+
+def _claim_records(md):
+    import memory_digest
+    seen: list[logging.LogRecord] = []
+
+    class _Cap(logging.Handler):
+        def emit(self, record):
+            seen.append(record)
+
+    lg = logging.getLogger(memory_digest.__name__)
+    old = lg.level
+    h = _Cap(level=logging.DEBUG)
+    lg.setLevel(logging.DEBUG)
+    lg.addHandler(h)
+    try:
+        memory_digest.log_row("turn_digest", "u-1", types.SimpleNamespace(id="row-1", text="t", metadata=md), "stored")
+    finally:
+        lg.removeHandler(h)
+        lg.setLevel(old)
+    return [r for r in seen if r.getMessage().startswith("MEMORY_ROW_CLAIM")]
+
+
+def test_memory_row_claim_line_never_carries_extractor_free_text():
+    """Every field of the claim row is model JSON: pred (free text after ``kin:``), pol / mod / tense and both labels are
+    clamped to their closed vocabularies, anything else logs as ``other``. Planted sentinel in ALL of them, checked on the
+    record (message, msg, args)."""
+    s = "Zorblax-tangerine-9137"
+    md = _claim_md(pred="kin:" + s, pol=s, mod=s, tense=s)
+    md["claim_lexical"] = s
+    md["claim_structural"] = s
+    (rec,) = _claim_records(md)
+    for part in (rec.getMessage(), str(rec.msg), repr(rec.args)):
+        assert "Zorblax" not in part and "tangerine" not in part, part
+    assert rec.getMessage().endswith("claim=kin/other/other/other:other>other")
+    (ok,) = _claim_records(_claim_md())
+    assert ok.getMessage().endswith("claim=residence/affirm/asserted/current:promote>anchor")   # a closed value stays readable
+    (free,) = _claim_records(_claim_md(pred=s))
+    assert "Zorblax" not in free.getMessage() and "claim=other/" in free.getMessage()
+
+
+def test_negative_control_unclamped_claim_label_would_leak():
+    """The pre-fix label joined the raw claim fields: the same planted pred reaches the message."""
+    md = _claim_md(pred="Zorblax-tangerine-9137")
+    import json
+    c = json.loads(md["claim"])
+    old_shape = "%s/%s/%s/%s" % (c.get("pred"), c.get("pol"), c.get("mod"), c.get("tense"))
+    assert "Zorblax" in old_shape
+
+
 # ── static pin: every other touched site ─────────────────────────────────────
 
 #: file -> variables that hold fact / turn / name text in that file. Passing one bare or sliced to a logger call leaks
 #: it; wrapping it in a reducing call (the tag, len, type) is fine.
 PINNED = {
     "expert_dispatch.py": {"text"},
-    "memory_digest.py": {"fact", "text", "synthesis_text", "fact_text", "wording"},
+    "memory_digest.py": {"fact", "text", "synthesis_text", "fact_text", "wording", "moment", "emotion", "tag", "pred", "obj", "subj",
+                         "quote", "claim", "label", "item", "candidate"},
     "memory_extractor.py": {"name", "text"},
     "person_extractor.py": {"name", "name_a", "name_b", "text"},
     "person_extractor_llm.py": {"name", "value"},

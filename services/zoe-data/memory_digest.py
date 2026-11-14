@@ -524,16 +524,31 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
+_LABELS = ("promote", "anchor", "hold")
+
+
+def _closed(value: Any, allowed: tuple[str, ...]) -> str:
+    """``value`` if it is one of the CLOSED set ``allowed``, else the fixed word ``other``: extractor output reaches a log
+    line only through this clamp (a claim row's fields come from model JSON, and ``pred`` can carry free text after ``kin:``)."""
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
 def _claim_label(md: dict) -> str:
     """``<pred>/<pol>/<mod>/<tense>:<lexical>><structural>`` of a row's claim row, or ``-``: what the extractor read and what
-    each floor made of it (labels only)."""
+    each floor made of it. Every part is clamped to its closed vocabulary (``structural_claims.PREDICATES`` /
+    ``POLARITIES`` / ``MODALITIES`` / ``TENSES``; the lexical / structural labels are promote|anchor|hold) with anything else
+    logged as ``other``; a ``kin:<code>`` predicate logs as ``kin`` (its code is model text). Never the obj / subj / quote."""
     raw = md.get("claim")
     if not raw:
         return "-"
     try:
+        import structural_claims as sc
         c = json.loads(raw) if isinstance(raw, str) else dict(raw)
-        return "%s/%s/%s/%s:%s>%s" % (c.get("pred"), c.get("pol"), c.get("mod"), c.get("tense"),
-                                      md.get("claim_lexical") or "-", md.get("claim_structural") or "-")
+        pred = str(c.get("pred") or "")
+        pred = "kin" if pred.startswith("kin:") else _closed(pred, sc.PREDICATES)
+        return "%s/%s/%s/%s:%s>%s" % (pred, _closed(c.get("pol"), sc.POLARITIES), _closed(c.get("mod"), sc.MODALITIES),
+                                      _closed(c.get("tense"), sc.TENSES), _closed(md.get("claim_lexical") or "-", _LABELS + ("-",)),
+                                      _closed(md.get("claim_structural") or "-", _LABELS + ("-",)))
     except Exception:  # noqa: BLE001
         return "-"
 
@@ -1716,7 +1731,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
         try:
             from memory_quality import user_relationship_claim_unsupported
             if user_relationship_claim_unsupported(moment, ""):
-                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %r", moment[:70])
+                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %s", _log_redaction.utterance_tag(moment))
                 continue
         except Exception:
             pass
@@ -1733,7 +1748,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
             if ref is not None:
                 stored += 1
                 log_row("emotional", user_id, ref, "stored")
-                logger.info("emotional_pass: stored user=%s [%s] %s", user_id, emotion, moment[:60])
+                logger.info("emotional_pass: stored user=%s %s", user_id, _log_redaction.utterance_tag(moment))
         except MemoryServiceError as exc:
             logger.debug("emotional_pass: ingest failed: %s", exc)
     return stored
@@ -3001,7 +3016,7 @@ async def _synthesis_pass(user_id: str) -> dict:
                         col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
                     synthesized += 1
             except Exception as exc:
-                logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
+                logger.warning("synthesis failed for tag=%s user=%s: %s", _log_redaction.utterance_tag(tag), user_id, exc)
 
     except Exception as exc:
         logger.warning("synthesis pass failed user=%s: %s", user_id, exc)
