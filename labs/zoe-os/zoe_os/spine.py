@@ -11,6 +11,9 @@
 * FORGET is a property of the log, not of each feature (``Spine.forget``): a person's events,
   everything derived from them and their bytes on disk are gone from replay, export and every
   queue, every subscriber is told, and a skill cannot publish the forgotten words again.
+  A forget is one of four scopes: everything about the person, named events, an ENTITY
+  ("forget Dana": their events that name it, plus a keyed hash of the name so a skill cannot
+  write the name about them again), or a TOPIC (their events that hold every topic word).
 
 Trust boundary: this is an in-process prototype. Python cannot stop a skill in the same
 process from calling a private method; the real boundary is a process and a socket.
@@ -27,6 +30,7 @@ import time
 from collections import deque
 from typing import Callable, Iterable, Iterator, NamedTuple, Protocol
 
+from . import forget_match as fm
 from .events import CONTENT_KEYS, KERNEL_ONLY, Event, Kind, Visibility
 
 KERNEL = "kernel"
@@ -49,6 +53,7 @@ CREATE TABLE IF NOT EXISTS forget_ledger (
   count INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (subject, fp));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 """
 
@@ -97,6 +102,10 @@ class ForgetResult(NamedTuple):
     upto: int       # the forget covers everything up to this sequence number
 
 
+MAX_TOPIC_EVENTS = 12   # a topic forget matching more first-hand events than this is refused
+MAX_NOTICE_SEQS = 256   # a scoped forget notice lists the erased sequence numbers up to this many
+
+
 def _strings(node):
     """Every string value in a payload, at any depth."""
     if isinstance(node, str):
@@ -107,6 +116,19 @@ def _strings(node):
     elif isinstance(node, list):
         for value in node:
             yield from _strings(value)
+
+
+def _keys_and_strings(node):
+    """Every string in a payload INCLUDING dict keys: a name can be smuggled as a key."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            yield from _keys_and_strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _keys_and_strings(value)
 
 
 def _content(node):
@@ -162,6 +184,9 @@ class Spine:
             self._db.execute("INSERT INTO meta VALUES ('shield_key', ?)", key)
         self._shield_key: bytes = key[0]
         self._shield: set[bytes] = {r[0] for r in self._db.execute("SELECT fp FROM shield")}
+        self._entities: dict[str, set[bytes]] = {}      # person -> keyed hashes of forgotten names
+        for person, fp in self._db.execute("SELECT subject, fp FROM entity_shield"):
+            self._entities.setdefault(person, set()).add(fp)
         self.refusals = 0
         self.last_seq = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
 
@@ -196,8 +221,11 @@ class Spine:
         if not ev.caused_by and not self.authorizer.is_origin(ev.source):
             return "a skill must say which events its event derives from"
         reason = self._cause_refusal(ev.source, ev.caused_by)
-        if not reason and not self.authorizer.is_origin(ev.source) and self._shielded(ev.payload):
-            reason = "carries forgotten content"
+        if not reason and not self.authorizer.is_origin(ev.source):
+            if self._shielded(ev.payload):
+                reason = "carries forgotten content"
+            elif self._names_forgotten(ev):
+                reason = "names a forgotten entity"
         return reason
 
     def _cause_refusal(self, source: str, caused_by: tuple[int, ...]) -> str:
@@ -261,25 +289,92 @@ class Spine:
         raise Refused(f"{who}: {attempted}: {reason}")
 
     # ---- forget -------------------------------------------------------------------
-    def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None) -> ForgetResult:
-        """Erase a person's events (all of them, or the named ones) and all that derives from them."""
+    def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None,
+               entity: str | None = None, topic: str | None = None) -> ForgetResult:
+        """Erase a person's events and all that derives from them.
+
+        With nothing else: every event about them. ``seqs``: only the named ones. ``entity``:
+        only their events that name it, and the name is shielded for them from then on.
+        ``topic``: only their events that hold every topic word. An entity or topic with no
+        words is REFUSED: a scope that matches nothing never widens to "everything".
+        """
         with self._lock:
             verdict = self.authorizer.may_forget(actor, subject)
             if not verdict.allowed:
                 self._refuse(actor, "forget", verdict.reason or "not theirs to forget")
+            if entity is not None and topic is not None:
+                self._refuse(actor, "forget", "one scope at a time")
+            key = fm.entity_key(entity) if entity is not None else ""
+            groups = fm.topic_groups(topic) if topic is not None else []
+            if (entity is not None and not key) or (topic is not None and not groups):
+                self._refuse(actor, "forget", "nothing to match")
             upto = self.last_seq
             seed = {r[0] for r in self._db.execute(
                 "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto))}
             if seqs is not None:
                 seed &= set(seqs)
+            if key or groups:
+                seed = self._matching(seed, key, groups)
+                if groups and len(seed) > MAX_TOPIC_EVENTS:
+                    self._refuse(actor, "forget", "too many events match: say which part")
             dead = sorted(self._closure(seed))
             self._tombstone(dead)
+            if key:
+                self._shield_entity(subject, key)
             self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
                              (subject, upto, self._clock(), len(dead)))
             self._epoch += 1
-            self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
-                                payload={"subject": subject, "upto": upto, "count": len(dead)})])
+            notice = {"subject": subject, "upto": upto, "count": len(dead)}
+            if key or groups:           # a scoped notice says WHICH events, never which words
+                notice |= {"scope": "entity" if key else "topic", "seqs": dead[:MAX_NOTICE_SEQS]}
+            self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL, payload=notice)])
             return ForgetResult(len(dead), upto)
+
+    def _matching(self, seed: set[int], key: str, groups: list) -> set[int]:
+        """The seed events whose payload names the entity / holds the whole topic."""
+        hit: set[int] = set()
+        for chunk in _chunks(sorted(seed)):
+            marks = ",".join("?" * len(chunk))
+            for seq, payload in self._db.execute(
+                    f"SELECT seq, payload FROM events WHERE tombstoned = 0 AND seq IN ({marks})", chunk):
+                body = json.loads(payload) if payload else {}
+                if any(fm.names(t, key) for t in _keys_and_strings(body)) if key \
+                        else fm.about(" . ".join(_strings(body)), groups):
+                    hit.add(seq)
+        return hit
+
+    # ---- the entity shield: a keyed hash of a forgotten name, per person, never the name -----
+    def _efp(self, person: str, key: str) -> bytes:
+        return hmac.new(self._shield_key, f"entity\0{person}\0{key}".encode(), hashlib.sha256).digest()
+
+    def _shield_entity(self, subject: str, key: str) -> None:
+        fp = self._efp(subject, key)
+        self._entities.setdefault(subject, set()).add(fp)
+        self._db.execute("INSERT OR IGNORE INTO entity_shield VALUES (?, ?)", (subject, fp))
+
+    def _names_forgotten(self, ev: Event) -> bool:
+        """Does a skill's event name something a person it is about asked to forget? An event
+        about nobody in particular is checked against everyone's forgotten names."""
+        watched = [(p, self._entities[p]) for p in (ev.people or self._entities) if self._entities.get(p)]
+        if not watched:
+            return False
+        return any(self._efp(person, run) in fps
+                   for text in _keys_and_strings(ev.payload) for run in fm.runs(fm.words(text))
+                   for person, fps in watched)
+
+    def release(self, subject: str, entity: str, *, actor: str) -> bool:
+        """The person explicitly teaches the name again: lift the shield. Never automatic: a
+        first-hand mention by an adapter is recorded but does NOT lift it."""
+        with self._lock:
+            verdict = self.authorizer.may_forget(actor, subject)
+            if not verdict.allowed:
+                self._refuse(actor, "release", verdict.reason or "not theirs to release")
+            fp = self._efp(subject, fm.entity_key(entity))
+            if fp not in self._entities.get(subject, ()):
+                return False
+            self._entities[subject].discard(fp)
+            self._db.execute("DELETE FROM entity_shield WHERE subject = ? AND fp = ?", (subject, fp))
+            return True
 
     def _closure(self, seed: set[int]) -> set[int]:
         """The seed plus every event that derives from it, to any depth."""
