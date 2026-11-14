@@ -24,8 +24,9 @@ import contextlib
 import contextvars
 import functools
 import inspect
+import time
 import weakref
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Iterator, Optional
 
 _generation: dict = {}
 #: one lock table per running event loop (an ``asyncio.Lock`` binds to a loop; tests start many)
@@ -117,10 +118,13 @@ async def writing(user_id: str, scheduled_at: int) -> AsyncIterator[bool]:
 
 #: the post-turn / background work the current task belongs to: ``(user_id, generation it was scheduled at)``, or None
 _scheduled: "contextvars.ContextVar" = contextvars.ContextVar("user_erase_gate_scheduled", default=None)
+#: ``(user_id, time.monotonic() when that work was scheduled)``: for a store with its own erase epoch (the value registry's partial
+#: erases), which must ask "did an erase of mine START after this work was queued?"
+_scheduled_mono: "contextvars.ContextVar" = contextvars.ContextVar("user_erase_gate_scheduled_mono", default=None)
 
 
 @contextlib.contextmanager
-def scheduled(user_id: str, scheduled_at: int) -> Iterator[None]:
+def scheduled(user_id: str, scheduled_at: int, *, at: Optional[float] = None) -> Iterator[None]:
     """Run a block as background work for ``user_id`` SCHEDULED at generation ``scheduled_at``; tasks it starts inherit it.
 
     For the MemoryService writers (the turn digest and every post-turn pass, the nightly digest, idle consolidation). Their rows are
@@ -129,10 +133,21 @@ def scheduled(user_id: str, scheduled_at: int) -> Iterator[None]:
     module's lock inside its memory lock, so a writer holding ``writing`` while it waits for the memory lock would deadlock it.
     ``delete_user`` runs whole inside ``erase_span``, so the member reads as erased from its first step until it has finished."""
     token = _scheduled.set((user_id, scheduled_at))
+    mono = _scheduled_mono.set((user_id, time.monotonic() if at is None else at))
     try:
         yield
     finally:
+        _scheduled_mono.reset(mono)
         _scheduled.reset(token)
+
+
+def scheduled_snapshot(user_id: str) -> "Optional[tuple]":
+    """``(generation, monotonic time)`` this task's work for ``user_id`` was SCHEDULED at, or None outside such work. A store that
+    snapshots its own epochs later (``value_correction.apply``) starts from THIS instead of the moment it runs."""
+    held, mono = _scheduled.get(), _scheduled_mono.get()
+    if held is None or (held[0] or "").strip().lower() != (user_id or "").strip().lower():
+        return None
+    return held[1], (mono[1] if mono is not None and mono[0] == held[0] else None)
 
 
 def scheduled_here(user_id: str) -> "contextlib.AbstractContextManager":
@@ -159,12 +174,16 @@ def scheduled_at_call(user_arg: str):
 
         @functools.wraps(fn)
         def call(*args, **kwargs):
-            user_id = sig.bind_partial(*args, **kwargs).arguments.get(user_arg) or ""
-            held = _scheduled.get()
-            gen = held[1] if held is not None and held[0] == user_id else generation(user_id)
+            bound = sig.bind_partial(*args, **kwargs)
+            bound.apply_defaults()
+            user_id = bound.arguments.get(user_arg) or ""
+            held, mono = _scheduled.get(), _scheduled_mono.get()
+            outer = held is not None and held[0] == user_id
+            gen = held[1] if outer else generation(user_id)
+            at = mono[1] if outer and mono is not None and mono[0] == user_id else time.monotonic()
 
             async def body():
-                with scheduled(user_id, gen):
+                with scheduled(user_id, gen, at=at):
                     return await fn(*args, **kwargs)
             return body()
         if hasattr(inspect, "markcoroutinefunction"):     # 3.12: still reads as a coroutine function
