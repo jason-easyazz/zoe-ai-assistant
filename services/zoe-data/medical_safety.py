@@ -325,7 +325,11 @@ _RECALL_TIME = (
     r"|at\s+(?:christmas|easter)"
     r"|when\s+(?:i|he|she|they|we|you)\s+(?:was|were)\s+(?:younger|little|small|a\s+kid|a\s+child|a\s+baby))"
 )
-_RQ_WHO = r"(?:i|you|he|she|we|they|(?:my|our|your)\s+[a-z]+|[a-z]+)"
+#: the CLOSED who-slot: a pronoun, or "my / our <relation>" from a closed list. Anything else - a bare relation word used as a name
+#: ("has dad ..."), a person's name, any other word ("did help have ...") - keeps the floor (the fail-safe direction).
+_RQ_RELATIONS = ("mum|mom|mother|dad|father|wife|husband|partner|son|daughter|kid|child|brother|sister|nan|nana|grandma|grandpa|"
+                 "grandad|friend")
+_RQ_WHO = rf"(?:i|you|he|she|we|they|(?:my|our)\s+(?:{_RQ_RELATIONS}))"
 _RECALL_SHAPE_RE = re.compile(
     rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)"
     rf"\s+(?P<sym>[a-z ]+?)(?:\s+{_RECALL_TIME})?$")

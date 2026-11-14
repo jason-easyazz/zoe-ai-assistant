@@ -21,11 +21,13 @@ def run(coro):
 # ── E1: both sides of the floor ───────────────────────────────────────────────────────────────────────────────────────────────
 #: QA round 10a recorded these three (shape kept, names generic): each got "Ring 000 now" instead of an answer from memory
 QA10A_RECALL = ["has my partner had chest pain", "have i ever had chest pain"]
-#: the third QA 10a phrasing, "did i have chest pain recently", now KEEPS the floor: "recently" can be present-relevant (FLIPPED)
+#: the third QA 10a phrasing, "did i have chest pain recently", now KEEPS the floor: "recently" can be present-relevant (FLIPPED);
+#: so do "has dad ever had chest pain" and "did grandma have chest pain at christmas" (a bare relation word is not in the closed
+#: who-slot: WHO_FLOOR)
 RECALL_QUESTIONS = QA10A_RECALL + [
-    "did i have chest pain?", "did i have chest pain last month?", "have i ever had chest pain?", "has dad ever had chest pain",
+    "did i have chest pain?", "did i have chest pain last month?", "have i ever had chest pain?",
     "did my wife have chest pain last week", "had i had chest pain before", "did my son have trouble breathing last year",
-    "hey zoe, did i have chest pain in march?", "did grandma have chest pain at christmas", "have i had chest pain before?",
+    "hey zoe, did i have chest pain in march?", "have i had chest pain before?",
     "did i ever have crushing chest pain", "did my husband have chest pain when he was younger", "um did i have chest pain last year",
     "has my mum ever had chest pain?", "ok, did my brother have chest pain in 2019?",
 ]
@@ -82,8 +84,9 @@ def test_property_appending_any_one_token_to_an_accepted_recall_question_keeps_t
         assert medical_safety.detect(f"{base} {token}").cls == "red_call", (q, token)
 
 
-def _old_unanchored(s: str) -> bool:
-    """The withdrawn check, kept HERE only as the negative control: a recall prefix, then anything not on an incomplete verb list."""
+def _old_unanchored(s: str, rx=None) -> bool:
+    """The withdrawn production check (aece8e39e^): a recall prefix, then anything not on an incomplete verb list. Patched INTO the
+    module below, so the control runs through the production ``detect``."""
     import re
 
     filler = r"(?:hey|hi|ok|okay|so|um+|uh+|oh|well|zoe|quick question)"
@@ -95,8 +98,22 @@ def _old_unanchored(s: str) -> bool:
 
 
 @pytest.mark.parametrize("text", LEFTOVER_FLOOR[:5])
-def test_control_the_old_unanchored_check_lost_the_floor_on_the_review_examples(text):
-    assert _old_unanchored(medical_safety._fold(text))
+def test_control_the_old_unanchored_check_loses_the_floor_through_detect(text, monkeypatch):
+    assert medical_safety.detect(text).cls == "red_call"                           # production: the floor
+    monkeypatch.setattr(medical_safety, "_recall_question", _old_unanchored)
+    assert medical_safety.detect(text).cls == ""                                   # the old rule, through detect: lost
+
+
+WHO_FLOOR = ["did help have chest pain", "has dad ever had chest pain", "did grandma have chest pain at christmas",
+             "did rowan have chest pain last year", "has the neighbour had chest pain before", "did someone have chest pain",
+             "did my boss have chest pain last week", "did it have chest pain"]
+
+
+@pytest.mark.parametrize("text", WHO_FLOOR)
+def test_only_a_closed_who_slot_can_take_the_floor_away(text):
+    assert medical_safety.detect(text).cls == "red_call"
+
+
 FALL_FLOOR = ["i fell over in the shower and cant get up", "my brother fell and cant get up", "she fell over and cant get up"]
 
 
