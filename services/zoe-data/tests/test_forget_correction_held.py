@@ -1,8 +1,9 @@
 """FORGET_CORRECTION_HELD: the instrument for #2487 (gap audit 2026-11-14.6). At a forget's completion it counts the corrections
 ``value_correction._REMEMBERED`` still holds about what was forgotten. Counts only, read-only, never raises.
 
-Before #2487 (this branch's base) the count is > 0 on every path below: that is the BEFORE number, proven here. After #2487 it is
-0. The instrument changes nothing: each path's result and the in-process memory are identical with the instrument stubbed out.
+Since #2487 every forget path clears that memory, so the count is 0 on every path below (the AFTER, proven here). The BEFORE
+(> 0) is kept honest by `test_the_instrument_still_sees_a_correction_a_forget_left_behind`: with #2487's clears switched off, the
+same real path reports held=1, so a 0 is a measurement, not a blind spot. The instrument changes nothing: each path's result and the in-process memory are identical with the instrument stubbed out.
 Invented names only (the repo is public). ``ci_safe``.
 """
 from __future__ import annotations
@@ -178,14 +179,16 @@ def test_topic_forget_logs_held_and_is_unchanged(forget_env, monkeypatch, caplog
 
     res, lines = _both_ways(monkeypatch, caplog,
                             lambda: run(forget_topic.forget(_Svc(("r1", "The book club meets at the library")), A, "the book club")))
-    assert res.forgotten == 1 and lines == ["FORGET_CORRECTION_HELD path=topic held=1 live=3"]   # before #2487: still held
+    assert res.forgotten == 1 and _held(lines, "topic") == 0
 
 
 def test_name_forget_through_the_cascade_logs_held_and_is_unchanged(monkeypatch, caplog):
     import memory_forget_cascade as cascade
 
-    async def only_mutes(user_id, rx, mutes, res, **_k):      # the in-process step only: no database, no file store
-        await cascade._step("restraint_mutes", mutes, res)
+    real_clear = cascade._clear
+
+    async def only_mutes(user_id, rx, mutes, res, **_k):      # the in-process steps only: no database, no file store
+        await real_clear(user_id, rx, mutes, res, only=frozenset({"restraint_mutes"}))
 
     async def no_retry(*_a, **_k):
         return None
@@ -197,7 +200,7 @@ def test_name_forget_through_the_cascade_logs_held_and_is_unchanged(monkeypatch,
         return 0
     monkeypatch.setattr(restraint, "erase_entity", zero)
     res, lines = _both_ways(monkeypatch, caplog, lambda: run(cascade.cascade_forget(A, "Juno")))
-    assert not res.failed and lines == ["FORGET_CORRECTION_HELD path=name held=1 live=3"]
+    assert not res.failed and _held(lines, "name") == 0
 
 
 def test_forget_that_logs_held_and_is_unchanged(monkeypatch, caplog):
@@ -223,7 +226,7 @@ def test_forget_that_logs_held_and_is_unchanged(monkeypatch, caplog):
     monkeypatch.setattr(exact_words, "erase_text", noop)
     monkeypatch.setattr(exact_words, "forget_transcript", noop)
     reply, lines = _both_ways(monkeypatch, caplog, lambda: run(ir._execute_forget_last(A)))
-    assert reply.startswith("Done") and lines == ["FORGET_CORRECTION_HELD path=last held=1 live=3"]
+    assert reply.startswith("Done") and _held(lines, "last") == 0
 
 
 def test_the_member_erase_calls_the_instrument_after_its_caches():
@@ -231,3 +234,23 @@ def test_the_member_erase_calls_the_instrument_after_its_caches():
     src = (SVC / "memory_service.py").read_text()
     body = src[src.index("forget_redact.clear_turn_caches(user_id)"):]
     assert 'value_correction.log_held_after_forget("member", user_id)' in body[:2000]
+
+
+def _held(lines, path):
+    """The one line's held count, after checking the strict format and the path."""
+    (line,) = lines
+    m = LINE_RE.match(line)
+    assert m and m.group(1) == path, line
+    return int(m.group(2))
+
+
+def test_the_instrument_still_sees_a_correction_a_forget_left_behind(forget_env, monkeypatch, caplog):
+    """Not vacuous: with #2487's in-process clears switched off, the SAME real topic path reports the correction it left behind."""
+    import forget_topic
+
+    for name in ("forget_matching", "forget_turns", "forget_in_texts", "forget_user"):
+        monkeypatch.setattr(vc, name, lambda *_a, **_k: 0)
+    caplog.set_level(logging.INFO, logger="value_correction")
+    res = run(forget_topic.forget(_Svc(("r1", "The book club meets at the library")), A, "the book club"))
+    assert res.forgotten == 1
+    assert _lines(caplog) == ["FORGET_CORRECTION_HELD path=topic held=1 live=3"]

@@ -275,7 +275,7 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
         return await restraint.erase_entity(user_id, name, strict=True)
 
     await _clear(user_id, rx, mutes, res, db=db)
-    try:    # instrument (counts only, read-only): corrections naming them the in-process memory still holds (#2487 makes it 0)
+    try:    # instrument (counts only, read-only): corrections naming them the in-process memory still holds (0 since #2487)
         import value_correction
         value_correction.log_held_after_forget("name", user_id, pattern=rx)
     except Exception:  # noqa: BLE001
