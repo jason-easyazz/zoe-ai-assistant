@@ -972,3 +972,43 @@ def test_summary_rows_absent_malformed_and_bucket_pct():
     assert "malformed marker" in sc.inst_search_embed(txt, SINCE, UNTIL)["reason"]
     assert sc.bucket_pct([0, 0, 0], (1, 2), 50) == "-"
     assert sc.bucket_pct([0, 0, 4], (1, 2), 50) == ">2" and sc.bucket_pct([1, 1, 0], (1, 2), 50) == "<=1"
+
+
+def test_alarm_seen_row_splits_ring_start_from_other_changes():
+    lines = parsed([
+        L("06T07:00:01", "ALARM_RING_SEEN event=rang ms=1800 changes=1"),
+        L("07T07:00:01", "ALARM_RING_SEEN event=rang ms=40 changes=1"),
+        L("07T07:03:00", "ALARM_RING_SEEN event=snoozed ms=900 changes=2"),
+        L("08T07:00:01", "ALARM_RING_SEEN event=rang ms=-1 changes=1"),
+        L("08T07:00:02", "ALARM_RING_SEEN event=rang ms=5 changes=1 traffic=probe"),     # a replay panel: excluded
+    ])
+    m = sc.inst_alarm_seen(_logset(lines, sc.parse_ts(L("01T00:00:00", ""))), SINCE, UNTIL)
+    assert m["data"] == {"lines": 4, "rang_ms": [1800.0, 40.0], "other_ms": [900.0], "never": 1}
+    assert m["value"].startswith("a ring starting: ms p50 920 / p90 1624 / max 1800 (n=2)")
+    empty = _logset([], sc.parse_ts(L("01T00:00:00", "")))
+    assert sc.inst_alarm_seen(empty, SINCE, UNTIL)["status"] == "unmeasured"
+    bad = _logset(parsed([L("06T07:00:01", "ALARM_RING_SEEN event=Wake ms=10 changes=1")]), sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_alarm_seen(bad, SINCE, UNTIL)["reason"]
+
+
+def test_self_heal_fix_row_reads_verified_heals_and_skips_impossible_timestamps(tmp_path):
+    import json as _j
+    p = tmp_path / "audit.jsonl"
+    rows = [
+        {"ts": "2026-11-06T10:00:00", "step": "result", "outcome": "healed_local", "fix_s": 120.0},
+        {"ts": "2026-11-07T10:00:00", "step": "result", "outcome": "healed", "fix_s": 600.0},
+        {"ts": "2026-11-07T11:00:00", "step": "result", "outcome": "discarded", "reason": "gate_failed"},
+        {"ts": "2026-11-07T12:00:00", "step": "engine", "outcome": "ok"},                       # not a result
+        {"ts": "2026-13-45T10:00:00", "step": "result", "outcome": "healed_local", "fix_s": 1.0},  # impossible: skipped
+        {"ts": "2026-11-01T10:00:00", "step": "result", "outcome": "healed_local", "fix_s": 9.0},  # outside the window
+        {"ts": "2026-11-08T10:00:00", "step": "result", "outcome": "secret_word", "fix_s": 5.0},   # unknown: other, no fix
+    ]
+    p.write_text("\n".join(_j.dumps(r) for r in rows) + "\n{torn\n")
+    m = sc.inst_self_heal_fix(str(p), SINCE, UNTIL)
+    assert m["data"] == {"fix_s": [120.0, 600.0], "outcomes": {"healed_local": 1, "healed": 1, "discarded": 1, "other": 1},
+                         "skipped": 2}
+    assert m["value"].startswith("fault-to-fix s p50 360 / p90 552 / max 600 (n=2)") and "secret_word" not in str(m)
+    assert sc.inst_self_heal_fix(str(tmp_path / "none.jsonl"), SINCE, UNTIL)["status"] == "unmeasured"
+    q = tmp_path / "q.jsonl"
+    q.write_text(_j.dumps({"ts": "2026-11-07T11:00:00", "step": "result", "outcome": "discarded"}) + "\n")
+    assert "unmeasured (no verified heal)" in sc.inst_self_heal_fix(str(q), SINCE, UNTIL)["value"]

@@ -64,6 +64,11 @@ HOOK_TIMEOUT_S = 5.0
 
 
 async def _emit(event: str, alarm: dict) -> None:
+    try:   # ALARM_RING_SEEN instrument: note when the ringing set changed (one monotonic read; counts only, never raises)
+        import alarm_ring_lateness
+        alarm_ring_lateness.changed(event, alarm)
+    except Exception:  # noqa: BLE001
+        pass
     for hook in list(HOOKS):
         try:
             await asyncio.wait_for(hook(event, alarm), HOOK_TIMEOUT_S)
