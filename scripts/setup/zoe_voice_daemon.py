@@ -2091,7 +2091,10 @@ class _BargeMonitor:
     def start(self) -> None:
         if not BARGE_IN_ENABLED or self._thread is not None:
             return
-        _TALK.begin()  # before the thread: a first sound can never land ahead of the reset
+        try:  # the first-sound instrument only counts: absent or failing, it must never stop barge-in
+            _TALK.begin()  # before the thread: a first sound can never land ahead of the reset
+        except Exception:
+            pass
         self._thread = threading.Thread(target=self._run, daemon=True, name="barge-monitor")
         self._thread.start()
 
@@ -2152,7 +2155,10 @@ class _BargeMonitor:
             log.debug("Barge monitor mic open failed: %s", exc)
             return
         det = _BargeDetector()
-        _TALK.mic_open()
+        try:  # same rule as begin(): counting only, never in the monitor's way
+            _TALK.mic_open()
+        except Exception:
+            pass
         log.debug("Barge monitor listening (th=%.2f, %d/%d chunks, grace=%dms, fast=%d@%.2f)",
                   det.threshold, det.min_chunks, det.window_chunks, int(det.grace_s * 1000),
                   det.fast_chunks, det.fast_prob)
