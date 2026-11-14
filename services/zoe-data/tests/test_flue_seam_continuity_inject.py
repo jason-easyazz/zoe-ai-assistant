@@ -273,7 +273,7 @@ async def test_composer_timeout_never_breaks_the_turn(monkeypatch):
         return PACKET
 
     monkeypatch.setattr(zc, "_fetch_continuity_packet", slow)
-    monkeypatch.setattr(zc, "_CONTINUITY_TIMEOUT_S", 0.05)
+    monkeypatch.setenv("ZOE_CONTINUITY_CEILING_S", "0.05")
     msg = await _outbound(S4_ASK)
     assert msg == f" zoe-uid:demo-a\n{S4_ASK}"
 
