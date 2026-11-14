@@ -254,6 +254,10 @@ class KernelServer:
                                     caused_by=tuple(a["caused_by"]))
         return dataclasses.asdict(r)
 
+    def _op_undo(self, conn: _Conn, a: dict) -> dict:
+        self._person_op(conn, "undo")
+        return dataclasses.asdict(self.kernel.actions.undo(a["person"], actor=a["actor"]))
+
     def _op_explain(self, conn: _Conn, a: dict) -> dict:
         """With ``person`` (surfaces only): the full answer of ``explain.Explainer.why``.
         With ``seq``: that event and its causes, as far as the calling skill may read them.

@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NUL
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS intents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, skill TEXT NOT NULL, action TEXT NOT NULL,
-  person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER
+  person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER,
+  undoes INTEGER
 );
 """
 

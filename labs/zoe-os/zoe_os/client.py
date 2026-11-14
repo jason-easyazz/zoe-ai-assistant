@@ -87,6 +87,9 @@ class Client:
     def grant(self, person: str, skill: str, **more) -> dict:
         return self.call("grant", person=person, skill=skill, **more)
 
+    def undo(self, person: str, *, actor: str) -> Receipt:
+        return Receipt(**self.call("undo", person=person, actor=actor))
+
     def revoke(self, person: str, skill: str) -> dict:
         return self.call("revoke", person=person, skill=skill)
 
