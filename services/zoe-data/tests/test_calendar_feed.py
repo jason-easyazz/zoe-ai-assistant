@@ -296,6 +296,84 @@ def test_a_shadow_run_never_touches_the_account(db):
     assert row() != before and db.one("SELECT status FROM connected_accounts") == "error"
 
 
+FORGOTTEN = ("Dana Quillfeather", "dana.quillfeather@example.org")          # synthetic
+
+
+def _with_people(uid, title, seq=0):
+    return vevent(uid, title, seq=seq, attendees=[FORGOTTEN, ("Pat Example", "pat@example.org")])
+
+
+def _forget(user, name):
+    """The entity forget's two writes: the ledger entry, then the cascade's own calendar-attendee step (``_clear`` limited to that
+    label, so the test never touches the cascade's FILE stores - the logs and records under the home directory)."""
+    import memory_forget_cascade as mfc
+
+    async def go():
+        assert await memory_forgotten.add(user, name)
+        res = mfc.CascadeResult()
+
+        async def no_mutes():
+            return 0
+        async with db_compat.get_compat_db() as d:
+            await mfc._clear(user, mfc._name_re(name), no_mutes, res, db=d, only=frozenset({"calendar_attendees"}))
+        assert not res.failed
+        return res
+    return run(go())
+
+
+def _people(d):
+    return sorted((r[0] or "", r[1] or "") for r in d.rows("SELECT display_name, email FROM event_attendees"))
+
+
+@needs_ics
+def test_a_forgotten_attendee_never_comes_back_from_the_feed(db):
+    a = account()
+    f = Feed(ics(_with_people("p1@example.test", "Planning")))
+    sync(a, f)
+    assert _forget("ann", FORGOTTEN[0]).attendees == 1                             # the cascade scrubbed the row
+    f.body = ics(_with_people("p1@example.test", "Planning", seq=1), _with_people("p2@example.test", "Review"))
+    r = sync(a, f)
+    assert (r.counts.get("updated"), r.counts.get("created")) == (1, 1)            # an update AND a fresh event
+    people = _people(db)
+    assert not any("quillfeather" in (n + e).lower() for n, e in people)
+    assert people.count(("Pat Example", "pat@example.org")) == 2 and people.count(("", "")) == 2   # the others survive
+
+
+@needs_ics
+def test_forgotten_attendee_negative_control(db, monkeypatch):
+    """Without the shield the provider's copy brings the scrubbed name straight back on the update."""
+    monkeypatch.setattr(feed, "shield_attendees", lambda user_id, wanted, attendees: attendees)
+    a = account()
+    f = Feed(ics(_with_people("p1@example.test", "Planning")))
+    sync(a, f)
+    _forget("ann", FORGOTTEN[0])
+    f.body = ics(_with_people("p1@example.test", "Planning", seq=1))
+    sync(a, f)
+    assert any("quillfeather" in (n + e).lower() for n, e in _people(db))
+
+
+@needs_ics
+def test_with_the_ledger_down_nothing_unshielded_is_written(db, monkeypatch):
+    a = account()
+    f = Feed(ics(_with_people("p1@example.test", "Planning")))
+    sync(a, f)
+    _forget("ann", FORGOTTEN[0])
+    before = _people(db), db.one("SELECT COUNT(*) FROM events")
+
+    class Down(memory_forgotten.MemoryBackend):
+        async def active_hashes(self, user_id, now_iso):
+            raise ConnectionError("synthetic outage")
+    memory_forgotten.set_backend(Down())
+    f.body = ics(_with_people("p1@example.test", "Planning", seq=1), _with_people("p2@example.test", "Review"))
+    r = sync(a, f)
+    assert (r.outcome, r.error_code) == ("error", "ledger_unavailable")
+    assert (_people(db), db.one("SELECT COUNT(*) FROM events")) == before          # held: no update, no new event
+    monkeypatch.delenv("ZOE_FORGET_LEDGER_SALT")
+    f.calls = 0
+    r = sync(a, f)
+    assert (r.outcome, r.error_class, r.error_code, f.calls) == ("error", "config", "ledger_unavailable", 0)   # refused before the fetch
+
+
 # -- the visibility clamp ---------------------------------------------------------------------------------------------------------
 
 @needs_ics

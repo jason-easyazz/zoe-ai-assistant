@@ -36,6 +36,12 @@ pinned address), returning ``blocked``; and never put the address, host or a tok
 * VISIBILITY CLAMP: an event's visibility is the MORE PRIVATE of its calendar's policy and its own CLASS (``parse_ics`` maps
   CLASS:PUBLIC to "family"); a provider never widens a private calendar to the household. A calendar this engine creates is
   ``personal``.
+* FORGOTTEN PEOPLE: before any attendee write (create AND update) the member's forget ledger is applied with the forget cascade's
+  own rule (``memory_forget_cascade.attendee_forgotten``): an attendee or organiser whose name or email names a forgotten person
+  is written anonymous, as the cascade leaves it, so a re-sync never brings back what a forget scrubbed. Titles, descriptions,
+  places and alarm text are stored as the provider sent them: the cascade does not scrub them on calendar rows either (owner
+  decision: attendee names are scrubbed, titles kept). FAIL CLOSED: an unconfigured ledger refuses the sync before the fetch, and
+  an unreadable one stops the write (``ledger_unavailable``); nothing is written unshielded.
 * ABSENT KEYS (this stage): a stored row whose key the feed no longer carries is LEFT UNTOUCHED and counted ``absent``. Remote
   deletes, the mass-delete guard, the forget shield and disconnect arrive together, in the next change.
 * ``shadow``: fetch, parse, count against the stored rows, write ``sync_runs`` only.
@@ -59,6 +65,7 @@ from typing import Any, Awaitable, Callable, Optional, Union
 import calendar_read
 import calendar_service as cal
 import connected_accounts as ca
+import memory_forgotten
 import user_erase_gate as erase_gate
 
 logger = logging.getLogger(__name__)
@@ -347,19 +354,38 @@ async def _stored(calendar_id: str) -> dict:
 class _Stop(Exception):
     def __init__(self, why: str):
         super().__init__(why)
-        self.why = why                       # "erased" | "fenced"
+        self.why = why                       # "erased" | "fenced" | "ledger"
 
 
-async def _gated(run: ca.Run, step: Callable[[Any, frozenset], Awaitable[Any]]) -> Any:
-    """One write step: the member's erase gate, then ONE transaction that first checks the account generation."""
+async def _gated(run: ca.Run, step: Callable[[Any, frozenset], Awaitable[Any]], *, shield: bool = False) -> Any:
+    """One write step: the member's erase gate, then ONE transaction that first checks the account generation. ``shield`` loads the
+    member's forgotten set (strict) under the gate's lock, so a forget that landed before this step is honoured by it."""
     async with erase_gate.writing(run.user_id, run.scheduled_at) as live:
         if not live:
             raise _Stop("erased")
+        wanted: frozenset = frozenset()
+        if shield:
+            try:
+                wanted = await memory_forgotten.active_hashes(run.user_id, strict=True)
+            except memory_forgotten.LedgerUnavailable:
+                raise _Stop("ledger") from None
         async with _db() as db:
             async with db.transaction():
                 if not await ca.still_current(db, run.account_id, run.generation):
                     raise _Stop("fenced")
-                return await step(db, frozenset())
+                return await step(db, wanted)
+
+
+def shield_attendees(user_id: str, wanted: frozenset, attendees: list) -> list:
+    """The forget cascade's own attendee rule (``memory_forget_cascade.attendee_forgotten``) over the member's ledger: an attendee
+    (the organiser included) whose name or email names a forgotten person is written ANONYMOUS, exactly as the cascade leaves it."""
+    if not wanted:
+        return attendees
+    from memory_forget_cascade import attendee_forgotten
+
+    rx = memory_forgotten.LedgerPattern(user_id, wanted)
+    return [dict(a, display_name=None, email=None, person_id=None, person_link_source=None) if attendee_forgotten(rx, a) else a
+            for a in attendees]
 
 
 async def _link_members(db, event_id: str, attendees: list) -> None:
@@ -467,6 +493,11 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
                 pass                         # erased / fenced: finish_run records which
         return await finish("error", error_class=error_class, error_code=error_code, retry_after=retry_after, failures=failures)
 
+    # forgotten means forever: without a working ledger nothing is fetched or written
+    if not memory_forgotten.configured():
+        logger.warning("CALENDAR_FEED refused account=%s: the forget ledger is not configured", account_id)
+        return await failed("config", "ledger_unavailable")
+
     cap = max_bytes()
     if account_id in _outstanding:                # its last fetch has not returned: never stack another on a stuck call
         rep.detail = "fetch_outstanding"
@@ -550,7 +581,9 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
             await _mark_success(db, cal_id, new_cursor, now, "ok")
         await _gated(run, mark)
         cursor["sha"] = sha
-    except _Stop:
+    except _Stop as stop:
+        if stop.why == "ledger":
+            return await finish("error", error_class="internal", error_code="ledger_unavailable")
         return await finish("partial")       # erased / fenced: finish_run writes nothing / records "fenced"
     return await finish("ok", error_code=None)
 
@@ -586,7 +619,7 @@ async def _write_items(run: ca.Run, user_id: str, cal_id: str, items: dict, stor
     for i in range(0, len(ordered), BATCH):
         batch = ordered[i:i + BATCH]
 
-        async def step(db, _w, batch=batch):
+        async def step(db, wanted, batch=batch):
             for it in batch:
                 s = stored.get(it.key)
                 eid = s["id"] if s else str(uuid.uuid4())
@@ -599,11 +632,12 @@ async def _write_items(run: ca.Run, user_id: str, cal_id: str, items: dict, stor
                 if not it.key[1]:
                     master_ids[it.key[0]] = eid
                 if got in ("created", "updated"):
-                    await cal.replace_attendees(db, eid, user_id, it.attendees)
+                    attendees = shield_attendees(user_id, wanted, it.attendees)
+                    await cal.replace_attendees(db, eid, user_id, attendees)
                     await cal.replace_alarms(db, eid, user_id, it.alarms)
-                    await _link_members(db, eid, it.attendees)
+                    await _link_members(db, eid, attendees)
                 if it.key[1]:
                     await db.execute("UPDATE events SET series_id = ? WHERE id = ? AND COALESCE(series_id, '') <> COALESCE(?, '')",
                                      (master_ids.get(it.key[0]), eid, master_ids.get(it.key[0])))
-        await _gated(run, step)
+        await _gated(run, step, shield=True)
 
