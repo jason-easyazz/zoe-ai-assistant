@@ -89,7 +89,7 @@ def install(monkeypatch, blocks: "dict[str, str] | None" = None, *, delay_s: "di
     monkeypatch.setattr(zfc, "_persona_context_block", stub("persona"))
     monkeypatch.setattr(zfc, "_speculative_turn_for_wire", spec)
     monkeypatch.setattr(zfc, "_household_locale_line", lambda: "")
-    monkeypatch.setattr(zfc, "_claim_correction_line", lambda _sid: "")
+    monkeypatch.delenv("ZOE_WRITE_CLAIM_CORRECTION", raising=False)   # the REAL _claim_correction_line runs: "" unless a test notes one
 
     cap: dict = {"calls": calls}
     real_wire = zfc._wire_version
