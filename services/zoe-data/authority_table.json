@@ -105,7 +105,7 @@
     "alarm_list": {"class": "read_private"},
     "list_show": {"class": "household_list"},
     "list_add": {"class": "household_list", "receipt": "list"},
-    "list_remove": {"class": "household_list"},
+    "list_remove": {"class": "household_list", "receipt": "list_removed"},
     "timer_create": {"class": "panel_utility", "receipt": "timer"},
     "music_play": {"class": "panel_utility"},
     "music_control": {"class": "panel_utility"},
@@ -117,9 +117,9 @@
     "journal_create": {"class": "personal_write"},
     "alarm_set": {"class": "personal_write", "receipt": "timer"},
     "smart_home": {"class": "home_control", "receipt": "device"},
-    "memory_store": {"class": "memory_write_stated"},
+    "memory_store": {"class": "memory_write_stated", "receipt": "memory"},
     "people_create": {"class": "memory_write_stated"},
-    "memory_retire": {"class": "memory_forget"},
+    "memory_retire": {"class": "memory_forget", "receipt": "forget"},
     "music_setup": {"class": "settings"}
   }
 }
