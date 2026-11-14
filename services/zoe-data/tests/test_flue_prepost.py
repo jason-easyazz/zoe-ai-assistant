@@ -17,7 +17,7 @@ pytestmark = pytest.mark.ci_safe
 
 PLANT = "PLANTED-zx81-octarine"   # must never appear in any instrument line
 _LINE_RE = re.compile(
-    r"^FLUE_PREPOST session=\S+ total_ms=\d+ blocks_ms=\d+ other_ms=\d+ awaited=\d+((?: [a-z_]+_ms=\d+)*)$")
+    r"^FLUE_PREPOST sid=[0-9a-f]{10} total_ms=\d+ blocks_ms=\d+ other_ms=\d+ awaited=\d+((?: [a-z_]+_ms=\d+)*)$")
 
 
 def _instrument_lines(caplog, tag: str) -> list[str]:
@@ -79,14 +79,22 @@ async def test_no_text_in_any_instrument_line_planted_string(monkeypatch, caplog
     cap = rig.install(monkeypatch, blocks)
     caplog.set_level(logging.DEBUG)
     for i in range(3):
-        await rig.outbound(cap, f"{PLANT} turn {i}", session_id="voice-panel-plant", uid=f"member-{PLANT}")
-        zfc._log_prompt_cache("voice-panel-plant", {"prompt_cache": [{"prompt_n": 2000, "cache_n": 0}],
-                                                     "context_budget": {"tools": 600 + i, "history": 50, "elided": 1}})
-    for tag in ("FLUE_PREPOST", "PANEL_KV_MISS", "FLUE_CONTEXT_BUDGET"):
+        await rig.outbound(cap, f"{PLANT} turn {i}", session_id=f"voice-panel-{PLANT}", uid=f"member-{PLANT}")
+        zfc._log_prompt_cache(f"voice-panel-{PLANT}", {"prompt_cache": [{"prompt_n": 2000, "cache_n": 0}],
+                                                       "context_budget": {"tools": 600 + i, "history": 50, "elided": 1}})
+    lines = _instrument_lines(caplog, "FLUE_PREPOST")
+    assert len(lines) == 3
+    for line in lines:                       # the new line: no text, no raw uid, no raw session id
+        assert PLANT not in line and "member-" not in line and "voice-panel-" not in line, line
+        assert f"sid={zfc._short_hash(f'voice-panel-{PLANT}')}" in line
+    # PANEL_KV_MISS / FLUE_CONTEXT_BUDGET carried ``session=<raw id>`` before this change and are joined by it
+    # (scripts/perf/user_model_ab.py); what this change ADDS to them (cause=, tools_changed=) carries no id or text
+    for tag in ("PANEL_KV_MISS", "FLUE_CONTEXT_BUDGET"):
         lines = _instrument_lines(caplog, tag)
         assert lines, tag
         for line in lines:
-            assert PLANT not in line and "member-" not in line, line
+            rest = line.replace(f"session=voice-panel-{PLANT}", "session=<sid>")
+            assert PLANT not in rest and "member-" not in rest, line
 
 
 async def test_negative_control_the_planted_string_is_detectable(monkeypatch, caplog):
@@ -94,6 +102,14 @@ async def test_negative_control_the_planted_string_is_detectable(monkeypatch, ca
     caplog.set_level(logging.INFO)
     logging.getLogger("zoe_flue_client").info("FLUE_PREPOST session=s total_ms=1 %s", PLANT)
     assert any(PLANT in line for line in _instrument_lines(caplog, "FLUE_PREPOST"))
+
+
+def test_negative_control_a_raw_session_id_is_caught():
+    """A FLUE_PREPOST line that carried the raw session id would fail the format: the sid field is a 10-hex hash only."""
+    raw = f"FLUE_PREPOST sid=voice-panel-{PLANT} total_ms=1 blocks_ms=0 other_ms=1 awaited=0"
+    assert not _LINE_RE.match(raw)
+    t = zfc._PrepostTimer()
+    assert _LINE_RE.match(t.render(f"voice-panel-{PLANT}")) and PLANT not in t.render(f"voice-panel-{PLANT}")
 
 
 async def test_a_seam_reply_turn_logs_no_line_and_leaves_no_timer_to_adopt(monkeypatch, caplog):
