@@ -4,10 +4,11 @@ Readers used to query ``events`` themselves and got it wrong the same ways: matc
 before the window vanished), never expanded a repeat (a weekly event showed on its first date only), read ``cancelled``
 events out as real, and let a voice/tool edit change an event its provider owns. ``events_in_window`` fixes all four for the
 readers that use it: the calendar list and today routes, the MCP ``calendar_list_events`` / ``calendar_today`` tools, the
-``intent_router`` calendar show and daily briefing, and the Skybridge calendar show. NOT yet on it (named follow-up): the
-anticipation loop's own query (it shares only ``repeat_rule``), ``proactive/triggers/morning_checkin``, ``proactive/selector``
-and the pendant day review's duplicate check (``omi_day_review._on_calendar``). ``load_for_write`` + ``is_writable`` /
-``refusal`` are the rule every update and delete path uses.
+``intent_router`` calendar show and daily briefing, the Skybridge calendar show, the anticipation loop (night pass and its
+re-checks, the member's OWN events), ``proactive/triggers/morning_checkin``, ``proactive/selector`` and the pendant day review's
+duplicate check (``omi_day_review._on_calendar``). Still reading ``events`` directly, by design: the write paths (the routers,
+the Skybridge move/delete target lookups, ``calendar_forget``, ``calendar_ical``) and the single-row ``GET /events/{id}``.
+``load_for_write`` + ``is_writable`` / ``refusal`` are the rule every update and delete path uses.
 
 Time (docs/architecture/calendar-data-model.md section 5.1): ``start_date`` / ``start_time`` are the wall clock in the
 event's own ``timezone``; no zone = floating (read as household time); all-day = a date (inclusive ``end_date``). An
@@ -33,9 +34,11 @@ _COUNT_SCAN_DAYS = 3660               # a COUNT rule is counted from its anchor;
 _OVERRIDE_PAD_DAYS = 31               # an override's original date this far before the window may still be inside it (multi-day)
 
 #: Sources whose rows are a provider's copy: Zoe has no write-back, so an edit here would silently fork the event.
-PROVIDER_SOURCES = frozenset(("ha", "caldav", "google", "microsoft"))
+#: ``subscription`` = a read-only subscribed calendar feed (an ICS address); ``ics`` = a file imported once, which stays editable.
+PROVIDER_SOURCES = frozenset(("ha", "caldav", "google", "microsoft", "subscription"))
 SOURCE_LABELS = {"local": "Zoe", "ics": "an imported calendar file", "ha": "Home Assistant",
-                 "caldav": "a CalDAV calendar", "google": "Google Calendar", "microsoft": "Outlook"}
+                 "caldav": "a CalDAV calendar", "google": "Google Calendar", "microsoft": "Outlook",
+                 "subscription": "a subscribed calendar"}
 
 _REPEAT_WORDS = {"daily": ("DAILY", 1), "weekly": ("WEEKLY", 1), "fortnightly": ("WEEKLY", 2), "biweekly": ("WEEKLY", 2),
                  "monthly": ("MONTHLY", 1), "yearly": ("YEARLY", 1), "annually": ("YEARLY", 1), "annual": ("YEARLY", 1)}
@@ -100,6 +103,12 @@ def _date(raw: Any) -> Optional[date]:
 
 def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in ("1", "true", "t", "yes")
+
+
+def repeat_understood(row: dict) -> bool:
+    """False when the row carries a repeat rule this module cannot read (it would show its base date only)."""
+    raw = str(row.get("rrule") or "").strip() or str(row.get("recurring") or "").strip()
+    return not raw or _rule_with_bounds(raw)[0] is not None
 
 
 def is_recurring(row: dict) -> bool:
