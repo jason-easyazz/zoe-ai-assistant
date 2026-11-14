@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-132 stores: 58 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+133 stores: 59 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -148,6 +148,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `learned_voiceprints` | pg_table | biometric | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_voiceprints` | - |
 | `learned_voiceprint_segments` | pg_table | biometric | reached | member: `omi_recordings.forget_user` / entity: `contacts_store.forget_voiceprints` | - |
 | `named_guest_turns` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_voiceprints` | - |
+| `named_guest_disclosures` | pg_table | metadata | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_voiceprints` | - |
 | `panel_voice_clusters` | pg_table | biometric | gap | - | Passive named guests (0073): unknown panel voices held for the household owner. Erased by expiry (14 days, hourly sweep), by naming (the voice becomes a guest's print), and by the owner's DELETE /api/voice/unknown-voices; a member erase does not reach them and they hold no name an entity forget could match. Never in the dumps (BIOMETRIC_TABLES). |
 | `panel_voice_samples` | pg_table | biometric | gap | - | The embeddings behind panel_voice_clusters (never audio), erased with their voice. Never in the dumps (BIOMETRIC_TABLES). |
 | `learned_voiceprints_0071` | pg_table | metadata | out_of_scope | - | Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the same migration; it never exists on the Postgres box the dumps read. |

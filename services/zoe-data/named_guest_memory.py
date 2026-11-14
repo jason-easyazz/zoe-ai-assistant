@@ -31,8 +31,19 @@ def memory_on() -> bool:
     return mode() == "on" and bool(flag("ZOE_NAMED_GUEST_MEMORY"))
 
 
+async def has_print(db, guest: Guest) -> bool:
+    """Does this guest still hold a panel print? Nothing about a guest is written once it is gone."""
+    async with db.execute("SELECT 1 FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? AND channel = ? LIMIT 1",
+                          (guest.owner_user_id, guest.person_id, CHANNEL)) as cur:
+        return await cur.fetchone() is not None
+
+
 async def remember(guest: Optional[Guest], session_id: str, user_text: str, reply: str) -> bool:
     """Keep one exchange in that guest's space. Never raises; False when not kept (flag off, nothing said, a failure)."""
+    if guest is not None:
+        import named_guest_disclosure     # this is the one post-turn call of a guest turn: was the guest told what is kept?
+
+        await named_guest_disclosure.after_turn(guest, reply)       # never raises; off = no work
     if guest is None or not memory_on() or not (user_text or "").strip():
         return False
     try:
@@ -40,6 +51,8 @@ async def remember(guest: Optional[Guest], session_id: str, user_text: str, repl
         from db_compat import get_compat_db
 
         async with get_compat_db() as db:
+            if not await has_print(db, guest):
+                return False      # erased during this very turn ("forget me", or the member's forget): the turn is not kept
             await db.execute(
                 "INSERT INTO named_guest_turns (id, user_id, people_id, session_id, user_text, reply, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -124,7 +137,9 @@ async def erase_people(db, owner_user_id: str, person_ids: Iterable[str]) -> int
         notes = await conversation_notes.erase_people(db, owner_user_id, ids)
     except ImportError:
         pass
-    return int(getattr(cur, "rowcount", 0) or 0) + notes
+    import named_guest_disclosure     # the told-mark goes too: a guest who is taught again is told again
+
+    return int(getattr(cur, "rowcount", 0) or 0) + notes + await named_guest_disclosure.erase_people(db, owner_user_id, ids)
 
 
 async def list_for(owner_user_id: str, *, admin: bool = False) -> list[dict]:

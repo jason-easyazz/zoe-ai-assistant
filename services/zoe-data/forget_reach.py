@@ -99,6 +99,7 @@ TABLES: tuple[Store, ...] = (
     _t("learned_voiceprints", BIOMETRIC, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),
     _t("learned_voiceprint_segments", BIOMETRIC, REACHED, member=_OMI_M, entity="contacts_store.forget_voiceprints"),
     _t("named_guest_turns", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),   # via omi_voices.purge_people
+    _t("named_guest_disclosures", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),   # 0083; via named_guest_memory.erase_people
     _t("panel_voice_clusters", BIOMETRIC, GAP,
        "Passive named guests (0073): unknown panel voices held for the household owner. Erased by expiry (14 days, hourly sweep), by "
        "naming (the voice becomes a guest's print), and by the owner's DELETE /api/voice/unknown-voices; a member erase does not "

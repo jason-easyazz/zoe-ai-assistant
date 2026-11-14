@@ -45,7 +45,7 @@ when I'm talking I can do stuff but if she talks she just gets treated like a gu
 she has had with that person".
 
 Code: `services/zoe-data/named_guests.py` (who, the claim, the panel feed, the brain block), `named_guest_enrol.py`,
-`named_guest_memory.py`, `named_guest_learning.py`, migrations `0071`-`0073`, the daemon's guest scoring in
+`named_guest_memory.py`, `named_guest_learning.py`, `named_guest_disclosure.py`, migrations `0071`-`0073` and `0083`, the daemon's guest scoring in
 `scripts/setup/zoe_voice_daemon.py`. Pinned by `services/zoe-data/tests/test_named_guest*.py` and
 `tests/unit/test_named_guests_daemon.py`; the forget probe row is `named_guest_turns` in `tests/test_forget_completeness_probe.py`.
 
@@ -78,6 +78,26 @@ Code: `services/zoe-data/named_guests.py` (who, the claim, the panel feed, the b
    outage means no guest at all. A member re-enrolling a name they forgot releases it (an explicit re-teach). Erasing a member
    (`contacts_store.forget_user`) erases their guests' turns.
 
+## Consent: being told, and "forget me" (`named_guest_disclosure.py`, 0083; both flags default off)
+
+- **Told once (`ZOE_NAMED_GUEST_DISCLOSURE`).** A voice can become a named guest without the guest hearing a word about it (a member
+  names a saved clip, the owner backfills, Zoe learns it from conversation), and even a panel enrolment only says "I keep a voice
+  signature". On a matched guest's turn, while no `named_guest_disclosures` row exists for them, their brain block carries one more
+  line: tell them, once and briefly, that Zoe knows their voice, that she remembers their conversations (only with
+  `ZOE_NAMED_GUEST_MEMORY`), that panel recordings are kept (only with `ZOE_VOICE_SAVE_AUDIO`; "up to 30 days" only with
+  `ZOE_VOICE_CLIP_RETENTION`), and how it is forgotten. The line is built from the flags as they are: it never promises what is off.
+- **Told means the reply said it.** The row is written after the turn, and only when the reply that went out used the word "forget"
+  (the line asks for it); otherwise the line rides the next turn. A mark that cannot be read counts as not told. LIMIT: the check is
+  one word, and the brain is asked, not forced: a reply that says "forget" for another reason counts as the telling.
+- **"Forget me" (`ZOE_NAMED_GUEST_SELF_FORGET`).** A guest the server matched by voice THIS turn who says "forget me" (the
+  `guest_asks` shapes) is erased exactly as by the member's "forget Quinn's voice": the panel print, every kept turn, the notes, the
+  labelled clips, the told-mark. The member's contact row stays. Saying a name is never enough, a member's turn never comes here, a
+  read-only turn changes nothing, and a failed erase says so. The turn itself is not kept: `remember` and `after_turn` write nothing
+  for a guest whose print is gone. With the flag off a recognised guest's "forget me" goes to the brain as before, and the telling
+  says "anyone who lives here can ask".
+- **Not solved:** with `ZOE_GUEST_VOICE_LEARN=on` a guest who asked to be forgotten is, after enough new turns, an unknown voice again
+  and is asked their name again. Not learning them would mean keeping their print (open-problems.md).
+
 ## On a guest turn
 
 The brain gets one block in the identity slot (both lanes: the Flue sidecar's identity slot, the core lane's portrait): "You are
@@ -92,6 +112,8 @@ window's stricter bar) is kept as a guest turn instead of being dropped as backg
 | `ZOE_NAMED_GUESTS` | `off` | `off`: no guest is served or matched, the tier is inert. `shadow`: guests are served to the panel and scored; the server logs `NAMED_GUEST mode=shadow would_greet=1` and changes nothing. `on`: matched, greeted, enrolable, member claim guard live. |
 | `ZOE_NAMED_GUEST_MEMORY` | off | Keep and recall a guest's own exchanges (needs `on`). |
 | `ZOE_NAMED_GUEST_RECALL_TURNS` | 6 | How many past exchanges ride into a guest turn (0-20). |
+| `ZOE_NAMED_GUEST_DISCLOSURE` | off | A named guest is told once what Zoe keeps about them and how it is forgotten (needs `on`; migration 0083). |
+| `ZOE_NAMED_GUEST_SELF_FORGET` | off | A recognised named guest's own "forget me" erases their voice and conversations (needs `on`). |
 | `ZOE_GUEST_VOICE_LEARN` | `off` | Passive learning: `shadow` keeps unknown voices and logs, `on` also asks their name. |
 | `ZOE_VOICE_CLIP_VERDICT` | off | Write the server's speaker verdict beside each saved corpus clip (needs `ZOE_VOICE_SAVE_AUDIO`). |
 | `ZOE_VOICE_CLIP_RETENTION` | off | Run the sweep (every 6 h) that deletes guest / unknown clips past `ZOE_VOICE_CLIP_RETENTION_DAYS` (30). Never a member's or a legacy clip. |
