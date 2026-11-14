@@ -4135,13 +4135,19 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
+        import value_correction
+        value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
+        value_correction.forget_in_texts(user_id, [text])
+    except Exception:  # noqa: BLE001
+        pass
     try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
         import conversation_notes
         await conversation_notes.erase_for_text(user_id, text, at=ts)
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
         failed += 1
-    try:    # instrument (counts only, read-only): corrections from that turn the in-process memory still holds (#2487 makes it 0)
+    try:    # instrument (counts only, read-only): corrections from that turn the in-process memory still holds (0 since #2487)
         import value_correction
         value_correction.log_held_after_forget("last", user_id, texts=[text])
     except Exception:  # noqa: BLE001

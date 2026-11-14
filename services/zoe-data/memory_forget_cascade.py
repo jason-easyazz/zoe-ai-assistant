@@ -126,6 +126,11 @@ def _names(rx: "re.Pattern[str]", *texts: Any) -> bool:
     return any(t and rx.search(str(t)) for t in texts)
 
 
+def attendee_forgotten(rx: Any, attendee: dict) -> bool:
+    """The ``event_attendees`` rule (the step below, and the calendar feed before it writes): its name or email names the entity."""
+    return _names(rx, attendee.get("display_name"), attendee.get("email"))
+
+
 async def _rows(db, sql: str, params: tuple) -> list:
     cur = await db.execute(sql, params)
     return list(await cur.fetchall())
@@ -173,6 +178,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         return only is None or label in only
 
     db_only = None if (only is None or "database" in only) else frozenset(only.intersection(DB_STEPS))
+    try:    # the in-process correction memory naming the entity (value_correction._REMEMBERED; in-process, never raises)
+        import value_correction
+
+        value_correction.forget_matching(user_id, rx)
+    except Exception:  # noqa: BLE001
+        pass
 
     async def database() -> int:
         if db is not None:
@@ -264,7 +275,7 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
         return await restraint.erase_entity(user_id, name, strict=True)
 
     await _clear(user_id, rx, mutes, res, db=db)
-    try:    # instrument (counts only, read-only): corrections naming them the in-process memory still holds (#2487 makes it 0)
+    try:    # instrument (counts only, read-only): corrections naming them the in-process memory still holds (0 since #2487)
         import value_correction
         value_correction.log_held_after_forget("name", user_id, pattern=rx)
     except Exception:  # noqa: BLE001
@@ -444,7 +455,7 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         now = _now_iso()
         n = 0
         for r in await _rows(db, "SELECT id, person_id, display_name, email FROM event_attendees WHERE user_id = ?", (user_id,)):
-            if (r[1] is not None and str(r[1]) in ids) or _names(rx, r[2], r[3]):
+            if (r[1] is not None and str(r[1]) in ids) or attendee_forgotten(rx, {"display_name": r[2], "email": r[3]}):
                 await db.execute(
                     "UPDATE event_attendees SET person_id = NULL, person_link_source = NULL, display_name = NULL, "
                     "email = NULL, updated_at = ? WHERE id = ? AND user_id = ?", (now, r[0], user_id))
