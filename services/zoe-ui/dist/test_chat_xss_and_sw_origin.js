@@ -10,9 +10,10 @@
  *    message containing `<img src=x onerror=...>` becomes the stored title and was
  *    injected unescaped into the sidebar. Reminder `notification.message` is
  *    user-authored via POST /api/reminders and was injected unescaped into the
- *    notifications panel. chat.html carries TWO copies of displayNotifications
- *    (the later declaration wins by hoisting) — both must escape, or deleting one
- *    copy later silently re-exposes the sink.
+ *    notifications panel. chat.html used to carry TWO copies of
+ *    displayNotifications (the later one was live); the duplicate is gone
+ *    (2026-11-14, test_chat_single_definitions.js) and this harness still checks
+ *    EVERY copy it finds, so a re-added one cannot dodge the escape check.
  *
  * 2. sw.js routed cross-origin no-cors scripts and styles through NetworkFirst.
  *    On every SW-controlled reload chat.html lost all 9 of its cross-origin assets
@@ -138,11 +139,11 @@ if (escapeSrc.length) {
 }
 
 // ---------------------------------------------------------------------------
-// 1b. BOTH displayNotifications copies must escape notification.message.
+// 1b. displayNotifications (ONE copy since 2026-11-14) must escape
+//     notification.message - and so must any copy that comes back.
 // ---------------------------------------------------------------------------
 const dnBodies = allFunctionBodies(chat, 'displayNotifications');
-check('chat.html still carries both displayNotifications copies', dnBodies.length === 2);
-check('at least one displayNotifications exists', dnBodies.length >= 1);
+check('chat.html defines exactly one displayNotifications', dnBodies.length === 1);
 dnBodies.forEach((body, i) => {
     const n = i + 1;
     check(`displayNotifications #${n} does NOT inject raw \${notification.message}`,
