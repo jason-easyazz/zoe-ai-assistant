@@ -50,9 +50,16 @@ pinned address), returning ``blocked``; and never put the address, host or a tok
   places and alarm text are stored as the provider sent them: the cascade does not scrub them on calendar rows either (owner
   decision: attendee names are scrubbed, titles kept). FAIL CLOSED: an unconfigured ledger refuses the sync before the fetch, and
   an unreadable one stops the write (``ledger_unavailable``); nothing is written unshielded.
-* ABSENT KEYS (this stage): a stored row whose key the feed no longer carries is LEFT UNTOUCHED and counted ``absent``. Remote
-  deletes, the mass-delete guard, the forget shield and disconnect arrive together, in the next change.
+* Remote deletes: a stored row whose key is absent from a complete fetch is hard-deleted with its attendees, alarms and anticipation
+  offers; a row that left the window, or that the provider MOVED outside it, is "pruned" (never kept at its old time, never
+  counted as a delete). MASS-DELETE GUARD: 0 events after some, or > 50 % and > 20 rows to delete = delete nothing, outcome
+  partial / provider / ``suspect_empty``, and only a second consecutive identical body confirms it.
+* FORGET SHIELD: every incoming key is checked against the member's ledger (``memory_forgotten.feed_item_hash``, strict) before it
+  is written, inside the batch's erase-gate lock; a hit is skipped and counted ``suppressed``. FAIL CLOSED: an unconfigured or
+  unreadable ledger refuses the sync (``ledger_unavailable``), and ``forget_feed_event`` refuses rather than delete unshielded.
 * ``shadow``: fetch, parse, count against the stored rows, write ``sync_runs`` only.
+* ``disconnect_feed``: the fence (``connected_accounts.disconnect``), then the account's calendars, events, attendees, alarms and
+  offers. Forget-me reaches the same rows through ``calendar_forget.forget_user`` / ``connected_accounts.forget_user``.
 
 Logs carry the account id, counts, outcome, class and code ONLY: never a title, place, attendee, description, URL, host or body.
 """
@@ -72,6 +79,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Union
 
+import calendar_forget
 import calendar_read
 import calendar_service as cal
 import connected_accounts as ca
@@ -90,6 +98,8 @@ PARSER_VERSION = 1                 # a bump discards the stored validators: the 
 WINDOW_PAST_DAYS = 7
 WINDOW_FUTURE_DAYS = calendar_read.MAX_WINDOW_DAYS
 BATCH = 200
+GUARD_MIN_ROWS = 20
+GUARD_RATIO = 0.5
 FETCH_TIMEOUT_S = 45.0             # the engine's own bound on one fetch, whatever the fetcher does
 MAX_FETCH_THREADS = 2              # the sync-fetcher pool: a bound on how many stuck calls can pile up
 MAX_ABANDONED_FETCHES = 4          # async fetches abandoned at the bound and still running: a bound on how many can pile up
@@ -171,6 +181,10 @@ def _fetch_pool() -> concurrent.futures.ThreadPoolExecutor:
     if _pool is None:
         _pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_FETCH_THREADS, thread_name_prefix="calendar-feed-fetch")
     return _pool
+
+
+class FeedForgetRefused(RuntimeError):
+    """A feed event could not be forgotten for good (no durable shield): nothing was deleted."""
 
 
 # -- flags and small helpers ------------------------------------------------------------------------------------------------------
@@ -266,6 +280,13 @@ def in_window(row: dict, w0: date, w1: date) -> bool:
     return d0 <= w1 and end >= w0
 
 
+def mass_delete_suspect(n_parsed: int, n_stored_in_window: int, n_delete: int) -> bool:
+    """The mass-delete guard: a fetch that parses to 0 events while rows exist, or would delete more than half and more than 20."""
+    if n_delete <= 0:
+        return False
+    return (n_parsed == 0 and n_stored_in_window > 0) or (n_delete > GUARD_MIN_ROWS and n_delete > GUARD_RATIO * n_stored_in_window)
+
+
 def content_hash(values: dict, attendees: list, alarms: list) -> str:
     """sha256 of the normalised event + attendees + alarms. DTSTAMP is never parsed, so a re-export alone changes nothing."""
     payload = {"v": PARSER_VERSION, "event": values, "attendees": attendees, "alarms": alarms}
@@ -290,8 +311,8 @@ class _Item:
 def plan(parsed: list, *, policy: str, w0: date, w1: date, report: SyncReport,
          outside: Optional[dict] = None) -> "dict[tuple[str, str], _Item]":
     """The kept items by key. Counts ``seen``, ``skipped`` (with reasons) and ``rrule_unsupported`` into ``report``. ``outside``
-    receives the items the feed still carries that fall outside the window, by key (the caller decides what a stored copy of one
-    becomes: it must never keep its old time)."""
+    receives the items the feed still carries that fall outside the window, by key (a stored copy of one is pruned: never kept at its
+    old time)."""
     c, why = report.counts, report.skipped
     c["seen"] = len(parsed)
     best: dict = {}
@@ -424,6 +445,28 @@ def shield_attendees(user_id: str, wanted: frozenset, attendees: list) -> list:
     rx = memory_forgotten.LedgerPattern(user_id, wanted)
     return [dict(a, display_name=None, email=None, person_id=None, person_link_source=None) if attendee_forgotten(rx, a) else a
             for a in attendees]
+
+
+def _shielded(user_id: str, wanted: frozenset, key: "tuple[str, str]") -> bool:
+    if not wanted:
+        return False
+    if memory_forgotten.feed_item_hash(user_id, key[0], key[1]) in wanted:
+        return True
+    return bool(key[1]) and memory_forgotten.feed_item_hash(user_id, key[0], None) in wanted   # the whole series was forgotten
+
+
+async def _delete_rows(db, user_id: str, ids: list) -> int:
+    n = 0
+    for i in range(0, len(ids), BATCH):
+        chunk = ids[i:i + BATCH]
+        ph = ", ".join("?" for _ in chunk)
+        await calendar_forget.withdraw_event_offers(db, user_id, chunk)
+        await db.execute(f"DELETE FROM event_alarms WHERE event_id IN ({ph})", chunk)
+        await db.execute(f"DELETE FROM event_attendees WHERE event_id IN ({ph})", chunk)
+        await db.execute(f"UPDATE events SET series_id = NULL WHERE series_id IN ({ph})", chunk)
+        cur = await db.execute(f"DELETE FROM events WHERE id IN ({ph})", chunk)
+        n += int(getattr(cur, "rowcount", 0) or 0)
+    return n
 
 
 async def _link_members(db, event_id: str, attendees: list) -> None:
@@ -660,7 +703,7 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
     if not _looks_like_calendar(body, res.content_type):
         return await failed("provider", "not_calendar")
     sha = hashlib.sha256(body).hexdigest()
-    if cursor.get("sha") == sha and same_window:
+    if cursor.get("sha") == sha and same_window and not cursor.get("suspect"):
         return await unchanged()
 
     policy = cal_row["policy"] if cal_row else DEFAULT_CALENDAR_VISIBILITY
@@ -675,29 +718,60 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
 
     outside: dict = {}
     items = plan(parsed, policy=policy, w0=w0, w1=w1, report=rep, outside=outside)
-    # an event the provider MOVED outside the window must never keep its old time: this stage (no deletes) rewrites the stored
-    # copy with what the feed now says; it is still out of the window, so no reader lists it there
-    items.update({k: it for k, it in outside.items() if k in stored})
-    # this stage never deletes: a stored key the feed no longer carries stays as it is, and is counted
-    rep.counts["absent"] = sum(1 for k in stored if k not in items)
+    try:
+        wanted = await memory_forgotten.active_hashes(uid, strict=True)
+    except memory_forgotten.LedgerUnavailable:
+        return await failed("internal", "ledger_unavailable")
+    suppressed = {k for k in items if _shielded(uid, wanted, k)}
+    gone = [s for k, s in stored.items() if k not in items or k in suppressed]
+    # an event the provider MOVED outside the window is pruned (its old time must not be served), and never counts as a delete
+    to_delete = [s for s in gone if _key(s["external_uid"], s["recurrence_id"]) not in suppressed | set(outside)
+                 and in_window(s, w0, w1)]
+    in_win = sum(1 for s in stored.values() if in_window(s, w0, w1))
+    guard = mass_delete_suspect(len(parsed), in_win, len(to_delete))
+    confirmed = guard and cursor.get("suspect") == sha
 
     if m == "shadow":
         c = rep.counts
+        c["suppressed"] = len(suppressed)
         for k, it in items.items():
+            if k in suppressed:
+                continue
             s = stored.get(k)
             name = "created" if s is None else "unchanged" if s.get("content_hash") == it.hash else "updated"
             c[name] = c.get(name, 0) + 1
+        if guard and not confirmed:
+            return await finish("partial", error_class="provider", error_code="suspect_empty")
+        c["deleted"] = len(to_delete)
+        c["pruned"] = len(gone) - len(to_delete) - sum(1 for s in gone if _key(s["external_uid"], s["recurrence_id"]) in suppressed)
         return await finish("ok", error_code=None)
 
     try:
         cal_id = cal_row["id"] if cal_row else await _gated(run, lambda db, _w: _ensure_calendar(db, uid, account_id, now))
         await _write_items(run, uid, cal_id, items, stored, now, rep)
-        new_cursor = {"v": PARSER_VERSION, "etag": res.etag, "last_modified": res.last_modified, "sha": sha,
-                      "window": w0.isoformat()}
+        if guard and not confirmed:
+            new_cursor = dict(cursor, suspect=sha, v=PARSER_VERSION)
 
-        async def mark(db, _w):
+            async def hold(db, _w):
+                await _mark_success(db, cal_id, new_cursor, now, "partial")
+            await _gated(run, hold)
+            return await finish("partial", error_class="provider", error_code="suspect_empty")
+
+        async def remove(db, w):
+            # a forget may have landed since the plan: re-check under this step's lock, then delete what is gone
+            sup_rows = [s for s in gone if _key(s["external_uid"], s["recurrence_id"]) in suppressed
+                        or _shielded(uid, w, _key(s["external_uid"], s["recurrence_id"]))]
+            sup_ids = {s["id"] for s in sup_rows}
+            dele = [s["id"] for s in to_delete if s["id"] not in sup_ids]
+            skip = sup_ids | set(dele)
+            prune = [s["id"] for s in gone if s["id"] not in skip]
+            rep.counts["deleted"] = await _delete_rows(db, uid, dele)
+            rep.counts["pruned"] = await _delete_rows(db, uid, prune)
+            await _delete_rows(db, uid, list(sup_ids))
+            new_cursor = {"v": PARSER_VERSION, "etag": res.etag, "last_modified": res.last_modified, "sha": sha,
+                          "window": w0.isoformat()}
             await _mark_success(db, cal_id, new_cursor, now, "ok")
-        await _gated(run, mark)
+        await _gated(run, remove, shield=True)
         cursor["sha"] = sha
     except _Stop as stop:
         if stop.why == "ledger":
@@ -729,7 +803,7 @@ async def _mark_success(db, calendar_id: str, cursor: dict, now: datetime, statu
 
 
 async def _write_items(run: ca.Run, user_id: str, cal_id: str, items: dict, stored: dict, now: datetime, rep: SyncReport) -> None:
-    """Masters, then overrides, in batches; each batch one gated + fenced transaction."""
+    """Masters, then overrides, in batches; each batch one gated + fenced transaction that re-reads the forget shield."""
     c = rep.counts
     stamp = _iso(now)
     master_ids = {k[0]: s["id"] for k, s in stored.items() if not k[1]}
@@ -739,6 +813,9 @@ async def _write_items(run: ca.Run, user_id: str, cal_id: str, items: dict, stor
 
         async def step(db, wanted, batch=batch):
             for it in batch:
+                if _shielded(user_id, wanted, it.key):
+                    c["suppressed"] = c.get("suppressed", 0) + 1
+                    continue
                 s = stored.get(it.key)
                 proposed = s["id"] if s else str(uuid.uuid4())
                 values = dict(it.values, id=proposed, user_id=user_id, source=SOURCE, read_only=1, deleted=0,
@@ -760,3 +837,59 @@ async def _write_items(run: ca.Run, user_id: str, cal_id: str, items: dict, stor
                                      (master_ids.get(it.key[0]), eid, master_ids.get(it.key[0])))
         await _gated(run, step, shield=True)
 
+
+# -- forget one feed event, and disconnect a feed ---------------------------------------------------------------------------------
+
+async def forget_feed_event(user_id: str, event_id: str) -> bool:
+    """'Forget that event' on a feed row: write the permanent shield FIRST, then hard-delete the row (a master takes its whole
+    series), its attendees, alarms and offers. False when it is not the member's feed event. Raises ``FeedForgetRefused`` (nothing
+    deleted) when the shield cannot be made durable: forgotten means forever, so an unshielded delete would come back next sync."""
+    if not memory_forgotten.configured():
+        logger.error("CALENDAR_FEED forget refused: the forget ledger is not configured")
+        raise FeedForgetRefused("the forget ledger is not configured")
+    async with _db() as db:
+        cur = await db.execute("SELECT external_uid, recurrence_id, calendar_id FROM events WHERE id = ? AND user_id = ? "
+                               "AND source = ?", (event_id, user_id, SOURCE))
+        row = await cur.fetchone()
+    if row is None or not row[0]:
+        return False
+    ext, rid, cal_id = str(row[0]), (str(row[1]) if row[1] else None), row[2]
+    async with erase_gate.erasing(user_id, bump=False):          # an in-flight batch finishes first, or waits and sees the shield
+        if not await memory_forgotten.add_feed_item(user_id, ext, rid, actor=user_id):
+            logger.error("CALENDAR_FEED forget refused: the shield is not durable; nothing deleted")
+            raise FeedForgetRefused("the forget could not be made permanent")
+        async with _db() as db:
+            async with db.transaction():
+                if rid is None:
+                    cur = await db.execute("SELECT id FROM events WHERE user_id = ? AND calendar_id = ? AND external_uid = ?",
+                                           (user_id, cal_id, ext))
+                    ids = [str(r[0]) for r in await cur.fetchall()]
+                else:
+                    ids = [event_id]
+                n = await _delete_rows(db, user_id, ids)
+    logger.info("CALENDAR_FEED forget rows=%d", n)
+    return True
+
+
+async def disconnect_feed(account_id: str) -> Optional[int]:
+    """Disconnect a feed: the fence first (``connected_accounts.disconnect``: generation bumped, revoked, secrets removed), then the
+    account's calendars and every row in them. Rows removed, or None when there is no such account."""
+    acct = await _account(account_id)
+    if acct is None:
+        return None
+    if await ca.disconnect(account_id) is None:
+        return None
+    uid = acct["user_id"]
+    async with erase_gate.erasing(uid, bump=False):
+        async with _db() as db:
+            async with db.transaction():
+                cur = await db.execute("SELECT id FROM calendars WHERE user_id = ? AND source_account_id = ?", (uid, account_id))
+                cal_ids = [str(r[0]) for r in await cur.fetchall()]
+                n = 0
+                for cid in cal_ids:
+                    cur = await db.execute("SELECT id FROM events WHERE calendar_id = ?", (cid,))
+                    n += await _delete_rows(db, uid, [str(r[0]) for r in await cur.fetchall()])
+                    cur = await db.execute("DELETE FROM calendars WHERE id = ?", (cid,))
+                    n += int(getattr(cur, "rowcount", 0) or 0)
+    logger.info("CALENDAR_FEED disconnect account=%s rows=%d", account_id, n)
+    return n
