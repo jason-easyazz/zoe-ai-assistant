@@ -330,7 +330,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(sock, server_hostname=server_hostname)
 
 
-def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
+def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None, max_redirects: int | None = None):
     """``urllib`` open with SSRF protection:
 
     * the initial URL and every redirect hop are validated with
@@ -342,6 +342,8 @@ def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
 
     Returns the response object for the caller to read. Raises
     :class:`SSRFBlocked` if any hop targets a non-public address.
+    ``max_redirects`` caps the redirect chain (``None`` keeps urllib's own cap
+    of 10); one hop more raises ``urllib.error.HTTPError``.
     """
     from urllib.request import (
         Request,
@@ -357,6 +359,11 @@ def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
     class _GuardedRedirect(HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, hdrs, newurl):
             assert_public_url(newurl)  # cheap pre-check; pinned connect is authoritative
+            # ``redirect_dict`` holds the hops already followed for this request chain.
+            if max_redirects is not None and len(getattr(req, "redirect_dict", ())) >= max_redirects:
+                from urllib.error import HTTPError
+
+                raise HTTPError(newurl, code, f"redirect cap ({max_redirects}) exceeded", hdrs, fp)
             return super().redirect_request(req, fp, code, msg, hdrs, newurl)
 
     class _GuardedHTTPHandler(HTTPHandler):

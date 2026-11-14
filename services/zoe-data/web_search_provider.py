@@ -24,6 +24,7 @@ No new dependency: uses ``httpx``, already a service dependency.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -85,14 +86,17 @@ TAVILY_OUTCOME_OFF = "off"
 
 
 def tavily_search_outcome(
-    query: str, max_results: int = 6, timeout_s: float = 8.0
+    query: str, max_results: int = 6, timeout_s: float = 8.0, max_bytes: int | None = None
 ) -> tuple[str, list[dict[str, str]]]:
     """Search via Tavily and report HOW it went: ``(status, rows)``.
 
     ``status`` is one of ``results`` / ``no_results`` / ``error`` / ``off``.
     ``off`` means no key or an explicit ``ZOE_SEARCH_PROVIDER=ddg`` (nothing was
     sent); ``error`` covers every HTTP/transport failure (401 bad key, 429 quota,
-    timeouts). Rows are ``[]`` for anything but ``results``. The key is never
+    timeouts). Rows are ``[]`` for anything but ``results``. ``max_bytes`` reads
+    the body as a stream and reports ``error`` once it passes that size (``None``
+    = unbounded, the pre-existing behaviour). Redirects are never followed
+    (httpx's default; pinned by tests/test_web_lookup_provider.py). The key is never
     logged. Synchronous (like ``_ddg_search_sync``) — run it in an executor.
     """
     q = (query or "").strip()
@@ -112,8 +116,7 @@ def tavily_search_outcome(
         # environment, which would route this bearer-token request through an
         # arbitrary proxy. Pin the transport explicitly.
         with httpx.Client(trust_env=False, timeout=timeout_s) as client:
-            resp = client.post(
-                _TAVILY_URL,
+            request = dict(
                 headers={"Authorization": f"Bearer {tavily_api_key()}",
                          "Content-Type": "application/json"},
                 json={
@@ -126,12 +129,24 @@ def tavily_search_outcome(
                     "max_results": max(1, min(int(max_results), 20)),
                 },
             )
-        if resp.status_code != 200:
+            if max_bytes is None:
+                resp = client.post(_TAVILY_URL, **request)
+                status_code = resp.status_code
+                data = resp.json() if status_code == 200 else None
+            else:
+                with client.stream("POST", _TAVILY_URL, **request) as resp:
+                    status_code, body = resp.status_code, b""
+                    if status_code == 200:
+                        for chunk in resp.iter_bytes():
+                            body += chunk
+                            if len(body) > max_bytes:
+                                raise ValueError(f"response body exceeds {max_bytes} byte cap")
+                    data = json.loads(body) if status_code == 200 else None
+        if status_code != 200:
             # 401 = bad/absent key, 429 = quota exhausted. Both are expected
             # operational states, not crashes — fall back quietly.
-            logger.info("web_search: tavily HTTP %s — falling back to ddg", resp.status_code)
+            logger.info("web_search: tavily HTTP %s — falling back to ddg", status_code)
             return TAVILY_OUTCOME_ERROR, []
-        data = resp.json()
     except Exception as exc:  # noqa: BLE001 - any failure falls back to ddg
         logger.info("web_search: tavily unavailable (%s) — falling back to ddg", type(exc).__name__)
         return TAVILY_OUTCOME_ERROR, []
