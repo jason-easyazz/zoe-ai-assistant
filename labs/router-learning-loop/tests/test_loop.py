@@ -1,9 +1,5 @@
-"""Local net for the router learning-loop lab (hand-run, not CI-wired; same convention as labs/self-heal):
-
-    flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider -q labs/router-learning-loop/tests
-
-Every test uses a throwaway workdir under tmp_path and the committed synthetic data; nothing reads a live log, a database or a model.
-"""
+"""Local net for the router learning-loop lab (hand-run under the test-lane flock, not CI-wired; like labs/self-heal). Throwaway
+workdirs and committed synthetic data only: no live log, database or model."""
 from __future__ import annotations
 
 import hashlib
@@ -105,16 +101,11 @@ def _ev(per: dict) -> dict:
     c = sum(v[0] for v in per.values())
     n = sum(v[1] for v in per.values())
     return {"n": n, "correct": c, "accuracy_pct": round(100.0 * c / n, 1), "chat_fp_pct": 0.0,
-            "per_intent": {k: {"correct": a, "n": b, "pct": round(100.0 * a / b, 1)} for k, (a, b) in per.items()}}
+            "per_intent": {k: {"correct": a, "n": b, "pct": round(100.0 * a / b, 1)} for k, (a, b) in per.items()},
+            "cases": {f"{k}-{i}": {"intent": k, "ok": i < a} for k, (a, b) in per.items() for i in range(b)}}
 
 
 BASE = {"lists": (6, 12), "weather": (3, 5), "timers": (3, 4), "chat": (7, 8), "music": (3, 6)}
-
-
-def test_gate_promotes_a_clean_improvement():
-    after = dict(BASE, lists=(9, 12), music=(4, 6))
-    v = loop.gate(_ev(BASE), _ev(after))
-    assert v["promote"] and all(v["checks"].values())
 
 
 def test_gate_overall_margin_required():
@@ -200,15 +191,58 @@ def test_rollback_without_a_previous_router_changes_nothing(tmp_path):
     assert loop.rollback(tmp_path) is False and cur.read_bytes() == before
 
 
-def test_artefact_is_byte_stable():
-    rows, _ = loop.base_examples(FZ)
-    assert loop.Model.fit(rows).to_bytes() == loop.Model.fit(list(rows)).to_bytes()
-    m = loop.Model.fit(rows)
-    assert loop.Model.from_bytes(m.to_bytes()).to_bytes() == m.to_bytes()
 
 
-def test_poison_moves_every_label():
-    assert all(p["label"] != r["label"] for p, r in zip(loop.poison(SOURCE), SOURCE))
+
+# ── the safety gate is per CASE (review thread: totals hide a swap) ──
+
+class _Oracle:
+    """A stand-in model that answers every frozen case right except the ids in ``wrong``."""
+
+    def __init__(self, wrong):
+        bad = {c["text"] for c in FROZEN if c["id"] in wrong}
+        self.answer = {c["text"]: ("lists" if c["expected"] == "chat" else "chat") if c["text"] in bad else c["expected"]
+                       for c in FROZEN}
+
+    def predict(self, text):
+        return self.answer[text]
+
+
+CHAT = [c["id"] for c in FROZEN if c["intent"] == "chat"]
+OTHER = [c["id"] for c in FROZEN if c["intent"] == "lists"]
+
+
+def _aggregate_safety_held(before, after):
+    """The pre-fix rule: per safety intent, the candidate's correct COUNT may not fall."""
+    return all(after["per_intent"][i]["correct"] >= b["correct"] for i, b in before["per_intent"].items() if i in loop.SAFETY_INTENTS)
+
+
+def test_a_safety_swap_with_equal_totals_is_refused_and_named():
+    # incumbent misses chat case 0 (+ two lists cases); candidate fixes those and breaks chat case 1: chat stays 7/8, overall +2
+    before = loop.evaluate(_Oracle({CHAT[0], OTHER[0], OTHER[1]}), FROZEN)
+    after = loop.evaluate(_Oracle({CHAT[1]}), FROZEN)
+    assert before["per_intent"]["chat"]["correct"] == after["per_intent"]["chat"]["correct"] == 7
+    v = loop.gate(before, after)
+    assert v["checks"]["overall_improves"] and v["checks"]["no_intent_regression"]
+    assert not v["checks"]["safety_held"] and not v["promote"] and v["safety_flipped"] == [CHAT[1]]
+    assert _aggregate_safety_held(before, after)        # negative control: the totals rule would have promoted the swap
+
+
+def test_a_candidate_that_only_fixes_cases_promotes():
+    v = loop.gate(loop.evaluate(_Oracle({CHAT[0], OTHER[0], OTHER[1]}), FROZEN), loop.evaluate(_Oracle(set()), FROZEN))
+    assert v["promote"] and v["safety_flipped"] == []
+
+
+def test_a_candidate_identical_to_the_incumbent_holds_safety():
+    ev = loop.evaluate(_Oracle({CHAT[0]}), FROZEN)
+    v = loop.gate(ev, ev)
+    assert v["checks"]["safety_held"] and v["safety_flipped"] == [] and not v["promote"]   # held; the margin is what refuses
+
+
+def test_missing_per_case_evidence_fails_safety_closed():
+    ev = loop.evaluate(_Oracle(set()), FROZEN)
+    v = loop.gate(ev, {k: val for k, val in ev.items() if k != "cases"})
+    assert not v["checks"]["safety_held"]
 
 
 

@@ -11,39 +11,32 @@ frozen guard, the gate, the proposal and the rollback. The stand-in only needs t
 
 ```bash
 python3 loop.py demo --workdir run [--write-summary]   # clean + poisoned runs; journals in run/, totals in results/
-python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W [--poison]
+python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W
 python3 loop.py rollback --workdir W          # previous router back, byte for byte
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider -q labs/router-learning-loop/tests
 ```
 
 ## The loop
 
-1. **Harvest** (`harvest`). An injected source yields rows `{id, text, label, signal, confidence}`. In the lab it is
-   `data/synthetic_source.jsonl` (synthetic only). Rules, in this order:
-   - a row whose id or word-free text key is on the forget list is dropped **first** and counted. Nothing else reads it;
-   - a row whose normalised text matches any frozen case is dropped (`frozen_overlap`);
-   - unknown label, unknown signal, or confidence below 0.75 after the signal's ceiling is applied is dropped. The router's own
-     belief has a ceiling of 0.4, so it is never a label on its own;
-   - identical wordings are deduplicated, and conflicting labels for one wording drop the whole group.
-   Every kept example carries provenance: signal, confidence, source id.
-2. **Train** the candidate on the base set plus the harvest. The base is the `labs/setfit-router` seeds, frozen-guarded too
-   (13 seeds that appear in the frozen corpus are dropped).
-3. **Evaluate** the incumbent and the candidate on the **frozen set**, which is read in place and never trained on: the 81-case
-   `labs/needle-benchmark/corpus.jsonl` (the real ratchet's corpus) plus 8 synthetic safety cases in `data/frozen_safety.jsonl`
-   (emergency and forget asks; expected = `chat`, meaning no fast tool may claim them).
+1. **Harvest**: rows `{id, text, label, signal, confidence}` from an injected source (lab: `data/synthetic_source.jsonl`).
+   Dropped in order: forgotten id or word-free text key (first; nothing else reads it), frozen overlap, unknown label or
+   signal, confidence under 0.75 after the signal's ceiling (the router's own belief caps at 0.4), duplicates and conflicts.
+   Every kept example carries provenance (signal, confidence, source id).
+2. **Train** on the `labs/setfit-router` seeds (frozen-guarded: 13 dropped) plus the harvest.
+3. **Evaluate** on the frozen set, read in place and never trained on: the 81-case `labs/needle-benchmark/corpus.jsonl` plus
+   8 synthetic safety cases (`data/frozen_safety.jsonl`: emergency and forget asks, expected `chat`).
 4. **Gate** (`gate`, deterministic). Promote only if ALL of these hold:
    - overall accuracy rises by at least **2.0 points**;
    - no intent loses more than **15 points**. With 4 cases that means no case may be lost; with 12, at most one;
    - each safety-critical intent (`chat`, `timers`, `reminders`, `safety:emergency`, `safety:forget`) keeps **every** case it
-     had before. A single new chat false positive blocks the promotion, whatever it buys elsewhere.
+     had before, case by case (never totals: fixing one safety case while breaking another is refused, and `safety_flipped`
+     names the ids). The other two checks stay aggregate by design (an improvement; a stated per-intent loss).
 
    A failed gate is a normal outcome. The current router stays, and the run journal records why.
-5. **Proposal**. Only on a pass, a file in the shape `evolution_queue.propose` takes: `source`, `change_class=harness`,
-   `risk_tier=1`, `component=router`, `status=probed`, `title`, a plain-words `description`, and `evidence` with
-   `signal`/`before`/`after`/`gate`/`ref`. The evidence is validated by the live module's own `normalize_evidence`. It holds
-   counts and percentages only, never an utterance. In the lab it goes to `<workdir>/proposals/`; the live queue is never touched.
-6. **Rollback**. Before a promotion, the current artefact is copied to `previous.json`. `loop.py rollback` puts it back byte for
-   byte.
+5. **Proposal** (pass only): the `evolution_queue.propose` shape (`change_class=harness`, `risk_tier=1`, `component=router`,
+   `status=probed`, plain-words `description`, counts-only `evidence` checked by the live `normalize_evidence`), written to
+   `<workdir>/proposals/`; the live queue is never touched.
+6. **Rollback**: the current artefact is copied to `previous.json` before a promotion; `loop.py rollback` restores it byte for byte.
 
 ## Measured runs (2026-11-14)
 
@@ -70,55 +63,37 @@ pins them.
 | weather | 3/5 | 3/5 | 2/5 | 3/5 |
 | **overall** | **45/89 (50.6%)** | **63/89 (70.8%)** | **28/89 (31.5%)** | **62/89 (69.7%)** |
 
-- **Clean run: promoted.** All three checks passed. 155 examples were harvested. Dropped: 3 forgotten, 1 planted frozen case,
-  1 low-confidence router belief, 1 unknown signal, 1 duplicate, 2 conflicting.
-- **Poisoned run: refused.** The same rows, with every label moved to a wrong one. All three checks failed (-19.1 points, eight
-  intents beyond tolerance, and chat, timers, reminders and emergency all lost cases). The current router was kept and no
-  proposal was written. The drops were the same as the clean run.
+- **Clean run: promoted**, all three checks passed. 155 harvested; dropped 3 forgotten, 1 planted frozen case, 1 router belief,
+  1 unknown signal, 1 duplicate, 2 conflicting (same drops in the poisoned run).
+- **Poisoned run** (every label moved to a wrong one): **refused**, all three checks failed (-19.1 points, eight intents beyond
+  tolerance; chat, timers, reminders, emergency lost cases). The router was kept, no proposal written.
 - **First clean attempt: refused, and rightly.** This used an earlier version of the source with no small-talk examples. It
   gained +19.1 points, but the intent check (people -25 points) and the safety check failed: one greeting started routing to
   weather, which is a new chat false positive. Adding eight generic small-talk negatives and four people paraphrases fixed it.
   The lesson for the real loop: every round needs chat negatives, and the real miner already collects them.
 
-The stand-in's absolute numbers mean nothing about the real router. The live router measures 84.0% on the same 81 cases
-(0.70 floor). Only the deltas and the gate's behaviour carry over. The stand-in also never gets forget asks right (0/4), which
-is why the safety rule says "no worse than before", not "perfect". The real router already sends these to deterministic tiers.
+Only the deltas and the gate's behaviour carry over: the live router measures 84.0% on the same 81 cases (0.70 floor). The
+stand-in never gets forget asks right (0/4), hence "no worse than before", not "perfect".
 
-## Tests (`tests/test_loop.py`, 23, local net, not CI-wired)
+## Tests (`tests/test_loop.py`, 24, local net, not CI-wired)
 
-Forget first (by id and by word-free key), frozen leak (one planted case and all 89), each gate condition with a fail case,
-a text-free proposal that passes the live queue's own validation, poisoned refused, byte-exact rollback, and the demo
-totals against `results/summary.json`. Negative controls are in the tests; mutating out the forget, frozen or safety check
-turns 3, 6 and 1 of them red.
+Forget first, frozen leak (one planted case and all 89), each gate condition failing, the safety swap (negative control: the
+totals rule passes it), a text-free proposal valid for the live queue, poisoned refused, byte-exact rollback, demo totals.
 
 ## Path to live (ordered; nothing here is done)
 
-Each step needs the one before it.
-
-1. **Owner decides the training-text policy.** *Question:* "May the router learn from the household's own words, or only from
-   generic examples Zoe writes for itself?" **Recommendation: generic only.** Household turns contribute counts ("weak on
-   lists") from text-free signals. The brain writes fresh generic paraphrases for those intents from the intent catalogue, and
-   those are what trains the router. A forget then has nothing to unlearn, because a trained adapter cannot unlearn one example.
-   The alternative, the hash join to the member's own stored turns, needs the clean-ancestor retrain fix in step 2 first.
-2. **Agent: fix the forget remedy in the existing retrain** (`scripts/maintenance/router_struggle_retrain.py`
-   `warm_start_for`). Today a generation flagged `needs_retrain` is still the warm start for the next one, so the forgotten
-   example's influence is inherited. The fix: warm-start from the newest ancestor that never saw it. Needed only if step 1 allows
-   household text. Recommended anyway.
-3. **Owner turns on failure capture.** *Question:* "Turn on `ZOE_STRUGGLE_OUTCOMES` so Zoe records, without words, which tool
-   the brain actually used when the router stepped aside?" **Recommendation: yes, behind the voice replay gate.** It is the only
-   high-trust automatic label, and it is not being collected today (0 rows).
-4. **Agent: build the harvest source for real.** The real source reads text-free counts from `turn_outcomes` and struggle
-   domains, then asks the brain (serial, `/slots`-gated, by day) for N generic paraphrases per weak intent. Same row shape as this
-   lab. The lab gate and proposal port across unchanged; the stand-in is replaced by `router_selftrain.py`'s train, export and
-   ratchet.
-5. **Agent + owner: rehearse one real adapter run BY DAY** (owner rule: no first run at night). The brain is stopped for a
-   measured window, the candidate is evaluated on the scratch sidecar, and the candidate is voice-replayed. This records real
-   peak RSS and minutes. *Question:* "Which weekly slot may the router train in, with voice off for about 2-3 hours?"
-   **Recommendation: a daytime slot when the house is usually empty.** The 02:50 night window already holds the RAM for the 12B
-   and is too short.
-6. **Agent: the proposal reaches the owner.** Write the passing run into the live `evolution_proposals` (`status=probed`) and
-   add one morning-brief line. **Owner:** "Should a passing round wait for your yes, or adopt itself and tell you after?"
-   **Recommendation: wait for a yes for the first four rounds, then auto-adopt** with the line "Zoe's router learned X, here is
-   how to undo it".
-7. **Owner registers the timer and flips the flag** (`ZOE_ROUTER_SELFTRAIN` shadow, then on), after one shadow round whose
-   proposal they have read.
+1. **Owner:** "May the router learn from the household's own words, or only from generic examples Zoe writes for itself?"
+   **Recommend generic only**: household turns contribute text-free counts ("weak on lists"), the brain writes generic
+   paraphrases for those intents, and a forget has nothing to unlearn (an adapter cannot unlearn one example).
+2. **Agent:** the forget remedy in the existing retrain (branch `fix/router-retrain-forget-warm-start`): never warm-start from a
+   generation that learned a forgotten example. Required before household text is ever allowed.
+3. **Owner:** "Turn on `ZOE_STRUGGLE_OUTCOMES` so Zoe records, without words, which tool the brain used when the router stepped
+   aside?" **Recommend yes, behind the voice replay gate**: the only high-trust automatic label, 0 rows today.
+4. **Agent:** the real harvest source (text-free counts from `turn_outcomes` + struggle domains -> serial, `/slots`-gated brain
+   paraphrases by day), same row shape; this gate and proposal port across, `router_selftrain.py` replaces the stand-in.
+5. **Agent + owner:** one real adapter run rehearsed BY DAY (brain stopped, scratch-sidecar eval, candidate voice replay),
+   recording peak RSS and minutes. **Owner:** "Which weekly slot may voice be off for about 2-3 hours?" **Recommend a
+   daytime slot when the house is usually empty**; the 02:50 night window holds the RAM for the 12B and is too short.
+6. **Agent:** passing runs go into the live `evolution_proposals` (`status=probed`) plus one morning-brief line. **Owner:**
+   "Should a passing round wait for your yes, or adopt itself and tell you after?" **Recommend a yes for the first four rounds.**
+7. **Owner:** register the job (`ZOE_ROUTER_SELFTRAIN` shadow, then on) after reading one shadow round's proposal.

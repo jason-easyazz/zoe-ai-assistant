@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """The router LEARNING LOOP, lab (no-subscription self-evolution tier): harvest -> train -> frozen eval -> gate -> proposal -> rollback.
 
-The loop is proven with a tiny STAND-IN classifier (multinomial naive Bayes over hashed word / char n-grams, stdlib only), never the
-real FunctionGemma router: training a real adapter competes with the live voice stack for memory. The gate, the forget order, the
-frozen guard, the proposal shape and the rollback are what is being proven; the stand-in is only something that can get better or
-worse. Nothing here reads a live log, a database, the network or a model.
+A stdlib STAND-IN classifier replaces the real router (training an adapter competes with the voice stack for memory): what is proven
+is the loop around it. Nothing here reads a live log, a database, the network or a model. README.md is the record.
 
     python3 loop.py demo --workdir run [--write-summary]    # clean + poisoned runs; journals in run/, totals in results/
     python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W
@@ -213,11 +211,13 @@ def base_examples(frozen: frozenset) -> tuple[list[tuple[str, str]], int]:
 
 def evaluate(model: Model, frozen: list[dict]) -> dict:
     per: dict = defaultdict(lambda: [0, 0])
+    cases: dict = {}                                   # case id -> outcome: the safety gate is per CASE, not per total
     ok = 0
     chat_fp = 0
     for c in frozen:
         pred = model.predict(c["text"])
         hit = pred == c["expected"]
+        cases[c["id"]] = {"intent": c["intent"], "ok": hit}
         ok += hit
         per[c["intent"]][0] += hit
         per[c["intent"]][1] += 1
@@ -225,7 +225,8 @@ def evaluate(model: Model, frozen: list[dict]) -> dict:
     n_chat = sum(1 for c in frozen if c["expected"] == "chat")
     return {"n": len(frozen), "correct": ok, "accuracy_pct": round(100.0 * ok / len(frozen), 1),
             "chat_fp_pct": round(100.0 * chat_fp / max(1, n_chat), 1),
-            "per_intent": {k: {"correct": v[0], "n": v[1], "pct": round(100.0 * v[0] / v[1], 1)} for k, v in sorted(per.items())}}
+            "per_intent": {k: {"correct": v[0], "n": v[1], "pct": round(100.0 * v[0] / v[1], 1)} for k, v in sorted(per.items())},
+            "cases": cases}
 
 
 # ── 3. the promotion gate ──
@@ -247,17 +248,20 @@ def gate(before: dict, after: dict, *, margin: float = MARGIN_PTS, tol: float = 
             reasons.append(f"{intent}: {b['pct']:.1f}% -> {a['pct']:.1f}%, loses more than {tol:.0f} pts")
             worst.append(intent)
     checks["no_intent_regression"] = not worst
-    unsafe = []
-    for intent in safety:
-        b = before["per_intent"].get(intent)
-        a = after["per_intent"].get(intent)
-        if b is None:
-            continue
-        if a is None or a["correct"] < b["correct"]:
-            unsafe.append(intent)
-            reasons.append(f"safety intent {intent}: {b['correct']}/{b['n']} -> {(a or {}).get('correct', 0)}/{b['n']}")
+    # SAFETY is held per CASE: every safety case the incumbent got right must still be right. Totals can hide a swap (one case
+    # fixed, a different one broken), so they are never compared here. No per-case evidence = not held (fail closed).
+    safety = tuple(safety)
+    bc, ac = before.get("cases"), after.get("cases")
+    if not isinstance(bc, dict) or not isinstance(ac, dict):
+        flipped = ["<no per-case evidence>"]
+    else:
+        flipped = sorted(cid for cid, o in bc.items()
+                         if o["intent"] in safety and o["ok"] and not (ac.get(cid) or {}).get("ok"))
+    if flipped:
+        reasons.append(f"safety cases that were right and are now wrong: {', '.join(flipped)}")
+    unsafe = flipped
     checks["safety_held"] = not unsafe
-    return {"promote": all(checks.values()), "checks": checks, "delta_pts": delta, "reasons": reasons,
+    return {"promote": all(checks.values()), "checks": checks, "delta_pts": delta, "reasons": reasons, "safety_flipped": flipped,
             "constants": {"margin_pts": margin, "intent_tol_pts": tol, "safety_intents": list(safety)}}
 
 
@@ -284,7 +288,8 @@ def proposal(before: dict, after: dict, verdict: dict, dropped: Counter, example
             "signal": {"examples": len(examples), "by_signal": dict(by_signal), "by_label": dict(by_label), "dropped": dict(dropped)},
             "before": {"accuracy_pct": before["accuracy_pct"], "per_intent_pct": {k: v["pct"] for k, v in before["per_intent"].items()}},
             "after": {"accuracy_pct": after["accuracy_pct"], "per_intent_pct": {k: v["pct"] for k, v in after["per_intent"].items()}},
-            "gate": {"checks": verdict["checks"], "delta_pts": verdict["delta_pts"], "constants": verdict["constants"]},
+            "gate": {"checks": verdict["checks"], "delta_pts": verdict["delta_pts"], "constants": verdict["constants"],
+                     "safety_flipped": verdict["safety_flipped"]},
             "ref": stamp,
         },
     }
@@ -351,16 +356,10 @@ def poison(rows: list[dict]) -> list[dict]:
 
 
 def table(j: dict) -> str:
-    b, a = j["before"], j["after"]
-    lines = ["| intent | before | after |", "|---|---|---|"]
-    for k, v in b["per_intent"].items():
-        w = a["per_intent"][k]
-        lines.append(f"| {k} | {v['correct']}/{v['n']} ({v['pct']:.1f}%) | {w['correct']}/{w['n']} ({w['pct']:.1f}%) |")
-    lines.append(f"| **overall** | {b['correct']}/{b['n']} ({b['accuracy_pct']:.1f}%) | {a['correct']}/{a['n']} ({a['accuracy_pct']:.1f}%) |")
-    v = j["verdict"]
-    lines.append("")
-    lines.append(f"gate: {'PROMOTE' if v['promote'] else 'KEEP CURRENT'}; checks {v['checks']}; reasons {v['reasons'] or 'none'}")
-    return "\n".join(lines)
+    b, a, v = j["before"], j["after"], j["verdict"]
+    rows = [f"| {k} | {x['correct']}/{x['n']} | {a['per_intent'][k]['correct']}/{x['n']} |" for k, x in b["per_intent"].items()]
+    return "\n".join(["| intent | before | after |", "|---|---|---|", *rows, f"| **overall** | {b['correct']}/{b['n']} | {a['correct']}/{a['n']} |",
+                      "", f"gate: {'PROMOTE' if v['promote'] else 'KEEP CURRENT'}; {v['checks']}; {v['reasons'] or 'no reasons'}"])
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -370,7 +369,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     r.add_argument("--source", required=True)
     r.add_argument("--forget")
     r.add_argument("--workdir", required=True)
-    r.add_argument("--poison", action="store_true", help="derange every label first (the gate must refuse)")
     d = sub.add_parser("demo")
     d.add_argument("--workdir", required=True)
     d.add_argument("--write-summary", action="store_true", help="rewrite results/summary.json (the pinned totals)")
@@ -379,14 +377,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     wd = Path(a.workdir)
     if a.cmd == "rollback":
         ok = rollback(wd)
-        print("rolled back to the previous router" if ok else "no previous router: nothing changed")
-        return 0 if ok else 1
+        return print("rolled back to the previous router" if ok else "no previous router: nothing changed") or (0 if ok else 1)
     if a.cmd == "run":
-        rows = read_jsonl(Path(a.source))
-        rows = poison(rows) if a.poison else rows
-        j = run(wd, lambda: rows, load_forget(Path(a.forget) if a.forget else None))
-        print(table(j))
-        return 0
+        j = run(wd, lambda: read_jsonl(Path(a.source)), load_forget(Path(a.forget) if a.forget else None))
+        return print(table(j)) or 0
     # demo: full journals stay in the workdir (<workdir>/<name>/runs/); only the compact totals go beside the lab
     s = demo_summary(wd, read_jsonl(HERE / "data" / "synthetic_source.jsonl"), load_forget(HERE / "data" / "forget.jsonl"), True)
     if a.write_summary:
