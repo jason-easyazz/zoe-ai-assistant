@@ -6,11 +6,12 @@ FROM ${PROXY_IMAGE} AS proxy
 
 FROM ${UBUNTU_IMAGE}
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv sudo python3 \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv sudo python3 git \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=proxy /socket-proxy /usr/local/bin/socket-proxy
 COPY deliverables/ /opt/p0/deliverables/
 COPY lab/ /opt/p0/lab/
+COPY callers/ /opt/p0/callers/
 RUN sh /opt/p0/lab/provision.sh
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

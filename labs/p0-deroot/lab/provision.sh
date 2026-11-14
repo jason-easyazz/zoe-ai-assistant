@@ -19,7 +19,7 @@ chmod 0440 /etc/sudoers.d/zoe-pre-control
 # Deliverables, verbatim.
 install -m 0440 "$D/sudoers.d/60-zoe-deroot" /etc/sudoers.d/60-zoe-deroot
 install -d -m 0755 /usr/local/libexec/zoe-priv
-install -m 0755 "$D/libexec/zoe-mem-compact" "$D/libexec/zoe-nvmap-read" /usr/local/libexec/zoe-priv/
+install -m 0755 "$D"/libexec/* /usr/local/libexec/zoe-priv/        # every root helper, P0-1's deploy helper included
 install -m 0644 "$D/systemd/zoe-docker-proxy.service" /etc/systemd/system/
 install -m 0644 "$D/tmpfiles.d/zoe-p0-deroot.conf" /etc/tmpfiles.d/   # applied at boot by systemd-tmpfiles-setup
 for u in zoe-data flue-zoe-brain-2x llama-server; do
@@ -67,3 +67,28 @@ install -d -o zoe -g zoe -m 0700 /home/zoe/.ssh && echo lab-key > /home/zoe/.ssh
 systemctl enable docker.service zoe-docker-proxy.service zoe-data.service flue-zoe-brain-2x.service \
   llama-server.service p0lab-cells.service
 systemctl mask getty@tty1.service console-getty.service systemd-logind.service 2>/dev/null || true
+
+# P0-1 callers (P cells). A fake docker CLI owns /usr/bin/docker (it records argv, runs nothing); a local bare repo
+# stands in for the public GitHub origin through a ROOT-owned /etc/gitconfig insteadOf (the helper's ORIGIN line stays
+# verbatim); /etc/zoe/compose.env is root 0600; /srv/zoe holds the "moved" bind sources plus a planted symlink.
+install -m 0755 "$L/fake_docker_cli.py" /usr/bin/docker
+O=/opt/p0/origin.git; W=/opt/p0/work
+git init -q --bare -b main "$O"; git init -q -b main "$W"
+install -d "$W/services/zoe-ui" "$W/services/zoe-auth"
+echo "services: {}" > "$W/docker-compose.yml"; echo "services: {}" > "$W/docker-compose.modules.yml"
+echo "server {}" > "$W/services/zoe-ui/nginx.conf"; echo "FROM scratch" > "$W/services/zoe-auth/Dockerfile"
+G="git -C $W -c user.name=lab -c user.email=lab@lab.invalid"
+$G add -A && $G commit -qm main-1 && $G push -q "$O" main
+$G checkout -qb side && echo off > "$W/off" && $G add -A && $G commit -qm off-main && $G push -q "$O" side
+printf 'main %s\noff %s\n' "$(git -C "$O" rev-parse main)" "$(git -C "$O" rev-parse side)" > /opt/p0/shas
+git config --system url."file://$O".insteadOf https://github.com/jason-easyazz/zoe-ai-assistant.git
+git config --system --add safe.directory /opt/p0/checkout
+git clone -q "$O" /opt/p0/checkout
+install -d /opt/p0/checkout/scripts/deploy /opt/p0/checkout/scripts/maintenance /opt/p0/checkout/scripts/lib
+install -m 0755 /opt/p0/callers/compose_deploy.sh /opt/p0/checkout/scripts/deploy/
+install -m 0755 /opt/p0/callers/brain_cold_start.sh /opt/p0/checkout/scripts/maintenance/
+install -m 0644 /opt/p0/callers/zoe_priv.py /opt/p0/checkout/scripts/lib/
+printf 'POSTGRES_PASSWORD=synthetic-lab\n' > /etc/zoe/compose.env && chmod 0600 /etc/zoe/compose.env
+install -d -m 0755 /srv/zoe/zoe-auth/data /srv/zoe/zoe-ui/ssl /srv/zoe/music-assistant /srv/zoe/elsewhere
+ln -s /srv/zoe/elsewhere /srv/zoe/link-data
+

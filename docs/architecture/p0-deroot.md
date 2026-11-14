@@ -1,10 +1,11 @@
 # P0: Zoe's services stop being root-equivalent
 
-**Status:** plan + lab proof, nothing applied (2026-10-18). **Owner decision:** "Fix the admin-rights problem (P0)
+**Status:** plan + lab proof (2026-10-18); P0-0 partly applied (the HA export helper was installed 2026-11-13);
+**P0-1 code written and lab-proven, not applied (2026-11-14, section 5.1).** **Owner decision:** "Fix the admin-rights problem (P0)
 first: yes." This is phase P0 of the credential vault design (`credential-vault.md` section 11, PR #2100), gate G-P0.
-**Deliverables (not installed by anything):** `scripts/setup/p0-deroot/` (sudoers allowlist, two root helpers, the
-Docker proxy unit, three service drop-ins, a tmpfiles fragment), pinned by `tests/unit/test_p0_deroot_files.py`, proven in
-`labs/p0-deroot/`.
+**Deliverables (not installed by anything):** `scripts/setup/p0-deroot/` (sudoers allowlist, five root helpers, the
+Docker proxy unit, three service drop-ins, a tmpfiles fragment, the `DOCKER_HOST` switch and example env files),
+pinned by `tests/unit/test_p0_deroot_files.py` and `tests/unit/test_p0_route_callers.py`, proven in `labs/p0-deroot/`.
 
 ## 1. Decision in one paragraph
 
@@ -22,12 +23,12 @@ uid, so a compromised service or coding agent can neither become root nor read a
 ### 2.1 Privileges today
 
 - `zoe` (uid 1000): groups `sudo`, `docker`, `adm`, `video`, `render`, `audio`, `gpio`, `i2c`, ... `sudo -l`:
-  `(ALL : ALL) ALL` (sudo group) and `(ALL) NOPASSWD: ALL` from `/etc/sudoers.d/zoe-temp` (28 bytes, dated
-  2026-06-20: a temporary grant that became permanent).
+  `(ALL : ALL) ALL` (sudo group) and `(ALL) NOPASSWD: ALL` from `/etc/sudoers.d/zoe-temp` (a temporary grant
+  that became permanent).
 - Every Zoe process runs as `zoe`: the user systemd manager (`user@1000`), the containers' host-side tooling, the
   Claude Code / Codex sessions, Omnigent (in-container uid 1000), Serena, and the GitHub runner.
-- `/home/zoe` is `0750 zoe:zoe`; the checkout, `~/models`, `~/.zoe` are `0775 zoe:zoe`. Root `.env` is `0664`
-  (**world-readable**); `services/zoe-data/.env` and the Flue `.env`s are `0600`.
+- `/home/zoe` is `0750 zoe:zoe`; the checkout, `~/models`, `~/.zoe` are `0775 zoe:zoe`. The root `.env`,
+  `services/zoe-data/.env` and the Flue `.env`s are owner-only `0600` (the root `.env` was world-readable until 2026-11).
 - GPU nodes `/dev/nvmap`, `/dev/nvhost-*`, `/dev/nvgpu/igpu0/*` are `root:video 0660`: group `video` is the whole
   GPU requirement. polkit is 0.105 (no JS rules, so no per-unit polkit grants: sudoers is the allowlist tool).
 
@@ -38,12 +39,12 @@ uid, so a compromised service or coding agent can neither become root nor read a
 | `zoe-data` (user) | 0.0.0.0:8000 | checkout (ro + `CAPABILITIES.md`, write tolerated to fail), `~/.zoe`, `~/.zoe-logs`, `~/.zoe-voice-samples`, `~/.mempalace`, `~/models`, `~/.worktrees`, `~/.ssh/zoe_pi_key` | `services/zoe-data/.env`, `~/.hermes/.env` | yes (2.3) | no | **yes**: chat, tools, web, Telegram, intents |
 | `flue-zoe-brain-2x` (user) | *:3579 | its lab dir, `data/zoe-brain.db` | its `.env` | no | no | **yes**: the brain lane |
 | `flue-zoe-telegram` (user) | *:3582 | its lab dir | bot token `.env` | no | no | **yes**: external messages |
-| `llama-server` (user) | 127.0.0.1:11434 | `~/models`, `~/llama.cpp-b11982` | none | no | `brain_cold_start.sh` drop_caches | prompts only |
+| `llama-server` (user) | 127.0.0.1:11434 | `~/models`, `~/llama.cpp-b11982` | none | no | `brain_cold_start.sh` drop_caches | prompts only (the P0-4 unit must keep its `LD_LIBRARY_PATH`) |
 | `kokoro-tts` (user) | 127.0.0.1:10201 | checkout script, `~/.zoe/kokoro_cache`, venv | none | no | no | model text |
 | `functiongemma-router` (user) | 127.0.0.1:11436 | `~/models`, `~/llama.cpp` | none | no | no | utterances |
 | `github-runner` (user) | none | `~/actions-runner`, the live checkout, venvs, `~/.nvm` | runner token | compose | no | no (runs `main`) |
 | `zoe-night-window` (user timer 02:50) | :11500 (12B) | `~/.zoe/night-window` | zoe-data `.env` | no | drop_caches, NvMap debugfs | household data |
-| timers: backup, backup-verify, memory-export, health, ma-idle-reap, multica-heartbeat, crash-loop-watch, merge-queue, voice-regression, training | none | `~/.zoe`, backups | `.env`s | exec `zoe-database`, stop MA, `ps` | no | no |
+| timers: backup (the timer is disabled; the backup runs in the night window's pre-sleep step), backup-verify, memory-export, health, ma-idle-reap, multica-heartbeat, crash-loop-watch, merge-queue, voice-regression, training | none | `~/.zoe`, backups | `.env`s | exec `zoe-database`, stop MA, `ps` | no | no |
 | `serena-mcp` (user), `serena-bridge` (system, `DynamicUser`, code in `/usr/local/lib/zoe`) | 9121 | repo | none | no | no | agents |
 
 ### 2.3 Docker callers (who needs the daemon, and for what)
@@ -57,18 +58,23 @@ uid, so a compromised service or coding agent can neither become root nor read a
 | zoe-data `omnigent_issue_executor.py` (Multica, `ZOE_MULTICA=true`) | `exec` in `zoe-omnigent` | **not** the proxy: a root helper that pins `-u 1000:1000` (P0-2) |
 | zoe-data `main.py` + `music_discovery_batch.py` (`ZOE_MUSIC_DISCOVERY=on`) | `run` digarr (`:latest`, unpinned), `rm -f` | container create = root: moves to a zoe-tier timer + helper, or stays off (P0-2) |
 | zoe-data `system_updates.py` (admin endpoint) | inspect, `compose pull/up --build`, `exec zoe-ui nginx -s reload` | retired from zoe-data; owner path (P0-2) |
-| `deploy.yml` (runner) | `compose up [--build] zoe-auth`, `compose up zoe-ui`, `docker restart zoe-ui`, `docker run nginx -t` | root helper `zoe-compose-deploy` (P0-1, see 4.4) |
+| `deploy.yml` (runner) | `compose up [--build] zoe-auth`, `compose up zoe-ui`, `docker restart zoe-ui`, `docker run nginx -t`, the modules compose (`config`, `ps`, `up --wait`), `compose logs` / `docker logs` on failure | root helper `zoe-compose-deploy` (P0-1, see 4.4) through `scripts/deploy/compose_deploy.sh` |
+| zoe-data `multica_autopilot_sync.py` -> `platform_health_check.sh` (Multica, paused) | `info`, `inspect` of every running container | proxy: rewritten in P0-1 to `version` + one `ps` |
 | coding agents, labs (`labs/relay`) | build/run anything | owner-approved, or rootless Docker (P0-5) |
 
 ### 2.4 sudo callers
 
-`night_window.py` (drop_caches + compact before the 12B, `cat` of two NvMap debugfs files), `bakeoff.py`,
-`brain_cold_start.sh` (llama-server `ExecStartPre`), `mtp_vocab_trim_window.sh`, and agents by hand (apt upgrades,
-container recreation, `npm -g` installs, system unit installs, drop_caches for 12B windows). Nothing in zoe-data calls
-sudo. Pi-only templates (`omi-sync`, `zoe-bluetooth`: `hcitool`) are out of scope (the panel Pi). All of these already
+`night_window.py` (drop_caches + compact before the 12B, `cat` of two NvMap debugfs files; `speed_sweep.py` parses
+those reads), `bakeoff.py`, `brain_cold_start.sh` (llama-server `ExecStartPre`), `mtp_vocab_trim_window.sh`,
+`engine_bench.py` (drop_caches, NvMap clients), zoe-data's `omi_repass.py` (drop + compact before the night re-pass
+model; it runs as a night-window pre-job), and agents by hand (apt upgrades, container recreation, `npm -g`
+installs, system unit installs, drop_caches for 12B windows). The bake-off's scratch-Postgres wipe (`sudo du/find`)
+stays an admin-account step. Pi-only templates (`omi-sync`, `zoe-bluetooth`: `hcitool`) are out of scope (the panel Pi). All of these already
 degrade without sudo (`sudo -n true` probe first): the cold start logs one line and starts; the night window refuses a
 12B load on fragmented RAM; the bake-off falls back to a throwaway container, which the proxy will refuse. So the
-helpers are about keeping the night window working, not about anything breaking loudly.
+helpers are about keeping the night window working, not about anything breaking loudly. **The probe itself was a
+trap:** after P0-3 `sudo -n true` fails even when the helper is allowed, so every precheck now asks the policy for
+the exact helper (`sudo -n -l <helper> <arg>`, which runs nothing), section 5.1.
 
 ### 2.5 The self-hosted runner
 
@@ -80,7 +86,8 @@ migrations, restart of the service units, and the zoe-auth / zoe-ui container op
 
 ### 2.6 Root paths that survive removing `sudo` and `docker`
 
-1. **Privileged Home Assistant reads a zoe-writable config.** `homeassistant` runs `Privileged=true` with
+1. **Privileged Home Assistant reads a zoe-writable config** (2026-10-18; the HA container is no longer privileged
+   since, but its zoe-writable config stays a P0-2 move). `homeassistant` ran `Privileged=true` with
    `/home/zoe/assistant/homeassistant` (`0775 zoe`) as `/config`. HA loads Python from `/config/custom_components`,
    so anything that can write as `zoe` can run code as root in a privileged container: host root. (Reasoned from the
    mounts and HA's loader; deliberately not exercised.)
@@ -156,11 +163,16 @@ lands, agents hand privileged steps to the owner as an operator pack, as today's
 
 ### 4.4 Deploy
 
-P0-1 adds `zoe-compose-deploy <zoe-auth|zoe-ui> <sha> [--build]` (root helper, follow-up PR): it fetches `main` from
-the **public** GitHub URL into a root-owned mirror, refuses unless the sha is on `main`, exports that tree root-owned,
-and runs `docker compose` from it with `--env-file /etc/zoe/compose.env` (root `0600`) and bind sources under
-`/srv/zoe/` (moved in P0-2). The runner can name a reviewed commit and a service, nothing else. `nginx -t` runs inside
-the helper. At P0-4 the runner moves to `zoe-deploy`, which owns `/srv/zoe/assistant` (the live checkout;
+P0-1 adds `zoe-compose-deploy` (`libexec/`), verbs `zoe-auth`, `zoe-auth --build`, `zoe-ui`, `modules`,
+`logs zoe-auth|zoe-ui`: every Docker step `deploy.yml` runs. The commit comes on **stdin** (40 hex), not as an
+argument: sudo 1.9.9 has no argument regex, and a `*` would match any argv. It fetches `main` from the **public**
+GitHub URL into a root-owned mirror, refuses unless the commit is on `main` (exit 3), exports that tree root-owned,
+and runs `docker compose -p assistant` from it with `--env-file /etc/zoe/compose.env` (root `0600`, a P0-1 item: an
+exported tree has no `.env`; the variable NAMES are in `examples/compose.env.example`). Every bind source must be
+unswappable (no symlink, root-owned non-writable ancestors) and either a read-only path inside the export or under
+`/srv/zoe/`; until P0-2 moves zoe-auth's data and zoe-ui's dist/ssl (and makes them compose variables) it answers
+exit 6 "not ready", and the seam `scripts/deploy/compose_deploy.sh` keeps today's commands. `nginx -t` runs inside
+the helper on `--network none`. The runner can name a reviewed commit and a fixed verb, nothing else. At P0-4 the runner moves to `zoe-deploy`, which owns `/srv/zoe/assistant` (the live checkout;
 `/home/zoe/assistant` becomes a symlink for humans and agents), `/srv/zoe/venvs` and a root-installed node.
 
 ### 4.5 systemd (P0-4)
@@ -190,6 +202,47 @@ change; another uid cannot read it (lab S5, Z3). Phase 2: `LoadCredential=` per 
 | **P0-5** agents' labs | rootless Docker for `zoe` (`uidmap`, `rootlesskit`, `slirp4netns`; subuids exist) | none | uninstall | `labs/relay/run.sh lab` |
 | **P0-6** HA de-privilege | replace `privileged` with explicit `devices` | HA restart | re-add `privileged` | HA integrations |
 
+### 5.1 P0-1 state (2026-11-14): code written, lab-proven, nothing applied
+
+Every caller now routes through `scripts/lib/zoe_priv.py` (or, in zoe-data and the shell scripts, the same rule
+inline): **the helper via `sudo -n <exact path> <fixed args>` when it is installed, else the old command**, and one
+fixed log line `priv-route <helper>=helper|legacy|none|override`. The availability probe is `sudo -n -l <helper>
+<arg>` when the helper is installed, else `sudo -n true`. Behaviour on today's box (helpers mostly absent, grant
+present) is unchanged; after P0-0 the helper path runs; after P0-3 only the helper path works.
+
+| caller | before | after (helper installed) | fallback (absent) |
+|---|---|---|---|
+| night window + bake-off compaction (`bakeoff.Window`) | `sudo -n sh -c '<drop + compact>'`, probe `sudo -n true` | `zoe-mem-compact 3` (or `0`), probe `sudo -n -l` | unchanged |
+| night window NvMap reads | `sudo -n cat <debugfs>` | `zoe-nvmap-read free` / `clients` | unchanged |
+| `brain_cold_start.sh`, `mtp_vocab_trim_window.sh` | `sudo -n sh -c 'echo 1 > drop_caches'` | `zoe-mem-compact 1` (probe `sudo -n -l`) | unchanged |
+| `engine_bench.py` | `sudo -n sh -c`, `sudo -n cat` | `zoe-mem-compact 1`, `zoe-nvmap-read clients` | unchanged |
+| zoe-data `omi_repass.py` (voice-gated) | `sudo -n sh -c '<drop + compact>'` | `zoe-mem-compact 3` | unchanged |
+| backup HA export, restore drill | already helper-first | + the route line | none / the repo copy |
+| deploy (`compose_deploy.sh`) | `docker compose` as the runner | `zoe-compose-deploy <verb>`, sha on stdin | today's commands; also on exit 6 |
+| Docker CLI callers (zoe-data MA/LiveKit, backup, manifest, heartbeat, health, idle reap, drill inspect) | raw socket | the proxy via `DOCKER_HOST` (`environment.d/60-zoe-docker-proxy.conf`, `examples/runner.env.example`) | no file = today's socket |
+
+Not rewired, by design: zoe-data `system_updates.py` (compose/exec from zoe-data: **retire in P0-2**; nothing in P0-1
+depends on it), `main.py` digarr and `omnigent_issue_executor.py` (P0-2), the bake-off's scratch wipe and the
+operator scripts that call `sudo` by hand (`disk_space_monitor.sh`, `emergency_cleanup.sh`,
+`docker_monitor_and_cleanup.sh`, `migrate_music_assistant_data.sh`, `time_sync_service.py`): admin-account tools.
+
+**Group membership needs a REBOOT, not a restart.** Adding `zoe` to `zoe-dockerproxy` (P0-0) reaches running
+services only when `user@1000` restarts, i.e. at a reboot; until then a `DOCKER_HOST` pointing at the proxy gets
+EACCES. Order: P0-0 (incl. the group) -> reboot -> install the `environment.d` file -> restart zoe-data.
+
+**Not in the repo (owner command sheet):** the `groupadd` for `zoe-dockerproxy`, the `usermod -aG zoe-dockerproxy zoe`,
+and the `useradd` for `zoe-admin`. Nothing here invents them.
+
+**The deploy workflow change (operator applies; agents may not edit workflows).** In `deploy.yml`, zoe-auth step:
+replace `docker compose up -d --no-deps zoe-auth` (both occurrences) with `bash scripts/deploy/compose_deploy.sh
+zoe-auth`, `docker compose up -d --no-deps --build zoe-auth` with `bash scripts/deploy/compose_deploy.sh zoe-auth
+--build`, and `docker compose logs --tail=80 zoe-auth` with `bash scripts/deploy/compose_deploy.sh logs zoe-auth`.
+zoe-ui step: replace the block from `NGINX_IMAGE=...` through `docker restart zoe-ui` with `bash
+scripts/deploy/compose_deploy.sh zoe-ui`, and `docker logs --tail=40 zoe-ui` with `bash scripts/deploy/compose_deploy.sh
+logs zoe-ui`. Modules step: replace from `docker compose -f docker-compose.modules.yml config -q` to the final
+`rm -f "${PENDING_FILE}"` with `bash scripts/deploy/compose_deploy.sh modules`. The seam keeps the exact current
+commands as its legacy path, so the change is behaviour-identical until the helper is installed and P0-2 is done.
+
 **Owner approvals needed:** P0-0 (create users, install sudoers/helpers/proxy, the CUDA smoke); P0-1 (the
 deploy/helper PR merge and the `DOCKER_HOST` switch); P0-2 (each container move, the zoe-data duty moves);
 **P0-3 (the de-root itself, with a scheduled reboot)**; P0-4 (each service move, the runner + checkout move);
@@ -201,7 +254,7 @@ One container, no network, systemd 249 as PID 1 (Ubuntu 22.04, the Jetson's own)
 the host cgroup namespace with a read-write `/sys/fs/cgroup`, because systemd does not boot otherwise (lab README).
 The deliverables are installed **verbatim**; three stand-in services carry the real drop-ins on top of base units that
 keep the voice guards. Each stand-in answers `/probe` from **inside its own sandbox**. **Result: 47/47 cells pass
-(2026-10-18 20:14).** The lab also caught one real defect: `StandardOutput=append:` is opened before the namespace
+(2026-10-18 20:14); P0-1 adds the P cells (section 5.1, lab README).** The lab also caught one real defect: `StandardOutput=append:` is opened before the namespace
 and before `LogsDirectory=`, so the drop-in moves zoe-data's capture to `/var/log/zoe-data/` and
 `tmpfiles.d/zoe-p0-deroot.conf` pre-creates it.
 

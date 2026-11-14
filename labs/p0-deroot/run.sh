@@ -43,6 +43,9 @@ KEEP="${1:-}"
 
 cp -r "$here/lab" "$ctx/lab"
 cp -r "$repo/scripts/setup/p0-deroot" "$ctx/deliverables"
+# P0-1: the rewired callers, verbatim (the P cells run them as zoe without the broad grant, and as zoe-pre with it)
+mkdir "$ctx/callers"
+cp "$repo/scripts/lib/zoe_priv.py" "$repo/scripts/maintenance/brain_cold_start.sh" "$repo/scripts/deploy/compose_deploy.sh" "$ctx/callers/"
 cp "$here/Dockerfile" "$ctx/"
 docker build -q -t "$IMAGE" "$ctx" >/dev/null
 

@@ -51,6 +51,30 @@ the real Docker CLI through the proxy including the `exec -i` stream hijack, and
   - `visudo -c` passes and catches a broken file.
   - `systemd-analyze verify` is clean on all four units.
 
+## P0-1 cells (2026-11-14): the rewired callers
+
+`run.sh` also copies the rewired callers verbatim (`scripts/lib/zoe_priv.py`, `brain_cold_start.sh`,
+`deploy/compose_deploy.sh`); the image gets `git` and a fake docker CLI at `/usr/bin/docker`
+(`lab/fake_docker_cli.py`: records argv, runs nothing, renders a canned compose config per scenario). A local bare
+repo stands in for the public origin through a root-owned `/etc/gitconfig` `insteadOf`, so the deploy helper is
+installed verbatim. The kernel's vm sysctls are not namespaced, so before any cell runs a memory helper both
+`/proc/sys/vm/drop_caches` and `compact_memory` are bind-mounted over with lab files and the redirection is proven
+by inode (cell P0); unproven, the executing cells do not run. `zoe` has the allowlist only; `zoe-pre` has today's grant;
+"helper absent" = the helper moved out of `zoe-priv/` for that block.
+
+- **P0** the vm sysctls are lab files. **P1** the deploy helper's sudoers lines allow its 6 verbs and nothing around
+  them. **P2** the helper itself refuses bad argv and bad stdin (exit 2, no docker call). **P3** every verb runs as
+  `zoe` without the grant (sha on main, binds moved): project `assistant`, the root-owned export, `--build`, nginx -t
+  then up then restart, modules `--wait`, logs. **P4** off-main / unknown commit: exit 3 before any compose.
+  **P5** bind under /home, a symlinked source, a rw bind into the tree, a loose env file: exit 6, no `up`.
+  **P6** a symlink planted where the export goes: exit 5. **P7** the seam: helper, legacy with the grant, and the
+  exit-6 fallback. **P8** `brain_cold_start.sh`: helper without the grant (root wrote the drop), legacy with it, and
+  neither (logs SKIPPED, writes nothing). **P9** `zoe_priv` with real sudo: helper routed + allowed + run as root;
+  legacy with the grant; neither = `can_run` False. **P10** the proxy carries every request the Docker callers make
+  and refuses what they used to do (`info`, inspect of other containers, logs, restart, create, stats, omnigent exec).
+
+Result: see the run recorded in the P0-1 commit message (or `last-result.json` after a run).
+
 **Found by the lab and fixed in the deliverables:** systemd opens `StandardOutput=append:` files **before** it builds
 the namespace and before `LogsDirectory=` exists. So the live `20-capture-output.conf` path (`~/.zoe-logs`) and a
 not-yet-created `/var/log/zoe-data` both fail with `Failed at step STDOUT`. The zoe-data drop-in now points the
