@@ -102,6 +102,21 @@ def _partial_bump(uid: str) -> None:
     _PARTIAL[uid] = _PARTIAL.get(uid, 0) + 1
 
 
+def _member_erased_since(uid: str, gen: int) -> bool:
+    """A whole-member erase moved the generation since ``gen`` was snapshotted, OR one is running now (``user_erase_gate.erase_span``,
+    #2569). The span check matters for a correction that started INSIDE a running ``delete_user`` after this store was swept: its
+    snapshot is already the post-sweep generation, so only the span says the member is being erased. The gate's own rule, as a
+    scheduled write (``scheduled`` + ``erased_since_scheduled``)."""
+    import user_erase_gate as erase_gate
+
+    with erase_gate.scheduled(uid, gen):
+        return erase_gate.erased_since_scheduled(uid)
+
+
+def _log_drop(code: str) -> None:
+    logger.info("ERASE_GATE_DROP lane=value_registry code=%s", code)       # a code only: no member, value, subject or id
+
+
 def mode() -> str:
     try:
         import typed_env
@@ -288,7 +303,7 @@ async def record(user_id: str, subject_ref: str, attribute: str, *, superseded: 
     """Record one correction: each value in ``superseded`` was corrected away, ``asserted`` (optional) is the value it was
     corrected to, said at ``said_at`` (epoch seconds). Every value is validated by ``normalise`` and every id by its real shape; ANY
     invalid input refuses the whole record. Written under the member's erase gate (``scheduled_at`` = the erase generation when the
-    write was scheduled; a member erase since then drops it) and against the partial-erase epoch (``partial_at``, snapshotted when
+    write was scheduled; a member erase since then, or one running now, drops it) and against the partial-erase epoch (``partial_at``, snapshotted when
     the write was scheduled; any topic / turn / rows / entity erase since then drops it, also when it lands between this write's
     insert and its commit). Returns the entries written (0 = nothing). Never raises."""
     import user_erase_gate as erase_gate
@@ -313,9 +328,11 @@ async def record(user_id: str, subject_ref: str, attribute: str, *, superseded: 
     n_new = 0
     try:
         async with erase_gate.writing(uid, gen) as live, _db() as db:
-            if not live or partial_epoch(uid) != part:
+            if not live or _member_erased_since(uid, gen) or partial_epoch(uid) != part:
                 COUNTS["dropped_erased"] += 1
-                return 0             # forgotten means forever: a correction from before an erase is never written
+                _log_drop("partial_erase" if live and partial_epoch(uid) != part and not _member_erased_since(uid, gen)
+                          else "erased_since_scheduled")
+                return 0             # forgotten means forever: a correction from before (or during) an erase is never written
             if subject_ref != SELF and not await _person_live(db, uid, subject_ref):
                 COUNTS["no_subject"] += 1
                 return 0
