@@ -444,3 +444,100 @@ def test_a_negative_value_abstains_in_the_other_normalisers(attribute, text):
 def test_a_range_or_hyphenated_word_is_not_a_negative(attribute, text, want):
     got = mc.normalise(attribute, text)
     assert (got.value if got else None) == want
+
+
+# -- impossible completed dates; the raw-text guard every numeric normaliser runs (review of PR 2477, round 3) -----
+
+@pytest.mark.parametrize("new, stored, want", [
+    ({"d": 31}, {"m": 2, "d": 1}, None),                                        # 31 -> February
+    ({"d": 29}, {"y": 2027, "m": 2, "d": 1}, None),                             # 29 -> February of a non-leap year
+    ({"d": 29}, {"y": 2028, "m": 2, "d": 1}, {"y": 2028, "m": 2, "d": 29}),     # a leap year
+    ({"d": 30}, {"m": 4, "d": 1}, {"m": 4, "d": 30}),
+    ({"d": 31}, {"m": 4, "d": 1}, None),                                        # 31 -> April
+    ({"d": 29}, {"m": 2, "d": 1}, {"m": 2, "d": 29}),                           # no year anywhere: possible in some year
+    ({"m": 2, "d": 29}, {"y": 2027, "m": 1, "d": 3}, None),                     # the inherited year decides
+    ({"m": 2}, {"y": 2027, "m": 1, "d": 31}, {"y": 2027, "m": 2}),              # a month-only move drops the day
+])
+def test_a_completed_date_must_exist(new, stored, want):
+    assert mc.merge_date(new, stored)[0] == want
+
+
+def test_a_schedule_hands_the_raw_clock_text_to_the_time_guard():
+    for text in ("every day at -7:00", "mondays at −5pm", "mondays at –7:00", "weekdays at - 5pm"):
+        assert mc.normalise("schedule", text) is None, text
+    assert mc.normalise("schedule", "mondays at 7:00").value == {"freq": "weekly", "byday": ["MO"],
+                                                                 "time": {"h12": 7, "mi": 0}}
+
+
+@pytest.mark.parametrize("attribute, text", [
+    ("amount", "¥500"), ("amount", "₹500"), ("amount", "+5"), ("amount", "±5"), ("measure", "~5 km"),
+    ("measure", "5°"), ("count", "+3"), ("age", "~8"), ("event_date", "the 19th +1"), ("time_of_day", "~5pm"),
+])
+def test_a_symbol_the_tokeniser_would_drop_abstains(attribute, text):
+    assert mc.normalise(attribute, text) is None
+
+
+MINUS_FORMS = ["-", "−", "–", "—"]
+VALID = [
+    ("event_date", "19 December 2026"), ("birthday", "3 May"), ("age", "8 years old"), ("age", ".5"),
+    ("count", "3 dogs"), ("amount", "$50"), ("amount", "US$50"), ("amount", ".50"), ("amount", "13.5k"),
+    ("measure", "5 km"), ("measure", ".5 km"), ("time_of_day", "7:00"), ("time_of_day", "5pm"),
+    ("schedule", "mondays at 7:00"),
+]
+
+
+def _minus_variants(text: str, minus: str) -> list:
+    """The minus before the whole input, after a space, and directly before the first digit / point / currency mark."""
+    first = next(i for i, c in enumerate(text) if c.isdigit() or c in ".$")
+    if text[:first].upper().endswith("US"):
+        first -= 2
+    return [minus + text, minus + " " + text, text[:first] + minus + text[first:]]
+
+
+@pytest.mark.parametrize("attribute, text", VALID)
+def test_property_a_minus_never_yields_a_positive_value(attribute, text):
+    assert mc.normalise(attribute, text) is not None                 # the input itself is valid
+    for minus in MINUS_FORMS:
+        for variant in _minus_variants(text, minus):
+            assert mc.normalise(attribute, variant) is None, variant
+
+
+@pytest.mark.parametrize("fn", [mc.norm_date, mc.norm_birthday, mc.norm_age, mc.norm_count, mc.norm_amount,
+                                mc.norm_measure, mc.norm_time, mc.norm_schedule])
+def test_every_numeric_normaliser_runs_the_raw_guard_itself(fn):
+    assert fn("−" + "5") is None and fn("(5)") is None          # direct calls, not only through normalise()
+
+
+# -- ranges: a dropped separator never leaves the two endpoints (review of PR 2477, round 3) -----------------------
+
+WEEK = ["MO", "TU", "WE", "TH", "FR"]
+
+
+@pytest.mark.parametrize("text, days", [
+    ("monday-friday at 5pm", WEEK), ("monday–friday at 5pm", WEEK), ("monday to friday", WEEK),
+    ("monday through friday", WEEK), ("mon-fri", WEEK), ("mondays-fridays", WEEK), ("tue-thu", ["TU", "WE", "TH"]),
+    ("monday-friday weekly", WEEK),
+])
+def test_a_weekday_range_expands_to_every_day_in_it(text, days):
+    assert mc.normalise("schedule", text).value["byday"] == days
+
+
+@pytest.mark.parametrize("text", [
+    "friday-monday",                         # across the week boundary: abstain (a choice, not a reading)
+    "monday-monday", "monday/friday",        # no range / a slash: one, the other or both?
+    "Mon - Fri at 9am", "monday — friday",   # a spaced dash is a loose minus to the raw guard: abstain
+    "monday-friday and saturday-sunday", "mondays till fridays", "monday-june",
+    "mondays at 9-5", "mondays at 9am-5pm", "mondays at 9am to 5pm",     # a time RANGE is no one time
+])
+def test_a_range_that_is_not_a_forward_weekday_range_abstains(text):
+    assert mc.normalise("schedule", text) is None
+
+
+@pytest.mark.parametrize("attribute, text", [
+    ("time_of_day", "9-5"), ("time_of_day", "9am-5pm"), ("time_of_day", "9am to 5pm"), ("time_of_day", "9/5"),
+    ("event_date", "the 12th-19th"), ("event_date", "the 12th to the 19th"), ("event_date", "12/12-19/12"),
+    ("event_date", "monday-friday the 19th"), ("amount", "10-50"), ("amount", "$10 to $50"),
+    ("measure", "5-10 km"), ("count", "3-4 dogs"), ("age", "7-8"), ("age", "7 to 8"),
+])
+def test_a_range_in_any_other_normaliser_abstains(attribute, text):
+    assert mc.normalise(attribute, text) is None

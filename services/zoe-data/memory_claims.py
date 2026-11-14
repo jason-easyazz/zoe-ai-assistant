@@ -21,6 +21,7 @@ Pure: stdlib + ``people_graph`` / ``structural_claims`` / ``lexicons`` / ``date_
 from __future__ import annotations
 
 import calendar
+import functools
 import hashlib
 import json
 import re
@@ -350,6 +351,35 @@ _NEGATIVE_RE = re.compile(rf"(?<![\w.]){_SIGN}\s*(?:{_CUR_MARK}\s*)?\.?\d"
                           rf"|\(\s*(?:{_CUR_MARK}\s*)?\.?\d[\d.,]*\s*(?:{_CUR_MARK}\s*)?\)", re.IGNORECASE)
 
 
+#: currency / symbol characters a NUMERIC normaliser understands; any other symbol ("¥500", "~5", "+5", "±2", "5°") is a
+#: meaning the tokeniser would silently drop, so the value abstains
+_KNOWN_SYMBOLS = frozenset("$€£")
+#: any minus form that does not join two word characters ("-mondays", "- 5", "5 - 10"): a numeric value never carries
+#: one; "twenty-one", "2026-12-19" and "10-$50" (a range, which abstains on its own) have a word character before it
+_LOOSE_MINUS_RE = re.compile(r"(?<![\w.])[-\u2212\u2013\u2014]")
+
+
+def raw_unsafe(text: Any) -> bool:
+    """Does the RAW text carry something the tokeniser would drop before a normaliser could see it - a sign (any minus
+    form, before or after a currency marker, or an accounting "( )"), or a symbol it has no reading for? Checked on the
+    whole input by every numeric normaliser (``_numeric``) BEFORE tokenising: three review rounds found the same class
+    because each guard sat inside one normaliser and the tokens another normaliser was handed had lost the sign."""
+    s = unicodedata.normalize("NFKC", str(text or ""))
+    if _NEGATIVE_RE.search(s) or _LOOSE_MINUS_RE.search(s):
+        return True
+    return any(unicodedata.category(c)[0] == "S" and c not in _KNOWN_SYMBOLS for c in s)
+
+
+def _numeric(fn):
+    """Every numeric normaliser runs behind ``raw_unsafe`` on its own raw input."""
+    @functools.wraps(fn)
+    def guarded(text, *args, **kwargs):
+        if raw_unsafe(text):
+            return None
+        return fn(text, *args, **kwargs)
+    return guarded
+
+
 def _toks(text: str) -> list:
     s = unicodedata.normalize("NFKC", str(text or "")).casefold().replace("’", "'")
     return _TOKEN_RE.findall(_AMPM_RE.sub(r"\1m", s))
@@ -467,13 +497,12 @@ def _date_value(y, m, d) -> dict:
     return {k: v for k, v in (("y", y), ("m", m), ("d", d)) if v is not None}
 
 
+@_numeric
 def norm_date(text: str) -> Optional[Norm]:
     """A calendar date as said: full ("12 December 2026", "2026-12-12", household-order "3/1/2027"), day + month in either
     order with ordinal or numeric days ("the twentieth of November", "December 19"), day-only ("the 19th"), month-only
     ("January"), month + year. Only the parts said are kept; a 2-digit year, a relative date ("next friday") or a lone
     weekday is ``None``."""
-    if _NEGATIVE_RE.search(str(text or "")):
-        return None
     raw = str(text or "").strip()
     m_iso = _ISO_RE.fullmatch(raw)
     if m_iso:
@@ -502,6 +531,8 @@ def norm_date(text: str) -> Optional[Norm]:
         if t in _DATE_FILLERS:
             pass
         elif t in _WEEKDAYS:
+            if weekday:
+                return None                    # "monday-friday the 19th": two weekdays are no single date
             weekday = True
         elif t in _MONTHS:
             if m is not None:
@@ -532,6 +563,7 @@ def norm_date(text: str) -> Optional[Norm]:
     return Norm(_date_value(y, m, d), "date")
 
 
+@_numeric
 def norm_birthday(text: str) -> Optional[Norm]:
     """A birthday names a day (the month and year optional: "the 3rd, not the 4th" takes the stored month)."""
     n = norm_date(text)
@@ -546,7 +578,9 @@ def date_matches(old: Mapping, stored: Mapping) -> bool:
 
 def merge_date(new: Mapping, stored: Mapping) -> tuple:
     """``(merged value_norm, year_inherited)``: a partial new date takes the stored row's coarser parts - a day-only date
-    the month, a date without a year the year - never a finer part (a month-only move drops the stored day)."""
+    the month, a date without a year the year - never a finer part (a month-only move drops the stored day). The
+    completed date is checked: an impossible one is ``(None, ...)``. 29 February with no year anywhere stays possible (it
+    exists in some year); the moment a year is present it must be a leap year."""
     out = dict(new)
     inherited = False
     if "d" in out and "m" not in out and "m" in stored:
@@ -554,6 +588,8 @@ def merge_date(new: Mapping, stored: Mapping) -> tuple:
     if "y" not in out and "y" in stored and "m" in out:
         out["y"] = stored["y"]
         inherited = True
+    if not _date_ok(out.get("y"), out.get("m"), out.get("d")):
+        return None, inherited                  # "the 31st" over February; 29 February in a year that has none
     return {k: out[k] for k in ("y", "m", "d") if k in out}, inherited
 
 
@@ -577,11 +613,10 @@ def age_at(birthday: Mapping, when: date) -> Optional[int]:
 _AGE_TAIL = frozenset({"years", "year", "yrs", "yr", "yo", "old"})
 
 
+@_numeric
 def norm_age(text: str) -> Optional[Norm]:
     """An age in years: "8", "eight", "8 years old", "3 and a half", "3.5". Halves only; 0-120. A date, a count noun or
     another unit ("8 months", "8th", "8 dogs") is None."""
-    if _NEGATIVE_RE.search(str(text or "")):
-        return None
     toks = _toks(text)
     while toks and toks[-1] in _AGE_TAIL:
         toks.pop()
@@ -619,10 +654,9 @@ DEFAULT_CURRENCY = "AUD"
 _NOT_A_COUNT = frozenset(_UNIT_WORDS) | frozenset(_CURRENCY) | _AGE_TAIL | {"cents", "cent"}
 
 
+@_numeric
 def norm_count(text: str) -> Optional[Norm]:
     """A whole count ("3", "three", "3 dogs"): one trailing noun allowed, never a unit, money or age word."""
-    if _NEGATIVE_RE.search(str(text or "")):
-        return None
     toks = _toks(text)
     if len(toks) > 1 and toks[-1].isalpha() and toks[-1] not in _NUMBER_WORDS:
         if toks[-1] in _NOT_A_COUNT:
@@ -634,11 +668,10 @@ def norm_count(text: str) -> Optional[Norm]:
     return Norm({"v": int(v)}, "count")
 
 
+@_numeric
 def norm_amount(text: str) -> Optional[Norm]:
     """Money: "$13,500", "13.5k", "twelve thousand dollars", "2 grand", "1.2m", "US$40", "20 dollar". The scale is applied
     and remembered (an unscaled old value takes the new one's: ``normalise_pair``); the currency is the stated one or AUD."""
-    if _NEGATIVE_RE.search(str(text or "")):
-        return None
     toks = _toks(text)
     cur: Optional[str] = None
 
@@ -673,11 +706,10 @@ def norm_amount(text: str) -> Optional[Norm]:
     return Norm({"v": _plain(v), "cur": cur or DEFAULT_CURRENCY}, "money", scale, stated)
 
 
+@_numeric
 def norm_measure(text: str, *, bare_ok: bool = False) -> Optional[Norm]:
     """A number with a measure unit ("5 km", "2.5 hours", "3%"); ``bare_ok`` lets an old value omit the unit (it then
     takes the new one's, ``normalise_pair``)."""
-    if _NEGATIVE_RE.search(str(text or "")):
-        return None
     toks = _toks(text)
     unit = ""
     if toks and toks[-1] in _UNIT_WORDS:
@@ -695,11 +727,10 @@ def norm_measure(text: str, *, bare_ok: bool = False) -> Optional[Norm]:
 _HOUR_WORDS = {w: i for w, i in _SMALL.items() if 1 <= i <= 12}
 
 
+@_numeric
 def norm_time(text: str) -> Optional[Norm]:
     """A time of day: "5pm", "5:30", "17:00", "five pm", "noon". Resolved as ``{"h": 0-23, "mi"}``; an hour of 1-12 with
     no am/pm is UNRESOLVED ``{"h12", "mi"}`` - it inherits a stored row's half of the day (``resolve_time``) or abstains."""
-    if _NEGATIVE_RE.search(str(text or "")):
-        return None
     toks = [t for t in _toks(text) if t not in ("at", "o", "clock")]
     if toks in (["noon"], ["midday"]):
         return Norm({"h": 12, "mi": 0}, "time")
@@ -744,22 +775,64 @@ def time_matches(old: Mapping, stored: Mapping) -> bool:
     return o == s and old.get("mi") == stored.get("mi")
 
 
+_AT_RE = re.compile(r"\bat\b", re.IGNORECASE)
 _FREQ = {"daily": "daily", "day": "daily", "weekly": "weekly", "week": "weekly", "monthly": "monthly", "month": "monthly",
          "yearly": "yearly", "year": "yearly", "annually": "yearly"}
 
 
+_DAY_ABBR = {**{w: c for w, c in _WEEKDAYS.items()}, "mon": "MO", "tue": "TU", "tues": "TU", "wed": "WE", "thu": "TH",
+             "thur": "TH", "thurs": "TH", "fri": "FR", "sat": "SA", "sun": "SU"}
+#: a separator the tokeniser would DROP between two words: a hyphen or dash, "to", "through" / "thru", a slash.
+#: "monday-friday" tokenised to "monday", "friday" and was stored as MO,FR only
+_RANGE_SEP_RE = re.compile(r"(?<=\w)\s*(?:[-\u2010-\u2015\u2212/])\s*(?=\w)|\s(?:to|through|thru|till|until)\s",
+                           re.IGNORECASE)
+_DAY_RANGE_RE = re.compile(r"\b([a-z]+?)s?\s*(?:[-\u2010-\u2015\u2212]|\s(?:to|through|thru)\s)\s*([a-z]+?)s?\b",
+                           re.IGNORECASE)
+_NOT_A_RANGE = object()
+
+
+def _day_range(raw: str):
+    """The weekday range in a schedule's day part: ``(text without the range, [days])``, ``None`` when there is no
+    range separator, or ``_NOT_A_RANGE`` (abstain) when a separator is there but is not a FORWARD range of two weekday
+    names ("monday-friday", "mon - fri", "monday to friday" -> MO..FR). A range across the week boundary
+    ("friday-monday") abstains - it is a choice, not a reading; a slash ("monday/friday": one, the other or both?)
+    abstains; any other dropped separator abstains."""
+    if not _RANGE_SEP_RE.search(raw):
+        return None
+    m = _DAY_RANGE_RE.search(raw)
+    if not m:
+        return _NOT_A_RANGE
+    a, b = _DAY_ABBR.get(m.group(1).casefold()), _DAY_ABBR.get(m.group(2).casefold())
+    if a is None or b is None:
+        return _NOT_A_RANGE
+    i, j = WEEKDAY_ORDER.index(a), WEEKDAY_ORDER.index(b)
+    if j <= i:
+        return _NOT_A_RANGE
+    rest = raw[:m.start()] + " " + raw[m.end():]
+    if _RANGE_SEP_RE.search(rest):
+        return _NOT_A_RANGE                     # a second range, or a separator left over
+    return rest, list(WEEKDAY_ORDER[i:j + 1])
+
+
+@_numeric
 def norm_schedule(text: str) -> Optional[Norm]:
     """A small recurrence: "on wednesdays", "mondays and thursdays", "every day", "weekly", "weekdays at 5pm" ->
     ``{"freq", "byday"?, "time"?}``."""
-    toks = _toks(text)
+    raw = str(text or "")
     when = None
-    if "at" in toks:
-        k = toks.index("at")
-        when = norm_time(" ".join(toks[k + 1:]))
+    head_tail = _AT_RE.split(raw, maxsplit=1)
+    if len(head_tail) == 2:
+        when = norm_time(head_tail[1])          # the RAW clock text, sign and all: never re-joined tokens
         if when is None:
             return None
-        toks = toks[:k]
-    freq, days = None, set()
+        raw = head_tail[0]
+    span = _day_range(raw)
+    if span is _NOT_A_RANGE:
+        return None
+    if span:
+        raw = span[0]
+    toks = _toks(raw)
+    freq, days = None, set(span[1] if span else ())
     for t in toks:
         if t in ("every", "each", "on", "and", "the", "a"):
             continue
