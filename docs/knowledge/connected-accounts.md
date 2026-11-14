@@ -81,3 +81,23 @@ Connect via `auth_handoff` (QR on the panel, finish on the phone) into `connecte
 per account using `start_run` / `finish_run`; `calendar_ical.store_parsed` and the connector moved onto `upsert_by_external_id` keyed by
 `(calendar_id, external_uid, recurrence_id)` with `etag` / `sequence`; the shared calendar read path with recurrence expansion (audit X3,
 X4); disconnect deleting the account's calendars and events after the fence.
+
+## The calendar feed fetcher contract (`calendar_feed.py`; the real fetcher is not built yet)
+
+The engine never holds a subscription address; an injected fetcher hands it bytes. It enforces what it can see itself:
+
+- a hard, engine-owned bound on every fetch (`FETCH_TIMEOUT_S`, 45 s). An async fetcher is cancelled at it. A sync fetcher runs
+  in the module's own pool of `MAX_FETCH_THREADS` (2) threads; at the bound the run is recorded failed (class `network`, report
+  detail `fetch_timeout`). A Python thread cannot be killed, so the stuck call keeps its worker until it returns: a feed whose fetch
+  is still outstanding is refused (`fetch_outstanding`, the fetcher is not called), and at most two stuck calls can exist (more
+  queue and are cancelled at their own bound);
+- the size cap on the result: a body over `ZOE_CALENDAR_FEED_MAX_BYTES` is refused (`quota` / `too_large`) whatever status came
+  with it, before anything is parsed or written;
+- a fetcher's exception is logged by its type name only; its text reaches no log, row or report (a test plants a token in the
+  address and in the exception and dumps every table, every log record and every report).
+
+The real fetcher (it belongs to the credential broker, a later change) MUST: stream the body and stop at `FetchRequest.max_bytes`;
+use connect / read timeouts shorter than the engine's bound; follow at most 3 redirects and re-check every hop; refuse loopback,
+link-local, private, multicast, reserved and cloud-metadata addresses AFTER DNS resolution and connect to the address it checked
+(`agent_safety.assert_public_url` plus a pinned address), answering `blocked`; and never put the address, host or a token in an
+exception, a log line or a result field.
