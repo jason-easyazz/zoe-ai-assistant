@@ -745,7 +745,10 @@ def test_every_verify_run_is_bracketed_by_dated_start_and_result_lines(tmp_path,
 
 # ── stale alerts: the transition, then at most one reminder a week, and one "passed again" (review of #2459) ───────────
 
-DAY0 = datetime.fromisoformat("2026-11-20T05:30:00+08:00")       # fixed-offset instants: the same under any TZ
+# The drill reads its guards from datetime.now().astimezone(): PROCESS-LOCAL time, the same clock the night window
+# (night_window.py, night_busy.sh `date`) and its systemd timers use. So test instants are built in process-local time:
+# a fixed +08:00 05:30 lands inside the window under some zones. Comparisons inside the drill are instants either way.
+DAY0 = datetime(2026, 11, 20, 5, 30).astimezone()
 
 
 def _stale_state(tmp_path, **extra):
@@ -769,7 +772,10 @@ def _daily_refusals(monkeypatch, tmp_path, days, start=DAY0, avail=10):
 def test_stale_daily_refusals_alert_on_the_transition_then_once_a_week(monkeypatch, tmp_path):
     """Before: every daily refusal after day 10 alerted (15 refusals = 15 alerts). Now: the transition, then one reminder
     per 7 days; the unit still exits loud every day."""
-    night = DAY0.replace(hour=3)                         # quiet (night-window) refusals: the old code alerted every one
+    # quiet (night-window) refusals: the old code alerted every one. The script reads the window from
+    # datetime.now().astimezone(), i.e. in PROCESS-LOCAL time, so the night instant is built in process-local time too
+    # (a fixed +08:00 03:00 is 19:00 under TZ=UTC: no refusal, the drill ran).
+    night = DAY0.replace(hour=3)
     _stale_state(tmp_path)
     assert _daily_refusals(monkeypatch, tmp_path, 14, start=night, avail=4000) == [0, 7]   # d0..d13: transition + reminder
     assert _daily_refusals(monkeypatch, tmp_path, 8, start=night + timedelta(days=14), avail=4000) == [0, 7]   # d14, d21
