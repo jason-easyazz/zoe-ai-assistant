@@ -343,6 +343,7 @@ class Correction(NamedTuple):
     old: Optional[str]       # None: an age restated with no old value ("Anaya is 7 now")
     cued: bool = False
     lazy: bool = False       # the subject is a bare name typed WITHOUT its possessive apostrophe ("kais 21 not 22"): the only plain-name form that may shorten
+    turn: Optional[str] = None   # the content id of the user turn the correction was said in (``turn_id_of``): what a forget of that turn reaches
 
 
 def statement(text: str) -> Optional[Correction]:
@@ -825,12 +826,25 @@ def _same_value(a: Optional[str], b: Optional[str]) -> bool:
     return re.sub(r"\s+", " ", a.strip().lower()) == re.sub(r"\s+", " ", b.strip().lower())
 
 
-def _remember(user_id: str, corr: Correction) -> None:
+def turn_id_of(user_id, text) -> Optional[str]:
+    """The content id of a user turn (``people_graph.content_turn_id`` over the lower-cased member id): the SAME id the correction is
+    remembered under and a forget computes from the retracted turn's words. None when it cannot be computed. Never raises."""
+    try:
+        from people_graph import content_turn_id
+
+        return content_turn_id(str(user_id or "").strip().lower(), str(text or ""))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _remember(user_id: str, corr: Correction, turn_text: Optional[str] = None) -> None:
     import time
 
     uid = (user_id or "").strip().lower()
     if not uid:
         return                      # a RESTATEMENT (old None) is remembered too: see superseded_by_correction
+    if turn_text is not None:
+        corr = corr._replace(turn=turn_id_of(uid, turn_text))
     now = time.time()
     keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
     keep.append((now, corr))
@@ -965,6 +979,208 @@ def _date_expr(text: str, q: "Quantity") -> str:
 
 def reset_state() -> None:
     _REMEMBERED.clear()
+
+
+# -- forgotten means forever: the in-process correction memory goes with every forget ------------------------------------------------
+# ``_REMEMBERED`` holds the corrected subject's name and both values for ``REMEMBER_S``. A forget must not leave them behind: every
+# forget path calls one of these (the member erase, "forget <name>", a topic forget, "forget that", the physical row erase). They
+# are in-process and never raise; over-forgetting a correction is the safe error (the cost is one possible stale near-duplicate).
+
+def _entry_text(c: "Correction") -> str:
+    return " ".join(str(x) for x in (c.subject, c.new, c.old) if x)
+
+
+def _keep_only(uid: str, keep: list) -> None:
+    if keep:
+        _REMEMBERED[uid] = keep
+    else:
+        _REMEMBERED.pop(uid, None)
+
+
+def _uid(user_id) -> str:
+    """The member key, from anything: ``""`` when it cannot be read (then nothing is identifiable and nothing is dropped)."""
+    try:
+        return str("" if user_id is None else user_id).strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _drop_all(uid: str) -> int:
+    try:
+        return len(_REMEMBERED.pop(uid, None) or ()) if uid else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def forget_user(user_id) -> int:
+    """The member erase: every remembered correction of the member. Returns the entries dropped. Never raises."""
+    return _drop_all(_uid(user_id))
+
+
+def forget_matching(user_id, matches) -> int:
+    """Drop the member's remembered corrections whose subject or values ``matches(text)`` - a callable, or anything with ``.search``
+    (a compiled name pattern, the forget ledger's ``LedgerPattern``). The matcher sees the entry's words AND every form of its subject
+    (``subject_forms``, the one normaliser all forget paths share). An entry the matcher cannot judge is dropped, and a matcher that
+    cannot be used at all drops every entry of the member (over-forget). Returns the entries dropped. Never raises."""
+    uid = _uid(user_id)
+    try:
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
+        if not entries:
+            return 0
+        test = matches.search if hasattr(matches, "search") else matches
+
+        def doomed(c) -> bool:
+            # the entry's own words, then EVERY form its subject may take (``subject_forms``): "ashas swimming" is a correction of
+            # Asha's row, so "forget Asha" must reach it although the literal subject never matches \bAsha\b
+            try:
+                if test(_entry_text(c)):
+                    return True
+                forms = subject_forms(c.subject)
+                return any(test(f) for f in forms) if forms else True
+            except Exception:  # noqa: BLE001
+                return True
+        keep = [(t, c) for t, c in entries if not doomed(c)]
+        _keep_only(uid, keep)
+        return len(entries) - len(keep)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
+
+
+def forget_subject(user_id, name) -> int:
+    """"Forget <name>": every remembered correction naming it (the forget ledger's whole-word, separator-blind name pattern). A
+    name that cannot be read drops every entry of the member (over-forget). Never raises."""
+    uid = _uid(user_id)
+    try:
+        if name is None:
+            return 0
+        text = str(name).strip()
+        if not text:
+            return 0
+        try:
+            from memory_forgotten import name_pattern
+
+            rx = name_pattern(text)
+        except Exception:  # noqa: BLE001
+            rx = re.compile(rf"(?<![A-Za-z0-9]){re.escape(text)}(?![A-Za-z0-9])", re.IGNORECASE)
+        return forget_matching(uid, rx)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
+
+
+def subject_forms(subject) -> list:
+    """Every form the correction machinery lets ``subject`` take, as plain strings - THE one normaliser every forget path uses.
+    The subject as said and without its determiner ("the book club" -> "book club"); for "<owner>'s <noun>" (``owner_noun``) the
+    owner alone, the owner with its noun and the possessive both with and without the apostrophe; for a word that may be a lazily
+    typed possessive or a name with a stray s (``_may_be_lazy``: "ashas", "kais") the word without its s; each also through the
+    people graph's ``fold_name`` (case, accents, apostrophe / hyphen styles, whitespace). Never raises: [] when unreadable."""
+    try:
+        s = " ".join(str(subject or "").split())
+        if not s:
+            return []
+        base = re.sub(r"(?i)^(?:the|my|our)\s+", "", s)
+        forms = [s, base]
+        on = owner_noun(s)
+        if on:
+            owner, noun = on
+            forms += [owner, f"{owner} {noun}", f"{owner}'s {noun}"]
+            if _may_be_lazy(owner):
+                forms += [owner[:-1], f"{owner[:-1]} {noun}", f"{owner[:-1]}'s {noun}"]
+        else:
+            words = base.split()
+            if len(words) == 1 and _may_be_lazy(words[0]):
+                forms.append(words[0][:-1])
+        try:
+            from people_graph import fold_name
+
+            forms += [fold_name(f) for f in forms]
+        except Exception:  # noqa: BLE001
+            pass
+        out: list = []
+        for f in forms:
+            f = " ".join(str(f or "").split())
+            if f and f not in out:
+                out.append(f)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _names_subject(subject: str, text: str, folded: set) -> bool:
+    """Does ``text`` name the correction's subject in ANY form the correction machinery itself accepts? Its own matchers
+    (``_subject_re`` lazy and exact: case, the possessive with or without its apostrophe, "my <relation>", "the <noun>"), plus the
+    people graph's fold (``people_graph.fold_name``: accents, apostrophe and hyphen styles, whitespace) of the subject's words, and
+    for "<owner>'s <noun>" the OWNER alone. Over-forgetting is the safe error: any of them is a match."""
+    s = (subject or "").strip()
+    if not s:
+        return False
+    if _subject_re(s, True).search(text) or _subject_re(s, False).search(text):
+        return True
+    try:
+        from people_graph import fold_name
+
+        for form in subject_forms(s):
+            key = set(fold_name(form).split())
+            if key and key <= folded:
+                return True
+    except Exception:  # noqa: BLE001 - cannot tell: drop
+        return True
+    return False
+
+
+def forget_in_texts(user_id, texts) -> int:
+    """A forget of specific words ("forget that"'s turn, a topic's retracted turns, the rows a physical erase removes): every
+    remembered correction whose SUBJECT those words name, in any form the correction machinery accepts (``_names_subject``).
+    Texts that cannot be read drop every entry of the member (over-forget). Never raises."""
+    uid = _uid(user_id)
+    try:
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
+        if not entries:
+            return 0
+        if isinstance(texts, (str, bytes)):
+            texts = [texts]
+        parts = [str(t if t is not None else "") for t in (texts or ())]
+        blob = " ".join(" ".join(p.split()) for p in parts).replace("\u2019", "'").replace("\u2018", "'")
+        if not blob.strip():
+            return 0
+        try:
+            from people_graph import fold_name
+
+            folded = set(fold_name(blob).split())
+        except Exception:  # noqa: BLE001
+            folded = None
+
+        def named(c) -> bool:
+            try:
+                return folded is None or _names_subject(c.subject, blob, folded)
+            except Exception:  # noqa: BLE001
+                return True
+        keep = [(t, c) for t, c in entries if not named(c)]
+        _keep_only(uid, keep)
+        return len(entries) - len(keep)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
+
+
+def forget_turns(user_id, turn_ids) -> int:
+    """A forget that RETRACTED user turns (a topic forget, "forget that"): every remembered correction said in one of those turns
+    (``Correction.turn``, the turn's content id - ``turn_id_of``). An entry with no recorded turn cannot be ruled out, so with any
+    turn retracted it is dropped too (over-forget). Ids that cannot be read drop every entry of the member. Never raises."""
+    uid = _uid(user_id)
+    try:
+        if isinstance(turn_ids, (str, bytes)):
+            turn_ids = [turn_ids]
+        raw = list(turn_ids or ())
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
+        if not entries or not raw:
+            return 0
+        if any(not isinstance(i, str) or not i for i in raw):
+            return _drop_all(uid)           # a retracted turn whose id could not be computed: nothing can be ruled out
+        gone = set(raw)
+        keep = [(t, c) for t, c in entries if getattr(c, "turn", None) and c.turn not in gone]
+        _keep_only(uid, keep)
+        return len(entries) - len(keep)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
 
 
 async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
@@ -1164,7 +1380,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         displaced = ([_displaced_value(r.text or "", t, corr) for r, t in hits]
                      if corr.old is None and 0 < len(hits) <= MAX_ROWS else [])
         for old in [d for d in displaced if d] or [None]:
-            _remember(user_id, corr._replace(old=old) if old else corr)
+            _remember(user_id, corr._replace(old=old) if old else corr, user_message)
         if not hits or len(hits) > MAX_ROWS:
             return 0
         excerpt = " ".join(user_message.split())
