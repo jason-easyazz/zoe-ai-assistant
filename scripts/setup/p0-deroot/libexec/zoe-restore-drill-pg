@@ -32,6 +32,13 @@ set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
+if [ "$(id -u)" -eq 0 ]; then
+  # as root nothing from the caller's environment or cwd reaches docker (sudo's env_reset is not relied on); the
+  # image override is honoured only in the non-root branch below
+  unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS_VERIFY DOCKER_API_VERSION
+  HOME=/root; export HOME
+  cd /
+fi
 
 # Same digest as docker-compose.yml zoe-database (tests/unit/test_restore_drill.py pins them equal).
 PINNED_IMAGE="pgvector/pgvector:0.8.6-pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
