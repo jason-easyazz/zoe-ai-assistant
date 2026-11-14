@@ -11,6 +11,9 @@ How. Two things per user, in this process (zoe-data is one process, like ``memor
   * a generation counter the eraser bumps when it ENTERS and again when it leaves. A writer snapshots the generation when it is
     scheduled; if it has moved by the time the writer holds the lock, the write belonged to the world before the erase and is dropped.
 
+  * for the MemoryService writers (post-turn passes, nightly digest, idle consolidation) the snapshot travels with the task
+    (``scheduled`` / ``scheduled_at_call``) and the store checks it under its OWN per-user lock (``erased_since_scheduled``).
+
 The lock is taken BEFORE any database connection, never after, so a writer holding a pooled connection can never wait on an eraser
 that is waiting for a connection (no pool deadlock). Everything here is in-memory and cannot raise into a caller.
 """
@@ -18,8 +21,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import functools
+import inspect
 import weakref
-from typing import AsyncIterator
+from typing import AsyncIterator, Iterator
 
 _generation: dict = {}
 #: one lock table per running event loop (an ``asyncio.Lock`` binds to a loop; tests start many)
@@ -35,6 +41,48 @@ def snapshot() -> dict:
     """Every user's erase generation now (a copy). A member absent from it was at generation 0. For a batch that fetches rows of many
     members and writes for each later."""
     return dict(_generation)
+
+
+#: whole-member erases running now, per member (a COUNT: two overlapping erases of one member are both visible until both finish)
+_in_progress: dict = {}
+
+
+def in_progress(user_id: str) -> bool:
+    """A whole-member erase of ``user_id`` is running (``erase_span``)."""
+    return _in_progress.get(user_id, 0) > 0
+
+
+@contextlib.contextmanager
+def erase_span(user_id: str) -> Iterator[None]:
+    """The WHOLE of a member erase (``MemoryService.delete_user``, first step to after its memory lock is released).
+
+    The inner erasers' ``erasing`` bumps are not enough on their own: a write scheduled after the first inner eraser RETURNS would
+    snapshot the generation it leaves, and that value never moves again. So while the span runs the member is ``in_progress``
+    (``erased_since_scheduled`` is True for every scheduled write of theirs), and the span bumps the generation on entry and AGAIN on
+    exit, in a ``finally``: any snapshot taken before or inside the span is stale for good, and one taken after it is clean.
+
+    An erase that RAISES still decrements and bumps: the member is never left stuck in progress, and every write scheduled before or
+    during the failed attempt is dropped (the caller retries the erase; nothing that attempt was erasing comes back meanwhile)."""
+    _in_progress[user_id] = _in_progress.get(user_id, 0) + 1
+    _generation[user_id] = generation(user_id) + 1
+    try:
+        yield
+    finally:
+        left = _in_progress.get(user_id, 1) - 1
+        if left > 0:
+            _in_progress[user_id] = left
+        else:
+            _in_progress.pop(user_id, None)
+        _generation[user_id] = generation(user_id) + 1
+
+
+def whole_member_erase(method):
+    """Decorate ``async def delete_user(self, user_id, ...)``: the whole call runs inside ``erase_span(user_id)``."""
+    @functools.wraps(method)
+    async def call(self, user_id, *args, **kwargs):
+        with erase_span(user_id):
+            return await method(self, user_id, *args, **kwargs)
+    return call
 
 
 def _lock(user_id: str) -> asyncio.Lock:
@@ -67,6 +115,65 @@ async def writing(user_id: str, scheduled_at: int) -> AsyncIterator[bool]:
         yield generation(user_id) == scheduled_at
 
 
+#: the post-turn / background work the current task belongs to: ``(user_id, generation it was scheduled at)``, or None
+_scheduled: "contextvars.ContextVar" = contextvars.ContextVar("user_erase_gate_scheduled", default=None)
+
+
+@contextlib.contextmanager
+def scheduled(user_id: str, scheduled_at: int) -> Iterator[None]:
+    """Run a block as background work for ``user_id`` SCHEDULED at generation ``scheduled_at``; tasks it starts inherit it.
+
+    For the MemoryService writers (the turn digest and every post-turn pass, the nightly digest, idle consolidation). Their rows are
+    guarded by the store's own per-user lock, which ``delete_user`` holds while it enumerates, so ``MemoryService.ingest`` /
+    ``review(edit)`` check ``erased_since_scheduled`` UNDER that lock rather than taking ``writing``: ``delete_user`` takes this
+    module's lock inside its memory lock, so a writer holding ``writing`` while it waits for the memory lock would deadlock it.
+    ``delete_user`` runs whole inside ``erase_span``, so the member reads as erased from its first step until it has finished."""
+    token = _scheduled.set((user_id, scheduled_at))
+    try:
+        yield
+    finally:
+        _scheduled.reset(token)
+
+
+def scheduled_here(user_id: str) -> "contextlib.AbstractContextManager":
+    """``scheduled`` at the generation NOW, unless this task already carries an earlier snapshot for ``user_id`` (that one wins)."""
+    held = _scheduled.get()
+    if held is not None and held[0] == user_id:
+        return contextlib.nullcontext()
+    return scheduled(user_id, generation(user_id))
+
+
+def erased_since_scheduled(user_id: str) -> bool:
+    """True when the current task is background work for ``user_id`` and the member was erased since it was scheduled, or a whole-member
+    erase of them is running now (``erase_span``)."""
+    held = _scheduled.get()
+    return held is not None and held[0] == user_id and (generation(user_id) != held[1] or in_progress(user_id))
+
+
+def scheduled_at_call(user_arg: str):
+    """Decorate an async post-turn writer: the generation of the member named by argument ``user_arg`` is read when the function is
+    CALLED - the moment its work is queued (``ensure_future(fn(...))``) - not when its body starts; the body runs ``scheduled``. A
+    caller that already carries a snapshot for the same member (a batch that took one when IT was scheduled) keeps the earlier one."""
+    def wrap(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            user_id = sig.bind_partial(*args, **kwargs).arguments.get(user_arg) or ""
+            held = _scheduled.get()
+            gen = held[1] if held is not None and held[0] == user_id else generation(user_id)
+
+            async def body():
+                with scheduled(user_id, gen):
+                    return await fn(*args, **kwargs)
+            return body()
+        if hasattr(inspect, "markcoroutinefunction"):     # 3.12: still reads as a coroutine function
+            inspect.markcoroutinefunction(call)
+        return call
+    return wrap
+
+
 def reset() -> None:
-    """Forget all generations (tests)."""
+    """Forget all generations and running erases (tests)."""
     _generation.clear()
+    _in_progress.clear()
