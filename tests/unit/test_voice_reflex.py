@@ -414,6 +414,53 @@ def test_loader_refuses_a_tampered_file(tmp_path):
     assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "sha_mismatch")
 
 
+def _bank_with(tmp_path: Path, bad: bytes) -> Path:
+    """A three-take bank whose second file is ``bad``, with a manifest whose hash MATCHES it (so only the reader refuses)."""
+    files = {"mm_01": _wav(400), "mm_02": bad, "mm_03": _wav(420, freq=170.0)}
+    pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
+    sha8 = R.bank_sha8("af_sky", 60, pairs)
+    d = tmp_path / "af_sky" / sha8
+    d.mkdir(parents=True)
+    for k, v in files.items():
+        (d / f"{k}.wav").write_bytes(v)
+    (d / "manifest.json").write_text(json.dumps({"voice": "af_sky", "bank": sha8, "style_len": 60,
+                                                 "takes": [{"id": k, "sha256": h} for k, h in pairs]}))
+    return d
+
+
+def _riff(chunks: bytes) -> bytes:
+    body = b"WAVE" + chunks
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+_FMT = struct.pack("<4sIHHIIHH", b"fmt ", 16, 1, 1, 24000, 48000, 2, 16)
+_DATA = b"data" + struct.pack("<I", 200) + b"\x00\x00" * 100
+BAD_WAVS = {
+    "negative_chunk_size": _riff(_FMT + b"LIST" + struct.pack("<i", -8) + _DATA),      # wave raises RuntimeError
+    "oversized_junk_chunk": _riff(_FMT + b"junk" + struct.pack("<I", 0x7FFFFFFF) + b"ab"),  # RuntimeError
+    "short_fmt_chunk": _riff(struct.pack("<4sI", b"fmt ", 4) + b"\x01\x00\x01\x00" + _DATA),  # EOFError
+    "not_a_wave": b"RIFF\x04\x00\x00\x00WA",
+}
+
+
+@pytest.mark.parametrize("name", sorted(BAD_WAVS))
+def test_loader_refuses_a_malformed_wav_whose_hash_matches(tmp_path, name):
+    """A hash-matching file with a broken RIFF chunk must never raise out of the loader: no bank, reason ``bad_format``."""
+    _bank_with(tmp_path, BAD_WAVS[name])
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "bad_format")
+
+
+def test_the_malformed_wavs_really_raise_what_the_reader_must_catch():
+    """Negative control for the test above: the standard reader raises RuntimeError on the first two files."""
+    import io
+    import wave
+
+    for name in ("negative_chunk_size", "oversized_junk_chunk"):
+        with pytest.raises(RuntimeError):
+            with wave.open(io.BytesIO(BAD_WAVS[name]), "rb") as wf:
+                wf.readframes(wf.getnframes())
+
+
 def test_loader_refuses_a_wrong_sample_rate(tmp_path):
     make_bank(tmp_path, rate=16000)
     assert R.load_bank("af_sky", str(tmp_path), ON).reason == "bad_format"

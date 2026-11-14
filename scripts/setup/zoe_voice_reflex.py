@@ -466,7 +466,7 @@ def _read_take(path: Path, max_ms: int) -> "tuple[Optional[bytes], str, int]":
                 return None, "bad_format", 0
             n = wf.getnframes()
             pcm = wf.readframes(n)
-    except (OSError, EOFError, wave.Error):
+    except (OSError, EOFError, RuntimeError, ValueError, wave.Error):   # a malformed chunk makes wave raise RuntimeError
         return None, "bad_format", 0
     if n <= 0 or len(pcm) != n * BANK_WIDTH:
         return None, "bad_format", 0
