@@ -98,7 +98,8 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
   a stale drill (no pass in 10 days) are ONE bad spell until a pass. The owner is alerted on the transition into it, then
   at most once per 7 days (`alert_since` / `alert_at` in `last_restore_drill.json`, read as instants), and gets ONE
   "passed again" line when a pass ends it. The unit still exits loud every day. Every drill alert goes through
-  `owner_alert` / `owner_cleared` (a static test pins it). `zoe_health.py`'s restore-drill check is report-only while the
+  `owner_alert` / `owner_cleared` (a static test pins it). "Alerted" (and "cleared") is recorded only after
+  `zoe_offbox.alert` reports the hand-off (`deliver()` returned anything but `failed`); otherwise the next run tries again. `zoe_health.py`'s restore-drill check is report-only while the
   drill runs (`--check-stale` exit 6) and alerts only when the drill has stopped running for 2+ days (exit 4).
 - **Monthly** (`zoe-backup-verify` runs it once per 28 days, 05:30): for each tier, restore the newest snapshot
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the

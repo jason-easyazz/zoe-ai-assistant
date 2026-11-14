@@ -484,11 +484,18 @@ def test_container_is_hard_capped_with_swap_off_and_small_postgres():
     assert "--pids-limit" in h
 
 
-def _run_main(monkeypatch, tmp_path, *, avail, now, alerts, argv=()):
+def _run_main(monkeypatch, tmp_path, *, avail, now, alerts, argv=(), hand_off=True):
+    """``hand_off``: what the owner-alert path does - True (handed off), False (deliver() returned "failed", e.g. an
+    unwritable outbox), or "raise" (the sender raised). ``alerts`` records every attempt either way."""
     monkeypatch.setattr(drill, "MEM_WAIT_S", 0)
     monkeypatch.setattr(drill.time, "sleep", lambda s: None)
     monkeypatch.setattr(ob, "mem_available_mb", lambda: avail)
-    monkeypatch.setattr(ob, "alert", lambda t: alerts.append(t))
+    def _alert(t):
+        alerts.append(t)
+        if hand_off == "raise":
+            raise RuntimeError("sender exploded")
+        return hand_off
+    monkeypatch.setattr(ob, "alert", _alert)
     monkeypatch.setattr(drill, "unit_active", lambda u: False)
 
     class _DT(datetime):
@@ -760,7 +767,7 @@ def _st(tmp_path) -> dict:
     return json.loads((tmp_path / "s" / "last_restore_drill.json").read_text())
 
 
-def _day(monkeypatch, tmp_path, kind: str, now) -> tuple[int, list[str]]:
+def _day(monkeypatch, tmp_path, kind: str, now, hand_off=True) -> tuple[int, list[str]]:
     """One daily run of ``kind``: "failed" (the restore runs and finds a problem), "lowmem" (a loud refusal) or "quiet"
     (a night-window refusal). Returns (exit code, alerts sent)."""
     alerts: list[str] = []
@@ -768,7 +775,7 @@ def _day(monkeypatch, tmp_path, kind: str, now) -> tuple[int, list[str]]:
     monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(findings=["host archive: synthetic problem"]))
     avail = 10 if kind == "lowmem" else 5000
     when = now.replace(hour=3) if kind == "quiet" else now
-    rc = _run_main(monkeypatch, tmp_path, avail=avail, now=when, alerts=alerts)
+    rc = _run_main(monkeypatch, tmp_path, avail=avail, now=when, alerts=alerts, hand_off=hand_off)
     return rc, alerts
 
 
@@ -819,11 +826,11 @@ def test_malformed_alert_state_never_silences_the_first_alert(monkeypatch, tmp_p
     assert rc == 1 and len(alerts) == 1 and not alerts[0].startswith("still failing")
 
 
-def _pass(monkeypatch, tmp_path, now) -> tuple[int, list[str]]:
+def _pass(monkeypatch, tmp_path, now, hand_off=True) -> tuple[int, list[str]]:
     alerts: list[str] = []
     monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
     monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(notes=["ok"]))
-    rc = _run_main(monkeypatch, tmp_path, avail=5000, now=now, alerts=alerts, argv=["--force"])
+    rc = _run_main(monkeypatch, tmp_path, avail=5000, now=now, alerts=alerts, argv=["--force"], hand_off=hand_off)
     return rc, alerts
 
 
@@ -857,6 +864,80 @@ def test_check_stale_is_report_only_while_the_drill_runs_and_alerts_when_it_stop
     assert rc == drill.EXIT_REFUSED_LOUD and "STALE:" in capsys.readouterr().out
     _stale_state(tmp_path)                                                     # never ran at all: health's voice
     assert _run_main(monkeypatch, tmp_path, avail=10, now=DAY0, alerts=[], argv=["--check-stale"]) == 4
+
+
+# ── "alerted" is recorded only after the hand-off succeeded (review thread PRRT_kwDOPZpkks63equZ) ────────────────────
+
+@pytest.mark.parametrize("failure", [False, "raise"])
+def test_an_unhanded_transition_alert_is_retried_the_next_day_and_recorded_then(monkeypatch, tmp_path, failure):
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", DAY0, hand_off=failure)          # the outbox cannot take it
+    assert rc == 1 and len(alerts) == 1, "attempted, and the drill's exit code is unchanged"
+    st = _st(tmp_path)
+    assert "alert_at" not in st or st["alert_at"] is None, "nothing recorded: the next run must alert again"
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", DAY0 + timedelta(days=1))       # the outbox works again
+    assert rc == 1 and len(alerts) == 1 and not alerts[0].startswith("still failing"), "still the transition"
+    st = _st(tmp_path)
+    assert datetime.fromisoformat(st["alert_at"]) == DAY0 + timedelta(days=1)
+    assert datetime.fromisoformat(st["alert_since"]) == DAY0 + timedelta(days=1)
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", DAY0 + timedelta(days=2))
+    assert alerts == [], "recorded now: the cadence holds"
+
+
+def test_an_unhanded_weekly_reminder_is_retried_the_next_day_not_a_week_later(monkeypatch, tmp_path):
+    assert _alert_days(monkeypatch, tmp_path, ["failed"]) == [0]
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", DAY0 + timedelta(days=7), hand_off=False)
+    assert len(alerts) == 1 and alerts[0].startswith("still failing")
+    assert datetime.fromisoformat(_st(tmp_path)["alert_at"]) == DAY0, "the old alert time stays: the reminder is still due"
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", DAY0 + timedelta(days=8))
+    assert len(alerts) == 1 and alerts[0].startswith("still failing"), "retried on day 8"
+    st = _st(tmp_path)
+    assert datetime.fromisoformat(st["alert_at"]) == DAY0 + timedelta(days=8)
+    assert datetime.fromisoformat(st["alert_since"]) == DAY0, "the same spell"
+
+
+@pytest.mark.parametrize("failure", [False, "raise"])
+def test_an_unhanded_cleared_line_is_retried_on_the_next_pass_and_sent_once(monkeypatch, tmp_path, failure):
+    assert _alert_days(monkeypatch, tmp_path, ["failed"]) == [0]
+    rc, alerts = _pass(monkeypatch, tmp_path, DAY0 + timedelta(days=1), hand_off=failure)
+    assert rc == 0 and len(alerts) == 1 and "passed again" in alerts[0], "a pass stays a pass"
+    assert _st(tmp_path).get("alert_since"), "the spell stays open: the line was not handed off"
+    rc, alerts = _pass(monkeypatch, tmp_path, DAY0 + timedelta(days=9))
+    assert rc == 0 and alerts == ["weekly restore drill passed again: the backups restore cleanly"]
+    st = _st(tmp_path)
+    assert "alert_since" not in st and "alert_at" not in st
+    rc, alerts = _pass(monkeypatch, tmp_path, DAY0 + timedelta(days=17))
+    assert rc == 0 and alerts == [], "sent once"
+
+
+def test_a_raising_sender_never_crashes_the_drill_or_changes_its_exit(monkeypatch, tmp_path):
+    for kind, want in (("failed", 1), ("lowmem", drill.EXIT_REFUSED_LOUD)):
+        _state(tmp_path, {})
+        rc, alerts = _day(monkeypatch, tmp_path, kind, DAY0, hand_off="raise")
+        assert rc == want and len(alerts) == 1, (kind, rc)
+
+
+def test_offbox_alert_reports_whether_it_handed_off(monkeypatch):
+    """zoe_offbox.alert returns True only when the shared deliver() took it (any outcome but "failed"); False for
+    "failed" (the outbox could not store it) and for a sender that cannot be loaded or raises."""
+    import types
+
+    outcomes = iter([("queued", "network"), ("failed", "outbox_write"), RuntimeError("boom")])
+
+    def deliver(code, text):
+        o = next(outcomes)
+        if isinstance(o, Exception):
+            raise o
+        return o
+    fake = types.SimpleNamespace(deliver=deliver)
+    monkeypatch.delenv("ZOE_OFFBOX_NO_ALERT", raising=False)
+    monkeypatch.setattr(ob.importlib.util, "spec_from_file_location",
+                        lambda *a, **k: types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m: None)))
+    monkeypatch.setattr(ob.importlib.util, "module_from_spec", lambda spec: fake)
+    assert ob.alert("x") is True
+    assert ob.alert("x") is False
+    assert ob.alert("x") is False
+    monkeypatch.setenv("ZOE_OFFBOX_NO_ALERT", "1")
+    assert ob.alert("x") is True                                   # switched off on purpose: nothing to retry
 
 
 def test_every_drill_alert_goes_through_the_cadence():
