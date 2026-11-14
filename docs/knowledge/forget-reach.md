@@ -85,7 +85,7 @@ member column are therefore recorded here instead, each with why neither forget 
 
 Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for anything else): `reached` with the eraser(s), `out_of_scope` with a one-line
 reason, or `gap` with the reason AND the key in the `forget-reach gaps:` line of [open-problems.md](open-problems.md). A table that holds **words** cannot be
-`out_of_scope`. Then regenerate the table below.
+`out_of_scope`. Then regenerate the table below. A store of words also needs its row (and its writer's `WRITE_SITES` line) in the [household-text inventory](household-text-inventory.md), whose test fails otherwise.
 
 ## Forget completeness (what a layer SERVES after a forget, 2026-11-05)
 
