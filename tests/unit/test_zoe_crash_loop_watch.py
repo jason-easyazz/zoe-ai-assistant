@@ -171,6 +171,56 @@ def test_alert_not_marked_delivered_when_send_fails(rig, monkeypatch, tmp_path):
     assert len(sent) == 1 and "crash-looping" in sent[0]
 
 
+def _outbox_unwritable(monkeypatch, tmp_path):
+    """The outbox cannot be stored (its directory is a regular file); the watcher's own state file still can."""
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    good = mod.OUTBOX_PATH
+    monkeypatch.setattr(mod, "OUTBOX_PATH", str(blocker / "alert-outbox.json"))
+    return lambda: monkeypatch.setattr(mod, "OUTBOX_PATH", good)
+
+
+def test_zoe_data_loop_alert_is_kept_pending_when_the_outbox_cannot_be_stored(rig, monkeypatch, tmp_path):
+    """PRRT_kwDOPZpkks63Vrei: outbox unwritable + state writable used to clear ``alerted`` and save the restart count, so the
+    MAIN crash-loop alert was lost. It must stay in ``pending`` and be re-raised every tick, never dropped, until deliver()
+    stores it - then raised once and ``pending`` cleared (the same shape as check_units)."""
+    configure, sent = rig
+    configure(restarts=0, healthy=True, active="active")
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    restore = _outbox_unwritable(monkeypatch, tmp_path)
+    configure(restarts=37, healthy=False)
+    assert mod.check(threshold=5, cooldown=1800, dry_run=False) == 2
+    st = mod._load_state()
+    assert st.get("pending", "").startswith("🔴") and "crash-looping" in st["pending"] and not st.get("alerted")
+    for n in range(6):                                           # many ticks, still unwritable (and the counter flat)
+        configure(restarts=37, healthy=False)
+        mod.check(threshold=5, cooldown=1800, dry_run=False)
+        assert mod._load_state().get("pending", "").startswith("🔴"), f"dropped on tick {n}"
+    assert sent == []                                           # never sent unstored
+    restore()
+    mod.check(threshold=5, cooldown=1800, dry_run=False)        # writable: raised once, pending cleared
+    st = mod._load_state()
+    assert len(sent) == 1 and "crash-looping" in sent[0] and "pending" not in st and st["alerted"] is True
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    assert len(sent) == 1, "raised exactly once"
+
+
+def test_a_recovery_waits_behind_a_pending_unstored_loop_alert(rig, monkeypatch, tmp_path):
+    configure, sent = rig
+    configure(restarts=0, healthy=True, active="active")
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    restore = _outbox_unwritable(monkeypatch, tmp_path)
+    configure(restarts=37, healthy=False)
+    mod.check(threshold=5, cooldown=1800, dry_run=False)        # loop alert: pending, unstored
+    configure(restarts=37, healthy=True, active="active")       # Zoe recovers while it is pending
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    assert mod._load_state().get("pending", "").startswith("🔴") and sent == []
+    restore()
+    for _ in range(3):
+        mod.check(threshold=5, cooldown=1800, dry_run=False)
+    assert [m[:1] for m in sent] == ["🔴", "🟢"], "the outage first, then its recovery, once each"
+
+
 def test_prefers_dedicated_recipient_setting_over_retired_allow_list():
     """TELEGRAM_ALLOWED_USERS is retired in .env.example, so a freshly
     provisioned host has none — reading only it meant zero recipients and a

@@ -590,6 +590,30 @@ def _raise_alert(code: str, msg: str) -> bool:
     return outcome != "failed"
 
 
+def _pick_alert(s: dict, loop_msg: "str | None", recovery_msg: "str | None") -> "str | None":
+    """The message this tick raises: a loop alert the outbox could not store comes FIRST, every tick, until it is stored
+    (so it is never dropped, and no recovery can be raised before it: ``alerted`` is only set once it is stored)."""
+    return s.get("pending") or loop_msg or recovery_msg
+
+
+def _hand_off(s: dict, msg: str, loop_code: str, recovery_code: str, now: float) -> None:
+    """Raise ``msg`` through deliver() and settle the watcher's own state ``s`` (zoe-data's top-level state or one
+    unit's). Stored in the outbox = the outbox owns the retry (cooldown starts; ``pending`` cleared). Not even stored =
+    ``pending`` keeps the loop alert, the ONLY retry this state does, re-raised every tick by _pick_alert."""
+    loop = msg.startswith("🔴")
+    handed = _raise_alert(loop_code if loop else recovery_code, msg)
+    if loop:
+        if handed:
+            s["alerted"] = True
+            s["last_alert_ts"] = now
+            s.pop("pending", None)
+        else:
+            s["pending"] = msg
+    elif handed:
+        s["alerted"] = False
+        s.pop("last_alert_ts", None)
+
+
 def check(threshold: int, cooldown: int, dry_run: bool) -> int:
     restarts_raw = _systemd_prop(UNIT, "NRestarts")
     if not restarts_raw.isdigit():
@@ -611,30 +635,25 @@ def check(threshold: int, cooldown: int, dry_run: bool) -> int:
     looping = delta >= threshold and not healthy
     recovered = state.get("alerted") and healthy
 
-    msg = None
+    loop_msg = recovery_msg = None
     if looping:
         last = state.get("last_alert_ts", 0)
         if now - last >= cooldown:
-            msg = (f"🔴 Zoe is crash-looping.\n"
-                   f"{UNIT} restarted {delta}x since the last check "
-                   f"(total {restarts}), ActiveState={active}, /health not responding.\n"
-                   f"Zoe cannot be talked to right now.\n"
-                   f"Check: journalctl --user -u zoe-data / ~/.zoe-logs/zoe-data.stderr.log")
+            loop_msg = (f"🔴 Zoe is crash-looping.\n"
+                        f"{UNIT} restarted {delta}x since the last check "
+                        f"(total {restarts}), ActiveState={active}, /health not responding.\n"
+                        f"Zoe cannot be talked to right now.\n"
+                        f"Check: journalctl --user -u zoe-data / ~/.zoe-logs/zoe-data.stderr.log")
     elif recovered:
-        msg = f"🟢 Zoe recovered — {UNIT} is healthy again (total restarts {restarts})."
+        recovery_msg = f"🟢 Zoe recovered — {UNIT} is healthy again (total restarts {restarts})."
+    msg = _pick_alert(state, loop_msg, recovery_msg)
 
     if msg:
         print(msg.replace("\n", " | "))
         if not dry_run:
-            # ONE retry path: the outbox. Handed to it = done here (cooldown starts); the outbox re-sends until delivered.
-            handed = _raise_alert(CODE_CRASH_LOOP if looping else CODE_RECOVERED, msg)
-            if looping:
-                state["alerted"] = handed
-                if handed:
-                    state["last_alert_ts"] = now
-            elif handed:
-                state["alerted"] = False
-                state.pop("last_alert_ts", None)
+            # ONE retry path: the outbox. Stored there = done here (cooldown starts); the outbox re-sends until delivered.
+            # Not even stored = kept in ``pending`` and re-raised every tick (same shape as check_units).
+            _hand_off(state, msg, CODE_CRASH_LOOP, CODE_RECOVERED, now)
     else:
         status = "healthy" if healthy else f"unhealthy (active={active})"
         # A steady "healthy, +0" line every 2 minutes was 41,700 undated lines
@@ -700,29 +719,17 @@ def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: f
         settled = delta == 0 and active == "active"               # running, and no restart since the last tick
         looping = recent >= threshold and not settled
         any_loop = any_loop or looping
-        msg = None
-        if s.get("pending"):
-            msg = s["pending"]                                    # one the outbox could not store (or a pre-outbox state)
-        elif looping and now - s.get("last_alert_ts", 0) >= cooldown:
-            msg = (f"🔴 {unit} is crash-looping: restarted {recent}x in the last {int(window_s // 60)} min "
-                   f"(total {restarts}), ActiveState={active}.\nCheck: journalctl --user -u {unit}")
+        loop_msg = recovery_msg = None
+        if looping and now - s.get("last_alert_ts", 0) >= cooldown:
+            loop_msg = (f"🔴 {unit} is crash-looping: restarted {recent}x in the last {int(window_s // 60)} min "
+                        f"(total {restarts}), ActiveState={active}.\nCheck: journalctl --user -u {unit}")
         elif s.get("alerted") and settled:
-            msg = f"🟢 {unit} recovered (total restarts {restarts})."
+            recovery_msg = f"🟢 {unit} recovered (total restarts {restarts})."
+        msg = _pick_alert(s, loop_msg, recovery_msg)              # an unstored loop alert (or a pre-outbox one) first
         if msg:
             print(msg.replace("\n", " | "))
             if not dry_run:
-                loop_msg = msg.startswith("🔴")
-                handed = _raise_alert(_unit_code("unit_crash_loop" if loop_msg else "unit_recovered", unit), msg)
-                if loop_msg:
-                    if handed:                                    # the outbox owns the retry from here
-                        s["alerted"] = True
-                        s["last_alert_ts"] = now
-                        s.pop("pending", None)
-                    else:                                         # not even stored: the ONLY case this state retries
-                        s["pending"] = msg
-                elif handed:
-                    s["alerted"] = False
-                    s.pop("last_alert_ts", None)
+                _hand_off(s, msg, _unit_code("unit_crash_loop", unit), _unit_code("unit_recovered", unit), now)
         s["restarts"] = restarts
     if not dry_run:
         _save_state(state)
