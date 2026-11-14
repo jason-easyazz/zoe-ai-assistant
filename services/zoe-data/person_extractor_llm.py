@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 
@@ -290,7 +291,7 @@ async def process_text_llm(
         if not name or not value:
             continue
         if not _keep_item(item, gated=gated, min_conf=min_conf):
-            logger.debug("person_extractor_llm: dropped low-confidence %r/%r", name, fact_type)
+            logger.debug("person_extractor_llm: dropped low-confidence name=%s type=%s", _utag(name), fact_type)
             _count_drop("low_confidence")
             continue
         if _is_unanchored_role(value):
@@ -305,16 +306,16 @@ async def process_text_llm(
                 else:
                     _count_drop("unanchored_role")
                     logger.info(
-                        "person_extractor_llm: dropped unanchored relationship %r for %r — "
+                        "person_extractor_llm: dropped unanchored relationship %s for %s — "
                         "value must say whose relative (e.g. \"wife of X\", \"user's friend\")",
-                        value, name,
+                        _utag(value), _utag(name),
                     )
                     continue
             except Exception:
                 _count_drop("unanchored_role")
                 logger.info(
-                    "person_extractor_llm: dropped unanchored relationship %r for %r",
-                    value, name,
+                    "person_extractor_llm: dropped unanchored relationship %s for %s",
+                    _utag(value), _utag(name),
                 )
                 continue
         # Roles are stated, never guessed from a name (people_roles.py): "Casey: wife of
@@ -325,8 +326,8 @@ async def process_text_llm(
             if value_role_unsupported(name, value, text):
                 _count_drop("value_role_unsupported")
                 logger.info(
-                    "person_extractor_llm: dropped unstated role %r for %r (the text never "
-                    "ties that role to this name)", value, name,
+                    "person_extractor_llm: dropped unstated role %s for %s (the text never "
+                    "ties that role to this name)", _utag(value), _utag(name),
                 )
                 continue
         except Exception:
@@ -341,7 +342,7 @@ async def process_text_llm(
                 _count_drop("user_anchor_unsupported")
                 logger.info(
                     "person_extractor_llm: dropped unsupported user-anchored "
-                    "relationship %r for %r (source never says \"my …\")", value, name,
+                    "relationship %s for %s (source never says \"my …\")", _utag(value), _utag(name),
                 )
                 continue
         except Exception:
