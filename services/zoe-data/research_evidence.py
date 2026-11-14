@@ -586,7 +586,9 @@ def _verify_rows(
     return filtered or rows
 
 
-def _fetch_ddg(query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True) -> WebFallbackOutcome:
+def _fetch_ddg(
+    query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True, max_redirects: int | None = None
+) -> WebFallbackOutcome:
     url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
@@ -595,8 +597,9 @@ def _fetch_ddg(query: str, max_results: int, timeout_s: float, *, enrich_prices:
     status: int | None = None
     body = ""
     detail = ""
+    hops = {} if max_redirects is None else {"max_redirects": max_redirects}
     try:
-        with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
+        with guarded_urlopen(url, timeout=timeout_s, headers=headers, **hops) as resp:
             status = int(getattr(resp, "status", None) or getattr(resp, "code", None) or 200)
             body = _read_bounded_response(resp, DDG_SEARCH_HTML_MAX_BYTES).decode("utf-8", errors="replace")
     except HTTPError as exc:
@@ -621,12 +624,15 @@ def _fetch_ddg(query: str, max_results: int, timeout_s: float, *, enrich_prices:
     return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "duckduckgo", rows)
 
 
-def _fetch_tavily(query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True) -> WebFallbackOutcome:
+def _fetch_tavily(
+    query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True, max_bytes: int | None = None
+) -> WebFallbackOutcome:
     # Lazy import: web_search_provider pulls typed_env/httpx; the classifier half
     # of this module stays stdlib-only for the slim CI lane.
     from web_search_provider import tavily_search_outcome
 
-    status, raw = tavily_search_outcome(query, max_results=max_results, timeout_s=timeout_s)
+    cap = {} if max_bytes is None else {"max_bytes": max_bytes}
+    status, raw = tavily_search_outcome(query, max_results=max_results, timeout_s=timeout_s, **cap)
     if status != WEB_LOOKUP_RESULTS:
         return WebFallbackOutcome(status, "tavily", [])
     rows = [
@@ -709,6 +715,8 @@ def fetch_web_fallback(
     *,
     enrich_prices: bool = True,
     deadline_s: float | None = None,
+    max_redirects: int | None = None,
+    max_response_bytes: int | None = None,
 ) -> WebFallbackOutcome:
     """Web lookup with an HONEST outcome: rows plus status + provider.
 
@@ -722,6 +730,10 @@ def fetch_web_fallback(
     capped at what remains, and a provider is not started once less than
     ``_MIN_PROVIDER_BUDGET_S`` is left — the outcome then says so in ``detail``.
     ``None`` (B10.0 chat callers) keeps the plain per-provider timeout.
+
+    ``max_redirects`` (DuckDuckGo fetch) and ``max_response_bytes`` (Tavily body)
+    are the web-lookup seam's outbound caps (``web_lookup_provider.LiveProvider``);
+    ``None`` leaves every other caller exactly as it was.
     """
     q = (query or "").strip()
     if not q:
@@ -745,7 +757,8 @@ def fetch_web_fallback(
             budget = _budget()
             if budget is not None:
                 attempted.append("tavily")
-                tavily = _fetch_tavily(q, max_results, budget, enrich_prices=enrich_prices)
+                cap = {} if max_response_bytes is None else {"max_bytes": max_response_bytes}
+                tavily = _fetch_tavily(q, max_results, budget, enrich_prices=enrich_prices, **cap)
         if tavily is not None and tavily.status == WEB_LOOKUP_RESULTS:
             outcome = tavily
         elif (ddg_budget := _budget()) is None:
@@ -761,7 +774,8 @@ def fetch_web_fallback(
                 attempted.append("none")
         else:
             attempted.append("duckduckgo")
-            ddg = _fetch_ddg(q, max_results, ddg_budget, enrich_prices=enrich_prices)
+            hops = {} if max_redirects is None else {"max_redirects": max_redirects}
+            ddg = _fetch_ddg(q, max_results, ddg_budget, enrich_prices=enrich_prices, **hops)
             if tavily is None:
                 outcome = ddg
             else:
