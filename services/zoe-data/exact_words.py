@@ -539,15 +539,28 @@ async def erase_turn(user_id: str, turn_id: str) -> int:
 async def erase_text(user_id: str, text: str) -> int:
     """Delete this user's indexed turns whose words ARE ``text`` (case/space-blind) or contain it - "forget it" after "why did you
     say that?" removes the owner's turn that was just quoted back, not only the fact. Like ``erase_entity`` a store failure is
-    RAISED (a forget that could not erase the words must not be confirmed). 0 = nothing matched."""
+    RAISED (a forget that could not erase the words must not be confirmed). 0 = nothing matched. The index holds the words
+    as ``index_turn`` stored them (``scrub_pii``: a phone / address redacted), so ``text`` is matched both as said (rows indexed
+    before the contact scrub) and in that stored form."""
     key = _squash(text or "").lower().strip(" .!?\"'")
     if not (user_id or "").strip() or len(key) < 6:
         return 0
+    keys = {key}
+    try:
+        from memory_service import scrub_pii
+        stored = _squash(scrub_pii(text or "")[0] or "").lower().strip(" .!?\"'")
+        if len(stored) >= 6:
+            keys.add(stored)
+    except Exception:  # noqa: BLE001 - the as-said key still erases what it always did
+        stored = key
     backend = get_backend()
-    needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+    # the needle must be in BOTH forms: a word the scrub kept (never a redacted value, never the placeholder)
+    words = [w for w in re.findall(r"[a-z0-9']+", stored) if w != "redacted"] or re.findall(r"[a-z0-9']+", key)
+    needle = max(words, key=len, default="")
     if not needle:
         return 0
-    ids = [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()]
+    ids = [tid for tid, t in await backend.rows_matching(user_id, needle)
+           if any(k in _squash(t or "").lower() for k in keys)]
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 

@@ -19,9 +19,10 @@ The contract here:
   made outside any capture scope is refused only when its evidence excerpt IS a retracted turn's words.
   ``MemoryService.ingest`` and ``MemoryService.review(edit)`` consult it (an explicit re-teach by the owner is exempt, exactly
   like the forget ledger).
-* ``rows_from_turn`` finds the rows already written FROM that turn: its ``user_turn_id`` hash, or a source excerpt that is
-  exactly the turn's words (never "contains" - a longer turn that merely includes the words is another turn), and never a
-  row written before the turn was said.
+* ``rows_from_turn`` finds the rows already written FROM that turn: its ``user_turn_id`` (the extractors' hash, or the
+  ask-to-remember id ``ask_to_remember.turn_ids_for``), or a source excerpt that is exactly the turn's words - as said, or as
+  the write boundary stores them (contacts redacted: ``stored_excerpt_key``) - never "contains" (a longer turn that merely
+  includes the words is another turn), and never a row written before the turn was said.
 * ``mark_forgotten`` drops the turn's words from the notes, ONLY once every row was removed: until then the target stays, so
   "forget that" again retries the same turn (a store failure must never leave rows behind a "done").
 
@@ -287,26 +288,49 @@ def _added_ts(meta: dict) -> Optional[float]:
         return None
 
 
-def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None) -> bool:
-    """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash, or its source excerpt is
-    exactly the turn's words. Never "one contains the other" (a longer turn that includes the words is another turn), never
-    by time alone, and never a row written before the turn was said."""
+def stored_excerpt_key(turn_text: str) -> str:
+    """The turn as the write boundary STORES its excerpt (``scrub_source_excerpt``: a phone / address / code redacted, cut at
+    400), normalised. A row written from this turn carries exactly that, so the comparison is like for like. "" when the
+    scrubber cannot be loaded or keeps nothing."""
+    try:
+        from memory_service import scrub_source_excerpt
+
+        return norm(scrub_source_excerpt(turn_text) or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None, *,
+                     turn_ids: frozenset = frozenset(), stored_key: Optional[str] = None) -> bool:
+    """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash or one of ``turn_ids`` (the
+    ask-to-remember id), or its source excerpt is exactly the turn's words: as said (a row written before the excerpt was
+    contact-scrubbed) or as the write boundary stores them (``stored_excerpt_key``). Never "one contains the other" (a
+    longer turn that includes the words is another turn), never by time alone, and never a row written before the turn."""
     meta = meta or {}
     if turn_ts is not None:
         ts = _added_ts(meta)
         if ts is not None and ts < turn_ts - ROW_SLACK_S:
             return False
     tid = str(meta.get("user_turn_id") or "")
-    if tid and any(tid.startswith(p) for p in extractor_turn_ids(turn_text)):
+    if tid and (tid in turn_ids or any(tid.startswith(p) for p in extractor_turn_ids(turn_text))):
         return True
     ex, key = norm(str(meta.get("source_excerpt") or "")), norm(turn_text)
-    return bool(ex and key and ex == key)
+    if not (ex and key):
+        return False
+    return ex == key or ex == (stored_excerpt_key(turn_text) if stored_key is None else stored_key)
 
 
 async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Optional[float] = None) -> list:
     """The owner's approved / pending rows written from this turn (``row_is_from_turn``). RAISES on a store failure (a forget
     must not be confirmed when the store could not be read)."""
     out, seen = [], set()
+    stored_key = stored_excerpt_key(turn_text)
+    try:
+        import ask_to_remember
+
+        turn_ids = ask_to_remember.turn_ids_for(user_id, turn_text)
+    except Exception:  # noqa: BLE001
+        turn_ids = frozenset()
     for status in ("approved", "pending"):
         for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT):
             if r.id in seen:
@@ -314,7 +338,7 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
             m = r.metadata or {}
             if (m.get("user_id") or m.get("wing") or user_id) != user_id:
                 continue
-            if row_is_from_turn(m, turn_text, turn_ts):
+            if row_is_from_turn(m, turn_text, turn_ts, turn_ids=turn_ids, stored_key=stored_key):
                 seen.add(r.id)
                 out.append(r)
     return out

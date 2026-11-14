@@ -800,3 +800,17 @@ def test_the_verbatim_index_redacts_a_contact(index):
     assert say("I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St") is True
     (stored,) = [r["text"] for r in index.rows.values()]
     assert "[REDACTED]" in stored and "0400" not in stored and "Example St" not in stored and "plumber" in stored
+
+
+def test_forget_erases_an_indexed_turn_whose_contact_was_redacted(index):
+    """The index stores the turn contact-redacted; the forget passes the turn AS SAID and must still erase it (and only it)."""
+    said = "I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St"
+    assert say(said) is True and say("I told my sister the cello recital moved to the Thursday evening") is True
+    assert run(xw.erase_text(USER, said)) == 1
+    assert [r["text"] for r in index.rows.values()] == ["I told my sister the cello recital moved to the Thursday evening"]
+
+
+def test_forget_erases_a_turn_indexed_before_the_contact_scrub(index):
+    said = "I told the plumber to ring me back on 0400 000 000 about the leak"
+    run(index.add(USER, "old-1", NOW, said, xw.tokens_column(said), "chat"))      # the old shape: the words as said
+    assert run(xw.erase_text(USER, said)) == 1 and not index.rows

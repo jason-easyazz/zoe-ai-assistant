@@ -236,6 +236,27 @@ def turn_id(user_id: str, clause: str) -> str:
     return "atr-" + hashlib.sha1(f"{user_id}|{_norm(clause)}".encode("utf-8")).hexdigest()[:16]
 
 
+def turn_ids_for(user_id: str, text: str) -> frozenset:
+    """The ``user_turn_id``s ``remember`` could have stamped for the owner turn ``text`` (the clause as parsed, and its own-words
+    form): "forget that" finds the ask's row by its id, never by the excerpt (which the write boundary redacts). Never raises."""
+    try:
+        p = parse(text)
+        if p is None or p.kind != "remember" or not (p.clause or "").strip():
+            return frozenset()
+        clauses = {p.clause.strip()}
+        try:
+            import own_words
+
+            own = own_words.analyze(p.clause.strip())
+            if own.changed and own.text.strip():
+                clauses.add(own.text.strip())
+        except Exception:  # noqa: BLE001
+            pass
+        return frozenset(turn_id(user_id, c) for c in clauses)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
 # ── the write ────────────────────────────────────────────────────────────────────────────────
 
 async def _speculation_barrier() -> None:

@@ -200,6 +200,13 @@ def test_the_night_quote_gate_refuses_the_new_classes(text):
     "A " * 10000, "Aa " * 7000 + "1", "password " * 3000, "door code " * 2000 + "1", "my address is 1" + " x" * 10000,
     "call me on " * 2000 + "1", "account number " * 1500 + "1", "x.dot " * 4000 + "@", "1-" * 10000, "(0" * 10000,
     "I live at 1 " + "word " * 5000,
+    # review thread PR #2574. Each carries a DIGIT, or the scrubber's no-digit fast path skips the pattern and the case proves
+    # nothing. Measured on 4500293f8 (quadratic, 4x per doubling): "my "*4000+"1" 2.5 s, "account number"+12000 spaces 8.5 s,
+    # "my number"+spaces 3.9 s, "email"+spaces 3.6 s; bounded now, each under 0.2 s at these sizes
+    "my " * 6000 + "1", "our new " * 3000 + "1", "my " * 6000 + "address is 1", "the home " * 3000 + "address: 1",
+    "account number" + " " * 12000 + "x1", "my number" + " " * 12000 + "x1", "email" + " " * 12000 + "x dot com 1",
+    "door code" + " " * 12000 + "x1", "pin" + " " * 12000 + "x1", "password" + " " * 12000 + ", 1",
+    "I live at" + " " * 12000 + "1", "I live at 1" + " Aa" * 6000, "12" + " Aa" * 6000, "call" + " me" * 6000 + " on 1",
 ])
 def test_a_long_adversarial_string_is_fast(blob):
     """Linear, not catastrophic: measured relative to a benign sentence of the SAME length on the same box (so a loaded CI

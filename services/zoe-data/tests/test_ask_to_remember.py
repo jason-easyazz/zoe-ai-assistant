@@ -594,3 +594,49 @@ def test_a_contact_fact_the_owner_asks_to_keep_is_stored_intact(svc, said, kept)
     """scrub_pii(contact=False): a tradesperson's number or address is a household fact, not a secret."""
     assert say(svc, said) in atr._CONFIRM
     assert [r.text for r in rows(svc)] == [kept]
+
+
+# ── forgotten means forever, for a contact the owner asked to keep (review thread, PR #2574) ──────────────────────────
+# The fact is stored with its phone / address intact (contact=False) but its excerpt is stored REDACTED, so "forget that" must
+# not find the row by comparing the turn as said with that copy. It finds it by the ask's own turn id, or by the excerpt as the
+# write boundary stores it; a row written before the contact scrub (raw excerpt) is still found. Negative control: on
+# 4500293f8 the first two tests fail (the fact survives the forget).
+
+CONTACT_ASKS = ["Remember that my plumber's number is 0400 000 000", "Remember that the plumber works from 1 Example St"]
+
+
+def _gone(svc, fragment):
+    live = [r.text for s in ("approved", "pending") for r in rows(svc, status=s)]
+    return not any(fragment in t for t in live)
+
+
+@pytest.mark.parametrize("said", CONTACT_ASKS)
+def test_forget_that_takes_a_contact_fact_and_leaves_an_unrelated_one(svc, said):
+    assert say(svc, said) in atr._CONFIRM and len(rows(svc)) == 1
+    run(svc.ingest("I work night shifts in the hospital pharmacy", user_id=UID, source="chat_regex", status="approved"))
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot")
+    assert _gone(svc, "plumber")                                                     # rejected: not served
+    assert [r.text for r in rows(svc)] == ["I work night shifts in the hospital pharmacy"]   # the control stays
+    assert say(svc, "What did I ask you to remember?") == atr.NOTHING_ASKED          # not recalled
+
+
+@pytest.mark.parametrize("turn,fact", [("my plumber's number is 0400 000 000", "User's plumber's number is 0400 000 000"),
+                                       ("the plumber works from 1 Example St", "User's plumber works from 1 Example St")])
+def test_forget_that_finds_another_writers_row_by_the_excerpt_as_stored(svc, turn, fact):
+    """A writer whose turn id the forget cannot recompute: the match is the turn scrubbed exactly as its excerpt was."""
+    import turn_forget
+
+    turn_forget.note_user_turn(UID, turn)
+    run(svc.ingest(fact, user_id=UID, source="chat_regex", status="approved", source_excerpt=turn, user_turn_id="other-writer"))
+    assert "[REDACTED]" in rows(svc)[0].metadata["source_excerpt"]
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot") and _gone(svc, "plumber")
+
+
+@pytest.mark.parametrize("said", CONTACT_ASKS)
+def test_forget_that_still_finds_a_row_written_before_the_contact_scrub(svc, said):
+    """Old shape: the excerpt holds the turn as said, and no recomputable turn id."""
+    assert say(svc, said) in atr._CONFIRM
+    (rid,) = list(svc._col.rows)
+    doc, meta = svc._col.rows[rid]
+    svc._col.rows[rid] = (doc, {**meta, "source_excerpt": said, "user_turn_id": "legacy-0"})
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot") and _gone(svc, "plumber")

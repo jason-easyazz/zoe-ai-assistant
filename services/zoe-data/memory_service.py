@@ -1383,49 +1383,53 @@ def _alt(words: tuple[str, ...]) -> str:
     return "|".join(re.escape(w).replace(r"\ ", r"\s+") for w in sorted(words, key=len, reverse=True))
 
 
-_CONNECT = r"(\s*(?:is|was|=|:|'s|’s)?\s*)"
+_CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an optional word between two \s* is quadratic on a long space run
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
-#: more digit groups (``12 34``)
-_TOKEN = r"[^\s,;!?]*?\d[^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,}){0,3}"
+#: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
+#: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
+_TOKEN = r"[^\s,;!?]*?\d[^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,12}){0,3}"
 _CODE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
     rf"{_CONNECT}({_TOKEN})"
 )
 #: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
-_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s*(?:is|was|=|:|-)?\s*)(\d{3,}(?:[ -]\d{2,}){0,2})\b")
-_BARE_PASSWORD_RE = re.compile(rf"(?i)\b(password|passphrase)\b(\s*(?:is|was|=|:|-)?\s*)({_TOKEN})")
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
+_BARE_PASSWORD_RE = re.compile(rf"(?i)\b(password|passphrase)\b(\s{{0,8}}(?:(?:is|was|=|:|-)\s{{0,8}})?)({_TOKEN})")
 _ACCOUNT_RE = re.compile(
-    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s*(?:is|was|=|:|#|of)?\s*)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
 )
 _EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
 _SPOKEN_EMAIL_RE = re.compile(
-    r"(?i)\b(e-?mail(?:\s+address)?(?:\s+(?:is|was))?\s*:?\s+)"
-    r"([\w.+-]{1,64}\s+at\s+[\w-]{1,63}(?:\s+dot\s+[\w-]{1,63}){0,3}\s+dot\s+[a-z]{2,6})\b"
+    r"(?i)\b(e-?mail(?:\s+address)?(?:\s{1,8}(?:is|was))?\s{0,8}:?\s{1,8})"
+    r"([\w.+-]{1,64}\s+at\s+[\w-]{1,63}(?:\s{1,8}dot\s{1,8}[\w-]{1,63}){0,3}\s+dot\s+[a-z]{2,6})\b"
 )
 _PHONE_LABEL_RE = re.compile(
-    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s+[\w'’]+){{0,2}}?\s+(?:on|at))\b"
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
     rf"{_CONNECT}(\+?\(?\d[\d ().-]{{5,22}}\d)"
 )
 #: unlabelled phone shapes: a leading +, a leading trunk 0 (AU / UK), or the 3-3-4 North American form with - or .
 _PHONE_INTL_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[\d .-]{5,16}\d(?!\w)")
 _PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,3}(?!\w|[.,/-]\d)")
 _PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
-_UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s*\d{1,5}[A-Za-z]?\s*[,/]?\s*)?\d{1,5}[A-Za-z]?(?:\s*[/-]\s*\d{1,5}[A-Za-z]?)?"
+_UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
 #: ``[unit] number Capitalised Name street-type [, Suburb] [STATE] [postcode]``; a lower-case street needs a label below
 _ADDRESS_RE = re.compile(
-    rf"(?<![\w/.-]){_UNIT},?\s+(?:[A-Z][A-Za-z'’-]*\s+){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
-    r"(?:(?:,\s*|\s+)(?:[A-Z][\w'’-]*\s+){0,3}(?:[A-Z]{2,3}\s+)?\d{4,5}\b|,\s*[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2})?"
+    rf"(?<![\w/.-]){_UNIT},?\s{{1,8}}(?:[A-Z][A-Za-z'’-]{{0,40}}\s{{1,8}}){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
+    r"(?:(?:,\s{0,8}|\s{1,8})(?:[A-Z][\w'’-]{0,40}\s{1,8}){0,3}(?:[A-Z]{2,3}\s{1,8})?\d{4,5}\b"
+    r"|,\s{0,8}[A-Z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2})?"
 )
+#: every repeat below is bounded (a fixed-width prefix of at most four words): an unbounded "my my my ... address" prefix
+#: was re-scanned from every word, quadratic on a long input (review thread, PR #2574)
 _ADDRESS_LABEL_RE = re.compile(
-    r"(?i)\b((?:(?:my|our|his|her|their|the|home|postal|street|new|old|billing|delivery|shipping)\s+)*(?<!ip\s)(?<!mac\s)"
-    r"address(?:\s+(?:is|was)|\s*:)\s*)"
-    r"(\d[^.;!?\n]{0,80}?(?=\s*(?:[.;!?\n]|$)|\s+(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]{0,80})"
+    r"(?i)\b((?:(?:my|our|his|her|their|the|home|postal|street|new|old|billing|delivery|shipping)\s{1,8}){0,4}(?<!ip\s)(?<!mac\s)"
+    r"address(?:\s{1,8}(?:is|was)|\s{0,8}:)\s{0,8})"
+    r"(\d[^.;!?\n]{0,80}?(?=\s{0,8}(?:[.;!?\n]|$)|\s{1,8}(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]{0,80})"
 )
 _LIVE_AT_RE = re.compile(
-    rf"(?i)\b((?:i|we|they|he|she|who)?\s*(?:live|lives|living|stay|stays|staying)\s+at\s+)"
-    rf"({_UNIT},?\s+(?:[\w'’-]+\s+){{1,3}}?(?:{_alt(_STREET_TYPES)})\b\.?"
-    r"(?:(?:,?\s+[A-Za-z][\w'’-]*){0,3}?,?\s+\d{4,5}\b|,\s*[A-Za-z][\w'’-]*(?:\s+[A-Za-z][\w'’-]*){0,2}?)?)"
+    rf"(?i)\b((?:i|we|they|he|she|who)?\s{{0,8}}(?:live|lives|living|stay|stays|staying)\s{{1,8}}at\s{{1,8}})"
+    rf"({_UNIT},?\s{{1,8}}(?:[\w'’-]{{1,40}}\s{{1,8}}){{1,3}}?(?:{_alt(_STREET_TYPES)})\b\.?"
+    r"(?:(?:,?\s{1,8}[A-Za-z][\w'’-]{0,40}){0,3}?,?\s{1,8}\d{4,5}\b|,\s{0,8}[A-Za-z][\w'’-]{0,40}(?:\s{1,8}[A-Za-z][\w'’-]{0,40}){0,2}?)?)"
 )
 _PO_BOX_RE = re.compile(r"(?i)\bP\.?\s?O\.?\s+Box\s+\d{1,6}\b")
 _REDACT = "[REDACTED]"
