@@ -1,4 +1,4 @@
-"""The panel daemon's first-sound instrument (S0, log-only): ``PCM_WRITE`` per chunk and ``FIRST_SOUND`` per turn.
+"""The panel daemon's first-sound instrument (S0, log-only): ``PCM_WRITE`` (one per-turn summary) and ``FIRST_SOUND`` (one per turn), both logged after the stream ends.
 
 Torch-free like test_voice_daemon_panel_cutoffs.py: ``_vad_prob`` is scripted, the clock (``_fs_now``) is scripted, and
 the REAL ``record_command`` / ``_follow_up_listen`` / ``_do_single_turn_stream`` / ``_feed_pcm_chunk`` /
@@ -45,7 +45,8 @@ FIRST_SOUND_RE = re.compile(
     r"still_talking=([01]) talk_chunks=(-?\d+) chunks=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+) "
     r"obs_ms=(\d+) win=(wake|followup|conversation|barge) quiet_ms=(-?\d+) fall=(clean|hesitating|none) "
     r"muted_ms=(-?\d+)$")
-PCM_WRITE_RE = re.compile(r"^PCM_WRITE i=(\d+) at_ms=(-?\d+) dur_ms=(\d+) underrun_ms=(\d+)$")
+PCM_WRITE_RE = re.compile(r"^PCM_WRITE n=(\d+) first_ms=(-?\d+) last_ms=(-?\d+) dur_ms=(\d+) gap_max_ms=(\d+) "
+                          r"starved=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+)$")
 
 
 def _load(name: str):
@@ -167,22 +168,19 @@ def test_underrun_is_starvation_against_back_to_back_playout(daemon):
     daemon._turn_close.update(t=100.0, rule="quiet", ms=800, seq=1)
     fs = daemon._FirstSound(speculative=False)
     schedule = [(100.5, 1.0), (100.6, 1.0), (102.1, 0.2), (102.8, 0.1), (102.85, 0.05)]
-    lines = [fs.write(at, dur) for at, dur in schedule]
+    for at, dur in schedule:
+        fs.write(at, dur)
     # playout: [100.5,101.5] [101.5,102.5] [102.5,102.7] (no starvation: the write landed while chunk 1 played)
     #          write 102.8 > end 102.7 -> 100 ms starved; [102.8,102.9]; write 102.85 < 102.9 -> 0
-    assert lines == [
-        "PCM_WRITE i=0 at_ms=500 dur_ms=1000 underrun_ms=0",
-        "PCM_WRITE i=1 at_ms=600 dur_ms=1000 underrun_ms=0",
-        "PCM_WRITE i=2 at_ms=2100 dur_ms=200 underrun_ms=0",
-        "PCM_WRITE i=3 at_ms=2800 dur_ms=100 underrun_ms=100",
-        "PCM_WRITE i=4 at_ms=2850 dur_ms=50 underrun_ms=0",
-    ]
+    assert fs.pcm_line() == ("PCM_WRITE n=5 first_ms=500 last_ms=2850 dur_ms=2350 gap_max_ms=1500 starved=1 "
+                             "underrun_max_ms=100 underrun_sum_ms=100")
+    assert PCM_WRITE_RE.match(fs.pcm_line())
     assert (fs.underrun_max, fs.underrun_sum, fs.writes) == (100, 100, 5)
     assert FIRST_SOUND_RE.match(fs.line((0, 0, 0))).group(4) == "500"
     # NEGATIVE CONTROL: modelling each chunk's end as its own write + duration (ignoring the queue) would call the
     # third write starved by 500 ms (102.1 - 101.6) - the schedule above is chosen so that error is visible.
     naive_end_after_1 = 100.6 + 1.0
-    assert round((102.1 - naive_end_after_1) * 1000) == 500 and lines[2].endswith("underrun_ms=0")
+    assert round((102.1 - naive_end_after_1) * 1000) == 500 and fs.starved == 1
 
 
 def test_underrun_sums_several_starvations(daemon):
@@ -190,8 +188,10 @@ def test_underrun_sums_several_starvations(daemon):
     for at, dur in [(0.0, 0.5), (0.7, 0.5), (1.5, 0.5), (2.0, 0.5)]:
         fs.write(at, dur)
     assert (fs.underrun_max, fs.underrun_sum) == (300, 500)
-    # no close known: at_ms is the sentinel, the underrun maths still holds
-    assert fs.write(5.0, 0.1) == "PCM_WRITE i=4 at_ms=-1 dur_ms=100 underrun_ms=2500"
+    # no close known: first/last are the sentinel, the underrun maths still holds
+    fs.write(5.0, 0.1)
+    assert fs.pcm_line() == ("PCM_WRITE n=5 first_ms=-1 last_ms=-1 dur_ms=2100 gap_max_ms=3000 starved=3 "
+                             "underrun_max_ms=2500 underrun_sum_ms=3000")
 
 
 # ── 3. t_close: stamped at the close, carried to the turn ────────────────────
@@ -360,11 +360,10 @@ def test_turn_lines_are_relative_to_the_carried_close(daemon, monkeypatch, caplo
     with caplog.at_level(logging.INFO, logger=daemon.log.name):
         ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
     assert ok is True
-    pcm = _msgs(caplog, "PCM_WRITE")
-    # writes at 100.5 (greeting 400 ms -> ends 100.9), 101.4 (500 ms, 500 ms starved), 101.5 (queued, no starvation)
-    assert pcm == ["PCM_WRITE i=0 at_ms=600 dur_ms=400 underrun_ms=0",
-                   "PCM_WRITE i=1 at_ms=1500 dur_ms=500 underrun_ms=500",
-                   "PCM_WRITE i=2 at_ms=1600 dur_ms=300 underrun_ms=0"]
+    # writes land at 100.5 (greeting 400 ms -> ends 100.9), 101.4 (500 ms, 500 ms starved), 101.5 (queued, no starvation)
+    assert _msgs(caplog, "PCM_WRITE") == [
+        "PCM_WRITE n=3 first_ms=600 last_ms=1600 dur_ms=1200 gap_max_ms=900 starved=1 underrun_max_ms=500 "
+        "underrun_sum_ms=500"]
     (line,) = _msgs(caplog, "FIRST_SOUND")
     assert line == ("FIRST_SOUND close=deep=640ms post_ms=100 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=600 server_kind=greeting gap_ms=-1 still_talking=0 "
@@ -383,7 +382,7 @@ def test_followup_window_turn_is_relative_to_its_carried_close(daemon, monkeypat
     assert line.startswith("FIRST_SOUND close=quiet=800ms post_ms=1000 ") and "server_first_ms=1500 " in line
 
 
-def test_a_turn_with_no_audio_still_logs_one_line(daemon, monkeypatch, caplog):
+def test_a_turn_with_no_audio_still_logs_both_lines(daemon, monkeypatch, caplog):
     clock = _Clock(100.0)
     daemon._turn_close.update(t=99.0, rule="quiet", ms=800, seq=1)
     wire = [(0.3, json.dumps({"transcript": TRANSCRIPT}).encode()), (0.1, b'{"done": true, "reply": ""}')]
@@ -391,7 +390,8 @@ def test_a_turn_with_no_audio_still_logs_one_line(daemon, monkeypatch, caplog):
     monkeypatch.setattr(daemon, "play_follow_up_beep", lambda: None)
     with caplog.at_level(logging.INFO, logger=daemon.log.name):
         daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False)
-    assert _msgs(caplog, "PCM_WRITE") == []
+    assert _msgs(caplog, "PCM_WRITE") == ["PCM_WRITE n=0 first_ms=-1 last_ms=-1 dur_ms=0 gap_max_ms=0 starved=0 "
+                                          "underrun_max_ms=0 underrun_sum_ms=0"]
     (line,) = _msgs(caplog, "FIRST_SOUND")
     m = FIRST_SOUND_RE.match(line)
     assert m.group(3, 4, 5, 8) == ("1000", "-1", "none", "0")
@@ -534,7 +534,7 @@ def test_no_text_reaches_either_line(daemon, monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger=daemon.log.name):
         daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
     lines = _msgs(caplog, "PCM_WRITE") + _msgs(caplog, "FIRST_SOUND")
-    assert len(lines) == 4
+    assert len(lines) == 2
     words = set((TRANSCRIPT + " " + REPLY_TEXT + " good morning anything else").lower().split())
     for line in lines:
         assert PCM_WRITE_RE.match(line) or FIRST_SOUND_RE.match(line), line
@@ -585,6 +585,12 @@ class _NullFirstSound:
     def sound(self, at):
         pass
 
+    def blob(self):
+        pass
+
+    def pcm_line(self):
+        return ""
+
     def line(self, talk):
         return ""
 
@@ -604,6 +610,7 @@ def _effects(daemon, monkeypatch, mode):
             raise RuntimeError("instrument fault")
         monkeypatch.setattr(daemon._FirstSound, "write", _boom)
         monkeypatch.setattr(daemon._FirstSound, "line", _boom)
+        monkeypatch.setattr(daemon._FirstSound, "pcm_line", _boom)
     ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
     return ok, [len(w) for w in writes], b"".join(writes), posts, registered, dict(daemon._last_turn_flags)
 
@@ -695,3 +702,118 @@ def test_barge_seed_stamps_too(daemon, monkeypatch):
     mon = daemon._BargeMonitor(_FakePA(stream))
     mon._capture_seed(stream, [], daemon._new_vad_stream() if False else object())
     assert daemon._turn_close["rule"] in ("deep", "quiet", "clean", "cap", "other") and daemon._turn_close["frames"] is not None
+
+
+# ── 9. never log inside the playback loop; stamp AFTER the write; whole-blob playback ─────────────────────
+
+import time as _real_time  # noqa: E402
+
+
+class _SlowHandler(logging.Handler):
+    """A log handler that takes 200 ms for every instrument line (a slow disk, a full pipe)."""
+
+    def emit(self, record):
+        if record.getMessage().startswith(("PCM_WRITE", "FIRST_SOUND")):
+            _real_time.sleep(0.2)
+
+
+def _timed_turn(daemon, monkeypatch, *, handler: bool):
+    """Run the scripted streamed turn; returns (real seconds from turn start to the LAST pipe write, real seconds for
+    the whole call). The pipe sink stamps the real clock at every write."""
+    clock = _Clock(100.0)
+    daemon._turn_close.update(t=99.9, rule="deep", ms=640, seq=1)
+    stamps = []
+
+    class _Sink(list):
+        def append(self, item):
+            stamps.append(_real_time.perf_counter())
+            super().append(item)
+
+    _stream_turn_setup(daemon, monkeypatch, clock, writes=_Sink())
+    h = _SlowHandler()
+    if handler:
+        daemon.log.addHandler(h)
+    prev = daemon.log.level
+    daemon.log.setLevel(logging.INFO)
+    try:
+        t0 = _real_time.perf_counter()
+        assert daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True) is True
+        total = _real_time.perf_counter() - t0
+    finally:
+        daemon.log.removeHandler(h)
+        daemon.log.setLevel(prev)
+    assert len(stamps) == 3
+    return stamps[-1] - t0, total
+
+
+def test_a_slow_log_handler_does_not_delay_playback(daemon, monkeypatch):
+    fast_last, _ = _timed_turn(daemon, monkeypatch, handler=False)
+    with monkeypatch.context() as m:
+        slow_last, slow_total = _timed_turn(daemon, m, handler=True)
+    # the three chunk writes are not delayed: only the two end-of-turn lines (2 x 200 ms) are slow, after the last write
+    assert slow_last < fast_last + 0.1 and slow_last < 0.15
+    assert slow_total >= 0.4 - 0.02          # the sleeps DID happen: the handler is really slow, after the audio
+    # NEGATIVE CONTROL: logging inside the per-chunk path (the old design) delays the later chunk writes
+    def _loud(at, dur_s):
+        fs = daemon._fs_local.turn
+        fs.write(at, dur_s)
+        daemon.log.info("PCM_WRITE per-chunk line")
+
+    with monkeypatch.context() as m:
+        m.setattr(daemon, "_fs_note_write", _loud)
+        loud_last, _ = _timed_turn(daemon, m, handler=True)
+    assert loud_last >= 0.4 - 0.02 and loud_last > slow_last + 0.3
+
+
+class _SlowWriteProc:
+    """A player whose pipe write itself takes time on the scripted clock (a full pipe)."""
+
+    def __init__(self, clock, cost_s):
+        self.stdin = types.SimpleNamespace(write=lambda b: setattr(clock, "t", clock.t + cost_s), flush=lambda: None,
+                                           close=lambda: None)
+        self.pid = 4343
+
+    def poll(self):
+        return 0
+
+
+def test_the_stamp_is_taken_after_the_write_returns(daemon, monkeypatch):
+    clock = _Clock(500.0)
+    monkeypatch.setattr(daemon, "_fs_now", clock)
+    monkeypatch.setattr(daemon, "_register_tts_process", lambda p: None)
+    daemon._turn_close.update(t=500.0, rule="deep", ms=640, seq=1)
+    fs = daemon._FirstSound(speculative=False)
+    daemon._fs_local.turn = fs
+    try:
+        proc = _SlowWriteProc(clock, 0.3)
+        monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=lambda r, c, w: proc))
+        clock.t += 0.5                                    # 500 ms after the close the first chunk is handed over
+        aplay = daemon._feed_pcm_chunk(None, _wav(400))   # write() takes 300 ms
+        clock.t += 0.1
+        daemon._feed_pcm_chunk(aplay, _wav(400))
+    finally:
+        daemon._fs_local.turn = None
+    # the first write LANDED at +800 ms (500 + the 300 ms the write took), not at +500 when it was handed over
+    assert fs.first_at == pytest.approx(500.8) and fs.rel_ms(fs.first_at) == 800
+    assert fs.rel_ms(fs.last_write) == 1200 and fs.gap_max == 400
+
+
+def test_whole_blob_playback_records_no_first_sound_time(daemon, monkeypatch, caplog):
+    clock = _Clock(100.0)
+    daemon._turn_close.update(t=99.9, rule="deep", ms=640, seq=1)
+    j = lambda o: json.dumps(o).encode()  # noqa: E731
+    wire = [(0.3, j({"transcript": TRANSCRIPT})),
+            (0.2, j({"full_audio": base64.b64encode(_wav(400)).decode(), "content_type": "audio/wav",
+                     "provider": "greeting", "chunk": -2, "reply": "Good morning."})),
+            (0.1, j({"done": True, "reply": "Good morning."}))]
+    _stream_turn_setup(daemon, monkeypatch, clock, wire=wire)
+    played = []
+    monkeypatch.setattr(daemon, "play_audio_b64", lambda *a, **k: played.append(1) or True)
+    with caplog.at_level(logging.INFO, logger=daemon.log.name):
+        daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
+    assert played
+    (line,) = _msgs(caplog, "FIRST_SOUND")
+    m = FIRST_SOUND_RE.match(line)
+    # dispatch is not a sound: no time is claimed (-1), the kind is still known, and no PCM chunk was written
+    assert m.group(4, 5, 8) == ("-1", "greeting", "0")
+    assert _msgs(caplog, "PCM_WRITE")[0].startswith("PCM_WRITE n=0 first_ms=-1")

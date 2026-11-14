@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import gzip
+import json
 import os
 import shutil
 import sqlite3
@@ -880,3 +881,29 @@ def test_first_sound_metrics():
     assert m["panel_server_first"]["n"] == 6 and m["panel_server_first"]["data"]["p50_ms"] == 799.5
     empty = sc.panel_first_sound_metrics(["2026-11-10 05:00:00 E"], since, until)
     assert len(empty) == 4 and all(x["status"] == "unmeasured" for x in empty)
+
+
+def test_a_regex_shaped_bad_timestamp_is_skipped_not_fatal():
+    since = dt.datetime(2026, 11, 10, 0, 0, tzinfo=sc.LOCAL_TZ)
+    until = dt.datetime(2026, 11, 10, 12, 0, tzinfo=sc.LOCAL_TZ)
+    bad = "2026-99-99 99:99:99"
+    assert sc._PANEL_LINE_RE.match(bad + " F -1 870 1 4 40 55 1500 160")   # shaped right, impossible date
+    rows = ["2026-11-09 23:00:00 E", bad + " F -1 870 1 4 40 55 1500 160", bad + " C 640", bad + " T 1.0", bad + " E",
+            "2026-11-10 05:00:00 F -1 870 1 4 40 55 1500 160", "2026-11-10 05:10:00 C 640", "2026-11-10 05:10:03 T 1.04"]
+    rows += [f"2026-11-10 {h:02d}:00:00 E" for h in range(6, 12)]
+    assert sc.panel_first_sound_rows(rows, since, until) == [(-1, 870, 1, 4, 40, 55, 1500, 160)]
+    assert sc.panel_pairs(rows, since, until) == [1680.0]
+    assert sc.panel_metric(rows, since, until)["status"] == "measured"
+    assert {m["key"]: m["n"] for m in sc.panel_first_sound_metrics(rows, since, until)}["first_sound_from_close"] == 1
+
+
+def test_measured_panel_rows_are_unmeasured_without_panel(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sc, "resolve_dsn", lambda: "")
+    monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: pytest.fail("no ssh without --panel"))
+    d = tmp_path / "empty"
+    d.mkdir()
+    argv = ["--log-dir", str(d), "--palace", str(d), "--night-reports", str(d), "--backup-state", str(d / "x"), "--json"]
+    assert sc.main(argv) == 0
+    rows = {m["key"]: m for m in json.loads(capsys.readouterr().out)["metrics"]}
+    for key, _title in sc.PANEL_MEASURED_ROWS:
+        assert rows[key]["status"] == "unmeasured" and "--panel" in rows[key]["reason"]

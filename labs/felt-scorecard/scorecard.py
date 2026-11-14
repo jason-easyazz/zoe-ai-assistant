@@ -1069,6 +1069,14 @@ FIRST_SOUND_BANDS_MS = (1000, 600)
 TAIL_FLOOR_MS = {"deep": 640.0, "quiet": 800.0}  # live .env.voice floors per lane 4 (used only when close= is absent)
 
 
+def _panel_ts(raw: str) -> "dt.datetime | None":
+    """A reduced row's timestamp; None for a regex-shaped but impossible one (month 99): that row is skipped."""
+    try:
+        return dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
+    except ValueError:
+        return None
+
+
 def panel_command(log_path: str = PANEL_LOG) -> str:
     """The remote shell command: the allowlist sed program over the panel log."""
     args = ["LC_ALL=C", "sed", "-nE"]
@@ -1086,7 +1094,9 @@ def panel_pairs(reduced_lines: Iterable[str], since: dt.datetime, until: dt.date
         m = _PANEL_LINE_RE.match(line.strip())
         if not m:
             continue
-        t = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
+        t = _panel_ts(m.group(1))
+        if t is None:
+            continue
         ttfa, close, tail, rec = m.group(2), m.group(3), m.group(4), m.group(5)
         if close is not None:
             last = (t, float(close))
@@ -1110,7 +1120,9 @@ def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> 
     for r in reduced:
         m = _PANEL_LINE_RE.match(r.strip())
         if m:
-            stamps.append(dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ))
+            t = _panel_ts(m.group(1))
+            if t is not None:
+                stamps.append(t)
     if not stamps:
         return unmeasured("speech_end_first_sound", title, "panel log returned no timestamped lines", window=w)
     stamps.sort()
@@ -1146,10 +1158,16 @@ def panel_first_sound_rows(reduced_lines: Iterable[str], since: dt.datetime, unt
         m = _PANEL_LINE_RE.match(line.strip())
         if not m or m.group(6) is None:
             continue
-        t = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
-        if since <= t < until:
+        t = _panel_ts(m.group(1))
+        if t is not None and since <= t < until:
             rows.append(tuple(int(m.group(i)) for i in range(6, 14)))
     return rows
+
+
+PANEL_MEASURED_ROWS = (("first_sound_from_close", "First sound after the close, panel (measured)"),
+                       ("panel_post_close_talk", "Speech after the close, panel (measured)"),
+                       ("panel_playback_underrun", "Playback starvation, panel (measured)"),
+                       ("panel_server_first", "Server first sound after the close, panel (measured)"))
 
 
 def panel_first_sound_metrics(reduced: list[str], since: dt.datetime, until: dt.datetime) -> list[dict]:
@@ -1157,10 +1175,7 @@ def panel_first_sound_metrics(reduced: list[str], since: dt.datetime, until: dt.
     ~0.8 s the recording needs to decide the person stopped). Four rows, each with n; `unmeasured` when no such line."""
     w = wstr(since, until)
     rows = panel_first_sound_rows(reduced, since, until)
-    keys = (("first_sound_from_close", "First sound after the close, panel (measured)"),
-            ("panel_post_close_talk", "Speech after the close, panel (measured)"),
-            ("panel_playback_underrun", "Playback starvation, panel (measured)"),
-            ("panel_server_first", "Server first sound after the close, panel (measured)"))
+    keys = PANEL_MEASURED_ROWS
     if not rows:
         return [unmeasured(k, t, "no FIRST_SOUND lines in window (daemon without the instrument, or no turns)", window=w)
                 for k, t in keys]
@@ -1217,10 +1232,7 @@ def panel_first_sound_metrics(reduced: list[str], since: dt.datetime, until: dt.
 def m_panel(host: str, since, until) -> list[dict]:
     """The panel rows: the inferred first-sound row, then the four measured FIRST_SOUND rows, from ONE ssh."""
     title = "Speech end to first sound, panel (inferred)"
-    extra = (("first_sound_from_close", "First sound after the close, panel (measured)"),
-             ("panel_post_close_talk", "Speech after the close, panel (measured)"),
-             ("panel_playback_underrun", "Playback starvation, panel (measured)"),
-             ("panel_server_first", "Server first sound after the close, panel (measured)"))
+    extra = PANEL_MEASURED_ROWS
 
     def fail(reason: str) -> list[dict]:
         return [unmeasured("speech_end_first_sound", title, reason)] + [unmeasured(k, t, reason) for k, t in extra]
@@ -1560,8 +1572,9 @@ def build(args) -> dict:
     if args.panel:
         out.extend(m_panel(args.panel_host, since, until))
     else:
-        out.append(unmeasured("speech_end_first_sound", "Speech end to first sound, panel",
-                              "panel log lives on the Pi; skipped by default (pass --panel to read it over ssh)"))
+        reason = "panel log lives on the Pi; skipped by default (pass --panel to read it over ssh)"
+        out.append(unmeasured("speech_end_first_sound", "Speech end to first sound, panel", reason))
+        out.extend(unmeasured(k, t, reason) for k, t in PANEL_MEASURED_ROWS)
 
     out.append(logs["brain_first_text"])
     out.append(m_nights(os.path.join(args.log_dir, "night-window.log"), until, args.nights))

@@ -1627,28 +1627,39 @@ Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
 
 ## Panel first-sound instrument — `PCM_WRITE` / `FIRST_SOUND` (S0, log-only, 2026-11-14)
 
-The daemon logs two lines per streamed turn. They change nothing the panel does: no flag, no new sound. They
-carry **counts, ms and fixed enums only**: never a transcript, a name or any reply text. All ms are relative to
-`t_close`. That is the monotonic stamp taken where the capture loop ends: the chunk where `_Endpointer.push`
-returned True, or the cap. The stamp is taken in `record_command`, `_follow_up_listen` and the barge seed, and it
-reaches the next streamed turn through `_turn_close` (the same hand-off as `_pending_stt_stream`). `-1` means
-unknown.
+The daemon logs two lines per streamed turn, **both after the stream ends** (`turn_stream TTFA=` first, then
+`PCM_WRITE`, then `FIRST_SOUND`). Nothing is logged inside the playback loop: a slow log handler or a full disk
+must never stall audio. The per-chunk data lives in plain ints on `_FirstSound` (counts, first and last landing,
+longest gap, underrun max and sum), and a test with a 200 ms-per-line handler pins that the chunk writes are not
+delayed. They change nothing the panel does: no flag, no new sound. They carry **counts, ms and fixed enums
+only**: never a transcript, a name or any reply text. All ms are relative to `t_close`. That is the monotonic
+stamp taken where the capture loop ends: the chunk where `_Endpointer.push` returned True, or the cap. The stamp
+is taken in `record_command`, `_follow_up_listen` and the barge seed, and it reaches the next streamed turn
+through `_turn_close` (the same hand-off as `_pending_stt_stream`). `-1` means unknown. One monotonic clock read
+per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks tens of ms long.
 
-- `PCM_WRITE i=<k> at_ms=<close->write> dur_ms=<pcm ms after trim> underrun_ms=<n>`, one per chunk, logged after
-  the write. Underrun is starvation: the write landed after the previous chunk's modelled end. Chunks are modelled
-  back to back, each starting at max(its write, the previous end). The kept 130 ms tail is inside `dur_ms`.
-  `at_ms` of `i=0` is taken after the player spawned, so it includes the spawn.
+- `PCM_WRITE n=<writes> first_ms=<close->first write landed> last_ms=<close->last write landed> dur_ms=<total pcm ms
+  after trim> gap_max_ms=<longest gap between landings> starved=<writes that landed after the previous chunk's
+  modelled end> underrun_max_ms=<n> underrun_sum_ms=<n>`. One line per turn; `n=0 first_ms=-1 last_ms=-1` when
+  nothing was streamed. **A write is stamped AFTER `write()` and `flush()` return**: a blocked write is part of
+  when the sound landed. Underrun is starvation: a write landed after the previous chunk's modelled end. Chunks
+  are modelled back to back, each starting at max(its landing, the previous end). The kept 130 ms tail is inside
+  `dur_ms`. `first_ms` includes the player spawn, because the first chunk spawns it. (Meaning changed from the first
+  draft: per-chunk `at_ms` was taken before the write; the per-chunk lines are gone.)
 - `FIRST_SOUND close=<rule>=<ms>ms post_ms=<close->POST> reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1
   reflex_cut=0 reflex_wait_ms=0 server_first_ms=<n> server_kind=<content|filler|tool_ack|greeting|canned|unknown|none>
   gap_ms=-1 still_talking=<0|1> talk_chunks=<n> chunks=<n> underrun_max_ms=<n> underrun_sum_ms=<n>
   obs_ms=<n> win=<wake|followup|conversation|barge> quiet_ms=<n> fall=<clean|hesitating|none> muted_ms=<n>`.
   Every `_do_single_turn_stream` call logs exactly one, after
-  `turn_stream TTFA=`, also when nothing played (`server_first_ms=-1 server_kind=none`).
+  `turn_stream TTFA=` and `PCM_WRITE`, also when nothing played (`server_first_ms=-1 server_kind=none`).
   - `close` is `deep|quiet|clean|hesitation|no_speech` with the rule limit (as on the `Recorded` line), `cap=0ms`,
     `other=0ms`, or `none=0ms` when no close is known. `post_ms` is negative on a speculative turn, because the POST
     goes out before the close.
   - The `reflex*` and `gap_ms` fields are constants until the Pi reflex exists. A parser written now does not
     change when it ships.
+  - `server_first_ms` is when the first PCM write LANDED (after `write()`+`flush()`). A whole-blob reply (a
+    `full_audio` frame played by the file player) has no observable first-sample time, so it records `-1`, never
+    the dispatch time; `server_kind` is still read, and `PCM_WRITE n=0` shows nothing was streamed.
   - `server_kind` is read from the first audio header: chunk -2 / `greeting` gives greeting; chunk -1 / `filler` /
     `processing_ack` gives filler; provider `kokoro` gives canned (only `_canned_turn_response` sends it); `stitch`
     gives content. A `kokoro-sidecar` sentence is content OR a tool ack, so it is `unknown` until the server adds a
