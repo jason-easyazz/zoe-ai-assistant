@@ -480,13 +480,17 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
 def _adapt_sql(sql: str) -> str:
     """:func:`_adapt_sql_uncached`, memoised on the SQL text.
 
-    The key also carries the identity of every module-level rule the walk reads, so a
-    test that swaps one (the NOW()-operand negative control does) gets a fresh rewrite
-    under the swapped rule and never leaves its result behind for the real rules.
+    The key also carries every module-level rule the walk reads, so a test that swaps
+    one (the NOW()-operand negative control does) gets a fresh rewrite under the
+    swapped rule and never leaves its result behind for the real rules. The key holds
+    the rule OBJECTS (compiled patterns and a function are hashable by identity), not
+    their id(): the cache then keeps each rule alive for as long as an entry uses it,
+    so a released rule's address can never be reused by a different rule and match a
+    stale entry (review of PR 2469).
     """
     return _adapt_sql_memo(sql, (
-        id(_SQLITE_DATETIME_OFFSET_RE), id(_SQLITE_DATETIME_NOW_RE), id(_NOW_RE),
-        id(_NOW_ARITH_AFTER_RE), id(_NOW_ARITH_BEFORE_RE), id(_copy_quoted_sql),
+        _SQLITE_DATETIME_OFFSET_RE, _SQLITE_DATETIME_NOW_RE, _NOW_RE,
+        _NOW_ARITH_AFTER_RE, _NOW_ARITH_BEFORE_RE, _copy_quoted_sql,
     ))
 
 

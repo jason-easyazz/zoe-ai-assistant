@@ -183,3 +183,37 @@ def test_non_str_sql_takes_the_uncached_walk():
     got, args = db_pool._adapt_params(sql, (1,))
     assert got == "SELECT $1 , NOW()::text" and args == [1]
     assert db_pool._adapt_sql_memo.cache_info().currsize == 0
+
+
+def test_a_dropped_rule_cannot_be_impersonated_by_a_new_one_at_the_same_address(monkeypatch):
+    """Review of PR 2469: with the key built from id(rule), a rule that is swapped out and garbage-collected frees its
+    address; a NEW rule allocated there would match the old cache entry and serve the OLD rewrite. The key holds the rule
+    objects, so every swap is seen. Many swaps with gc between them make an address reuse overwhelmingly likely."""
+    import gc
+    import re
+
+    sql = "SELECT NOW() FROM t WHERE a = ?"
+    real = db_pool._adapt_sql(sql)
+    assert "NOW()::text" in real
+    never = "this_never_matches_anything_xyz"
+    for i in range(300):
+        # rule A: never matches -> NOW() is left alone
+        monkeypatch.setattr(db_pool, "_NOW_RE", re.compile(never + str(i)))
+        assert db_pool._adapt_sql(sql) == "SELECT NOW() FROM t WHERE a = $1", i
+        # drop A entirely, collect, then install a DIFFERENT rule (it may land at A's old address)
+        monkeypatch.setattr(db_pool, "_NOW_RE", None)
+        gc.collect()
+        monkeypatch.setattr(db_pool, "_NOW_RE", re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE))
+        assert db_pool._adapt_sql(sql) == real, i          # the NEW rule's rewrite, never A's cached one
+        gc.collect()
+    monkeypatch.undo()
+    assert db_pool._adapt_sql(sql) == real
+
+
+def test_the_cache_key_holds_the_rule_objects_not_their_addresses():
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(db_pool._adapt_sql)))
+    calls = [n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+    assert "id" not in calls, "the memo key must hold the rule objects, never id(rule)"
