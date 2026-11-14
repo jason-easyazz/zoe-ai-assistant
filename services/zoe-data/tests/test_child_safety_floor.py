@@ -77,6 +77,8 @@ def floor(text, sid="s1", uid="adult-a"):
 
 
 def reply_of(cls):
+    if cls == "urgent":
+        return csf._rx("en")["urgent"]
     return next(r for c, _t, r in csf._rx("en")["classes"] if c == cls)
 
 
@@ -121,13 +123,42 @@ def test_declaration_is_per_session():
     assert floor(ASKS["blades"][0], sid="s1", uid="adult-b") is None   # and it is never another member's
 
 
-def test_later_adult_age_clears_and_dry_records_nothing():
+def test_child_declaration_is_sticky_and_dry_records_nothing():
+    """FLIPPED (PRRT_kwDOPZpkks63cZOU): a later adult-age claim used to clear the declaration; it no longer does."""
     floor("im 10", sid="s1")
     floor("actually i am 34", sid="s1")
-    assert floor(ASKS["fire"][0], sid="s1") is None
+    assert floor(ASKS["fire"][0], sid="s1") == reply_of("fire")
+    assert floor("im 40 " + ASKS["fire"][0], sid="s1") == reply_of("fire")   # even in the same turn as the ask
     csf.check("im 10", "s3", "adult-a", dry=True)               # replay isolation: nothing is held
     assert floor(ASKS["fire"][0], sid="s3") is None
     assert floor("im 10 " + ASKS["fire"][0], sid="s3") is not None  # control: the same turn's own words still count
+
+
+@pytest.mark.parametrize("said", ['my dad said "I am 40"', "my dad said i am 40", "my dad says hes 40", "mum reckons im 40"])
+def test_reported_or_quoted_age_is_no_declaration(said):
+    floor("im 10", sid="s1")
+    floor(said, sid="s1")
+    assert floor(ASKS["blades"][0], sid="s1") == reply_of("blades")     # the child stays a child
+    floor(said.replace("40", "9"), sid="s2")
+    assert floor(ASKS["blades"][0], sid="s2") is None                   # and a reported child age declares nothing either
+    floor("im 9", sid="s3")
+    assert floor(ASKS["blades"][0], sid="s3") is not None               # control: the speaker's own age does
+
+
+def test_another_speaker_and_a_fresh_session_are_not_child(_clean):
+    floor("im 10", sid="s1", uid="guest")
+    assert floor(ASKS["fire"][0], sid="s1", uid="adult-b") is None      # a verified adult voice: its own member id
+    assert floor(ASKS["fire"][0], sid="s2", uid="guest") is None        # a fresh session is not child
+    assert floor(ASKS["fire"][0], sid="s1", uid="guest") is not None    # control: the declaring speaker still is
+
+
+def test_declaration_store_stays_bounded_and_expires(monkeypatch):
+    monkeypatch.setattr(csf, "MAX_SESSIONS", 3)
+    for i in range(6):
+        floor("im 10", sid=f"b{i}")
+    assert len(csf._SESSIONS) == 3 and ("adult-a", "b0") not in csf._SESSIONS
+    monkeypatch.setattr(csf, "SESSION_TTL_S", -1)
+    assert floor(ASKS["fire"][0], sid="b5") is None                     # expired: no longer held
 
 
 # 4. must not refuse ----------------------------------------------------------------------------------------------------
@@ -159,7 +190,7 @@ def test_child_factual_question_is_not_refused(text, _clean):
     assert floor("how do i use a knife", uid="kid-a") is not None   # control
 
 
-@pytest.mark.parametrize("text", ["the stove is on how do i turn it off", "i cut my finger on the knife what do i do now how do i stop it"])
+@pytest.mark.parametrize("text", ["the stove is on", "i cut my finger on the knife what do i do now how do i stop it"])
 def test_child_reporting_danger_is_not_refused(text, _clean):
     _clean["kid-a"] = "child"
     assert floor(text, uid="kid-a") is None
@@ -388,12 +419,12 @@ ASK_VS_REPORT = [
     ("blades", "can i use the knife if my hand hurts", "my hand hurts from the knife"),
     ("fire", "how do i burn the paper", "i burnt my hand on the stove"),
     ("fire", "can i burn this", "the stove is on"),
-    ("fire", "can i turn the stove off its been left on", "the oven was left on"),
+    ("urgent", "can i turn the stove off its been left on", "the oven was left on"),
     ("electricity", "what happens if i get shocked", "i got a shock from the power point"),
     ("electricity", "how do i shock my brother with the socket", "i got an electric shock"),
     ("heights", "how do i get on the roof i fell last time", "i fell off the ladder"),
     ("fire", "how do i light a fire without smoke", "theres smoke coming from the oven"),
-    ("fire", "how do i use the stove, it smells like gas", "it smells like gas near the stove"),
+    ("urgent", "how do i use the stove, it smells like gas", "it smells like gas near the stove"),
 ]
 
 
@@ -417,3 +448,41 @@ def test_swallowed_poison_stays_with_the_medical_floor(_clean):
     _clean["kid-a"] = "child"
     assert medical_safety.detect("i drank bleach").cls and floor("i drank bleach", uid="kid-a") is None
     assert floor("what happens if i drink bleach", uid="kid-a") == reply_of("chemicals")   # control: the ask is refused
+
+
+# 11. a hazard IN PROGRESS in a refused request gets the urgent line, not only "ask a grown-up to help you" ------------------
+IN_PROGRESS = [("fire", "what do i do it smells like gas"), ("fire", "what do i do the pan is on fire"),
+               ("fire", "the oven was left on, can i turn it off"), ("fire", "the stove is on how do i turn it off"),
+               ("electricity", "can i touch the sparks from the power point"),
+               ("fire", "theres a burning smell from the toaster, can i unplug it"), ("fire", "is there smoke coming from the oven?")]
+
+
+@pytest.mark.parametrize("cls,text", IN_PROGRESS)
+def test_hazard_in_progress_gets_the_urgent_line(cls, text, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") == csf.URGENT_REPLY == reply_of("urgent")
+    _clean["kid-a"] = "unverified"
+    assert floor(text, uid="kid-a") == csf.URGENT_REPLY          # the same speakers the refusal covers
+    assert floor(text) is None                                   # control: an adult is unaffected
+
+
+@pytest.mark.parametrize("cls,text", [("fire", "how do i light a fire without smoke"), ("fire", "theres no gas smell, how do i light the stove"),
+                                      ("blades", "how do i cut my bread with a knife")])
+def test_no_live_hazard_keeps_the_class_line(cls, text, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") == reply_of(cls)             # negated / absent: the normal line
+
+
+@pytest.mark.parametrize("text", ["it smells like gas near the stove", "the oven was left on", "theres smoke coming from the oven"])
+def test_live_hazard_statement_still_passes(text, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") is None
+
+
+def test_error_after_detection_keeps_the_urgent_line(monkeypatch, _clean):
+    def broken(_text):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(csf, "_owned_by_other_floor", broken)
+    _clean["m1"] = "unverified"
+    assert floor("what do i do it smells like gas", uid="m1") == csf.URGENT_REPLY

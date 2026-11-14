@@ -1653,13 +1653,14 @@
   ]
  },
  "child_safety": {
-  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. A class fires on one of its 'terms' in a REQUEST or QUESTION: a '?', an 'ask' cue anywhere, or an 'opener' as the first word (after 'lead_strip'). A STATEMENT that only mentions a hazard is not one. 'factual' questions (a why... question, or what is it made of / called, with no 'factual_not' first-person word and no ask cue) and 'benign' ones (spell, draw) are removed first; a 'report' (an injury, a hazard that is already on) is not refused unless an ask / opener cue comes BEFORE it ('how do i cut my bread' is an ask). 'reply' is the whole fixed answer.",
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements (not inside quotes and not after a 'reported_speech' verb in the same clause: 'my dad said i am 40' declares nothing; a child declaration is sticky for the session) ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. A class fires on one of its 'terms' in a REQUEST or QUESTION: a '?', an 'ask' cue anywhere, or an 'opener' as the first word (after 'lead_strip'). A STATEMENT that only mentions a hazard is not one. 'factual' questions (a why... question, or what is it made of / called, with no 'factual_not' first-person word and no ask cue) and 'benign' ones (spell, draw) are removed first; a 'report' (an injury) is not refused unless an ask / opener cue comes BEFORE it ('how do i cut my bread' is an ask). 'in_progress' (gas smell, smoke, fire, sparks, left on) is part of that same report list, split out: a statement stays answered, but a refused request carrying one (not negated by an 'in_progress_not' word just before it: 'without smoke') gets 'urgent_reply' instead of the class line, whatever the order. 'reply' is the whole fixed answer.",
   "adult_age": 18,
   "max_school_year": 12,
   "number_words": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen",
   "tens_words": "twenty thirty forty fifty sixty seventy eighty ninety",
   "lead_not": "when |if |until |till |once |pretend |pretend that |imagine |as if ",
   "end": "(?=$|[.,!?;:]| (?:and|so|but|now|today|too|ok|okay|btw|how|can|could|what|which|is|please|zoe|i|im|my)(?!\\w))",
+  "reported_speech": "said says say told tells asked asks reckons reckoned thinks thought goes went wrote writes",
   "own_age": [
    "(?:i am|im|i m)(?: (?:only|just))? {AGE}(?: (?:years?|yrs?) old| yo)?{END}",
    "i (?:just )?turned {AGE}{END}",
@@ -1675,7 +1676,10 @@
   "factual": "^(?:why|whys) .*|^what (?:is|are|was|were) (?:a |an |the )?.{0,40}(?:made of|made from|called)$",
   "factual_not": "i|me|my|we|us|our|im|ive",
   "benign": "how (?:do|can|would) (?:i|you|we) (?:spell|say|pronounce|draw|write|paint|colou?r|sing)",
-  "report": "i cut|cut (?:my|myself)|bleed\\w*|blood|burnt|burned|burn(?:ed|t)? (?:my|myself)|i burn|hurts?|hurting|stings?|on fire|smoke|smoky|smells? (?:like )?(?:gas|smoke|burning)|swallowed|ate|drank|emergency|fell|fallen|stuck|electric shock|got (?:a )?shock|electrocuted|(?:stove|oven|gas|cooktop|hob|heater|iron|bbq|barbecue|grill|fire|candle|burner)s? (?:is|are|was|were|has been|have been) (?:still )?(?:on|lit|burning|left on)|left (?:the \\w+ )?on|(?:wont|cant|doesnt) (?:turn|switch) off",
+  "report": "i cut|cut (?:my|myself)|bleed\\w*|blood|burnt|burned|burn(?:ed|t)? (?:my|myself)|i burn|hurts?|hurting|stings?|swallowed|ate|drank|emergency|fell|fallen|stuck|electric shock|got (?:a )?shock|electrocuted",
+  "in_progress": "on fire|flames?|smoke|smoky|smells? (?:like |of )?(?:gas|smoke|burning)|(?:gas|burning) smell|sparks?|sparking|(?:stove|oven|gas|cooktop|hob|heater|iron|bbq|barbecue|grill|fire|candle|burner)s? (?:is|are|was|were|has been|have been) (?:still )?(?:on|lit|burning|left on)|left (?:the \\w+ )?on|(?:wont|cant|doesnt) (?:turn|switch) off",
+  "in_progress_not": "without no not never isnt arent wasnt any",
+  "urgent_reply": "Move away from it and tell a grown-up right now.",
   "classes": [
    {
     "id": "medicine",

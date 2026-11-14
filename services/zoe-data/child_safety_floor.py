@@ -5,8 +5,7 @@ steps. No floor covered those classes (``distress_handoff`` / ``medical_safety``
 role, so nothing knew the speaker was a child: the asks that were refused were refused by the brain's own judgement.
 
 WHAT IT DOES. ``check`` (sync, pure, run on every brain turn by ``brain_dispatch``) reads the turn's own words. It records an explicit
-OWN-age statement for this ``(user, session)`` in process memory (never a memory fact; a later own age at or over the adult age clears
-it), then asks whether the turn is a REQUEST or QUESTION that names a hazard (``hazard_class``). Every other turn returns ``None``
+OWN-age statement for this ``(user, session)`` in process memory (never a memory fact; STICKY: a later adult-age claim never clears it; a quoted or reported age is no one's declaration), then asks whether the turn is a REQUEST or QUESTION that names a hazard (``hazard_class``). Every other turn returns ``None``
 there and nothing changes. There is deliberately no "how-to" phrase list: for a child, a hazard word in any request or question is
 enough (over-refusing a child is the safe side). A STATEMENT that only mentions a hazard ("dad used the drill today") is not a request.
 ``resolve`` then decides who is speaking. FAIL SAFE: the session declaration or a child record (minor mode, or a role in
@@ -41,6 +40,8 @@ ENV = "ZOE_CHILD_SAFETY_FLOOR"
 LEXICON_KEY = "child_safety"
 FALLBACK_LANG = "en"
 FALLBACK_REPLY = "That one needs a grown-up. Can you ask one to help you?"
+#: a hazard IN PROGRESS (a gas smell, smoke, fire, sparks, something left on) in a refused request: the one instruction that matters
+URGENT_REPLY = "Move away from it and tell a grown-up right now."
 MAX_CHARS = 2000
 SESSION_TTL_S = 12 * 3600
 LOOKUP_BUDGET_S = 0.5
@@ -94,7 +95,8 @@ def _rx(lang: str) -> Optional[dict]:
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
             "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
-            "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": w(e["benign"]), "report": w(e["report"]),
+            "reported": frozenset(e["reported_speech"].split()), "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": w(e["benign"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
+            "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
             "classes": [(c["id"], w(c["terms"]), c["reply"]) for c in e["classes"]]}
 
 
@@ -104,13 +106,25 @@ def _age(token: str, nums: dict) -> int:
     return sum(nums.get(p, 0) for p in re.split(r"[ -]", token))
 
 
+def _not_own(s: str, pos: int, rx: dict) -> bool:
+    """Someone ELSE's words: inside double quotes, or after a reported-speech verb in the same clause ("my dad said i am 40")."""
+    before = s[:pos]
+    if sum(before.count(q) for q in '"\u201c\u201d') % 2:
+        return True
+    clause = re.split(r"[.!?;]", before)[-1]
+    return bool(set(re.findall(r"\w+", clause)[-6:]) & rx["reported"])
+
+
 def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
-    """True = the speaker states their own age as a child's, False = as an adult's, None = no own-age statement. The LAST one wins."""
+    """True = the speaker states their own age as a child's, False = as an adult's, None = no own-age statement. The LAST one wins.
+    A quoted or reported age is not the speaker's own and counts as neither."""
     found: list[tuple[int, bool]] = []
     for r in rx["own"]:
-        found += [(m.start(), _age(m.group("age"), rx["nums"]) < rx["adult"]) for m in r.finditer(s)]
+        found += [(m.start(), _age(m.group("age"), rx["nums"]) < rx["adult"]) for m in r.finditer(s) if not _not_own(s, m.start(), rx)]
     for r in rx["school"]:
         for m in r.finditer(s):
+            if _not_own(s, m.start(), rx):
+                continue
             year = m.groupdict().get("age")
             if year is None or _age(year, rx["nums"]) <= rx["max_year"]:
                 found.append((m.start(), True))
@@ -129,6 +143,14 @@ def _cue_before(s: str, pos: int, rx: dict) -> bool:
     return bool(rx["ask"].search(s[:pos])) or bool(head and rx["opener"].match(head))
 
 
+def in_progress(s: str, rx: dict) -> bool:
+    """A live hazard phrase that is not negated by the word or two just before it ("without smoke", "no gas smell")."""
+    for m in rx["in_progress"].finditer(s):
+        if not set(s[max(0, m.start() - 24):m.start()].split()[-2:]) & rx["in_progress_not"]:
+            return True
+    return False
+
+
 def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
     """(class id, fixed reply) when ``s`` is a request or question naming one hazard and reports no danger, else None."""
     core = re.sub(r"[\s.,!?;:]+$", "", rx["lead"].sub("", s, count=1))
@@ -137,12 +159,13 @@ def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
     s = rx["benign"].sub(" ", s)
     if not is_request(s, rx):
         return None
+    live = in_progress(s, rx)
     rep = rx["report"].search(s)
-    if rep and not _cue_before(s, rep.start(), rx):
+    if rep and not live and not _cue_before(s, rep.start(), rx):
         return None   # a report ("i cut my finger") - unless a request cue came FIRST ("how do i cut my bread with a knife")
     for cid, terms, reply in rx["classes"]:
         if terms.search(s):
-            return cid, reply
+            return cid, (rx["urgent"] if live else reply)   # a live hazard: "move away", never only "ask a grown-up to help"
     return None
 
 
@@ -188,13 +211,14 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -
         if rx is None:
             raise LookupError("no child_safety lexicon")
         said = own_age_says_child(s, rx)
-        if said is not None and key[1] and not dry:
-            _entry(key)["child"] = said
+        held = _SESSIONS.get(key) if key[1] else None
+        held_child = bool(held and time.monotonic() - held["t"] <= SESSION_TTL_S and held["child"])
+        if said and key[1] and not dry:
+            _entry(key)["child"] = True   # STICKY for the session: a later adult-age claim never clears it
         hit = hazard_class(s, rx)
         if hit is None or _owned_by_other_floor(text):
             return None
-        held = _SESSIONS.get(key) if key[1] else None
-        declared = said if said is not None else bool(held and time.monotonic() - held["t"] <= SESSION_TTL_S and held["child"])
+        declared = bool(said) or held_child
         return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key)
     except Exception as exc:  # noqa: BLE001
         logger.warning("CHILD_SAFETY_FLOOR check failed stage=%s (%s)", "after" if hit else "before", type(exc).__name__)
