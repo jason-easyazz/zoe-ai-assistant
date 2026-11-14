@@ -85,6 +85,20 @@ def _evict_stubs() -> dict[str, str]:
     return stubs
 
 
+def pytest_configure(config) -> None:
+    """Arm the offline guard for the OFFLINE TIER's files in this lane (tools/ci/offline_guard.py): a tier test that
+    reaches for a non-loopback address fails by name. Pinned by tests/unit/test_offline_tier.py."""
+    if any(getattr(p, "ZOE_OFFLINE_GUARD_PLUGIN", False) for p in config.pluginmanager.get_plugins()):
+        return                                # already loaded with -p (offline_tier.py, --offline-tier)
+    import importlib.util
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "ci", "offline_guard.py")
+    spec = importlib.util.spec_from_file_location("offline_guard", src)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("offline_guard", mod)
+    spec.loader.exec_module(mod)
+    config.pluginmanager.register(mod, "offline_guard")
+
+
 def pytest_collectstart(collector) -> None:
     """Collection-time guard: evict stubs left by an already-imported module BEFORE the next module is imported.
 
