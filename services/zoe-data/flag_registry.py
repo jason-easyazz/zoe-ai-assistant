@@ -206,6 +206,7 @@ _ENTRIES = (
     _f('ZOE_CHEAP_PR_AGENT_URL', 'str', ''),
     _f('ZOE_CHILD_SAFETY_CARRY', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='services/zoe-data/AGENTS.md', note='ships dark: carries a hazard named in one turn to the next turn of the same speaker'),
     _f('ZOE_CHILD_SAFETY_FLOOR', 'str', 'enforce', allowed=('off', 'shadow', 'enforce'), doc='services/zoe-data/AGENTS.md'),
+    _f('ZOE_CHILD_SAFETY_LANGS', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='services/zoe-data/AGENTS.md', note='ships dark: es/fr/de/zh/ja child-safety words are NOT native-reviewed'),
     _f('ZOE_CLEAN_GOODBYE', 'str', 'shadow', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/person-half-enforce-pack-2026-10-09.md', note='live .env: enforce'),
     _f('ZOE_COMMITMENTS', 'str', 'shadow', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/samantha-bar.md', note='live: unset (code default in force)'),
     _f('ZOE_COMPOSE_MAX_TOKENS', 'int', 700),

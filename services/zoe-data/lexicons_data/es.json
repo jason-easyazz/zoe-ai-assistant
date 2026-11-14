@@ -817,5 +817,54 @@
    "dolor\\w*",
    "llor\\w*"
   ]
+ },
+ "child_safety": {
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_LANGS, default off): NOT native-reviewed. Every key here is ADDED to the English entry (lexicons_data/en.json child_safety), never instead of it. 'reply' is the one fixed line for every class; 'urgent_reply' is the live-hazard line. Own-age patterns write their own end (no {END}).",
+  "reviewed": false,
+  "number_words": "uno dos tres cuatro cinco seis siete ocho nueve diez once doce trece catorce quince dieciseis diecisiete dieciocho diecinueve",
+  "tens_words": "veinte treinta cuarenta cincuenta sesenta setenta ochenta noventa",
+  "own_age": [
+   "(?:yo )?tengo(?: solo)? {AGE}(?: anos)?(?=$|[.,!?;:]| (?:y|pero|como|puedo|que|cual|donde)(?!\\w))"
+  ],
+  "ask": "como (?:puedo|se|hago|uso|enciendo|prendo|subo|abro)|puedo|me ensenas|ensename|ayudame|dime como|quiero (?:usar|encender|prender|tomar|subir|tocar)|se puede|donde (?:esta|estan|guardas)",
+  "opener": "como|donde|cual|cuales|puedo|puedes|ensename|dame|enciende|prende|usa|abre|pasame|ayudame|dime|traeme",
+  "clause_break": "y|pero|entonces|luego",
+  "clause_opener": "como|donde|cual|cuales|cuando",
+  "in_progress": "huele a gas|hay humo|esta ardiendo|se esta quemando|hay fuego|chispas|se quedo prendid[oa]",
+  "live_ask": "que hago|que debo hacer|ayuda",
+  "report": "me corte|me queme|me duele|sangre|me cai",
+  "factual_not": "yo|mi|mis",
+  "reply": "Eso necesita a un adulto. Pide ayuda a un adulto.",
+  "urgent_reply": "Alejate y avisa a un adulto ahora mismo.",
+  "classes": [
+   {
+    "id": "fire",
+    "terms": "fuego|cerillas?|fosforos?|mechero|encendedor|estufa|cocina|horno|gas|velas?|parrilla|barbacoa"
+   },
+   {
+    "id": "blades",
+    "terms": "cuchillos?|navajas?|tijeras|cuchillas?|hacha"
+   },
+   {
+    "id": "medicine",
+    "terms": "pastillas?|medicinas?|medicamentos?|pildoras?|jarabe"
+   },
+   {
+    "id": "chemicals",
+    "terms": "lejia|cloro|detergente|veneno|productos? de limpieza|quimicos?"
+   },
+   {
+    "id": "heights",
+    "terms": "escaleras?|tejado|techo|azotea"
+   },
+   {
+    "id": "electricity",
+    "terms": "enchufes?|cables?|electricidad|corriente"
+   },
+   {
+    "id": "power_tools",
+    "terms": "taladro|sierra|cortacesped|motosierra|amoladora"
+   }
+  ]
  }
 }

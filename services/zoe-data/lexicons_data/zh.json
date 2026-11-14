@@ -330,5 +330,55 @@
   "ack_release_none": "我本来就没有回避什么，所以没问题。",
   "ack_ask": "我该不再提哪件事？请告诉我。"
  },
- "recall_gate": {"caps_entity":true,"stop":[],"plan_cues":["明天","今天","今晚","明早","稍后","稍後","周末","週末","这周","這週","下周","下週","马上","馬上"],"routine_cues":["每天","天天","每週","每周","总是","總是","通常","平时","平時","每个","每個"],"dayparts":["早上","早晨","上午","中午","下午","晚上","夜里","夜裡","半夜","清晨","黎明","傍晚"],"am_words":[],"pm_words":[],"clock_suffix":["点","點","时","時"],"months":[],"weekdays":[],"stop_chars":["的","了","是","在","我","你","他","她","它","们","這","这","那","有","和","与","與","也","都","就","不","很","个","個","一","把","被","给","給","对","對","吗","嗎","呢","吧","啊"]}
+ "recall_gate": {"caps_entity":true,"stop":[],"plan_cues":["明天","今天","今晚","明早","稍后","稍後","周末","週末","这周","這週","下周","下週","马上","馬上"],"routine_cues":["每天","天天","每週","每周","总是","總是","通常","平时","平時","每个","每個"],"dayparts":["早上","早晨","上午","中午","下午","晚上","夜里","夜裡","半夜","清晨","黎明","傍晚"],"am_words":[],"pm_words":[],"clock_suffix":["点","點","时","時"],"months":[],"weekdays":[],"stop_chars":["的","了","是","在","我","你","他","她","它","们","這","这","那","有","和","与","與","也","都","就","不","很","个","個","一","把","被","给","給","对","對","吗","嗎","呢","吧","啊"]},
+ "child_safety": {
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_LANGS, default off): NOT native-reviewed. Every key here is ADDED to the English entry (lexicons_data/en.json child_safety), never instead of it. 'reply' is the one fixed line for every class; 'urgent_reply' is the live-hazard line. Own-age patterns write their own end (no {END}).",
+  "reviewed": false,
+  "boundaries": "ascii",
+  "number_words": "一 二 三 四 五 六 七 八 九 十 十一 十二 十三 十四 十五 十六 十七 十八 十九",
+  "tens_words": "二十 三十 四十 五十 六十 七十 八十 九十",
+  "own_age": [
+   "我(?:才|今年|只有)?{AGE}岁"
+  ],
+  "ask": "怎么|怎样|如何|可以|能不能|教我|帮我|告诉我|在哪",
+  "opener": "怎么|怎样|如何|哪|可以|教|帮|给我|告诉",
+  "clause_break": "然后|但是|还有",
+  "clause_opener": "怎么|哪",
+  "in_progress": "煤气味|有煤气|冒烟|有烟|着火|起火|火花|没关",
+  "live_ask": "怎么办|我该怎么做|救命",
+  "report": "我割伤|我被割|我烫伤|我被烫|流血|好痛|我摔",
+  "factual_not": "我",
+  "reply": "这个要找大人。请大人帮你。",
+  "urgent_reply": "快离开，马上告诉大人。",
+  "classes": [
+   {
+    "id": "fire",
+    "terms": "火(?!车|锅|腿|箭|星)|火柴|打火机|炉子|灶|煤气|燃气|烤箱|蜡烛|烟花"
+   },
+   {
+    "id": "blades",
+    "terms": "刀|剪刀|刀片|斧头"
+   },
+   {
+    "id": "medicine",
+    "terms": "药|药片|药丸"
+   },
+   {
+    "id": "chemicals",
+    "terms": "漂白剂|消毒水|清洁剂|洗衣液|毒药|化学品"
+   },
+   {
+    "id": "heights",
+    "terms": "梯子|屋顶|房顶|窗台"
+   },
+   {
+    "id": "electricity",
+    "terms": "插座|电线|电源"
+   },
+   {
+    "id": "power_tools",
+    "terms": "电钻|电锯|锯子|割草机"
+   }
+  ]
+ }
 }

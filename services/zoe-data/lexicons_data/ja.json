@@ -300,5 +300,55 @@
   "ack_release_none": "何も控えていなかったので、大丈夫です。",
   "ack_ask": "どの話をやめればいいですか？教えてください。"
  },
- "recall_gate": {"caps_entity":true,"stop":[],"plan_cues":["明日","今日","今夜","今晩","後で","あとで","週末","今週","来週","すぐ"],"routine_cues":["毎日","毎朝","毎晩","毎週","いつも","普段","たいてい"],"dayparts":["朝","午前","昼","午後","夕方","夜","夜中","早朝"],"am_words":[],"pm_words":[],"clock_suffix":["時"],"months":[],"weekdays":[],"stop_chars":["の","は","を","が","に","で","と","も","て","た","し","な","ま","す","れ","る","い","ん","か","ら","へ","や","ね","よ","私","僕","俺"]}
+ "recall_gate": {"caps_entity":true,"stop":[],"plan_cues":["明日","今日","今夜","今晩","後で","あとで","週末","今週","来週","すぐ"],"routine_cues":["毎日","毎朝","毎晩","毎週","いつも","普段","たいてい"],"dayparts":["朝","午前","昼","午後","夕方","夜","夜中","早朝"],"am_words":[],"pm_words":[],"clock_suffix":["時"],"months":[],"weekdays":[],"stop_chars":["の","は","を","が","に","で","と","も","て","た","し","な","ま","す","れ","る","い","ん","か","ら","へ","や","ね","よ","私","僕","俺"]},
+ "child_safety": {
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_LANGS, default off): NOT native-reviewed. Every key here is ADDED to the English entry (lexicons_data/en.json child_safety), never instead of it. 'reply' is the one fixed line for every class; 'urgent_reply' is the live-hazard line. Own-age patterns write their own end (no {END}).",
+  "reviewed": false,
+  "boundaries": "ascii",
+  "number_words": "一 二 三 四 五 六 七 八 九 十 十一 十二 十三 十四 十五 十六 十七 十八 十九",
+  "tens_words": "二十 三十 四十 五十 六十 七十 八十 九十",
+  "own_age": [
+   "(?:私|僕|ぼく|わたし|おれ|俺)(?:は)?{AGE}(?:歳|さい)"
+  ],
+  "ask": "どうやって|使い方|やり方|てもいい|でもいい|していい|教えて|どこ|どうすれば",
+  "opener": "どうやって|どこ|どれ|どう",
+  "clause_break": "それから|でも|そして",
+  "clause_opener": "どうやって|どこ|どれ",
+  "in_progress": "ガスのにおい|ガス臭い|煙|けむり|燃えて|火事|火花|つけっぱなし",
+  "live_ask": "どうしよう|どうしたらいい|助けて",
+  "report": "切った|やけどした|血が|痛い|転んだ",
+  "factual_not": "私|僕|ぼく|わたし|俺",
+  "reply": "それは大人に聞いてね。",
+  "urgent_reply": "すぐに離れて、大人にすぐ知らせてね。",
+  "classes": [
+   {
+    "id": "fire",
+    "terms": "火(?!曜)|マッチ|ライター|コンロ|ガス|オーブン|ろうそく|ストーブ|花火"
+   },
+   {
+    "id": "blades",
+    "terms": "包丁|ナイフ|はさみ|ハサミ|カッター"
+   },
+   {
+    "id": "medicine",
+    "terms": "薬|くすり|錠剤"
+   },
+   {
+    "id": "chemicals",
+    "terms": "漂白剤|洗剤|薬品"
+   },
+   {
+    "id": "heights",
+    "terms": "はしご|梯子|屋根"
+   },
+   {
+    "id": "electricity",
+    "terms": "コンセント|電線"
+   },
+   {
+    "id": "power_tools",
+    "terms": "ドリル|のこぎり|草刈り機|チェーンソー"
+   }
+  ]
+ }
 }

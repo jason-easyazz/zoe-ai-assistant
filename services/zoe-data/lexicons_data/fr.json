@@ -374,5 +374,54 @@
   "ack_release_none": "Je ne retenais rien, donc pas de souci.",
   "ack_ask": "De quoi dois-je arrêter de parler ? Dis-moi."
  },
- "recall_gate": {"caps_entity":true,"stop":["le","la","les","un","une","des","du","de","d","l","et","ou","mais","à","au","aux","en","dans","sur","avec","pour","par","comme","est","sont","était","être","suis","ai","a","ont","que","qui","je","me","moi","mon","ma","mes","nous","notre","ne","pas","plus","très","aussi","se","son","sa","ses","ce","cet","cette","ces","il","elle","ils","elles","on","y","utilisateur"],"plan_cues":["demain","ce soir","aujourd'hui","plus tard","bientôt","ce matin","cet après-midi","ce week-end","cette semaine","la semaine prochaine","le mois prochain"],"routine_cues":["chaque","tous","toutes","quotidien","toujours","habituellement","hebdomadaire","tous les jours","en semaine"],"dayparts":["matin","soir","après-midi","nuit","aube","midi","minuit","crépuscule"],"am_words":[],"pm_words":[],"clock_suffix":["h"],"months":["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"],"weekdays":["lundi","mardi","mercredi","jeudi","vendredi","samedi","dimanche"],"stop_chars":[]}
+ "recall_gate": {"caps_entity":true,"stop":["le","la","les","un","une","des","du","de","d","l","et","ou","mais","à","au","aux","en","dans","sur","avec","pour","par","comme","est","sont","était","être","suis","ai","a","ont","que","qui","je","me","moi","mon","ma","mes","nous","notre","ne","pas","plus","très","aussi","se","son","sa","ses","ce","cet","cette","ces","il","elle","ils","elles","on","y","utilisateur"],"plan_cues":["demain","ce soir","aujourd'hui","plus tard","bientôt","ce matin","cet après-midi","ce week-end","cette semaine","la semaine prochaine","le mois prochain"],"routine_cues":["chaque","tous","toutes","quotidien","toujours","habituellement","hebdomadaire","tous les jours","en semaine"],"dayparts":["matin","soir","après-midi","nuit","aube","midi","minuit","crépuscule"],"am_words":[],"pm_words":[],"clock_suffix":["h"],"months":["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"],"weekdays":["lundi","mardi","mercredi","jeudi","vendredi","samedi","dimanche"],"stop_chars":[]},
+ "child_safety": {
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_LANGS, default off): NOT native-reviewed. Every key here is ADDED to the English entry (lexicons_data/en.json child_safety), never instead of it. 'reply' is the one fixed line for every class; 'urgent_reply' is the live-hazard line. Own-age patterns write their own end (no {END}).",
+  "reviewed": false,
+  "number_words": "un deux trois quatre cinq six sept huit neuf dix onze douze treize quatorze quinze seize dix-sept dix-huit dix-neuf",
+  "tens_words": "vingt trente quarante cinquante soixante",
+  "own_age": [
+   "j ?ai(?: seulement)? {AGE} ans(?!\\w)"
+  ],
+  "ask": "comment (?:je|on|faire|allumer|utiliser|ouvrir|monter)|est ce que je peux|je peux|tu peux|montre moi|aide moi|explique moi|dis moi comment|ou (?:est|sont)",
+  "opener": "comment|ou|quel|quelle|quels|montre|donne|allume|utilise|ouvre|passe|aide|dis|peux",
+  "clause_break": "et|mais|alors|puis",
+  "clause_opener": "comment|ou|quel|quelle|quand",
+  "in_progress": "ca sent le gaz|odeur de gaz|il y a de la fumee|fumee|ca brule|en feu|des etincelles|reste allume",
+  "live_ask": "je fais quoi|que faire|au secours",
+  "report": "je me suis coupe|je me suis brule|jai mal|du sang|je suis tombe",
+  "factual_not": "je|moi|mon|ma|mes",
+  "reply": "Ça, il faut un adulte. Demande à un adulte de t'aider.",
+  "urgent_reply": "Éloigne-toi et préviens un adulte tout de suite.",
+  "classes": [
+   {
+    "id": "fire",
+    "terms": "feu|allumettes?|briquet|cuisiniere|plaques?|four|gaz|bougies?|barbecue"
+   },
+   {
+    "id": "blades",
+    "terms": "couteaux?|ciseaux|lames?|cutter|hache"
+   },
+   {
+    "id": "medicine",
+    "terms": "medicaments?|cachets?|pilules?|comprimes?|sirop"
+   },
+   {
+    "id": "chemicals",
+    "terms": "javel|eau de javel|detergent|poison|produits? menagers?|produits? chimiques?"
+   },
+   {
+    "id": "heights",
+    "terms": "echelle|toit|escabeau"
+   },
+   {
+    "id": "electricity",
+    "terms": "prises?|fils? electriques?|electricite|courant"
+   },
+   {
+    "id": "power_tools",
+    "terms": "perceuse|scie|tondeuse|tronconneuse|meuleuse"
+   }
+  ]
+ }
 }

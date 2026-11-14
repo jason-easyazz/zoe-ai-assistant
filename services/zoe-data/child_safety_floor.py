@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 ENV = "ZOE_CHILD_SAFETY_FLOOR"
 CARRY_ENV = "ZOE_CHILD_SAFETY_CARRY"
+LANGS_ENV = "ZOE_CHILD_SAFETY_LANGS"
 #: a hazard named in one turn carries to the speaker's NEXT turn only, and only this long
 CARRY_TTL_S = 60.0
 LEXICON_KEY = "child_safety"
@@ -61,6 +62,7 @@ class Pending:
     key: tuple
     blind: bool = False   # the floor itself failed: refuse unless the speaker is POSITIVELY an adult
     carried: bool = False  # the hazard came from this speaker's PREVIOUS turn (``carry_mode``): "the gas stove" -> "how do i turn it on"
+    shadow_lang: str = ""  # only another language's words matched and ZOE_CHILD_SAFETY_LANGS is shadow: log, never answer
 
 
 def mode() -> str:
@@ -68,6 +70,18 @@ def mode() -> str:
 
     raw = str(flag(ENV) or "").strip().lower()
     return raw if raw in ("off", "shadow") else "enforce"   # anything else (unknown, empty) is a floor that enforces
+
+
+def langs_mode() -> str:
+    """``ZOE_CHILD_SAFETY_LANGS`` off (DEFAULT: English rules only, exactly as before) | shadow (log the language code and
+    ``would_refuse`` only) | on. The non-English entries are NOT native-reviewed (``reviewed: false``)."""
+    try:
+        from typed_env import flag
+
+        raw = str(flag(LANGS_ENV) or "").strip().lower()
+        return raw if raw in ("shadow", "on") else "off"
+    except Exception:  # noqa: BLE001
+        return "off"
 
 
 def carry_mode() -> str:
@@ -115,28 +129,80 @@ def _fold(text: str) -> str:
     return distress_handoff._strip(s)[:MAX_CHARS]
 
 
+#: how a language's child_safety entry joins the English one (``_merge``): English rules are ALWAYS kept, so a mis-detected turn
+#: never has fewer rules than an English-only floor; the other language only adds words.
+_PIPE_KEYS = ("ask", "opener", "report", "in_progress", "live_ask", "carry_ask", "clause_break", "clause_opener", "factual_not", "lead_not")
+_SPACE_KEYS = ("body_parts", "back_refs", "aux_openers", "aux_subjects", "in_progress_not")
+_LIST_KEYS = ("own_age", "school")
+_LATIN = ("es", "fr", "de")
+
+
+def _numbers(e: dict) -> dict:
+    small, tens = e["number_words"].split(), e["tens_words"].split()
+    return {w: i + 1 for i, w in enumerate(small)} | {w: (i + 2) * 10 for i, w in enumerate(tens)}
+
+
+def _merge(en: dict, extra: dict) -> tuple[dict, dict]:
+    e, nums = dict(en), _numbers(en) | _numbers(extra)
+    for k in _PIPE_KEYS:
+        if extra.get(k):
+            e[k] = f"{e[k]}|{extra[k]}"
+    for k in _SPACE_KEYS:
+        if extra.get(k):
+            e[k] = f"{e[k]} {extra[k]}"
+    for k in _LIST_KEYS:
+        e[k] = list(e[k]) + list(extra.get(k) or [])
+    terms = {c["id"]: c["terms"] for c in extra.get("classes") or []}
+    reply = extra.get("reply")
+    e["classes"] = [{**c, "terms": f"{c['terms']}|{terms[c['id']]}" if c["id"] in terms else c["terms"], "reply": reply or c["reply"]}
+                    for c in en["classes"]]
+    for k in ("urgent_reply", "boundaries"):
+        if extra.get(k):
+            e[k] = extra[k]
+    return e, nums
+
+
 @lru_cache(maxsize=8)
 def _rx(lang: str) -> Optional[dict]:
+    """English: the English entry. Another language: English MERGED with that language's entry (None when it has none)."""
     import lexicons
 
-    e = (lexicons.load(lang) or {}).get(LEXICON_KEY)
-    if not isinstance(e, dict) or not e.get("classes"):
+    en = (lexicons.load(FALLBACK_LANG) or {}).get(LEXICON_KEY)
+    if not isinstance(en, dict) or not en.get("classes"):
         return None
-    small, tens = e["number_words"].split(), e["tens_words"].split()
-    nums = {w: i + 1 for i, w in enumerate(small)} | {w: (i + 2) * 10 for i, w in enumerate(tens)}
-    age = rf"(?P<age>\d{{1,3}}(?!\d)|(?:{'|'.join(tens)})(?:[ -](?:{'|'.join(small[:9])}))?(?!\w)|(?:{'|'.join(sorted(small, key=len, reverse=True))}))"
+    e, nums = en, _numbers(en)
+    if lang != FALLBACK_LANG:
+        own = (lexicons.load(lang) or {}).get(LEXICON_KEY)
+        if not isinstance(own, dict) or not own.get("classes"):
+            return None
+        # es / fr / de are easily mis-detected for one another on a short turn: a turn detected as ANY of them gets all three
+        # (the detected one last, so its replies win); a turn detected as English never gets them ("gift", "four" stay English)
+        order = [x for x in _LATIN if x != lang] + [lang] if lang in _LATIN else [lang]
+        for x in order:
+            extra = (lexicons.load(x) or {}).get(LEXICON_KEY)
+            if isinstance(extra, dict) and extra.get("classes"):
+                e, more = _merge(e, extra)
+                nums |= more
+    # scripts with no spaces between words (zh / ja) bound terms by ASCII letters only; every other entry keeps \w (English unchanged)
+    b0, b1, punct = (r"(?<![a-z0-9])", r"(?![a-z0-9])", "，。？！；：、") if e.get("boundaries") == "ascii" \
+        else (r"(?<!\w)", r"(?!\w)", "")
+    small = [w for w, v in nums.items() if v < 20]
+    tens = [w for w, v in nums.items() if v >= 20]
+    units = [w for w, v in nums.items() if v < 10]
+    age = rf"(?P<age>\d{{1,3}}(?!\d)|(?:{'|'.join(tens)})(?:[ -](?:{'|'.join(units)}))?{b1}|(?:{'|'.join(sorted(small, key=len, reverse=True))}))"
     lead = "".join(rf"(?<!{re.escape(w)})" for w in e["lead_not"].split("|"))
-    comp = lambda p: re.compile(rf"{lead}(?<!\w)" + p.replace("{AGE}", age).replace("{END}", e["end"]))  # noqa: E731
-    w = lambda body: re.compile(rf"(?<!\w)(?:{body})(?!\w)")  # noqa: E731
+    comp = lambda p: re.compile(rf"{lead}{b0}" + p.replace("{AGE}", age).replace("{END}", e["end"]))  # noqa: E731
+    w = lambda body: re.compile(rf"{b0}(?:{body}){b1}")  # noqa: E731
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
-            "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
+            "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']}){b1}"), "lead": re.compile(e["lead_strip"]),
             # a question word at the start of ANY clause ("im 10, which knife is sharpest"; "im 9 and where do you keep the matches")
-            "clause_q": re.compile(rf"(?:[,;:.!?]\s*|(?<!\w)(?:{e['clause_break']})\s+)(?:{e['clause_opener']})(?!\w)"),
-            "clause_split": re.compile(rf"[,;:.!?]+|(?<!\w)(?:{e['clause_break']})(?!\w)"),
+            "clause_q": re.compile(rf"(?:[,;:.!?{punct}]\s*|{b0}(?:{e['clause_break']})\s*)(?:{e['clause_opener']}){b1}"
+                                   if punct else rf"(?:[,;:.!?]\s*|(?<!\w)(?:{e['clause_break']})\s+)(?:{e['clause_opener']})(?!\w)"),
+            "clause_split": re.compile(rf"[,;:.!?{punct}]+|{b0}(?:{e['clause_break']}){b1}"),
             "back_ref": w("|".join(e["back_refs"].split())),
             # later-clause openers skip auxiliaries and the question words (clause_q owns those, with its "what a ..." exclusion)
-            "aux": frozenset(e["aux_openers"].split()) | {re.match(r"[a-z]+", q).group(0) for q in e["clause_opener"].split("|")},
+            "aux": frozenset(e["aux_openers"].split()) | {q.split("(")[0] for q in e["clause_opener"].split("|")},
             "aux_words": frozenset(e["aux_openers"].split()), "aux_subjects": frozenset(e["aux_subjects"].split()),
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
@@ -179,7 +245,7 @@ def is_request(s: str, rx: dict) -> bool:
     such as "is" / "do" opens a later-clause QUESTION only when a subject word follows it and the clause names a hazard: "im 10, is
     the knife sharp" asks, "dad used the drill and is tired" / "the lawnmower is loud and does my head in" stay statements). A plain
     statement is not one."""
-    if "?" in s or rx["ask"].search(s) or rx["clause_q"].search(s) or rx["opener"].match(rx["lead"].sub("", s, count=1)):
+    if "?" in s or "？" in s or rx["ask"].search(s) or rx["clause_q"].search(s) or rx["opener"].match(rx["lead"].sub("", s, count=1)):
         return True
     for c in clauses(s, rx)[1:]:
         head = rx["lead"].sub("", c, count=1)
@@ -219,7 +285,7 @@ def _clause_clears(c: str, rx: dict) -> bool:
     """May this ONE clause stand without a refusal? It is exempt (a pure factual question, an art / spelling ask whose hazard is only
     the object, a report with no request cue before it) or it names no hazard and is not a request pointing back at one ("how do i
     use one"). Every exemption is judged per clause, so an exempt clause never shields another clause's ask."""
-    core = re.sub(r"[\s.,!?;:\"]+$", "", rx["lead"].sub("", c, count=1))
+    core = re.sub(r"[\s.,!?;:\"。？！]+$", "", rx["lead"].sub("", c, count=1))
     if not core:
         return True
     if rx["factual"].match(core) and not rx["ask"].search(core) and not rx["factual_not"].search(core):
@@ -296,9 +362,16 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, f
             return None
         import lexicons
 
-        rx = _rx(lexicons.detect(s) or FALLBACK_LANG) or _rx(FALLBACK_LANG)
+        rx = _rx(FALLBACK_LANG)
         if rx is None:
             raise LookupError("no child_safety lexicon")
+        # another language (ZOE_CHILD_SAFETY_LANGS): its words are ADDED to the English rules, never instead of them
+        lm, lang, rx_l = langs_mode(), FALLBACK_LANG, None
+        if lm != "off":
+            lang = lexicons.detect(s) or FALLBACK_LANG
+            rx_l = _rx(lang) if lang != FALLBACK_LANG else None
+            if rx_l is not None and lm == "on":
+                rx = rx_l
         said = own_age_says_child(s, rx)
         held = _SESSIONS.get(key) if key[1] else None
         held_child = bool(held and time.monotonic() - held["t"] <= SESSION_TTL_S and held["child"])
@@ -308,6 +381,11 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, f
         carried = _carry_step(key, s, rx) if key[1] and not dry and carry_mode() != "off" else None
         if hit is None and carried is not None:
             hit = carried
+        if hit is None and lm == "shadow" and rx_l is not None:
+            shadow = hazard_class(s, rx_l)   # what the other language's words WOULD refuse: logged by resolve, never answered
+            if shadow is not None and not _owned_by_other_floor(text, floors_live):
+                return Pending(cls=shadow[0], reply=shadow[1], declared=bool(own_age_says_child(s, rx_l)) or held_child, key=key,
+                               shadow_lang=lang)
         if hit is None or _owned_by_other_floor(text, floors_live):
             return None
         declared = bool(said) or held_child
@@ -357,6 +435,9 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
             e["n"] += 1
             n = e["n"]
         m = _safe_mode()
+        if p.shadow_lang:   # only another language's (unreviewed) words matched, and that part is in shadow: log, never answer
+            logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s lang=%s would_refuse=1 n=%d", p.cls, source, m, p.shadow_lang, n)
+            return None
         if p.carried:   # the hazard was named in the previous turn: its own flag (shadow logs only)
             cm = carry_mode()
             logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s carry=%s would_refuse=1 n=%d", p.cls, source, m, cm, n)
