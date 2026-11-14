@@ -971,6 +971,7 @@ def _real_palace_ef():
 
 def test_dynamic_pad_vectors_equal_the_palaces_fixed_pad_vectors():
     import numpy as np
+    pytest.importorskip("chromadb")   # slim CI shards install NumPy, not Chroma
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
     ef = _real_palace_ef()

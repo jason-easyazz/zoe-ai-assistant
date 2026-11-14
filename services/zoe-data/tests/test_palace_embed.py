@@ -44,6 +44,7 @@ def _fixture_texts() -> list:
 
 
 def test_vectors_match_chroma_fixed_pad_on_60_plus_texts_in_mixed_batches(ef):
+    pytest.importorskip("chromadb")   # slim CI shards install NumPy, not Chroma
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
     texts = _fixture_texts()
@@ -79,6 +80,7 @@ def test_stock_tokenizer_untouched_and_output_is_unit_float32(ef):
 
 
 def test_any_exception_falls_back_to_the_stock_forward_and_logs_once_without_text(ef, monkeypatch, caplog):
+    pytest.importorskip("chromadb")   # slim CI shards install NumPy, not Chroma
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
     secret = "zz-private-memory-text-zz"
@@ -99,6 +101,7 @@ def test_any_exception_falls_back_to_the_stock_forward_and_logs_once_without_tex
 
 
 def test_empty_input_is_chromas_own_behaviour(ef):
+    pytest.importorskip("chromadb")   # slim CI shards install NumPy, not Chroma
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
     try:
@@ -117,6 +120,7 @@ def test_empty_input_is_chromas_own_behaviour(ef):
 def test_no_embedding_function_conflict_either_way_and_stored_vectors_unchanged(ef, tmp_path):
     """Opening a collection with a different EF object must not raise chroma's conflict error, in either direction, and a row
     written under the stock EF is found by a query embedded by the dynamic EF (same vectors, so no re-index)."""
+    pytest.importorskip("chromadb")   # slim CI shards install NumPy, not Chroma
     import chromadb
     from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
