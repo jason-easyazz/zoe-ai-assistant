@@ -30,9 +30,14 @@ pinned address), returning ``blocked``; and never put the address, host or a tok
   (never expanded). Kept: what overlaps [today - 7 d, today + 400 d], a master whose rule reaches into it, and a master whose rule
   ``calendar_read`` cannot read (counted ``rrule_unsupported``; it would show once).
 * Reconcile (``on``): one transaction per batch, each inside ``erase_gate.writing`` and ``connected_accounts.still_current`` - a
-  false stops the run with that batch unwritten (erased / fenced). Idempotent ``upsert_by_external_id`` keyed (calendar, UID,
+  false stops the run with that batch unwritten (erased / fenced). Idempotent ``connected_accounts.upsert_row`` keyed (calendar, UID,
   RECURRENCE-ID) with ``version_col="content_hash"``; attendees / alarms replaced only on created / updated; overrides linked to their
-  master. No UID = skipped; a duplicate key keeps the highest SEQUENCE.
+  master. No UID = skipped; a duplicate key keeps the highest SEQUENCE. Children and series links always use the id the upsert
+  returns (the row actually stored), never a locally proposed one. ONE SYNC PER ACCOUNT at a time: a second sync of an account
+  whose sync is still running returns at once (outcome ``skipped``, detail ``busy``; no run is recorded). The guard is held from
+  the start of the sync to its end on every path; it never outlives the sync, because the fetch inside it is bounded: a fetch
+  still running after the bound leaves the account in ``_outstanding`` instead, and the next sync is refused as
+  ``fetch_outstanding`` (recorded) until that fetch returns.
 * VISIBILITY CLAMP: an event's visibility is the MORE PRIVATE of its calendar's policy and its own CLASS (``parse_ics`` maps
   CLASS:PUBLIC to "family"); a provider never widens a private calendar to the household. A calendar this engine creates is
   ``personal``.
@@ -138,7 +143,7 @@ class SyncReport:
     n_bytes: int = 0
     duration_ms: int = 0
     backoff_until: Optional[str] = None
-    detail: Optional[str] = None                  # a fixed word (fetch_timeout / fetch_outstanding); not persisted
+    detail: Optional[str] = None                  # a fixed word (fetch_timeout / fetch_outstanding / busy); not persisted
 
 
 class FetchTimeout(Exception):
@@ -437,8 +442,28 @@ async def _fetch(fetcher: Fetcher, req: FetchRequest, timeout: float) -> FetchRe
     return res
 
 
+#: accounts with a sync running in this process (one entry per running sync, removed when it ends: bounded by the syncs running)
+_syncing: set = set()
+
+
 async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[str] = None, now: Optional[datetime] = None,
                        scheduled_at: Optional[int] = None, fetch_timeout_s: Optional[float] = None) -> SyncReport:
+    """One sync of one feed account, never two at once (see ``_sync_once``; a second one returns ``skipped`` / ``busy``)."""
+    if account_id in _syncing:                    # no await between this check and the add: one event loop, atomic
+        logger.info("CALENDAR_FEED busy account=%s", account_id)
+        rep = SyncReport(account_id, run_mode or mode(), "skipped")
+        rep.detail = "busy"
+        return rep
+    _syncing.add(account_id)
+    try:
+        return await _sync_once(account_id, fetcher, run_mode=run_mode, now=now, scheduled_at=scheduled_at,
+                                fetch_timeout_s=fetch_timeout_s)
+    finally:
+        _syncing.discard(account_id)
+
+
+async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[str] = None, now: Optional[datetime] = None,
+                     scheduled_at: Optional[int] = None, fetch_timeout_s: Optional[float] = None) -> SyncReport:
     """One sync of one feed account. Never raises for a provider or parse problem (it is recorded on the run); raises only on a
     programming error. ``run_mode`` overrides the flag (the lab); ``now`` fixes the clock and ``fetch_timeout_s`` shortens the
     engine's fetch bound (tests; it can only shorten it)."""
@@ -622,10 +647,11 @@ async def _write_items(run: ca.Run, user_id: str, cal_id: str, items: dict, stor
         async def step(db, wanted, batch=batch):
             for it in batch:
                 s = stored.get(it.key)
-                eid = s["id"] if s else str(uuid.uuid4())
-                values = dict(it.values, id=eid, user_id=user_id, source=SOURCE, read_only=1, deleted=0,
+                proposed = s["id"] if s else str(uuid.uuid4())
+                values = dict(it.values, id=proposed, user_id=user_id, source=SOURCE, read_only=1, deleted=0,
                               account_generation=run.generation, last_synced_at=stamp, content_hash=it.hash)
-                got = await ca.upsert_by_external_id(
+                # the STORED row's id, re-read in this transaction: another sync may have created the row since ``stored`` was read
+                got, eid = await ca.upsert_row(
                     db, "events", match={"calendar_id": cal_id, "external_uid": it.key[0], "recurrence_id": it.key[1] or None},
                     values=values, version_col="content_hash")
                 c[got] = c.get(got, 0) + 1

@@ -374,6 +374,83 @@ def test_with_the_ledger_down_nothing_unshielded_is_written(db, monkeypatch):
     assert (r.outcome, r.error_class, r.error_code, f.calls) == ("error", "config", "ledger_unavailable", 0)   # refused before the fetch
 
 
+def _overlap(db, monkeypatch, entry):
+    """Two syncs of ONE account, interleaved deterministically: the first is suspended right after it has read its stored rows, a
+    second runs to its end against a CHANGED feed, then the first resumes with its older copy. Foreign keys are enforced."""
+    db.conn.execute("CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY)")      # event_attendees.person_id's parent
+    db.conn.execute("PRAGMA foreign_keys = ON")
+    db.conn.execute("INSERT INTO users (id) VALUES ('ann')")
+    db.conn.commit()
+    a = account()
+    v1 = ics(vevent("new@example.test", "Planning", attendees=[("Pat Example", "pat@example.org")], alarm=True))
+    v2 = ics(vevent("new@example.test", "Planning (moved room)", seq=1, attendees=[("Pat Example", "pat@example.org")], alarm=True))
+    real, paused, resume = feed._stored, asyncio.Event(), asyncio.Event()
+
+    async def stored_then_wait(calendar_id):
+        rows = await real(calendar_id)
+        if not paused.is_set():
+            paused.set()
+            await resume.wait()
+        return rows
+    monkeypatch.setattr(feed, "_stored", stored_then_wait)
+
+    async def scenario():
+        db.conn.execute("INSERT INTO calendars (id, user_id, name, source, source_account_id, source_calendar_id, default_visibility, "
+                        "writable, created_at, updated_at) VALUES ('cal-1', 'ann', 'Feed', 'subscription', ?, 'feed', 'personal', 0, "
+                        "'x', 'x')", (a,))
+        db.conn.commit()
+        first = asyncio.ensure_future(entry(a, Feed(v1), run_mode="on", now=NOW))
+        await paused.wait()
+        second = await entry(a, Feed(v2), run_mode="on", now=NOW)
+        resume.set()
+        return second, await first
+    return run(scenario())
+
+
+@needs_ics
+def test_two_overlapping_syncs_of_one_feed_cannot_interleave(db, monkeypatch):
+    second, first = _overlap(db, monkeypatch, feed.sync_account)
+    assert (second.outcome, second.detail) == ("skipped", "busy") and first.outcome == "ok"   # refused, not interleaved
+    assert db.one("SELECT COUNT(*) FROM events") == 1 and not feed._syncing
+    assert sync(account(), Feed(ics(*THREE))).outcome == "ok"                     # the guard is gone once the sync ended
+
+
+@needs_ics
+def test_with_the_guard_off_the_stored_id_still_keeps_children_consistent(db, monkeypatch):
+    """Fix (a) on its own: the second sync creates the row; the first, resuming with an older copy, updates it and writes its
+    children against the id the upsert returned. One row, its attendee and alarm intact, no foreign-key failure."""
+    second, first = _overlap(db, monkeypatch, feed._sync_once)
+    assert (second.counts.get("created"), first.counts.get("updated")) == (1, 1)
+    (eid_,) = [r[0] for r in db.rows("SELECT id FROM events")]
+    assert db.rows("SELECT event_id FROM event_attendees") == [(eid_,)] and db.rows("SELECT event_id FROM event_alarms") == [(eid_,)]
+    assert db.rows("PRAGMA foreign_key_check") == []
+
+
+@needs_ics
+def test_overlap_negative_control(db, monkeypatch):
+    """The old behaviour (children written against the locally proposed id) fails the batch with a foreign-key error."""
+    real = ca.upsert_row
+
+    async def proposed_id(db_, table, **kw):
+        got, _stored_id = await real(db_, table, **kw)
+        return got, kw["values"]["id"]
+    monkeypatch.setattr(ca, "upsert_row", proposed_id)
+    with pytest.raises(sqlite3.IntegrityError):
+        _overlap(db, monkeypatch, feed._sync_once)
+
+
+@needs_ics
+def test_the_sync_guard_is_released_on_a_timeout_and_on_an_exception(db):
+    a = account()
+
+    async def hang(req):
+        await asyncio.Event().wait()
+    assert run(feed.sync_account(a, hang, run_mode="on", now=NOW, fetch_timeout_s=0.05)).detail == "fetch_timeout"
+    with pytest.raises(TypeError):
+        sync(a, lambda req: b"not a result")
+    assert not feed._syncing and sync(a, Feed(ics(*THREE))).counts["created"] == 3
+
+
 # -- the visibility clamp ---------------------------------------------------------------------------------------------------------
 
 @needs_ics
