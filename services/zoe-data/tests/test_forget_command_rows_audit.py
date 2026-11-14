@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -50,6 +51,16 @@ def _turns():
     ]
 
 
+RETEACH = "my brother rowan just moved to cairns"          # an ordinary re-teach: none of the forget keywords
+
+
+def _transcript(uid):
+    """The member's FULL on-the-record transcript (what iter_member_turns pages through): the pre-fix command row is on it."""
+    return [t for t in _turns() if t["user_id"] == uid] + (
+        [{"id": "t9", "session_id": "sess-a", "at": "2026-11-14T09:00:00+08:00", "user_id": UID, "content": "hi im a librarian"}]
+        if uid == UID else [])
+
+
 def _rows():
     def r(rid, text, user=UID, **md):
         return {"id": rid, "user_id": user, "text": text, "meta": {"user_id": user, "status": "approved", **md}}
@@ -66,7 +77,7 @@ def _rows():
 
 
 def test_audit_finds_the_minted_rows_and_ignores_ordinary_ones():
-    rep = fca.audit(_rows(), _turns())
+    rep = fca.audit(_rows(), _turns(), member_turns=_transcript)
     assert sorted(x["id"] for x in rep["linked"]) == ["minted_excerpt", "minted_turnid"]
     assert {x["how"] for x in rep["linked"]} == {"excerpt_is_command", "turn_id"}
     assert [x["id"] for x in rep["window"]] == ["window"]                 # unproven, listed for review only
@@ -77,7 +88,7 @@ def test_audit_finds_the_minted_rows_and_ignores_ordinary_ones():
 
 def test_control_with_the_detector_blind_nothing_is_found(monkeypatch):
     monkeypatch.setattr(turn_forget, "is_forget_instruction", lambda _t: False)
-    rep = fca.audit(_rows(), _turns())
+    rep = fca.audit(_rows(), _turns(), member_turns=_transcript)
     assert rep["linked"] == [] and rep["window"] == []
 
 
@@ -109,6 +120,7 @@ def test_main_reads_only_prints_counts_and_writes_a_private_id_file(tmp_path, mo
     db = _palace(tmp_path, _rows())
     before = _sha(db)
     monkeypatch.setattr(fca, "load_turns", lambda *_a, **_k: _turns())
+    monkeypatch.setattr(fca, "iter_member_turns", lambda _cmd, uid, since=None, **_k: iter(_transcript(uid)))
     out = tmp_path / "ids.json"
     assert fca.main(["--palace", str(tmp_path), "--ids-out", str(out)]) == 0
     printed = capsys.readouterr().out
@@ -124,10 +136,11 @@ def test_cleanup_dry_run_changes_nothing_and_confirm_needs_the_stop(tmp_path, mo
     db = _palace(tmp_path, _rows())
     before = _sha(db)
     plan = tmp_path / "ids.json"
-    fca.write_ids(str(plan), fca.audit(_rows(), _turns()))
+    fca.write_ids(str(plan), fca.audit(_rows(), _turns(), member_turns=_transcript))
     called = []
     monkeypatch.setattr(fca, "cleanup", lambda *a, **k: called.append(1))
     monkeypatch.setattr(fca, "load_turns", lambda *_a, **_k: _turns())
+    monkeypatch.setattr(fca, "iter_member_turns", lambda _cmd, uid, since=None, **_k: iter(_transcript(uid)))
     assert fca.main(["--palace", str(tmp_path), "--erase-from", str(plan)]) == 0
     assert '"total": 2' in capsys.readouterr().out and not called and _sha(db) == before
     assert fca.main(["--palace", str(tmp_path), "--erase-from", str(plan), "--confirm"]) == 2      # no stop acknowledgement
@@ -168,8 +181,8 @@ def _live_rows(svc):
 
 def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(svc, monkeypatch):  # noqa: F811
     rows, calls = _store(svc, monkeypatch)
-    plan = fca.audit(rows, _turns())
-    todo, refused = fca.plan_cleanup(rows, _turns(), plan)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    todo, refused = fca.plan_cleanup(rows, _turns(), plan, member_turns=_transcript)
     assert todo == {UID: ["minted_excerpt", "minted_turnid"]} and refused == []
     done = asyncio.run(fca.cleanup(todo, svc=svc))
     assert sorted(calls["review"]) == [("minted_excerpt", "archive"), ("minted_turnid", "archive")]
@@ -188,6 +201,7 @@ def _confirm(svc, monkeypatch, tmp_path, plan: dict, *extra):  # noqa: F811
     path.write_text(json.dumps(plan))
     monkeypatch.setattr(fca, "_service_up", lambda: None)
     monkeypatch.setattr(fca, "load_turns", lambda *_a, **_k: _turns())
+    monkeypatch.setattr(fca, "iter_member_turns", lambda _cmd, uid, since=None, **_k: iter(_transcript(uid)))
     monkeypatch.setattr(fca, "load_rows", lambda _p: _live_rows(svc))
     monkeypatch.setattr(memory_service, "MemoryService", lambda **_k: svc)
     return fca.main(["--palace", str(tmp_path), "--erase-from", str(path), "--confirm", "--i-stopped-zoe-data", *extra])
@@ -195,7 +209,7 @@ def _confirm(svc, monkeypatch, tmp_path, plan: dict, *extra):  # noqa: F811
 
 def test_an_edited_plan_cannot_erase_an_ordinary_row(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
     rows, calls = _store(svc, monkeypatch)
-    plan = fca.audit(rows, _turns())
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
     forged = {"linked": plan["linked"] + [{"id": "ordinary", "user_id": UID, "source": "chat_regex", "how": "excerpt_is_command"},
                                           {"id": "other_member", "user_id": UID, "source": "digest", "how": "turn_id"}],
               "window": []}
@@ -215,12 +229,12 @@ def test_control_the_old_trusting_plan_check_would_have_erased_the_forged_row(sv
     forged = {"linked": [{"id": "ordinary", "user_id": UID}]}
     trusted = [x["id"] for x in forged["linked"] if any(r["id"] == x["id"] and r["user_id"] == x["user_id"] for r in rows)]
     assert trusted == ["ordinary"]                                       # ownership + status alone pass it (the reviewed defect)
-    assert fca.plan_cleanup(rows, _turns(), forged) == ({}, ["ordinary"])  # the recomputed link refuses it
+    assert fca.plan_cleanup(rows, _turns(), forged, member_turns=_transcript) == ({}, ["ordinary"])  # the recomputed link refuses it
 
 
 def test_window_rows_are_report_only_even_with_confirm(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
     rows, calls = _store(svc, monkeypatch)
-    plan = fca.audit(rows, _turns())
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
     assert [x["id"] for x in plan["window"]] == ["window"]
     assert _confirm(svc, monkeypatch, tmp_path, plan) == 0
     assert '"window_report_only": 1' in capsys.readouterr().out
@@ -241,6 +255,84 @@ def test_turns_are_read_over_the_whole_history_unless_since_is_given(tmp_path, m
         seen["since"] = since
         return _turns()
     monkeypatch.setattr(fca, "load_turns", turns)
+    monkeypatch.setattr(fca, "iter_member_turns", lambda _cmd, uid, since=None, **_k: iter(_transcript(uid)))
     assert fca.main(["--palace", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert seen["since"] is None and "turns read: 2026-11-14 .. 2026-11-14 (whole history)" in out
+
+
+
+# ── review #2482 PRRT ...aUVK: a re-teach after the forget is never "command-only" ─────────────────────────────────────────────
+def _reteach_rows():
+    rows = _rows()
+    rows.append({"id": "reteach", "user_id": UID, "text": "User's brother Rowan moved to Cairns",
+                 "meta": {"user_id": UID, "status": "approved", "source": "digest", "source_excerpt": "my brother"}})
+    return rows
+
+
+def _with_reteach(uid):
+    extra = [{"id": "t10", "session_id": "sess-c", "at": "2026-11-15T08:00:00+08:00", "user_id": UID, "content": RETEACH}]
+    return _transcript(uid) + (extra if uid == UID else [])
+
+
+def test_a_row_also_resting_on_an_ordinary_reteach_turn_is_kept():
+    rep = fca.audit(_reteach_rows(), _turns(), member_turns=_with_reteach)
+    assert "reteach" not in {x["id"] for x in rep["linked"]} and rep["counts"]["not_command_only"] == 1
+    assert sorted(x["id"] for x in rep["linked"]) == ["minted_excerpt", "minted_turnid"]        # the leak is still found
+    plan = {"linked": [{"id": "reteach", "user_id": UID}]}
+    assert fca.plan_cleanup(_reteach_rows(), _turns(), plan, member_turns=_with_reteach) == ({}, ["reteach"])   # same rule
+
+
+def test_control_classifying_from_the_keyword_prefiltered_turns_erases_the_reteach():
+    prefiltered = lambda uid: [t for t in _with_reteach(uid) if re.search(fca._PREFILTER, t["content"])]   # noqa: E731
+    rep = fca.audit(_reteach_rows(), _turns(), member_turns=prefiltered)
+    assert "reteach" in {x["id"] for x in rep["linked"]}                    # the reviewed data loss, reproduced
+
+
+def test_an_unreadable_transcript_makes_every_candidate_unclear_and_nothing_erasable():
+    def down(_uid):
+        raise OSError("db down")
+        yield  # pragma: no cover
+    rep = fca.audit(_rows(), _turns(), member_turns=down)
+    assert rep["linked"] == [] and rep["counts"]["unclear"] == 2
+    assert fca.audit(_rows(), _turns())["linked"] == []                     # no transcript reader at all: unclear too
+    plan = fca.audit(_rows(), _turns(), member_turns=_transcript)
+    assert fca.plan_cleanup(_rows(), _turns(), plan, member_turns=down)[0] == {}
+
+
+def test_the_member_turn_read_is_every_on_record_turn_paged_with_no_keyword_filter():
+    import memory_provenance
+
+    q = fca.member_turns_sql(UID, None, fca.MEMBER_TURN_PAGE)
+    assert memory_provenance.OFF_RECORD_JSON_MARK in q and "~*" not in q and f"limit {fca.MEMBER_TURN_PAGE}" in q
+    assert "> ('2026-11-14 08:00:00+00', 't1')" in fca.member_turns_sql(UID, ("2026-11-14 08:00:00+00", "t1"), 10)
+    assert "o''brien" in fca.member_turns_sql("o'brien", None, 10)            # quoted, never raw
+    pages = []
+
+    def fake_run(argv, **_k):
+        n = len(pages)
+        pages.append(argv[-1])
+        batch = [{"id": f"m{n}-{i}", "session_id": "s", "at": f"2026-11-1{n}T00:00:0{i}", "content": "x"} for i in range(2 if n < 2 else 1)]
+        return type("R", (), {"stdout": json.dumps(batch)})()
+    import subprocess
+    orig = subprocess.run
+    subprocess.run = fake_run
+    try:
+        got = list(fca.iter_member_turns("psql", UID, page=2))
+    finally:
+        subprocess.run = orig
+    assert len(got) == 5 and len(pages) == 3 and "('2026-11-10T00:00:01', 'm0-1')" in pages[1]
+
+
+# ── review #2482 PRRT ...aUVS: an owner- or operator-authority row is the owner's to forget ─────────────────────────────────────
+@pytest.mark.parametrize("cls", ["user_stated", "user_confirmed", "operator"])
+def test_an_owner_authority_row_is_listed_as_owner_decision_and_never_erased(cls, svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    rows, calls = _store(svc, monkeypatch)
+    svc._col.rows["minted_turnid"][1]["authority_class"] = cls
+    rows = _live_rows(svc)
+    rep = fca.audit(rows, _turns(), member_turns=_transcript)
+    assert [x["id"] for x in rep["owner_decision"]] == ["minted_turnid"] and [x["id"] for x in rep["linked"]] == ["minted_excerpt"]
+    forged = {"linked": rep["linked"] + rep["owner_decision"], "owner_decision": rep["owner_decision"], "window": []}
+    assert _confirm(svc, monkeypatch, tmp_path, forged) == 0
+    assert '"owner_decision_report_only": 1' in capsys.readouterr().out
+    assert "minted_turnid" in svc._col.rows and "minted_excerpt" not in svc._col.rows

@@ -117,7 +117,9 @@ reader leaves it out: idle consolidation, the digest loaders, the fast-path cont
 `memory_digest._skip_forgotten_turns` skip one saved before the fix (`services/zoe-data/tests/test_qa10_forget_command_leak.py`).
 Rows already minted that way are found by `scripts/maintenance/forget_command_rows_audit.py` (read-only, counts per member index
 and writer, row ids only to a 0600 file; a row is cleaned only when its own provenance - `source_excerpt` or `user_turn_id` - links
-it to a forget-command turn; unlinked idle / digest rows in the same session are reported as unproven "window" rows, never erased; turns are read over the whole history):
+it to a forget-command turn AND every source turn in the member's full on-the-record transcript is a forget command (a re-teach keeps it;
+an unreadable transcript makes it `unclear`; a row the member's own word or an operator stands behind is an `owner decision`; both are
+reported, never erased); unlinked idle / digest rows in the same session are reported as unproven "window" rows, never erased; turns are read over the whole history):
 `python3 scripts/maintenance/forget_command_rows_audit.py --ids-out ~/.zoe/forget-command-rows.json`, then, with zoe-data stopped,
 `~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/forget_command_rows_audit.py --erase-from ~/.zoe/forget-command-rows.json`
 (dry run) and the same with `--confirm --i-stopped-zoe-data`, which re-verifies every planned row from the palace and the turns (the plan file is a hint: an unlinked id is refused and left alone) and forgets the verified ones through the owner-forget path

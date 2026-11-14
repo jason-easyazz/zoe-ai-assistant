@@ -6,10 +6,16 @@ Why (QA round 10a, 2026-11-14; record docs/knowledge/forget-reach.md "Forget com
 idle consolidation and the nightly digest re-read the command itself and filed a row ABOUT the forgotten topic ("the user told
 Zoe about their brother"). The fix (``turn_forget.is_forget_instruction``) stops new ones; this finds the rows minted before it.
 
-A row is LINKED to a forget command (and only linked rows are ever cleaned) when its own provenance says so:
+A row is a CANDIDATE when its own provenance points at a forget command:
   excerpt_is_command  the row's ``source_excerpt`` (the user's words it rests on) is itself a forget instruction
-  excerpt_in_command  the excerpt is part of one of the member's forget-command turns and of none of their other turns read
+  excerpt_in_command  the excerpt is part of one of the member's forget-command turns
   turn_id             the row's ``user_turn_id`` is the content id (``memory_authority.turn_evidence``) of a forget-command turn
+and it is LINKED (the only kind ever erased) only when EVERY source turn is a forget command: the member's FULL on-the-record
+transcript is read (paged, ``MEMBER_TURN_PAGE`` turns per SELECT, only for members with a command) and any ordinary turn holding
+the excerpt or carrying the turn id keeps the row (``not_command_only``: a fact re-taught after the forget). A transcript that
+cannot be read makes every candidate ``unclear``. A row the member's own word or an operator stands behind (rank >=
+``memory_authority.USER_RANK``: user_stated / user_confirmed / curated / operator) is an OWNER DECISION: listed, NEVER erased by
+this script (the owner forgets it by voice or in Memories). Unclear and owner-decision rows are counts only, never erased.
 The detector is the fix's own (``turn_forget.is_forget_instruction``: ``forget_topic.parse`` + ``turn_forget.is_forget_turn`` +
 the entity-forget pattern), so "I always forget my keys" is never a command.
 A row with NO linkage (no excerpt, no turn id: idle consolidation / digest rows often have neither) cannot be proven: the
@@ -27,7 +33,8 @@ Safety contract (pinned by services/zoe-data/tests/test_forget_command_rows_audi
     ``MemoryService.erase_rows`` (content-free intent row, the rows and their audit trail, the physical residue erase), for rows
     The plan file is a HINT, never an authority: before anything is erased the link is RECOMPUTED from the palace and the
     transcripts by the same three rules, and a planned row not linked NOW to a forget command of that same owner is refused
-    (counted; its id only to ``--refused-out``, 0600) and left untouched. Window rows are never erased. Never a raw delete.
+    (counted; its id only to ``--refused-out``, 0600) and left untouched. Window, unclear and OWNER-DECISION rows are never erased
+    (an owner- or operator-authority row is the owner's to forget, never a maintenance script's). Never a raw delete.
 
 Usage (operator, on the box):
   python3 scripts/maintenance/forget_command_rows_audit.py --ids-out ~/.zoe/forget-command-rows.json
@@ -150,39 +157,90 @@ def _ts(value: Any) -> Optional[float]:
         return None
 
 
-def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 48.0) -> dict[str, Any]:
-    """Pure: ``{linked, window, counts}``. ``linked`` / ``window`` are ``{id, user_id, source, how}`` (never text)."""
+#: one page of a member's on-the-record turns (keyset-paged SELECT): RAM holds one page plus the candidate rows, never a history
+MEMBER_TURN_PAGE = 500
+
+
+def member_turns_sql(user_id: str, cursor: Optional[tuple[str, str]], limit: int, since: Optional[str] = None) -> str:
+    """One page of ONE member's ON-THE-RECORD user turns (every turn, no keyword prefilter: a re-teach carries none), oldest first,
+    strictly after ``cursor`` = ``(created_at, id)``. Owner = ``user_filters.message_owner_expr`` (the readers' own rule)."""
+    from memory_provenance import off_record_sql
+    from user_filters import message_owner_expr
+
+    lit = lambda v: "'" + str(v).replace("'", "''") + "'"   # noqa: E731
+    when = f"and cm.created_at::timestamptz >= {lit(_dt.date.fromisoformat(since).isoformat())}::date " if since else ""
+    after = f"and (cm.created_at::text, cm.id) > ({lit(cursor[0])}, {lit(cursor[1])}) " if cursor else ""
+    return ("select coalesce(json_agg(t), '[]') from (select cm.id, cm.session_id, cm.created_at::text as at, cm.content "
+            "from chat_messages cm join chat_sessions cs on cm.session_id = cs.id "
+            f"where cm.role = 'user' and {message_owner_expr()} = {lit(user_id)} and {off_record_sql('cm')} {when}{after}"
+            f"order by cm.created_at::text, cm.id limit {int(limit)}) t")
+
+
+def iter_member_turns(psql_cmd: str, user_id: str, since: Optional[str] = None, page: int = MEMBER_TURN_PAGE):
+    """Every on-the-record user turn of ``user_id``, one ``page``-sized SELECT at a time (never printed)."""
+    cursor = None
+    while True:
+        out = subprocess.run([*shlex.split(psql_cmd), "-Atc", member_turns_sql(user_id, cursor, page, since)],
+                             capture_output=True, text=True, timeout=120, check=True).stdout
+        batch = json.loads(out.strip() or "[]")
+        for t in batch:
+            yield {"id": str(t.get("id")), "session_id": str(t.get("session_id") or ""), "at": str(t.get("at") or ""),
+                   "content": str(t.get("content") or "")}
+        if len(batch) < page:
+            return
+        cursor = (str(batch[-1].get("at") or ""), str(batch[-1].get("id")))
+
+
+def _owner_decision(meta: dict, text: str) -> bool:
+    """A row at or above the rank of the person speaking directly (user_stated / user_confirmed / curated / operator,
+    ``memory_authority.USER_RANK``) is the OWNER's to forget, never this script's: listed, never erased (an authority inversion
+    otherwise). Unreadable authority = owner decision."""
+    try:
+        import memory_authority
+
+        return memory_authority.row_rank(meta, text) >= memory_authority.USER_RANK
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 48.0, member_turns=None) -> dict[str, Any]:
+    """``{linked, owner_decision, unclear, window, counts}`` (entries ``{id, user_id, source, how}``, never text).
+
+    ``turns`` are the candidate turns (keyword-prefiltered) that FIND the forget commands. A row is a candidate when its provenance
+    points at one (its excerpt is a command or part of one, or its ``user_turn_id`` is a command's content id). It is LINKED (the
+    only erasable kind) ONLY when EVERY source turn is a forget command: ``member_turns(uid)`` yields the member's FULL on-the-record
+    transcript, and any ordinary turn holding the excerpt / carrying the turn id makes the row ``not_command_only`` (kept: e.g. a
+    re-teach after the forget). Without ``member_turns``, or when it cannot be read, every candidate is ``unclear`` (never erased).
+    A linked row the member's own word or an operator stands behind goes to ``owner_decision`` (never erased). Window rows: the
+    unproven same-session match, report-only."""
     import turn_forget
 
+    rows = list(rows)
     commands: dict[str, list[dict]] = collections.defaultdict(list)
-    others: dict[str, list[str]] = collections.defaultdict(list)
     for t in turns:
         uid = t.get("user_id") or ""
-        if not uid:
-            continue
-        if turn_forget.is_forget_instruction(t.get("content") or ""):
+        if uid and turn_forget.is_forget_instruction(t.get("content") or ""):
             commands[uid].append({**t, "norm": _norm(t["content"]), "cid": turn_content_id(uid, t["content"]), "ts": _ts(t.get("at"))})
-        else:
-            others[uid].append(_norm(t.get("content") or ""))
-    linked, window = [], []
+    cands: dict[str, list[dict]] = collections.defaultdict(list)
+    window = []
     for r in rows:
         meta, uid = r.get("meta") or {}, r.get("user_id") or ""
         if str(meta.get("status") or "approved").lower() in GONE or not commands.get(uid):
             continue
         src = str(meta.get("source") or meta.get("added_by") or "-")
         excerpt = _norm(meta.get("source_excerpt") or "")
+        tid = str(meta.get("user_turn_id") or "")
         how = ""
         if excerpt and turn_forget.is_forget_instruction(excerpt):
             how = "excerpt_is_command"
-        elif len(excerpt) >= 8 and any(excerpt in c["norm"] for c in commands[uid]) \
-                and not any(excerpt in o for o in others.get(uid, ())):
+        elif len(excerpt) >= 8 and any(excerpt in c["norm"] for c in commands[uid]):
             how = "excerpt_in_command"
-        elif str(meta.get("user_turn_id") or "") in {c["cid"] for c in commands[uid]}:
+        elif tid and tid in {c["cid"] for c in commands[uid]}:
             how = "turn_id"
         if how:
-            linked.append({"id": r["id"], "user_id": uid, "source": src, "how": how})
+            cands[uid].append({"row": r, "id": r["id"], "user_id": uid, "source": src, "how": how, "excerpt": excerpt, "tid": tid})
             continue
-        if excerpt or str(meta.get("user_turn_id") or "").startswith("ut-") or src not in WINDOW_SOURCES:
+        if excerpt or tid.startswith("ut-") or src not in WINDOW_SOURCES:
             continue        # it rests on some other turn of the member's: not this audit's
         added = _ts(meta.get("added_ts") if meta.get("added_ts") is not None else meta.get("added_at"))
         sess = str(meta.get("session_id") or "")
@@ -191,16 +249,44 @@ def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 
                     and 0 <= added - c["ts"] <= window_hours * 3600:
                 window.append({"id": r["id"], "user_id": uid, "source": src, "how": "session_window"})
                 break
-    index = {u: f"member-{i + 1}" for i, u in enumerate(sorted({x["user_id"] for x in linked + window}))}
+    linked, owner, unclear, kept = [], [], [], []
+    for uid, items in cands.items():
+        ordinary: set = set()
+        readable = member_turns is not None
+        if readable:
+            try:
+                for t in member_turns(uid):
+                    text = t.get("content") or ""
+                    if turn_forget.is_forget_instruction(text):
+                        continue
+                    nt, cid = _norm(text), turn_content_id(uid, text)
+                    for x in items:
+                        if (x["excerpt"] and x["excerpt"] in nt) or (x["tid"] and x["tid"] == cid):
+                            ordinary.add(x["id"])
+            except Exception:  # noqa: BLE001 - a transcript that cannot be read proves nothing
+                readable = False
+        for x in items:
+            entry = {k: x[k] for k in ("id", "user_id", "source", "how")}
+            if not readable:
+                unclear.append(entry)
+            elif x["id"] in ordinary:
+                kept.append(entry)
+            elif _owner_decision(x["row"].get("meta") or {}, x["row"].get("text") or ""):
+                owner.append(entry)
+            else:
+                linked.append(entry)
+    index = {u: f"member-{i + 1}" for i, u in enumerate(sorted({x["user_id"] for x in linked + owner + unclear + kept + window}))}
     per_member: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
-    for bucket, items in (("linked", linked), ("window", window)):
+    for bucket, items in (("linked", linked), ("owner_decision", owner), ("unclear", unclear), ("not_command_only", kept),
+                          ("window", window)):
         for x in items:
             per_member[f"{index[x['user_id']]} ({member_key(x['user_id'])})"][f"{bucket}.{x['source']}"] += 1
     return {
-        "linked": linked, "window": window,
+        "linked": linked, "owner_decision": owner, "unclear": unclear, "window": window,
         "counts": {
             "command_turns": sum(len(v) for v in commands.values()),
-            "linked": len(linked), "window": len(window),
+            "linked": len(linked), "owner_decision": len(owner), "unclear": len(unclear), "not_command_only": len(kept),
+            "window": len(window),
             "linked_by_how": dict(sorted(collections.Counter(x["how"] for x in linked).items())),
             "by_member": {k: dict(sorted(v.items())) for k, v in sorted(per_member.items())},
         },
@@ -223,15 +309,17 @@ def _write_private(path: str, obj: Any) -> None:
 
 
 def write_ids(path: str, report: dict) -> None:
-    _write_private(path, {"linked": report["linked"], "window": report["window"]})
+    _write_private(path, {k: report[k] for k in ("linked", "owner_decision", "unclear", "window")})
 
 
-def plan_cleanup(rows: list[dict], turns: list[dict], plan: dict, *,
-                 window_hours: float = 48.0) -> tuple[dict[str, list[str]], list[str]]:
+def plan_cleanup(rows: list[dict], turns: list[dict], plan: dict, *, window_hours: float = 48.0,
+                 member_turns=None) -> tuple[dict[str, list[str]], list[str]]:
     """``({owner: [ids]}, refused_ids)``. The plan is a HINT: a planned ``linked`` row is kept only when the audit RECOMPUTED here from
     ``rows`` and ``turns`` links it NOW to a forget command of the SAME owner the plan names (which also means it still exists and
-    is not gone); every other planned id - an edited plan, a row that changed - is refused. ``window`` entries are never erased. Pure."""
-    verified = {(x["id"], x["user_id"]) for x in audit(rows, turns, window_hours=window_hours)["linked"]}
+    is not gone), by the SAME rule as the audit (every source turn a forget command, read from ``member_turns``; not an owner
+    decision): the erase path can never be more permissive than the report. Every other planned id - an edited plan, a row that
+    changed, an owner-decision / unclear / window entry - is refused. Pure apart from ``member_turns``."""
+    verified = {(x["id"], x["user_id"]) for x in audit(rows, turns, window_hours=window_hours, member_turns=member_turns)["linked"]}
     out: dict[str, list[str]] = collections.defaultdict(list)
     refused: list[str] = []
     for x in list(plan.get("linked") or []):
@@ -306,18 +394,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
             print(f"refused: could not read the plan, the palace or the turns ({type(exc).__name__})", file=sys.stderr)
             return 2
-        todo, refused = plan_cleanup(rows, turns, plan, window_hours=args.window_hours)
+        mt = lambda uid: iter_member_turns(args.psql_cmd, uid, args.since)   # noqa: E731
+        todo, refused = plan_cleanup(rows, turns, plan, window_hours=args.window_hours, member_turns=mt)
         if refused and args.refused_out:
             _write_private(args.refused_out, {"refused": refused})
         print(json.dumps({"turns_read": turn_dates(turns), "before": _member_counts(todo), "total": sum(len(v) for v in todo.values()),
-                          "refused_not_linked_now": len(refused), "window_report_only": len(plan.get("window") or [])}))
+                          "refused_not_linked_now": len(refused), "window_report_only": len(plan.get("window") or []),
+                          "owner_decision_report_only": len(plan.get("owner_decision") or []),
+                          "unclear_report_only": len(plan.get("unclear") or [])}))
         if not args.confirm:
             print("DRY RUN: nothing was changed. Add --confirm --i-stopped-zoe-data (zoe-data stopped) to forget the verified rows.")
             return 0
         from memory_service import MemoryService
 
         done = asyncio.run(cleanup(todo, svc=MemoryService(data_dir=str(Path(args.palace).expanduser()))))
-        left, _ = plan_cleanup(load_rows(args.palace), turns, plan, window_hours=args.window_hours)
+        left, _ = plan_cleanup(load_rows(args.palace), turns, plan, window_hours=args.window_hours, member_turns=mt)
         print(json.dumps({"done": done, "after": _member_counts(left), "remaining": sum(len(v) for v in left.values())}))
         return 5 if left else 0
     try:
@@ -326,7 +417,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
         print(f"refused: could not read the palace or the turns ({type(exc).__name__})", file=sys.stderr)
         return 2
-    report = audit(rows, turns, window_hours=args.window_hours)
+    report = audit(rows, turns, window_hours=args.window_hours,
+                   member_turns=lambda uid: iter_member_turns(args.psql_cmd, uid, args.since))
     if args.ids_out:
         write_ids(args.ids_out, report)
     c = report["counts"]
@@ -335,8 +427,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     else:
         d = turn_dates(turns)
         print(f"turns read: {d['from']} .. {d['to']}{' (since ' + args.since + ')' if args.since else ' (whole history)'}")
-        print(f"forget-command turns read: {c['command_turns']}; rows minted from one: linked={c['linked']} "
-              f"{c['linked_by_how']} window(unproven)={c['window']}")
+        print(f"forget-command turns read: {c['command_turns']}; rows minted only from one: linked={c['linked']} "
+              f"{c['linked_by_how']}; owner decision (never erased)={c['owner_decision']}; unclear (never erased)={c['unclear']}; "
+              f"also from an ordinary turn (kept)={c['not_command_only']}; window (unproven, report-only)={c['window']}")
         for m, counts in c["by_member"].items():
             print(f"  {m}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
         if not args.ids_out:
