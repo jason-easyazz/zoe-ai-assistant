@@ -904,6 +904,111 @@ def reset_state() -> None:
     _REMEMBERED.clear()
 
 
+# -- forgotten means forever: the in-process correction memory goes with every forget ------------------------------------------------
+# ``_REMEMBERED`` holds the corrected subject's name and both values for ``REMEMBER_S``. A forget must not leave them behind: every
+# forget path calls one of these (the member erase, "forget <name>", a topic forget, "forget that", the physical row erase). They
+# are in-process and never raise; over-forgetting a correction is the safe error (the cost is one possible stale near-duplicate).
+
+def _entry_text(c: "Correction") -> str:
+    return " ".join(str(x) for x in (c.subject, c.new, c.old) if x)
+
+
+def _keep_only(uid: str, keep: list) -> None:
+    if keep:
+        _REMEMBERED[uid] = keep
+    else:
+        _REMEMBERED.pop(uid, None)
+
+
+def _uid(user_id) -> str:
+    """The member key, from anything: ``""`` when it cannot be read (then nothing is identifiable and nothing is dropped)."""
+    try:
+        return str("" if user_id is None else user_id).strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _drop_all(uid: str) -> int:
+    try:
+        return len(_REMEMBERED.pop(uid, None) or ()) if uid else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def forget_user(user_id) -> int:
+    """The member erase: every remembered correction of the member. Returns the entries dropped. Never raises."""
+    return _drop_all(_uid(user_id))
+
+
+def forget_matching(user_id, matches) -> int:
+    """Drop the member's remembered corrections whose subject or values ``matches(text)`` - a callable, or anything with ``.search``
+    (a compiled name pattern, the forget ledger's ``LedgerPattern``). An entry the matcher cannot judge is dropped, and a matcher
+    that cannot be used at all drops every entry of the member (over-forget). Returns the entries dropped. Never raises."""
+    uid = _uid(user_id)
+    try:
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
+        if not entries:
+            return 0
+        test = matches.search if hasattr(matches, "search") else matches
+
+        def doomed(c) -> bool:
+            try:
+                return bool(test(_entry_text(c)))
+            except Exception:  # noqa: BLE001
+                return True
+        keep = [(t, c) for t, c in entries if not doomed(c)]
+        _keep_only(uid, keep)
+        return len(entries) - len(keep)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
+
+
+def forget_subject(user_id, name) -> int:
+    """"Forget <name>": every remembered correction naming it (the forget ledger's whole-word, separator-blind name pattern). A
+    name that cannot be read drops every entry of the member (over-forget). Never raises."""
+    uid = _uid(user_id)
+    try:
+        if name is None:
+            return 0
+        text = str(name).strip()
+        if not text:
+            return 0
+        try:
+            from memory_forgotten import name_pattern
+
+            rx = name_pattern(text)
+        except Exception:  # noqa: BLE001
+            rx = re.compile(rf"(?<![A-Za-z0-9]){re.escape(text)}(?![A-Za-z0-9])", re.IGNORECASE)
+        return forget_matching(uid, rx)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
+
+
+def forget_in_texts(user_id, texts) -> int:
+    """A forget of specific words ("forget that"'s turn, the rows a physical erase removes): every remembered correction whose
+    SUBJECT occurs as a whole word in any of ``texts``. Texts that cannot be read drop every entry of the member (over-forget).
+    Never raises."""
+    uid = _uid(user_id)
+    try:
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
+        if not entries:
+            return 0
+        if isinstance(texts, (str, bytes)):
+            texts = [texts]
+        blob = " ".join(str(t if t is not None else "") for t in (texts or ())).lower().replace("\u2019", "'")
+        if not blob.strip():
+            return 0
+
+        def named(c) -> bool:
+            s = _subject_key(c.subject)
+            return bool(s) and re.search(rf"(?<![a-z0-9]){re.escape(s)}(?![a-z0-9])", blob) is not None
+        keep = [(t, c) for t, c in entries if not named(c)]
+        _keep_only(uid, keep)
+        return len(entries) - len(keep)
+    except Exception:  # noqa: BLE001
+        return _drop_all(uid)
+
+
 async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
     """How many DISTINCT people the rows a correction would rewrite belong to, from data only. (1) The rows' own linkage: a
     person id (``entity_id`` of an ``entity_type`` person row, never a pending ``slug:``) - two ids are two people. (2) Rows with
