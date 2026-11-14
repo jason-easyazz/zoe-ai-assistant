@@ -16,7 +16,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -163,6 +163,7 @@ class Feed:
         self.calls = 0
         self.honour_etag = True
         self.before = None                    # an async hook run inside the fetch (the race tests)
+        self.etags = []                       # the validator each request carried
 
     @property
     def etag(self):
@@ -171,6 +172,7 @@ class Feed:
 
     async def __call__(self, req: feed.FetchRequest) -> feed.FetchResult:
         self.calls += 1
+        self.etags.append(req.etag)
         if self.before:
             await self.before()
         if self.status != "ok":
@@ -263,6 +265,35 @@ def test_this_stage_leaves_an_absent_event_untouched_and_counts_it(db):
     f.body = ics()
     r = sync(a, f)
     assert (r.outcome, r.counts.get("absent")) == ("ok", 3) and db.one("SELECT COUNT(*) FROM events") == 3
+
+
+@needs_ics
+def test_a_byte_identical_feed_is_re_read_on_a_new_day_so_the_window_rolls(db):
+    far = (date(2026, 12, 1) + timedelta(days=401)).strftime("%Y%m%d")
+    a = account()
+    f = Feed(ics(*THREE, vevent("far@example.test", "Far ahead", f"{far}T010000Z", f"{far}T020000Z")))
+    r = sync(a, f)
+    assert (r.counts["created"], r.skipped) == (3, {"out_of_window": 1})          # day N: +401 d is past the horizon
+    assert sync(a, f).counts.get("unchanged") == 3 and f.etags[-1] is not None    # same day: the validator goes, 304
+    f.honour_etag = False
+    assert "seen" not in sync(a, f).counts                                         # same day, same body: no parse
+    f.honour_etag = True
+    later = lambda days: run(feed.sync_account(a, f, run_mode="on", now=NOW + timedelta(days=days)))
+    r = later(2)
+    assert f.etags[-1] is None and r.counts.get("created") == 1 and "Far ahead" in events(db)   # a new day: no validator, re-read
+    assert later(2).counts.get("unchanged") == 4 and f.etags[-1] is not None      # and that day skips again
+
+
+def test_a_shadow_run_never_touches_the_account(db):
+    a = account()
+    row = lambda: db.rows("SELECT * FROM connected_accounts WHERE id = ?", (a,))
+    before = row()
+    for fetcher in ([Feed(ics(*THREE))] if importlib.util.find_spec("icalendar") else []) + [Feed(status="unauthorized")]:
+        sync(a, fetcher, mode="shadow")
+        assert row() == before                                                    # success and failure: byte-identical
+    assert db.one("SELECT COUNT(*) FROM sync_runs WHERE outcome <> 'running'") >= 1
+    sync(a, Feed(status="unauthorized"))                                           # control: an enforcing run updates it
+    assert row() != before and db.one("SELECT status FROM connected_accounts") == "error"
 
 
 # -- the visibility clamp ---------------------------------------------------------------------------------------------------------

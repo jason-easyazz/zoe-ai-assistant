@@ -441,7 +441,7 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
             rep.backoff_until = _iso(now + timedelta(seconds=backoff_seconds(max(1, failures), retry_after)))
         done = await ca.finish_run(run, outcome=outcome, counts=rep.counts, cursor_after=cursor.get("sha"),
                                    error_class=error_class, error_code=error_code, backoff_until=rep.backoff_until,
-                                   n_bytes=rep.n_bytes, duration_ms=rep.duration_ms)
+                                   n_bytes=rep.n_bytes, duration_ms=rep.duration_ms, update_account=writes)
         if done:
             rep.outcome = outcome
         elif erase_gate.generation(uid) != run.scheduled_at:
@@ -471,7 +471,11 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
     if account_id in _outstanding:                # its last fetch has not returned: never stack another on a stuck call
         rep.detail = "fetch_outstanding"
         return await failed("network", None)
-    req = FetchRequest(account_id, cursor.get("etag"), cursor.get("last_modified"), cap)
+    # the stored digest is keyed by the window's first day: on a new day the validators are NOT sent, so a byte-identical feed is
+    # fetched and re-parsed as its window rolls forward (a 304 has no body to re-parse); the same day still skips
+    w0, w1 = _window(now)
+    same_window = cursor.get("window") == w0.isoformat()
+    req = FetchRequest(account_id, *((cursor.get("etag"), cursor.get("last_modified")) if same_window else (None, None)), cap)
     bound = min(FETCH_TIMEOUT_S, fetch_timeout_s) if fetch_timeout_s else FETCH_TIMEOUT_S
     try:
         res = await _fetch(fetcher, req, bound)
@@ -511,7 +515,7 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
     if not _looks_like_calendar(body, res.content_type):
         return await failed("provider", "not_calendar")
     sha = hashlib.sha256(body).hexdigest()
-    if cursor.get("sha") == sha:
+    if cursor.get("sha") == sha and same_window:
         return await unchanged()
 
     policy = cal_row["policy"] if cal_row else DEFAULT_CALENDAR_VISIBILITY
@@ -524,7 +528,6 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
         logger.warning("CALENDAR_FEED parse failed account=%s (%s)", account_id, type(exc).__name__)
         return await failed("provider", "parse_failed")
 
-    w0, w1 = _window(now)
     items = plan(parsed, policy=policy, w0=w0, w1=w1, report=rep)
     # this stage never deletes: a stored key the feed no longer carries stays as it is, and is counted
     rep.counts["absent"] = sum(1 for k in stored if k not in items)
@@ -540,7 +543,8 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
     try:
         cal_id = cal_row["id"] if cal_row else await _gated(run, lambda db, _w: _ensure_calendar(db, uid, account_id, now))
         await _write_items(run, uid, cal_id, items, stored, now, rep)
-        new_cursor = {"v": PARSER_VERSION, "etag": res.etag, "last_modified": res.last_modified, "sha": sha}
+        new_cursor = {"v": PARSER_VERSION, "etag": res.etag, "last_modified": res.last_modified, "sha": sha,
+                      "window": w0.isoformat()}
 
         async def mark(db, _w):
             await _mark_success(db, cal_id, new_cursor, now, "ok")

@@ -170,12 +170,13 @@ async def start_run(account_id: str, user_id: str, *, scope: str = "", cursor_be
 
 async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, int]] = None, cursor_after: Optional[str] = None,
                      error_class: Optional[str] = None, backoff_until: Optional[str] = None, error_code: Any = _UNSET,
-                     n_bytes: Optional[int] = None, duration_ms: Optional[int] = None) -> bool:
+                     n_bytes: Optional[int] = None, duration_ms: Optional[int] = None, update_account: bool = True) -> bool:
     """Close a run. True when recorded as ``outcome``; False when the member was erased since (nothing written) or the account was
     disconnected since (the run is recorded ``fenced``, its cursor dropped, the account untouched).
 
     The 0079 extras are written only when given: a ``COUNTS_0079`` key in ``counts``, ``n_bytes`` / ``duration_ms``, and
-    ``error_code`` (a code from ``ERROR_CODES`` or None; passing it also sets / clears ``connected_accounts.last_error_code``)."""
+    ``error_code`` (a code from ``ERROR_CODES`` or None; passing it also sets / clears ``connected_accounts.last_error_code``).
+    ``update_account=False`` (a shadow run) records the run only: the account row is never touched, the fence still applies."""
     if outcome not in OUTCOMES or (error_class is not None and error_class not in ERROR_CLASSES):
         raise ValueError("connected_accounts.finish_run: unknown outcome / error class")
     if error_code is not _UNSET and error_code is not None and error_code not in ERROR_CODES:
@@ -197,7 +198,9 @@ async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, in
                 # the check and the write are ONE step: the row is locked by the check (PostgreSQL), and the write itself only lands
                 # on the generation the run started under - zero rows means a disconnect got there first, and the run is fenced
                 moved = 0
-                if await still_current(db, run.account_id, run.generation):
+                if not update_account and await still_current(db, run.account_id, run.generation):
+                    moved = 1                    # a shadow run: the account row is left exactly as it is
+                elif update_account and await still_current(db, run.account_id, run.generation):
                     extra_sql = "".join(f", {k} = ?" for k in acct_extra)
                     cur = await db.execute(
                         f"UPDATE connected_accounts SET status = ?, last_sync_at = ?, last_error_class = ?, updated_at = ?{extra_sql} "
