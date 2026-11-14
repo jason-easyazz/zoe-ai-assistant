@@ -244,27 +244,41 @@ def _verdict() -> Optional[bool]:
 
 
 async def block_for(user_id: str, session_id: str, *, now: Optional[float] = None) -> str:
-    """The bridge for this brain turn, or ''. Never raises. '' before any work when the flag is off."""
+    """The bridge for this brain turn, or ''. Never raises. '' before any work when the flag is off. = ``prepare_block`` +
+    its commit at once."""
+    draft = await prepare_block(user_id, session_id, now=now)
+    await draft.commit()
+    return draft.block
+
+
+async def prepare_block(user_id: str, session_id: str, *, now: Optional[float] = None):
+    """``block_for`` as a ``turn_draft.TurnDraft``: ``.block`` is computed with NO state change; the session's brain-turn
+    count (``_YOUNG``) moves only on ``commit()``, which the brain turn calls when it reaches the POST."""
+    from turn_draft import TurnDraft
+
+    draft = TurnDraft()
     if not enabled():
-        return ""
+        return draft
     try:
         uid = _real(user_id)
         if not uid or not session_id or session_id not in _PRED:
-            return ""
+            return draft
         n = _YOUNG.get(session_id, 0) + 1
-        _bounded(_YOUNG, session_id, n)
+        draft.on_commit(lambda: _bounded(_YOUNG, session_id, n))
         if n > _YOUNG_TURNS:
-            return ""
+            return draft
         if _verdict() is not True:          # voice is a password: an unconfirmed voice gets nobody's bridge
-            return ""
+            return draft
         picked = select(uid, session_id, now=now)
         if not picked:
-            return ""
+            return draft
         kept = await _unmuted(uid, await _unforgotten(uid, picked))
         block = render(kept, now=now)
         if block:
             logger.info("VOICE_SESSION_BRIDGE session=%s exchanges=%d chars=%d", session_id[:48], len(kept), len(block))
-        return block
+        draft.block = block
+        return draft
     except Exception as exc:  # noqa: BLE001 - fail closed
         logger.debug("voice session bridge withheld (%s)", type(exc).__name__)
-        return ""
+        draft.block = ""
+        return draft

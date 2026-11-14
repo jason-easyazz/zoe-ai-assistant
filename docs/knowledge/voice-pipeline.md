@@ -271,8 +271,11 @@ and the register line it feeds stay in sequence where they ran) - as tasks
 right after the verify-on-challenge return, beside the sequential precedence chain (recall > continuity > hop > offer /
 list share > risk > every turn, whose blocks consume state only when they win). Same bytes in the same order (golden
 corpus test); a turn closed before its POST cancels and then awaits what it started, and every prefetch's outcome is
-retrieved. Synthetic plain turn: `FLUE_PREPOST total_ms` 252 ->
-92 (`tests/test_flue_prepost_concurrent.py`); the live gain is what `FLUE_PREPOST` shows before and after.
+retrieved. The bridge and the conversation notes change state when built (turn counts; the notes' 6 h cooldown and
+persisted served count): they are prefetched as a pure read (`prepare_block`, a `turn_draft.TurnDraft`) and their state
+change is committed only when the turn reaches the POST, so an aborted turn burns nothing. Synthetic plain turn:
+`FLUE_PREPOST total_ms` 253 -> 117 (`tests/test_flue_prepost_concurrent.py`, measured on the final tree); the live gain
+is what `FLUE_PREPOST` shows before and after.
 
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms

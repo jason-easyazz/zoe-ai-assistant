@@ -1954,11 +1954,28 @@ class _Prefetch:
     """Per-turn prefetch of the always-awaited blocks. ``take(name, factory)`` returns the prefetched result, or awaits
     ``factory()`` in place (timed under ``name``) when nothing was prefetched - the sequential path, byte for byte."""
 
-    __slots__ = ("pp", "tasks")
+    __slots__ = ("pp", "tasks", "drafts")
 
     def __init__(self, pp: "_PrepostTimer") -> None:
         self.pp = pp
         self.tasks: "dict[str, asyncio.Future]" = {}
+        self.drafts: list = []   # turn_draft.TurnDraft of the prefetched blocks that change state: committed at the POST
+
+    def block(self, result: Any) -> str:
+        """A prefetched TurnDraft's block (its commit held for the POST), or the in-place call's plain string."""
+        if isinstance(result, str) or result is None:
+            return result or ""
+        self.drafts.append(result)
+        return str(getattr(result, "block", "") or "")
+
+    async def commit_drafts(self) -> None:
+        """The turn reached the POST: apply the held state changes, once, in assembly order. Never raises."""
+        drafts, self.drafts = self.drafts, []
+        for d in drafts:
+            try:
+                await d.commit()
+            except Exception:  # noqa: BLE001
+                pass
 
     def start(self, factories: "dict[str, Any]") -> None:
         """``factories``: name -> zero-arg callable returning a coroutine. Starts each as a task (timed under its name)."""
@@ -1992,8 +2009,10 @@ def _prefetch_for_turn(pp: "_PrepostTimer", uid: str, session_id: str, message: 
 
         pre.start({
             "fastpath": lambda: flue_fastpath_context.block_for(uid, session_id, message),
-            "bridge": lambda: voice_session_bridge.block_for(uid, session_id),
-            "notes": lambda: conversation_notes.block_for(uid, session_id),
+            # the bridge and the notes advance state when built (turn counts, the notes cooldown + served count): prefetched as a
+            # pure read (prepare_block), their changes are committed only when the turn reaches the POST (_commit_drafts)
+            "bridge": lambda: voice_session_bridge.prepare_block(uid, session_id),
+            "notes": lambda: conversation_notes.prepare_block(uid, session_id),
             "identity": lambda: _identity_context_block(uid),
             "now_card": lambda: _now_card_context_block(uid, voice),
             "manner": lambda: _manner_context_block(uid, message),
@@ -3418,13 +3437,13 @@ async def _run_flue_brain_streaming_turn(
     # block (it is older), inside the latest user message: the cached prefix is untouched. Off => "" before any work.
     import voice_session_bridge
 
-    bridge_block = await _pre.take("bridge", lambda: voice_session_bridge.block_for(uid, session_id))
+    bridge_block = _pre.block(await _pre.take("bridge", lambda: voice_session_bridge.block_for(uid, session_id)))
     # Notes about earlier conversations with this member (ZOE_CONVERSATION_NOTES, default OFF; conversation_notes.py): the first
     # brain turns of a session carry the member's newest 1-2 notes as soft context ("last time you talked about X; it is open").
     # Same slot and delimiters as the bridge (the sidecar elides it from older turns); confirmed speaker only; shadow logs, serves "".
     import conversation_notes
 
-    notes_block = await _pre.take("notes", lambda: conversation_notes.block_for(uid, session_id))
+    notes_block = _pre.block(await _pre.take("notes", lambda: conversation_notes.block_for(uid, session_id)))
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
@@ -3543,6 +3562,7 @@ async def _run_flue_brain_streaming_turn(
     )
     payload = _request_payload(outbound_message)
     _pp.log(session_id)
+    await _pre.commit_drafts()   # ZOE_FLUE_PREPOST_CONCURRENT: the prefetched bridge / notes state moves only now, at the POST
 
     if _wire_version() >= _WIRE_2 and not _stream_enabled():
         # Wire 2 has no whole-result call: the non-streaming turn is a stream
