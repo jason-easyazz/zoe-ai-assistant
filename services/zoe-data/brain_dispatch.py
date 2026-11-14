@@ -104,6 +104,7 @@ import sys
 import threading
 import time
 import traffic_class
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
@@ -222,7 +223,7 @@ def _observe_circuit() -> tuple[bool, int]:
     The probe's own outcome supersedes: success closes the breaker for
     everyone, another transport failure re-arms it.
     """
-    global _flue_circuit_open_until, _flue_circuit_generation
+    global _flue_circuit_open_until, _flue_circuit_generation, _probe_claim
     with _breaker_lock:
         now = _monotonic()
         deadline = _flue_circuit_open_until
@@ -231,9 +232,27 @@ def _observe_circuit() -> tuple[bool, int]:
         if deadline:
             # Lapsed: claim the single half-open probe.
             ttl = _cooldown_s()
+            _probe_claim = (_flue_circuit_generation + 1, deadline, _flue_circuit_generation)
             _flue_circuit_generation += 1
             _flue_circuit_open_until = (now + ttl) if ttl > 0 else 0.0
         return False, _flue_circuit_generation
+
+
+#: the half-open probe claim this process last made: ``(claimed_generation, lapsed_deadline, generation_before)``
+_probe_claim: Optional[tuple] = None
+
+
+def _release_probe(observed: Optional[tuple]) -> None:
+    """Undo a half-open probe claim that will never dial Flue (the child floor answered the turn): the breaker goes back to exactly
+    the state before the claim - same lapsed deadline, same generation - so the next real turn is the probe. Neither a success nor
+    a failure is recorded. A no-op unless ``observed`` is the claim and nothing has moved the breaker since."""
+    global _flue_circuit_open_until, _flue_circuit_generation, _probe_claim
+    if not observed or observed[0]:
+        return
+    with _breaker_lock:
+        claim = _probe_claim
+        if claim and claim[0] == observed[1] == _flue_circuit_generation:
+            _flue_circuit_open_until, _flue_circuit_generation, _probe_claim = claim[1], claim[2], None
 
 
 def _open_circuit(observed_generation: int) -> None:
@@ -574,9 +593,10 @@ async def _fallback_oneshot(message: str, session_id: str, user_id: str, **kwarg
 
 
 async def _flue_streaming_with_failover(
-    message: str, session_id: str, user_id: str, **kwargs: Any
+    message: str, session_id: str, user_id: str, _observed: Optional[tuple] = None, **kwargs: Any
 ) -> AsyncIterator[str]:
-    """Flue streaming turn with ONE bounded retry on the lane below it."""
+    """Flue streaming turn with ONE bounded retry on the lane below it. ``_observed``: the breaker view ``_route`` already took
+    for this turn (it is never taken twice); None = take it here."""
     from zoe_flue_client import FlueTransportError, run_flue_brain_streaming
 
     other = _fallback_lane()
@@ -603,7 +623,7 @@ async def _flue_streaming_with_failover(
     generation = 0
 
     try:
-        skip_flue, generation = _observe_circuit()
+        skip_flue, generation = _observed if _observed is not None else _observe_circuit()
         if skip_flue:
             record.emit(
                 attempted=other,
@@ -685,9 +705,9 @@ async def _flue_streaming_with_failover(
 
 
 async def _flue_oneshot_with_failover(
-    message: str, session_id: str, user_id: str, **kwargs: Any
+    message: str, session_id: str, user_id: str, _observed: Optional[tuple] = None, **kwargs: Any
 ) -> str:
-    """Flue one-shot turn with ONE bounded retry on the lane below it."""
+    """Flue one-shot turn with ONE bounded retry on the lane below it. ``_observed``: as in the streaming wrapper."""
     from zoe_flue_client import FlueTransportError, run_flue_brain
 
     other = _fallback_lane()
@@ -703,7 +723,7 @@ async def _flue_oneshot_with_failover(
     record = _LaneRecord(session_id)
 
     try:
-        skip_flue, generation = _observe_circuit()
+        skip_flue, generation = _observed if _observed is not None else _observe_circuit()
         if skip_flue:
             record.emit(
                 attempted=other,
@@ -1017,10 +1037,119 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
     kwargs = _sanitize_kwargs(kwargs)
-    if use_flue_brain():
-        if failover_enabled():
+    route = _route()
+    floor = _child_floor_check(message, session_id, user_id, kwargs, route)
+    if floor is not None:
+        return _child_floor_stream(floor, message, session_id, user_id, kwargs, route)
+    return _brain_streaming_lanes(message, session_id, user_id, _route_=route, **kwargs)
+
+
+def _route() -> tuple:
+    """This turn's lane decision, taken ONCE: ``(use_flue, observed)``. ``observed`` is the failover breaker view
+    (``_observe_circuit`` also claims the half-open probe, so it is never taken twice) or None when failover is off. The lanes
+    reuse it, and the child floor reads from it whether this turn will reach the Flue seam's floors. NEVER raises: any error is
+    ``_ROUTE_UNKNOWN`` - the lanes then decide and observe for themselves, exactly as before ``_route`` existed."""
+    try:
+        if not use_flue_brain():
+            return (False, None)
+        return (True, _observe_circuit() if failover_enabled() else None)
+    except Exception as exc:  # noqa: BLE001 - a routing read must never fail the turn before any lane runs
+        logger.warning("BRAIN_ROUTE unknown (%s)", type(exc).__name__)
+        return _ROUTE_UNKNOWN
+
+
+#: the route could not be read: the lanes take their own decision and observation; the child floor never defers
+_ROUTE_UNKNOWN = (None, None)
+
+
+def _lane_choice(route: tuple) -> tuple:
+    """``(use_flue, failover, observed)`` for the lanes. A known route is reused as is; ``_ROUTE_UNKNOWN`` re-reads the lane the old
+    way, and the failover wrappers observe the breaker inside their own try (``observed`` None). A lane read that fails again
+    takes the fallback lane rather than failing the turn."""
+    if route is not _ROUTE_UNKNOWN:
+        return route[0], route[1] is not None, route[1]
+    try:
+        use_flue = bool(use_flue_brain())
+        return use_flue, bool(use_flue and failover_enabled()), None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("BRAIN_ROUTE fallback (%s)", type(exc).__name__)
+        return False, False, None
+
+
+def _floors_live(route: tuple) -> bool:
+    """Will this turn actually reach the Flue seam, where the distress / medical floors run? Not on another lane, not when the
+    failover breaker is open (that turn goes to the fallback lane), and not when the route is unknown."""
+    try:
+        use_flue, observed = route
+        return bool(use_flue) and not (observed is not None and observed[0])
+    except Exception:  # noqa: BLE001 - not knowing: assume they do not, so the child floor never defers to nothing
+        return False
+
+
+def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict[str, Any], route: tuple) -> Any:
+    """``child_safety_floor.check`` (sync, pure): None on every turn that is not a hazard request, so those turns are dispatched exactly as before."""
+    try:
+        import child_safety_floor
+
+        return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")),
+                                        floors_live=_floors_live(route))
+    except Exception:  # noqa: BLE001 - FAIL SAFE: a floor that cannot run lets only a positively adult speaker through
+        logger.warning("CHILD_SAFETY_FLOOR source=error stage=dispatch")
+        return _CHILD_FLOOR_BROKEN
+
+
+#: needs no lexicon and no floor module: what a speaker who is not positively an adult hears when the floor cannot run at all
+_CHILD_FLOOR_GENERIC = "That one needs a grown-up. Can you ask one to help you?"
+_CHILD_FLOOR_BROKEN = SimpleNamespace(cls="error", reply=_CHILD_FLOOR_GENERIC, declared=False, key=("", ""), blind=True, broken=True)
+
+
+async def _positively_adult(user_id: str) -> bool:
+    try:
+        import manner_block
+
+        return bool(await manner_block.is_adult(user_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _child_floor_reply(floor: Any, user_id: str) -> str:
+    """``child_safety_floor.resolve``, failing SAFE: if it cannot answer, the hazard ask gets the floor's cautious line, never the brain."""
+    if getattr(floor, "broken", False):
+        return "" if await _positively_adult(user_id) else _CHILD_FLOOR_GENERIC
+    try:
+        import child_safety_floor
+
+        return await child_safety_floor.resolve(floor, user_id) or ""
+    except Exception:  # noqa: BLE001
+        logger.warning("CHILD_SAFETY_FLOOR source=error stage=resolve")
+        return "" if await _positively_adult(user_id) else (getattr(floor, "reply", "") or _CHILD_FLOOR_GENERIC)
+
+
+async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any],
+                              route: tuple) -> AsyncIterator[str]:
+    """A hazard ask: a child (or a speaker the floor could not clear) gets its fixed line and no lane runs; an adult gets the lanes unchanged."""
+    reply = await _child_floor_reply(floor, user_id)
+    if reply:
+        _release_probe(route[1])   # this turn never dials Flue: the half-open probe it may have claimed goes back unused
+        yield reply
+        return
+    inner = _brain_streaming_lanes(message, session_id, user_id, _route_=route, **kwargs)
+    try:
+        async for delta in inner:
+            yield delta
+    finally:
+        aclose = getattr(inner, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
+def _brain_streaming_lanes(message: str, session_id: str, user_id: str = "", *, _route_: tuple, **kwargs: Any) -> AsyncIterator[str]:
+    use_flue, failover, observed = _lane_choice(_route_)
+    if use_flue:
+        if failover:
             return _provenance_tracked_stream(_claim_guarded(
-                _flue_streaming_with_failover(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
+                _flue_streaming_with_failover(message, session_id, user_id, _observed=observed, **kwargs),
+                message, user_id, kwargs, session_id),
                 message, session_id, user_id, bool(kwargs.get("replay_isolation")))
         return _provenance_tracked_stream(_claim_guarded(
             _flue_streaming_labeled(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
@@ -1038,14 +1167,22 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
     kwargs = _sanitize_kwargs(kwargs)
+    route = _route()
+    floor = _child_floor_check(message, session_id, user_id, kwargs, route)
+    if floor is not None:
+        reply = await _child_floor_reply(floor, user_id)
+        if reply:
+            _release_probe(route[1])   # this turn never dials Flue: the half-open probe it may have claimed goes back unused
+            return reply
     token = _provenance_begin(user_id)
     reply = ""
     started = _receipts_begin()
     implied = _take_deferred_write()
+    use_flue, failover, observed = _lane_choice(route)
     try:
-        if use_flue_brain():
-            if failover_enabled():
-                reply = await _flue_oneshot_with_failover(message, session_id, user_id, **kwargs)
+        if use_flue:
+            if failover:
+                reply = await _flue_oneshot_with_failover(message, session_id, user_id, _observed=observed, **kwargs)
             else:
                 reply = await _flue_oneshot_labeled(message, session_id, user_id, **kwargs)
             reply = _claim_guarded_text(reply, message, user_id, started, kwargs, implied, session_id)

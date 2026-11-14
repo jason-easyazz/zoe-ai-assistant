@@ -72,7 +72,10 @@ class _Sqlite:
 
     def execute(self, sql, params=()):
         async def _run():
-            cur = self.conn.execute(sql, tuple(params))
+            cur = self.conn.cursor()
+            if " FROM events " in f" {' '.join(sql.split())} ":
+                cur.row_factory = sqlite3.Row         # the pool's records read by name, as the shared calendar read path needs
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
             self.conn.commit()
             return _Cursor(rows, rowcount=cur.rowcount)
@@ -101,7 +104,7 @@ def env(monkeypatch, tmp_path):
         "follow_up_hint TEXT, emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, "
         "resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)",
         "CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, "
-        "deleted INTEGER DEFAULT 0)",
+        "deleted INTEGER DEFAULT 0, end_date TEXT, recurring TEXT, rrule TEXT, rdates TEXT, recurrence_id TEXT)",
         "CREATE TABLE proactive_pending (id TEXT, trigger_type TEXT, item_id TEXT)",
         "CREATE TABLE people (id TEXT, user_id TEXT, name TEXT, deleted INTEGER DEFAULT 0)",
     ):

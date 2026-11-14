@@ -5,9 +5,11 @@ should I wake you up earlier?" - offline, private, never unprompted.
 
 THE LOOP. Night (``memory_digest`` phase 1.65, the dreaming cycle): ``generate_for_user`` reads the member's own events for the next
 ``HORIZON_DAYS`` and, by CODE only (keywords and clock maths, no model, no network), makes at most three kinds of offer per event:
-``wake`` (a one-off earlier alarm), ``leave`` (a leave-by reminder) and ``packing`` (a private packing list). A REPEATING event
-(``events.recurring``: an RRULE in ``reminder_recurrence``'s subset or daily / weekly / fortnightly / monthly / yearly) stands for its
-NEXT occurrence in the horizon only (owner decision 2026-11-13); a repeat value that is not understood gets no offer. Day: on the member's
+``wake`` (a one-off earlier alarm), ``leave`` (a leave-by reminder) and ``packing`` (a private packing list). Events are read through
+``calendar_read.events_in_window`` (own events only): cancelled, EXDATE and overridden instances are gone, and a zoned event is seen at
+its HOUSEHOLD date and time. A REPEATING event stands for its NEXT occurrence in the horizon that has not begun (owner decision
+2026-11-13); a repeat rule that is not understood gets no offer. Offers are keyed ``<kind>:<event id>:<household date>[T<HH:MM>]``, so
+each occurrence is its own offer and a night re-run never duplicates one. Day: on the member's
 own chat brain turn, ``pick_for_turn`` returns at most ONE timely offer as a short "By the way - ..." line (and a Yes/No card).
 Answer: a short yes/no that answers the line Zoe just said (``match_reply``) or a card tap (``execute_if_ours`` / ``on_dismissed``)
 runs ``answer``: yes = the real tool (``alarms.create_alarm`` / ``reminder_service.create_reminder_record`` /
@@ -89,7 +91,6 @@ class Event:
     end_date: str = ""
     location: str = ""
     all_day: bool = False
-    recurring: str = ""
 
 
 @dataclass
@@ -155,36 +156,6 @@ def classify(ev: Event) -> Optional[str]:
     return None
 
 
-def _repeat_rule(raw: str) -> Optional[dict]:
-    """``events.recurring`` as a rule (None = not understood: no offer rather than a guessed date). The ONE parser lives in
-    ``calendar_read.repeat_rule``, shared with every calendar reader."""
-    from calendar_read import repeat_rule
-
-    return repeat_rule(raw)
-
-
-def _occurs_on(ev: Event, day: date) -> bool:
-    import reminder_recurrence as rr
-
-    rule, anchor = _repeat_rule(ev.recurring), _date(ev.start_date)
-    return rule is not None and anchor is not None and rr.occurs_on(rule, anchor, day)
-
-
-def _next_occurrence(ev: Event, now: datetime) -> Optional[date]:
-    """A repeating event's NEXT date inside the horizon that has not started yet (today counts only while its start is still ahead of
-    ``now``), else None. One occurrence at a time: a daily event is one offer for its next day, never fourteen."""
-    today = now.astimezone(_tz()).date()
-    start_m = None if ev.all_day else _hhmm(ev.start_time)
-    for i in range(HORIZON_DAYS + 1):
-        day = today + timedelta(days=i)
-        if not _occurs_on(ev, day):
-            continue
-        if _at(day, start_m or 0) <= now:            # today's has already begun (or was all day): the offer is for the one after
-            continue
-        return day
-    return None
-
-
 def _at(d: date, minutes: int) -> datetime:
     return datetime(d.year, d.month, d.day, minutes // 60, minutes % 60, tzinfo=_tz())
 
@@ -199,12 +170,6 @@ def candidates(events: list[Event], *, now: datetime, usual_wake: Callable[[date
         if kind is None or start_d is None:
             continue
         end_d = _date(ev.end_date)
-        if (ev.recurring or "").strip():                 # a repeating event stands for its next occurrence in the horizon
-            nxt = _next_occurrence(ev, now)
-            if nxt is None:
-                continue
-            end_d = end_d + (nxt - start_d) if end_d is not None else None
-            start_d = nxt
         if not (today <= start_d <= today + timedelta(days=HORIZON_DAYS)):
             continue
         start_m = None if ev.all_day else _hhmm(ev.start_time)
@@ -315,14 +280,38 @@ def _missing(exc: BaseException) -> bool:
     return "does not exist" in s or "no such table" in s
 
 
-async def _events(db: Any, uid: str, today: date) -> list[Event]:
-    rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, COALESCE(NULLIF(rrule, ''), recurring) FROM events"
-                          " WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL) AND start_date < ?"
-                          " AND COALESCE(status, 'confirmed') <> 'cancelled'"
-                          " AND (start_date >= ? OR COALESCE(recurring, '') <> '' OR COALESCE(rrule, '') <> '')",       # a repeating event may have started long ago
-                      (uid, (today + timedelta(days=HORIZON_DAYS + 1)).isoformat(), today.isoformat()))
-    return [Event(str(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or ""), str(r[4] or ""), str(r[5] or ""), str(r[6] or ""),
-                  bool(r[7]), str(r[8] or "")) for r in rows]
+async def _occurrences(db: Any, uid: str, first: date, last: date) -> list[dict]:
+    """The member's OWN occurrences over household dates ``[first, last]`` (the shared read path; never another member's)."""
+    from calendar_read import events_in_window
+
+    return await events_in_window(db, uid, first, last, own_only=True)
+
+
+def _as_event(o: dict) -> Event:
+    """One occurrence as an Event: its HOUSEHOLD date and start; an end date only when the row has one."""
+    has_end = bool(str((o.get("event") or {}).get("end_date") or "").strip())
+    return Event(str(o["event_id"]), str((o.get("event") or {}).get("user_id") or ""), str(o.get("title") or ""), str(o["date"]),
+                 "" if o.get("all_day") else str(o.get("start_time") or ""), str(o["end_date"]) if has_end else "",
+                 str(o.get("location") or ""), bool(o.get("all_day")))
+
+
+async def _events(db: Any, uid: str, now: datetime) -> list[Event]:
+    """One Event per event in the horizon: a one-off as itself, a repeating event as its NEXT occurrence that has not begun
+    (today's counts only while its start is ahead of ``now``); a repeat rule that is not understood gives none."""
+    from calendar_read import repeat_understood
+
+    today = now.astimezone(_tz()).date()
+    out: list[Event] = []
+    seen: set = set()
+    for o in await _occurrences(db, uid, today, today + timedelta(days=HORIZON_DAYS)):
+        if o["is_recurring"]:
+            ev = _as_event(o)
+            start_m = None if ev.all_day else _hhmm(ev.start_time)
+            if o["event_id"] in seen or not repeat_understood(o["event"]) or _at(_date(ev.start_date), start_m or 0) <= now:
+                continue
+            seen.add(o["event_id"])
+        out.append(_as_event(o))
+    return out
 
 
 async def _usual_alarms(db: Any, uid: str) -> list[tuple[str, str]]:
@@ -378,25 +367,23 @@ def _local_day(now: datetime) -> str:
     return now.astimezone(_tz()).date().isoformat()
 
 
-def _event_matches(ev: Optional[Event], slots: dict) -> bool:
-    """The offer's event still exists exactly as it was when the offer was made."""
-    if ev is None:
-        return False
-    start_m = None if ev.all_day else _hhmm(ev.start_time)
-    offered = _date(slots.get("start_date"))
-    same_day = (offered is not None and _occurs_on(ev, offered)) if (ev.recurring or "").strip() else str(_date(ev.start_date)) == str(slots.get("start_date"))
-    return (same_day
-            and (_fmt_hhmm(start_m) if start_m is not None else "") == str(slots.get("start_time") or ""))
-
-
-async def _event(db: Any, uid: str, event_id: str) -> Optional[Event]:
-    rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, COALESCE(NULLIF(rrule, ''), recurring) FROM events"
-                          " WHERE id = ? AND user_id = ? AND (deleted = 0 OR deleted IS NULL)", (event_id, uid))
-    if not rows:
+async def _offered(db: Any, uid: str, slots: dict) -> Optional[Event]:
+    """The offer's occurrence if it still exists exactly as offered (same event, household day and start), else None: a delete,
+    a cancel, an EXDATE, an override that moved it, a re-time or a repeat rule that is no longer understood withdraws the offer."""
+    d = _date(slots.get("start_date"))
+    if d is None:
         return None
-    r = rows[0]
-    return Event(str(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or ""), str(r[4] or ""), str(r[5] or ""), str(r[6] or ""),
-                 bool(r[7]), str(r[8] or ""))
+    from calendar_read import repeat_understood
+
+    for o in await _occurrences(db, uid, d, d):
+        if not repeat_understood(o["event"]):          # the same guard as ``_events``: a rule we cannot place gives no offer
+            continue
+        ev = _as_event(o)
+        start_m = None if ev.all_day else _hhmm(ev.start_time)
+        if (ev.id == str(slots.get("event_id") or "") and ev.start_date == d.isoformat()
+                and (_fmt_hhmm(start_m) if start_m is not None else "") == str(slots.get("start_time") or "")):
+            return ev
+    return None
 
 
 # -- outcome --------------------------------------------------------------------------------------------------------------------
@@ -435,21 +422,18 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
     counts = {"events": 0, "wake": 0, "leave": 0, "packing": 0, "stored": 0, "withdrawn": 0}
     try:
         async with _conn(db) as conn:
-            today = now.astimezone(_tz()).date()
-            events = await _events(conn, uid, today)
+            events = await _events(conn, uid, now)
             offers = candidates(events, now=now, usual_wake=usual_wake_from(await _usual_alarms(conn, uid)),
                                 adult=await _is_adult(uid, db=conn))
             counts["events"] = len(events)
             for o in offers:
                 counts[o.kind] += 1
             if m == "on":
-                by_id = {e.id: e for e in events}
                 existing = await _rows(conn, uid)
                 for r in existing:
                     if r["resolved"] != OPEN:
                         continue
-                    ev = by_id.get(str(r["slots"].get("event_id") or "")) or await _event(conn, uid, str(r["slots"].get("event_id") or ""))
-                    if not _event_matches(ev, r["slots"]) or (r["expires"] is not None and r["expires"] <= now):
+                    if await _offered(conn, uid, r["slots"]) is None or (r["expires"] is not None and r["expires"] <= now):
                         await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**r["slots"], "outcome": "withdrawn"}, only_from=OPEN)
                         counts["withdrawn"] += 1
                 keys = {r["key"] for r in existing}
@@ -527,7 +511,7 @@ async def pick_for_turn(user_id: str, session_id: str, *, now: Optional[datetime
                     await _edge(conn, uid, r["id"], r["kind"], "ignored", now, day=s.get("last_day"))
                     _log_outcome(uid, r["kind"], "ignored")
                     continue
-                if not _event_matches(await _event(conn, uid, str(s.get("event_id") or "")), s):
+                if await _offered(conn, uid, s) is None:
                     await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**s, "outcome": "withdrawn"}, only_from=OPEN)
                     continue
                 question = phrase(r["kind"], s, now)
@@ -643,8 +627,8 @@ async def answer(user_id: str, suggestion_id: str, accept: bool, *, now: Optiona
                 await _edge(conn, uid, r["id"], r["kind"], "dismissed", now, day=s.get("last_day"))
                 _log_outcome(uid, r["kind"], "dismissed")
                 return DECLINED_REPLY
-            ev = await _event(conn, uid, str(s.get("event_id") or ""))
-            if not _event_matches(ev, s) or (r["expires"] is not None and r["expires"] <= now):
+            ev = await _offered(conn, uid, s)
+            if ev is None or (r["expires"] is not None and r["expires"] <= now):
                 await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**s, "outcome": "withdrawn"}, only_from=OPEN)
                 return GONE
             if not await _set(conn, r["id"], uid, resolved=CLAIMED, slots=s, only_from=OPEN):
