@@ -84,5 +84,52 @@
   "glucose_unit_mg": "mg/dL",
   "poison_number_fallback": "your local poisons information line",
   "emergency_fallback": "your local emergency number"
+ },
+ "self_assess": {
+  "_note": "PRESENT self-assessment of a time-critical CONDITION (medical_safety.self_assessment, flag ZOE_MEDICAL_SELF_ASSESS). A CLOSED allow-list: conditions (each with the existing reply key it uses, and explicit speech-to-text / typing variants - never fuzzy matching: edit distance 1 on 'stroke' also accepts 'strike'), and frames whose slots are filled from 'slots' ('{who}' = any present person: a pronoun is listed, a name or 'my <relation>' is matched broadly, so a person present always counts). tests/test_medical_self_assessment.py generates its must-fire set from these same lists.",
+  "conditions": {
+   "heart": ["heart attack", "heartattack", "heart-attack", "cardiac arrest", "hart attack", "heart atack", "heart attak", "hart atack", "heart attach"],
+   "stroke": ["stroke", "mini stroke", "mini-stroke", "ministroke", "tia", "heat stroke", "heatstroke", "sunstroke", "sun stroke", "stoke", "strok", "stroak"],
+   "breathing": ["anaphylaxis", "anaphylactic shock", "anaphylactic reaction", "anafylaxis", "anaphalaxis", "anaphylaxsis", "anaphylatic shock", "anaflaxis"],
+   "poison_human": ["overdose", "over dose", "overdoes", "overdoze", "drug overdose"]
+  },
+  "verb_conditions": {
+   "poison_human": {"ING": ["overdosing", "overdoseing", "overdozing"], "ED": ["overdosed", "overdozed", "overdoesed"], "BASE": ["overdose", "overdoes", "overdoze"]}
+  },
+  "verdicts": {"poison_human": "ingest_human"},
+  "condition_not_after": {
+   "stroke": ["of luck", "of good luck", "of bad luck", "of genius", "of brilliance", "of inspiration", "of fortune", "of the pen", "of a pen", "of the brush", "of a brush", "of midnight", "of the clock", "of the oar", "in the pool", "in this pool", "in the water", "on the water", "rate", "count", "play", "technique", "the cat", "the dog"],
+   "heart": ["on a plate", "waiting to happen"]
+  },
+  "verb_idiom_objects": ["chocolate", "sugar", "sweets", "lollies", "candy", "cake", "cakes", "biscuits", "cookies", "food", "pizza", "chips", "snacks", "junk food", "ice cream", "carbs", "netflix", "tv", "telly", "television", "youtube", "tiktok", "instagram", "social media", "games", "gaming", "video games", "love", "cuteness", "work", "sport", "football", "footy", "cricket", "news", "christmas", "music", "shopping", "sun", "sunshine", "exercise", "drama", "nostalgia", "memes", "reality tv", "books", "reading", "studying", "homework"],
+  "verb_idiom_unless_asked": ["coffee", "caffeine", "tea", "energy drinks", "red bull", "espresso"],
+  "drug_names": ["heroin", "cocaine", "coke", "crack", "fentanyl", "meth", "ice", "opioids", "opiates", "oxy", "oxycodone", "oxycontin", "ketamine", "mdma", "ecstasy", "xanax", "benzos", "valium", "methadone", "tramadol", "codeine", "morphine", "ghb", "pills", "insulin", "sleeping pills", "painkillers", "pain killers"],
+  "slots": {
+   "Q": ["am i", "are we", "are you", "are they", "is he", "is she", "is it", "is {who}"],
+   "S": ["im", "i am", "were", "we are", "youre", "you are", "theyre", "they are", "hes", "he is", "shes", "she is", "{who} is"],
+   "SUBJ": ["i", "we", "you", "they", "he", "she", "{who}"],
+   "DO": ["do i", "do we", "do you", "do they", "does he", "does she", "does {who}"],
+   "DEM": ["this", "it", "that", "these", "those"],
+   "DEMIS": ["its", "it is", "this is", "thats", "that is"],
+   "SIGN": ["the start", "the beginning", "the onset", "the signs", "signs", "a sign", "the symptoms", "symptoms"],
+   "THINK": ["think", "think that", "maybe", "probably", "reckon", "worried", "scared", "afraid"],
+   "HAS": ["have i", "have we", "have you", "have they", "has he", "has she", "has {who}"],
+   "PERF": ["ive", "i have", "weve", "we have", "youve", "you have", "theyve", "they have", "hes", "he has", "shes", "she has", "{who} has"]
+  },
+  "frames": [
+   "{Q} having {C}", "{Q} getting {C}", "{Q} going into {C}", "{Q} in {C}",
+   "{Q} in the middle of {C}", "{S} having {C}", "{S} going into {C}", "{S} in {C}",
+   "{SUBJ} might be having {C}", "{SUBJ} may be having {C}", "{SUBJ} could be having {C}", "{SUBJ} must be having {C}",
+   "could {SUBJ} be having {C}", "might {SUBJ} be having {C}", "can {SUBJ} be having {C}", "{DO} have {C}",
+   "could {SUBJ} have had {C}", "might {SUBJ} have had {C}", "{SUBJ} might have had {C}", "{SUBJ} could have had {C}",
+   "{SUBJ} may have had {C}", "could {SUBJ} have {C}", "{SUBJ} might have {C}", "did {SUBJ} just have {C}",
+   "{SUBJ} just had {C}", "is {DEM} {C}", "is {DEM} really {C}", "could {DEM} be {C}",
+   "might {DEM} be {C}", "may {DEM} be {C}", "can {DEM} be {C}", "would {DEM} be {C}",
+   "could {DEM} really be {C}", "is {DEM} {SIGN} of {C}", "are {DEM} {SIGN} of {C}", "could {DEM} be {SIGN} of {C}",
+   "what if {DEM} is {C}", "what if {S} having {C}", "{THINK} {DEMIS} {C}",
+   "{Q} {ING}", "{S} {ING}", "{SUBJ} might be {ING}", "could {SUBJ} be {ING}",
+   "did {SUBJ} just {BASE}", "{HAS} {ED}", "{HAS} just {ED}", "{PERF} {ED}",
+   "{PERF} just {ED}", "{SUBJ} just {ED}", "{THINK} {SUBJ} {ED}", "{THINK} {SUBJ} just {ED}"
+  ]
  }
 }
