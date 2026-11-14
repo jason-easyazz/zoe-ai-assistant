@@ -1582,6 +1582,14 @@ async def reconcile_for_ingest(
                 return "refuse", mem_id
         existing = guard_existing_by_entity(text, existing, title)
         decision = classify_against_existing(text, existing)
+        if decision[0] == "update":
+            # a replacement that would leave the subject with LESS (a date or an age replaced by "next month", or by nothing) is
+            # refused: the stored row stays and the candidate is added beside it (QA round 10; value_correction.drops_value)
+            from value_correction import drops_value
+
+            if drops_value(dict(existing).get(decision[1], ""), text):
+                logger.info("RECONCILE_UPDATE_REFUSED user=%s kept=%s reason=drops_value", user_id, decision[1])
+                return "add", None
         if decision[0] == "add" and extend_supersedes:
             from memory_overlap import strictly_extends
             for mem_id, mem_text in existing:
