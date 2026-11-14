@@ -306,7 +306,27 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
             pass
         res.store_down = True
         return res
-    # The superseded-value registry (0080) BEFORE anything that destroys the evidence it is found by: the retracted turns' ids
+    # EVERY clear keyed by the retracted turns (their ids or their words) runs HERE: after the evidence is gathered (the recent
+    # turns, the persisted exact-words index, the rows) and BEFORE any step that destroys it (the words erase, the notes erase,
+    # the archive). A destructive step that fails afterwards then leaves nothing correction-shaped behind for its retry to miss.
+    # Each clear is guarded on its own: one failing never skips another.
+    turn_texts = list(said) + list(indexed)
+    row_texts = [getattr(r, "text", "") or "" for r in rows]
+    try:
+        import value_correction
+    except Exception:  # noqa: BLE001
+        value_correction = None
+    if value_correction is not None:
+        # the in-process correction memory: a correction about any topic word, one SAID in a retracted turn (a correction said
+        # before any row existed holds no topic word in its subject or values), or one whose subject the turns / rows name
+        for clear in (lambda: value_correction.forget_matching(user_id, lambda text: any(row_matches([g], text) for g in groups)),
+                      lambda: value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, t) for t in turn_texts]),
+                      lambda: value_correction.forget_in_texts(user_id, turn_texts + row_texts)):
+            try:
+                clear()
+            except Exception:  # noqa: BLE001 - in-process and never raises; nothing here may break the forget
+                pass
+    # The superseded-value registry (0080), the durable turn-keyed clear, also BEFORE anything that destroys the evidence it is found by: the retracted turns' ids
     # come from the turn notes and the exact-words index, which ``_erase_words`` below blanks. A failure here leaves both intact
     # (so the member's repeat finds the same turns) AND a durable pending marker in the forget ledger (``value_registry_topic``):
     # the next healthy pass over-forgets the member's registry entries even if nobody repeats the forget.
@@ -342,17 +362,6 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
         logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
-    try:     # the in-process correction memory: a correction about any topic word, or about a subject the topic's rows name
-        import value_correction
-
-        # the RETRACTED turns too, not only the rows: a correction said before any row existed ("my daughter Juno is 8, not 7")
-        # holds no topic word in its subject or values, but its own turn is one of the forgotten ones
-        turn_texts = list(said) + list(indexed)
-        value_correction.forget_matching(user_id, lambda text: any(row_matches([g], text) for g in groups))
-        value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, t) for t in turn_texts])
-        value_correction.forget_in_texts(user_id, turn_texts + [getattr(r, "text", "") or "" for r in rows])
-    except Exception:  # noqa: BLE001 - in-process and never raises; nothing here may break the forget
-        pass
     archived: list = []
     for r in rows:
         try:

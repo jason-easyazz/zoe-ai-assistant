@@ -706,6 +706,43 @@ def test_the_old_ordering_leaks_the_entry(db, forget_env, ledger, monkeypatch):
     assert not second.store_down and _subjects(db, A) == [JUNO]
 
 
+@pytest.mark.parametrize("step", ["words", "notes", "archive"])
+def test_a_failed_destructive_step_leaves_neither_store_holding_the_correction(db, forget_env, ledger, monkeypatch, step):
+    """Thread PRRT_kwDOPZpkks63cwpI as a class: a one-shot failure in EACH destructive step after the clears (the words erase, the
+    notes erase, the archive). After a healthy retry the member's registry AND in-process correction memory are empty, and member
+    B's identical entries are untouched."""
+    import conversation_notes
+    import forget_topic
+    import value_correction as vc
+
+    _sister_seed(db)
+    vc.reset_state()
+    vc._remember(A, vc.Correction("Juno", "8", "7"), SISTER)
+    vc._remember(B, vc.Correction("Juno", "6", "5"), SISTER)
+    left = {"n": 1}
+
+    def once(real):
+        async def flaky(*a, **k):
+            if left["n"] > 0:
+                left["n"] -= 1
+                raise ConnectionError("pool lost")
+            return await real(*a, **k)
+        return flaky
+    svc = _registry_svc((R(A, "r9"), "User's sister has a new job"))
+    if step == "words":
+        monkeypatch.setattr(forget_topic, "_erase_words", once(forget_topic._erase_words))
+    elif step == "notes":
+        monkeypatch.setattr(conversation_notes, "erase_topic", once(conversation_notes.erase_topic))
+    else:
+        monkeypatch.setattr(type(svc), "review", once(type(svc).review))
+    run(forget_topic.forget(svc, A, "my sister"))
+    assert left["n"] == 0                                             # the failure really happened
+    run(forget_topic.forget(svc, A, "my sister"))                     # the healthy retry
+    assert _subjects(db, A) == [] and not vc._REMEMBERED.get(A)
+    assert _subjects(db, B) == [OTHER_JUNO] and [c.subject for _t, c in vc._REMEMBERED[B]] == ["Juno"]
+    vc.reset_state()
+
+
 def test_topic_forget_by_a_tied_row_alone(db):
     _seed(db)
     assert run(reg.erase_topic(A, row_ids=[R(A, "r2")], name_matches=lambda _n: False)) == 2
