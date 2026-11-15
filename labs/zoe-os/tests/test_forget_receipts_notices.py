@@ -91,6 +91,62 @@ def test_snapshot_scrub_keeps_nonforgotten_before_rows(tmp_path):
     k.close()
 
 
+@pytest.mark.parametrize('opaque', [False, True])
+def test_legacy_snapshot_index_backfills_once_before_forget(tmp_path, opaque):
+    import json
+    path = tmp_path / 'kernel.db'
+    k = boot(path)
+    rows = Lists().register(k)
+    first, _ = add(k, rows, SECRET)
+    _, second = add(k, rows, KEEP)
+    if opaque:
+        p = k.spine._get(second.seq).payload
+        p['undo']['before'].pop('provenance')
+        k.spine._db.execute('UPDATE events SET payload=? WHERE seq=?', (json.dumps(p), second.seq))
+    # Emulate a store from before the index existed, then upgrade on restart.
+    k.spine._db.execute('DROP TABLE snapshot_dependencies')
+    k.spine._db.execute('DROP TABLE opaque_snapshots')
+    k.spine._db.execute("DELETE FROM meta WHERE key='snapshot_index_v1'")
+    k.close()
+    k = boot(path)
+    assert k.spine._db.execute("SELECT 1 FROM meta WHERE key='snapshot_index_v1'").fetchone()
+    k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
+    assert SECRET.encode() not in disk(path)
+    k.close()
+    k = boot(path)
+    rows.rows[PERSON] = [{'item': KEEP, 'asked': 999}]
+    rows.register(k)
+    if opaque:
+        with pytest.raises(Refused, match='without provenance'):
+            k.actions.undo(PERSON, actor=PERSON)
+    else:
+        assert k.actions.undo(PERSON, actor=PERSON).verified
+        assert rows.rows[PERSON] == []
+    k.close()
+
+
+def test_snapshot_dependencies_survive_scrub_and_rollback_then_member_erase(tmp_path):
+    k = boot(tmp_path / 'kernel.db')
+    rows = Lists().register(k)
+    first, _ = add(k, rows, SECRET)
+    survivor, _ = add(k, rows, KEEP)
+    _, last = add(k, rows, 'synthetic third row')
+    before = k.spine._db.execute('SELECT * FROM snapshot_dependencies ORDER BY 1,2').fetchall()
+    k.spine._db.execute("CREATE TEMP TRIGGER stop_erase BEFORE INSERT ON forget_ledger "
+                        "BEGIN SELECT RAISE(ABORT, 'synthetic interruption'); END")
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):
+        k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
+    assert k.spine._db.execute('SELECT * FROM snapshot_dependencies ORDER BY 1,2').fetchall() == before
+    k.spine._db.execute('DROP TRIGGER stop_erase')
+    k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
+    assert k.spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall() == [(survivor.seq, last.seq)]
+    k.spine.forget(PERSON, actor=PERSON)
+    assert not k.spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall()
+    assert not k.spine._db.execute('SELECT * FROM opaque_snapshots').fetchall()
+    k.close()
+
+
 def test_forget_scrubs_a_surviving_undo_readback_proof(tmp_path):
     path = tmp_path / 'kernel.db'
     k = boot(path)
@@ -189,10 +245,13 @@ def test_all_chunks_replay_after_partial_delivery_restart(tmp_path, n, truncate,
     k.grants.grant(PERSON, 'reminders')
     if truncate:
         real = Spine._append
-        def old_notice(self, events, then=None):
-            if events and events[0].kind is Kind.FORGET:
-                events = events[:1]  # old single truncated notice: negative control
-            return real(self, events, then)
+        def old_notice(self, events, then=None, *, before=None):
+            def prepare():
+                if before is not None:
+                    before()
+                if events and events[0].kind is Kind.FORGET:
+                    del events[1:]  # old single truncated notice: negative control
+            return real(self, events, then, before=prepare)
         monkeypatch.setattr(Spine, '_append', old_notice)
     assert k.spine.forget(PERSON, actor=PERSON, entity=SECRET).count == n
     notices = k.spine._fetch(0, frozenset({Kind.FORGET}), None, n)

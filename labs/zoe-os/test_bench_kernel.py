@@ -34,7 +34,7 @@ def test_latency_and_profile(tmp_path):
     assert result['profile_one_list_add']['sql_commit_sync_inclusive'][0] == 2
     assert set(result['profile']) == set(VERBS)
     for row in result['profile'].values():
-        assert set(row['phases_us']) == {'decode', 'consent', 'SQL', 'commit', 'receipt'}
+        assert set(row['phases_us']) == {'decode', 'consent', 'SQL', 'commit', 'receipt', 'checkpoint'}
         assert row['phases_us']['decode'] > 0 and row['phases_us']['SQL'] > 0
     assert 'synthetic-' not in json.dumps(result)
 

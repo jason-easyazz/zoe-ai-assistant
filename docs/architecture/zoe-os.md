@@ -17,6 +17,14 @@ and not checked, **[vision]** means not built and not proven.
 
 ## 0. Answer first
 
+**Forget merge limitation [code, inferred]:** `labs/zoe-os/zoe_os/spine.py` selects named
+sequences in chunks through `people_seq` and commits selection, complete scoped notice batches,
+snapshot scrubbing, erasure and bookkeeping in one transaction. However, `_scrub_snapshots`
+reads every surviving action receipt, including opaque legacy snapshots. This conflicts with
+`test_history_cost.py`'s fixed SQL-work budget as receipt history grows; indexed seed selection
+alone does not make the whole forget bounded. Preserving snapshot safety takes precedence in
+this merge. An indexed snapshot-dependency design would need separate implementation and proof.
+
 **What "an OS" means for a household.** Today each feature of Zoe carries its own copy of the hard rules: who
 may see this, whether she may speak now, how to forget, how to prove a thing was really done. The copies are
 good, and they are separate, so every new feature must remember all of them, and the price of one miss is a
@@ -829,4 +837,122 @@ lines may be shared beyond their guardians at all (today they cannot be, by anyo
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
 
+## Load, soak and crash results
+
+[code] `labs/zoe-os/bench_kernel.py` is the offline evidence harness, with
+`bench_support.py` providing a scratch kernel process and durable synthetic effects.
+It uses the brain bridge's real authenticated Unix-socket wire. The driver fixture
+is explicitly different from the brain's in-memory stores; success here would not
+prove those stores survive restart. Workload seed defaults to 4721.
+
+[lab, coordinator baseline, 2026-11-15, seed 7] Measurements on the real box,
+before the indexed-lookup changes below. All latencies are microseconds.
+
+| Verb | p50 | p90 | p99 |
+|---|---|---|---|
+| list.add | 721 | not supplied | not supplied |
+| list.remove | 713 | not supplied | not supplied |
+| remind.set | 713 | not supplied | not supplied |
+| alarm.set | 716 | not supplied | not supplied |
+| why | 896 | not supplied | not supplied |
+| undo | 7,726 | 8,231 | not supplied |
+| forget | 12,261 | 38,555 | 49,851 |
+| denied | 348 | not supplied | not supplied |
+| malformed | 289 | not supplied | not supplied |
+
+Undo was previously 27,774 p50 before newest-first paging; forget was 3,995 before
+intent scrubbing and derived-event text hashing. These protections remain required.
+Concurrency: 1/4/16 clients achieved 1,533 / 1,772 / 1,677 wire calls/s; 16-client
+p99 was 17 ms, with cross-member isolation holding. Fifty SIGKILL trials across six
+stages passed integrity, no half receipt, acknowledged-write survival and undo after
+restart. Cold-start p50 was 129 ms. The 20,000-operation soak exceeded its 290 s budget;
+there are no completed soak growth/drift measurements. Profiling was reported null.
+
+[code] Root causes and changes:
+
+- Undo used `_newest`'s 200-event decode and a member-wide `people` subquery;
+  `_undone` scanned intents. `Dispatcher.last_action` now selects exactly one live
+  receipt by subject using a partial index; `intents.undoes` is indexed.
+- Scoped forget read every member event before intersecting `seqs`. Deletes by
+  `people.seq` / `causes.seq`, and the three intent references, lacked indexes.
+  Selection now includes the requested IDs in SQL; all these predicates are indexed.
+  Reads, closure, hashes, erasure, intent scrub, ledger and notice share one transaction.
+  Secure deletion, derived text/tuple shields, spent-yes/undo markers and the WAL
+  truncation checkpoint remain. No durability setting or claim rule was weakened.
+- `why` finds its grant through `_newest`; without a kind index this traversed
+  intervening event history. A partial live `(kind, seq)` index removes that work.
+
+[inferred] The nine baseline medians sum to 24.383 ms; their uniform mix costs
+about 54.2 s for 20,000 timed operations. Fixture setup adds roughly 20 s at the
+measured ordinary-call cost. Thus 290 s is already ample for steady costs (and is
+under five minutes); raising it would hide history drift. It remains 290 s. Soak
+now retains partial results on timeout, exits nonzero, and reports overall AND
+per-verb p50/p90/p99 in each requested-history quarter. Mix changes cannot masquerade
+as a slow verb when per-verb quarters are inspected.
+
+[code] A bounded isolated forget and undo no longer scan unrelated completed history.
+Broad person/entity/topic forget still visits candidate/erased events and descendants;
+open intent cause checks scale with pending intents, not completed history. Checkpoint
+I/O depends on WAL state and storage; indexed lookups do not bound physical I/O latency.
+Grants and example brain driver effects remain memory-only. SQLite remains WAL with
+`synchronous=NORMAL`: process-kill evidence is not power-loss evidence.
+
+[code] `--profile` writes top-level `profile[verb]` and `latency.profile[verb]` for
+one extra call of EVERY verb, with setup excluded. Each includes `phases_us` for
+decode, consent, SQL (including cursor stepping), commit and receipt, plus raw
+counters and total wire time. Zero means no work in that phase. Receipt is inclusive
+of SQL/commit; phases overlap and must not be summed. Decode includes wire and stored
+JSON; supervisor parsing is excluded. Autocommit timing includes the SQL statement
+and SQLite sync; native fsync is not separately observable. No measured attribution
+is claimed until the coordinator reruns it.
+
+| Coordinator rerun evidence | After (fill from result JSON) |
+|---|---|
+| Undo on a 20,000-event history, target p50 < 2,000 us | **PENDING COORDINATOR:** `latency.undo` with `--history-n 20000` |
+| Scoped forget on that history, target p50 < 5,000 us | **PENDING COORDINATOR:** `latency.forget` with `--history-n 20000` |
+| Completed soak | **PENDING COORDINATOR:** completed calls, seconds, RSS/DB growth, quarter timings |
+| Profile | **PENDING COORDINATOR:** per-verb phase timings from `profile` |
+| Regression checks | **PENDING COORDINATOR:** test counts/exits, concurrency, crash and cold results |
+
+[code] The small tests include deliberate wrong-member routing and a volatile effect
+store. The crash oracle checks actual effects as well as acknowledged receipts; the
+concurrency oracle compares stored member/key pairs against controller-owned expectations.
+The fixture pauses inside one of six shuffled crash phases before SIGKILL, including
+inside an effect transaction and inside a receipt transaction. It never treats an
+unacknowledged interrupted write as known done. See the lab README for commands and
+measurement boundaries. Full runs and all existing tests green remain unproven.
+
+[code] Socket-free complexity guards in `tests/test_history_cost.py` build 200 and
+5,000 events plus completed intents and links. SQLite progress callbacks count VM
+steps, including work hidden inside a single statement; fixed budgets cover full
+undo, absent-member lookup and isolated/receipt forget. Negative controls restore
+the old paged undo or issue an unindexed scan and must trip the same budget.
+Rollback, open-intent scrubbing and the 200,000-byte DB/WAL/SHM ceiling after two
+refusals are checked. Startup truncates schema-creation WAL page images; the seven
+additive indexes are installed idempotently on opening existing lab stores.
+The existing oversized-frame scenario and all socket tests still need the coordinator.
+## Snapshot dependency index (lab)
+
+Receipt appends index both undo-before rows and restored read-back proofs in
+`snapshot_dependencies(source_seq, receipt_seq)`, a WITHOUT ROWID table whose
+primary key serves chunked source lookups. The receipt index supports deletion.
+Forget visits only dependent receipts, removes their old edges, and indexes the
+surviving rows again, in the erase transaction. Tombstones remove incoming and
+outgoing edges. Opaque snapshots containing text use a compact per-person
+fallback index; opaque numeric state contains no forgotten text.
+
+Existing stores get a one-time atomic backfill at open, with 256 receipt bodies
+per batch and a durable completion marker. This bounds memory, not total upgrade
+work: first open is proportional to existing receipts; subsequent forgets never
+scan receipt history. New stores use the indexed path immediately.
+
+The history-cost regression retains the 4000-step fixed budget; its 1/50-dependent
+case additionally allows 150 steps per payload rewrite. It includes a negative
+control that deliberately scans surviving receipts. Restart/privacy, rollback,
+remaining-edge and whole-member cleanup tests cover the index lifecycle.
+
+The benchmark's `--profile` now exposes `checkpoint` separately, timing the
+existing `PRAGMA wal_checkpoint(TRUNCATE)` call through its database wrapper.
+It measures synchronous checkpoint call latency, including SQLite/I/O work,
+without changing checkpoint policy. No checkpoint timing has been measured here.
 Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).

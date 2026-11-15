@@ -47,6 +47,25 @@ Undo = Callable[[str, dict, dict], Any]            # (person, args, before) -> p
 UNDO = "undo"
 
 
+def snapshot_sources(payload: dict) -> tuple[set[int], bool]:
+    """Provenance for saved state AND undo read-back; no copied text in the index."""
+    sources, opaque = set(), False
+    for holder, key in ((payload.get('undo'), 'before'), (payload.get('proof'), 'restored')):
+        if not holder or key not in holder:
+            continue
+        before = holder[key]
+        if scrub_snapshot(before, set()) is None:
+            # The bench's scalar slot has no text when numeric/empty. All other opaque
+            # shapes (including unknown dictionary keys) fail closed for that person.
+            numeric_slot = (isinstance(before, dict) and set(before) == {'value'}
+                            and (before['value'] is None or isinstance(before['value'], (int, float))))
+            opaque |= not numeric_slot
+        else:
+            rows = before.get('rows', [before.get('alarm')])
+            sources.update(row['asked'] for row in rows if row is not None)
+    return sources, opaque
+
+
 def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
     """Only versioned row snapshots assert complete provenance; None means unknown."""
     if not isinstance(before, dict) or before.get('provenance') != 1:
@@ -261,8 +280,11 @@ class Dispatcher:
         return self.spine._db.execute("SELECT 1 FROM intents WHERE undoes = ?", (seq,)).fetchone() is not None
 
     def last_action(self, person: str) -> Event | None:
-        return next((e for e in self.spine._newest(frozenset({Kind.ACTION_RECEIPT}), person)
-                     if e.subject == person), None)
+        # Exact subject, not mentions; the partial index also handles an empty history.
+        row = self.spine._db.execute(
+            "SELECT seq FROM events INDEXED BY latest_receipt WHERE subject = ? AND kind = 'action_receipt'"
+            " AND tombstoned = 0 ORDER BY seq DESC LIMIT 1", (person,)).fetchone()
+        return self.spine._get(row[0]) if row else None
 
     def undo(self, person: str, *, actor: str) -> Receipt:
         """Reverse ``person``'s last action. Raises ``Refused`` (recorded) when it may not or cannot."""

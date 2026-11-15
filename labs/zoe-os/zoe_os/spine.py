@@ -47,8 +47,23 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS people (seq INTEGER NOT NULL, person TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
+CREATE INDEX IF NOT EXISTS people_seq ON people(seq);
 CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
+CREATE INDEX IF NOT EXISTS causes_seq ON causes(seq);
+CREATE INDEX IF NOT EXISTS latest_receipt ON events(subject, seq DESC)
+  WHERE kind = 'action_receipt' AND tombstoned = 0;
+CREATE INDEX IF NOT EXISTS live_kind ON events(kind, seq) WHERE tombstoned = 0;
+CREATE TABLE IF NOT EXISTS snapshot_dependencies (
+  source_seq INTEGER NOT NULL, receipt_seq INTEGER NOT NULL,
+  PRIMARY KEY (source_seq, receipt_seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS snapshot_receipt ON snapshot_dependencies(receipt_seq);
+CREATE TABLE IF NOT EXISTS opaque_snapshots (
+  person TEXT NOT NULL, receipt_seq INTEGER NOT NULL,
+  PRIMARY KEY (person, receipt_seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS opaque_receipt ON opaque_snapshots(receipt_seq);
 CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS consumed_receipts (
   receipt_seq INTEGER PRIMARY KEY, claim_seq INTEGER NOT NULL
@@ -68,6 +83,9 @@ CREATE TABLE IF NOT EXISTS intents (
   person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER,
   undoes INTEGER
 );
+CREATE INDEX IF NOT EXISTS intent_receipt ON intents(receipt_seq);
+CREATE INDEX IF NOT EXISTS intent_accept ON intents(accept_seq) WHERE accept_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS intent_undo ON intents(undoes) WHERE undoes IS NOT NULL;
 """
 
 
@@ -222,6 +240,7 @@ class Spine:
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
+        self._backfill_snapshots()
         # Upgrade extant claims without retaining any person or payload in bookkeeping.
         self._db.execute("""
             INSERT OR IGNORE INTO consumed_receipts
@@ -246,6 +265,9 @@ class Spine:
             self._entities.setdefault(person, set()).add(fp)
         self.refusals = 0
         self.last_seq = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+        # Schema/index creation uses autocommit. Do not retain all its intermediate
+        # page images in WAL (also keeps the oversized-frame disk guard meaningful).
+        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def close(self) -> None:
         with self._lock:
@@ -329,11 +351,14 @@ class Spine:
                 self._refuse(KERNEL, "kernel_write", "forgotten_kernel_content")
             return self._append([event], then)[0]
 
-    def _append(self, events: list[Event], then: Callable[[int], None] | None = None) -> list[Event]:
+    def _append(self, events: list[Event], then: Callable[[int], None] | None = None,
+                *, before: Callable[[], None] | None = None) -> list[Event]:
         out: list[Event] = []
         now = self._clock()
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            if before is not None:
+                before()
             for ev in events:
                 cur = self._db.execute(
                     "INSERT INTO events (ts, kind, source, subject, visibility, payload, mentions,"
@@ -343,6 +368,8 @@ class Spine:
                      json.dumps(ev.mentions) if ev.mentions else None,
                      json.dumps(ev.caused_by) if ev.caused_by else None))
                 seq = cur.lastrowid
+                if ev.kind is Kind.ACTION_RECEIPT:
+                    self._index_snapshot(seq, ev.subject, ev.payload)
                 if ev.kind is Kind.CLAIM:
                     from .receipts import ClaimAuditor
                     if ClaimAuditor(self, self.authorizer).backed(replace(ev, seq=seq)):
@@ -405,33 +432,51 @@ class Spine:
             if (entity is not None and not key) or (topic is not None and not groups):
                 self._refuse(actor, "forget", "nothing to match")
             upto = self.last_seq
-            seed = {r[0] for r in self._db.execute(
-                "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto))}
-            if seqs is not None:
-                seed &= set(seqs)
-            if key or groups:
-                seed = self._matching(seed, key, groups)
-                if groups and len(seed) > MAX_TOPIC_EVENTS:
-                    self._refuse(actor, "forget", "too many events match: say which part")
-            dead = sorted(self._closure(seed))
+            selected = None if seqs is None else sorted(set(seqs))
+            dead: list[int] = []
+            notices: list[Event] = []
             scope = "entity" if key else "topic" if groups else "seqs" if seqs is not None else "person"
-            # One append transaction persists ALL chunks before any subscriber can see one.
-            batches = list(_chunks(dead, MAX_NOTICE_SEQS)) or [[]]
+
+            def prepare():
+                # Select under the same write transaction as erasure and every notice.
+                seed = set()
+                if selected is None:
+                    seed.update(r[0] for r in self._db.execute(
+                        "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto)))
+                else:
+                    for chunk in _chunks(selected):
+                        marks = ','.join('?' * len(chunk))
+                        seed.update(r[0] for r in self._db.execute(
+                            f"SELECT seq FROM people INDEXED BY people_seq WHERE person = ?"
+                            f" AND seq <= ? AND seq IN ({marks})", [subject, upto, *chunk]))
+                if key or groups:
+                    seed = self._matching(seed, key, groups)
+                    if groups and len(seed) > MAX_TOPIC_EVENTS:
+                        raise Refused("too many events match: say which part")
+                dead.extend(sorted(self._closure(seed)))
+                batches = list(_chunks(dead, MAX_NOTICE_SEQS)) or [[]]
+                notices.extend(Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
+                                     payload={"subject": subject, "upto": upto, "count": len(dead),
+                                              "scope": scope, "seqs": batch}) for batch in batches)
+
             def erase(_seq):
                 self._tombstone(dead)   # joins the notice transaction: no erase/notice crash gap
                 if key:
-                    self._shield_entity(subject, key)
+                    fp = self._efp(subject, key)
+                    self._db.execute("INSERT OR IGNORE INTO entity_shield VALUES (?, ?)",
+                                     (subject, fp))
+                    self._entities.setdefault(subject, set()).add(fp)
                 self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
                                  (subject, upto, self._clock(), len(dead)))
             try:
-                self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
-                                    payload={"subject": subject, "upto": upto, "count": len(dead),
-                                             "scope": scope, "seqs": batch}) for batch in batches], erase)
-            except BaseException:
+                self._append(notices, erase, before=prepare)
+            except BaseException as exc:
                 self._shield = {r[0] for r in self._db.execute('SELECT fp FROM shield')}
                 self._entities = {}
                 for person, fp in self._db.execute('SELECT subject, fp FROM entity_shield'):
                     self._entities.setdefault(person, set()).add(fp)
+                if isinstance(exc, Refused):
+                    self._refuse(actor, "forget", str(exc))
                 raise
             self._epoch += 1
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -459,11 +504,6 @@ class Spine:
     # ---- the entity shield: a keyed hash of a forgotten name, per person, never the name -----
     def _efp(self, person: str, key: str) -> bytes:
         return hmac.new(self._shield_key, f"entity\0{person}\0{key}".encode(), hashlib.sha256).digest()
-
-    def _shield_entity(self, subject: str, key: str) -> None:
-        fp = self._efp(subject, key)
-        self._entities.setdefault(subject, set()).add(fp)
-        self._db.execute("INSERT OR IGNORE INTO entity_shield VALUES (?, ?)", (subject, fp))
 
     def _names_forgotten(self, ev: Event) -> bool:
         """Does a skill's event name something a person it is about asked to forget? An event
@@ -533,6 +573,9 @@ class Spine:
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
             self._scrub_intents(set(seqs))
             self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
             if not outer:
@@ -557,9 +600,17 @@ class Spine:
             marks = ','.join('?' * len(chunk))
             people.update(r[0] for r in self._db.execute(
                 f"SELECT person FROM people WHERE seq IN ({marks})", chunk))
-        for seq, person, raw in self._db.execute(
-                "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt'"
-                " AND tombstoned = 0").fetchall():
+        receipts = set()
+        for chunk in _chunks(sorted(dead)):
+            marks = ','.join('?' * len(chunk))
+            receipts.update(r[0] for r in self._db.execute(
+                f"SELECT receipt_seq FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk))
+        for person in people:
+            receipts.update(r[0] for r in self._db.execute(
+                'SELECT receipt_seq FROM opaque_snapshots WHERE person = ?', (person,)))
+        for seq in sorted(receipts - dead):
+            person, raw = self._db.execute(
+                'SELECT subject, payload FROM events WHERE seq = ? AND tombstoned = 0', (seq,)).fetchone()
             if seq in dead or not raw:
                 continue
             p = json.loads(raw)
@@ -592,6 +643,35 @@ class Spine:
             if changed:
                 self._db.execute('UPDATE events SET payload = ? WHERE seq = ?',
                                  (json.dumps(p, sort_keys=True), seq))
+                self._db.execute('DELETE FROM snapshot_dependencies WHERE receipt_seq = ?', (seq,))
+                self._db.execute('DELETE FROM opaque_snapshots WHERE receipt_seq = ?', (seq,))
+                self._index_snapshot(seq, person, p)
+
+    def _index_snapshot(self, seq: int, person: str | None, payload: dict) -> None:
+        """IDs only, in the receipt transaction; opaque text fails closed per person."""
+        from .receipts import snapshot_sources
+        sources, opaque = snapshot_sources(payload)
+        self._db.executemany('INSERT OR IGNORE INTO snapshot_dependencies VALUES (?, ?)',
+                             [(source, seq) for source in sources])
+        if opaque and person is not None:
+            self._db.execute('INSERT OR IGNORE INTO opaque_snapshots VALUES (?, ?)', (person, seq))
+
+    def _backfill_snapshots(self) -> None:
+        """One atomic upgrade, bounded to 256 receipt bodies in memory; never per forget."""
+        if self._db.execute("SELECT 1 FROM meta WHERE key = 'snapshot_index_v1'").fetchone():
+            return
+        self._db.execute('BEGIN IMMEDIATE')
+        try:
+            cursor = self._db.execute("SELECT seq, subject, payload FROM events"
+                                      " WHERE kind = 'action_receipt' AND tombstoned = 0")
+            while batch := cursor.fetchmany(256):
+                for seq, person, raw in batch:
+                    self._index_snapshot(seq, person, json.loads(raw or '{}'))
+            self._db.execute("INSERT INTO meta VALUES ('snapshot_index_v1', 1)")
+            self._db.execute('COMMIT')
+        except BaseException:
+            self._db.execute('ROLLBACK')
+            raise
 
     def _scrub_intents(self, dead: set[int]) -> None:
         """Forget reaches the action bookkeeping (``receipts.Dispatcher``): an intent tied to an
@@ -658,6 +738,8 @@ class Spine:
                     self._db.execute(
                         f"UPDATE events SET tombstoned = {EXPIRED}, payload = NULL, mentions = NULL,"
                         f" subject = NULL WHERE tombstoned = 0 AND seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -679,6 +761,8 @@ class Spine:
                         " GROUP BY 1, 2 ON CONFLICT(day, kind) DO UPDATE SET n = n + excluded.n", chunk)
                     for table in ("events", "people", "causes"):
                         self._db.execute(f"DELETE FROM {table} WHERE seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
