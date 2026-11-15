@@ -1,0 +1,185 @@
+"""The guarded real-turn runner: each guard refuses on its own, the window logic on a fake clock,
+the lock, and cleanup on an injected failure. No model, no node, no llama is contacted here: every
+reading is injected (``Probes``). Synthetic throughout."""
+from __future__ import annotations
+
+import datetime as dt
+import os
+
+import pytest
+import real_turn as rt
+
+
+def probes(**over) -> rt.Probes:
+    base = dict(now=lambda: dt.datetime(2030, 3, 4, 23, 0), cmdlines=lambda: ["python3 -m http.server"],
+                slots=lambda url: [{"id": 0, "is_processing": False, "n_prompt_tokens": 300}],
+                mem_mb=lambda: 4000, log_age_s=lambda: 600.0, speech_active=lambda: True,
+                panel_quiet=lambda: True, night_busy=lambda now: None, night_jobs=lambda: None, voice_hold=lambda: None)
+    base.update(over)
+    return rt.Probes(**base)
+
+
+def args(*extra):
+    import argparse
+    ns = argparse.Namespace(i_own_the_slot=True, dry_run=False, lock="/nonexistent", llama_url="http://x", owner_approved_daytime=False,
+                            mem_floor=1500, log_quiet_s=60)
+    for e in extra:
+        setattr(ns, e[0], e[1])
+    return ns
+
+
+def guards(a, p, held=True):
+    return [g for g, _ in rt.refusals(a, p, held_lock=held)]
+
+
+def test_all_clear_passes():
+    assert rt.refusals(args(), probes(), held_lock=True) == []
+
+
+@pytest.mark.parametrize("name,a,p,held", [
+    ("flag", args(("i_own_the_slot", False)), probes(), True),
+    ("window", args(), probes(now=lambda: dt.datetime(2030, 3, 4, 12, 0)), True),
+    ("lock", args(), probes(), False),
+    ("probe", args(), probes(cmdlines=lambda: ["/usr/bin/python3.12 -u scripts/perf/measure_voice.py --x"]), True),
+    ("speech", args(), probes(speech_active=lambda: False), True),
+    ("slots", args(), probes(slots=lambda u: [{"id": 0, "is_processing": True}]), True),
+    ("memory", args(), probes(mem_mb=lambda: 900), True),
+    ("log-quiet", args(), probes(log_age_s=lambda: 5.0), True),
+    ("voice-hold", args(), probes(voice_hold=lambda: "the lander's voice-hold is set"), True),
+    ("night-jobs", args(), probes(night_jobs=lambda: "zoe-night-window.service"), True)])
+def test_each_guard_alone_refuses_and_only_that_guard(name, a, p, held):
+    assert guards(a, p, held) == [name]
+
+
+def test_an_unreadable_slot_is_never_idle():
+    def boom(url):
+        raise OSError("down")
+    assert guards(args(), probes(slots=boom)) == ["slots"]
+
+
+def test_an_unreadable_log_refuses():
+    assert guards(args(), probes(log_age_s=lambda: None)) == ["log-quiet"]
+
+
+def test_the_panel_and_night_busy_rules_of_the_repo_refuse_too():
+    assert guards(args(), probes(panel_quiet=lambda: False)) == ["window"]
+    assert guards(args(), probes(night_busy=lambda now: "night_busy says pause")) == ["window"]
+
+
+@pytest.mark.parametrize("hh,mm,ok", [(22, 0, True), (23, 30, True), (0, 5, True), (1, 30, True), (21, 59, False),
+                                      (1, 45, False), (1, 55, False), (2, 30, False), (3, 15, False), (4, 30, False),
+                                      (4, 55, False), (7, 0, False), (12, 0, False)])
+def test_the_window_on_a_fake_clock(hh, mm, ok):
+    day = 5 if hh < 12 else 4
+    p = probes(now=lambda: dt.datetime(2030, 3, day, hh, mm))
+    assert (rt.window_reason(p.now(), p) is None) is ok, rt.window_reason(p.now(), p)
+
+
+@pytest.mark.parametrize("hh,mm,ok", [(7, 0, True), (12, 0, True), (21, 59, True), (22, 0, True), (1, 30, True),
+                                      (1, 45, False), (1, 55, False), (2, 30, False), (3, 15, False),
+                                      (4, 30, False), (4, 54, False), (4, 55, True)])
+def test_the_daytime_override_lifts_only_the_waking_hours_never_the_night_span(hh, mm, ok):
+    day = 5 if hh < 12 else 4
+    p = probes(now=lambda: dt.datetime(2030, 3, day, hh, mm))
+    assert (rt.window_reason(p.now(), p, True) is None) is ok, rt.window_reason(p.now(), p, True)
+
+
+def test_the_override_flag_reaches_the_guard_but_a_busy_panel_or_slot_still_refuses():
+    day = probes(now=lambda: dt.datetime(2030, 3, 4, 12, 0))
+    assert guards(args(("owner_approved_daytime", True)), day) == []
+    assert guards(args(("owner_approved_daytime", True)), probes(now=day.now, panel_quiet=lambda: False)) == ["window"]
+    assert guards(args(("owner_approved_daytime", True)), probes(now=day.now, log_age_s=lambda: 3.0)) == ["log-quiet"]
+    assert guards(args(("owner_approved_daytime", True)), probes(now=lambda: dt.datetime(2030, 3, 5, 3, 0))) == ["window"]
+
+
+@pytest.mark.parametrize("cmd,hit", [
+    ("python3 /h/scripts/perf/measure_voice.py --n 3", True),
+    ("/usr/bin/python3.12 -u scripts/maintenance/voice_regression_probe.py", True),
+    ("python3 -B x/measure_tts.py", True), ("python3 scripts/perf/measure_cold_first_turn.py", True),
+    ("bash -c 'while pgrep -f measure_voice.py; do sleep 1; done'", False),
+    ("claude --prompt please read measure_tts.py", False), ("vim measure_voice.py", False),
+    ("python3 -m pytest tests/test_measure_voice_helpers.py", False)])
+def test_the_probe_pattern_matches_the_process_not_the_mention(cmd, hit):
+    assert bool(rt.PROBE_RE.match(cmd)) is hit
+
+
+def test_the_lock_is_taken_not_waited_for(tmp_path):
+    path = str(tmp_path / "l.lock")
+    fd = rt.take_lock(path)
+    assert fd is not None and rt.take_lock(path) is None
+    os.close(fd)
+    again = rt.take_lock(path)
+    assert again is not None
+    os.close(again)
+
+
+def test_a_held_lock_exits_2_and_never_builds_a_stack(tmp_path, monkeypatch):
+    path = str(tmp_path / "l.lock")
+    held = rt.take_lock(path)
+    monkeypatch.setattr(rt, "Stack", lambda *a: pytest.fail("a stack was built without the lock"))
+    assert rt.main(["--i-own-the-slot", "--lock", path, "--dry-run", "--out", str(tmp_path / "o")], probes()) == rt.EXIT_LOCK
+    os.close(held)
+
+
+def test_a_refusal_exits_3_and_releases_the_lock(tmp_path, monkeypatch):
+    path = str(tmp_path / "l.lock")
+    monkeypatch.setattr(rt, "Stack", lambda *a: pytest.fail("a stack was built despite a refusal"))
+    assert rt.main(["--lock", path, "--dry-run"], probes()) == rt.EXIT_REFUSED       # no --i-own-the-slot
+    free = rt.take_lock(path)
+    assert free is not None
+    os.close(free)
+
+
+def test_cleanup_runs_and_the_lock_is_released_when_the_run_fails_midway(tmp_path, monkeypatch):
+    path, events = str(tmp_path / "l.lock"), []
+
+    class Boom:
+        def __init__(self, *a):
+            pass
+
+        def up(self, llama):
+            events.append("up")
+            raise RuntimeError("injected failure after the lab app started")
+
+        def down(self):
+            events.append("down")
+    monkeypatch.setattr(rt, "Stack", Boom)
+    with pytest.raises(RuntimeError, match="injected"):
+        rt.main(["--i-own-the-slot", "--dry-run", "--lock", path, "--out", str(tmp_path / "o")], probes())
+    assert events == ["up", "down"]
+    free = rt.take_lock(path)
+    assert free is not None
+    os.close(free)
+
+
+def test_cleanup_on_a_signal(tmp_path, monkeypatch):
+    path, events = str(tmp_path / "l.lock"), []
+
+    class Sig:
+        def __init__(self, *a):
+            pass
+
+        def up(self, llama):
+            raise SystemExit(130)           # what the SIGTERM handler raises
+
+        def down(self):
+            events.append("down")
+    monkeypatch.setattr(rt, "Stack", Sig)
+    with pytest.raises(SystemExit):
+        rt.main(["--i-own-the-slot", "--dry-run", "--lock", path, "--out", str(tmp_path / "o")], probes())
+    assert events == ["down"] and rt.take_lock(path) is not None
+
+
+def test_app_port_may_never_be_a_live_port():
+    assert {3579, 3578, 11434, 8000} <= rt.LIVE_PORTS
+
+
+def test_the_voice_hold_reads_size_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(rt.Path, "home", staticmethod(lambda: tmp_path))
+    assert rt._voice_hold() is None                                   # no file
+    d = tmp_path / ".zoe/agent-tools/coord"
+    d.mkdir(parents=True)
+    (d / "voice-hold").write_text("")
+    assert rt._voice_hold() is None                                   # empty
+    (d / "voice-hold").write_text("pr-1234")
+    assert rt._voice_hold()
