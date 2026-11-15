@@ -403,7 +403,7 @@ def test_the_real_sidecar_takes_the_newest_turn_and_never_an_older_members(sent,
 # -- the wiring itself ------------------------------------------------------------------------------------
 def test_the_seam_has_one_construction_site_and_the_sidecar_mirrors_the_prefix():
     src = (Path(zc.__file__)).read_text()
-    assert src.count("_wrap_message_with_persona(outbound_message, await _persona_context_block(uid))") == 1
+    assert src.count('_wrap_message_with_persona(\n        outbound_message, await _pre.take("persona", lambda: _persona_context_block(uid)))') == 1
     ts = (LAB / "src" / "persona.ts").read_text()
     assert 'PERSONA_ENVELOPE_PREFIX = "%s"' % zc._PERSONA_ENVELOPE_PREFIX in ts.replace("'", '"')
     assert "PERSONA_MAX_TOKENS = %d" % zc._PERSONA_MAX_TOKENS in ts

@@ -183,6 +183,10 @@ async def _run(case):
 
             for m, want_ev, (text, meta) in zip(ms, exp["events"], filed):
                 is_event = meta.get("memory_type") == "event"
+                if want_ev == {"unfiled": True}:        # a present emergency the converter declines: an automatic writer files nothing
+                    if text is not None:
+                        fails.append("filed, expected nothing filed")
+                    continue
                 if want_ev is None:
                     if is_event or text != m["fact"]:
                         fails.append("event filed or text changed")
