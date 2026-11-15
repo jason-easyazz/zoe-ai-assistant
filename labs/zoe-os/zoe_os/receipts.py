@@ -38,13 +38,30 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .events import Event, Kind, Visibility
-from .spine import KERNEL, Spine
+from .spine import KERNEL, Spine, Refused
 
 Do = Callable[[str, dict], Any]                    # (person, args) -> result
 Verify = Callable[[str, dict, Any], "dict | None"]   # independent read-back, None = no proof
 Snapshot = Callable[[str, dict], "dict | None"]    # (person, args) -> the state this would change
 Undo = Callable[[str, dict, dict], Any]            # (person, args, before) -> put ``before`` back
 UNDO = "undo"
+
+
+def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
+    """Only versioned row snapshots assert complete provenance; None means unknown."""
+    if not isinstance(before, dict) or before.get('provenance') != 1:
+        return None
+    if 'rows' in before:
+        rows = before['rows']
+        if not all(isinstance(r.get('asked'), int) for r in rows):
+            return None
+        return before | {'rows': [r for r in rows if r['asked'] not in dead]}
+    if 'alarm' in before:
+        row = before['alarm']
+        if row is not None and not isinstance(row.get('asked'), int):
+            return None
+        return before | {'alarm': None if row and row['asked'] in dead else row}
+    return None
 
 
 @dataclass(frozen=True)
@@ -59,6 +76,7 @@ class Receipt:
     verified: bool
     outcome: str = "verified"     # verified | unverified | uncertain (see ``Dispatcher.recover``)
     reversible: bool = False      # the receipt holds what ``Dispatcher.undo`` needs
+    asked: int | None = None      # kernel-bound request provenance, never caller authority
 
 
 _PARAM_TYPES = {"string": (str,), "integer": (int,), "number": (int, float)}
@@ -94,10 +112,12 @@ class Dispatcher:
         self._actions: dict[str, tuple[Do, Verify, bool]] = {}
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
+        self._purges: dict[str, tuple[str, str]] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
-                 doc: str = "", params: dict | None = None) -> None:
+                 doc: str = "", params: dict | None = None,
+                 purge_key: tuple[str, str] | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -108,14 +128,40 @@ class Dispatcher:
         can describe the action to a caller. Without it nothing is checked and the action is
         not described (the behaviour every earlier action has)."""
         self._actions[action] = (do, verify, needs_accept)
+        if purge_key is not None:
+            self._purges[action] = purge_key
+        else:
+            self._purges.pop(action, None)
         self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
 
+    def purge(self, skill: str, action: str, args: dict, notice: Event) -> None:
+        """Trusted driver opt-in: delete ONLY IDs derived from a live erasure notice.
+
+        This kernel duty survives revoked grants and does not grant general action authority.
+        The configured key/prefix is the driver's globally unique request-ID contract.
+        """
+        with self.spine._lock:
+            live = self.spine._get(notice.seq)
+            manifest = self.enforcer.store.manifests.get(skill)
+            spec = self._purges.get(action)
+            if live is None or live.kind is not Kind.FORGET or spec is None or \
+                    manifest is None or action not in manifest.acts:
+                raise Refused('invalid purge')
+            key, prefix = spec
+            if set(args) != {key} or args[key] not in {f'{prefix}{s}' for s in live.payload.get('seqs', ())}:
+                raise Refused('invalid purge id')
+            do, verify, _ = self._actions[action]
+            result = do(live.payload['subject'], args)
+            if not verify(live.payload['subject'], args, result):
+                raise Refused('purge unconfirmed')
+
     def act(self, skill: str, action: str, on_behalf_of: str, args: dict, *,
             caused_by: tuple[int, ...]) -> Receipt:
         """Run one action for one person. Raises ``Refused`` (and records the refusal)."""
-        attempted = f"act {action}"
+        # A registered action name is kernel vocabulary; anything else is caller text and is never recorded.
+        attempted = f"act {action}" if action in self._meta else "act unknown_action"
         with self.spine._lock:
             verdict = self._authorize(skill, action, on_behalf_of)
             if not verdict.allowed:
@@ -123,9 +169,10 @@ class Dispatcher:
             if action not in self._actions:
                 self.spine._refuse(skill, attempted, "no such action")
             do, verify, needs_accept = self._actions[action]
-            bad = check_params(self._meta[action][1], args)
-            if bad:
-                self.spine._refuse(skill, attempted, bad)
+            params = self._meta[action][1]
+            if not isinstance(args, dict):
+                self.spine._refuse(skill, attempted, "unknown argument")
+            args = dict(args)
             reason = self.spine._cause_refusal(skill, caused_by) if caused_by else \
                 "an action must cite the event that asked for it"
             if not reason and not self._concerns(on_behalf_of, caused_by):
@@ -135,6 +182,15 @@ class Dispatcher:
                 accept, reason = self._find_accept(skill, on_behalf_of, caused_by)
             if reason:
                 self.spine._refuse(skill, attempted, reason)
+            if 'asked' in args or (params and 'asked' in params):
+                # A scalar cannot represent several requests safely under scoped forget.
+                if len(caused_by) != 1:
+                    self.spine._refuse(skill, attempted, "ambiguous_request_provenance")
+                args = dict(args, asked=caused_by[0])
+            bad = check_params(params, args)
+            if bad:
+                self.spine._refuse(skill, attempted, bad)
+            self._check_arguments(skill, attempted, on_behalf_of, args)
             intent = self._open_intent(skill, action, on_behalf_of, verdict.grant_id, accept, caused_by)
             proof, error, before = None, "", None
             try:
@@ -142,19 +198,22 @@ class Dispatcher:
                     before = self._reverse[action][0](on_behalf_of, args)
                 result = do(on_behalf_of, args)
                 proof = verify(on_behalf_of, args, result)
-            except Exception as exc:   # a failed action still leaves a receipt, unverified
-                error = type(exc).__name__
+            except Exception:   # exception names/messages can contain request content
+                error = "driver_failed"
             digest = hashlib.sha256(json.dumps(args, sort_keys=True).encode()).hexdigest()[:16]
             outcome = "verified" if proof else "unverified"
             payload = {"action": action, "skill": skill, "grant_id": verdict.grant_id,
                        "args_digest": digest, "proof": proof, "verified": bool(proof),
                        "outcome": outcome, "error": error, "reversible": before is not None}
+            if 'asked' in args:
+                payload['asked'] = args['asked']
             if before is not None:      # enough to reverse it: what was asked, and what was there
                 payload["undo"] = {"args": args, "before": before}
             ev = self._close_intent(intent, Event(
                 Kind.ACTION_RECEIPT, KERNEL, subject=on_behalf_of, caused_by=caused_by, payload=payload))
             return Receipt(f"r{ev.seq}", ev.seq, action, skill, on_behalf_of,
-                           verdict.grant_id or "", proof, bool(proof), outcome, before is not None)
+                           verdict.grant_id or "", proof, bool(proof), outcome, before is not None,
+                           args.get('asked'))
 
     def catalog(self, names) -> list[dict]:
         """What a caller may be told about the registered actions among ``names``: only those
@@ -179,6 +238,12 @@ class Dispatcher:
         return False
 
     # ---- undo ---------------------------------------------------------------------------------
+    def _check_arguments(self, who: str, attempted: str, person: str, payload: dict) -> None:
+        """Check under the spine lock, before any intent or driver write. Never echo arguments."""
+        if self.spine._payload_refusal(Event(Kind.ACTION_RECEIPT, KERNEL, subject=person,
+                                            payload=payload)):
+            self.spine._refuse(who, attempted, "forgotten_action_arguments")
+
     def _may_undo(self, actor: str, person: str) -> bool:
         """The person whose action it was, or a guardian of that child. Nobody else, no skill."""
         return self.enforcer.may_forget(actor, person).allowed
@@ -200,6 +265,7 @@ class Dispatcher:
             if why:
                 self.spine._refuse(actor, UNDO, why)
             action, saved = last.payload["action"], last.payload["undo"]
+            self._check_arguments(actor, UNDO, person, saved)
             snapshot, reverse = self._reverse[action]
             intent = self._open_intent(KERNEL, UNDO, person, None, None, (last.seq,), undoes=last.seq)
             proof, error = None, ""
@@ -207,8 +273,8 @@ class Dispatcher:
                 reverse(person, saved["args"], saved["before"])
                 if snapshot(person, saved["args"]) == saved["before"]:      # the read-back
                     proof = {"restored": saved["before"]}
-            except Exception as exc:
-                error = type(exc).__name__
+            except Exception:
+                error = "driver_failed"
             outcome = "verified" if proof else "unverified"
             ev = self._close_intent(intent, Event(
                 Kind.ACTION_RECEIPT, KERNEL, subject=person, caused_by=(last.seq,),
@@ -219,6 +285,8 @@ class Dispatcher:
 
     def _cannot_undo(self, last: Event) -> str:
         p = last.payload
+        if p.get('undo_refusal'):
+            return p['undo_refusal']
         if p.get("action") == UNDO:
             return "the last action was itself an undo"
         if self._undone(last.seq):
@@ -268,7 +336,8 @@ class Dispatcher:
                 ev = self._close_intent(intent, Event(
                     Kind.ACTION_RECEIPT, KERNEL, subject=person, caused_by=causes, payload=payload))
                 self.spine._kernel_append(Event(
-                    Kind.AUDIT_FINDING, KERNEL, visibility=Visibility.KERNEL,
+                    Kind.AUDIT_FINDING, KERNEL, subject=person, caused_by=(ev.seq,),
+                    visibility=Visibility.KERNEL,
                     payload={"finding": "action_outcome_uncertain", "who": skill, "action": action,
                              "receipt_seq": ev.seq}))
                 out.append(ev)
@@ -315,9 +384,11 @@ class ClaimAuditor:
             (self.READER, seq))
 
     def backed(self, claim: Event) -> bool:
-        """A matching verified receipt that no EARLIER live claim of the same skill, person and
-        action already cited: one action, one claim. Read from the log itself, so a restart (or
-        re-judging after a crash) gives the same answer."""
+        """One action, one claim, even after forget, retention or restart.
+
+        Consumption stores IDs only; the original claim can still be re-audited.
+        Startup backfills surviving legacy claims into the same register.
+        """
         seq = claim.payload.get("receipt_seq")
         receipt = self.spine._get(seq) if isinstance(seq, int) else None
         if not (
@@ -327,12 +398,9 @@ class ClaimAuditor:
             and receipt.subject == claim.subject
             and receipt.payload.get("skill") == claim.source):
             return False
-        earlier = self.spine._db.execute(
-            "SELECT 1 FROM events WHERE kind = 'claim' AND tombstoned = 0 AND seq > ? AND seq < ?"
-            " AND source = ? AND subject IS ? AND json_extract(payload, '$.receipt_seq') = ?"
-            " AND json_extract(payload, '$.action') IS ? LIMIT 1",
-            (seq, claim.seq, claim.source, claim.subject, seq, claim.payload.get("action")))
-        return earlier.fetchone() is None
+        spent = self.spine._db.execute(
+            "SELECT claim_seq FROM consumed_receipts WHERE receipt_seq = ?", (seq,)).fetchone()
+        return spent is None or spent[0] == claim.seq
 
     def scan(self) -> list[Event]:
         """Check every claim since the last scan. Returns the unbacked ones."""
@@ -345,9 +413,10 @@ class ClaimAuditor:
                         continue
                     unbacked.append(claim)
                     self.spine._kernel_append(Event(        # the finding and the cursor: one commit
-                        Kind.AUDIT_FINDING, KERNEL, visibility=Visibility.KERNEL,
+                        Kind.AUDIT_FINDING, KERNEL, subject=claim.subject, caused_by=(claim.seq,),
+                        visibility=Visibility.KERNEL,
                         payload={"finding": "claim_without_receipt", "who": claim.source,
-                                 "action": claim.payload.get("action"), "claim_seq": claim.seq}),
+                                 "claim_seq": claim.seq}),
                         lambda _seq, at=claim.seq: self._save(at))
                 if not rows:
                     return unbacked

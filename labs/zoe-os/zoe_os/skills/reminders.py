@@ -21,6 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..provenance import erased_request
 
 SNOOZE_MINUTES = 10
 
@@ -67,7 +68,7 @@ class Reminders:
                           caused_by=(ev.seq,))
         if receipt.verified:                 # say "I've set that" only on a verified receipt
             self._items[rid] = {"person": ev.subject, "note": intent["note"], "due": intent["at"],
-                                "gen": 0, "receipt": receipt.seq, "asked": ev.seq, "open": True}
+                                "gen": 0, "receipt": receipt.seq, "asked": receipt.asked, "open": True}
             ctx.publish(Kind.CLAIM, subject=ev.subject, caused_by=(receipt.seq,),
                         payload={"action": "reminder.create", "receipt_seq": receipt.seq})
 
@@ -79,8 +80,15 @@ class Reminders:
         args = (p.get("undo") or {}).get("args") or {}
         rid = args.get("id")
         if p["action"] == "reminder.create" and rid:
+            # Legacy receipts lack the top-level field: use their kernel-owned causal
+            # link, never the old caller-supplied undo argument. Ambiguity fails closed.
+            asked = p.get('asked')
+            if asked is None and len(ev.caused_by) == 1:
+                asked = ev.caused_by[0]
+            if type(asked) is not int:
+                return
             self._items[rid] = {"person": ev.subject, "note": args["note"], "due": args["at"], "gen": 0,
-                                "receipt": ev.seq, "asked": args["asked"], "open": True}
+                                "receipt": ev.seq, "asked": asked, "open": True}
         elif rid in self._items and p["action"] == "reminder.snooze":
             self._items[rid] |= {"due": args["until"], "gen": self._items[rid]["gen"] + 1}
 
@@ -115,14 +123,21 @@ class Reminders:
         """The kernel erased the events. The store is outside the kernel, so the skill erases
         there: everything of the person's, or (a scoped forget) the reminders whose request or
         create receipt is among the erased events."""
-        gone = set(notice.payload.get("seqs", ()))
-        scoped = "scope" in notice.payload
+        deleted = set()
         for rid, item in sorted(self._items.items()):
-            if item["person"] != notice.payload.get("subject"):
+            if not any(erased_request(notice, s, item['person']) for s in (item['receipt'], item['asked'])):
                 continue
-            if scoped and not ({item["receipt"], item["asked"]} & gone):
-                continue
-            ctx.act("reminder.delete", item["person"], {"id": rid}, caused_by=(notice.seq,))
+            if rid in {f'r{s}' for s in notice.payload.get('seqs', ())}:
+                ctx.purge("reminder.delete", {"id": rid}, notice)
+            else:   # legacy notices without an explicit causal closure
+                ctx.act('reminder.delete', item['person'], {'id': rid}, caused_by=(notice.seq,))
             del self._items[rid]
+            deleted.add(rid)
+        # A restarted skill cannot relearn forgotten requests from the erased log. IDs are
+        # derived from globally unique request seqs, so replay can purge the external store
+        # even with an empty _items cache. Deleting a non-reminder seq's ID is a no-op.
+        if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
+            for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
+                ctx.purge('reminder.delete', {'id': rid}, notice)
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}

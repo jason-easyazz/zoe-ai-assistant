@@ -82,15 +82,15 @@ def _privacy(k: Kernel, facts: list, skills: list) -> list[str]:
     for index, t, e in facts:
         stamp, p = f"{_hms(t)} @{index:<5}", e.payload
         if e.kind is Kind.REFUSAL and p.get("who") in names:
-            out.append(f"{stamp} REFUSED  {p['who']} tried to {p['attempted']}: {p['reason']}")
+            out.append(f"{stamp} REFUSED event={e.seq}")
         elif e.kind is Kind.AUDIT_FINDING and p.get("who") in names and p.get("finding") == "claim_without_receipt":
-            out.append(f"{stamp} UNBACKED {p['who']} claimed {p.get('action')} with no verified receipt")
+            out.append(f"{stamp} UNBACKED event={e.seq}")
         elif e.kind in (Kind.OFFER, Kind.ACTION_RECEIPT) and e.subject and \
                 (e.source in names or p.get("skill") in names):
             who = e.source if e.kind is Kind.OFFER else p.get("skill")
-            did = "made an offer to" if e.kind is Kind.OFFER else f"did {p.get('action')} for"
+            did = "made an offer to" if e.kind is Kind.OFFER else "acted for"
             for other in sorted(_others(k, e)):
-                out.append(f"{stamp} CROSSED  {who} {did} {e.subject} from {other}'s private event")
+                out.append(f"{stamp} CROSSED  {e.source} {did} {e.subject} from {other}'s private event")
             if e.kind is Kind.OFFER:
                 mine = words.get(e.subject, set()) | shared
                 text = " ".join(_strings(p))
@@ -124,10 +124,7 @@ def _hms(t: float) -> str:
 
 
 def _label(rec: Recording, n: int) -> str:
-    m = rec.meta
-    if not m.get("day"):
-        return f"recorded day {n}"
-    return f"{m['day']} {m.get('weekday', '')}".strip() + (f" [{m['awkward']}]" if m.get("awkward") else "")
+    return f"recorded day {n}"
 
 
 def _body(report: Report) -> list[str]:
@@ -156,7 +153,7 @@ def rehearse(current: list, changed: list, *, generated: list[Recording] = (),
     def names(version) -> str:
         return ", ".join(sorted(Manifest.from_dict(make.manifest).skill for make in version)) or "(nothing)"
 
-    seeds = sorted({str(rec.meta["seed"]) for rec in generated if "seed" in rec.meta})
+    seeds = sorted({str(rec.meta['seed']) for rec in generated if type(rec.meta.get('seed')) is int})
     out = [f"# zoe-os rehearsal v{FORMAT}",
            f"# current: {names(current)} | changed: {names(changed)}",
            f"# days: {len(generated)} generated" + (f" (seed {', '.join(seeds)})" if seeds else "")

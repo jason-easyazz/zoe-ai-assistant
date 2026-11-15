@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zoe_os import wire  # noqa: E402
 from zoe_os.client import Client, RemoteKernel  # noqa: E402
-from zoe_os.events import Event  # noqa: E402
+from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.skills.malicious import Malicious  # noqa: E402
 
 
@@ -49,6 +49,10 @@ def main() -> None:
                 out = hunt(client)
             elif cmd == "open":
                 out = read_files(args)
+            elif cmd == "plant_stale_copy":
+                person, seq, text = args   # synthetic negative control: bypass the supported cache
+                bad.cache = [Event(Kind.UTTERANCE, "voice", person, payload={"text": text}, seq=seq)]
+                out = []
             else:
                 out = [wire.event_to_wire(r) if isinstance(r, Event) else dataclasses.asdict(r)
                        for r in getattr(bad, cmd)(kernel, *args)]

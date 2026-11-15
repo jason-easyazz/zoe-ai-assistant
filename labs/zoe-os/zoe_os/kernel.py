@@ -11,7 +11,7 @@ from .events import Event, Kind, Visibility
 from .explain import Explainer
 from .retention import POLICY, Retention
 from .receipts import ClaimAuditor, Dispatcher, Receipt
-from .spine import KERNEL, Refused, Spine
+from .spine import KERNEL, EventCache, Refused, Spine
 
 
 class Context:
@@ -19,9 +19,13 @@ class Context:
 
     def __init__(self, kernel: "Kernel", skill: str) -> None:
         self.kernel, self.skill = kernel, skill
+        self.cache = EventCache(lambda: kernel.spine.replay(skill))
 
     def now(self) -> float:
         return self.kernel.clock()
+
+    def purge(self, action: str, args: dict, notice: Event) -> None:
+        self.kernel.actions.purge(self.skill, action, args, notice)
 
     def publish(self, kind: Kind, *, subject: str | None, payload: dict,
                 caused_by: tuple[int, ...], visibility: Visibility = Visibility.PRIVATE) -> Event:
@@ -75,6 +79,7 @@ class Kernel:
                 progressed, handled = True, handled + 1
                 try:
                     skill.on_event(ev, ctx)
+                    sub.ack(ev.seq)   # only after handling: replay an interrupted purge on restart
                 except Refused:
                     pass            # already recorded on the spine as a REFUSAL event
             if not progressed:

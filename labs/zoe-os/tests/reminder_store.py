@@ -20,7 +20,7 @@ class ReminderStore:
         reg("reminder.ack", self.ack, lambda p, a, r: {"acknowledged": True}
             if self.rows.get(a["id"], {}).get("acknowledged") else None)
         reg("reminder.delete", self.delete, lambda p, a, r: {"deleted": a["id"]}
-            if a["id"] not in self.rows else None, needs_accept=False)
+            if a["id"] not in self.rows else None, needs_accept=False, purge_key=('id', 'r'))
         return self
 
     def create(self, person, args):
