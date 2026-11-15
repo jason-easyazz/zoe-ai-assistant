@@ -253,7 +253,7 @@ class _Conn:
 #: ``no_input`` (no member or no item) and ``shadow_error`` (the shadow's OWN failure, ``reason=hook|worker|code``) are not the kernel's.
 RESULTS = ("worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
-           "queue_full", "live_noop", "no_input", "shadow_error", "member_differs")
+           "queue_full", "live_noop", "no_input", "shadow_error", "member_differs", "member_unproven")
 #: FIRST match wins, so "forgotten" comes first: the kernel's "forgotten_action_arguments" (an act citing words a forget shielded) also
 #: contains "argument", and a forgotten refusal must never be read as a fixable argument problem.
 _REASONS = (("forgotten", "forgotten"), ("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
@@ -268,13 +268,13 @@ def reason_code(reason: str) -> str:
 
 def for_whom(kernel: dict, member: Optional[str]) -> Optional[str]:
     """None when the receipt is for ``member``; else the result code: ``member_differs`` (it names someone else) or
-    ``kernel_malformed`` (it names no one). Checked before anything else in a receipt: a match for the wrong person is the worst
+    ``member_unproven`` (it names no one: a disagreement, never a match). The ONE member check, for every verb. Checked before anything else in a receipt: a match for the wrong person is the worst
     disagreement there is. ``member`` None = the caller did not say (the comparator's own table tests)."""
     if member is None:
         return None
     who = kernel.get("on_behalf_of")
     if not isinstance(who, str):
-        return "kernel_malformed"
+        return "member_unproven"
     return None if who == member else "member_differs"
 
 
