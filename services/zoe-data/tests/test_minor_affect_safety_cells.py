@@ -423,7 +423,7 @@ def test_c_a_guardian_forget_erases_the_childs_verbatim_words_by_the_rows_proven
     a, _b = _child(env, monkeypatch)
     seen = []
 
-    async def record(user_id, exp, *extra):
+    async def record(user_id, exp, *extra, **_kw):       # the real seam also takes mids= (the row's saved-turn ids)
         seen.append(exp)
         return 0
 

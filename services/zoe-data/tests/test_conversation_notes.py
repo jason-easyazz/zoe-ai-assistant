@@ -757,7 +757,7 @@ def test_forget_that_fails_closed_and_says_so(member, monkeypatch):
     import memory_service
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
 
-    async def rows(svc, uid, text, ts):
+    async def rows(svc, uid, text, ts, **_kw):          # the real seam also takes mids= (the turn's saved-turn ids)
         return []
     monkeypatch.setattr(turn_forget, "rows_from_turn", rows)
     monkeypatch.setattr(turn_forget, "previous_turn", lambda uid, **k: turn_forget.Turn("I got dismissed today and it hurts", NOW, "h", 1))
