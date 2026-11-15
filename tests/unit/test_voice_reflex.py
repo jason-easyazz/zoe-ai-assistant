@@ -207,10 +207,6 @@ def test_the_explicit_inputs_fail_silent():
         assert R.decide(ok_ctx(media_active=v), s=ON).skip == "media"
     for v in (None, True, 0):
         assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
-    allow = replace(ON, for_guests=True)
-    assert R.decide(ok_ctx(guest=True), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_accept=None), s=allow).skip == "low_confidence"  # still needs an accept
     # the model's own accept: exactly True, nothing else (a raw score or a truthy stand-in is not a decision)
     for v in (None, False, 1, 0.9, "yes", "True", [True]):
         assert R.decide(ok_ctx(speaker_accept=v), s=ON).skip == "low_confidence"
@@ -229,6 +225,18 @@ def test_the_explicit_inputs_fail_silent():
     # the safe defaults: a bare Ctx (the daemon stated nothing) is silent
     bare = R.Ctx(rule="deep", speech_ms=1200, bank_voice="af_sky", current_voice="af_sky", takes=TAKES)
     assert R.decide(bare, s=ON).skip == "not_committed"
+
+
+def test_an_unknown_or_guest_speaker_is_always_silent_whatever_the_settings():
+    """The contract: an unknown speaker (no claim) or a guest is NEVER heard, even with an accepted verdict from a known
+    model, and no setting or environment value opens that guard (the old REFLEX_FOR_GUESTS escape is gone)."""
+    accepted = dict(speaker_accept=True, speaker_model=R.KNOWN_SPEAKER_MODELS[0], verdict_ms=90)
+    env_settings = R.settings({"REFLEX_ENABLED": "1", "REFLEX_FOR_GUESTS": "1"})
+    for s in (ON, env_settings):
+        for g in (None, True):
+            assert R.decide(ok_ctx(guest=g, **accepted), s=s) == R.Decision("none", None, "guest")
+        assert R.decide(ok_ctx(guest=False, **accepted), s=s).kind == "heard"   # positive control: a member is heard
+    assert not hasattr(env_settings, "for_guests") and "for_guests" not in R.Settings.__dataclass_fields__
 
 
 def test_more_silence_rules():
@@ -350,7 +358,7 @@ def test_defaults_are_the_s1_constants():
     s = R.settings({})
     assert (s.enabled, s.min_speech_ms, s.max_ms, s.seam_ms, s.min_gap_s, s.idle_greet_h, s.night_start, s.night_end,
             s.gain_db) == (False, 480, 600, 120, 30, 4, 22, 7, -3)
-    assert (s.for_guests, s.score_deadline_ms) == (False, 250)
+    assert s.score_deadline_ms == 250 and not hasattr(s, "for_guests")   # removed: no setting opens the guest guard
     assert not hasattr(s, "min_speaker_conf")               # removed: the reflex no longer owns a score threshold
     assert not hasattr(s, "require_speaker")                # removed: a missing score is always silence
 
@@ -362,8 +370,8 @@ def test_env_overrides_are_clamped():
     assert s.enabled is True and s.min_gap_s == 10 and s.max_ms == 1000 and s.seam_ms == 40
     assert s.min_speech_ms == 480 and s.gain_db == 0 and s.idle_greet_h == 4 and (s.night_start, s.night_end) == (21, 6)
     assert s.chain_every == 2
-    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_SCORE_DEADLINE_MS": "99999"})
-    assert t.for_guests and t.score_deadline_ms == 1000
+    t = R.settings({"REFLEX_SCORE_DEADLINE_MS": "99999"})
+    assert t.score_deadline_ms == 1000
     assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "-1"}).score_deadline_ms == 50
     assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "nan"}).score_deadline_ms == 250
     assert R.settings({"REFLEX_ENABLED": "maybe"}).enabled is False
@@ -515,6 +523,49 @@ def test_loader_refuses_other_defects(tmp_path):
     assert R.load_bank("../x", str(tmp_path), ON).reason == "voice_mismatch"
     assert set(R.LOAD_RESULTS) >= {"ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format",
                                    "too_long", "too_few"}
+
+
+def test_loader_decodes_the_bytes_it_hashed_not_a_second_read(tmp_path, monkeypatch):
+    """A take swapped on disk AFTER its hash was checked must not reach the bank: the loader decodes the very bytes it
+    hashed. The swap is made from inside the hash call, so it lands between the check and any later read of the path."""
+    d, _ = make_bank(tmp_path)
+    target = d / "mm_02.wav"
+    original = target.read_bytes()
+    swapped = _wav(410, freq=900.0, amp=20000)                      # a valid take of the same format, different PCM
+    real = hashlib
+
+    class _SwapAfterHash:
+        @staticmethod
+        def sha256(data=b""):
+            h = real.sha256(data)
+            if bytes(data) == original:
+                target.write_bytes(swapped)                         # the attacker's swap, right after the check
+            return h
+
+    monkeypatch.setattr(R, "hashlib", _SwapAfterHash)
+    res = R.load_bank("af_sky", str(tmp_path), ON)
+    import io
+
+    with wave.open(io.BytesIO(original), "rb") as wf:
+        want = wf.readframes(wf.getnframes())
+    assert res.reason == "ok"
+    assert res.bank.takes["mm_02"].pcm == want                     # the verified PCM, never the swapped file's
+
+
+def test_loader_refuses_a_take_that_is_not_a_regular_file(tmp_path):
+    """A take path that is a FIFO (or a symlink) is refused on the open descriptor, without blocking on it."""
+    import os
+
+    d, _ = make_bank(tmp_path)
+    (d / "mm_02.wav").unlink()
+    os.mkfifo(d / "mm_02.wav")
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "missing")
+    d2, _ = make_bank(tmp_path / "s")
+    real = (d2 / "mm_02.wav").read_bytes()
+    (tmp_path / "elsewhere.wav").write_bytes(real)
+    (d2 / "mm_02.wav").unlink()
+    (d2 / "mm_02.wav").symlink_to(tmp_path / "elsewhere.wav")
+    assert R.load_bank("af_sky", str(tmp_path / "s"), ON) == R.LoadResult(None, "missing")
 
 
 def test_loader_negative_control_untampered_copy_loads(tmp_path):
