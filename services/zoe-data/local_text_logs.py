@@ -44,6 +44,7 @@ import fcntl
 import json
 import logging
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -554,46 +555,117 @@ def _capture_text(directory: int, name: str) -> str:
         return stream.read()
 
 
+def _flock_capture(directory: int, *, wait: bool) -> bool:
+    """Exclusive ``flock`` on the capture DIRECTORY descriptor: the one serialisation the pair writer (``write_capture_pair``) and the
+    eraser (``erase_capture``) share. Each ``capture_directory()`` call opens its own descriptor, so two holders contend in one
+    process as across processes, and no lock file is added to the corpus. ``wait``: the eraser waits up to ``LOCK_WAIT_S``
+    (``TimeoutError``: the step fails and is retried); the writer never waits (it runs on a request) and gets False instead."""
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if not wait:
+                return False
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"capture directory lock busy for {LOCK_WAIT_S:.0f}s") from None
+            time.sleep(0.05)
+
+
+def write_capture_pair(wav_path: str, text: str, epoch: Optional[int]) -> bool:
+    """Write one capture pair (``tg-<stamp>-<pid>.wav`` then ``.txt``) ALL OR NOTHING with respect to an erase. ``epoch``: the
+    ``erase_epoch()`` captured BEFORE the audio was transcribed. Under the eraser's directory lock the pair is refused if an erase is
+    in progress or ran since ``epoch`` (the transcript may name what it forgot), checked before the audio and again before the
+    transcript; a refusal or failure after the audio was written removes the audio, so no half pair is left. Never waits: an
+    erase holding the lock means this note is not captured. Returns True only when both files were written. Raises ``OSError``
+    / ``ValueError`` (the caller logs them; capture is optional)."""
+    with capture_directory(create=True) as directory:
+        if directory is None or not _flock_capture(directory, wait=False):
+            return False
+        written: list[str] = []
+        done = False
+
+        def fresh() -> bool:
+            return not erase_in_progress() and (epoch is None or erase_epoch() == epoch)
+
+        def opener(name, flags):
+            return os.open(name, flags | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+
+        try:
+            if not fresh():
+                return False
+            base = f"tg-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            with open(wav_path, "rb") as source, open(f"{base}.wav", "xb", opener=opener) as dest:
+                written.append(f"{base}.wav")              # only a file THIS call created is ever removed below
+                shutil.copyfileobj(source, dest)
+            if not fresh():
+                return False
+            with open(f"{base}.txt", "x", encoding="utf-8", opener=opener) as dest:
+                written.append(f"{base}.txt")
+                dest.write(text + "\n")
+            done = True
+            return True
+        finally:
+            if not done:
+                for name in written:
+                    try:
+                        os.unlink(name, dir_fd=directory)
+                    except FileNotFoundError:
+                        pass
+            fcntl.flock(directory, fcntl.LOCK_UN)
+
+
 def erase_capture(*, match: Any = None, older_than: Optional[float] = None, everything: bool = False) -> int:
     """Delete capture pairs: every pair (``everything``), a pair whose transcript matches ``match``, or one older than ``older_than``
     (file mtime). Entity matching requires readable UTF-8 text: unreadable transcripts and orphaned WAVs are kept and reported
     as counts only. Full member erase deletes them unconditionally; retention still removes orphaned WAVs.
+    The whole pass holds the capture directory lock (``_flock_capture``), so no pair is written half before and half after it.
     Returns the number of files removed. RAISES on a failed delete (the cascade step / sweep then fails, never silently)."""
-    removed = unreadable = orphaned = 0
     with capture_directory() as directory:
         if directory is None:
             return 0
-        gone: set[str] = set()  # the listing is a snapshot: a pair deleted below must not be re-read as an orphan
-        for name in sorted(os.listdir(directory)):
-            entry = Path(name)
-            if name in gone or not name.startswith("tg-") or entry.suffix not in (".wav", ".txt"):
+        _flock_capture(directory, wait=True)
+        try:
+            return _erase_capture_held(directory, match=match, older_than=older_than, everything=everything)
+        finally:
+            fcntl.flock(directory, fcntl.LOCK_UN)
+
+
+def _erase_capture_held(directory: int, *, match: Any, older_than: Optional[float], everything: bool) -> int:
+    """``erase_capture``'s pass; the caller holds the capture directory lock."""
+    removed = unreadable = orphaned = 0
+    gone: set[str] = set()  # the listing is a snapshot: a pair deleted below must not be re-read as an orphan
+    for name in sorted(os.listdir(directory)):
+        entry = Path(name)
+        if name in gone or not name.startswith("tg-") or entry.suffix not in (".wav", ".txt"):
+            continue
+        txt, wav = str(entry.with_suffix(".txt")), str(entry.with_suffix(".wav"))
+        text_stat = _capture_stat(directory, txt)
+        _capture_stat(directory, wav)
+        if entry.suffix == ".wav" and text_stat is not None:
+            continue
+        if match is not None and not everything:
+            if text_stat is None:
+                orphaned += 1
                 continue
-            txt, wav = str(entry.with_suffix(".txt")), str(entry.with_suffix(".wav"))
-            text_stat = _capture_stat(directory, txt)
-            _capture_stat(directory, wav)
-            if entry.suffix == ".wav" and text_stat is not None:
+            try:
+                doomed = bool(match.search(_capture_text(directory, txt)))
+            except (OSError, UnicodeError):
+                unreadable += 1
                 continue
-            if match is not None and not everything:
-                if text_stat is None:
-                    orphaned += 1
-                    continue
+        else:
+            doomed = everything or text_stat is None
+        if not doomed and match is None and older_than is not None:
+            doomed = text_stat.st_mtime < older_than
+        if doomed:
+            for filename in (txt, wav):
                 try:
-                    doomed = bool(match.search(_capture_text(directory, txt)))
-                except (OSError, UnicodeError):
-                    unreadable += 1
-                    continue
-            else:
-                doomed = everything or text_stat is None
-            if not doomed and match is None and older_than is not None:
-                doomed = text_stat.st_mtime < older_than
-            if doomed:
-                for filename in (txt, wav):
-                    try:
-                        os.unlink(filename, dir_fd=directory)
-                        removed += 1
-                        gone.add(filename)
-                    except FileNotFoundError:
-                        pass
+                    os.unlink(filename, dir_fd=directory)
+                    removed += 1
+                    gone.add(filename)
+                except FileNotFoundError:
+                    pass
     if unreadable or orphaned:
         logger.warning("local_text_logs: entity capture skipped unreadable=%d orphaned=%d", unreadable, orphaned)
     return removed

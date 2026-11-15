@@ -235,7 +235,7 @@ BY_KEY = {s.key: s for s in STORES}
 
 # -- the detector's allowlist: reviewed write sites (``relpath::function``, fnmatch) -> a store key or a NOT_HOUSEHOLD reason ------
 WRITE_SITES: dict[str, str] = {
-    "services/zoe-data/routers/telegram_media.py::_maybe_capture": "telegram_stt_capture",
+    "services/zoe-data/local_text_logs.py::write_capture_pair": "telegram_stt_capture",
     "services/zoe-data/semantic_router.py::_append_shadow_line": "router_shadow_log",
     "services/zoe-data/zoe_agent.py::_log_feedback_triple": "production_feedback_log",
     "services/zoe-data/self_review.py::_write_private": "self_review_records",
