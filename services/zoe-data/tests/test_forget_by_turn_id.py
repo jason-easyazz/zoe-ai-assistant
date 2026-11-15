@@ -52,6 +52,8 @@ class _Chat:
 
     def __init__(self):
         self.rows: dict = {}                                     # id -> [content, metadata]
+        self.created: dict = {}                                  # id -> epoch it was saved (the real column's default)
+        self.clock = None                                        # a test may pin "now" to plant rows hours apart
 
     def ctx(self):
         chat = self
@@ -60,6 +62,7 @@ class _Chat:
             async def execute(self, sql, params=()):
                 if sql.lstrip().upper().startswith("INSERT INTO CHAT_MESSAGES"):
                     chat.rows.setdefault(params[0], [params[3], params[4]])
+                    chat.created.setdefault(params[0], chat.clock if chat.clock is not None else time.time())
                 return self
 
             rowcount = 0
@@ -82,9 +85,14 @@ class _Chat:
         return _ctx()
 
     async def by_id(self, user_id, mids):
-        # the real seam also returns every committed COPY of each turn (same session, role and words; this fake has one session)
-        said = {self.rows[m][0] for m in mids if m in self.rows}
-        return [(m, meta) for m, (c, meta) in self.rows.items() if m in mids or c in said]
+        # the real seam also returns every committed COPY of each turn: same session (this fake has one), role and words, saved
+        # within exact_words.COPY_WINDOW_S of it - the same words hours apart are another turn
+        want = [m for m in mids if m in self.rows]
+
+        def copy_of(m, c):
+            return any(c == self.rows[w][0] and abs(self.created.get(m, 0) - self.created.get(w, 0)) <= xw.COPY_WINDOW_S
+                       for w in want)
+        return [(m, meta) for m, (c, meta) in self.rows.items() if m in mids or copy_of(m, c)]
 
     async def candidates(self, user_id, needle):
         return [(m, c, meta) for m, (c, meta) in self.rows.items() if needle in c.lower() and not self.off(m)]
@@ -855,3 +863,77 @@ def test_a_refused_reject_of_a_bound_row_is_not_done_and_the_retry_finishes(worl
     second = go()                                                               # the same forget again: it finishes the job
     assert second.startswith("Done"), second
     assert stray.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+
+
+
+def test_the_same_words_hours_apart_are_two_turns_not_copies(world):
+    """The owner says the same sentence twice in one session, hours apart: two turns. Forgetting the first (from its entry) leaves
+    the second's transcript row, entry and fact. Copies are only rows saved within ``COPY_WINDOW_S`` of each other (the voice lane's
+    arrival / recovery race is seconds); on ac3fa1d3d the second turn's fact went too."""
+    from routers.chat import _save_chat_message
+
+    svc, chat = world
+    t0 = time.time() - 6 * 3600
+    stamped = {}
+    for mid, at in (("m-morning", t0), ("m-afternoon", t0 + 6 * 3600 - 60)):
+        chat.clock = at
+        with chat.patch.context() as scoped:
+            scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+            assert run(_save_chat_message("s-1", "user", TWICE, user_id=UID, message_id=mid)) is True
+        assert run(xw.index_turn(UID, TWICE, said_at=at, message_id=mid)) is True
+        stamped[mid] = run(svc.ingest(f"User's fishing rods lean on the carport wall ({mid})", user_id=UID, source="digest",
+                                      status="approved", source_excerpt=TWICE, metadata={"source_turn": mid})).id
+    chat.clock = None
+    entry = next(k[1] for k in xw.get_backend().rows if xw.mid_of(k[1]) == "m-morning")
+    stored = xw.get_backend().rows[(UID, entry)]["text"]
+    assert run(pa._forget_turn(UID, mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=entry),
+                               svc=svc)).startswith("Done")
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert chat.off("m-morning") and stamped["m-morning"] not in approved
+    assert not chat.off("m-afternoon") and stamped["m-afternoon"] in approved
+    assert [xw.mid_of(k[1]) for k in xw.get_backend().rows] == ["m-afternoon"]
+
+
+# ── a retry can always find its targets: the ids a legacy target resolved are KEPT with it (bot P1, PR #2574) ────────────────
+
+@pytest.mark.parametrize("fault", ["fact_read", "bound_reject"])
+def test_a_legacy_forget_that_fails_part_way_is_finished_by_the_retry(world, monkeypatch, fault):
+    """A legacy entry, an upgraded fact bound to its turn. The forget fails part-way - the fact-store read (once), or the reject of
+    the bound fact (once, after the transcript was flagged). The answer is not Done; the retry, from the target the forget kept
+    (``mp`` state, no manual help), removes the bound fact. On b7aa267a the transcript was flagged and the entry deleted before
+    the read, and a retry could not resolve the turn again (the transcript read skips off-record rows)."""
+    from routers.chat import _save_chat_message
+
+    svc, chat = world
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", UPGRADED, user_id=UID)) is True
+    mid = next(m for m, (c, _meta) in chat.rows.items() if c == UPGRADED)
+    run(xw.get_backend().add(UID, "xw-pre-upgrade", time.time(), UPGRADED, xw.tokens_column(UPGRADED), "chat"))
+    bound = run(svc.ingest("User's bike pump hangs inside the laundry", user_id=UID, source="digest", status="approved",
+                           source_excerpt=UPGRADED, metadata={"source_turn": mid}))
+    real_list, real_review, left = svc.list_by_status, svc.review, {"n": 1}
+
+    async def list_by_status(*a, **k):
+        if fault == "fact_read" and left["n"]:
+            left["n"] -= 1
+            raise RuntimeError("store hiccup")
+        return await real_list(*a, **k)
+
+    async def review(row_id, *a, **k):
+        if fault == "bound_reject" and row_id == bound.id and left["n"]:
+            left["n"] -= 1
+            return None
+        return await real_review(row_id, *a, **k)
+    monkeypatch.setattr(svc, "list_by_status", list_by_status)
+    monkeypatch.setattr(svc, "review", review)
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=UPGRADED, quote=UPGRADED, turn_id="xw-pre-upgrade")
+    first = run(pa._forget_turn(UID, exp, svc=svc))
+    assert not first.startswith("Done"), first
+    assert bound.id in {r.id for r in run(real_list(user_id=UID, status="approved"))}
+    kept = mp._state(UID).explained                                   # what the forget kept for the retry
+    assert kept is not None and kept.turn_id == "xw-pre-upgrade"
+    second = run(pa._forget_turn(UID, kept, svc=svc))
+    assert second.startswith("Done"), second
+    assert bound.id not in {r.id for r in run(real_list(user_id=UID, status="approved"))}
+    assert chat.off(mid) and "xw-pre-upgrade" not in {k[1] for k in xw.get_backend().rows}

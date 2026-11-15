@@ -287,3 +287,111 @@ def test_no_introducer_is_on_the_kept_list():
 
     assert not memory_service._LABELLED_NOT_VALUES & memory_service._LABELLED_INTRODUCERS
     assert not memory_service._LABELLED_NOT_VALUES & {"the", "a", "an", "my", "our", "your", "his", "her", "their"}
+
+
+# ── one match never swallows the next label (cross-review, PR #2574): every secret of a multi-secret sentence goes ──────────────
+
+_LABELS = ["password", "passcode", "pin", "token", "secret", "api key"]
+_CONNECTORS = [" is", " was", ":", " ="]
+
+
+def _labelled_rows() -> list:
+    """(sentence, secret) for every label x connector x (plain value | an introducer "the word <value>"); invented words."""
+    out, n = [], 0
+    for label in _LABELS:
+        for conn in _CONNECTORS:
+            for intro in ("", "the word "):
+                n += 1
+                value = f"zq{n:02d}vex"
+                out.append((f"my {label}{conn} {intro}{value}", value))
+    return out
+
+
+LABELLED = _labelled_rows()
+_JOINS = [" and ", ", ", ". "]
+
+
+@pytest.mark.parametrize("a,b", [
+    ("token is alpha", "secret is bravo"), ("my password is the word alpha", "pin is 4455"),
+    ("password: alpha", "api key = bravo"), ("the passcode was alpha", "the token is the word bravo"),
+    ("secret = alpha", "my password was bravo"), ("my api key is alpha", "the passcode: bravo"),
+])
+@pytest.mark.parametrize("join", _JOINS)
+def test_two_labelled_secrets_in_one_sentence_both_go(a, b, join):
+    out, _ = scrub_pii(a + join + b)
+    assert "alpha" not in out and "bravo" not in out, out
+    out, _ = scrub_pii(b + join + a)                                    # and in the other order
+    assert "alpha" not in out and "bravo" not in out, out
+
+
+def test_three_labelled_secrets_in_one_sentence_all_go():
+    for text in ("token is alpha, secret was the word bravo and my password is charlie",
+                 "pin = 4455 and the passcode is the word bravo. api key: charlie"):
+        out, _ = scrub_pii(text)
+        assert not {"alpha", "bravo", "charlie", "4455"} & set(out.replace(".", " ").replace(",", " ").split()), out
+
+
+@pytest.mark.parametrize("join", _JOINS)
+def test_any_two_and_three_labelled_rows_joined_lose_every_secret(join):
+    """PROPERTY over the generated labelled table: every pair, and a fixed spread of triples, joined - no secret survives."""
+    n = len(LABELLED)
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            (ta, sa), (tb, sb) = LABELLED[i], LABELLED[j]
+            out, _ = scrub_pii(ta + join + tb)
+            assert sa not in out and sb not in out, (ta, tb, out)
+        rows = [LABELLED[i], LABELLED[(i * 7 + 3) % n], LABELLED[(i * 13 + 5) % n]]
+        out, _ = scrub_pii(join.join(t for t, _s in rows))
+        assert not any(sec in out for _t, sec in rows), (rows, out)
+
+
+def _all_must_rows() -> list:
+    return [(t, s) for table in (SECRET_CATCH, CONTACT_CATCH) for rows in table.values() for t, s in rows] + LABELLED
+
+
+#: KNOWN, pre-existing run-ons between two CONTACT patterns (not the secret / labelled passes): a street address takes the next
+#: number's leading group as its postcode, and an international / trunk phone runs across ". " into the next number. Pinned as a
+#: ratchet: a NEW leaking pair fails the test, and fixing one of these fails it too until the entry is removed. The address
+#: helpers are being reworked on a separate branch; recorded in docs/knowledge/open-problems.md.
+_KNOWN_CONTACT_RUN_ONS = {
+    (" and ", "we live at 12 Example Street", "07700 900123 is my cell"),
+    (" and ", "I live at 33 sample road", "07700 900123 is my cell"),
+    (" and ", "she lives at 5 placeholder close, springfield", "07700 900123 is my cell"),
+    (", ", "we live at 12 Example Street", "07700 900123 is my cell"),
+    (", ", "the party is at 7 Sample Ave.", "07700 900123 is my cell"),
+    (", ", "Unit 3, 18 Placeholder Crescent", "07700 900123 is my cell"),
+    (", ", "it's 221B Example Lane", "07700 900123 is my cell"),
+    (", ", "I live at 33 sample road", "07700 900123 is my cell"),
+    (", ", "she lives at 5 placeholder close, springfield", "07700 900123 is my cell"),
+    (", ", "meet at 12 St Example Terrace", "07700 900123 is my cell"),
+    (". ", "the office is +61-8-5550-1303", "020 7946 0958 is the London line"),
+    (". ", "the office is +61-8-5550-1303", "07700 900123 is my cell"),
+    (". ", "the plumber's number is 5550 1234", "020 7946 0958 is the London line"),
+    (". ", "the plumber's number is 5550 1234", "07700 900123 is my cell"),
+    (". ", "call mum on 9555 0123", "020 7946 0958 is the London line"),
+    (". ", "call mum on 9555 0123", "07700 900123 is my cell"),
+    (". ", "we live at 12 Example Street", "07700 900123 is my cell"),
+    (". ", "Unit 3, 18 Placeholder Crescent", "07700 900123 is my cell"),
+    (". ", "it's 221B Example Lane", "07700 900123 is my cell"),
+    (". ", "I live at 33 sample road", "07700 900123 is my cell"),
+    (". ", "meet at 12 St Example Terrace", "07700 900123 is my cell"),
+}
+
+
+@pytest.mark.parametrize("join", _JOINS)
+def test_the_whole_must_table_joined_pairwise_loses_every_secret(join):
+    """After ALL passes (``scrub_pii`` order), any two MUST rows joined: neither secret survives (a pair is skipped only when one
+    row's secret is literally part of the other row's text, or the joined text is rejected outright). Every pair that involves a
+    SECRET or LABELLED row must pass; the only leaking pairs allowed are the pinned pre-existing contact run-ons."""
+    rows = _all_must_rows()
+    leaks = set()
+    for ta, sa in rows:
+        for tb, sb in rows:
+            if ta == tb or sa in tb or sb in ta:
+                continue
+            out, reject = scrub_pii(ta + join + tb)
+            if not reject and (sa in out or sb in out):
+                leaks.add((join, ta, tb))
+    assert leaks == {k for k in _KNOWN_CONTACT_RUN_ONS if k[0] == join}, sorted(leaks ^ _KNOWN_CONTACT_RUN_ONS)
