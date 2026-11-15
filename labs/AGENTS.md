@@ -559,3 +559,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   it proves the rules and NOT isolation. Regression net (hand-run under the test-lane rules, never CI):
   `python3 -m pytest -p no:cacheprovider -q labs/zoe-os/tests`; every guarantee has a monkeypatched negative control
   (README table). `bench.py` is one capped benchmark (60 s, 100k events). README is a record, not a contract.
+  `zoe_os/brain/` is the brain bridge (`docs/architecture/zoe-os-brain-bridge.md`): an adapter that presents the kernel's
+  declared actions as tools and turns a tool call into one kernel `act` (the brain proposes, the kernel disposes),
+  proven with a scripted and a recorded driver; NO real model turn has run through it (single llama slot shared with
+  the household), and it must not be wired to `flue-zoe-brain-2x/`. `bench_brain.py` measures the hop.

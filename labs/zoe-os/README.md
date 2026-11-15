@@ -19,7 +19,7 @@ is invented.
 | `zoe_os/receipts.py` | the action dispatcher, read-back receipts, the write-ahead intent and crash recovery, the claim-without-receipt detector |
 | `zoe_os/attention.py` | per-person routing of offers: card by default, spoken only if that person turned it on |
 | `zoe_os/kernel.py` | the services wired together and the loop that feeds events to skills |
-| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of eight ops and their arguments |
+| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of nine ops and their arguments |
 | `zoe_os/server.py` | the kernel behind a Unix socket: handshake, per-connection identity, size cap, frame deadline |
 | `zoe_os/client.py` | the skill's side of the socket, and `RemoteKernel` so an in-process skill runs unchanged |
 | `zoe_os/skills/` | three toy skills: leaving catch, calendar heads-up, and a deliberately malicious one |
@@ -32,6 +32,10 @@ is invented.
 | `zoe_os/twin/baseline.py` | the twin skill: what is normal per person, as counts; "not enough days yet" below ten working days |
 | `zoe_os/twin/rehearse.py` | a changed skill against generated and recorded days: privacy failures first, then every difference |
 | `zoe_os/twin/unusual.py` | "this differs from the last N days in this way": never a reason |
+| `zoe_os/brain/bridge.py` | the brain's adapter: tool list derived from the kernel's `describe`, one tool call = one `act`, one sentence back |
+| `zoe_os/brain/drivers.py` | kernel-side drivers for the brain's three actions (lists, reminders, alarms) and the keeper that erases them on forget |
+| `zoe_os/brain/drive.py` | the scripted agent and the recorded-stream replay (no model) |
+| `bench_brain.py` | latency of the kernel hop per brain action |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
@@ -94,6 +98,16 @@ bad outcome.
 | the same recording gives the same report, byte for byte | `test_replay.py` | (checked across three processes with different hash seeds and time zone) |
 | one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the rule-free store moves it |
 | a forget still reaches what derived from an event that aged out | `test_retention.py` | expiry that drops the links, or retires a skeleton early: the copy survives |
+
+### The brain bridge ([record](../../docs/architecture/zoe-os-brain-bridge.md))
+
+| Guarantee | Test | Control: remove this, and the bad thing happens |
+|---|---|---|
+| an action's declared arguments are checked before its driver runs | `test_describe_params.py` | `check_params` always yes: the driver runs on malformed arguments |
+| an action for a person must cite an event about that person | `test_cause_binding.py` | `Dispatcher._concerns` always yes: a deputy acts for one person on another's word |
+| the brain's tools are derived from the kernel; the turn's own values are hidden from the model | `test_brain_bridge.py` | a bridge that shows every parameter, or accepts `asked` from the model |
+| forgetting a person removes the effect in the stores, not only the events | `test_brain_bridge.py` | a keeper that ignores the notice |
+| kernel down or lost mid-call is said honestly and writes nothing half-way | `test_brain_bridge.py` | (a kill between write and receipt is `uncertain`, never done) |
 
 ### The household twin
 
