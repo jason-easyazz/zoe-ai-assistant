@@ -213,6 +213,11 @@ if [ -s "$applog" ]; then
   recs=$(tail -500 "$applog" 2>/dev/null | grep -cE ' (INFO|WARNING|ERROR) ')
   tb=$(tail -500 "$applog" 2>/dev/null | grep -cE 'Traceback|CRITICAL')
   ok "app log live ($recs app records in last 500 lines, $tb tracebacks)"
+  # Turn-lane facts written with no source turn (#2574's ZOE_MEMORY_TURN_ID_REQUIRED shadow count). The enforce flip waits
+  # for this to read 0 over a day of real use; counts only, the marker carries no words.
+  unb=$(grep -c 'MEMORY_WRITE_UNBOUND' "$applog" 2>/dev/null)
+  if [ "${unb:-0}" = "0" ]; then dim "unbound memory writes in the current app log: 0"
+  else dim "unbound memory writes in the current app log: $unb (ZOE_MEMORY_TURN_ID_REQUIRED stays shadow until this is 0 for a day)"; fi
 else bad "app log EMPTY/ABSENT — app-level logging may be broken again (pre-#1468 blackout signature)"; fi
 avail=$(free -m 2>/dev/null | awk '/Mem:/{print $7}')
 # The floor is PER-MODE and lives in voice_regression_probe.resolve_min_mem()

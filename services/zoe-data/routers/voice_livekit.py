@@ -639,6 +639,10 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     propagate, the STT temp file is unlinked in a ``finally``, and no counters
     are mutated on the cancel path — so a cancelled turn leaks no state.
     """
+    # The turn's erase epoch, read BEFORE its words exist (this task is the turn's own): every erasable write it causes checks it.
+    import local_text_logs
+
+    local_text_logs.begin_turn()
     pipeline_started = time.monotonic()
     await _send_data(local_participant, {"type": "state", "state": "thinking"})
 
@@ -792,6 +796,9 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
 
 async def _run_text_pipeline(local_participant, message: str, user_id: str, session_id: str) -> None:
     """LLM -> TTS pipeline for text commands sent over the LiveKit data channel."""
+    import local_text_logs
+
+    local_text_logs.begin_turn()   # a typed turn's epoch, read where its words enter this process (this task is the turn's own)
     message = (message or "").strip()
     if not message:
         await _send_data(local_participant, {"type": "state", "state": "ambient"})
@@ -1677,6 +1684,9 @@ async def livekit_audio(
     full STT → LLM → TTS pipeline, and returns the result as JSON.
     Also used by touch/voice.html.
     """
+    import local_text_logs
+
+    local_text_logs.begin_turn()   # BEFORE the clip reaches STT: every erasable write of this turn checks it
     user_id = caller.get("user_id") or "guest"
     sid = session_id or f"lk-http-{user_id}"
     cancel_key = f"{user_id}:{sid}"
