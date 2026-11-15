@@ -191,6 +191,18 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 | How does the kernel learn who lives in the house | Automatically, from the accounts Zoe already has. The owner keeps no second list |
 | Where should the kernel live, and how much should go through it | Open: an architecture study is under way. The owner's expectation is that most things go through the kernel; the study must state the boundary and justify every exception |
 
+### Owner choices from the architecture study (decided 2026-11-15: the recommendations were accepted)
+
+Record: `docs/architecture/zoe-os-architecture.md` (its section on the owner's choices).
+
+| Choice | Decision |
+|---|---|
+| The kernel is briefly down after an action's old rule code has been removed | Zoe refuses list, reminder and alarm changes for that moment and says so; reads keep working. The duplicate rules are not kept forever as a spare |
+| Devices that need a spoken yes every time, and do nothing while the kernel is down | Door locks, garage doors, the security alarm, and anything that heats |
+| What a guardian can see and manage of a child's data | The child's reminders, alarms and lists. Not their private notes or journal |
+| Changes to the kernel's own code, its "what the kernel owns" table and its budgets | Need a one-tap approval from the owner, even after clean reviews |
+| Things found in pendant recordings, messages, calendars or web pages | Suggestions by default; a per-person "act on my pendant" switch; never automatic for web pages. The pendant itself needs new firmware and a phone app before it is useful: later work, not part of this programme |
+
 ### Decisions taken from the prior-art review (2026-11-15; engineering decisions, not owner questions)
 
 Record: `docs/research/zoe-os-prior-art-2026-11-15.md`. These are adopted and become work before the first authority flag goes live.
