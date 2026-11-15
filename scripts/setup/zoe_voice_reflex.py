@@ -439,11 +439,13 @@ def ordering_wait_ms(reflex_started_at: Optional[float], reflex_dur_ms, now: flo
 
 
 # ── the bank ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-def bank_sha8(voice: str, style_len, takes: "list[tuple[str, str]]") -> str:
-    """The bank id: sha256 over the voice, the pinned style row and every (take id, file sha256), sorted. A render date or a
-    tool version does not change it; any changed byte of audio does."""
-    canon = json.dumps({"voice": voice, "style_len": style_len, "takes": sorted([list(t) for t in takes])},
-                       sort_keys=True, separators=(",", ":"))
+def manifest_sha8(manifest: Mapping) -> str:
+    """The bank id: sha256 over the WHOLE manifest except its own ``bank`` key, in canonical JSON (sorted keys, no
+    whitespace, no NaN). Every take's file sha256 is in the manifest, so the id covers every byte of audio AND every manifest
+    field (durations, levels, render date, versions): no file of the bank can be swapped or edited without changing the
+    directory name the loader demands. Raises ValueError on a value JSON cannot carry exactly (NaN, infinity)."""
+    body = {k: v for k, v in manifest.items() if k != "bank"}
+    canon = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     return hashlib.sha256(canon.encode()).hexdigest()[:8]
 
 
@@ -517,8 +519,9 @@ def _read_regular_file(path: Path, limit: int) -> Optional[bytes]:
 
 def load_bank_dir(bank_dir, voice: str, s: Optional[Settings] = None) -> LoadResult:
     """Load and verify ONE bank directory ``<root>/<voice>/<sha8>/``. Any mismatch is no bank (fail silent, never the wrong
-    voice): the manifest voice and the directory names must equal ``voice``; the directory name must equal the sha8 recomputed
-    from the files; every file must hash to its manifest sha256, be 24 kHz mono S16, and be at most ``REFLEX_MAX_MS`` long."""
+    voice): the manifest voice and the directory names must equal ``voice``; the directory name and the manifest's ``bank``
+    must equal ``manifest_sha8`` of the whole manifest (which holds every file's sha256); every file must hash to its manifest
+    sha256, be 24 kHz mono S16, and be at most ``REFLEX_MAX_MS`` long."""
     s = s or settings()
     d = Path(bank_dir)
     mf = d / "manifest.json"
@@ -558,8 +561,11 @@ def load_bank_dir(bank_dir, voice: str, s: Optional[Settings] = None) -> LoadRes
         pairs.append((tid, sha))
     if len(takes) < BANK_MIN_TAKES or len(takes) != len(man["takes"]):
         return LoadResult(None, "too_few")
-    sha8 = bank_sha8(voice, style_len, pairs)
-    if d.name != sha8 or man.get("bank") not in (None, sha8):
+    try:
+        sha8 = manifest_sha8(man)          # the WHOLE manifest (bar its own ``bank`` key), so no field is swappable
+    except (TypeError, ValueError):
+        return LoadResult(None, "bad_manifest")
+    if d.name != sha8 or man.get("bank") != sha8:
         return LoadResult(None, "sha_mismatch")
     return LoadResult(Bank(voice, sha8, style_len, takes), "ok")
 

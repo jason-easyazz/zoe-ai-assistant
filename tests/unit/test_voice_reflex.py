@@ -421,13 +421,14 @@ def make_bank(root: Path, voice: str = "af_sky", n: int = 3, ms: int = 400, rate
               manifest_voice: str | None = None):
     files = {f"mm_{i + 1:02d}": _wav(ms + 10 * i, rate=rate, freq=150.0 + 10 * i) for i in range(n)}
     pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
-    sha8 = R.bank_sha8(voice, 60, pairs)
+    man = {"voice": manifest_voice or voice, "style_len": 60, "render_date": "2026-11-14",
+           "takes": [{"id": k, "sha256": s, "dur_ms": 0, "rms_db": -20.0} for k, s in pairs]}
+    sha8 = R.manifest_sha8(man)
+    man["bank"] = sha8
     d = root / voice / (dirname or sha8)
     d.mkdir(parents=True)
     for k, v in files.items():
         (d / f"{k}.wav").write_bytes(v)
-    man = {"voice": manifest_voice or voice, "bank": sha8, "style_len": 60, "render_date": "2026-11-14",
-           "takes": [{"id": k, "sha256": s, "dur_ms": 0, "rms_db": -20.0} for k, s in pairs]}
     (d / "manifest.json").write_text(json.dumps(man))
     return d, sha8
 
@@ -439,6 +440,37 @@ def test_loader_accepts_a_good_bank(tmp_path):
     assert res.bank.takes["mm_01"].dur_ms == 400 and len(res.bank.takes["mm_01"].pcm) == 400 * 24 * 2
     ctx = ok_ctx(bank_voice=res.bank.voice, takes=res.bank.take_ids)
     assert R.decide(ctx, s=ON).kind == "heard"
+
+
+@pytest.mark.parametrize("edit", ["dur_ms", "rms_db", "render_date", "new_key", "drop_bank", "reorder_takes"])
+def test_loader_refuses_an_edited_manifest(tmp_path, edit):
+    """Every manifest field is covered by the bank id: editing ANY of them (a take's duration or level, the render date, an
+    added key, the bank key itself, the take order) without re-rendering makes the loader refuse the bank."""
+    d, _ = make_bank(tmp_path)
+    assert R.load_bank("af_sky", str(tmp_path), ON).reason == "ok"           # positive control: the untouched bank loads
+    man = json.loads((d / "manifest.json").read_text())
+    if edit == "dur_ms":
+        man["takes"][0]["dur_ms"] = 999
+    elif edit == "rms_db":
+        man["takes"][1]["rms_db"] = -3.0
+    elif edit == "render_date":
+        man["render_date"] = "2099-01-01"
+    elif edit == "new_key":
+        man["gain_db"] = 6.0
+    elif edit == "drop_bank":
+        man.pop("bank")
+    else:
+        man["takes"] = man["takes"][::-1]
+    (d / "manifest.json").write_text(json.dumps(man))
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "sha_mismatch")
+
+
+def test_manifest_sha8_ignores_only_its_own_key_and_refuses_nan():
+    m = {"voice": "af_sky", "takes": [{"id": "mm_01", "sha256": "0" * 64}], "render_date": "2026-11-14"}
+    assert R.manifest_sha8(m) == R.manifest_sha8({**m, "bank": "deadbeef"})
+    assert R.manifest_sha8(m) != R.manifest_sha8({**m, "render_date": "2026-11-15"})
+    with pytest.raises(ValueError):
+        R.manifest_sha8({**m, "gain_db": float("nan")})
 
 
 def test_loader_refuses_a_tampered_file(tmp_path):
@@ -453,13 +485,14 @@ def _bank_with(tmp_path: Path, bad: bytes) -> Path:
     """A three-take bank whose second file is ``bad``, with a manifest whose hash MATCHES it (so only the reader refuses)."""
     files = {"mm_01": _wav(400), "mm_02": bad, "mm_03": _wav(420, freq=170.0)}
     pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
-    sha8 = R.bank_sha8("af_sky", 60, pairs)
+    man = {"voice": "af_sky", "style_len": 60, "takes": [{"id": k, "sha256": h} for k, h in pairs]}
+    sha8 = R.manifest_sha8(man)
+    man["bank"] = sha8
     d = tmp_path / "af_sky" / sha8
     d.mkdir(parents=True)
     for k, v in files.items():
         (d / f"{k}.wav").write_bytes(v)
-    (d / "manifest.json").write_text(json.dumps({"voice": "af_sky", "bank": sha8, "style_len": 60,
-                                                 "takes": [{"id": k, "sha256": h} for k, h in pairs]}))
+    (d / "manifest.json").write_text(json.dumps(man))
     return d
 
 
