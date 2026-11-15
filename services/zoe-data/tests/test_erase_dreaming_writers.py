@@ -424,3 +424,64 @@ def test_a_derived_store_that_cannot_be_cleared_fails_the_delete(env, monkeypatc
     with pytest.raises(memory_service.MemoryServiceError, match="derived-store erasure failed"):
         asyncio.run(svc.delete_user(UID, actor="test", reason="synthetic erase"))
     assert [d for d, _ in _rows(col, UID)] == ["User keeps hens"], "nothing of the palace was erased: the caller retries"
+
+
+# ── the night-write undo inside the memory lock skips the registry step; the member erase clears the registry itself ──────────
+
+def test_a_night_write_undone_under_the_lock_leaves_no_palace_and_no_registry_row(env, monkeypatch, tmp_path):
+    """erase_rows(lock_held=True) (a night write undoing itself inside ingest) must NOT take the erase gate under the memory lock, so
+    it skips memory_value_registry.erase_for_rows; the member erase that raced it clears the whole registry (forget_user)."""
+    import memory_value_registry as reg
+    import test_memory_value_registry as tmvr
+
+    svc, col = env
+    member = tmvr.A
+    path = str(tmp_path / "zoe.db")
+    db = tmvr._Sqlite(path)
+    db.conn.executescript(tmvr.PEOPLE + ";")
+    db.conn.execute("INSERT INTO people (id, user_id, name, deleted) VALUES (?, ?, 'Juno', 0)", (tmvr.JUNO, member))
+    db.conn.commit()
+    import sqlalchemy as sa
+    tmvr._migrate(sa.create_engine(f"sqlite:///{path}"))                # the REAL migration 0080
+
+    @contextlib.asynccontextmanager
+    async def regdb():
+        yield db
+    monkeypatch.setattr(reg, "_db", regdb)                       # the registry's own store, for the pass and the erase alike
+    reg.reset_state()
+    rows = lambda: db.q("SELECT COUNT(*) FROM memory_value_registry WHERE user_id = ?", (member,))[0][0]  # noqa: E731
+    assert asyncio.run(reg.record(member, tmvr.JUNO, "age", superseded=[tmvr._age(7)], asserted=tmvr._age(8), said_at=tmvr.T0,
+                                  by_claim=tmvr.C(1), row_ids=[tmvr.R(member, "r1")], now=tmvr.T0)) == 2
+    assert rows() == 2, "control: the registry holds the member's entries before the erase"
+
+    other = MemoryService(data_dir="/nonexistent/zoe-test-erase-dreaming-api")
+    other._collection, other._audit_collection = svc._collection, svc._audit_collection
+    other._append_audit, other.search = svc._append_audit, svc.search
+    real_check, calls, undo_calls, registry_calls = ew.erased_since_cycle, {"n": 0}, [], []
+
+    async def check(uid, ph):
+        out = await real_check(uid, ph)
+        if uid == member and ph == "synthesis":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                await other.delete_user(member, actor="test", reason="synthetic erase")   # the API erase, right after the pre-check
+        return out
+    monkeypatch.setattr(ew, "erased_since_cycle", check)
+    real_erase_rows = svc.erase_rows
+
+    async def erase_rows(user_id, ids, **kw):
+        undo_calls.append(kw.get("lock_held"))
+        return await real_erase_rows(user_id, ids, **kw)
+    monkeypatch.setattr(svc, "erase_rows", erase_rows)
+    real_for_rows = reg.erase_for_rows
+
+    async def for_rows(*a, **k):
+        registry_calls.append(1)
+        return await real_for_rows(*a, **k)
+    monkeypatch.setattr(reg, "erase_for_rows", for_rows)
+
+    _night(lambda: svc.ingest("User keeps a small vegetable garden behind the house", user_id=member, source="synthesis",
+                              memory_type="insight", confidence=0.85, status="approved"))
+    assert undo_calls == [True], "the racing write was undone through erase_rows(lock_held=True)"
+    assert registry_calls == [], "the undo under the memory lock never takes the erase gate (no erase_for_rows)"
+    assert _rows(col, member) == [] and rows() == 0, "no palace row and no registry row survive"

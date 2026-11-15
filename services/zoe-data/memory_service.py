@@ -3812,7 +3812,8 @@ class MemoryService:
         # memory lock (_user_locks) is held. The writers hold the gate and THEN take the memory lock (omi_review_apply.approve ->
         # ingest), so the reverse order here deadlocked a pendant approval against a row forget. Every gate-taking eraser therefore
         # runs before the memory lock is taken (or after it is released).
-        # ``lock_held``: the caller already holds this member's memory lock (a night write undoing itself inside ingest / review:
+        # ``lock_held``: the caller already holds this member's memory lock (a night write undoing itself inside ingest / review /
+        # the candidate write / archive_duplicate:
         # erase_watermark.guarded_write). The lock is not re-entrant, and the registry step is SKIPPED: it takes the erase gate,
         # which must never be taken under the memory lock, and the member erase that triggered the undo clears the member's
         # whole registry itself (delete_user -> memory_value_registry.forget_user, fail closed).
