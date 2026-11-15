@@ -316,7 +316,7 @@ def _plant_partition(svc):
                                                   day="2026-10-08", said_at=now)))
     old = run(svc.ingest("User's locksmith is at the corner shop", user_id=UID, source="turn_digest", status="approved",
                          source_excerpt=LEGACY_SAID))
-    for k in ("source_turn", "source_kind"):                      # an OLD row: written before the ids
+    for k in ("source_turn", "source_kind", "source_excerpt_said"):   # no provenance of any kind                      # an OLD row: written before the ids
         svc._collection().rows[old.id][1].pop(k, None)
     bound = run(svc.ingest("User's locksmith is in the corner shop", user_id=UID, source="turn_digest", status="approved",
                            source_excerpt=LEGACY_SAID, metadata={"source_turn": "m-other"}))
@@ -445,7 +445,7 @@ def _plant_backfilled(svc, chat):
 
     def legacy(text, excerpt):
         ref = run(svc.ingest(text, user_id=UID, source="turn_digest", status="approved", source_excerpt=excerpt))
-        for k in ("source_turn", "source_kind"):
+        for k in ("source_turn", "source_kind", "source_excerpt_said"):   # no provenance of any kind
             svc._collection().rows[ref.id][1].pop(k, None)              # written before the ids
         return ref
     old = legacy("User's piano teacher lives next to the old bakery", BACKFILLED)
@@ -514,7 +514,7 @@ def _plant_kind(svc, chat, kind):
     def fact(text, prov):
         ref = run(svc.ingest(text, user_id=UID, source="turn_digest", status="approved", source_excerpt=KW))
         meta = svc._collection().rows[ref.id][1]
-        for k in ("source_turn", "source_kind"):
+        for k in ("source_turn", "source_kind", "source_excerpt_said"):   # no provenance of any kind
             meta.pop(k, None)
         meta.update(prov)
         return ref.id
@@ -655,7 +655,7 @@ def test_a_twin_of_a_non_turn_fact_goes_with_it_and_a_look_alike_stays(world, pa
     w = _plant_kind(svc, chat, "kind")
     look = run(svc.ingest("User's kayak is red and lives at the club", user_id=UID, source="turn_digest", status="approved",
                           source_excerpt="My kayak is red and it lives at the club"))
-    for k in ("source_turn", "source_kind"):
+    for k in ("source_turn", "source_kind", "source_excerpt_said"):   # no provenance of any kind
         svc._collection().rows[look.id][1].pop(k, None)
     reply = _run_path(path, svc, w)
     approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
@@ -813,3 +813,45 @@ def test_a_turn_committed_twice_is_forgotten_whole_from_any_one_id(world, path):
         if not chat.off(mid):
             run(xw.index_turn(UID, TWICE, message_id=mid))
     assert not xw.get_backend().rows
+
+
+# ── any failed reject fails the forget (after everything reachable ran), and the retry finishes it (cross-review, PR #2574) ─────
+
+@pytest.mark.parametrize("path", ["forget_it_after_why", "forget_it_fact", "memory_space"])
+def test_a_refused_reject_of_a_bound_row_is_not_done_and_the_retry_finishes(world, monkeypatch, path):
+    """The store refuses the reject of a row bound to the target's turn (it returns None once): the forget must NOT say Done while
+    that fact is still approved, everything else reachable still goes, and the same forget again completes it."""
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    stray = run(svc.ingest("User keeps the kayak paddles behind the garage door", user_id=UID, source="digest",
+                           status="approved", source_excerpt="something else entirely about kayaks",
+                           metadata={"source_turn": w["mid"]}))          # bound to the same turn, not a twin by words
+    real, refused = svc.review, {"left": 1}
+
+    async def review(row_id, *a, **k):
+        if row_id == stray.id and refused["left"]:
+            refused["left"] -= 1
+            return None
+        return await real(row_id, *a, **k)
+    monkeypatch.setattr(svc, "review", review)
+    stored = xw.get_backend().rows[(UID, w["entry"])]["text"]                   # the explained quote, kept for the retry
+
+    def go():
+        if path == "forget_it_after_why":
+            return run(pa._forget_turn(UID, mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored,
+                                                         turn_id=w["entry"]), svc=svc))
+        if path == "memory_space":
+            import memory_space
+            try:
+                return "Done" if run(memory_space.forget_row(UID, w["fact"], svc=svc)) == "forgotten" else "not done"
+            except RuntimeError:
+                return "not done"
+        return _run_path(path, svc, w)
+
+    first = go()
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert not first.startswith("Done") and stray.id in approved, first
+    assert w["fact"] not in approved and chat.off(w["mid"])                     # the rest that was reachable still went
+    second = go()                                                               # the same forget again: it finishes the job
+    assert second.startswith("Done"), second
+    assert stray.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}

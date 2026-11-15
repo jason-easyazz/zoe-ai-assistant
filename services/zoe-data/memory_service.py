@@ -1402,7 +1402,31 @@ _CODE_RE = re.compile(
 )
 #: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
 _BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
-_BARE_PASSWORD_RE = re.compile(rf"(?i)\b(password|passphrase)\b(\s{{0,8}}(?:(?:is|was|=|:|-)\s{{0,8}})?)({_TOKEN})")
+#: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
+#: after the label is kept only when it is on this CLOSED list - a word that says the sentence is ABOUT the password, not its
+#: value. Nouns and states first, then function words (a connector, pronoun or adverb is never the value itself).
+_PASSWORD_NOT_VALUES = (
+    # what the password is part of / what happened to it
+    "manager", "managers", "reset", "resets", "field", "policy", "policies", "protected", "protection", "prompt", "hint",
+    "box", "change", "changes", "changed", "rules", "rule", "requirements", "strength", "expiry", "expired", "recovery",
+    "generator", "vault", "app", "screen", "page", "form", "login", "entry", "length", "update", "updated", "settings",
+    "wrong", "incorrect", "forgotten", "lost", "leaked", "again",
+    # function words: the value, if any, comes later ("the password for the wifi is ..." is the labelled form below)
+    "is", "was", "are", "were", "be", "been", "has", "had", "have", "will", "would", "can", "could", "should", "must", "may",
+    "doesn't", "didn't", "isn't", "wasn't", "won't", "can't", "not", "no", "and", "or", "but", "so", "if", "when", "because",
+    "for", "to", "of", "on", "in", "at", "with", "from", "by", "about", "into", "the", "a", "an", "this", "that", "it", "i",
+    "you", "we", "they", "he", "she", "my", "your", "our", "their", "now", "then", "too", "yet", "already", "today",
+    "please", "here", "there",
+)
+#: label, separator, value. A ``for / to <thing>`` label needs an explicit is / was / = / : before its value; the value is one
+#: whitespace-free token (digit groups may follow), and the token after a bare label must not be on the closed list. Every repeat
+#: is bounded or confined to one token, and the match is anchored on the label (linear: the adversarial timing test)
+_BARE_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30}"
+    r"(?=\s{0,8}(?:is|was|=|:))|password|passphrase)\b"
+    r"(\s{0,8}(?:(?:is|was|=|:|-|'s|’s)\s{0,8})?)"
+    rf"((?!(?:{_alt(_PASSWORD_NOT_VALUES)})(?![\w'’-]))[^\s,;!?.][^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{{2,12}}){{0,3}})"
+)
 _ACCOUNT_RE = re.compile(
     rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
 )
@@ -1543,7 +1567,8 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     if _IBAN_RE.search(text) and _BANKING_CONTEXT_RE.search(text):
         return text, "iban"
 
-    redacted = _scrub_secrets(_LABELLED_SECRET_RE.sub(r"\1\2" + _REDACT, text))
+    # a bare password (letters-only too) is redacted here as well: ``_scrub_secrets`` skips a text with no digit at all
+    redacted = _scrub_secrets(_BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, _LABELLED_SECRET_RE.sub(r"\1\2" + _REDACT, text)))
     return (_scrub_contact(redacted) if contact else redacted), None
 
 

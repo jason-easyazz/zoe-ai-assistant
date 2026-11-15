@@ -1430,6 +1430,23 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         return []
 
 
+async def _reject_all(svc: Any, user_id: str, rows: Any, *, note: str) -> tuple:
+    """Reject every row in ``rows``: ``(rejected ids, failures)``. A refused (None) or raising reject is COUNTED and the rest still
+    run - fail closed AND erase everything reachable; the caller must not confirm a forget with failures > 0."""
+    gone, failed = [], 0
+    for r in rows or ():
+        try:
+            if await svc.review(r.id, decision="reject", actor=user_id, note=note) is not None:
+                gone.append(r.id)
+                continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("provenance_answers: reject failed (%s)", type(exc).__name__)
+        failed += 1
+    if failed:
+        logger.warning("PROVENANCE_FORGET code=reject_failed n=%d", failed)
+    return gone, failed
+
+
 async def _target_ids(user_id: str, exp: "mp.Explained", ref: Any = None, *extra: str) -> tuple:
     """``(mids, source_only, resolved)`` of a forget target, RESOLVED before anything is erased: a TURN target's saved-turn ids; a KIND target
     names none (``source_only``); a LEGACY target's words resolve to the saved turns holding them (``resolve_legacy_ids``) so the
@@ -1490,9 +1507,13 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             # the row was rejected already - possibly by an earlier "forget it" whose word erase failed: finish that job (idempotent)
             try:
                 mids, source_only, resolved = await _target_ids(user_id, exp, ref, ref.text or "")
-                for r in await _bound_rows(svc, user_id, mids, skip=(ref.id,)):     # a legacy target's resolved turns: all of it
-                    await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained")
-                left = await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
+                # a legacy target's resolved turns: all of it; a refused reject fails the retry (after the words still go)
+                _g, failed = await _reject_all(svc, user_id, await _bound_rows(svc, user_id, mids, skip=(ref.id,)),
+                                               note="forget_explained")
+                left = len(_g) + await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only,
+                                                    resolved=resolved)
+                if failed:
+                    raise RuntimeError("a bound row's reject failed")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
                 _rearm(user_id, exp)
@@ -1511,10 +1532,8 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
         if done is None:
             return STORE_DOWN_REPLY
-        gone = [ref.id]
-        for tw in [*twins, *bound]:
-            if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_explained") is not None:
-                gone.append(tw.id)
+        more, failed = await _reject_all(svc, user_id, [*twins, *bound], note="forget_explained")
+        gone = [ref.id, *more]
         if hasattr(svc, "erase_rows"):
             try:
                 from memory_service import physical_erase_enabled
@@ -1527,6 +1546,9 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
+        if failed:   # a twin / bound row still approved: everything reachable ran, but this forget did not finish
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
         mp.clear_explained(user_id)
@@ -1565,9 +1587,11 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
             ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
             if ex and any(ex == k or k in ex for k in keys):
                 mine.append(r)
-        for r in mine:
-            if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:
-                gone += 1
+        rejected, failed = await _reject_all(svc, user_id, mine, note="forget_explained")
+        gone += len(rejected)
+        if failed:   # a row of that turn is still approved: not "Done"; the target is kept for the retry
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
         mp.clear_explained(user_id)
         logger.info("PROVENANCE_FORGET user=%s turn=1 rows=%d erased=%d", user_id, gone, erased)
         if not erased and not gone:
