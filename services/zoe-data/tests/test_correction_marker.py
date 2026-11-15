@@ -676,3 +676,95 @@ async def test_a_curated_row_about_something_else_does_not_block_the_marker(monk
     _Svc.meta = {"authority_class": "curated"}
     await _note(OTHER_SUBJECT)                                       # "Juno ..." shares no subject word with the book club row
     assert OTHER_SUBJECT in _packet(monkeypatch)["packet"]
+
+
+# ── review threads, PR #2570 ──────────────────────────────────────────────────────────────────────────────────────────────
+# (c) a forget that COMPLETES while the fold awaits the restraint read (the mute store) must not be followed by a replay of the
+# erased correction: the last marker check runs after every await, the restraint read included. The forget is the real forget
+# code, run to completion inside that await. Negative control: on 96f8fe071 the erased correction is served.
+
+@pytest.mark.parametrize("which", ["topic", "entity", "delete"])
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+async def test_a_forget_finishing_during_the_restraint_read_serves_nothing(monkeypatch, tmp_path, which, mode):
+    import memory_forget_cascade as mfc
+    import restraint
+
+    async def noop(*a, **k):
+        return None
+    monkeypatch.setattr(mfc, "_clear", noop)
+    monkeypatch.setattr(mfc, "retry_pending", noop)
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda _u: None)
+    forget = {"topic": _forget_topic, "entity": _forget_entity, "delete": lambda: _forget_member(tmp_path)}[which]
+    monkeypatch.setenv("ZOE_RESTRAINT", mode)
+    await _note()
+    monkeypatch.setattr(restraint, "list_mutes", lambda _u: _ret([]))
+    assert HEAD in _packet(monkeypatch)["packet"]                                   # control: no forget, served
+    ran, real_filter, folding = [], restraint.filter_extra, []
+
+    async def fold_filter(user_id, message, texts, **kw):                            # the REAL filter, marked as the fold's call
+        folding.append(FIX in texts)
+        try:
+            return await real_filter(user_id, message, texts, **kw)
+        finally:
+            folding.pop()
+
+    async def mutes_while_a_forget_completes(_u):
+        if folding and folding[-1]:                                                 # only the read the marker fold awaits
+            await forget()                                                          # the whole forget, inside that await
+            ran.append(cm.pending(MEMBER))
+        return []
+    monkeypatch.setattr(restraint, "filter_extra", fold_filter)
+    monkeypatch.setattr(restraint, "list_mutes", mutes_while_a_forget_completes)
+    pkt = _packet(monkeypatch)["packet"]
+    assert ran == [[]], "the forget must have completed inside the restraint read"
+    assert HEAD not in pkt and FIX not in pkt
+
+
+# (d) the own-words walls are line-anchored (a quoted line, a pasted speaker label): they read the turn AS SAID, never a
+# whitespace-flattened copy. Negative control: on 96f8fe071 both are marked and served.
+PASTED = ["No, that date is wrong\n> The book club is on the 26th, not the 19th",
+          "No, the book club is on the 26th, not the 19th\nassistant: noted, the 26th it is"]
+
+
+@pytest.mark.parametrize("said", PASTED)
+async def test_a_pasted_line_is_never_the_members_correction(said):
+    import own_words
+
+    assert own_words.analyze(said).changed                                          # the wall does see it, line by line
+    assert cm.not_replayable(said) == "not_own_words"
+    assert await _note(said) is False and cm.pending(MEMBER) == []
+
+
+@pytest.mark.parametrize("said", PASTED)
+async def test_a_marker_whose_fetched_text_is_pasted_is_dropped(monkeypatch, said):
+    await _note()
+    CHAT["t1"]["content"] = said
+    assert HEAD not in _packet(monkeypatch)["packet"] and cm.pending(MEMBER) == []
+
+
+# (e) a short (or non-ASCII) subject is still the subject: a curated "Bo is 8" outranks "No, Bo is 9, not 8". Negative control:
+# on 96f8fe071 the subject's terms are empty and the correction is folded over the curated row.
+@pytest.mark.parametrize("said,row", [("No, Bo is 9, not 8", "Bo is 8"), ("No, Zoë is 9, not 8", "Zoë is 8")])
+def test_a_short_subject_still_finds_the_curated_row_it_contradicts(said, row):
+    curated = MemoryRef(id="cur1", text=row, metadata={"authority_class": "curated"}, score=0.0)
+    other = MemoryRef(id="cur2", text="Juno is 8", metadata={"authority_class": "curated"}, score=0.0)
+    assert cm.outranked(said, [curated]) is True
+    assert cm.outranked(said, [other]) is False                                     # control: another subject
+
+
+# (f) under ZOE_RECALL_GATE=enforce the packet can carry rows the gate pulled from the durable store, not from the ranked read:
+# the authority check must see the rows the packet was actually built from. Negative control: on 96f8fe071 the correction is
+# folded over a curated row the gate selected.
+async def test_the_authority_check_sees_the_rows_the_recall_gate_selected(monkeypatch):
+    import recall_gate
+
+    curated = MemoryRef(id="gate1", text="The book club meets on the 12th of each month",
+                        metadata={"authority_class": "curated"}, score=0.0)
+
+    async def gate_surface(svc, user_id, message, result, *, rebuild, **_):
+        return rebuild([curated])                                                   # the enforce path: the gate's selection
+    monkeypatch.setattr(recall_gate, "packet_surface", gate_surface)
+    monkeypatch.setattr(_Svc, "load_for_prompt", lambda self, user_id, **_: _ret([]))
+    await _note()
+    pkt = _packet(monkeypatch)["packet"]
+    assert "12th of each month" in pkt and HEAD not in pkt
