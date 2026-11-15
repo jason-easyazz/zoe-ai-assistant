@@ -38,7 +38,8 @@ def test_workflow_order_and_nonfatal_contract():
     names = [s.get("name") for s in steps]
     pos = names.index("Restart optional Zoe OS kernel (if changed)")
     assert names.index("Pull latest main") < names.index("Restart zoe-data (user service)") < pos
-    assert pos < names.index("Health check")
+    assert pos == len(names) - 1, "the optional kernel step is LAST: its wait must not delay any existing check"
+    assert steps[pos]["timeout-minutes"] <= 2
     assert steps[pos]["continue-on-error"] is True
     assert "zoe_os_kernel.sh deploy" in steps[pos]["run"]
     text = SCRIPT.read_text()
@@ -236,3 +237,14 @@ def test_deploy_dead_health_is_nonfatal_and_unchanged_healthy_skips(world):
     result = run(env, "deploy")
     assert result.returncode == 0 and "::warning::" in result.stdout
     assert (home / ".zoe/deploy/kernel-update-pending").exists()
+
+
+def test_kernel_backup_ages_out_inside_the_household_backup_policy():
+    """A dump cannot be rewritten by a forget, so it must age out within the documented bound, like the Postgres dumps."""
+    import re, sys
+    sys.path.insert(0, str(ROOT / "services/zoe-data"))
+    import forget_reach as fr
+    ops = (MAINT / "zoe_os_kernel_ops.py").read_text()
+    days = [int(n) for n in re.findall(r"> (\d+) \* 86400", ops)]
+    assert days and max(days) <= fr.BACKUP_MAX_AGE_DAYS
+    assert any(s.name == "backup_zoe_os_kernel" for s in fr.STORES)

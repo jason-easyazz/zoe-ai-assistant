@@ -132,7 +132,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-134 stores: 67 reached, 31 out of scope, 36 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+135 stores: 67 reached, 31 out of scope, 37 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -267,6 +267,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `sqlite_dev_db` | file | metadata | out_of_scope | - | database.py's zoe.db is the legacy SQLite fallback for dev; production is Postgres. |
 | `app_logs` | file | words | gap | - | ~/.zoe-logs/zoe-data.*: the service log. Utterances are logged as len + hash only since 2026-11-03 (intent_miss: len=N utt=<hash>); lines written before then hold text until the size rotation drops them; rotated by size (50 MB x4), not by age, outside the cascade. |
 | `backup_postgres` | backup | words | gap | - | Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing keeps its old dumps (an age alarm is the fix; a time prune must never delete the last good copy). Forget cannot rewrite a dump; biometric table data is excluded from them. Restore => re-issue the forget. |
+| `backup_zoe_os_kernel` | backup | words | gap | - | Zoe OS kernel record snapshots (gzip, 7 kept, none older than BACKUP_MAX_AGE_DAYS; the prune is by count AND age). Not rewritten by a forget: they age out. Restore => re-apply every forget made since the archive BEFORE the kernel serves (docs/knowledge/zoe-os-kernel-service.md). |
 | `backup_palace_tar` | backup | words | gap | - | Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by count after a new tarball, so a failing job keeps its old ones). Not rewritten; the JSON exports beside it are redacted by the ledger (redact_backups.py). |
 | `backup_json_exports` | backup | words | reached | entity: `forget_redact.redact_export` | Palace JSON exports and compaction backups are redacted by the forget ledger (forget_redact.redact_export, scripts/maintenance/redact_backups.py). |
 | `backup_adhoc` | backup | words | out_of_scope | - | One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep (local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup. |

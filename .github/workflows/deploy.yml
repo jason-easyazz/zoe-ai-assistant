@@ -600,13 +600,6 @@ jobs:
           PID="$(systemctl --user show -p MainPID --value zoe-data.service)"
           echo "zoe-data MainPID ${PID}: $(readlink -f "/proc/${PID}/exe" 2>/dev/null || echo 'exe unreadable (still starting?)')"
 
-      - name: Restart optional Zoe OS kernel (if changed)
-        continue-on-error: true
-        timeout-minutes: 2
-        run: |
-          cd "${ZOE_CHECKOUT:-$HOME/assistant}"
-          bash scripts/maintenance/zoe_os_kernel.sh deploy
-
       # The Flue brain sidecar is the production brain when ZOE_BRAIN_BACKEND=flue.
       # It runs a pre-built dist/ and `flue build` externalizes deps, so a change to
       # labs/flue-zoe-brain-2x/ on main does NOT reach the running brain until dist is
@@ -778,3 +771,12 @@ jobs:
           printf '%s\n' "${DEPLOY_TARGET_SHA}" > "${DEPLOY_STATE_DIR}/last-deployed-sha.tmp"
           mv -f "${DEPLOY_STATE_DIR}/last-deployed-sha.tmp" "${DEPLOY_STATE_DIR}/last-deployed-sha"
           echo "last-deployed-sha = ${DEPLOY_TARGET_SHA}"
+
+      # LAST on purpose: the kernel is optional, so neither a failure nor its (bounded) wait may delay or fail the
+      # zoe-data health check, the voice gate or the deployed-SHA marker above.
+      - name: Restart optional Zoe OS kernel (if changed)
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          cd "${ZOE_CHECKOUT:-$HOME/assistant}"
+          bash scripts/maintenance/zoe_os_kernel.sh deploy
