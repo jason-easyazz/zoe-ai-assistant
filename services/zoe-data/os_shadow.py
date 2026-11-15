@@ -258,7 +258,7 @@ RESULTS = ("match", "not_expressible", "kernel_refused_live_did", "kernel_unveri
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full")
 _REASONS = (("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
-            ("cited", "cause"), ("forgotten", "forgotten"))
+            ("cited", "cause"), ("cites", "cause"), ("forgotten", "forgotten"))
 
 
 def reason_code(reason: str) -> str:
