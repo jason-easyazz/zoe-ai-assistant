@@ -147,13 +147,14 @@ a name or a pronoun (`test_HONEST_LIMIT_reworded_content_...` asserts three of t
 "Durable" means against a killed process, not power loss. An `uncertain` receipt has no resolution step.
 Grants, manifests and credentials are in memory: a restart denies everything until granted again.
 
-A skill's own store is outside the kernel: a skill that ignores a forget notice keeps the words
-(`test_HONEST_LIMIT_a_skill_that_ignores_the_notice_...`). A forget by entity or topic cannot match an event
+A skill's arbitrary private memory is outside the kernel. A registered store is purged directly by
+the kernel even if its skill ignores the notice (`test_kernel_purges_store_even_when_skill_ignores_the_notice`).
+A forget by entity or topic cannot match an event
 whose content has aged out (`test_HONEST_LIMIT_a_scoped_forget_...`). Retention has a chosen policy (record,
 section 9) and no scheduler: nothing expires until something calls the sweep.
 
-Whole-member forget now erases consent records too. The reminder skill therefore cannot use its erased
-grant for external-store cleanup, even when it obeys the notice; it drops its cache and records a refusal.
+Whole-member forget erases consent records too. The kernel purges the reminder store and verifies it
+before erasing consent; the skill then drops its cache without acting through the former grant.
 The kernel-side brain keeper erases its stores directly without consulting a skill grant. Per-person shield
 and legacy-store rules, including anonymous whole-member notices, are in the architecture record §2.3–2.4.
 Trusted origins can no longer reassert forgotten text for the forgetting member.
@@ -244,3 +245,23 @@ latency. Scoped ID forget is bounded by affected rows; broad/entity/topic forget
 pending-intent cause inspection still scale with their candidates. WAL truncation
 remains synchronous. Additive `CREATE INDEX IF NOT EXISTS` statements apply on opening
 an existing lab store; there is no production migration or new environment variable.
+
+Owner-decision repair: forget counts all erased event rows (including grants,
+refusals and named scoped notices). Shield controls restore explicit consent before
+turning off the shield, so erasing consent cannot mask the control's attack. Text
+reassertion and explicit entity release remain blocked pending the owner's decision
+on deliberate relearning. Trusted bootstrap can register idempotent store purges and
+independent read-back with the kernel; forget runs them before erasing consent.
+The reminder store is purged synchronously even if the skill ignores its notice.
+Purge is absent from Context and the wire/action catalog. The architecture document
+records the failure/retry boundary and the outstanding owner question.
+
+Fresh scratch schemas use `WITHOUT ROWID` for cursors, metadata and retired counts,
+eliminating three redundant primary-key B-trees. Person and cause links are sets
+with composite primary keys, replacing each link table's separate lookup B-tree.
+The named `people_seq` and `latest_receipt` indexes remain, as do the cause lookup
+and all intent indexes; repeated links are ignored rather than stored twice.
+The 200,000-byte oversized-frame ceiling and SQL complexity budgets stay unchanged.
+The socket-free disk oracle now includes the launcher's initial audit grant; the
+former empty-spine fixture understated WAL growth. Existing scratch tables retain
+their layout; these DDL changes compact fresh stores, without rewriting old ones.

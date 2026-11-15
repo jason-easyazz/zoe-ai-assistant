@@ -146,6 +146,12 @@ whose `who` is that member. An event-list forget reaches only selected records b
 plus their descendants. Entity/topic forget reaches records only if their payload matches that scope.
 Unrelated grants survive a scoped forget. A fresh explicit grant is required to authorise later actions.
 The twin's sharing grants also require their recorded event to remain live; erased sharing never opens a line.
+`ForgetResult.count` and wire `forget.count` count every erased event row, including grant/refusal records
+and earlier scoped notices that name the member. The new forget notice is excluded. Thus one grant,
+one utterance and its action receipt return 3, not 2. This follows the owner's decision that grant and
+refusal records "should be forgotten too"; they are events, not uncounted ancillary rows. Whole-member
+forget also removes an earlier named scoped notice; the aged-content retention example therefore counts
+three rows (skeleton, derived copy, notice) while still honestly matching zero aged words by entity.
 
 **Exists [code].** Roles and a capability matrix (`guest_policy.py`), the authority table with coded floors
 (`household_authority.py`), and a written design for ability manifests and connected accounts:
@@ -207,12 +213,39 @@ hash, the store retains a permanent fail-closed marker: it refuses all named/str
 This deliberately over-blocks legacy stores rather than forgetting how to recognise an old forbidden name;
 new stores never need that fallback. Legacy global shields are an explicit exception to B's new freedom.
 
-**Conflicting prior guarantees.** The former first-hand reassertion exception is removed: the owner's
-never-republish rule wins. Erasing grants also means a reminder skill cannot use its old grant to delete
-from an external store after whole-member forget. It drops its in-memory state, but external-store erasure
-needs an independent kernel-owned erase mechanism; the former reminder-store cleanup claim no longer holds.
-The event tables and action authorisation fail closed. No production migration or external-store erase
-mechanism is introduced here.
+**Scratch schema footprint [code; byte measurement pending].** Fresh stores use `WITHOUT ROWID` for
+cursors, metadata and retired counts, avoiding separate primary-key B-trees. Person links have primary
+key `(person, seq)` and cause links `(seq, cause)`; both are sets, inserted with `OR IGNORE`. Their primary
+keys replace `people_person` and `causes_seq`; `people_seq`, `causes_cause`, `latest_receipt` and every
+intent index remain. Existing stores keep their old table layout/indexes. The oversized-frame disk
+ceiling stays **200,000 bytes**, including DB/WAL/SHM. Its socket-free oracle now creates the launcher's
+initial audit grant before the two frame refusals. Complexity budgets and both `INDEXED BY` pins stay.
+
+**Conflicting prior guarantees [code; coordinator verification required].** First-hand reassertion does
+not lift a shield. Explicit `release` is also refused, even for the member: "forgotten means forever"
+wins until the owner defines an exception. A member may give new consent and say different things;
+deliberately repeating the old exact sentence or forgotten entity remains blocked for that member.
+**Owner question:** should deliberate relearning ever override "forgotten means forever"? If yes, what
+explicit authenticated instruction permits it, and does it lift text, entity, or both? Pending an answer,
+all remain blocked; another member's private use still follows "per-person scoping is required".
+
+**Kernel-driven external cleanup [code; lab tests added, verification pending].** Trusted bootstrap
+registers a store's idempotent purge and independent read-back with `Kernel.register_store_purge`.
+After validating the person's forget authority and computing the erased rows, the spine invokes the
+kernel under its lock and SQLite transaction, BEFORE tombstoning source/grant records. Whole-member
+cleanup purges every row owned by the member, even if the skill lost its cache or ignores the notice.
+Scoped cleanup receives the erased events while their request/receipt keys still exist and purges only
+the matching owned rows. The reminder fake-store adapter implements both paths; the skill's notice
+handler only drops local state. No ordinary action or receipt is emitted for cleanup, and no grant is
+resurrected. No purge operation, callback or reusable purge capability is exposed through Context or
+the closed wire operation table; a skill's ordinary actions still require live consent.
+
+A purge exception or failed read-back aborts forget and leaves consent/source records live for retry.
+External stores cannot commit atomically with SQLite: if a later step fails or the kernel crashes, an
+external purge may already have happened while log erasure rolls back. Purges must be idempotent; retry
+finishes erasure. A successful forget promises verified cleanup of registered stores. Unregistered stores,
+lying drivers and unsupported private process-memory copies remain outside this prototype's guarantee.
+No production store or live service is changed.
 
 **Exists [code].** The production forget is strong and hand-maintained: a ledger that cannot list what it
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
@@ -224,15 +257,16 @@ six whole words, case and punctuation blind; the person's events that name it ar
 derived, and a keyed hash of the name is kept per person (never the name), so a skill that writes the name about
 that person again is refused, in new words, nested, or as a dictionary key. B can mention that third party
 in private events that do not concern A; a household event cannot resurrect it for A. First-hand mentions
-also obey the shield; only the person's explicit entity release lifts that name shield (not forgotten text).
+also obey the shield; explicit entity release is blocked pending the owner question above.
 A topic is its content words, and an event is about it
 only when it holds every one; more than twelve matching events is refused whole. A scope with no words is
 refused and never widens to "everything".
 
 **Missing, and the honest limits of the lab version.** The supported cache is kernel-owned; a private body copy
 outside that cache violates its contract. Python cannot prevent arbitrary copying in the same process or erase
-another program's memory. Separate derived stores still depend on their forget handlers (including the twin and
-reminder store); this cache change does not turn them into kernel-owned stores. **Reworded content is not caught**:
+another program's memory. Separate derived stores need registered kernel purge drivers (the reminder fake store)
+or still depend on cooperative forget handlers (the twin); arbitrary stores are not automatically kernel-owned.
+**Reworded content is not caught**:
 a paraphrase that avoids the name and the exact old
 sentences, a near spelling, part of a name, a pronoun or a role ("my sister"). A test asserts that the first
 three get through, so the limit is pinned. Production has near-spelling probes and asks "did you also

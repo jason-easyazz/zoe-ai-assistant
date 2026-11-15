@@ -16,12 +16,11 @@ Inputs it reads (all private to their subject):
 * its own ``action_receipt`` and ``offer`` events: ``restore(history)`` rebuilds a restarted
   skill's state from the log, so it keeps no private database (an acknowledgement is the one
   thing it cannot relearn: that receipt carries no arguments);
-* ``forget`` notices: it deletes the person's reminders from the store and drops its state.
+* ``forget`` notices: drops local state; the kernel has already purged the registered store.
 """
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..spine import Refused
 
 SNOOZE_MINUTES = 10
 
@@ -113,9 +112,7 @@ class Reminders:
 
     # ---- forget ---------------------------------------------------------------------------------
     def _forget(self, notice: Event, ctx) -> None:
-        """The kernel erased the events. The store is outside the kernel, so the skill erases
-        there: everything of the person's, or (a scoped forget) the reminders whose request or
-        create receipt is among the erased events."""
+        """Drop local state after kernel-driven store cleanup, without spending consent."""
         gone = set(notice.payload.get("seqs", ()))
         scoped = "scope" in notice.payload
         person = ctx.forgotten_subject(notice)
@@ -128,10 +125,6 @@ class Reminders:
                 continue
             if scoped and not ({item["receipt"], item["asked"]} & gone):
                 continue
-            try:
-                ctx.act("reminder.delete", item["person"], {"id": rid}, caused_by=(notice.seq,))
-            except Refused:
-                pass  # erased consent cannot authorise even external-store cleanup
             del self._items[rid]
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}

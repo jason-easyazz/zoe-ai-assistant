@@ -13,6 +13,7 @@ class ReminderStore:
         self.rows: dict[str, dict] = {}
 
     def register(self, kernel) -> "ReminderStore":
+        kernel.register_store_purge(SKILL, self.purge, self.purged)
         reg = kernel.actions.register
         reg("reminder.create", self.create, self.created, needs_accept=False,
             snapshot=self.snapshot, undo=self.put_back)
@@ -22,6 +23,23 @@ class ReminderStore:
         reg("reminder.delete", self.delete, lambda p, a, r: {"deleted": a["id"]}
             if a["id"] not in self.rows else None, needs_accept=False)
         return self
+
+    def _purge_ids(self, person, events):
+        if events is None:
+            return {rid for rid, row in self.rows.items() if row["owner"] == person}
+        # Store keys derive from requests; reversible receipts also name the key.
+        ids = {f"r{ev.seq}" for ev in events}
+        ids.update(args["id"] for ev in events
+                   if ev.payload.get("skill") == SKILL
+                   and (args := (ev.payload.get("undo") or {}).get("args", {})).get("id"))
+        return {rid for rid in ids if self.rows.get(rid, {}).get("owner") == person}
+
+    def purge(self, person, events):
+        for rid in self._purge_ids(person, events):
+            self.rows.pop(rid, None)
+
+    def purged(self, person, events):
+        return not self._purge_ids(person, events)
 
     def create(self, person, args):
         self.rows[args["id"]] = {"owner": person, "note": args["note"], "due": args["at"],

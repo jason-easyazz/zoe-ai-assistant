@@ -58,6 +58,31 @@ class Kernel:
         self.explainer = Explainer(self.spine, self.grants.people)
         self.retention = Retention(self.spine, POLICY)      # the chosen policy; sweeps only when called
         self._skills: list[tuple[object, object, Context]] = []
+        self._store_purges: dict[str, tuple[Callable, Callable]] = {}
+        self.spine._before_forget = self._purge_stores
+
+    def register_store_purge(self, name: str, purge: Callable, empty: Callable) -> None:
+        """Trusted bootstrap only: idempotent erasure and independent read-back.
+
+        Drivers receive (subject, erased events), or (subject, None) for a whole
+        member. Neither callbacks nor an invocation capability are handed to skills.
+        """
+        if name in self._store_purges:
+            raise ValueError("store purge already registered")
+        self._store_purges[name] = (purge, empty)
+
+    def _purge_stores(self, subject: str, dead: list[int], whole: bool) -> None:
+        """Under the forget lock/transaction, BEFORE grants and source rows vanish.
+
+        No ordinary action, receipt, grant override or reusable authority is created.
+        A failed purge/read-back aborts forget; retry is safe even after partial
+        external erasure or a crash (external stores cannot share SQLite's commit).
+        """
+        events = None if whole else tuple(e for seq in dead if (e := self.spine._get(seq)))
+        for purge, empty in self._store_purges.values():
+            purge(subject, events)
+            if empty(subject, events) is not True:
+                raise Refused("external store purge unverified")
 
     def _grant_changed(self, change: str, g: Grant) -> None:
         record = self.spine._kernel_append(Event(

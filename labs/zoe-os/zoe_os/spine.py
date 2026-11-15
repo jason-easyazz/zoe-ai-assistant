@@ -45,16 +45,18 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT, mentions TEXT, caused_by TEXT,
   tombstoned INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS people (seq INTEGER NOT NULL, person TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
+CREATE TABLE IF NOT EXISTS people (
+  seq INTEGER NOT NULL, person TEXT NOT NULL, PRIMARY KEY (person, seq)
+) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS people_seq ON people(seq);
-CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS causes (
+  seq INTEGER NOT NULL, cause INTEGER NOT NULL, PRIMARY KEY (seq, cause)
+) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
-CREATE INDEX IF NOT EXISTS causes_seq ON causes(seq);
 CREATE INDEX IF NOT EXISTS latest_receipt ON events(subject, seq DESC)
   WHERE kind = 'action_receipt' AND tombstoned = 0;
 CREATE INDEX IF NOT EXISTS live_kind ON events(kind, seq) WHERE tombstoned = 0;
-CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS forget_ledger (
   id INTEGER PRIMARY KEY, subject TEXT NOT NULL, upto INTEGER NOT NULL, ts REAL NOT NULL,
   count INTEGER NOT NULL
@@ -68,10 +70,10 @@ CREATE TABLE IF NOT EXISTS scoped_entities (
   owner BLOB NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (fp, owner)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (subject, fp)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS retired_counts (
   day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, kind)
-);
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS intents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, skill TEXT NOT NULL, action TEXT NOT NULL,
   person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER,
@@ -124,7 +126,7 @@ class Refused(Exception):
 
 
 class ForgetResult(NamedTuple):
-    count: int      # events erased, including derived ones
+    count: int      # rows erased, including derived events, grants, refusals and scoped notices
     upto: int       # the forget covers everything up to this sequence number
 
 
@@ -222,6 +224,7 @@ class Spine:
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
         self._subs: list[Subscription] = []
+        self._before_forget = None  # trusted kernel store cleanup, never a skill/wire operation
         self._epoch = 0     # bumped by every forget; a subscription re-checks its queue on a change
         key = self._db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()
         if key is None:
@@ -323,7 +326,7 @@ class Spine:
     def _index_record(self, seq, kind, payload):
         keys = {Kind.GRANT_CHANGE: ('person', 'guardian', 'with'), Kind.REFUSAL: ('who',),
                 Kind.FORGET: ('subject',)}.get(kind, ())
-        self._db.executemany("INSERT INTO people VALUES (?,?)",
+        self._db.executemany("INSERT OR IGNORE INTO people VALUES (?,?)",
                              [(seq, payload[k]) for k in keys if payload.get(k)])
 
     def _append(self, events: list[Event], then: Callable[[int], None] | None = None,
@@ -345,10 +348,10 @@ class Spine:
                 seq = cur.lastrowid
                 self._index_record(seq, ev.kind, ev.payload)
                 if ev.people:
-                    self._db.executemany("INSERT INTO people VALUES (?,?)",
+                    self._db.executemany("INSERT OR IGNORE INTO people VALUES (?,?)",
                                          [(seq, p) for p in ev.people])
                 if ev.caused_by:
-                    self._db.executemany("INSERT INTO causes VALUES (?,?)",
+                    self._db.executemany("INSERT OR IGNORE INTO causes VALUES (?,?)",
                                          [(seq, c) for c in ev.caused_by])
                 out.append(Event(ev.kind, ev.source, ev.subject, ev.visibility, ev.payload,
                                  ev.mentions, ev.caused_by, seq=seq, ts=now))
@@ -424,6 +427,8 @@ class Spine:
                     if groups and len(seed) > MAX_TOPIC_EVENTS:
                         raise Refused("too many events match: say which part")
                 dead = sorted(self._closure(seed))
+                if self._before_forget is not None:
+                    self._before_forget(subject, dead, whole)
                 fingerprints.update(self._tombstone(dead) or ())
                 # New hashes belong only to this owner; legacy global rows stay.
                 self._db.executemany("INSERT OR IGNORE INTO scoped_shield VALUES (?,?)",
@@ -496,22 +501,12 @@ class Spine:
                    for person, fps in watched)
 
     def release(self, subject: str, entity: str, *, actor: str) -> bool:
-        """The person explicitly teaches the name again: lift the shield. Never automatic: a
-        first-hand mention by an adapter is recorded but does NOT lift it."""
+        """Fail closed until the owner defines whether deliberate relearning is allowed."""
         with self._lock:
             verdict = self.authorizer.may_forget(actor, subject)
             if not verdict.allowed:
                 self._refuse(actor, "release", verdict.reason or "not theirs to release")
-            fp = self._efp(subject, fm.entity_key(entity))
-            scoped = self._db.execute("DELETE FROM scoped_entities WHERE owner=? AND fp=?",
-                                      (self._owner(subject), self._fp(fm.entity_key(entity))))
-            if scoped.rowcount:
-                return True
-            if fp not in self._entities.get(subject, ()):
-                return False
-            self._entities[subject].discard(fp)
-            self._db.execute("DELETE FROM entity_shield WHERE subject = ? AND fp = ?", (subject, fp))
-            return True
+            self._refuse(actor, "release", "forgotten means forever")
 
     def _closure(self, seed: set[int]) -> set[int]:
         """The seed plus every event that derives from it, to any depth."""

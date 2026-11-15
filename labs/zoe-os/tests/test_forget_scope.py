@@ -185,7 +185,7 @@ def test_negative_control_without_the_entity_shield_the_name_is_written_again(sp
     assert "Zorvane" in texts(spine.replay("all"))
 
 
-def test_the_entity_shield_survives_a_restart_and_only_the_person_lifts_it(spine):
+def test_the_entity_shield_survives_restart_and_even_explicit_release_is_blocked(spine):
     live = forgotten_name(spine)
     spine.close()
     again = Spine(spine.path, spine.authorizer)
@@ -195,8 +195,10 @@ def test_the_entity_shield_survives_a_restart_and_only_the_person_lifts_it(spine
         again.publish(say(A, "zorvane quillfeather is visiting"))
     with pytest.raises(Refused, match="release"):
         again.release(A, NAME, actor=B)
-    assert again.release(A, NAME, actor=A) and not again.release(A, NAME, actor=A)
-    assert again.publish(offer(A, "Zorvane Quillfeather is visiting", live)).seq
+    with pytest.raises(Refused, match="forgotten means forever"):
+        again.release(A, NAME, actor=A)
+    with pytest.raises(Refused, match="names a forgotten entity"):
+        again.publish(offer(A, "Zorvane Quillfeather is visiting", live))
     again.close()
 
 

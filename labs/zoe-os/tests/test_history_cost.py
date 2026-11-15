@@ -150,13 +150,40 @@ def test_open_intent_cause_is_still_scrubbed(history):
 
 
 def test_new_schema_stays_inside_oversized_frame_disk_ceiling(tmp_path):
-    path = tmp_path / 'size.db'
-    spine = Spine(str(path))
+    from world import household
+
+    # Match the socket launcher, including its initial audit grant. An empty
+    # DenyAll spine understated the live WAL pages in the failing wire scenario.
+    kernel = household(tmp_path)
+    spine = kernel.spine
     try:
         for _ in range(2):
             with pytest.raises(Refused, match='frame too large'):
                 spine._refuse('unverified-peer', 'send a frame', 'frame too large')
         # Include WAL and SHM while open, just like the wire test's oracle.
-        assert sum(p.stat().st_size for p in tmp_path.glob('size.db*')) < 200_000
+        assert sum(p.stat().st_size for p in tmp_path.glob('zoe-os.db*')) < 200_000
     finally:
-        spine.close()
+        kernel.close()
+
+
+def test_negative_control_old_rowid_schema_exceeds_the_same_disk_ceiling(tmp_path, monkeypatch):
+    import zoe_os.spine as module
+
+    schema = module._SCHEMA
+    for table in ('cursors', 'meta', 'retired_counts'):
+        start = schema.index(f'CREATE TABLE IF NOT EXISTS {table} ')
+        end = schema.index(';', start)
+        schema = schema[:start] + schema[start:end].replace(' WITHOUT ROWID', '') + schema[end:]
+    schema = schema.replace(
+        'CREATE TABLE IF NOT EXISTS people (\n'
+        '  seq INTEGER NOT NULL, person TEXT NOT NULL, PRIMARY KEY (person, seq)\n) WITHOUT ROWID;',
+        'CREATE TABLE IF NOT EXISTS people (seq INTEGER NOT NULL, person TEXT NOT NULL);\n'
+        'CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);')
+    schema = schema.replace(
+        'CREATE TABLE IF NOT EXISTS causes (\n'
+        '  seq INTEGER NOT NULL, cause INTEGER NOT NULL, PRIMARY KEY (seq, cause)\n) WITHOUT ROWID;',
+        'CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);\n'
+        'CREATE INDEX IF NOT EXISTS causes_seq ON causes(seq);')
+    monkeypatch.setattr(module, '_SCHEMA', schema)
+    with pytest.raises(AssertionError):
+        test_new_schema_stays_inside_oversized_frame_disk_ceiling(tmp_path)
