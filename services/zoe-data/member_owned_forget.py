@@ -103,28 +103,43 @@ def _turn_owner(metadata: Any, session_owner: Any) -> str:
     return uid or str(session_owner or "").strip()
 
 
+#: candidate turns of a member: the sessions they own, and every row whose metadata TEXT contains the bare id (a prefilter that cannot miss,
+#: whatever the JSON spacing or key order: a member id is ASCII, and its JSON-escaped form is matched too); ``_turn_owner`` then decides
+#: each row. ``metadata`` is a TEXT column (alembic 0001); the CAST keeps the comparison text on any database. No literal question marks
+#: beyond the binds (the asyncpg positional-compat layer counts them).
+TRANSCRIPT_SQL = ("SELECT cm.id, cm.session_id, cm.metadata, cs.user_id FROM chat_messages cm "
+                  "LEFT JOIN chat_sessions cs ON cs.id = cm.session_id "
+                  "WHERE cs.user_id = ? OR CAST(cm.metadata AS TEXT) LIKE ? OR CAST(cm.metadata AS TEXT) LIKE ?")
+
+
+def _id_patterns(user_id: str) -> tuple:
+    escaped = json.dumps(str(user_id))[1:-1]
+    return (f"%{user_id}%", f"%{escaped}%")
+
+
 async def _scheduled_sends(r: _Run, user_id: str) -> None:
     """The member's scheduled reminder sends: consumed first (a job that fires finds no claimable row), jobs cancelled where this
     process runs the scheduler, then the rows deleted."""
     jobs = [str(x[0]) for x in await r.rows("SELECT apscheduler_job_id FROM proactive_scheduled WHERE user_id = ?", (user_id,)) if x[0]]
     await r.run("UPDATE proactive_scheduled SET fired = 1 WHERE user_id = ?", (user_id,))
     await r.db.commit()
+    # A fire that ALREADY claimed a row is not stopped by fired=1; it is stopped at delivery time: _fire_reminder refuses a send whose
+    # member has an erase mark at or after the row (written before this step). Cancel errors are NOT swallowed (fail closed: the
+    # delete is retried); only "this process runs no scheduler" is not an error - the jobstore is shared, and the consumed row cannot fire.
+    from proactive.scheduler import cancel_job
     for job in jobs:
         try:
-            from proactive.scheduler import cancel_job
             cancel_job(job)
-        except Exception:  # noqa: BLE001 - no scheduler here (another process / not started): the consumed row cannot fire
-            pass
+        except RuntimeError as exc:
+            if "not started" not in str(exc):
+                raise
     await r.run("DELETE FROM proactive_scheduled WHERE user_id = ?", (user_id,))
 
 
 async def _transcript(r: _Run, user_id: str) -> None:
     """The member's chat turns (any session, by the per-turn owner rule); then the sessions they own that are now empty (with their
     AG-UI runs); a session they own that still holds someone else's turns keeps those turns and loses its title (the member's words)."""
-    like = [f'%"user_id": "{user_id}"%', f'%"user_id":"{user_id}"%']
-    rows = await r.rows(
-        "SELECT cm.id, cm.session_id, cm.metadata, cs.user_id FROM chat_messages cm LEFT JOIN chat_sessions cs ON cs.id = cm.session_id "
-        "WHERE cs.user_id = ? OR cm.metadata LIKE ? OR cm.metadata LIKE ?", (user_id, *like))
+    rows = await r.rows(TRANSCRIPT_SQL, (user_id, *_id_patterns(user_id)))
     mine = [str(x[0]) for x in rows if _turn_owner(x[2], x[3]) == user_id]
     touched = sorted({str(x[1]) for x in rows if _turn_owner(x[2], x[3]) == user_id and x[1]})
     await r.by_ids("DELETE FROM chat_messages WHERE id", mine)
@@ -211,17 +226,43 @@ async def _biometrics(r: _Run, user_id: str) -> None:
 async def _after_commit(user_id: str) -> None:
     """After the rows are gone: the member's labelled clips in the voice-sample corpus (by the clip's own verdict sidecar, never by a
     name pattern; RAISES on a clip that cannot be removed), and the panels told to drop the voice signature now (voice_enrollment: also
-    revokes any open voice session of the member; best effort - a panel that misses it drops the profile at its next hourly sync, and the
-    server refuses a stale claim anyway, ``_voice_claim_consented`` reads the store). Face copies on a panel wait for its next sync."""
+    closes any open voice session of the member; FAIL CLOSED - a queue failure raises; a panel that is offline gets the command when it
+    reconnects (24 h) or drops the profile at its next hourly sync, and the server refuses a stale claim anyway: ``_voice_claim_consented``
+    reads the store). Face copies on a panel wait for its next sync; the server refuses a stale face corroboration (speaker_adaptation)."""
     import voice_clips
 
     voice_clips.erase_member(user_id)
-    try:
-        import voice_enrollment
+    await _push_forget_strict(user_id)
 
-        await voice_enrollment.push_forget_to_panels(user_id)
-    except Exception as exc:  # noqa: BLE001 - never raises by contract; guard the import
-        logger.warning("member_owned_forget: panel voice purge not queued (%s)", type(exc).__name__)
+
+async def _push_forget_strict(user_id: str) -> int:
+    """Queue ``voice_profile_forget`` for every panel holding a device token, FAIL CLOSED: any failure (the panel list, one queue
+    write) RAISES, so ``delete_user`` does not report success while a panel keeps the voice (the caller retries the whole delete; it is
+    idempotent, and the retry re-queues). No device panel at all is not a failure: there is nothing to purge. Also closes the member's
+    open voice sessions (``voice_session.revoke_member``, never raises). ``voice_enrollment.push_forget_to_panels`` stays best effort
+    for its own callers (a profile delete that already happened)."""
+    try:
+        import voice_session
+
+        await voice_session.revoke_member(user_id, "member_deleted")
+    except Exception:  # noqa: BLE001 - access is removed in memory first inside revoke_member; the purge below must still run
+        pass
+    import voice_announce
+    import voice_enrollment
+
+    queued = 0
+    async with _db() as db:
+        try:
+            panels = await voice_enrollment._device_panels(db)
+        except Exception as exc:  # noqa: BLE001
+            if _missing_table(exc):
+                return 0                  # no device_tokens table: no panel was ever paired
+            raise
+        for panel in panels:
+            await voice_announce.enqueue_command(db, user_id=user_id, panel_id=panel, trigger_type="voice_profile_forget", command={})
+            queued += 1
+        await db.commit()
+    return queued
 
 
 #: the last run's DELETE order (tests read it to check it against the migrations' foreign keys)

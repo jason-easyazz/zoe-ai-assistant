@@ -137,6 +137,23 @@ async def _record_fire_failure_and_release(scheduled_id: str, exc: Exception) ->
         log.error("could not record fire failure for %s", scheduled_id)
 
 
+async def _member_erased_since_row(user_id: str, scheduled_id: str) -> bool:
+    """True when ``user_id`` was deleted (``erase_watermark``) at or after this scheduled row was made, or the row is gone. No mark at
+    all (every live member): False without touching the row. RAISES when the mark cannot be read."""
+    import erase_watermark
+
+    mark = await erase_watermark.watermark(user_id)
+    if mark is None:
+        return False
+    async with _get_compat_db() as db:
+        async with db.execute("SELECT created_at FROM proactive_scheduled WHERE id = ?", (scheduled_id,)) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return True
+    made = erase_watermark.instant(row[0])
+    return made is None or made <= mark
+
+
 async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     """
     Called by APScheduler at the scheduled time (and by listener/reconcile-
@@ -169,6 +186,19 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     job_generation = claim["schedule_generation"] or 0
     if item_id and await _reminder_job_superseded(item_id, job_generation):
         log.info("reminder %s superseded (deleted/ack/inactive/rescheduled) — not delivering", pending_id)
+        await _consume_scheduled(pending_id)
+        return
+
+    # A member delete may have run since the claim (it consumes and deletes the rows, but a fire that already claimed one is past that
+    # gate): a send whose member has an erase mark at or after the row is never delivered. Unreadable: not now (released and retried).
+    try:
+        erased = await _member_erased_since_row(user_id, pending_id)
+    except Exception as exc:
+        log.error("_fire_reminder: erase check failed for pending %s (%s) - not delivering now", pending_id, type(exc).__name__)
+        await _record_fire_failure_and_release(pending_id, exc)
+        raise
+    if erased:
+        log.info("reminder %s: its member was deleted - not delivering", pending_id)
         await _consume_scheduled(pending_id)
         return
 

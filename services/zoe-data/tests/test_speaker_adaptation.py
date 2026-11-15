@@ -266,6 +266,7 @@ CREATE TABLE speaker_profiles (
 CREATE TABLE panel_user_bindings (panel_id TEXT NOT NULL, user_id TEXT NOT NULL,
     binding_type TEXT NOT NULL DEFAULT 'allowed', priority INTEGER DEFAULT 0, PRIMARY KEY (panel_id, user_id));
 CREATE TABLE ui_panel_sessions (panel_id TEXT PRIMARY KEY, user_id TEXT, last_seen_at TEXT, updated_at TEXT);
+CREATE TABLE face_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, active INTEGER DEFAULT 1);
 """
 
 
@@ -458,6 +459,10 @@ async def test_fresh_login_session_corroborates_and_stale_does_not(world):
 @pytest.mark.asyncio
 async def test_face_match_corroborates_only_for_the_same_user_above_threshold(world):
     world.unbind()
+    gone = await world.offer(corroboration={"face_user_id": "jason", "face_score": 0.8})
+    assert gone["reason"] == "no_corroboration", "a panel face match with no face profile here (deleted, stale cache) vouches for nothing"
+    world.db.conn.execute("INSERT INTO face_profiles (id, user_id, active) VALUES ('f-jason', 'jason', 1)")
+    world.db.conn.commit()
     ok = await world.offer(corroboration={"face_user_id": "jason", "face_score": 0.8})
     assert ok["applied"] is True and ok["corroboration"] == ["face"]
     for claim in ({"face_user_id": "kiddo", "face_score": 0.9}, {"face_user_id": "jason", "face_score": 0.3},
