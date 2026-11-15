@@ -1,4 +1,23 @@
 ---
+
+> **Status 2026-11-15: a proposal, reviewed, partly adopted.** An independent review (a different vendor's model, reading the code)
+> returned "adopt with changes; do not authorise the proposed rework as written". What is ADOPTED: the boundary (the kernel decides
+> actions and records; data streams never pass through it; reads follow its rules), its own service, its own system user, a home
+> under `services/`, standard-library Python with a size budget, only the main service calling it, and the owner's five choices
+> (recorded in `zoe-os-cutover-plan.md`). What is NOT adopted yet: **"the kernel keeps decisions, not content"**. It stays the
+> intended direction, but the stores already built (rows rebuilt from the kernel's own verified receipts) give guarantees the
+> replacement has not specified, so they are kept for the first cut-over. Before any rework, a complete action protocol must be
+> written and reviewed: the caller allocates the action id; one transaction in the main database records the change, the id, the
+> version acted on and the before-state reference; settlement is deduplicated; a stale approval cannot cross a forget or a consent
+> change; historical "why" and undo work from versions, never from today's row. Other corrections taken from the review: a
+> "forgotten" refusal is a real refusal and never falls back (fixed in the authority client); cached read rules need a revocation
+> protocol with a stated staleness bound; text the model merely read needs provenance carried with the data, not a label on the
+> turn; account removal keeps an item only on an EXPLICIT acceptance ("keep it", or an accepted invitation), a contribution keeps
+> only the contributor's own material, missing evidence means delete, UNREADABLE evidence means stop and retry; the removal job
+> persists a barrier before deactivation and keeps it afterwards; reminders and alarms already set still fire while the kernel is
+> down (only changes are refused); the kernel's file is NOT low-sensitivity (schedules and relationships are in it) and is backed
+> up and protected like any other household data; the one-millisecond figure is withdrawn for any design with a second call until
+> measured.
 type: architecture
 title: Zoe OS - where the kernel sits, what goes through it, and what never does
 date: 2026-11-15
