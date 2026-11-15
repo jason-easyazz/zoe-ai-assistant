@@ -85,7 +85,9 @@ class Kernel:
         A failed purge/read-back aborts forget; retry is safe even after partial
         external erasure or a crash (external stores cannot share SQLite's commit).
         """
-        events = tuple(e for seq in dead if (e := self.spine._get(seq)))
+        # A request expired to its retention skeleton has no readable body, but its seq is
+        # what store rows are keyed by: hand it over as a body-less skeleton, never drop it.
+        events = self.spine._erased_events(dead)
         for purge, empty in self._store_purges.values():
             # Explicit closure reaches derived rows under EVERY owner. A whole-person
             # sweep additionally reaches retained store rows whose source log expired.

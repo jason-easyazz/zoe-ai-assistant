@@ -28,8 +28,9 @@ import sqlite3
 import threading
 import time
 from dataclasses import replace
+from types import MappingProxyType
 from collections import deque
-from typing import Callable, Iterable, Iterator, NamedTuple, Protocol
+from typing import Callable, Iterable, Iterator, Mapping, NamedTuple, Protocol
 
 from . import forget_match as fm
 from .events import CONTENT_KEYS, KERNEL_ONLY, Event, Kind, Visibility
@@ -146,6 +147,14 @@ class Refused(Exception):
         super().__init__(message)
         self.reason = reason
         self.wire = wire      # set only by Spine._refuse, from kernel vocabulary; the one text that may cross the socket
+
+
+class Skeleton(NamedTuple):
+    """An erased event whose body has already aged out: the sequence number and kind are all
+    that is left, and all a store purge keyed by request seq needs."""
+    seq: int
+    kind: Kind
+    payload: Mapping = MappingProxyType({})
 
 
 class ForgetResult(NamedTuple):
@@ -829,7 +838,20 @@ class Spine:
         return hmac.new(self._shield_key, norm, hashlib.sha256).digest()
 
     def _owner(self, person: str) -> bytes:
-        return self._fp('owner\0' + fm.entity_key(person))
+        """The keyed hash of one EXACT person id. Never normalised: two ids that fold or
+        tokenise alike are two people. Name normalisation belongs to entity forgets only."""
+        return hmac.new(self._shield_key, b'owner\0' + person.encode(), hashlib.sha256).digest()
+
+    def _payload_owners(self, payload: dict) -> set[bytes]:
+        """Owners a payload names: an exact id held as a whole string or key, an exact id that is
+        one word run of its text, or a known member whose name key is a run of its text (two
+        members whose ids fold alike are then BOTH named: the text cannot tell them apart)."""
+        strings = set(_keys_and_strings(payload))
+        found = set(strings)
+        run_set = {run for text in strings for run in fm.runs(fm.words(text))}
+        found |= run_set
+        found |= {m for m in self._members if fm.entity_key(m) in run_set}
+        return {self._owner(p) for p in found}
 
     def _scoped_hit(self, table: str, ev: Event, fps) -> bool:
         if not self._db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
@@ -837,8 +859,7 @@ class Spine:
         # Payload identities count even if a publisher omitted mentions. Household
         # and kernel visibility may reach A regardless of their declared subject.
         owners = {self._owner(p) for p in (*ev.people, ev.source)} | {b''}
-        owners.update(self._owner(run) for text in _keys_and_strings(ev.payload)
-                      for run in fm.runs(fm.words(text)))
+        owners |= self._payload_owners(ev.payload)
         for fp in fps:
             if ev.visibility is not Visibility.PRIVATE:
                 if self._db.execute(f"SELECT 1 FROM {table} WHERE fp=? LIMIT 1", (fp,)).fetchone():
@@ -912,6 +933,19 @@ class Spine:
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     # ---- read ---------------------------------------------------------------------
+    def _erased_events(self, seqs: Iterable[int]) -> tuple:
+        """The events a forget is about to erase, in order: live ones in full, expired ones as a
+        ``Skeleton``. Primary-key reads of these seqs only, never a history scan."""
+        out: dict[int, object] = {}
+        with self._lock:
+            for chunk in _chunks(sorted(set(seqs))):
+                marks = ','.join('?' * len(chunk))
+                for row in self._db.execute(
+                        f"SELECT {_COLS}, tombstoned FROM events WHERE seq IN ({marks})"
+                        f" AND tombstoned IN (0, {EXPIRED})", chunk):
+                    out[row[0]] = _row_to_event(row[:-1]) if row[-1] == 0 else Skeleton(row[0], Kind(row[2]))
+        return tuple(out[s] for s in sorted(out))
+
     def _get(self, seq: int) -> Event | None:
         """One live event by sequence number (kernel-internal: no capability check)."""
         with self._lock:

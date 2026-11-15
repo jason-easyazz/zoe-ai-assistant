@@ -1065,7 +1065,11 @@ that restores forgotten rows.
 Every notice has `scope` (`person`, `entity`, `topic`, `seqs`) and a complete,
 ordered sequence batch of at most 256 IDs, including an explicit empty batch.
 Whole-person notices retain an opaque `subject_hash`, resolved against the known
-roster only in memory; scoped notices also identify the subject. This preserves
+roster only in memory. Every owner hash (notice subject, scoped shields, forget
+ledger, nested-index markers) is a keyed hash of the EXACT person id; name
+normalisation is for entity forgets only, so two ids that fold alike stay two
+people. Stores written with the former normalised owner hash do not match after
+this change (a lab clean break, no migration); scoped notices also identify the subject. This preserves
 whole-person erasure of names without truncating the reviewed notice protocol.
 Explicit erased request IDs match every owner's stores and caches. Whole-person
 purge additionally sweeps orphaned owner rows; the twin clears reduced owner facts
@@ -1085,6 +1089,10 @@ entity matching; the snapshot scrub reaches them through their sources. Rows wri
 before the index, or before a member was known, are backfilled once per member at
 open (marked by a keyed hash, never the id). Scoped, entity and topic forgets do not
 use this index.
+
+Registered store purges and their read-backs receive every erased seq: a request
+already expired to its retention skeleton arrives as a body-less `Skeleton`
+(seq and kind), read by primary key, so rows keyed by `asked` are reached.
 
 Trusted bootstrap registers synchronous purges for brain lists/reminders/alarms
 and the reminder fixture. The reminder skill retains the reviewed replay delete:
