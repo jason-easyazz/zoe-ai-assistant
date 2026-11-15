@@ -26,7 +26,7 @@ One live write core is two functions and a REST route. Every path below ends in 
 | Pendant day review applying an approved list item | `omi_review_apply.py:148` | `list_service.add_item_to_list` (`list_service.py:534`), no receipts list | `list_service.py:609` / `:655`, `source=single` |
 | Skybridge voice resolver ("add X to the shopping list" at the panel) | `routers/voice_tts.py:4623` `resolve_skybridge_request` -> `skybridge_service.py:3569` -> `_resolve_list_add_item` (`:4882`) and the "this list" path `:4626` | its own inline INSERT in `_add_spoken_items` (`skybridge_service.py:4786`) | `skybridge_service.py:4871`, `source=skybridge` |
 | UI / REST "add an item" | `routers/lists.py` `POST /{list_type}/{list_id}/items` | `create_item_record` directly | `routers/lists.py:389`, `source=rest` |
-| Zoe's own accepted offer (`pending_suggestions.py:887`), the trip packing list (`anticipation.py:620`) | an offer the member accepted | inline INSERT / `create_item_record` | **not shadowed**, with a reason each in `tests/test_os_shadow.py` `NOT_SHADOWED` |
+| Zoe's own accepted offer (`pending_suggestions.py:887`), the trip packing list (`anticipation.py:620`) | an offer the member accepted | inline INSERT / `create_item_record` | **not shadowed**, with a reason each in `tests/test_os_shadow_hook.py` `NOT_SHADOWED` |
 
 **The seam.** There is no single function all four share: `write_receipts.record(user, "list", row_id, why)` is called by all of them but
 carries no item, no list and no outcome. So the hook is four one-line calls, and a static test
