@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import zoneinfo
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
@@ -18,12 +18,19 @@ _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 _FIRE_HOUR = 9
 
 
-def _weeks_since(last_contacted_at: str | None) -> str:
+def _days_since(last_contacted_at: str, now_utc: datetime) -> int:
+    """Whole days from ``last_contacted_at`` to ``now_utc`` (the trigger's clock). A naive stamp is read as UTC."""
+    dt = datetime.fromisoformat(last_contacted_at.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now_utc - dt).days
+
+
+def _weeks_since(last_contacted_at: str | None, now_utc: datetime | None = None) -> str:
     if not last_contacted_at:
         return "a long time"
     try:
-        dt = datetime.fromisoformat(last_contacted_at.replace("Z", "+00:00"))
-        days = (datetime.now(dt.tzinfo) - dt).days
+        days = _days_since(last_contacted_at, now_utc or datetime.now(timezone.utc))
         if days < 7:
             return f"{days} day{'s' if days != 1 else ''}"
         weeks = days // 7
@@ -32,19 +39,38 @@ def _weeks_since(last_contacted_at: str | None) -> str:
         return "a while"
 
 
+async def _nudged_today(db, local_day: str) -> set | None:
+    """``(user_id, person_id)`` already nudged on this household day, read from ``proactive_pending`` (the row
+    ``fire_notification`` writes for a send that went through; the birthday and morning triggers read the same table).
+    None when the read failed: the caller then sends nothing this tick rather than risk a repeat."""
+    try:
+        async with db.execute(
+            "SELECT user_id, item_id FROM proactive_pending WHERE trigger_type = ? "
+            "AND (created_at::timestamptz AT TIME ZONE ?)::date::text = ?",
+            (PeopleHealthTrigger.trigger_type, getattr(_ZOE_TZ, "key", "UTC"), local_day),
+        ) as cur:
+            return {(r["user_id"], r["item_id"]) for r in await cur.fetchall()}
+    except Exception as exc:
+        log.warning("PeopleHealthTrigger: nudged-today read failed, skipping this tick: %s", type(exc).__name__)
+        return None
+
+
 class PeopleHealthTrigger(ProactiveTrigger):
     """Daily: fire for Inner Circle people whose health_score is low."""
 
     trigger_type = "people_health"
 
-    def __init__(self) -> None:
-        # The household day this trigger last ran its check. The slow loop polls every few minutes, so an hour-only gate
-        # fired the same "you haven't spoken to X" nudge about a dozen times inside the 9 o'clock hour.
-        self._checked_day: date | None = None
-
     async def check(self, db, now_utc: datetime | None = None) -> list[TriggerResult]:
-        now_local = (now_utc or datetime.now(timezone.utc)).astimezone(_ZOE_TZ)
-        if now_local.hour != _FIRE_HOUR or self._checked_day == now_local.date():
+        # Once per person per household day. The mark is the proactive_pending row of a send that went through, so it
+        # survives a restart and a new instance, and a send that failed is retried on the next tick. Remaining window:
+        # two processes checking in the same tick (only a deploy overlap) can both send before either row commits; closing
+        # it needs a unique claim key, i.e. a migration (docs/knowledge/open-problems.md).
+        now_utc = now_utc or datetime.now(timezone.utc)
+        now_local = now_utc.astimezone(_ZOE_TZ)
+        if now_local.hour != _FIRE_HOUR:
+            return []
+        already = await _nudged_today(db, now_local.date().isoformat())
+        if already is None:
             return []
 
         try:
@@ -76,21 +102,21 @@ class PeopleHealthTrigger(ProactiveTrigger):
                 log.warning("PeopleHealthTrigger.check failed: %s", exc)
                 return []
 
-        self._checked_day = now_local.date()  # only once the read worked: a failed read is retried on the next tick
         results: list[TriggerResult] = []
         for row in rows:
             d = dict(row)
+            if (d["user_id"], d["id"]) in already:
+                continue
             last_c = d.get("last_contacted_at")
             # Enforce 21-day minimum in Python to avoid SQL dialect issues
             if last_c:
                 try:
-                    last_dt = datetime.fromisoformat(last_c.replace("Z", "+00:00"))
-                    if (datetime.now(last_dt.tzinfo) - last_dt).days < 21:
+                    if _days_since(last_c, now_utc) < 21:
                         continue
                 except (ValueError, TypeError):
                     pass
 
-            weeks = _weeks_since(last_c)
+            weeks = _weeks_since(last_c, now_utc)
             msg = f"You haven't spoken to {d['name']} in {weeks}."
             results.append(TriggerResult(
                 user_id=d["user_id"],

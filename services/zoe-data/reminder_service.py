@@ -408,24 +408,37 @@ async def _reread(db, reminder_id: str) -> dict | None:
 
 
 async def update_reminder_record(db, actor: Mapping[str, object], reminder_id: str, changes: Mapping[str, object], *,
-                                 own_only: bool = False) -> dict:
-    """Edit: dates/times normalised, an RRULE row re-anchored, old job cancelled before and rescheduled after the write."""
+                                 own_only: bool = False, now_utc: datetime | None = None) -> dict:
+    """Edit: dates/times normalised, an RRULE row re-anchored, old job cancelled before and rescheduled after the write.
+
+    The past-time rule is create's: an edit that MOVES a one-off to a day or time already gone is refused
+    (``ReminderPastError``, nothing written), because the scan never fires it. A field re-sent unchanged is not a move
+    (an edit form sends the whole row), so renaming, deactivating or re-saving a reminder whose time has passed stays
+    allowed. A recurring row is never refused for its time: its date is re-anchored to the next occurrence."""
     await require_feature_access(db, actor, feature="reminders", action="update")
     user_id = str(actor["user_id"])
     existing = await load_for_actor(db, actor, reminder_id, verb="edit", own_only=own_only)
     data = dict(changes)
     if existing.get("user_id") != user_id:
         data.pop("visibility", None)
-    if "due_date" in data and is_rrule(existing.get("recurring_pattern")):
-        # A recurring row's due_date is the rule's ANCHOR, not a due day.
-        if data["due_date"] is not None and str(data["due_date"]) == str(existing.get("due_date")):
-            data.pop("due_date")  # an edit form re-sending the stored anchor is not a date change: never 422 it
-        else:  # re-anchor on/after the new date (today when cleared); a NULL anchor would make a monthly rule fire DAILY
-            due_time = normalize_due_time(data["due_time"]) if "due_time" in data else existing.get("due_time")
+    # The stored value re-sent ("8am" for a stored 08:00 too) is not a change: dropped, so it is never 422'd as past.
+    if "due_time" in data:
+        data["due_time"] = normalize_due_time(data["due_time"])
+    for key in ("due_date", "due_time"):
+        if key in data and data[key] is not None and str(data[key]) == str(existing.get(key)):
+            data.pop(key)
+    recurring = is_rrule(existing.get("recurring_pattern"))
+    if "due_date" in data:
+        data["due_date"] = normalize_due_date(data["due_date"], now_utc=now_utc)
+        if recurring:  # the date is the rule's ANCHOR: re-anchor on/after it (today when cleared); NULL would fire a monthly rule DAILY
+            due_time = data["due_time"] if "due_time" in data else existing.get("due_time")
             _, data["due_date"] = normalize_recurrence_fields(
-                existing["recurring_pattern"], normalize_due_date(data["due_date"]), due_time)
+                existing["recurring_pattern"], data["due_date"], due_time, now_utc=now_utc)
+    if not recurring and ("due_date" in data or "due_time" in data):
+        refuse_past_due(data.get("due_date", existing.get("due_date")), data.get("due_time", existing.get("due_time")),
+                        now_utc=now_utc)
     updates, params = [], []
-    convert = {"is_active": lambda v: 1 if v else 0, "due_date": normalize_due_date, "due_time": normalize_due_time}
+    convert = {"is_active": lambda v: 1 if v else 0}
     for key, value in data.items():
         updates.append(f"{key} = ?")
         params.append(convert[key](value) if key in convert else value)

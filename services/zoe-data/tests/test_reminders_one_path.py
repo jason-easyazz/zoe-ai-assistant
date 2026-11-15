@@ -179,6 +179,48 @@ async def test_a_time_already_gone_today_is_refused(quiet, monkeypatch):
     assert sum("INSERT INTO reminders" in w[0] for w in db.writes) == 2
 
 
+def _edit(db, **changes):
+    return rs.update_reminder_record(db, _actor(A), "rem-1", changes, now_utc=FROZEN)
+
+
+@pytest.mark.asyncio
+async def test_an_edit_that_moves_a_one_off_into_the_past_is_refused(quiet, monkeypatch):
+    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+    db = _Store()  # a one-off on 2099-06-15 08:00
+    with pytest.raises(rs.ReminderPastError) as exc:
+        await _edit(db, due_date="2026-06-10", due_time="09:00")    # earlier today: stored, never fired
+    assert exc.value.spoken == rs.SPOKEN["past_time"] and db.updates() == []
+    db = _Store(due_date="2026-06-10", due_time="13:00")
+    with pytest.raises(rs.ReminderPastError):
+        await _edit(db, due_time="9am")                              # only the time moved, onto today's stored date
+    assert db.updates() == []
+    await _edit(db, due_time="14:30")                                # positive control: later today
+    assert any("due_time = ?" in w[0] and "14:30" in w[1] for w in db.updates())
+
+
+@pytest.mark.asyncio
+async def test_an_edit_that_leaves_the_time_alone_on_a_past_reminder_is_allowed(quiet, monkeypatch):
+    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+    for day in ("2026-06-10", "2026-06-09"):                         # earlier today, and yesterday
+        db = _Store(due_date=day, due_time="09:00")
+        await _edit(db, title="take pills with food")                # rename
+        await _edit(db, title="take pills with food", due_date=day, due_time="9am")  # an edit form re-sends the row
+        await _edit(db, is_active=False)                             # switch it off
+        sets = [w[0] for w in db.updates()]
+        assert len(sets) == 3 and not any("due_date = ?" in s or "due_time = ?" in s for s in sets)
+
+
+@pytest.mark.asyncio
+async def test_a_recurring_edit_is_re_anchored_not_refused(quiet, monkeypatch):
+    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+    db = _Store(recurring_pattern="FREQ=DAILY", due_date="2026-06-10", due_time="13:00")
+    await _edit(db, due_time="09:00")                                # today's 09:00 has gone: tomorrow's still fires
+    await _edit(db, due_date="2026-06-10", due_time="10:00")         # the anchor re-sent with an earlier time
+    await _edit(db, due_date="today", due_time="08:00")              # a moved anchor: the next 08:00 is tomorrow
+    sets = db.updates()
+    assert len(sets) == 3 and sets[2][1][0] == "2026-06-11"
+
+
 @pytest.mark.asyncio
 async def test_the_keyword_path_says_the_refusal(monkeypatch):
     async def past(*_a, **_k):
@@ -206,8 +248,16 @@ async def test_spoken_cancel_removes_only_the_speakers_own_reminder(monkeypatch,
 
 # ── the "you haven't spoken to X" nudge: once per household day, not every tick of the 9 o'clock hour ─────────────────────
 class _PeopleDb:
-    def execute(self, *_a, **_k):
-        row = {"id": "p1", "name": "Person One", "user_id": A, "last_contacted_at": None, "context": ""}
+    """The people read plus ``proactive_pending``, which ``fire_notification`` writes for a send that went through."""
+
+    def __init__(self, people):
+        self.people, self.pending, self.pending_read_fails = people, [], False
+
+    def sent(self, results, day):  # what fire_notification leaves behind for a send that worked
+        self.pending += [{"user_id": r.user_id, "item_id": r.item_id, "trigger_type": r.trigger_type, "day": day} for r in results]
+
+    def execute(self, sql, params=()):
+        db = self
 
         class _C:
             async def __aenter__(self):
@@ -217,16 +267,39 @@ class _PeopleDb:
                 return False
 
             async def fetchall(self):
-                return [row]
+                if "FROM proactive_pending" in sql:
+                    if db.pending_read_fails:
+                        raise RuntimeError("pool timeout")
+                    kind, tz_key, day = params
+                    assert tz_key == "Australia/Perth"
+                    return [r for r in db.pending if r["trigger_type"] == kind and r["day"] == day]
+                return [dict(p) for p in db.people]
         return _C()
 
 
 @pytest.mark.asyncio
 async def test_people_health_nudge_fires_once_per_day(monkeypatch):
+    """Once per person per household day, surviving a restart (a NEW trigger instance every tick here), a failed send
+    retried, and the 21-day rule measured on the trigger's own clock."""
+    import zoneinfo
+
     from proactive.triggers import people_health as ph
 
-    monkeypatch.setattr(ph, "_ZOE_TZ", timezone(timedelta(hours=8)))
-    trig, nine = ph.PeopleHealthTrigger(), datetime(2026, 6, 10, 1, 0, tzinfo=timezone.utc)  # 09:00 local
-    assert len(await trig.check(_PeopleDb(), now_utc=nine)) == 1
-    assert await trig.check(_PeopleDb(), now_utc=nine + timedelta(minutes=5)) == []        # the next slow-loop tick
-    assert len(await trig.check(_PeopleDb(), now_utc=nine + timedelta(days=1))) == 1        # tomorrow fires again
+    monkeypatch.setattr(ph, "_ZOE_TZ", zoneinfo.ZoneInfo("Australia/Perth"))  # +08:00, no DST
+    nine = datetime(2026, 6, 10, 1, 0, tzinfo=timezone.utc)  # 09:00 local
+    ago = lambda days: (nine - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    db = _PeopleDb([{"id": "p1", "name": "Person One", "user_id": A, "last_contacted_at": ago(30), "context": ""},
+                    {"id": "p2", "name": "Person Two", "user_id": A, "last_contacted_at": ago(10), "context": ""}])
+
+    async def tick(minutes, days=0):
+        return await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(days=days, minutes=minutes))
+
+    first = await tick(0)
+    assert [(r.item_id, r.message) for r in first] == [("p1", "You haven't spoken to Person One in 4 weeks.")]
+    assert [r.item_id for r in await tick(5)] == ["p1"]       # that send failed (no pending row): retried
+    db.sent(first, "2026-06-10")
+    assert await tick(10) == []                                # sent: a restart in the same hour does not repeat it
+    db.pending_read_fails = True
+    assert await tick(15) == []                                # cannot tell what was sent: send nothing this tick
+    db.pending_read_fails = False
+    assert [r.item_id for r in await tick(0, days=1)] == ["p1"]  # tomorrow fires again
