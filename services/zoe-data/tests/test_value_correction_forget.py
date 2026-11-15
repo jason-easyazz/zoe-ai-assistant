@@ -542,14 +542,16 @@ def test_an_unrelated_name_drops_nothing():
 
 # ── the call sites, by AST, each with its break-the-fix control ─────────────────────────────
 
+# forget_topic.forget is a thin wrapper (it clears the pending-correction markers in a finally, after the body); the body that
+# makes these calls is forget_topic._forget.
 CALL_SITES = (
     ("memory_service.py", "delete_user", "forget_user"),
     ("memory_forget_cascade.py", "_clear", "forget_matching"),
-    ("forget_topic.py", "forget", "forget_matching"),
-    ("forget_topic.py", "forget", "forget_in_texts"),
+    ("forget_topic.py", "_forget", "forget_matching"),
+    ("forget_topic.py", "_forget", "forget_in_texts"),
     ("intent_router.py", "_execute_forget_last", "forget_in_texts"),
     ("intent_router.py", "_execute_forget_last", "forget_turns"),
-    ("forget_topic.py", "forget", "forget_turns"),
+    ("forget_topic.py", "_forget", "forget_turns"),
     ("memory_service.py", "erase_rows", "forget_in_texts"),
 )
 

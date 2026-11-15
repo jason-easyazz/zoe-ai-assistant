@@ -575,7 +575,7 @@ def test_sidecar_takes_the_newest_turn_and_never_an_older_members(sent, rdb, mon
 # -- the wiring itself -------------------------------------------------------------------------------------------------
 def test_the_seam_has_one_construction_site_and_the_sidecar_mirrors_the_prefix():
     src = Path(zc.__file__).read_text()
-    assert src.count("_wrap_message_with_register(outbound_message, await _register_context_block(uid))") == 1
+    assert src.count('_wrap_message_with_register(\n        outbound_message, await _pre.take("register", lambda: _register_context_block(uid)))') == 1
     ts = (LAB / "src" / "register.ts").read_text()
     assert "REGISTER_ENVELOPE_PREFIX = '%s'" % zc._REGISTER_ENVELOPE_PREFIX in ts
     assert mr.MAX_REGISTER_CHARS <= 120 * 4

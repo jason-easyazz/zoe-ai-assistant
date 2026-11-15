@@ -33,6 +33,8 @@ import subprocess
 import time
 from typing import AsyncIterator
 
+import user_erase_gate as _erase_gate
+
 # Suppress ChromaDB ONNX runtime GPU-discovery noise on Pi (no GPU)
 os.environ.setdefault("ORT_DISABLE_GPU", "1")
 
@@ -3941,6 +3943,8 @@ def _fast_memory_extract(user_msg: str, _assistant_reply: str = "") -> list[str]
         return _legacy_memory_extract(user_msg)
 
 
+# The member's erase generation is read when ``_fire_memory_capture`` queues this (``ensure_future``), like the chat / voice hooks.
+@_erase_gate.scheduled_at_call("user_id")
 async def _background_memory_save(
     user_msg: str, assistant_reply: str, user_id: str = "guest"
 ) -> None:

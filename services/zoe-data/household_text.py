@@ -67,6 +67,7 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     _pg("omi_day_reviews", "the pendant day review (meetings, lists, reminders)", "omi_day_review.py"),
     _pg("omi_day_candidates", "day-review candidates (words lifted from the day)", "omi_day_review.py"),
     _pg("conversation_notes", "short notes about past conversations", "conversation_notes.py"),
+    _pg("memory_value_registry", "superseded-value registry (ids, closed labels and numbers such as an age)", "memory_value_registry.py"),
     _pg("contact_fields", "contact details (names, addresses, notes)", "contacts_store.py"),
     _pg("source_contacts", "synced contact cards", "contacts_store.py"),
     _pg("contact_merge_reviews", "contact merge proposals", "contacts_store.py"),

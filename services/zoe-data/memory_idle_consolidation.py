@@ -25,6 +25,7 @@ import os
 from collections import Counter
 from typing import Any, Optional
 
+import user_erase_gate as erase_gate
 from user_filters import is_unidentified
 
 logger = logging.getLogger(__name__)
@@ -376,6 +377,7 @@ def _warn_if_all_zero(session_id: str, user_id: str, turns: int, user_in: int, u
         pass
 
 
+@erase_gate.scheduled_at_call("user_id")       # a direct call is scheduled when called; the sweep's earlier snapshot wins
 async def consolidate_session(session_id: str, user_id: str,
                               since: Optional[Any] = None,
                               *, get_ctx=None) -> int:
@@ -407,6 +409,16 @@ async def consolidate_session(session_id: str, user_id: str,
         logger.debug("idle consolidation: no real user for session=%s — skipped", session_id)
         return 0
     user_id = owner
+    # The member's turns at or before their erase watermark are never mined (erase_watermark: the transcript survives a member erase).
+    # FAIL-CLOSED: an unreadable watermark returns BEFORE the consolidation watermark moves, so the session is re-read next sweep.
+    read = rows
+    try:
+        import erase_watermark
+        rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r["at"], reader="idle_consolidation")
+    except Exception as exc:  # noqa: BLE001 - Unavailable (or any failure to consult it): defer
+        logger.warning("idle consolidation: erase watermark unreadable session=%s (%s) - deferred, watermark kept",
+                       session_id, type(exc).__name__)
+        return 0
 
     # USER turns only, to the extractor AND as the anchor: the extraction prompt says "user
     # turns only", and the old "role: content" transcript fed it the assistant's lines too, so
@@ -490,6 +502,13 @@ async def consolidate_session(session_id: str, user_id: str,
             guessed = value_correction.kind_guess_on_correction(text, user_turn_list)
         except Exception:  # noqa: BLE001 - the check never costs the session its facts
             stale = guessed = False
+        try:    # ZOE_MEMORY_SUPERSEDED_REGISTRY shadow: the durable registry's verdict, counts only, beside the one that decides
+            import memory_value_registry
+
+            if memory_value_registry.recording():
+                await memory_value_registry.shadow_check(user_id, text, _fact_said_at(item, text, rows), bool(stale))
+        except Exception:  # noqa: BLE001
+            pass
         if guessed:
             rejected += 1
             logger.info("VALUE_CORRECTION_KIND_GUESS lane=idle_consolidation user=%s session=%s", user_id, session_id)
@@ -523,9 +542,9 @@ async def consolidate_session(session_id: str, user_id: str,
             logger.warning("idle consolidation ingest failed: %s", exc)
 
     # ── Step 3: fresh short-lived conn — advance the watermark, then release ───
-    last_at = rows[-1]["at"]
+    last_at = read[-1]["at"]       # every row READ is consolidated (a turn skipped at the erase watermark stays skipped)
     async with get_ctx() as conn:
-        await _write_watermark(conn, session_id, user_id, last_at, len(rows))
+        await _write_watermark(conn, session_id, user_id, last_at, len(read))
     _warn_if_all_zero(session_id, user_id, len(rows), user_rows_in, user_turns_kept,
                       len(user_turns), len(facts or []), stored, rejected, skipped, dropped, failed)
     logger.info("MEMORY_IDLE_CONSOLIDATE session=%s user=%s turns=%d stored=%d "
@@ -540,6 +559,8 @@ async def run_idle_consolidation_sweep() -> dict:
         return {"enabled": False}
     result = {"enabled": True, "sessions": 0, "stored": 0}
     from db_pool import get_db_ctx
+
+    seen = erase_gate.snapshot()     # the sweep is scheduled NOW: a member erased while it runs keeps nothing it writes for them
     # Short-lived listing connection: ensure the state table + list idle sessions,
     # then RELEASE it before doing any per-session work. No pooled connection is
     # held across the batch loop — each session opens its own short-lived conns.
@@ -552,7 +573,8 @@ async def run_idle_consolidation_sweep() -> dict:
         # session's watermark is left un-advanced, so it retries next sweep.
         try:
             # `since` comes straight from the batch query (no per-session round-trip).
-            stored = await consolidate_session(s["session_id"], s["user_id"], s["since"])
+            with erase_gate.scheduled(s["user_id"], seen.get(s["user_id"], 0)):
+                stored = await consolidate_session(s["session_id"], s["user_id"], s["since"])
             result["sessions"] += 1
             result["stored"] += stored
         except Exception as exc:

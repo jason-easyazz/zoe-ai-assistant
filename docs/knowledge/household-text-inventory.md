@@ -56,7 +56,7 @@ Generated from `household_text.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: household_text.py -->
 
-88 stores: a per-subject forget reaches 44, delete-my-data reaches 40, both 33, neither 37.
+89 stores: a per-subject forget reaches 45, delete-my-data reaches 41, both 34, neither 37.
 
 | store | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner |
 |---|---|---|---|---|---|---|---|
@@ -77,6 +77,7 @@ Generated from `household_text.py`; do not edit by hand.
 | `omi_day_reviews` | `pg:omi_day_reviews` | the pendant day review (meetings, lists, reminders) | `omi_day_review.erase_entity` | `omi_day_review.forget_user` | reached | no age limit: kept until deleted | omi_day_review.py |
 | `omi_day_candidates` | `pg:omi_day_candidates` | day-review candidates (words lifted from the day) | `omi_day_review.erase_entity` | `omi_day_review.forget_user` | reached | no age limit: kept until deleted | omi_day_review.py |
 | `conversation_notes` | `pg:conversation_notes` | short notes about past conversations | `conversation_notes.erase_entity` | `conversation_notes.forget_user` | reached | no age limit: kept until deleted | conversation_notes.py |
+| `memory_value_registry` | `pg:memory_value_registry` | superseded-value registry (ids, closed labels and numbers such as an age) | `memory_value_registry.erase_entity` | `memory_value_registry.forget_user` | reached | no age limit: kept until deleted | memory_value_registry.py |
 | `contact_fields` | `pg:contact_fields` | contact details (names, addresses, notes) | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py |
 | `source_contacts` | `pg:source_contacts` | synced contact cards | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py |
 | `contact_merge_reviews` | `pg:contact_merge_reviews` | contact merge proposals | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py |
