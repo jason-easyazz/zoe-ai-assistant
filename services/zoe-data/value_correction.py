@@ -1221,6 +1221,80 @@ async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
     return max(len(ids), 1)
 
 
+def _registry_snapshot(user_id: str) -> tuple:
+    """``(partial_at, scheduled_at)`` for the shadow registry record: the erase epochs as of when this correction's work was QUEUED.
+
+    Inside a post-turn task (``user_erase_gate.scheduled_at_call`` on the chat / voice / legacy hooks) that is the hook's snapshot,
+    taken when the turn queued it: a member erase that ran to completion before this task reached ``apply`` has moved the generation
+    past it, so ``record`` drops. A partial erase (topic / turn / rows / entity) that started or ended since then makes ``partial_at``
+    ``-1``, which no epoch equals. A direct call (no such task) snapshots now, as before. Never raises."""
+    try:
+        import memory_value_registry as reg
+        import user_erase_gate
+
+        uid = (user_id or "").strip().lower()
+        queued = user_erase_gate.scheduled_snapshot(user_id)
+        if queued is None:
+            return reg.partial_epoch(uid), user_erase_gate.generation(uid)
+        gen, at = queued
+        part = -1 if at is not None and reg.partial_bumped_since(uid, at) else reg.partial_epoch(uid)
+        return part, gen
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+_PLAIN_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z'’\-]{0,24}(?: [A-Za-z][A-Za-z'’\-]{0,24})?$")
+
+
+def _age_norm(value: Optional[str]) -> Optional[dict]:
+    """``{"v": x}`` (the ``memory_claims`` age shape) for an AGE value ("8", "eight", "7 and a half", "9 years old"), else None (a date, an amount, a word). Pure."""
+    t = re.sub(r"(?i)\s*(?:years?[ -]old|yrs?\s+old|yo)\s*$", "", (value or "").strip())
+    x = value_of(t) if t else None
+    return {"v": x} if x is not None else None
+
+
+async def _shadow_record(user_id: str, user_message: str, corr: "Correction", displaced: list, row_ids,
+                         partial_at: Optional[int] = None, scheduled_at: Optional[int] = None) -> None:
+    """``ZOE_MEMORY_SUPERSEDED_REGISTRY`` shadow: record this correction in the durable registry BESIDE ``_remember`` (which keeps
+    deciding). v1 records only what it can normalise without words: an AGE of a plain name that resolves to exactly ONE person of
+    the member by an exact (folded) name match - never a prefix or token match (the Ana / Ana-Lise class), never a relation, label
+    or lazily typed possessive. Anything else is counted, not recorded. Flag off: returns before any read. Never raises."""
+    try:
+        import memory_value_registry as reg
+
+        if not reg.recording():
+            return
+        subject = (corr.subject or "").strip()
+        if (not _PLAIN_NAME_RE.match(subject) or _not_a_subject(subject) or owner_noun(subject)
+                or re.match(r"(?i)^(?:the|my|our)\s", subject)):
+            reg.COUNTS["unrecorded_subject"] += 1
+            return
+        new = _age_norm(corr.new)
+        olds = [_age_norm(v) for v in ([corr.old] if corr.old is not None else [d for d in displaced if d])]
+        if new is None or any(o is None for o in olds):
+            reg.COUNTS["unrecorded_value"] += 1
+            return
+        import hashlib
+        import time
+
+        import db_compat
+        from people_graph import resolve_person
+
+        uid = user_id.strip().lower()
+        async with db_compat.get_compat_db() as db:
+            res = await resolve_person(db, uid, subject, allow_prefix=False)
+        if res.status != "unique" or res.tier != "exact" or not res.person_id:
+            reg.COUNTS["unrecorded_unresolved"] += 1
+            return
+        said_at = time.time()
+        turn = turn_id_of(uid, user_message)
+        claim = "vc-" + hashlib.sha256(f"{uid}|{turn}|{said_at!r}".encode("utf-8")).hexdigest()[:16]
+        await reg.record(uid, res.person_id, "age", superseded=olds, asserted=new, said_at=said_at, by_claim=claim,
+                         source_turn_id=turn, row_ids=[i for i in row_ids if i], partial_at=partial_at, scheduled_at=scheduled_at)
+    except Exception as exc:  # noqa: BLE001 - shadow bookkeeping never touches the correction
+        logger.debug("value_correction: shadow registry skipped (%s)", type(exc).__name__)
+
+
 _NOT_SURNAME = frozenset({
     "is", "was", "are", "were", "am", "be", "been", "has", "had", "have", "does", "did", "do", "will", "would", "can", "could",
     "and", "or", "but", "not", "also", "then", "than", "who", "whose", "which", "that", "this", "with", "for", "from", "the", "a", "an",
@@ -1290,6 +1364,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
     corr = statement(user_message)
     if corr is None:
         return 0
+    _reg_snap = _registry_snapshot(user_id)       # before the rows are read: an erase from here on drops the shadow record
     try:
         from correction_apply import SOURCE, _is_unidentified, note_correction
 
@@ -1382,9 +1457,11 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         for old in [d for d in displaced if d] or [None]:
             _remember(user_id, corr._replace(old=old) if old else corr, user_message)
         if not hits or len(hits) > MAX_ROWS:
+            await _shadow_record(user_id, user_message, corr, displaced, (), *_reg_snap)
             return 0
         excerpt = " ".join(user_message.split())
         done = 0
+        tied = [r.id for r, _t in hits]
         for r, new_text in hits:
             ref = await svc.review(
                 r.id, decision="edit", edits=new_text, actor=SOURCE, note="spoken value correction (durable supersede)",
@@ -1392,6 +1469,8 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 **({} if speaker_verified is None else {"speaker_verified": speaker_verified}))
             if ref is not None:
                 done += 1
+                tied.append(getattr(ref, "id", None))
+        await _shadow_record(user_id, user_message, corr, displaced, tied, *_reg_snap)
         if done:
             logger.info("VALUE_CORRECTION_APPLIED user=%s rows=%d", user_id, done)
         return done

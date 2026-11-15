@@ -104,6 +104,7 @@ def _rx(lang: str) -> Optional[dict]:
             "back_ref": w("|".join(e["back_refs"].split())),
             # later-clause openers skip auxiliaries and the question words (clause_q owns those, with its "what a ..." exclusion)
             "aux": frozenset(e["aux_openers"].split()) | {re.match(r"[a-z]+", q).group(0) for q in e["clause_opener"].split("|")},
+            "aux_words": frozenset(e["aux_openers"].split()), "aux_subjects": frozenset(e["aux_subjects"].split()),
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
@@ -141,13 +142,22 @@ def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
 def is_request(s: str, rx: dict) -> bool:
     """A request or question: a ``?``, an ``ask`` cue anywhere, an ``opener`` as the first word, a question word opening any later
     clause (``clause_q``), or an imperative opener starting any later clause ("why is fire hot, get me the big knife"; an auxiliary
-    such as "is" / "do" counts only at the turn start, so "dad used the drill and is tired" stays a statement). A plain statement is
-    not one."""
+    such as "is" / "do" opens a later-clause QUESTION only when a subject word follows it and the clause names a hazard: "im 10, is
+    the knife sharp" asks, "dad used the drill and is tired" / "the lawnmower is loud and does my head in" stay statements). A plain
+    statement is not one."""
     if "?" in s or rx["ask"].search(s) or rx["clause_q"].search(s) or rx["opener"].match(rx["lead"].sub("", s, count=1)):
         return True
     for c in clauses(s, rx)[1:]:
-        m = rx["opener"].match(rx["lead"].sub("", c, count=1))
-        if m and m.group(0) not in rx["aux"]:
+        head = rx["lead"].sub("", c, count=1)
+        m = rx["opener"].match(head)
+        if not m:
+            continue
+        word = m.group(0)
+        if word not in rx["aux"]:
+            return True
+        rest = head[m.end():].split()
+        if (word in rx["aux_words"] and rest and rest[0] in rx["aux_subjects"]
+                and any(terms.search(c) for _cid, terms, _r in rx["classes"])):
             return True
     return False
 

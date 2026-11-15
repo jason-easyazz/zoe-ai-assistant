@@ -560,7 +560,9 @@ TWO_SONS = "my sons eli and max are here and eli fell and cant get up"
 def test_a_turn_naming_two_people_converts_nothing(fact, said, mem):
     assert medical_safety.emergency_event(fact, said) is None
     run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
-    assert [r.text for r in _rows(mem)] == [fact]                               # stored exactly as mined
+    # QA round 10a: as mined it reads as a standing condition, so an automatic writer files nothing (medical_safety.unfiled_emergency;
+    # tests/test_qa10_emergency_recall.py); before, it was stored exactly as mined
+    assert [r.text for r in _rows(mem)] == []
 
 
 @pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])
@@ -999,7 +1001,9 @@ def test_another_person_in_the_turn_never_makes_the_member_an_emergency(fact, sa
     assert medical_safety.emergency_event(fact, said) is None
     run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
     rows = _rows(mem)
-    assert [r.text for r in rows] == [fact] and all(r.metadata.get("memory_type") != "event" for r in rows)
+    # QA round 10a: a present emergency the converter declines is not filed by an automatic writer at all (before: stored as
+    # mined, which read as the member's standing condition); either way it is never the member's emergency event
+    assert rows == []
 
 
 def test_the_single_person_fall_still_converts():
