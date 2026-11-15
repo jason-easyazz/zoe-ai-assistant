@@ -290,13 +290,30 @@ _worker_guard = threading.Lock()
 
 
 def _ensure_worker() -> None:
+    """Lock-free when the worker is up (the normal case: it is started at import while the flag is ``shadow``, off every turn).
+    Otherwise ONE caller starts it; a caller that finds another one starting it never waits on the guard: its job is queued and
+    drained by the worker that other caller is starting."""
     global _worker
     if _worker is not None and _worker.is_alive():
         return
-    with _worker_guard:
+    if not _worker_guard.acquire(blocking=False):
+        return
+    try:
         if _worker is None or not _worker.is_alive():
             _worker = threading.Thread(target=_run, name="os-shadow", daemon=True)
             _worker.start()
+    finally:
+        _worker_guard.release()
+
+
+def _start_at_import() -> None:
+    """The worker starts when the service imports this module (start-up, not a turn) if the flag is ``shadow``; the flag is process
+    env, so a flip means a restart and the import sees it. Never raises: a failure here only defers the start to the first add."""
+    try:
+        if mode() == "shadow":
+            _ensure_worker()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class _Kernel:
@@ -573,3 +590,5 @@ def _reset_for_tests() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+else:
+    _start_at_import()        # service start-up, never a turn (see _ensure_worker)
