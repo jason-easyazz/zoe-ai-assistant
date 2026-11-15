@@ -4533,29 +4533,22 @@ class _ReflexTurn:
         self.started_at: "float | None" = None
         self._decided = False
         self.would_play = False          # decide() said "heard" (in shadow: would have played); read by the safety count
-        self._reply = threading.Event()  # the reply's first audio arrived
+        self._reply = threading.Event()  # the reply's first audio arrived (set by the reply path: its ONLY reflex action)
         self._over = threading.Event()   # the turn ended
-        self._lock = threading.Lock()
-        self._proc = None
         self._thread = threading.Thread(target=self._run, daemon=True, name="reflex-turn")
 
     def start(self) -> None:
         self._thread.start()
 
     def note_reply(self) -> None:
-        """The reply's first audio is about to be written. A lock and at most one signal: never waits."""
+        """The reply's first audio is about to be written. Sets ONE event and returns: no lock, no subprocess call, no wait.
+        The cut of a take still playing (poll, terminate, reap) happens on the reflex's OWN thread (``_play``)."""
         self._reply.set()
-        with self._lock:
-            p = self._proc
-        if p is not None and p.poll() is None:
-            self.cut = True
-            try:
-                p.terminate()
-            except Exception:  # noqa: BLE001
-                pass
 
     def end(self) -> None:
         self._over.set()
+        if self._thread.is_alive():      # the TURN's end (the reply has finished): let the reflex thread settle its fields
+            self._thread.join(timeout=0.25)
         if self.skip == "-" and self.kind == "none" and self.take is None and not self._decided:
             self.skip = "late"           # the turn was over before a decision: never a "would have played"
 
@@ -4628,13 +4621,8 @@ class _ReflexTurn:
         except Exception:  # noqa: BLE001
             self.skip = "player_failed"
             return
-        with self._lock:
-            if self._reply.is_set() or self._over.is_set():
-                late = True
-            else:
-                late, self._proc = False, proc
-        if late:
-            self.skip = "reply_first"
+        if self._reply.is_set() or self._over.is_set():
+            self.skip = "reply_first"    # the reply came while the player spawned: kill it unwritten
             self._reap(proc, kill=True)
             return
         try:
@@ -4648,9 +4636,18 @@ class _ReflexTurn:
         self.started_at, self.dur_ms, self.kind = t0, int(take.dur_ms), "heard"
         self.at_ms = int(round((t0 - self.t_close) * 1000.0))
         global _REFLEX_STATE
-        with _REFLEX_LOCK:
+        with _REFLEX_LOCK:               # the reflex thread's own state lock: the reply path never takes it
             _REFLEX_STATE = _reflex.record(_REFLEX_STATE, d, _fs_now())
-        self._reap(proc, kill=False, timeout=take.dur_ms / 1000.0 + 2.0)
+        # The CUT lives here, on the reflex's own thread: wait (here, never on the reply path) for the take to end or the
+        # reply's first audio; if the reply came while the take still plays, terminate it.
+        deadline = time.monotonic() + take.dur_ms / 1000.0 + 2.0
+        while proc.poll() is None and time.monotonic() < deadline:
+            if self._reply.wait(timeout=0.01):
+                if proc.poll() is None:
+                    self.cut = True
+                    self._reap(proc, kill=True)
+                return
+        self._reap(proc, kill=False)
 
     @staticmethod
     def _reap(proc, *, kill: bool, timeout: float = 1.0) -> None:
@@ -4691,7 +4688,8 @@ def _reflex_end(fs: "_FirstSound") -> None:
 
 
 def _reflex_note_reply() -> None:
-    """Called where the reply's first audio is about to be written. Never raises; a no-op with no reflex this turn."""
+    """Called where the reply's first audio is about to be written (only when REFLEX_MODE is not off). Never raises, never
+    waits: a global read and ``note_reply`` (one Event.set). A no-op with no reflex this turn."""
     ctl = _REFLEX_CUR
     if ctl is not None:
         try:
@@ -4723,7 +4721,8 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         return aplay
     pcm = _trim_chunk_silence(pcm, rate, ch, width)
     if aplay is None:
-        _reflex_note_reply()  # the reply's first audio: a reflex still playing is CUT, never waited for (a lock and a signal)
+        if REFLEX_MODE != "off":  # off: no reflex work on the first-audio path at all
+            _reflex_note_reply()  # the reply's first audio: ONE event set; the reflex thread cuts its own take
         # A player that cannot start raises (Popen: FileNotFoundError; Mac: OSError /
         # NotImplementedError). _do_single_turn_stream treats that as "nothing played"
         # and falls back to the blocking turn, instead of counting the reply as heard.
@@ -5043,7 +5042,8 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
             if "full_audio" in obj:
                 # Skybridge/confirmation path: voice_command returned one full
                 # audio blob (wav or mp3). Play it via the robust player.
-                _reflex_note_reply()
+                if REFLEX_MODE != "off":
+                    _reflex_note_reply()
                 if not played_any:
                     _recording_active.clear()
                 if ttfa is None:
