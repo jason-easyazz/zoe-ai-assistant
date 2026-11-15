@@ -4,15 +4,17 @@ These run in the KERNEL process (registered on its ``Dispatcher``). The brain ne
 this module. Each store is as dumb as production's are: it checks nothing, so every rule shown
 in the tests is the kernel's. Each action declares its ``params`` (the tool schema is derived
 from them) and is reversible. ``asked`` is a ``from: turn`` parameter: the adapter fills it from
-the turn the trusted voice surface recorded; the model never sees it. It is only provenance for
-a scoped forget, and a wrong value can at worst mis-scope a delete of the SAME person's row.
+the turn the trusted voice surface recorded; the model never sees it. The dispatcher overwrites
+it with the single authorised cause before any driver runs. Multiple causes are refused for
+actions using this scalar provenance, so scoped forget cannot miss another cited request.
 """
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..provenance import erased_request
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
-         "description": "the utterance this came from (filled by the adapter)"}
+         "description": "the single authorised request (set by the kernel)"}
 
 
 class Lists:
@@ -38,7 +40,7 @@ class Lists:
         return {"item": args["item"]} if want in self.rows.get(person, []) else None
 
     def snapshot(self, person, args):
-        return {"rows": [dict(r) for r in self.rows.get(person, [])]}
+        return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, [])]}
 
     def put_back(self, person, args, before):
         self.rows[person] = [dict(r) for r in before["rows"]]
@@ -68,7 +70,7 @@ class Reminders:
             r["asked"] == args["asked"] and r["note"] == args["note"] for r in self.rows.get(person, [])) else None
 
     def snapshot(self, person, args):
-        return {"rows": [dict(r) for r in self.rows.get(person, [])]}
+        return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, [])]}
 
     def put_back(self, person, args, before):
         self.rows[person] = [dict(r) for r in before["rows"]]
@@ -94,7 +96,7 @@ class Alarms:
         return {"alarm": args["time"]} if self.at.get(person, {}).get("time") == args["time"] else None
 
     def snapshot(self, person, args):
-        return {"alarm": self.at.get(person)}
+        return {"provenance": 1, "alarm": self.at.get(person)}
 
     def put_back(self, person, args, before):
         if before["alarm"] is None:
@@ -115,18 +117,17 @@ class Keeper:
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is not Kind.FORGET:
             return
-        person, gone = ev.payload.get("subject"), set(ev.payload.get("seqs", ()))
-        scoped = "scope" in ev.payload
         for store in self.stores:
             if isinstance(store, Alarms):
-                row = store.at.get(person)
-                if row and (not scoped or row["asked"] in gone):
-                    del store.at[person]
+                for person, row in list(store.at.items()):
+                    if erased_request(ev, row["asked"], person):
+                        del store.at[person]
             else:
-                keep = [r for r in store.rows.get(person, []) if scoped and r["asked"] not in gone]
-                store.rows[person] = keep
-                if not keep:
-                    store.rows.pop(person, None)
+                for person, rows in list(store.rows.items()):
+                    keep = [r for r in rows if not erased_request(ev, r["asked"], person)]
+                    store.rows[person] = keep
+                    if not keep:
+                        store.rows.pop(person, None)
 
 
 # the brain's manifest: the ceiling on what it may ask the kernel to do

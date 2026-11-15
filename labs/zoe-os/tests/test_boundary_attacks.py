@@ -117,7 +117,9 @@ def test_an_oversized_frame_is_refused_before_its_body_is_read(box):
     voice = box.raw("voice")
     assert ask(voice, req("publish", kind="utterance", subject=SAM,
                           payload={"text": BIG}))["error"]["code"] == "too_large"
-    assert box.reasons() == ["frame too large"] * 2 and len(box.on_disk()) < len(BIG)
+    assert box.reasons() == ["frame too large"] * 2
+    # The body never reached the store: no run of it is on disk (a bare size bound only measured the schema).
+    assert BIG[:4096].encode() not in box.on_disk() and len(box.on_disk()) < 2 * len(BIG)
     assert alive(box)
 
 

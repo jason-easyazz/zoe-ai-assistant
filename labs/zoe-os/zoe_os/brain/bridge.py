@@ -55,10 +55,11 @@ class Outcome:
 
 
 def shape(visible: dict, arguments: object) -> dict:
-    """Which arguments a proposal had, by NAME only: present, missing, unknown, and failing their own check."""
+    """Declared argument names only; unknown keys become a fixed code, never caller text."""
     args = arguments if isinstance(arguments, dict) else {}
-    return {"present": sorted(args), "missing": sorted(n for n, s in visible.items() if s.get("required") and n not in args),
-            "unknown": sorted(set(args) - set(visible)),
+    return {"present": sorted(set(args) & set(visible)),
+            "missing": sorted(n for n, s in visible.items() if s.get("required") and n not in args),
+            "unknown": ["unknown_argument"] if set(args) - set(visible) else [],
             "bad_value": sorted(n for n, s in visible.items() if n in args and check_params({n: s}, {n: args[n]}))}
 
 
@@ -141,7 +142,7 @@ class BrainBridge:
         try:
             r = client.act(entry["action"], turn.member, args, caused_by=[turn.cause])
         except Refused as exc:
-            reason = str(exc).split(": ", 2)[-1]        # the kernel's text is "who: attempted: reason"
+            reason = str(exc).split(": ", 2)[-1]        # fixed wire reason; accepts older kernel formatting
             return Outcome("refused", SAY.get(reason, SAY_OTHER), reason=reason)
         except wire.WireError as exc:
             return Outcome("invalid" if exc.code == wire.BAD_REQUEST else "refused", SAY_OTHER)
