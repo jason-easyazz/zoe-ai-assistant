@@ -26,6 +26,10 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
   the runner) is in README "v3"; it is why full + local is allowed only with conditions.
 - Landing `github` (default) only ever opens a DRAFT PR labelled `self-heal`, one finding per PR,
   with the `zoe-self-heal:v1` marker block. Landing `local` makes no `gh`, GitHub or network call.
+- Fault-to-fix time (gap audit 2026-11-14.6): the ticket record keeps `detected_at` (the detect run that ticketed it) and a
+  VERIFIED outcome (`healed_local` | `healed`, the reproduction passed) carries `fix_s` (seconds, one decimal) in the result,
+  the `result` audit row and the ticket; no other outcome does. `e2e_scratch.py` also prints `fault_to_fix_s` (fault
+  injected to proof). Read by the felt scorecard row `inst_self_heal_fix`. Pinned by `tests/test_self_heal_fix_time.py`.
 - Every step checks the kill switch first and appends a row to `<state_dir>/audit.jsonl` (allow-listed
   keys, single-token values). Before the engine, gates, landing, push, PR call and each pending verify item the run re-checks
   kill switch, quiet hours, voice lander and night_busy.

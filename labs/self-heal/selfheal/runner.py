@@ -33,7 +33,10 @@ from .sandbox import Sandbox
 AUDIT_KEYS = {"ts", "run", "step", "outcome", "ticket", "dispatch", "landing", "engine",
               "rule", "reason", "found", "skipped", "fault_class", "fault_key", "test", "plan",
               "seconds", "rc", "files", "lines", "gates", "sha", "branch", "pr", "review", "snapshot",
-              "applied", "restored", "verify", "issue", "chosen", "checkpoint", "error", "bins", "sandbox"}
+              "applied", "restored", "verify", "issue", "chosen", "checkpoint", "error", "bins", "sandbox", "fix_s"}
+#: The outcomes that are a VERIFIED fix proof (the reproduction passed): they carry `fix_s`, seconds from the fault being
+#: detected (the detect run that ticketed it) to that proof. A lab measure; no other outcome carries it.
+VERIFIED = ("healed_local", "healed")
 _TOKEN = re.compile(r"^[A-Za-z0-9_./:@+=,#\[\]-]{0,240}$")
 
 
@@ -176,6 +179,7 @@ class Runner:
             if broken:
                 self.audit("detect", "cannot_reproduce", fault_class=COLLECTION_ERROR, files=broken)
                 return {"outcome": COLLECTION_ERROR, "files": broken}
+            detected = self.now()   # fault seen (the detector reproduced it): the start of fault-to-fix
             tickets = failing_test_tickets(xml, base_sha=base_sha, python=c.python, ignore=c.ignore_nodeids, now=now)
             self.audit("detect", "done", found=len(tickets))
             ticket, skipped = None, []
@@ -192,7 +196,8 @@ class Runner:
             if ticket is None:
                 self.audit("ticket", "none", skipped=skipped)
                 return {"outcome": "no_fault" if not tickets else "all_capped", "skipped": skipped}
-            state.data["tickets"][ticket.id] = {"ticket": ticket.to_dict(), "status": "planned"}
+            state.data["tickets"][ticket.id] = {"ticket": ticket.to_dict(), "status": "planned",
+                                                "detected_at": detected.isoformat()}
             state.save()
             self.audit("ticket", "chosen", ticket.id, fault_class=ticket.fault_class,
                        fault_key=ticket.fault_key, test=ticket.evidence.get("nodeid", ""))
@@ -267,8 +272,21 @@ class Runner:
             return c.local_gates
         return c.gates
 
+    def _fix_seconds(self, rec: dict):
+        """Seconds from ``detected_at`` to now (one decimal), or None: no record of detection (a ticket from before this
+        field existed), an unreadable stamp, or a negative span (a clock step). Never raises."""
+        try:
+            s = (self.now() - dt.datetime.fromisoformat(str(rec["detected_at"]))).total_seconds()
+        except Exception:   # noqa: BLE001
+            return None
+        return round(s, 1) if s >= 0 else None
+
     def _finish(self, state: State, ticket: Ticket, status: str, **detail) -> dict:
         rec = state.data["tickets"][ticket.id]
+        if status in VERIFIED:
+            fix_s = self._fix_seconds(rec)
+            if fix_s is not None:
+                detail = {**detail, "fix_s": fix_s}
         rec["status"] = status
         rec.update(detail)
         f = state.fault(ticket.fault_key)

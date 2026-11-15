@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE / "tests"))
 
 from conftest import FakeEngine, fix_calc, make_cfg, seed_repo, sh  # noqa: E402
 from selfheal.landing import NoopApplier  # noqa: E402
-from selfheal.runner import Runner  # noqa: E402
+from selfheal.runner import VERIFIED, Runner  # noqa: E402
 
 
 def main() -> int:
@@ -34,6 +34,7 @@ def main() -> int:
     a = ap.parse_args()
     tmp = Path(tempfile.mkdtemp(prefix="self-heal-e2e-"))
     live = tmp / "live"
+    t_fault = time.monotonic()   # the synthetic fault is injected here (seed_repo writes the buggy calc.py)
     seed_repo(live)
     repo = tmp / "repo.git"
     sh("git", "clone", "-q", "--bare", str(live), str(repo))
@@ -46,7 +47,10 @@ def main() -> int:
     t0 = time.monotonic()
     out = Runner(cfg, engine=engine, applier=applier).run_once()
     wall = time.monotonic() - t0
-    print(json.dumps({"scratch": str(tmp), "wall_s": round(wall, 1), "result": out}, indent=1, default=str))
+    # fault injected -> verified fix proof (the reproduction passed); None when the run did not end in one
+    fault_to_fix = round(time.monotonic() - t_fault, 1) if out.get("outcome") in VERIFIED else None
+    print(json.dumps({"scratch": str(tmp), "wall_s": round(wall, 1), "fault_to_fix_s": fault_to_fix, "result": out},
+                     indent=1, default=str))
     print("--- audit.jsonl ---")
     print((Path(cfg.state_dir) / "audit.jsonl").read_text())
     if out.get("sha"):
