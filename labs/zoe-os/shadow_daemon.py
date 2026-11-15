@@ -6,7 +6,7 @@ Operator opt-in (``scripts/setup/systemd/zoe-os-shadow-kernel.service``); never 
 authoritative: zoe-data's own list add stays the only writer of the household's list, and this kernel records the event and a
 receipt beside it, in its OWN store. Read ``docs/knowledge/zoe-os-list-shadow.md`` first.
 
-State directory (default ``$ZOE_OS_SHADOW_DIR`` or ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
+State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no ``ZOE_`` name), else ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
 
     people.json   {"people": [member ids]}   REQUIRED, written by the owner (``os_shadow.export_roster``); read at start
     known-people.json  every id ever in people.json (never shrinks): who the kernel can still FORGET
@@ -80,7 +80,7 @@ def register_list_remove(kernel, lists: Lists) -> None:
 
 
 def state_dir(arg: str | None) -> Path:
-    return Path(arg or os.environ.get("ZOE_OS_SHADOW_DIR") or Path.home() / ".zoe" / "os-shadow")
+    return Path(arg or os.environ.get("OSLAB_SHADOW_DIR") or Path.home() / ".zoe" / "os-shadow")
 
 
 def remember_people(state: Path, people: list) -> list:
@@ -142,7 +142,7 @@ def serve(k: Kernel, srv: KernelServer, stop: threading.Event) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--dir", help="state directory (default $ZOE_OS_SHADOW_DIR or ~/.zoe/os-shadow)")
+    ap.add_argument("--dir", help="state directory (else $OSLAB_SHADOW_DIR, else ~/.zoe/os-shadow)")
     state = state_dir(ap.parse_args(argv).dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.umask(0o077)                       # the database, its WAL and the credentials are this user's alone
