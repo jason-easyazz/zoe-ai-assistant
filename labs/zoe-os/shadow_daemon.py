@@ -1,4 +1,4 @@
-"""The Zoe OS kernel as a long-running SHADOW process: the one the list-add shadow client talks to.
+"""The Zoe OS kernel as a long-running SHADOW process: the one the zoe-data shadow client (``os_shadow.py``) talks to.
 
     python3 labs/zoe-os/shadow_daemon.py [--dir STATE_DIR]
 
@@ -13,7 +13,11 @@ State directory (default ``$ZOE_OS_SHADOW_DIR`` or ``~/.zoe/os-shadow``; mode 07
     k.sock        the Unix socket (0600)
     kernel/       the kernel's SQLite spine (events, receipts, intents), 0600
 
-What it grants itself, and why that is honest only in shadow: every roster member gets the ``brain`` skill's ``list.add`` grant at
+The verbs it serves: ``list.add``, ``list.remove`` (registered HERE, over the same list rows: the lab drivers have no remove),
+``remind.set`` and ``alarm.set`` (the lab drivers, ``zoe_os/brain/drivers.py``). Which of them zoe-data proposes is its own
+``ZOE_OS_SHADOW_VERBS``; the kernel serves all four.
+
+What it grants itself, and why that is honest only in shadow: every roster member gets the ``brain`` skill's four acts at
 start, with no consent ceremony, because a shadow records what the household already did; it must never be reused as the consent
 model for an authoritative kernel (a child's grant needs a guardian: not modelled here, every member is an adult).
 Members are never removed from the roster by this process: a member the kernel recorded cannot be forgotten once it no longer
@@ -29,11 +33,12 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
-from zoe_os.brain.drivers import BRAIN, Keeper, Lists  # noqa: E402
+from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
@@ -43,6 +48,34 @@ from zoe_os.server import KernelServer  # noqa: E402
 ADAPTERS = ({"skill": "voice", "emits": ["utterance"], "origin": True},
             {"skill": "panel", "emits": ["offer_response"], "origin": True})
 PUMP_S = 0.5
+#: the brain manifest's ceiling plus the shadow-only ``list.remove``
+SHADOW_BRAIN = {**BRAIN, "acts": [*BRAIN["acts"], "list.remove"]}
+ACTS = tuple(SHADOW_BRAIN["acts"])
+
+
+def register_list_remove(kernel, lists: Lists) -> None:
+    """``list.remove`` over the lab list driver's rows. Its post-condition is "that item is not on that list": every matching row
+    goes, and the read-back verifies the absence (an item the shadow never saw added is verified too: the household's list is
+    the authority, and it no longer has the item)."""
+    def key(args):
+        return args.get("list", "shopping"), args["item"]
+
+    def remove(person, args):
+        rows = lists.rows.get(person, [])
+        keep = [r for r in rows if (r["list"], r["item"]) != key(args)]
+        lists.rows[person] = keep
+        return len(rows) - len(keep)
+
+    def removed(person, args, result):
+        gone = all((r["list"], r["item"]) != key(args) for r in lists.rows.get(person, []))
+        return {"item": args["item"], "removed": int(result or 0)} if gone else None
+
+    kernel.actions.register(
+        "list.remove", remove, removed, needs_accept=False, snapshot=lists.snapshot, undo=lists.put_back,
+        doc="Remove an item from one of the person's lists",
+        params={"item": {"type": "string", "required": True, "description": "what to remove"},
+                "list": {"type": "string", "required": False, "description": "which list; the shopping list if not said"},
+                "asked": ASKED})
 
 
 def state_dir(arg: str | None) -> Path:
@@ -57,11 +90,13 @@ def build(state: Path):
     (state / "kernel").mkdir(mode=0o700, exist_ok=True)
     k = Kernel(str(state / "kernel" / "zoe-os.db"), [Person(p) for p in people])
     lists = Lists().register(k)
-    for manifest in (*ADAPTERS, BRAIN):
+    register_list_remove(k, lists)
+    reminders, alarms = Reminders(time.time).register(k), Alarms().register(k)
+    for manifest in (*ADAPTERS, SHADOW_BRAIN):
         k.grants.install(manifest)
-    k.install(Keeper(lists))
+    k.install(Keeper(lists, reminders, alarms))
     for person in people:
-        k.grants.grant(person, "brain", acts=["list.add"])      # the shadow records what already happened: see the module docstring
+        k.grants.grant(person, "brain", acts=list(ACTS))       # the shadow records what already happened: see the module docstring
     srv = KernelServer(k, str(state / "k.sock"))
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds

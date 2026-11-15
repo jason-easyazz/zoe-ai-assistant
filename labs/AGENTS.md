@@ -567,6 +567,6 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   declared actions as tools and turns a tool call into one kernel `act` (the brain proposes, the kernel disposes),
   proven with a scripted and a recorded driver; NO real model turn has run through it (single llama slot shared with
   the household), and it must not be wired to `flue-zoe-brain-2x/`. `bench_brain.py` measures the hop.
-  `shadow_daemon.py` is the one long-running entry point: the kernel + the lab list driver for the list-add SHADOW (`docs/knowledge/zoe-os-list-shadow.md`),
+  `shadow_daemon.py` is the one long-running entry point: the kernel + the lab list, reminder and alarm drivers (plus its own `list.remove` over the list rows) for zoe-data's SHADOW of list add / list remove / reminder create / alarm create (`docs/knowledge/zoe-os-list-shadow.md`, `docs/knowledge/zoe-os-integration.md`),
   started only by the owner-installed `zoe-os-shadow-kernel.service` (see Forbidden); `services/zoe-data/tests/test_os_shadow_contract.py` runs the zoe-data client against it
   and is skipped with a named reason when this lab is absent.

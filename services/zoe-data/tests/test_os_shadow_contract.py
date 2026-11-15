@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-import os_shadow
+os_shadow = pytest.importorskip("os_shadow", reason="the zoe-data shadow client (os_shadow.py) is not in this tree: nothing to hold to the wire")
 
 pytestmark = pytest.mark.ci_safe
 
@@ -97,3 +97,35 @@ def test_an_oversized_item_is_a_named_refusal_not_a_crash(real_kernel):
     os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="x" * 600)
     settle(1)
     assert os_shadow.counters() == {"kernel_refused_live_did": 1}       # the kernel's own argument check (wrong argument type)
+
+
+# ---- the widened verbs, against the real kernel (os_shadow.note_act and the daemon's four acts) -------------------------------------
+needs_verbs = pytest.mark.skipif(not hasattr(os_shadow, "note_act"),
+                                 reason="this os_shadow predates the widened verbs (note_act): only list add is in the contract here")
+
+
+@needs_verbs
+def test_a_reminder_an_alarm_and_a_remove_match_against_the_real_kernel(real_kernel, monkeypatch):
+    import proactive.triggers.reminder_scan as scan
+    from datetime import timedelta
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "list_add,list_remove,reminder_create,alarm_create")
+    when = scan.zoe_now() + timedelta(minutes=45)
+    os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="oat milk")
+    os_shadow.note_list_remove(MEMBER, source="skybridge", list_type="shopping", list_name="Shopping", item="oat milk")
+    os_shadow.note_reminder_create(MEMBER, source="service", note="call the plumber", due_date=when.date().isoformat(),
+                                   due_time=when.strftime("%H:%M"), recurring=False)
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="once")
+    settle(4)
+    assert os_shadow.counters_by_verb() == {v: {"match": 1} for v in ("list_add", "list_remove", "reminder_create", "alarm_create")}
+    import asyncio
+    assert asyncio.run(os_shadow.forget_user(MEMBER)) >= 8            # four utterances and four receipts, all the member's
+
+
+@needs_verbs
+def test_the_real_kernel_refuses_what_its_schema_cannot_take_and_the_client_names_it(real_kernel, monkeypatch):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="7:5", repeat="once")      # never sent: the client stops it
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="weekdays")
+    settle(2)
+    assert os_shadow.counters_by_verb() == {"alarm_create": {"not_expressible": 1, "match": 1}}

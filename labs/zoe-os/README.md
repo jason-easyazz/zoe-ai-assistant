@@ -36,7 +36,7 @@ is invented.
 | `zoe_os/brain/bridge.py` | the brain's adapter: tool list derived from the kernel's `describe`, one tool call = one `act`, one sentence back |
 | `zoe_os/brain/drivers.py` | kernel-side drivers for the brain's three actions (lists, reminders, alarms) and the keeper that erases them on forget |
 | `zoe_os/brain/drive.py` | the scripted agent and the recorded-stream replay (no model) |
-| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's list-add shadow (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only |
+| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's shadow (list add, list remove, reminder create, alarm create) (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only |
 | `bench_brain.py` | latency of the kernel hop per brain action |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
