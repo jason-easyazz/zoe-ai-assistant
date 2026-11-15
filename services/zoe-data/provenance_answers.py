@@ -1536,6 +1536,12 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             logger.warning("provenance_answers: forget target unresolved (%s)", type(exc).__name__)
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
+        try:   # BEFORE the rejects (they make the rows undiscoverable): the stored card citing them, their registry entries
+            await turn_forget.erase_turn_words(user_id, (), (), row_ids=[ref.id, *(t.id for t in twins), *(b.id for b in bound)])
+        except Exception as exc:  # noqa: BLE001 - nothing rejected yet: say so, keep the target for a retry
+            logger.warning("provenance_answers: card / registry erase failed (%s)", type(exc).__name__)
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
         await _speculation_barrier()
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
         if done is None:
@@ -1551,7 +1557,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
         try:
-            await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved, row_ids=gone)
+            await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)

@@ -4096,6 +4096,11 @@ async def _execute_forget_last(user_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
+    try:   # BEFORE the rejects (they make the rows undiscoverable by this turn): the stored card citing them, their registry entries
+        await turn_forget.erase_turn_words(user_id, (), (), row_ids=[r.id for r in rows])
+    except Exception as exc:  # noqa: BLE001 - nothing rejected yet; the turn is kept, so "forget that" again finishes it
+        logger.info("memory_forget_last: card / registry erase failed (%s)", type(exc).__name__)
+        return FORGET_STORE_DOWN_REPLY
     gone: list = []
     failed = 0
 
@@ -4140,7 +4145,7 @@ async def _execute_forget_last(user_id: str) -> str:
     try:    # BY the turn's saved-turn ids (its words are never compared); a turn noted with none, by its words, legacy rows only
         # (the turn keeps its ids in the notes: a retry reaches all); the conversation notes of the turn (by their own turn ids, a
         # legacy note by these words or the turn's time) and the rejected rows' stored card / registry entries go in the same call
-        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved, row_ids=[r.id for r in gone], at=ts)
+        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved, row_ids=[r.id for r in gone], at=ts)   # (siblings)
     except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         failed += 1

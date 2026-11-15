@@ -473,3 +473,75 @@ def test_the_21_former_run_on_pairs_lose_both_values(join, a, b):
     secret = dict(_all_must_rows())
     out, reject = scrub_pii(a + join + b)
     assert reject is None and secret[a] not in out and secret[b] not in out, out
+
+
+# ── MODIFIERS are skipped and the NEXT word judged (cross-review, PR #2574): "is still <value>" never keeps the value ─────────────
+
+def _ms():
+    import memory_service
+
+    return memory_service
+
+
+_INVENTED = ["zebrafiddle", "quokkamarble", "Sunflowerlamp", "tangerine-cloud", "velvetkite", "marmalade7", "orbitpancake",
+             "ziggurat"]
+
+
+@pytest.mark.parametrize("mod", sorted(getattr(_ms(), "_VALUE_MODIFIERS", None) or {"still", "now", "also", "too"}))
+@pytest.mark.parametrize("conn", ["is", "was"])
+def test_every_modifier_then_a_value_is_redacted_labelled(mod, conn):
+    out, _ = scrub_pii(f"my password {conn} {mod} zebrafiddle")
+    assert "zebrafiddle" not in out and R in out, out
+
+
+@pytest.mark.parametrize("mod", sorted(getattr(_ms(), "_BARE_MODIFIERS", None) or ("now", "too", "please")))
+def test_every_modifier_then_a_value_is_redacted_bare(mod):
+    out, _ = scrub_pii(f"my password {mod} zebrafiddle")
+    assert "zebrafiddle" not in out and R in out, out
+
+
+def test_fail_closed_every_modifier_and_every_chain_of_two_before_an_invented_word_is_redacted():
+    """PROPERTY: 1 and 2 modifiers (every pair, both orders) before each invented word, after "is" and "was" (labelled) and after a
+    bare label: the word never survives."""
+    ms = _ms()
+    mods, bare = sorted(ms._VALUE_MODIFIERS), sorted(ms._BARE_MODIFIERS)
+    for chains, forms in (([[m] for m in mods] + [[a, b] for a in mods for b in mods], ("my password is {c} {w}",
+                                                                                         "the pin was {c} {w}")),
+                          ([[m] for m in bare] + [[a, b] for a in bare for b in bare], ("my password {c} {w}",))):
+        for chain in chains:
+            for w in _INVENTED:
+                for form in forms:
+                    text = form.format(c=" ".join(chain), w=w)
+                    out, _ = scrub_pii(text)
+                    assert w not in out, (text, out)
+
+
+def test_every_modifier_then_a_slot_ending_word_is_kept():
+    """MUST_NOT, exhaustive: after "is" / "was", any modifier (and two) followed by a state or place word is kept as said."""
+    ms = _ms()
+    for mod in sorted(ms._VALUE_MODIFIERS):
+        for slot in sorted(ms._LABELLED_NOT_VALUES):
+            for text in (f"my password is {mod} {slot}", f"the passcode was {mod} {mod} {slot}"):
+                assert scrub_pii(text) == (text, None), text
+
+
+@pytest.mark.parametrize("text", [
+    "my password is still working", "my password is not working", "my password is now on the fridge",
+    "my password is no longer valid", "the password was reset", "change your password now", "change your password again",
+    "my password no longer works", "the password reset link expired", "the password change worked",
+])
+def test_modifier_forms_that_carry_no_value_are_kept(text):
+    assert scrub_pii(text) == (text, None)
+
+
+@pytest.mark.parametrize("text,secret", [
+    ("my password is still zebrafiddle", "zebrafiddle"), ("my password is now actually zebrafiddle", "zebrafiddle"),
+    ("my password is not zebrafiddle any more", "zebrafiddle"), ("my password is still the word zebrafiddle", "zebrafiddle"),
+    ("my password is still on the fridge: zebrafiddle", "zebrafiddle"), ("the password was changed to zebrafiddle", "zebrafiddle"),
+    ("my password now zebrafiddle", "zebrafiddle"), ("my password too zebrafiddle", "zebrafiddle"),
+    ("password please zebrafiddle", "zebrafiddle"), ("password: now zebrafiddle", "zebrafiddle"),
+    ("the password for the wifi is still zebrafiddle", "zebrafiddle"), ("my password is new", "new"),
+])
+def test_modifier_forms_with_a_value_lose_it(text, secret):
+    out, _ = scrub_pii(text)
+    assert secret not in out and R in out, out

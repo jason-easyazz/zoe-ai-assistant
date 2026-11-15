@@ -380,6 +380,14 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
+    try:   # BEFORE the archive (it makes the rows undiscoverable by topic): the stored card citing them and their registry entries
+        import turn_forget   # - the same dispatcher every forget uses; a failure stops here, nothing archived, a retry finds all
+
+        await turn_forget.erase_turn_words(user_id, (), (), row_ids=[r.id for r in rows])
+    except Exception as exc:  # noqa: BLE001 - the card still holds the words: not confirmed, a retry finishes it
+        logger.warning("forget_topic: card / registry erase failed (%s)", type(exc).__name__)
+        res.store_down = True
+        return res
     archived: list = []
     for r in rows:
         try:
@@ -399,15 +407,6 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
                 await svc.erase_rows(user_id, [r.id for r in archived], actor=user_id, reason="forgotten by request (topic)")
         except Exception as exc:  # noqa: BLE001 - archived rows are hidden from every read either way
             logger.warning("forget_topic: physical erase failed (%s) - rows stay archived", type(exc).__name__)
-    if archived:
-        try:   # the stored card citing an archived row, and registry entries tied to them: the same dispatcher every forget uses
-            import turn_forget
-
-            await turn_forget.erase_turn_words(user_id, (), (), row_ids=[r.id for r in archived])
-        except Exception as exc:  # noqa: BLE001 - the card still holds the words: not confirmed, a retry finishes it
-            logger.warning("forget_topic: card / registry erase failed (%s)", type(exc).__name__)
-            res.store_down = True
-            return res
     res.forgotten = len(archived)
     if archived:
         res.preview = _preview(archived[0].text)

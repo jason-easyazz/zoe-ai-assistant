@@ -1072,3 +1072,29 @@ def test_a_failing_card_invalidation_fails_the_forget_and_the_retry_finishes(wor
     assert chat.off(w["mid"])                                                   # the rest that was reachable still went
     down["on"] = False
     assert run(pa._forget_turn(UID, mp._state(UID).explained, svc=svc)).startswith("Done")
+
+
+def test_a_topic_forget_whose_card_step_fails_is_not_confirmed_and_the_retry_finishes(world, monkeypatch):
+    """The card step runs BEFORE the archive (the archive makes the rows undiscoverable by topic). It fails once: the forget is not
+    confirmed and nothing was archived; the same topic forget again finds the rows, invalidates the card and archives them. On
+    eb71415d7 the rows were archived first, so the retry found nothing and the stored card kept the words."""
+    import user_model_card
+
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    seen, down = [], {"n": 1}
+
+    async def card(user_id, row_ids):
+        if down["n"]:
+            down["n"] -= 1
+            raise RuntimeError("card store down")
+        seen.append(set(row_ids))
+        return 1
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    first = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert first.store_down and not first.forgotten
+    assert w["fact"] in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}   # nothing archived yet
+    second = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert not (second.store_down or second.failed) and second.forgotten
+    assert any(w["fact"] in rows for rows in seen)
+    assert w["fact"] not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
