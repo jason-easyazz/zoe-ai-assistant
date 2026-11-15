@@ -260,7 +260,7 @@ OTHER: tuple[Store, ...] = (
           member="struggle_detector.delete_user", entity="night_extract.erase_entity",
           markers=(".night-extract.jsonl", ".night-extract-summary.json")),
     Store("zoe_os_shadow_kernel", "db", WORDS, REACHED, "~/.zoe/os-shadow/ (ZOE_OS_SHADOW_DIR; ZOE_OS_LIST_SHADOW, default off): the Zoe OS kernel's spine "
-          "(kernel/zoe-os.db: an event and a receipt per list add, both holding the item), its in-memory list driver and a roster / credential / pending-forget "
+          "(kernel/zoe-os.db: an event and a receipt per shadowed write, holding the list item, the reminder note or the alarm time; ZOE_OS_SHADOW_VERBS names the verbs), its in-memory list driver and a roster / credential / pending-forget "
           "file set (ids only). os_shadow.forget_user forgets the whole member in the kernel (fail-closed while the flag is shadow; with the flag off a kernel that "
           "was once installed is still tried and a miss is parked in pending-forgets.json and replayed); the entity forget runs the os_shadow cascade step "
           "(os_shadow.erase_entity; its retry is a whole-member forget) and the topic forget os_shadow.erase_topic. With no kernel installed nothing is recorded "
