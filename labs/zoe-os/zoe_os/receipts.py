@@ -94,10 +94,11 @@ class Dispatcher:
         self._actions: dict[str, tuple[Do, Verify, bool]] = {}
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
+        self._checks: dict[str, Callable] = {}                    # action -> its own rule (``register``)
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
-                 doc: str = "", params: dict | None = None) -> None:
+                 doc: str = "", params: dict | None = None, check: Callable | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -106,8 +107,13 @@ class Dispatcher:
         ``minimum`` / ``maximum`` for a number). With it, ``act`` refuses (and records) any
         arguments that are not exactly that shape BEFORE the driver runs, and ``catalog``
         can describe the action to a caller. Without it nothing is checked and the action is
-        not described (the behaviour every earlier action has)."""
+        not described (the behaviour every earlier action has).
+
+        ``check(person, args, caused_by) -> reason`` is the action's own rule (a time already past, a row that is not theirs):
+        a non-empty reason refuses (and records) the act BEFORE the intent is written, like a bad argument."""
         self._actions[action] = (do, verify, needs_accept)
+        if check is not None:
+            self._checks[action] = check
         self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
@@ -124,6 +130,8 @@ class Dispatcher:
                 self.spine._refuse(skill, attempted, "no such action")
             do, verify, needs_accept = self._actions[action]
             bad = check_params(self._meta[action][1], args)
+            if not bad and action in self._checks:
+                bad = self._checks[action](on_behalf_of, args, tuple(caused_by))
             if bad:
                 self.spine._refuse(skill, attempted, bad)
             reason = self.spine._cause_refusal(skill, caused_by) if caused_by else \
