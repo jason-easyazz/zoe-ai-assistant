@@ -289,14 +289,14 @@ async def run_evolution_notice() -> dict:
                 evidence={"signal": {"kind": "intent_miss_cluster", "miss_count": len(members)}},
             )
             created += 1
-            logger.info("evolution_notice: proposed intent gap '%s' (%d hits)", rep[:60], len(members))
+            logger.info("evolution_notice: proposed intent gap %s (%d hits)", _utag(rep), len(members))
 
             # Auto-approve if cluster is large enough and threshold is set
             if _AUTO_APPROVE_THRESHOLD > 0 and len(members) >= _AUTO_APPROVE_THRESHOLD:
                 await evolution_queue.decide(db, prop_id, "approved", actor="evolution_notice:auto_approve",
                                              note=f"cluster of {len(members)} >= {_AUTO_APPROVE_THRESHOLD}")
-                logger.info("evolution_notice: auto-approved '%s' (%d hits >= threshold %d)",
-                            rep[:60], len(members), _AUTO_APPROVE_THRESHOLD)
+                logger.info("evolution_notice: auto-approved %s (%d hits >= threshold %d)",
+                            _utag(rep), len(members), _AUTO_APPROVE_THRESHOLD)
 
             await _mirror(db, prop_id, dict(intake.multica_payload))
 

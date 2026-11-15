@@ -4,7 +4,7 @@
  * instruction text is short on purpose (a small prompt keeps the household's one llama slot busy
  * for as little time as possible) and tells the model to repeat the kernel's sentence, not embroider it.
  */
-import { useModel, useTool } from '@flue/runtime';
+import { useModel, useTool, type AgentProps } from '@flue/runtime';
 import { LAB_MODEL_SPECIFIER } from '../provider.ts';
 import { labTools } from '../tools.ts';
 
@@ -25,12 +25,13 @@ export const SIDECAR_TOOL_DOCTRINE =
   "Act proactively: do not ask a clarifying question first when the request is clear enough to act on " +
   '("add milk" -> add it). Do not claim you cannot do something until a tool has actually tried and failed.';
 
-const tools = labTools();
 const instructions = LAB_INSTRUCTIONS + ((process.env.OSLAB_POLICY ?? '') === 'sidecar' ? SIDECAR_TOOL_DOCTRINE : '');
 
-export function Lab(): string {
+// The instance id IS the turn id the bridge minted (the runner routes each turn to /agents/lab/<turn id>):
+// the tools close over it, so every call they forward is bound to the turn that started this instance.
+export function Lab({ id }: AgentProps): string {
   useModel(LAB_MODEL_SPECIFIER, { compaction: false });
-  for (const tool of tools) useTool(tool);
+  for (const tool of labTools(id)) useTool(tool);
   return instructions;
 }
 
