@@ -156,3 +156,59 @@ has shown one unexplained failure in about fifty full runs.
 One kernel process, one lock. No rate limit on failed handshakes. Presence, memory and
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
+
+## Offline load evidence [code]
+
+`bench_kernel.py` owns latency (all nine verbs), 1/4/16-client concurrency, a seeded
+20,000-operation soak (290 s cap), 50 SIGKILL/restart trials, and cold start to the
+first authenticated answer. `bench_support.py` starts one scratch kernel child;
+clients use threads, never additional worker processes. It uses the SAME `Client`,
+`KernelServer`, wire, consent, dispatcher and record as the brain bridge. Effects
+are **durable synthetic SQLite drivers**, not the brain's in-memory example stores.
+No model is loaded or contacted. No service or environment setting is changed.
+Scratch files stay inside this directory and are removed on exit.
+
+When the host's memory/probe rules allow, on a host permitting Unix socket bind:
+
+```sh
+python3 -B labs/zoe-os/bench_kernel.py --mode all --n 100 --soak-n 20000 --crashes 50 --out labs/zoe-os/bench-results.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --n 100 --profile --out labs/zoe-os/bench-profile.json
+python3 -B -m pytest -p no:cacheprovider -q labs/zoe-os/test_bench_kernel.py
+```
+
+Numbers and fixed statuses only leave the harness: never credentials or payloads.
+A failure writes its exception CLASS, exits nonzero, and does not masquerade as a
+completed measurement. CLI modes run independently so all failures are recorded.
+Keep baseline/after JSON from identical parameters and a comparable host load.
+Do not compare profiled timings to unprofiled timings. The profile is one extra
+`list.add`, with its utterance recorded before counters reset. Counters are inclusive,
+not additive: `receipt_inclusive` contains append/SQL timings; JSON decoding includes
+wire parsing and DB payload decoding. SQL commit/autocommit include SQLite sync work;
+**fsync is not separately timed**. The two supervisor messages add small JSON decode
+costs; they are not socket calls. This is instrumentation, not an fsync attribution.
+
+Crash trials shuffle all six semantic crash points once per block, deterministically
+for the seed. The supervisor waits for a hook INSIDE the selected phase before
+SIGKILL; it does not hope a timer hits a write. It checks SQLite integrity, closed
+intent/receipt correspondence, payload completeness, acknowledged receipts AND actual
+effects, persistent survival sentinels, and undo after every restart. A volatile effect
+store must fail that same oracle. A driver that writes to the wrong member must fail
+the concurrency oracle even if its own read-back is unverified. The seeded workload
+is repeatable; thread schedules and timings are not. Process kill is not power loss.
+
+Forget timings cover a scoped isolated event, not deletion of a large member history
+or asynchronous erasure from external stores. Setup calls are excluded from per-verb
+latency; total concurrency wall time includes both successful writes and adversarial
+cross-member calls. Tail latency describes successful writes. Soak counts mixed
+operations separately from wire calls including fixture setup. RSS is the child process,
+not the controller, and disk growth includes the SQLite database, WAL and SHM files.
+Cold start includes Python imports, schema, synthetic grants, authentication and describe.
+
+[lab] The builder sandbox denies AF_UNIX bind, so the wire modes have **no measured
+results yet**. See the architecture document's “Load, soak and crash results”. Neither
+negative-control integration test has been observed passing here. No kernel optimisation
+was applied without measurements or a passing crash gate.
+
+`bench-sandbox-result.json` is the fixed-status record of the builder's failed startup
+attempts, **not a benchmark result**. The UTC repeat was also 2 passed / 7 startup failures
+(exit 1). The direct full benchmark was not started below the 1500 MiB memory floor.

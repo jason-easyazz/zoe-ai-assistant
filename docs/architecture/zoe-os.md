@@ -726,3 +726,58 @@ Still open and unbuilt: whether an older child's lines should stop going to a gu
 lines may be shared beyond their guardians at all (today they cannot be, by anyone). The choice is kept in
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
+
+## Load, soak and crash results
+
+[code] `labs/zoe-os/bench_kernel.py` is the offline evidence harness, with
+`bench_support.py` providing a scratch kernel process and durable synthetic effects.
+It uses the brain bridge's real authenticated Unix-socket wire. The driver fixture
+is explicitly different from the brain's in-memory stores; success here would not
+prove those stores survive restart. Workload seed defaults to 4721.
+
+[lab] On 2026-11-15 the builder sandbox refused the kernel's Unix-socket `bind()`:
+`PermissionError: Operation not permitted`. The initial small test invocation collected
+9 tests, passed 2 pure checks and failed 7 wire checks at startup (exit 1). No measured
+latency, throughput, soak growth, crash survival or cold-start number can be reported.
+
+| Mode | Requested evidence | Result [lab] |
+|---|---|---|
+| Latency | 100 sequential calls per verb, p50/p90/p99 | Unmeasured: socket bind denied |
+| Concurrency | 1, 4, 16 clients; throughput/tails; actual per-member effects | Unmeasured: socket bind denied |
+| Soak | 20,000 mixed operations; child RSS, DB/WAL/SHM growth, latency drift | Not reached |
+| Crash | 50 seeded SIGKILL points; receipt consistency, acknowledged effects, undo | Not reached |
+| Cold start | Process start to first authenticated answer | Unmeasured: socket bind denied |
+
+[code] The harness profiles one additional list-add call after its cause has been
+recorded: consent, JSON decoding (wire and database), SQL reads/writes, explicit and
+autocommit transactions, and receipt/append inclusive time. SQLite's native fsync time
+is **not separately observable by this instrumentation**. No measured top-cost ordering
+exists yet. Profile counters overlap and must not be summed.
+
+| Optimisation considered [code] | Before | After | Decision |
+|---|---|---|---|
+| Connection reuse, WAL, receipt and intent-close batching | Already implemented | Unchanged | Kept existing behaviour; no new speed claim |
+| Replace undo's full receipt-history decode with a newest-row query | Unmeasured | Unmeasured | Deferred until wire baseline and crash gate can run |
+| Weaken durability settings or batch intent with effect/receipt | Not attempted | Not attempted | Rejected: write-ahead intent must land before an external effect |
+
+[code] Fragile points found while reading: `Dispatcher.last_action` decodes up to
+one million candidate events per undo; `Explainer.last` and `_grant` also scan history.
+Grants and example driver effects are memory-only. Forget tombstoning, its ledger and
+its notice are separate transactions, so this action-crash harness does not establish
+crash-atomic forgetting. SQLite uses WAL with `synchronous=NORMAL`: this harness targets
+process kills, **not power interruption or faulty storage**. No kernel code or durability
+setting was changed to claim an unmeasured optimisation.
+
+[code] The small tests include deliberate wrong-member routing and a volatile effect
+store. The crash oracle checks actual effects as well as acknowledged receipts; the
+concurrency oracle compares stored member/key pairs against controller-owned expectations.
+The fixture pauses inside one of six shuffled crash phases before SIGKILL, including
+inside an effect transaction and inside a receipt transaction. It never treats an
+unacknowledged interrupted write as known done. See the lab README for commands and
+measurement boundaries. Full runs and all existing tests green remain unproven.
+
+[lab] The UTC repeat also finished with **2 passed, 7 startup failures, exit 1**.
+`labs/zoe-os/bench-sandbox-result.json` records these attempts, explicitly distinguished
+from a completed benchmark run. The full harness CLI was not run: observed available
+memory remained below the brief's 1,500 MiB benchmark floor. No locked lane or existing
+suite was run, and neither integration negative control reached its assertion.
