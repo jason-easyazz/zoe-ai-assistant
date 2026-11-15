@@ -39,12 +39,22 @@ recorded in the cut-over plan.
 9. **Cost does not grow with history.** Everyday actions, undo and forget do bounded work; the step-budget tests pin it.
 10. **It works alone.** No network, no cloud, no code-hosting site is needed to run or test it.
 
+## What the kernel owns in production
+
+Nothing yet. This table is the single place that says which actions production must write through the kernel; a row is added
+in the same change that makes the kernel the authority for that action, and never before.
+
+| Action | State | Flag | Since |
+|---|---|---|---|
+| (none) | lab only | n/a | n/a |
+
 ## How a feature moves onto the kernel
 
 Owner direction 2026-11-15; phases, proofs and decisions are in `docs/architecture/zoe-os-cutover-plan.md`.
 
-- **New features** that write a household action are built to go through the kernel, or at least to publish their receipts to
-  it, from the start.
+- **New features** that write a household action reuse the existing permission, visibility, quiet-hours and receipt code (one
+  thing to move later) until the kernel owns that action; then they write through the kernel. A feature that is still dark
+  and has no behaviour to preserve may be designed against the kernel's model from the start, in the lab.
 - **Existing actions** move one at a time, in this order: shadow (the kernel is shown each real action and its verdict is
   compared; it controls nothing), the pass mark for that action, authority behind its own default-off flag with the old path as
   the fallback, then the duplicate rule code is removed.
