@@ -1475,16 +1475,18 @@ async def _bound_rows(svc: Any, user_id: str, mids: tuple, *, skip: Any = ()) ->
 
 
 async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str, mids: tuple = (), source_only: bool = False,
-                       resolved: bool = False) -> int:
+                       resolved: bool = False, row_ids: Any = ()) -> int:
     """Erase the owner's words behind an explained answer, PER ROW (``turn_forget.erase_turn_words``): bound rows by the saved-turn
     ids ``mids`` only, legacy rows by the words of the quote, the row and ``extra`` (as said or as redacted). A target bound to a
     NON-TURN source (``source_only``) erases only its own entry, by its index id: no transcript is flagged and no words are
-    matched. Then the quoted entry itself by its index id. RAISES on a store failure (the caller must not confirm)."""
+    matched. ``row_ids`` = the memory rows the forget rejected (their stored card and registry entries go too). Then the quoted entry
+    itself by its index id. RAISES on a store failure (the caller must not confirm)."""
     import exact_words
 
-    n = 0
-    if not source_only:
-        n = await turn_forget.erase_turn_words(user_id, mids, (exp.quote, exp.text, *extra), resolved=resolved)
+    if source_only:   # a non-turn target: no transcript, no words - only what the rejected rows left (card, registry)
+        n = await turn_forget.erase_turn_words(user_id, (), (), row_ids=row_ids)
+    else:
+        n = await turn_forget.erase_turn_words(user_id, mids, (exp.quote, exp.text, *extra), resolved=resolved, row_ids=row_ids)
     return n + (await exact_words.erase_turn(user_id, exp.turn_id) if exp.turn_id else 0)
 
 
@@ -1515,6 +1517,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 _g, failed = await _reject_all(svc, user_id, await _bound_rows(svc, user_id, mids, skip=(ref.id,)),
                                                note="forget_explained")
                 left = len(_g) + await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only,
+                                                    row_ids=[ref.id, *_g],
                                                     resolved=resolved)
                 if failed:
                     raise RuntimeError("a bound row's reject failed")
@@ -1548,7 +1551,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
         try:
-            await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
+            await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved, row_ids=gone)
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)
@@ -1577,24 +1580,25 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
             exp = dataclasses.replace(exp, mids=tuple(mids)) if resolved else exp
             rows = [r for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT),
                                                       READ_BUDGET_S) if _owns(r.metadata or {}, user_id)]
-            erased = await _erase_words(user_id, exp, mids=mids, source_only=source_only, resolved=resolved)
+            key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
+            # the rows of the quoted turn (``turn_forget.partition``): a bound row by its saved-turn id only (a non-turn row is no
+            # turn's); a LEGACY row by its excerpt holding the quote - as said, or as redacted (over-inclusive, legacy only)
+            bound, legacy = turn_forget.partition(rows)
+            mine = [r for r in bound if turn_forget.classify(r) in {(turn_forget.TURN, m) for m in mids}]
+            # PER ROW: a legacy row is matched by the quote even when the target has ids (its turn was backfilled after the
+            # upgrade); a target bound to a NON-TURN source takes nothing but its own entry (no legacy row is its)
+            keys = [k for k in {key, turn_forget.scrubbed_form(exp.text or exp.quote)} if k] if not source_only else []
+            for r in legacy:
+                ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
+                if ex and any(ex == k or k in ex for k in keys):
+                    mine.append(r)
+            erased = await _erase_words(user_id, exp, mids=mids, source_only=source_only, resolved=resolved,
+                                        row_ids=[r.id for r in mine])
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: say so, and keep the target for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
         gone = 0
-        key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
-        # the rows of the quoted turn (``turn_forget.partition``): a bound row by its saved-turn id only (a non-turn row is no
-        # turn's); a LEGACY row by its excerpt holding the quote - as said, or as redacted (over-inclusive by design, legacy only)
-        bound, legacy = turn_forget.partition(rows)
-        mine = [r for r in bound if turn_forget.classify(r) in {(turn_forget.TURN, m) for m in mids}]
-        # PER ROW: a legacy row is matched by the quote even when the target has ids (its turn was backfilled after the upgrade);
-        # a target bound to a NON-TURN source takes nothing but its own entry (no legacy row is its)
-        keys = [k for k in {key, turn_forget.scrubbed_form(exp.text or exp.quote)} if k] if not source_only else []
-        for r in legacy:
-            ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
-            if ex and any(ex == k or k in ex for k in keys):
-                mine.append(r)
         rejected, failed = await _reject_all(svc, user_id, mine, note="forget_explained")
         gone += len(rejected)
         if failed:   # a row of that turn is still approved: not "Done"; the target is kept for the retry

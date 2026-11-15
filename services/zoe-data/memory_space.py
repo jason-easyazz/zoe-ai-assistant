@@ -280,7 +280,8 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
             # a failed physical erase is NOT "forgotten": the text is still on disk. The rows stay rejected; a retry finishes it.
             await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
             physical = True
-    erased = await pa._erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)   # per row, resolved ids
+    erased = await pa._erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved,
+                                  row_ids=gone)   # per row, resolved ids; the rejected rows' card and registry entries too
     if failed:   # everything reachable ran; a twin / bound row is still approved: the caller must not report "forgotten"
         raise RuntimeError("memory store refused a twin's forget")
     logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
@@ -342,7 +343,8 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
 
         if physical_erase_enabled():
             await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
-    await pa._erase_words(owner, _exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
+    await pa._erase_words(owner, _exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved,
+                          row_ids=[ref.id, *(t.id for t in (*twins, *bound))])
     if failed:
         raise RuntimeError("memory store refused the guardian's forget")
     logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))

@@ -4138,7 +4138,9 @@ async def _execute_forget_last(user_id: str) -> str:
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
     try:    # BY the turn's saved-turn ids (its words are never compared); a turn noted with none, by its words, legacy rows only
-        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved)   # (the turn keeps its ids in the notes: a retry reaches all)
+        # (the turn keeps its ids in the notes: a retry reaches all); the conversation notes of the turn (by their own turn ids, a
+        # legacy note by these words or the turn's time) and the rejected rows' stored card / registry entries go in the same call
+        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved, row_ids=[r.id for r in gone], at=ts)
     except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         failed += 1
@@ -4151,12 +4153,6 @@ async def _execute_forget_last(user_id: str) -> str:
         value_correction.forget_in_texts(user_id, [text])
     except Exception:  # noqa: BLE001
         pass
-    try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
-        import conversation_notes
-        await conversation_notes.erase_for_text(user_id, text, at=ts)
-    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
-        logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
-        failed += 1
     try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
         import memory_value_registry
         await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])

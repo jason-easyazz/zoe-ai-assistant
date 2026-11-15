@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 
 import pytest
@@ -937,3 +938,137 @@ def test_a_legacy_forget_that_fails_part_way_is_finished_by_the_retry(world, mon
     assert second.startswith("Done"), second
     assert bound.id not in {r.id for r in run(real_list(user_id=UID, status="approved"))}
     assert chat.off(mid) and "xw-pre-upgrade" not in {k[1] for k in xw.get_backend().rows}
+
+
+# ── a SURVIVING night-mind thread keeps nothing derived from an erased turn (cross-review, PR #2574) ─────────────────────────────
+
+POTTERY = "My cousin Odalys starts a pottery class next Tuesday evening"
+HOSE = "The garden hose still leaks near the back tap"
+
+
+def _plant_thread(chat, title_from):
+    """One thread, two observations from two saved turns (POTTERY, HOSE); its title and anchors carry ``title_from``'s words."""
+    from routers.chat import _save_chat_message
+
+    mids = {}
+    for said in (POTTERY, HOSE):
+        with chat.patch.context() as scoped:
+            scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+            assert run(_save_chat_message("s-1", "user", said, user_id=UID)) is True
+        mids[said] = next(m for m, (c, _meta) in chat.rows.items() if c == said)
+    be, now = night_store.get_backend(), time.time()
+    title = " ".join(title_from.split()[:8])
+    run(be.put_thread(night_store.thread_row(id="t-mixed", user_id=UID, title=title, anchors="@odalys pottery class garden hose leaks",
+                                             topic="", first_day="2026-10-07", last_day="2026-10-08", mentions_n=2)))
+    for oid, said, day, at in (("o-pottery", POTTERY, "2026-10-07", now - 90000), ("o-hose", HOSE, "2026-10-08", now - 3600)):
+        run(be.put_observation(night_store.obs_row(id=oid, user_id=UID, thread_id="t-mixed", turn_id=mids[said], quote=said,
+                                                   who="Odalys" if said == POTTERY else "", day=day, said_at=at)))
+    return mids
+
+
+def _thread():
+    return next(t for t in run(night_store.get_backend().threads(UID)) if t["id"] == "t-mixed")
+
+
+@pytest.mark.parametrize("path", ["dispatcher", "forget_it_after_why"])
+def test_a_surviving_thread_loses_the_title_and_anchors_of_an_erased_turn(world, path):
+    """The thread's title came from the POTTERY turn; that turn is forgotten by id. The HOSE observation (another turn) survives,
+    so the thread survives - and its title, anchors and topic no longer carry the erased words. On e19282eac an id-scoped erase
+    skipped the title and left it (a thread was only touched once orphaned)."""
+    svc, chat = world
+    mids = _plant_thread(chat, POTTERY)
+    if path == "dispatcher":
+        run(turn_forget.erase_turn_words(UID, (mids[POTTERY],), ()))
+    else:
+        assert run(xw.index_turn(UID, POTTERY, message_id=mids[POTTERY])) is True
+        entry = next(k[1] for k in xw.get_backend().rows if xw.mid_of(k[1]) == mids[POTTERY])
+        stored = xw.get_backend().rows[(UID, entry)]["text"]
+        assert run(pa._forget_turn(UID, mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=entry),
+                                   svc=svc)).startswith("Done")
+    assert _night() == ["hose"]                                              # the other turn's observation survives
+    t = _thread()
+    blob = (t["title"] + " " + t["anchors"]).lower()
+    assert not {"pottery", "odalys", "cousin", "tuesday"} & set(re.findall(r"[a-z]+", blob)), t
+    assert t["title"] == " ".join(HOSE.split()[:8]) and t["mentions_n"] == 1 and t["first_day"] == "2026-10-08"
+
+
+def test_a_surviving_thread_whose_title_came_from_the_survivor_keeps_it(world):
+    svc, chat = world
+    mids = _plant_thread(chat, HOSE)
+    run(turn_forget.erase_turn_words(UID, (mids[POTTERY],), ()))
+    t = _thread()
+    assert t["title"] == " ".join(HOSE.split()[:8])                          # supported by what survives: kept as it was
+    assert "pottery" not in t["anchors"] and "@odalys" not in t["anchors"]
+
+
+# ── every forget path reaches the conversation notes, the stored user-model card and the value registry through the ONE
+#    dispatcher (cross-review, PR #2574) ──────────────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def side_stores(monkeypatch):
+    """Spies on the three side erasers the dispatcher must reach (their own store logic is tested in their own files)."""
+    import conversation_notes
+    import memory_value_registry
+    import user_model_card
+
+    seen = {"notes": [], "card": [], "registry": []}
+
+    async def notes(user_id, mids=(), texts=(), *, at=None):
+        seen["notes"].append((set(mids), list(texts)))
+        return 0
+
+    async def card(user_id, row_ids):
+        seen["card"].append(set(row_ids))
+        return 0
+
+    async def registry(user_id, row_ids, **_kw):
+        seen["registry"].append(set(row_ids))
+        return 0
+    monkeypatch.setattr(conversation_notes, "erase_for_turns", notes)
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    monkeypatch.setattr(memory_value_registry, "erase_for_rows", registry)
+    return seen
+
+
+@pytest.mark.parametrize("path", ["forget_it_after_why", "forget_it_fact", "memory_space", "forget_last"])
+def test_every_forget_path_reaches_the_notes_card_and_registry(world, side_stores, path):
+    """Through each path: the conversation notes are erased by the turn's saved-turn id (a note with no ids by these words), and
+    the stored card / registry entries are invalidated for every fact row the forget rejected. On 27fb26749 forget-it and the
+    memory-space erase never reached the notes, and no path invalidated the stored card."""
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    assert _run_path(path, svc, w).startswith("Done")
+    assert any(w["mid"] in mids for mids, _t in side_stores["notes"]), side_stores["notes"]
+    assert any(w["fact"] in rows for rows in side_stores["card"]), side_stores["card"]
+    assert any(w["fact"] in rows for rows in side_stores["registry"]), side_stores["registry"]
+    assert not any(w["other_fact"] in rows for rows in side_stores["card"] + side_stores["registry"])   # another turn's: untouched
+
+
+def test_the_topic_forget_invalidates_the_card_for_what_it_archived(world, side_stores):
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    res = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert not (res.store_down or res.failed) and res.forgotten
+    assert any(w["fact"] in rows for rows in side_stores["card"]) and any(w["fact"] in rows for rows in side_stores["registry"])
+
+
+def test_a_failing_card_invalidation_fails_the_forget_and_the_retry_finishes(world, monkeypatch):
+    """The stored card could not be deleted: the forget is NOT confirmed (it still holds the words), everything else reachable
+    went, and the same forget again completes it."""
+    import user_model_card
+
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    down = {"on": True}
+
+    async def card(user_id, row_ids):
+        if down["on"]:
+            raise RuntimeError("card store down")
+        return 1
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    stored = xw.get_backend().rows[(UID, w["entry"])]["text"]
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=w["entry"])
+    assert not run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert chat.off(w["mid"])                                                   # the rest that was reachable still went
+    down["on"] = False
+    assert run(pa._forget_turn(UID, mp._state(UID).explained, svc=svc)).startswith("Done")

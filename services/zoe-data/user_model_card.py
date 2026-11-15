@@ -372,6 +372,49 @@ async def rebuild_user_model_card(user_id: str, db=None) -> dict[str, Any]:
         return {"status": "error", "error": str(exc)}
 
 
+async def invalidate_for_rows(user_id: str, row_ids: Iterable[str]) -> int:
+    """A forget rejected these memory rows: the member's STORED card is deleted when it cites any of them (each card item records
+    its row id), so no stored copy keeps a forgotten fact. The card is a cache: the next serve rebuilds it from the approved rows
+    (``load_card_block``), the nightly pass rebuilds it too. RAISES on a store failure (the forget is not confirmed); 0 when there
+    is no card store (a bare / lab run). Returns the cards deleted."""
+    gone = {str(i) for i in (row_ids or ()) if i}
+    uid = (user_id or "").strip()
+    if not uid or not gone:
+        return 0
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+
+        async with get_db_ctx() as db:
+            row = await (await db.execute("SELECT card_json FROM user_model_cards WHERE user_id = ?", (uid,))).fetchone()
+            if row is None:
+                return 0
+            cited = {str(it[2]) for it in (json.loads(row[0] or "{}").get("items") or []) if len(it) >= 3}
+            if not cited & gone:
+                return 0
+            await db.execute("DELETE FROM user_model_cards WHERE user_id = ?", (uid,))
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        s = str(exc)
+        if ("user_model_cards" in s and ("no such table" in s or "does not exist" in s)) or _never_had_pool(exc):
+            return 0
+        raise
+    logger.info("user-model card: invalidated by a forget (rows=%d)", len(gone))
+    return 1
+
+
+def _never_had_pool(exc: BaseException) -> bool:
+    """A process that NEVER built a database pool (a lab / bare unit run) has no card to delete; one that LOST its pool may still
+    hold one, so that failure is raised."""
+    if isinstance(exc, RuntimeError) and "pool not initialised" in str(exc):
+        try:
+            from db_pool import pool_ever_initialised  # type: ignore[import]
+
+            return not pool_ever_initialised()
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
 async def _live_ids(user_id: str, ids: list[str]) -> set[str] | None:
     """The ids whose memory row is still approved; None when the store cannot say."""
     from memory_service import get_memory_service  # type: ignore[import]
