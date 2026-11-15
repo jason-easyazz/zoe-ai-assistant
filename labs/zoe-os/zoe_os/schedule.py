@@ -207,10 +207,10 @@ def reminder_next_fire(row: dict, after: float, tz: tzinfo, default_hm: tuple[in
     inactive or done never fires."""
     if not row.get("active", 1) or row.get("done"):
         return None
-    snoozed = row.get("snoozed_until")
-    if snoozed and snoozed > after:
-        return snoozed
     floor = max(after, row.get("after", 0.0))
+    snoozed = row.get("snoozed_until")
+    if snoozed and snoozed > floor:       # the row's own floor binds a snooze too: nothing at or before it ever fires
+        return snoozed
     if row.get("at") is not None:
         return row["at"] if row["at"] > floor else None
     day, clock = row.get("date"), hm(row.get("time"))

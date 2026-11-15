@@ -134,6 +134,8 @@ class Dispatcher:
         self._actions[action] = (do, verify, needs_accept)
         if check is not None:
             self._checks[action] = check
+        else:
+            self._checks.pop(action, None)       # a re-registration without a rule drops the old one
         if purge_key is not None:
             self._purges[action] = purge_key
         else:
