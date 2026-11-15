@@ -286,7 +286,12 @@ def test_the_seam_runs_the_distress_hand_off_before_the_medical_floor():
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[1] / "zoe_flue_client.py").read_text(encoding="utf-8")
-    assert src.index("await distress_handoff.handle(") < src.index("await medical_safety.handle(")
+    # each call is awaited in turn inside the per-block timer (``await _pp.timed("distress", distress_handoff.handle(...))``, #2484)
+    d, m = src.index("distress_handoff.handle("), src.index("medical_safety.handle(")
+    assert d < m
+    for at in (d, m):                                     # sequential, not gathered: each sits on its own awaited line
+        line = src[src.rfind("\n", 0, at) + 1:at]
+        assert "await " in line and "gather" not in line
 
 
 def _distress_default(monkeypatch):
