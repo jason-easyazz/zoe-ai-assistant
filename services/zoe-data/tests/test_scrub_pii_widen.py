@@ -75,6 +75,17 @@ SECRET_CATCH: dict[str, list[tuple[str, str]]] = {
         ("the actual pin 4821 notes", "4821"),
         ("Sam's actual pin 4821 photos", "4821"),
         ("my keys, pin 300 photos", "300"),        # a comma does not end the window: redaction preferred
+        # letters-only, every spoken form (invented words): redacted by DEFAULT
+        ("my password zebrafiddle", "zebrafiddle"),
+        ("the password zebrafiddle.", "zebrafiddle"),
+        ("password: zebrafiddle", "zebrafiddle"),                # already caught before 2026-11-15 ("password:")
+        ("password - zebrafiddle", "zebrafiddle"),
+        ("my old password was zebrafiddle", "zebrafiddle"),
+        ("my password's zebrafiddle", "zebrafiddle"),
+        ("passphrase zebrafiddle now", "zebrafiddle"),
+        ("Password Zebrafiddle, ok", "Zebrafiddle"),
+        ("the password for the wifi is zebrafiddle", "zebrafiddle"),
+        ("the password to my laptop was zebrafiddle", "zebrafiddle"),
     ],
     "labelled_account": [
         ("my account number is 12345678", "12345678"),
@@ -191,6 +202,11 @@ MUST_NOT: list[str] = [
     "pineapple on pizza", "the dress code is casual", "the area code", "what's the postcode", "the postcode is unknown",
     "the alarm code changed yesterday", "the gate code is green", "the wifi password changed", "pin it to the board",
     "pin 3 photos to the fridge", "the zip code", "reset my password", "the password reset tomorrow",
+    # the closed list after "password": the sentence is ABOUT the password, it holds no value
+    "I need a password manager", "the password reset link expired", "type it in the password field",
+    "our password policy changed", "the file is password protected", "the password prompt froze", "use the password hint",
+    "the password box is empty", "the password change worked", "the password rules are strict", "the password for the wifi",
+    "I forgot my password.", "the password was reset yesterday", "change your password now", "my password doesn't work",
     # email / address concepts
     "send an email to the school", "I'll email you", "down the road", "we walked 5 km down the road",
     "she lives at the end of the street", "I live at home", "the road was closed", "my address is changing",
@@ -378,3 +394,16 @@ def test_a_long_adversarial_string_is_fast(blob):
     scrub_pii(blob)
     took = time.perf_counter() - t0
     assert took < 50 * base + 0.5 and took < 10.0, (took, base)
+
+
+@pytest.mark.parametrize("word", ["zebrafiddle", "quokkamarble", "Sunflowerlamp", "tangerine-cloud", "velvetkite",
+                                  "marmalade7", "orbitpancake", "ziggurat"])
+@pytest.mark.parametrize("form", ["my password {w}", "the password was {w}", "passphrase {w} please", "password: {w}"])
+def test_any_unlisted_word_after_password_is_redacted(word, form):
+    """FAIL-CLOSED: the token after "password" is a value unless it is on the closed non-secret list (``_PASSWORD_NOT_VALUES``),
+    so an invented word nobody listed is always redacted."""
+    import memory_service
+
+    assert word.lower() not in memory_service._PASSWORD_NOT_VALUES
+    out, reject = scrub_pii(form.format(w=word))
+    assert reject is None and word not in out and R in out

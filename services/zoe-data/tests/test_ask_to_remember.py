@@ -621,10 +621,24 @@ def test_forget_that_takes_a_contact_fact_and_leaves_an_unrelated_one(svc, said)
 
 
 @pytest.mark.parametrize("said", CONTACT_ASKS)
-def test_forget_that_still_finds_a_row_written_before_the_contact_scrub(svc, said):
-    """Old shape: the excerpt holds the turn as said, and no recomputable turn id."""
+@pytest.mark.parametrize("broken", [False, True])
+def test_forget_that_still_finds_a_row_written_before_the_contact_scrub(svc, said, monkeypatch, broken):
+    """A TRUE legacy row (written before provenance): the excerpt holds the turn as said, no recomputable turn id, and NO
+    provenance of any kind (no source_turn, no source_kind, no keyed tag), so only the legacy words fallback can find it.
+    Control (``broken``): with that fallback disabled the row survives and the forget is not confirmed - the id path cannot
+    pass this test for it."""
+    import turn_forget
+
     assert say(svc, said) in atr._CONFIRM
     (rid,) = list(svc._col.rows)
     doc, meta = svc._col.rows[rid]
-    svc._col.rows[rid] = (doc, {**meta, "source_excerpt": said, "user_turn_id": "legacy-0"})
-    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot") and _gone(svc, "plumber")
+    legacy = {k: v for k, v in meta.items() if k not in ("source_turn", "source_kind", "source_excerpt_said")}
+    svc._col.rows[rid] = (doc, {**legacy, "source_excerpt": said, "user_turn_id": "legacy-0"})
+    assert turn_forget.classify(svc._col.rows[rid][1])[0] == turn_forget.LEGACY
+    if broken:
+        monkeypatch.setattr(turn_forget, "_legacy_row_is_from_turn", lambda *a, **k: False)
+    reply = _execute(svc, "memory_forget_last")
+    if broken:
+        assert not reply.startswith("Done — I forgot") and not _gone(svc, "plumber")
+    else:
+        assert reply.startswith("Done — I forgot") and _gone(svc, "plumber")
