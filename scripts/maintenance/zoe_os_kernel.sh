@@ -20,7 +20,13 @@ case "${1:-}" in
     state=$(timeout -k 1 2 systemctl --user is-active "$KERNEL_UNIT" 2>/dev/null || true)
     case "$state" in active|inactive|failed|activating|deactivating) ;; *) state=unknown;; esac
     if health read; then status=ok; else status=dead; fi
-    echo "kernel: unit=$state health=$status"
+    # A restart that did not come back leaves this marker: the main service is then running on its fallback path,
+    # and with the shadow or authority switch on a member delete fails closed until the kernel is back. Show it.
+    if [ -e "$HOME/.zoe/deploy/kernel-update-pending" ]; then update=pending; else update=none; fi
+    echo "kernel: unit=$state health=$status update=$update"
+    if [ "$update" = pending ] || { [ "$state" != active ] && installed; }; then
+      echo 'kernel: ATTENTION kernel is not serving; Zoe is on her fallback path and member delete will fail closed while a kernel switch is on'
+    fi
     if [ -f "$KERNEL_DB" ]; then
       size=$(stat -c %s "$KERNEL_DB" 2>/dev/null || echo unknown)
       modified=$(stat -c %Y "$KERNEL_DB" 2>/dev/null || echo 0)

@@ -71,10 +71,21 @@ cp scripts/setup/systemd/zoe-os-authority-kernel.service "$HOME/.config/systemd/
 mkdir -p "$HOME/.config/systemd/user/zoe-backup.service.d"
 cp scripts/setup/systemd/zoe-backup.service.d/50-os-kernel.conf "$HOME/.config/systemd/user/zoe-backup.service.d/"
 systemctl --user daemon-reload
-systemctl --user enable --now zoe-os-authority-kernel.service
-bash scripts/maintenance/zoe_os_kernel.sh health
-bash scripts/maintenance/zoe_os_kernel.sh report
+# Start it ONCE without enabling, and check it answers, before it is allowed to start at boot:
+systemctl --user start zoe-os-authority-kernel.service
+bash scripts/maintenance/zoe_os_kernel.sh health && bash scripts/maintenance/zoe_os_kernel.sh report
+# Only if both lines above succeeded:
+systemctl --user enable zoe-os-authority-kernel.service
 ```
+
+If the start fails with status `218/CAPABILITIES` (or the unit never becomes active), the sandbox settings need unprivileged
+user namespaces, which this machine's service manager must allow for a user unit. Roll back: `systemctl --user stop
+zoe-os-authority-kernel.service`, remove the copied unit file, `systemctl --user daemon-reload`, and report it; Zoe keeps
+working without the kernel. Do not loosen the sandbox lines by hand.
+
+`report` (and the ground-truth script) prints `update=pending` and an ATTENTION line when a deploy's kernel restart did not
+come back: Zoe is then on her fallback path, and while a kernel switch is on a member delete fails closed until the kernel
+is serving again.
 
 Check the unit's effective memory and sandbox settings with `systemctl --user show
 zoe-os-authority-kernel.service -p MemoryHigh -p MemoryMax -p Result`.

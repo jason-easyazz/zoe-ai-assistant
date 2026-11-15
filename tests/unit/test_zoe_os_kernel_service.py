@@ -110,9 +110,12 @@ def test_deploy_warning_retry_and_night_deferral(world):
     assert "WARNING:" in Path(env["GITHUB_STEP_SUMMARY"]).read_text()
     pending = home / ".zoe/deploy/kernel-update-pending"
     assert pending.exists()
+    stuck = run(env, "report").stdout          # a kernel that did not come back is visible in ground truth
+    assert "update=pending" in stuck and "ATTENTION" in stuck
     env.update(DIFF_RC="0", RESTART_RC="0")
     assert "healthy after restart" in run(env, "deploy").stdout
     assert not pending.exists()
+    assert "update=none" in run(env, "report").stdout
     Path(env["LOG"]).write_text("")
     marker = home / ".zoe/night-window/WINDOW_OPEN"
     marker.parent.mkdir(parents=True)
