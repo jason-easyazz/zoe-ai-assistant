@@ -1082,7 +1082,11 @@ already retired. A remote skill (`Client`) holds no key to resolve `subject_hash
 so an unresolved whole-person notice means "possibly any member", never "nobody":
 only state whose source event the skill can still read is kept (`still_live`, one
 replay of its own reads from its oldest held source); the Keeper, which cannot
-vouch for any row from its reads, refuses and retries instead. Another member's state with a live source
+vouch for any row from its reads, refuses and retries instead. State the unresolved
+rule drops for another member can no longer act: a reminder or a leaving catch must
+cite its live source to publish, and the twin relearns. On a whole-person notice the
+reminder skill never deletes through the forgotten member's (erased) consent; the
+kernel's whole-member sweep removed their rows. Another member's state with a live source
 survives; their state whose source had also left the log is dropped and relearned.
 
 Whole-person selection also follows `nested_people`: a known member id that an

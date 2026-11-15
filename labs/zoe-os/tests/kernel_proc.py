@@ -103,6 +103,9 @@ def main() -> None:
     k = household(Path(cfg["db_dir"]), cfg.get("extra_people", ()))
     for manifest in cfg.get("install", ()):
         k.grants.install(manifest)
+    if cfg.get("reminder_store"):
+        from reminder_store import ReminderStore
+        k.reminder_store = ReminderStore().register(k)
     device = Device(cfg["device"], k)
     k.actions.register("light.toggle", device.do, device.verify, needs_accept=False)
     k.actions.register("alarm.move", device.do, device.verify,
@@ -127,6 +130,10 @@ def main() -> None:
         elif msg["cmd"] == "retire":       # retention's two stages, now: the rows leave the log
             k.spine._expire(msg["seqs"])
             k.spine._retire(msg["seqs"])
+        elif msg["cmd"] == "last":
+            out = {"seq": k.spine.last_seq}
+        elif msg["cmd"] == "reminder_rows":     # ids and owners only, never a note
+            out = {"rows": sorted([rid, row["owner"]] for rid, row in k.reminder_store.rows.items())}
         elif msg["cmd"] == "reissue":
             out = {"cred": srv.issue(msg["skill"]).hex()}
         elif msg["cmd"] == "stop":

@@ -126,6 +126,9 @@ class Reminders:
         reach a restarted store when this skill has lost its request cache.
         """
         deleted = set()
+        # The purge duty is in-process only (never a wire op). A remote skill has none: the
+        # kernel's registered store purge already erased those rows before the notice existed.
+        purge = getattr(ctx, 'purge', None) or (lambda *_: None)
         seqs = set(notice.payload.get('seqs', ()))
         listed = {f'r{s}' for s in seqs}
         gone = erased(notice, ctx, ((rid, item['person'], (item['receipt'], item['asked']))
@@ -134,12 +137,17 @@ class Reminders:
             if rid not in gone:
                 continue
             if rid in listed:
-                ctx.purge("reminder.delete", {"id": rid}, notice)
-            elif 'count' not in notice.payload or seqs & {item['receipt'], item['asked']}:
-                # legacy notices, or a listed receipt whose request id is not listed
+                purge("reminder.delete", {"id": rid}, notice)
+            elif 'count' not in notice.payload or (notice.payload.get('scope') != 'person' and
+                                                   seqs & {item['receipt'], item['asked']}):
+                # legacy notices, or a scoped forget of a receipt whose request id is not listed
+                # (the member's consent is intact, so the ordinary delete runs)
                 ctx.act('reminder.delete', item['person'], {'id': rid}, caused_by=(notice.seq,))
-            # else: a whole-person reach beyond the list (its sources already retired, or the
-            # notice unresolved): the kernel's whole-member store sweep reached the external row.
+            # else, a whole-person notice: that member's consent is already erased (an act would
+            # be refused and stall this handler), and the kernel's whole-member sweep removed
+            # their rows before erasure. An item reached only by the UNRESOLVED rule has neither
+            # its request nor its create receipt left; it can never fire again (an offer must
+            # cite that receipt), so dropping it from the cache loses no action for anyone.
             del self._items[rid]
             deleted.add(rid)
         # A restarted skill cannot relearn forgotten requests from the erased log. IDs are
@@ -147,6 +155,6 @@ class Reminders:
         # even with an empty _items cache. Deleting a non-reminder seq's ID is a no-op.
         if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
             for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
-                ctx.purge('reminder.delete', {'id': rid}, notice)
+                purge('reminder.delete', {'id': rid}, notice)
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}
