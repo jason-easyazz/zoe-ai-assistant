@@ -2882,7 +2882,10 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
             reminder = await create_reminder_record(payload, user=user, db=db)
         return _format_response(intent, json.dumps(reminder, default=str))
     except HTTPException as exc:
-        if getattr(exc, "spoken", None):  # reminder_service.ReminderPastError: a day or time already gone, nothing stored
+        # reminder_service.ReminderPastError: a day or time already gone, nothing stored. A spoken turn is told so; the
+        # brain's dispatch endpoint (PAST_IS_AN_ERROR) gets the 422 so its log and the tool result stay honest.
+        import reminder_service as _rs
+        if getattr(exc, "spoken", None) and not _rs.PAST_IS_AN_ERROR.get():
             return exc.spoken
         raise
     except Exception as exc:

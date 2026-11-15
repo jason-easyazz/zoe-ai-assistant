@@ -3,6 +3,7 @@ functions here, under ONE ownership rule (``load_for_actor``) and the household 
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -27,6 +28,11 @@ SPOKEN = {
     "cancel_not_found": "I couldn't find that reminder, so nothing has changed.",
     "cancel_failed": "I couldn't cancel that reminder just now, so nothing has changed.",
 }
+
+
+# The brain's dispatch endpoint needs a past day or time as the 422 it is (its log and the brain's tool both read the
+# status); a spoken fast-path turn needs the sentence. The endpoint sets this for the length of its call.
+PAST_IS_AN_ERROR: contextvars.ContextVar[bool] = contextvars.ContextVar("reminder_past_is_an_error", default=False)
 
 
 class ReminderPastError(HTTPException):
