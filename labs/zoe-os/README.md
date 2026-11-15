@@ -169,3 +169,71 @@ the Node boundary's synthetic stub-fetch test is `node --test labs/zoe-os/brain-
 One kernel process, one lock. No rate limit on failed handshakes. Presence, memory and
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
+
+## Offline load evidence [code]
+
+`bench_kernel.py` owns latency (all nine verbs), 1/4/16-client concurrency, a seeded
+20,000-operation soak (290 s cap), 50 SIGKILL/restart trials, and cold start to the
+first authenticated answer. `bench_support.py` starts one scratch kernel child;
+clients use threads, never additional worker processes. It uses the SAME `Client`,
+`KernelServer`, wire, consent, dispatcher and record as the brain bridge. Effects
+are **durable synthetic SQLite drivers**, not the brain's in-memory example stores.
+No model is loaded or contacted. No service or environment setting is changed.
+Scratch files stay inside this directory and are removed on exit.
+
+When the host's memory/probe rules allow, on a host permitting Unix socket bind:
+
+```sh
+python3 -B labs/zoe-os/bench_kernel.py --mode all --seed 7 --n 100 --soak-n 20000 --crashes 50 --out labs/zoe-os/bench-results.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --history-n 20000 --out labs/zoe-os/bench-history.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --profile --history-n 20000 --out labs/zoe-os/bench-profile.json
+python3 -B -m pytest -p no:cacheprovider -q labs/zoe-os/test_bench_kernel.py
+```
+
+Numbers and fixed statuses only leave the harness: never credentials or payloads.
+A failure writes its exception CLASS, exits nonzero, and does not masquerade as a
+completed measurement. CLI modes run independently so all failures are recorded.
+Keep baseline/after JSON from identical parameters and a comparable host load.
+Do not compare profiled timings to unprofiled timings. `--profile` writes a top-level
+`profile` object (also under `latency`), with one extra call per verb and `phases_us`
+for decode, consent, SQL, commit and receipt. Fixture setup precedes the counter reset.
+`--history-n` preloads at least that many action-history events through real calls,
+excluded from timing, so links and completed intents also grow. Counters are inclusive,
+not additive: `receipt_inclusive` contains append/SQL timings; JSON decoding includes
+wire parsing and DB payload decoding. SQL commit/autocommit include SQLite sync work;
+**fsync is not separately timed**. Cursor stepping is included in SQL time;
+supervisor commands are excluded from JSON decode counters. This is instrumentation,
+not an fsync attribution. Zero is an unused phase; receipt overlaps SQL and commit.
+
+Crash trials shuffle all six semantic crash points once per block, deterministically
+for the seed. The supervisor waits for a hook INSIDE the selected phase before
+SIGKILL; it does not hope a timer hits a write. It checks SQLite integrity, closed
+intent/receipt correspondence, payload completeness, acknowledged receipts AND actual
+effects, persistent survival sentinels, and undo after every restart. A volatile effect
+store must fail that same oracle. A driver that writes to the wrong member must fail
+the concurrency oracle even if its own read-back is unverified. The seeded workload
+is repeatable; thread schedules and timings are not. Process kill is not power loss.
+
+Forget timings cover a scoped isolated event, not deletion of a large member history
+or asynchronous erasure from external stores. Setup calls are excluded from per-verb
+latency; total concurrency wall time includes both successful writes and adversarial
+cross-member calls. Tail latency describes successful writes. Soak counts mixed
+operations separately from wire calls including fixture setup. RSS is the child process,
+not the controller, and disk growth includes the SQLite database, WAL and SHM files.
+Cold start includes Python imports, schema, synthetic grants, authentication and describe.
+
+[lab, coordinator] Seed-7 baseline numbers and the failed 20,000-call soak are recorded
+in the architecture document's “Load, soak and crash results”. New indexed lookups are
+unmeasured until the coordinator reruns them. The 290 s cap remains: baseline medians
+plus fixture setup imply about 75 s at steady cost. Timeout now retains partial
+measurements with a failure status. Each requested-history quarter reports per-verb
+percentiles and sequence boundaries, including any partially completed quarter.
+
+The builder sandbox cannot bind AF_UNIX; wire, concurrency, crash and the original
+oversized-frame scenario must be rerun by the coordinator. Socket-free complexity
+guards live in `tests/test_history_cost.py` (200/5,000 events, fixed SQLite VM-step
+budgets, deliberate scans as failing controls). VM steps measure SQL work, not storage
+latency. Scoped ID forget is bounded by affected rows; broad/entity/topic forget and
+pending-intent cause inspection still scale with their candidates. WAL truncation
+remains synchronous. Additive `CREATE INDEX IF NOT EXISTS` statements apply on opening
+an existing lab store; there is no production migration or new environment variable.

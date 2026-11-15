@@ -47,8 +47,13 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS people (seq INTEGER NOT NULL, person TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
+CREATE INDEX IF NOT EXISTS people_seq ON people(seq);
 CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
+CREATE INDEX IF NOT EXISTS causes_seq ON causes(seq);
+CREATE INDEX IF NOT EXISTS latest_receipt ON events(subject, seq DESC)
+  WHERE kind = 'action_receipt' AND tombstoned = 0;
+CREATE INDEX IF NOT EXISTS live_kind ON events(kind, seq) WHERE tombstoned = 0;
 CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS consumed_receipts (
   receipt_seq INTEGER PRIMARY KEY, claim_seq INTEGER NOT NULL
@@ -68,6 +73,9 @@ CREATE TABLE IF NOT EXISTS intents (
   person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER,
   undoes INTEGER
 );
+CREATE INDEX IF NOT EXISTS intent_receipt ON intents(receipt_seq);
+CREATE INDEX IF NOT EXISTS intent_accept ON intents(accept_seq) WHERE accept_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS intent_undo ON intents(undoes) WHERE undoes IS NOT NULL;
 """
 
 
@@ -231,6 +239,9 @@ class Spine:
             self._entities.setdefault(person, set()).add(fp)
         self.refusals = 0
         self.last_seq = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+        # Schema/index creation uses autocommit. Do not retain all its intermediate
+        # page images in WAL (also keeps the oversized-frame disk guard meaningful).
+        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def close(self) -> None:
         with self._lock:
@@ -305,11 +316,14 @@ class Spine:
         with self._lock:
             return self._append([event], then)[0]
 
-    def _append(self, events: list[Event], then: Callable[[int], None] | None = None) -> list[Event]:
+    def _append(self, events: list[Event], then: Callable[[int], None] | None = None,
+                *, before: Callable[[], None] | None = None) -> list[Event]:
         out: list[Event] = []
         now = self._clock()
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            if before is not None:
+                before()
             for ev in events:
                 cur = self._db.execute(
                     "INSERT INTO events (ts, kind, source, subject, visibility, payload, mentions,"
@@ -374,26 +388,48 @@ class Spine:
             if (entity is not None and not key) or (topic is not None and not groups):
                 self._refuse(actor, "forget", "nothing to match")
             upto = self.last_seq
-            seed = {r[0] for r in self._db.execute(
-                "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto))}
-            if seqs is not None:
-                seed &= set(seqs)
-            if key or groups:
-                seed = self._matching(seed, key, groups)
-                if groups and len(seed) > MAX_TOPIC_EVENTS:
-                    self._refuse(actor, "forget", "too many events match: say which part")
-            dead = sorted(self._closure(seed))
-            self._tombstone(dead)
+            selected = None if seqs is None else sorted(set(seqs))
+            notice = {"subject": subject, "upto": upto}
+            fingerprints: set[bytes] = set()
+
+            def erase():
+                # All reads, erasure, shields, bookkeeping and notice share ONE commit.
+                seed = set()
+                if selected is None:
+                    seed.update(r[0] for r in self._db.execute(
+                        "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto)))
+                else:
+                    for chunk in _chunks(selected):
+                        marks = ','.join('?' * len(chunk))
+                        seed.update(r[0] for r in self._db.execute(
+                            f"SELECT seq FROM people INDEXED BY people_seq WHERE person = ? AND seq <= ? AND seq IN ({marks})",
+                            [subject, upto, *chunk]))
+                if key or groups:
+                    seed = self._matching(seed, key, groups)
+                    if groups and len(seed) > MAX_TOPIC_EVENTS:
+                        raise Refused("too many events match: say which part")
+                dead = sorted(self._closure(seed))
+                fingerprints.update(self._tombstone(dead) or ())
+                if key:
+                    self._db.execute("INSERT OR IGNORE INTO entity_shield VALUES (?, ?)",
+                                     (subject, self._efp(subject, key)))
+                self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
+                                 (subject, upto, self._clock(), len(dead)))
+                notice['count'] = len(dead)
+                if key or groups:
+                    notice.update(scope="entity" if key else "topic", seqs=dead[:MAX_NOTICE_SEQS])
+
+            try:
+                self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
+                                    payload=notice)], before=erase)
+            except Refused as exc:
+                self._refuse(actor, "forget", str(exc))
+            self._shield.update(fingerprints)
             if key:
-                self._shield_entity(subject, key)
-            self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
-                             (subject, upto, self._clock(), len(dead)))
+                self._entities.setdefault(subject, set()).add(self._efp(subject, key))
             self._epoch += 1
-            notice = {"subject": subject, "upto": upto, "count": len(dead)}
-            if key or groups:           # a scoped notice says WHICH events, never which words
-                notice |= {"scope": "entity" if key else "topic", "seqs": dead[:MAX_NOTICE_SEQS]}
-            self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL, payload=notice)])
-            return ForgetResult(len(dead), upto)
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return ForgetResult(notice['count'], upto)
 
     def _matching(self, seed: set[int], key: str, groups: list) -> set[int]:
         """The seed events whose payload names the entity / holds the whole topic."""
@@ -411,11 +447,6 @@ class Spine:
     # ---- the entity shield: a keyed hash of a forgotten name, per person, never the name -----
     def _efp(self, person: str, key: str) -> bytes:
         return hmac.new(self._shield_key, f"entity\0{person}\0{key}".encode(), hashlib.sha256).digest()
-
-    def _shield_entity(self, subject: str, key: str) -> None:
-        fp = self._efp(subject, key)
-        self._entities.setdefault(subject, set()).add(fp)
-        self._db.execute("INSERT OR IGNORE INTO entity_shield VALUES (?, ?)", (subject, fp))
 
     def _names_forgotten(self, ev: Event) -> bool:
         """Does a skill's event name something a person it is about asked to forget? An event
@@ -454,11 +485,13 @@ class Spine:
                     frontier.append(seq)
         return dead
 
-    def _tombstone(self, seqs: list[int]) -> None:
+    def _tombstone(self, seqs: list[int]) -> set[bytes]:
         """Erase the rows in place, remember a keyed hash of their free text: first-hand AND
         derived (text that only ever lived in a derived event is forgotten too)."""
         fps: set[bytes] = set()
-        self._db.execute("BEGIN IMMEDIATE")
+        own_transaction = not self._db.in_transaction
+        if own_transaction:
+            self._db.execute("BEGIN IMMEDIATE")
         try:
             for chunk in _chunks(seqs):
                 marks = ",".join("?" * len(chunk))
@@ -473,12 +506,16 @@ class Spine:
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
             self._scrub_intents(set(seqs))
             self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
-            self._db.execute("COMMIT")
+            if own_transaction:
+                self._db.execute("COMMIT")
         except BaseException:
-            self._db.execute("ROLLBACK")
+            if own_transaction:
+                self._db.execute("ROLLBACK")
             raise
-        self._shield |= fps
-        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # old page images leave the WAL file
+        if own_transaction:
+            self._shield |= fps
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return fps
 
     def _scrub_intents(self, dead: set[int]) -> None:
         """Forget reaches the action bookkeeping (``receipts.Dispatcher``): an intent tied to an

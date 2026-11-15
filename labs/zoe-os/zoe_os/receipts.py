@@ -187,8 +187,11 @@ class Dispatcher:
         return self.spine._db.execute("SELECT 1 FROM intents WHERE undoes = ?", (seq,)).fetchone() is not None
 
     def last_action(self, person: str) -> Event | None:
-        return next((e for e in self.spine._newest(frozenset({Kind.ACTION_RECEIPT}), person)
-                     if e.subject == person), None)
+        # Exact subject, not mentions; the partial index also handles an empty history.
+        row = self.spine._db.execute(
+            "SELECT seq FROM events INDEXED BY latest_receipt WHERE subject = ? AND kind = 'action_receipt'"
+            " AND tombstoned = 0 ORDER BY seq DESC LIMIT 1", (person,)).fetchone()
+        return self.spine._get(row[0]) if row else None
 
     def undo(self, person: str, *, actor: str) -> Receipt:
         """Reverse ``person``'s last action. Raises ``Refused`` (recorded) when it may not or cannot."""
