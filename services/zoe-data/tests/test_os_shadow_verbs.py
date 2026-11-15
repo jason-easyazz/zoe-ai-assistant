@@ -269,3 +269,88 @@ def test_a_hooked_writer_does_not_hide_an_unhooked_one_for_a_new_verb():
     src = ("async def a(db):\n    await db.execute('INSERT INTO alarms (id) VALUES (1)')\n    os_shadow.note_alarm_create('u')\n"
            "async def b(db):\n    await db.execute('insert into alarms (id) values (2)')\n")
     assert hook_scan.unhooked(src, WRITERS["alarm_create"][0], frozenset(), frozenset({"note_alarm_create"})) == ["b"]
+
+
+# ---- every verb: one line per outcome, one deadline per write ------------------------------------------------------------------------
+def _verb_call(verb, user=MEMBER, empty=False):
+    """One live write of ``verb``; ``empty`` = the write carries no value (no item, no note)."""
+    if verb == "list_add":
+        os_shadow.note_add(user, source="spoken", list_type="shopping", list_name="Shopping", item="" if empty else "rice")
+    elif verb == "list_remove":
+        os_shadow.note_list_remove(user, source="skybridge", list_type="shopping", list_name="Shopping", item="" if empty else "rice")
+    elif verb == "reminder_create":
+        remind(note="" if empty else NOTE) if user == MEMBER else os_shadow.note_reminder_create(
+            user, source="service", note=NOTE, due_date=_in(90)[0], due_time=_in(90)[1], recurring=False)
+    else:
+        os_shadow.note_alarm_create(user, source="service", time_hhmm="" if empty else "06:45", repeat="once")
+
+
+def _act_lines(caplog, verb):
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith(f"OS_SHADOW_ACT verb={verb} ")]
+
+
+@pytest.mark.parametrize("verb", ["list_add", "list_remove", "reminder_create", "alarm_create"])
+def test_every_outcome_of_every_verb_writes_exactly_one_line(kernel, monkeypatch, caplog, verb):
+    import queue
+
+    import user_erase_gate
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    want = []
+
+    def one(code, fn):
+        fn()
+        want.append(code)
+        settle(len(want))
+
+    one("match", lambda: _verb_call(verb))
+    kernel.act_mode = "refuse"
+    one("kernel_refused_live_did", lambda: _verb_call(verb))
+    kernel.act_mode = "ok"
+    one("member_not_in_roster", lambda: _verb_call(verb, user="someone-else"))
+    # an alarm with no time still reaches the worker: the kernel's verb cannot say it (a counted disagreement)
+    one("not_expressible" if verb == "alarm_create" else "no_input", lambda: _verb_call(verb, empty=True))
+    one("no_input", lambda: _verb_call(verb, user=""))
+    with user_erase_gate.erase_span(MEMBER):
+        one("dropped_erased", lambda: _verb_call(verb))
+    user_erase_gate.reset()
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "_worker_alive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("shadow_error", lambda: _verb_call(verb))
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "kernel_args", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("not_expressible", lambda: _verb_call(verb))                      # a field the worker could not read: reason=parse
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "roster", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("shadow_error", lambda: _verb_call(verb))
+    kernel.delay = 1.0
+    one("timeout", lambda: _verb_call(verb))
+    kernel.delay = 0.0
+    with monkeypatch.context() as m:
+        full = queue.Queue(maxsize=1)
+        full.put_nowait(("stop",))
+        m.setattr(os_shadow, "_q", full)
+        one("queue_full", lambda: _verb_call(verb))
+    os_shadow._q.put(("stop",))
+    os_shadow._worker.join(5)
+    one("worker_down", lambda: _verb_call(verb))
+    lines = _act_lines(caplog, verb)
+    assert sorted(ln.split(" result=", 1)[1].split()[0] for ln in lines) == sorted(want)
+    assert len(lines) == len(want) and set(os_shadow.counters_by_verb()) == {verb}
+    assert sum(os_shadow.counters_by_verb()[verb].values()) == len(want)
+    recs = report.parse(lines)                                                 # the report reads every one of them, by its own code
+    assert len(recs) == len(lines) and all(r["verb"] == verb and r["result"] in report.ALLOWED["result"] for r in recs)
+
+
+@pytest.mark.parametrize("verb", ["list_remove", "reminder_create", "alarm_create"])
+def test_every_verb_runs_on_one_deadline(kernel, monkeypatch, caplog, verb):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    monkeypatch.setattr(os_shadow, "OP_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(os_shadow, "JOB_DEADLINE_S", 0.2)
+    kernel.stall[("act", 2)] = 0.6                                            # under the per-op timeout, over the write's budget
+    _verb_call(verb)
+    settle(1, timeout=3)
+    (line,) = _act_lines(caplog, verb)
+    assert " result=timeout " in line and float(line.split(" hop_ms=", 1)[1].split()[0]) < 350

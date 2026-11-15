@@ -517,6 +517,9 @@ def _sweep(kernel, monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(os_shadow, "roster", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         one("shadow_error", add)                                      # reason=worker
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "kernel_args", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("not_expressible", add)                                   # a field the worker could not read: reason=parse
     kernel.delay = 1.0
     one("timeout", add)
     kernel.delay = 0.0
