@@ -1072,3 +1072,140 @@ def test_a_failing_card_invalidation_fails_the_forget_and_the_retry_finishes(wor
     assert chat.off(w["mid"])                                                   # the rest that was reachable still went
     down["on"] = False
     assert run(pa._forget_turn(UID, mp._state(UID).explained, svc=svc)).startswith("Done")
+
+
+def test_a_topic_forget_whose_card_step_fails_is_not_confirmed_and_the_retry_finishes(world, monkeypatch):
+    """The card step runs BEFORE the archive (the archive makes the rows undiscoverable by topic). It fails once: the forget is not
+    confirmed and nothing was archived; the same topic forget again finds the rows, invalidates the card and archives them. On
+    eb71415d7 the rows were archived first, so the retry found nothing and the stored card kept the words."""
+    import user_model_card
+
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    seen, down = [], {"n": 1}
+
+    async def card(user_id, row_ids):
+        if down["n"]:
+            down["n"] -= 1
+            raise RuntimeError("card store down")
+        seen.append(set(row_ids))
+        return 1
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    first = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert first.store_down and not first.forgotten
+    assert w["fact"] in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}   # nothing archived yet
+    second = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert not (second.store_down or second.failed) and second.forgotten
+    assert any(w["fact"] in rows for rows in seen)
+    assert w["fact"] not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+
+
+# ── a partial failure never leaves the retry without its targets (bot review round, PR #2574) ─────────────────────────────────
+
+@pytest.mark.parametrize("path", ["forget_it_fact", "memory_space"])
+def test_with_physical_erase_on_a_refused_bound_reject_is_finished_by_the_retry(world, monkeypatch, path):
+    """Physical erase ON (the default). The reject of another fact bound to the explained turn is refused once: the target must NOT
+    be physically erased (the retry starts from it), the answer is not Done, and the retry rejects the surviving fact and only
+    then confirms. On 17493da8d the target was erased anyway and the retry said "already gone"."""
+    import memory_space
+
+    svc, chat = world
+    monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "1")
+    erased: list = []
+
+    async def erase_rows(user_id, ids, **_kw):
+        for i in ids:
+            svc._collection().rows.pop(i, None)
+            erased.append(i)
+        return {"erased": len(list(ids))}
+    monkeypatch.setattr(svc, "erase_rows", erase_rows)
+    w = _plant_kind(svc, chat, "turn")
+    stray = run(svc.ingest("User keeps the kayak paddles behind the garage door", user_id=UID, source="digest",
+                           status="approved", source_excerpt="something else entirely about kayaks",
+                           metadata={"source_turn": w["mid"]}))
+    real, refused = svc.review, {"left": 1}
+
+    async def review(row_id, *a, **k):
+        if row_id == stray.id and refused["left"]:
+            refused["left"] -= 1
+            return None
+        return await real(row_id, *a, **k)
+    monkeypatch.setattr(svc, "review", review)
+
+    def go():
+        if path == "memory_space":
+            try:
+                return "Done" if run(memory_space.forget_row(UID, w["fact"], svc=svc)) == "forgotten" else "not done"
+            except RuntimeError:
+                return "not done"
+        ref = run(svc.get(w["fact"]))
+        return run(pa.forget_it(UID, mp.Explained(seq=1, row_id=w["fact"], ts=time.time(), text=ref.text if ref else "",
+                                                  quote=KW, turn_id=""), svc=svc))
+    first = go()
+    assert not first.startswith("Done") and w["fact"] not in erased, (first, erased)
+    second = go()
+    assert second.startswith("Done"), second
+    assert stray.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert w["fact"] in erased and stray.id in erased                          # erased once every reject held
+
+
+def test_forget_that_invalidates_the_card_for_a_sibling_before_any_reject_and_the_retry_finishes(world, monkeypatch):
+    """"forget that": the capture's sibling of the turn's row is found BEFORE any reject, so the stored card is invalidated for
+    the WHOLE set in one step. That step fails once (on the sibling): nothing is rejected, the forget is not confirmed; the retry
+    invalidates the card for the sibling and rejects it. On 17493da8d the sibling was found only after the rejects, its card
+    step failed with no way back, and the retry could not find it."""
+    import ask_to_remember
+    import user_model_card
+
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    sib = run(svc.ingest("User keeps kayak paddles in a blue shed", user_id=UID, source="chat_regex", status="approved"))
+    real_sib = ask_to_remember.siblings_of
+
+    async def siblings_of(svc_, user_id, ref):
+        out = await real_sib(svc_, user_id, ref)
+        if ref.id == w["fact"]:
+            out = [*out, await svc_.get(sib.id)]
+        return [o for o in out if o is not None]
+    monkeypatch.setattr(ask_to_remember, "siblings_of", siblings_of)
+    carded, down = [], {"n": 1}
+
+    async def card(user_id, row_ids):
+        if sib.id in set(row_ids) and down["n"]:
+            down["n"] -= 1
+            raise RuntimeError("card store down")
+        carded.append(set(row_ids))
+        return 1
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    first = _forget_last(svc, chat, "a", None)
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert not first.startswith("Done") and sib.id in approved and w["fact"] in approved, first   # nothing rejected yet
+    second = _forget_last(svc, chat, "a", None)
+    assert second.startswith("Done"), second
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert sib.id not in approved and w["fact"] not in approved
+    assert any(sib.id in rows for rows in carded)
+
+
+@pytest.mark.parametrize("fault", ["put_thread", "threads"])
+def test_a_thread_repair_that_fails_once_is_finished_by_the_retry(world, monkeypatch, fault):
+    """The surviving thread's repair fails once (``put_thread``, or the thread read): the repair now runs BEFORE the observation is
+    deleted, so the erase raises (the forget is not confirmed) with the observation still there, and the retry repairs the title
+    and anchors and erases it. On 17493da8d the observation was already gone and the retry found nothing to repair."""
+    svc, chat = world
+    mids = _plant_thread(chat, POTTERY)
+    be = night_store.get_backend()
+    real, left = getattr(be, fault), {"n": 1}
+
+    async def flaky(*a, **k):
+        if left["n"]:
+            left["n"] -= 1
+            raise RuntimeError("store hiccup")
+        return await real(*a, **k)
+    monkeypatch.setattr(be, fault, flaky)
+    with pytest.raises(RuntimeError):
+        run(turn_forget.erase_turn_words(UID, (mids[POTTERY],), ()))
+    run(turn_forget.erase_turn_words(UID, (mids[POTTERY],), ()))
+    assert _night() == ["hose"]
+    t = _thread()
+    assert not {"pottery", "odalys", "cousin", "tuesday"} & set(re.findall(r"[a-z]+", (t["title"] + " " + t["anchors"]).lower())), t

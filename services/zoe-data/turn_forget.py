@@ -327,6 +327,7 @@ def mark_forgotten(user_id: str, turn: Turn) -> None:
         for tr in _turns.get(user_id) or ():
             if tr.tid == turn.tid:
                 tr.text = ""
+        _PENDING_ROWS.pop((user_id or "", turn.tid), None)
     try:  # the rows are flagged off the record by now: clear the pending corrections AGAIN, after the flagging (retract
         import correction_marker  # cleared them before it; a marker set in between must not outlive the forget)
 
@@ -649,10 +650,29 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
     return n
 
 
+#: (user, turn instance) -> memory row ids a forget of that turn could not finish (a refused reject, a failed card step): the retry
+#: carries them - they may no longer be findable through the turn once their source row is rejected and erased. In process, like
+#: the turn notes themselves; cleared when the turn is forgotten.
+_PENDING_ROWS: "dict[tuple, set]" = {}
+
+
+def note_pending_rows(user_id: str, turn: Any, row_ids: Any) -> None:
+    ids = {str(r) for r in (row_ids or ()) if r}
+    if ids and turn is not None:
+        with _LOCK:
+            _PENDING_ROWS.setdefault((user_id or "", getattr(turn, "tid", 0)), set()).update(ids)
+
+
+def pending_rows(user_id: str, turn: Any) -> "set[str]":
+    with _LOCK:
+        return set(_PENDING_ROWS.get((user_id or "", getattr(turn, "tid", 0)), ()))
+
+
 def reset() -> None:  # tests
     with _LOCK:
         _turns.clear()
         _retracted.clear()
+        _PENDING_ROWS.clear()
 
 
 __all__ = [

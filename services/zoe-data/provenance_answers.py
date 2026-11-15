@@ -1513,14 +1513,23 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             try:
                 mids, source_only, resolved = await _target_ids(user_id, exp, ref, ref.text or "")
                 exp = dataclasses.replace(exp, mids=tuple(mids)) if resolved else exp
-                # a legacy target's resolved turns: all of it; a refused reject fails the retry (after the words still go)
-                _g, failed = await _reject_all(svc, user_id, await _bound_rows(svc, user_id, mids, skip=(ref.id,)),
-                                               note="forget_explained")
+                # what the first attempt could not finish: the twins and the rows bound to the target's turns that still stand
+                twins = await twins_of(user_id, ref, svc=svc, strict=True)
+                rest = [*twins, *await _bound_rows(svc, user_id, mids, skip=[ref.id, *(t.id for t in twins)])]
+                await turn_forget.erase_turn_words(user_id, (), (), row_ids=[ref.id, *(r.id for r in rest)])   # card FIRST
+                _g, failed = await _reject_all(svc, user_id, rest, note="forget_explained")
                 left = len(_g) + await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only,
-                                                    row_ids=[ref.id, *_g],
                                                     resolved=resolved)
                 if failed:
                     raise RuntimeError("a bound row's reject failed")
+                if hasattr(svc, "erase_rows"):   # every dependent reject held: now the physical erase (best effort, as below)
+                    try:
+                        from memory_service import physical_erase_enabled
+
+                        if physical_erase_enabled():
+                            await svc.erase_rows(user_id, [ref.id, *_g], actor=user_id, reason="forgotten by request (explained)")
+                    except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
+                        logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
                 _rearm(user_id, exp)
@@ -1536,13 +1545,21 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             logger.warning("provenance_answers: forget target unresolved (%s)", type(exc).__name__)
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
+        try:   # BEFORE the rejects (they make the rows undiscoverable): the stored card citing them, their registry entries
+            await turn_forget.erase_turn_words(user_id, (), (), row_ids=[ref.id, *(t.id for t in twins), *(b.id for b in bound)])
+        except Exception as exc:  # noqa: BLE001 - nothing rejected yet: say so, keep the target for a retry
+            logger.warning("provenance_answers: card / registry erase failed (%s)", type(exc).__name__)
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
         await _speculation_barrier()
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
         if done is None:
             return STORE_DOWN_REPLY
         more, failed = await _reject_all(svc, user_id, [*twins, *bound], note="forget_explained")
         gone = [ref.id, *more]
-        if hasattr(svc, "erase_rows"):
+        # the physical erase only once EVERY dependent reject held: erasing the target while a twin / bound fact still stands
+        # would leave the retry no target to start from ("already gone") and that fact approved for good
+        if not failed and hasattr(svc, "erase_rows"):
             try:
                 from memory_service import physical_erase_enabled
 
@@ -1551,7 +1568,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
         try:
-            await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved, row_ids=gone)
+            await _erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)

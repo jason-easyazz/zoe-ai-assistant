@@ -4093,8 +4093,31 @@ async def _execute_forget_last(user_id: str) -> str:
         mids = (tuple(await _xw_copies.turn_copies(user_id, turn.mids)) if turn.mids   # every committed copy of the turn
                 else await turn_forget.resolve_legacy_ids(user_id, (text,)))
         rows = await turn_forget.rows_from_turn(svc, user_id, text, ts, mids=mids)
+        # rows an EARLIER attempt at this turn could not reject (kept with the turn): they may no longer be findable by it (their
+        # source row was rejected and erased), so they are carried, not rediscovered
+        have = {r.id for r in rows}
+        for rid in turn_forget.pending_rows(user_id, turn):
+            ref = await svc.get(rid) if rid not in have else None
+            if ref is not None and str((ref.metadata or {}).get("status") or "approved").lower() in ("approved", "pending"):
+                rows.append(ref)
+                have.add(rid)
+        # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too - looked up NOW,
+        # before anything is rejected, so the whole set is known for the card step and nothing is found only afterwards
+        import ask_to_remember as _atr_f
+
+        for r in list(rows):
+            for _sib in await _atr_f.siblings_of(svc, user_id, r):
+                if _sib.id not in have:
+                    have.add(_sib.id)
+                    rows.append(_sib)
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
+        return FORGET_STORE_DOWN_REPLY
+    try:   # BEFORE the rejects (they make the rows undiscoverable by this turn): the stored card citing ANY of them, their registry
+        await turn_forget.erase_turn_words(user_id, (), (), row_ids=[r.id for r in rows])     # entries - the whole set, siblings too
+    except Exception as exc:  # noqa: BLE001 - nothing rejected yet; the turn is kept, so "forget that" again finishes it
+        logger.info("memory_forget_last: card / registry erase failed (%s)", type(exc).__name__)
+        turn_forget.note_pending_rows(user_id, turn, [r.id for r in rows])
         return FORGET_STORE_DOWN_REPLY
     gone: list = []
     failed = 0
@@ -4106,28 +4129,15 @@ async def _execute_forget_last(user_id: str) -> str:
             logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
             return False
 
+    left: list = []
     for r in rows:
         if await _reject(r):
             gone.append(r)
         else:
             failed += 1
-    # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
-    try:
-        import ask_to_remember as _atr_f
-
-        ids = {r.id for r in gone}
-        for r in list(gone):
-            for _sib in await _atr_f.siblings_of(svc, user_id, r):
-                if _sib.id in ids:
-                    continue
-                ids.add(_sib.id)
-                if await _reject(_sib):
-                    gone.append(_sib)
-                else:
-                    failed += 1
-    except Exception as exc:  # noqa: BLE001 - not finished: a twin may still stand, so the forget is not confirmed
-        logger.info("memory_forget_last: sibling retraction failed (%s)", type(exc).__name__)
-        failed += 1
+            left.append(r.id)
+    if left:   # kept WITH the turn: the retry rejects them even if nothing it can still find points at them
+        turn_forget.note_pending_rows(user_id, turn, left)
     # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
     # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
     if gone and hasattr(svc, "erase_rows"):
@@ -4140,7 +4150,7 @@ async def _execute_forget_last(user_id: str) -> str:
     try:    # BY the turn's saved-turn ids (its words are never compared); a turn noted with none, by its words, legacy rows only
         # (the turn keeps its ids in the notes: a retry reaches all); the conversation notes of the turn (by their own turn ids, a
         # legacy note by these words or the turn's time) and the rejected rows' stored card / registry entries go in the same call
-        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved, row_ids=[r.id for r in gone], at=ts)
+        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved, at=ts)
     except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         failed += 1
