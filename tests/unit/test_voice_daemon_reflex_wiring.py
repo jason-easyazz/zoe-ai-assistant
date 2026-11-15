@@ -184,10 +184,13 @@ def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True
     if talk:
         _talk(daemon)
 
+    controllers = []
+
     def _hook():
         ctl = daemon._REFLEX_CUR
         if ctl is None:
             return
+        controllers.append(ctl)
         if not talk:
             clock.t += 0.4              # real time passes with no mic window: the decision deadline is reached
         if before == "join":
@@ -208,6 +211,9 @@ def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True
     monkeypatch.setattr(daemon, "_speaker_claim_to_attach", _score)
     with caplog.at_level(logging.INFO, logger=daemon.log.name):
         ok = daemon._do_single_turn_stream(FS._FakePA(), b"RIFFwav", wake_turn=wake)
+        for ctl in controllers:                 # test teardown only; the turn itself must never join
+            ctl._thread.join(timeout=3)
+            assert not ctl._thread.is_alive()
     (line,) = FS._msgs(caplog, "FIRST_SOUND")
     dec = FS._msgs(caplog, "REFLEX_DECISION")
     if safety_out is not None:
@@ -228,11 +234,19 @@ def bank(tmp_path):
 # ── off: nothing runs ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_off_is_the_default_and_changes_nothing(daemon, monkeypatch, caplog, bank):
-    assert daemon.REFLEX_MODE == "off"
-    ok, line, writes, players, first, _, dec = _turn(daemon, monkeypatch, caplog, mode="off", bank=bank)
+    monkeypatch.delenv("REFLEX_MODE", raising=False)
+    fresh = FS._load("zoe_voice_daemon_reflex_default_test")  # importlib loader; never reload the shared fixture
+    assert fresh.REFLEX_MODE == "off"
+    for name in ("_reflex_begin", "_reflex_end", "_reflex_note_reply", "_reflex_note_voice",
+                 "_reflex_note_safety", "_reflex_safety_line"):
+        monkeypatch.setattr(fresh, name, lambda *a: pytest.fail("reflex work with default off"))
+    monkeypatch.setattr(fresh._FirstSound, "shadow_reflex", lambda self: pytest.fail("shadow work with default off"))
+    ok, line, writes, players, first, _, dec = _turn(fresh, monkeypatch, caplog, mode=fresh.REFLEX_MODE, bank=bank)
     assert ok and players == [] and dec == [] and len(writes) == 3
     assert (_f(line, "reflex"), _f(line, "reflex_at_ms"), _f(line, "reflex_cut"), _f(line, "gap_ms")) == ("none", "-1", "0", "-1")
-    assert daemon._REFLEX_CUR is None and FS.FIRST_SOUND_RE.match(line), line
+    assert fresh._REFLEX_CUR is None and FS.FIRST_SOUND_RE.match(line), line
+    monkeypatch.setenv("REFLEX_MODE", "shadow")  # control: fresh import observes an explicit non-default
+    assert FS._load("zoe_voice_daemon_reflex_default_control").REFLEX_MODE == "shadow"
 
 
 # ── on is BLOCKED: no at-close crisis / medical / refusal gate exists ───────────────────────────────────────────────────
@@ -462,13 +476,15 @@ def test_note_reply_only_sets_an_event_no_lock_no_subprocess(daemon, monkeypatch
 def test_off_does_no_reflex_work_on_the_first_audio_path(daemon, monkeypatch, caplog, bank):
     """REFLEX_MODE off: the first-audio path never calls into the reflex (not even the no-op hook)."""
     monkeypatch.setattr(daemon, "_reflex_note_reply", lambda: pytest.fail("reflex hook ran with REFLEX_MODE off"))
+    monkeypatch.setattr(daemon, "_reflex_end", lambda fs: pytest.fail("end hook ran with REFLEX_MODE off"))
     ok, _, writes, players, _, _, dec = _turn(daemon, monkeypatch, caplog, mode="off", bank=bank)
     assert ok and len(writes) == 3 and players == [] and dec == []
     src = DAEMON.read_text(encoding="utf-8")
     calls = [ln for ln in src.splitlines() if ln.strip().startswith("_reflex_note_reply()")]
     assert len(calls) == 2
     for i, ln in enumerate(src.splitlines()):
-        if ln.strip().startswith("_reflex_note_reply()"):
+        if ln.strip().startswith(("_reflex_note_reply()", "_reflex_end(fs)", "_reflex_begin(fs)",
+                                  "_reflex_note_voice(obj.get", "fs.shadow_reflex()")):
             assert 'if REFLEX_MODE != "off":' in src.splitlines()[i - 1], i
 
 
@@ -477,7 +493,10 @@ def test_a_reply_during_the_take_cuts_the_reflex_and_is_never_delayed(daemon, mo
                                                    before="playing")
     (p,) = players
     assert ok and p.terminated.is_set() and len(writes) == 3 and len(p.buf) == 1
-    assert _f(line, "reflex") == "heard" and _f(line, "reflex_cut") == "1" and _f(line, "gap_ms") == "0"
+    if "reflex_pending=1" in line:
+        assert (_f(line, "reflex"), _f(line, "reflex_cut"), _f(line, "gap_ms")) == ("none", "-1", "-1")
+    else:
+        assert _f(line, "reflex") == "heard" and _f(line, "reflex_cut") == "1" and _f(line, "gap_ms") == "0"
     base = _turn(daemon, monkeypatch, caplog, mode="off", bank=bank)
     assert first == base[4] and b"".join(writes) == b"".join(base[2])         # the reply started exactly when it would have
 
@@ -551,6 +570,92 @@ def test_the_turn_ending_first_drops_the_decision(daemon, monkeypatch, bank):
     ctl.end()
     ctl._run()
     assert ctl.kind == "none" and ctl.skip == "late"
+
+
+def test_turn_end_never_waits_for_a_slow_reflex(daemon, monkeypatch, caplog, bank):
+    """Real turn-return budget <50 ms; putting the old 250 ms join back must exceed 200 ms."""
+    for join_back in (False, True):
+        with monkeypatch.context() as m:
+            _controller(daemon, m, bank, mode="shadow")
+            entered, release = threading.Event(), threading.Event()
+            controllers = []
+            real_run = daemon._ReflexTurn._run
+            real_end = daemon._ReflexTurn.end
+
+            def slow(self):
+                entered.set()
+                release.wait(3)
+                real_run(self)
+
+            def stream(pa, wav, fs, **kw):
+                ctl = daemon._ReflexTurn(fs, "shadow", bank)
+                fs.reflex = ctl
+                daemon._reflex_note_safety(fs, "medical")
+                controllers.append(ctl)
+                ctl.start()
+                assert entered.wait(1)
+                return True
+
+            def joining(self):
+                real_end(self)
+                self._thread.join(timeout=0.25)
+
+            m.setattr(daemon._ReflexTurn, "_run", slow)
+            m.setattr(daemon, "_stream_turn", stream)
+            if join_back:
+                m.setattr(daemon._ReflexTurn, "end", joining)
+            try:
+                with caplog.at_level(logging.INFO, logger=daemon.log.name):
+                    start = time.perf_counter()
+                    assert daemon._do_single_turn_stream(FS._FakePA(), b"RIFFsynthetic", wake_turn=True)
+                    elapsed = time.perf_counter() - start
+                    ctl = controllers[0]
+                    assert ctl._thread.daemon and ctl._over.is_set() and ctl._thread.is_alive()
+                    (line,) = FS._msgs(caplog, "FIRST_SOUND")
+                    assert "reflex_pending=1" in line and _f(line, "reflex_cut") == "-1"
+                    assert FS._msgs(caplog, "REFLEX_SAFETY") == [
+                        "REFLEX_SAFETY mode=shadow would_play=pending class=medical"]
+                    assert elapsed >= 0.2 if join_back else elapsed < 0.05
+                    release.set()
+                    ctl._thread.join(timeout=1)   # cleanup is outside the measured turn
+                    assert not ctl._thread.is_alive()
+                    assert len(FS._msgs(caplog, "FIRST_SOUND")) == 1
+                    (decision,) = FS._msgs(caplog, "REFLEX_DECISION")
+                    assert "skip=late" in decision
+                    assert FS._msgs(caplog, "REFLEX_SAFETY") == [
+                        "REFLEX_SAFETY mode=shadow would_play=pending class=medical"]  # no second line after settling
+            finally:
+                release.set()
+                for ctl in controllers:
+                    ctl._thread.join(timeout=1)
+                caplog.clear()
+
+
+def test_turn_end_cuts_a_playing_take_without_a_reply(daemon, monkeypatch, bank):
+    fs, ctl = _controller(daemon, monkeypatch, bank)
+    p, playing = _Player(hold=True), threading.Event()
+    real_poll = p.poll
+
+    def poll():
+        playing.set()
+        return real_poll()
+
+    monkeypatch.setattr(p, "poll", poll)
+    monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=lambda *a: p))
+    ctl.start()
+    try:
+        assert playing.wait(1) and len(p.buf) == 1
+        assert not p.terminated.wait(0.04)  # control: without the end signal the take stays playing
+        assert not ctl._reply.is_set()
+        start = time.perf_counter()
+        ctl.end()
+        assert time.perf_counter() - start < 0.05
+        assert p.terminated.wait(0.1)       # worker observes end, kills and reaps; no natural completion
+        ctl._thread.join(timeout=1)
+        assert not ctl._thread.is_alive() and p.poll() == 0 and ctl.cut
+    finally:
+        ctl.end()
+        ctl._thread.join(timeout=1)
 
 
 # ── never over a person still making sound ───────────────────────────────────────────────────────────────────────────────────
