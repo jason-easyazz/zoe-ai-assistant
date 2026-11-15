@@ -864,8 +864,8 @@ def test_panel_programs_are_voice_path():
     # every file the panel deploy ships is covered (the deploy script is the authority)
     shipped = re.search(r"^SHIPPED_FILES=\(([^)]*)\)", (REPO / "scripts/setup/deploy-pi-voice.sh").read_text(),
                         re.M).group(1).split()
-    code = [f"scripts/setup/{f}" for f in shipped if f.endswith((".py", ".txt"))]
-    assert touched_voice_files(code, pats) == code
+    shipped_paths = [f"scripts/setup/{f}" for f in shipped]
+    assert touched_voice_files(shipped_paths, pats) == shipped_paths
 
 
 def test_zoe_data_requirements_is_voice_path():

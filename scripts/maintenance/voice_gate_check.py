@@ -570,6 +570,8 @@ VOICE_PATH_WIDE_PATTERNS = (
     "scripts/setup/deploy-pi-voice.sh",
     "scripts/setup/pi_voice_daemon_install.sh",
     "scripts/setup/pi-requirements.txt",
+    "scripts/setup/fetch_speaker_models.sh",
+    "scripts/setup/zoe_speaker_resnet34_artifacts.json",
 )
 VOICE_PATH_PATTERNS = VOICE_PATH_NARROW_PATTERNS + VOICE_PATH_WIDE_PATTERNS
 # What the WIDE `services/zoe-data/*` glob does NOT cover (fnmatch's `*` crosses `/`): the
