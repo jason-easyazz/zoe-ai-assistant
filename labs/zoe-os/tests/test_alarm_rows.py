@@ -204,3 +204,37 @@ def test_a_restart_rebuilds_the_alarms_and_a_forget_takes_them_for_good(house, t
     assert set(again.al.rows) == {b}
     again.k.close()
     assert set(House(tmp_path / "k.db", clock).al.rows) == {b}
+
+
+@pytest.mark.parametrize("day", ["2030-02-30", "2030-99-99", "2030-00-10"])
+def test_a_day_that_is_not_a_day_is_refused_and_never_raises(house, clock, day):
+    """The argument shape lets an impossible day through; the alarm's own rule refuses it with a fixed line, on set and on edit."""
+    with pytest.raises(Refused, match="not a day I can use"):
+        house.act(A, "alarm.set", time="07:00", date=day)
+    a = rid(house.act(A, "alarm.set", time="07:00"))
+    before = dict(house.al.rows[a])
+    with pytest.raises(Refused, match="not a day I can use"):
+        house.act(A, "alarm.edit", id=a, date=day)
+    assert house.al.rows[a] == before
+
+
+def test_a_label_or_snooze_edit_leaves_a_spent_one_off_spent(house, clock):
+    """Only an edit that asks for a new ring re-picks a spent one-off's day: a label or snooze-length edit must not bring it back."""
+    a = rid(house.act(A, "alarm.set", time="07:00"))
+    day = house.al.rows[a]["date"]
+    clock[0] = at(2030, 1, 9, 12)                                    # well past its one ring
+    assert house.al.visible_to(A)[0]["next_fire"] is None
+    for extra in ({"label": "work"}, {"snooze_minutes": 3}):
+        assert house.act(A, "alarm.edit", id=a, **extra).verified
+        assert house.al.rows[a]["date"] == day and house.al.visible_to(A)[0]["next_fire"] is None, extra
+    assert house.al.rows[a]["label"] == "work" and house.al.rows[a]["snooze_minutes"] == 3
+
+
+def test_a_time_edit_or_a_switch_back_on_reschedules_a_spent_one_off(house, clock):
+    a = rid(house.act(A, "alarm.set", time="07:00"))
+    clock[0] = at(2030, 1, 9, 12)
+    assert house.act(A, "alarm.edit", id=a, enabled=1).verified
+    assert house.al.visible_to(A)[0]["next_fire"] == at(2030, 1, 10, 7)
+    clock[0] = at(2030, 1, 11, 12)
+    assert house.act(A, "alarm.edit", id=a, time="08:00").verified
+    assert house.al.visible_to(A)[0]["next_fire"] == at(2030, 1, 12, 8)

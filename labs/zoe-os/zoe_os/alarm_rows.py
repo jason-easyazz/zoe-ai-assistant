@@ -14,6 +14,8 @@ set at the wall panel) and the panel's right to silence any ringing alarm are NO
 """
 from __future__ import annotations
 
+from datetime import date
+
 from zoneinfo import ZoneInfo
 
 from . import schedule as sch
@@ -63,6 +65,11 @@ class DurableAlarms(DurableRows):
         rule = sch.alarm_repeat(row["repeat"])
         if rule is None:
             return row, "That is not a repeat I can use."
+        if row["date"] is not None:                      # the shape check lets "2030-02-30" through: refuse it, never raise
+            try:
+                date.fromisoformat(row["date"])
+            except (TypeError, ValueError):
+                return row, "That is not a day I can use."
         row = row | {"repeat": rule, "date": row["date"] if rule == "once" else None}
         if rule == "once" and row["enabled"]:
             row["date"] = row["date"] or sch.next_once_date(row["time"], now, self.tz)
@@ -120,11 +127,20 @@ class DurableAlarms(DurableRows):
             new["enabled"] = args["enabled"]
         if new["repeat"] == "once" and (set(args) & {"time", "repeat"}) and "date" not in args:
             new["date"] = None
-        if new["enabled"] and new["repeat"] == "once" and new["date"] and "date" not in args and \
-                sch.alarm_occurrence(new["time"], "once", new["date"], now, self.tz) is None:
-            new["date"] = None
+        landed = {"after": now, "snoozed_until": None, "snooze_of": None, "snooze_count": 0}
+        if new["repeat"] == "once" and new["date"] and "date" not in args:
+            try:
+                spent = new["enabled"] and sch.alarm_occurrence(new["time"], "once", new["date"], now, self.tz) is None
+            except ValueError:
+                spent = False                                # an unusable stored day: let _plan refuse it
+            if spent:
+                # Only an edit that asks for a new ring re-picks the day: a changed time or repeat (handled above) or an
+                # explicit switch back on. A label or snooze-length edit leaves a spent one-off spent.
+                if not args.get("enabled"):
+                    return new | landed, ""
+                new["date"] = None
         new, why = self._plan(new, now)
-        return new | {"after": now, "snoozed_until": None, "snooze_of": None, "snooze_count": 0}, why
+        return new | landed, why
 
     def _edit(self, person, args):
         new, _ = self._edited(args)
