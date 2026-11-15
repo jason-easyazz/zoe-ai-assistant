@@ -208,6 +208,21 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
   on the shared `.git` could otherwise advance the tree to a commit pushed *after* the gate ran, a
   silent bypass. (Same fix as #1344 on the manual path.)
 
+### Landing a panel-program PR (owner, 2026-11-15: "panel programs should be tested")
+
+The panel's own voice programs (`scripts/setup/zoe_voice_*.py`, `zoe_enroll_flow.py`, the
+`zoe-voice.service` unit, `deploy-pi-voice.sh`, `pi_voice_daemon_install.sh`, `pi-requirements.txt`)
+are voice scope (`VOICE_PATH_WIDE_PATTERNS` in `scripts/maintenance/voice_gate_check.py`), so they land
+through the voice lander with a replay, never through the docs chain on CI alone. The replay proves the
+server side the panel talks to; the panel program itself is proven by its own tests in CI and then by
+the deploy, which is a separate step on the Pi and goes in this order:
+
+1. `DRY_RUN=1 bash scripts/setup/deploy-pi-voice.sh` from a clean checkout of the merged `main`: read
+   the plan (the files it would ship, the backup suffix, any unit it would install).
+2. Only then the real `bash scripts/setup/deploy-pi-voice.sh`, then on the Pi
+   `systemctl --user restart zoe-voice` and one spoken turn (wake word, a short command, a reply).
+3. Rollback is the deploy's own `.bak-<suffix>` copies.
+
 ### Reusing replay evidence across a voice-free update (since 2026-11-11)
 
 **The problem.** A voice PR's probe passes for head P; then any other PR merges, `strict` forces an

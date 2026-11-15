@@ -22,6 +22,8 @@ reader, a code and counts: never an id, never text.
 """
 from __future__ import annotations
 
+import contextvars
+import functools
 import logging
 import re
 from datetime import datetime, timezone
@@ -214,3 +216,120 @@ async def keep_after(rows: Iterable[Any], *, owner: Union[str, Callable[[Any], A
     if skipped or unread:
         logger.info("ERASE_WATERMARK_SKIP reader=%s skipped=%d unreadable=%d kept=%d", reader, skipped, unread, len(kept))
     return kept
+
+
+# ── night writers: a member erased after the pass STARTED is skipped (the reads it already made are pre-erase) ─────────────────
+#: when the current night pass started (``night_cycle``); None outside one
+_cycle: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_cycle", default=None)
+
+
+def night_cycle(fn):
+    """Decorate an async night pass (the dreaming cycle, the nightly digest, a weekly / music / portrait pass): its start is recorded for
+    ``erased_since_cycle``. A pass already inside one keeps the outer, earlier start."""
+    @functools.wraps(fn)
+    async def call(*args, **kwargs):
+        token = _cycle.set(_now()) if _cycle.get() is None else None
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            if token is not None:
+                _cycle.reset(token)
+    return call
+
+
+ERASED, CLEAR, UNKNOWN = "erased", "clear", "unknown"
+
+
+async def erase_state(user_id: str, phase: str) -> str:
+    return (await _erase_state(user_id, phase))[0]
+
+
+async def _erase_state(user_id: str, phase: str) -> "tuple[str, str]":
+    """Inside a night pass: ``ERASED`` (the member's mark is at or after the pass start), ``CLEAR`` (it is not), or ``UNKNOWN`` (the mark
+    could not be read). ``CLEAR`` outside a night pass. A night pass runs in its own process, where the in-memory erase gate never moves,
+    so this is the check that reaches it. Logs a phase name and an error type only."""
+    started = _cycle.get()
+    if started is None or not user_id:
+        return CLEAR, ""
+    try:
+        mark = await watermark(str(user_id))
+    except Unavailable as exc:
+        code = type(exc.__cause__ or exc).__name__
+        logger.warning("ERASE_WATERMARK_UNREADABLE reader=%s code=%s strict=1", phase, code)
+        return UNKNOWN, code
+    if mark is not None and mark >= started:
+        logger.info("ERASE_WATERMARK_PHASE_SKIP phase=%s", phase)
+        return ERASED, ""
+    return CLEAR, ""
+
+
+async def erased_since_cycle(user_id: str, phase: str) -> bool:
+    """The PRE-write check: True = do NOT write (erased since the pass began, or the mark is unreadable: fail closed - skipping a write
+    loses nothing that the next pass will not redo). Never use it to decide a destructive step: that is ``erase_state``'s three answers."""
+    return await erase_state(user_id, phase) != CLEAR
+
+
+async def guarded_write(user_id: str, phase: str, write: Callable[[], Any], undo: Callable[[list], Any]) -> Any:
+    """The ONE write rule for a night pass, whose erase check can go stale while it writes: ``delete_user`` runs in another process and
+    no in-process lock spans the two.
+
+    (1) PRE-check (``erased_since_cycle``, fail closed): erased or unreadable -> no write, None.
+    (2) ``created = await write()``: the write returns the ids / keys it CREATED, and only those (``[]`` when it only MODIFIED rows that
+        already existed; None when it declined to write). A modification must use a write that never creates (Chroma ``update``, SQL
+        ``UPDATE``), so a row the erase removed meanwhile is not brought back - and an undo must never touch a row it did not create:
+        that would destroy a stored fact.
+    (3) POST-check (``erase_state``), three answers: ERASED -> ``await undo(created)`` (skipped when nothing was created) and None;
+        CLEAR -> keep, return ``created``; UNKNOWN (the mark could not be read) -> keep, log ``ERASE_WATERMARK_UNKNOWN``, return
+        ``created``. Fail closed applies to the pre-check only, never to a destructive undo: the mark is written BEFORE the erase starts
+        and a real erase removes the member's rows itself, so an unreadable mark is no evidence of an erase, while undoing on a blip
+        could delete a fact that was never at risk.
+    Why this closes the race for created rows: a write that commits after the erase enumerated its store sees the mark at (3); one that
+    commits before is erased by the erase itself. Outside a night pass both checks are no-ops. A failed undo RAISES (logged, codes only)."""
+    if await erased_since_cycle(user_id, phase):
+        return None
+    created = await write()
+    if created is None:
+        return None              # the write itself declined: nothing to keep, nothing to undo
+    state, code = await _erase_state(user_id, phase)
+    if state == UNKNOWN:
+        logger.warning("ERASE_WATERMARK_UNKNOWN phase=%s code=%s", phase, code)
+        return created
+    if state == CLEAR:
+        return created
+    if created:
+        try:
+            await undo(list(created))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("ERASE_WATERMARK_COMPENSATE_FAILED phase=%s code=%s", phase, type(exc).__name__)
+            raise
+        logger.warning("ERASE_WATERMARK_COMPENSATED phase=%s", phase)
+    return None
+
+
+async def run_sql(db, sql: str, params: tuple) -> None:
+    """Execute + commit on ``db``, or on a short-lived pooled connection when ``db`` is None (a ``guarded_write`` undo step)."""
+    if db is not None:
+        await db.execute(sql, params)
+        await db.commit()
+        return
+    from db_pool import get_db_ctx  # type: ignore[import]
+    async with get_db_ctx() as conn:
+        await conn.execute(sql, params)
+        await conn.commit()
+
+
+async def insert_or_update(db, exists: tuple, insert: tuple, update: tuple) -> bool:
+    """One row, the night-write way: ``UPDATE`` it when it exists (an UPDATE never brings back a row an erase removed meanwhile), else
+    ``INSERT`` it. Each argument is ``(sql, params)``. Returns True when the row was CREATED (only then may a ``guarded_write`` undo
+    delete it). On ``db``, or a short-lived pooled connection when ``db`` is None."""
+    async def go(conn) -> bool:
+        cur = await conn.execute(*exists)
+        found = await cur.fetchone()
+        await conn.execute(*(update if found else insert))
+        await conn.commit()
+        return not found
+    if db is not None:
+        return await go(db)
+    from db_pool import get_db_ctx  # type: ignore[import]
+    async with get_db_ctx() as conn:
+        return await go(conn)
