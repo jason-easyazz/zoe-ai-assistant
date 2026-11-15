@@ -188,7 +188,8 @@ class KernelServer:
                     result = getattr(self, "_op_" + op)(conn, args)
             return {"v": wire.VERSION, "id": rid, "ok": True, "result": result}
         except Refused as exc:                      # already a REFUSAL event on the spine
-            return _err(rid, wire.REFUSED, str(exc))   # who/attempted are kernel vocabulary by now (see _refuse)
+            # Only the kernel's own composed refusal crosses the socket; any other Refused sends its fixed code.
+            return _err(rid, wire.REFUSED, exc.wire or exc.reason)
         except ConsentError:
             self._record(conn.name, f"request {op}", "consent_refused")
             return _err(rid, wire.REFUSED, "consent_refused")

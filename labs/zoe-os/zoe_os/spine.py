@@ -109,9 +109,10 @@ class DenyAll:
 class Refused(Exception):
     """Raised to the caller; the same refusal is also appended as a REFUSAL event."""
 
-    def __init__(self, message: str, *, reason: str = 'request_refused') -> None:
+    def __init__(self, message: str, *, reason: str = 'request_refused', wire: str | None = None) -> None:
         super().__init__(message)
         self.reason = reason
+        self.wire = wire      # set only by Spine._refuse, from kernel vocabulary; the one text that may cross the socket
 
 
 class ForgetResult(NamedTuple):
@@ -378,7 +379,8 @@ class Spine:
             self.refusals += 1
             self._append([Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL,
                                 payload={"who": who, "attempted": attempted, "reason": reason})])
-        raise Refused(f"{who}: {attempted}: {reason}", reason=reason)
+        text = f"{who}: {attempted}: {reason}"
+        raise Refused(text, reason=reason, wire=text)
 
     # ---- forget -------------------------------------------------------------------
     def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None,
