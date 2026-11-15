@@ -4085,7 +4085,7 @@ async def _execute_forget_last(user_id: str) -> str:
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
-        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts)
+        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts, mids=turn.mids)
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
@@ -4118,8 +4118,9 @@ async def _execute_forget_last(user_id: str) -> str:
                     gone.append(_sib)
                 else:
                     failed += 1
-    except Exception as exc:  # noqa: BLE001
-        logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001 - not finished: a twin may still stand, so the forget is not confirmed
+        logger.info("memory_forget_last: sibling retraction failed (%s)", type(exc).__name__)
+        failed += 1
     # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
     # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
     if gone and hasattr(svc, "erase_rows"):
@@ -4129,12 +4130,18 @@ async def _execute_forget_last(user_id: str) -> str:
                 await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
-    try:
-        import exact_words
-        await exact_words.erase_text(user_id, text)
+    try:    # BY the turn's saved-turn ids: the transcript flag and the night mind FIRST, the exact-words entries last (the turn
+        import exact_words   # keeps its ids in the notes, so a retry after a part-way failure reaches all of it); the words as
+        import night_mind    # said reach only old entries written before the ids
+        await exact_words.flag_transcript_turns(user_id, turn.mids)
         await exact_words.forget_transcript(user_id, text)
-    except Exception as exc:  # noqa: BLE001
+        for _mid in turn.mids:
+            await night_mind.erase_words(user_id, _mid)
+        await exact_words.erase_turns(user_id, turn.mids)
+        await exact_words.erase_text(user_id, text)
+    except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+        failed += 1
     try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
         import value_correction
         value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])

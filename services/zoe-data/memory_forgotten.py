@@ -221,21 +221,14 @@ def _said_key(user_id: str) -> bytes:
 
 def said_tag(user_id: str, words: str) -> str:
     """A KEYED identity for words a write boundary redacted before storing (a contact detail in an exact-words turn or a fact
-    row's excerpt): ``<key fingerprint>.<hmac>``, so a forget finds the row by the words as said while the row keeps only the
-    redacted copy. Keyed with the ledger secret: a bare hash of a sentence around a phone number is reversed by trying every
-    number. The caller normalises ``words`` (the same way at write and at forget). '' when unconfigured or no words."""
+    row's excerpt): ``<key fingerprint>.<hmac>`` of the words as said, while the row keeps only the redacted copy. Keyed with
+    the ledger secret: a bare hash of a sentence around a phone number is reversed by trying every number. The caller normalises ``words``. An AUDIT identity stamped beside the saved-turn id (what a one-time id backfill can
+    map a redacted row back to its saved turn by); no forget matches it. '' when unconfigured or no words."""
     key = _said_key(user_id)
     if not key or not (words or "").strip():
         return ""
     fp = hmac.new(key, b"fp", hashlib.sha256).hexdigest()[:6]
     return fp + "." + hmac.new(key, words.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
-
-
-def said_tag_current(user_id: str, tag: str) -> bool:
-    """Was ``tag`` made with the secret configured NOW? False after a rotation (or unconfigured): the caller cannot match it and
-    falls back to the redacted text, over-forgetting rather than missing the row."""
-    key = _said_key(user_id)
-    return bool(key and tag) and tag.split(".", 1)[0] == hmac.new(key, b"fp", hashlib.sha256).hexdigest()[:6]
 
 
 # ── storage ──────────────────────────────────────────────────────────────────

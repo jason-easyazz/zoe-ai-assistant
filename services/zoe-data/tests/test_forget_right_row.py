@@ -20,7 +20,6 @@ import exact_words
 import intent_router
 import memory_service
 import turn_forget
-from forgotten_support import ledger_env  # noqa: F401 - fixture
 from memory_service import MemoryService
 from test_memory_authority import _Col
 
@@ -271,40 +270,3 @@ def test_turn_notes_keep_no_words_once_forgotten(svc):
     with turn_forget._LOCK:
         held = [t.text for t in turn_forget._turns[UID]]
     assert held == [""], "the retracted turn's words stayed in the notes"
-
-
-# ── two turns that differ only in a contact detail (review thread, PR #2574) ──────────────────────────────────────────
-# The write boundary stores the excerpt contact-redacted, so both turns' rows hold the SAME excerpt. The row carries a keyed tag
-# of the excerpt as said (``source_excerpt_said``) and the forget matches that, never the redacted copy. Negative control: on
-# f4192a206 forgetting the second turn rejects the first turn's row too.
-
-PLUMB_1 = "the plumber works from 1 Example Street"
-PLUMB_2 = "the plumber works from 2 Example Street"
-
-
-def _approved(svc):
-    return {r.metadata.get("user_turn_id"): r for r in run(svc.list_by_status(user_id=UID, status="approved"))}
-
-
-def test_forget_takes_only_the_turn_whose_contact_detail_it_was(svc, ledger_env):
-    turn_forget.note_user_turn(UID, PLUMB_1, now=time.time() - 120)
-    turn_forget.note_user_turn(UID, PLUMB_2)
-    # both captures land AFTER the newer turn was said (the digest runs minutes behind), from a writer id the forget cannot recompute
-    for i, said in enumerate((PLUMB_1, PLUMB_2)):
-        run(svc.ingest(f"User's plumber works from {i + 1} Example Street", user_id=UID, source="chat_regex",
-                       status="approved", source_excerpt=said, user_turn_id=f"other-writer-{i}"))
-    rows = _approved(svc)
-    assert rows["other-writer-0"].metadata["source_excerpt"] == rows["other-writer-1"].metadata["source_excerpt"]
-    assert forget().startswith("Done — I forgot")
-    assert list(_approved(svc)) == ["other-writer-0"], "the OTHER turn's row was taken by its redacted excerpt"
-
-
-def test_a_redacted_excerpt_carries_a_keyed_identity_of_the_turn(svc, ledger_env):
-    turn_forget.note_user_turn(UID, PLUMB_1)
-    rid = run(svc.ingest("User's plumber works from 1 Example Street", user_id=UID, source="chat_regex",
-                         status="approved", source_excerpt=PLUMB_1, user_turn_id="other-writer-0"))
-    tag = _approved(svc)["other-writer-0"].metadata.get("source_excerpt_said")
-    assert tag, "a redacted excerpt carries the keyed identity of its words as said"
-    assert turn_forget.row_is_from_turn(_approved(svc)["other-writer-0"].metadata, PLUMB_1, user_id=UID)
-    assert not turn_forget.row_is_from_turn(_approved(svc)["other-writer-0"].metadata, PLUMB_2, user_id=UID)
-    assert rid is not None

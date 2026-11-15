@@ -205,19 +205,21 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
         turn_forget.retract(user_id, turn)
         # the saved transcript turn too, whether or not the exact-words index holds it: the nightly readers (digest, idle
         # consolidation) re-mine chat_messages long after the in-process wall has expired (RAISES: not confirmed if not flagged)
-        await exact_words.forget_transcript(user_id, turn.text)
+        await exact_words.flag_transcript_turns(user_id, turn.mids)          # by its saved-turn ids
+        await exact_words.forget_transcript(user_id, turn.text)              # (and an old caller's copy, by the words as said)
         turn_forget.mark_forgotten(user_id, turn)
         retracted += 1
     erased = 0
     backend = exact_words.get_backend()
     hits = await _index_hits(user_id, groups)
     if hits:
-        erased = int(await backend.delete(user_id, list(hits)) or 0)
+        # the transcript FIRST, then the index rows: a failure part-way (a store error, an old redacted entry with no saved-turn id:
+        # ``UnboundRedactedForget``) RAISES before anything is deleted, so the forget is not confirmed and a retry finds the same
+        # entries again - nothing is left unfindable. By the entry's saved-turn id; an old entry by its words as said.
         for tid, text in hits.items():
-            try:   # a contact-redacted index row's text is its stored form: its id carries the keyed identity of the turn
-                await exact_words.forget_transcript(user_id, text, turn_id=tid)
-            except Exception as exc:  # noqa: BLE001 - the index row is gone; the transcript flag is the second line
-                logger.warning("forget_topic: transcript flag failed (%s)", type(exc).__name__)
+            mid = exact_words.mid_of(tid)
+            await (exact_words.flag_transcript_turns(user_id, [mid]) if mid else exact_words.forget_transcript(user_id, text))
+        erased = int(await backend.delete(user_id, list(hits)) or 0)
     return retracted, erased
 
 

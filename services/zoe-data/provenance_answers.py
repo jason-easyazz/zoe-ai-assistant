@@ -1373,8 +1373,6 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
     the fact standing in a sibling. Never raises - unless ``strict`` (a write that must not go ahead blind: forget / correct), which
     lets a failed lookup propagate so the caller can stop BEFORE the write instead of leaving a twin behind an empty list."""
     try:
-        import turn_forget
-
         svc = svc or _svc_default()
         meta = ref.metadata or {}
         ep = _row_epoch(meta)
@@ -1382,20 +1380,25 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         excerpt = str(meta.get("source_excerpt") or "").strip().lower()
         turn = str(meta.get("user_turn_id") or "")
         out = []
+        src = str(meta.get("source_turn") or "")
         for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
             m = r.metadata or {}
             r_turn = str(m.get("user_turn_id") or "")
             r_ex = str(m.get("source_excerpt") or "").strip().lower()
-            if turn and r_turn and r_turn != turn:
-                continue                                     # two different saved turns: a different fact, however alike the words
-            if excerpt and r_ex and excerpt not in r_ex and r_ex not in excerpt:
-                continue
-            if excerpt and excerpt == r_ex and turn_forget.distinct_sayings(user_id, meta.get("source_excerpt_said"),
-                                                                            m.get("source_excerpt_said")):
-                continue                                     # equal redacted excerpts, different words as said: a look-alike turn
-            same_turn = bool(turn and r_turn == turn) or bool(excerpt and r_ex and (excerpt in r_ex or r_ex in excerpt))
+            r_src = str(m.get("source_turn") or "")
+            if (src or r_src) and r_src != src:
+                continue                                     # saved-turn ids decide: another saved turn is another fact
+            by_id = bool(src) and r_src == src               # the same saved turn: no text needed to say so
+            if not by_id:
+                if _PLACEHOLDER in excerpt or _PLACEHOLDER in r_ex:
+                    continue                                 # an old redacted excerpt names no turn: never a twin by its text
+                if turn and r_turn and r_turn != turn:
+                    continue                                 # two different saved turns: a different fact, however alike the words
+                if excerpt and r_ex and excerpt not in r_ex and r_ex not in excerpt:
+                    continue
+            same_turn = by_id or bool(turn and r_turn == turn) or bool(excerpt and r_ex and (excerpt in r_ex or r_ex in excerpt))
             r_ep = _row_epoch(m)
             near = ep is not None and r_ep is not None and abs(r_ep - ep) <= _TWIN_WINDOW_S
             if not (same_turn or near):
@@ -1422,40 +1425,45 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         return []
 
 
-async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str, said_tags: tuple = ()) -> int:
-    """Erase the owner's words behind an explained answer: the quoted ``exact_words`` turn (by id when known - a displayed quote can
-    be shortened), every indexed turn holding those words, and flag the saved transcript turn ``off_record`` so the nightly catch-up
-    cannot index it again. RAISES on a store failure (the caller must not confirm a forget that did not hold). Returns what it removed
-    or flagged. A quote of a contact-redacted turn is its stored form: the transcript turn is found by the keyed identity in
-    ``exp.turn_id`` or the row's ``said_tags`` (``exact_words.forget_transcript``), and with none it RAISES."""
+_PLACEHOLDER = "[redacted]"
+
+
+def _mids_of(exp: "mp.Explained", ref: Any = None) -> list:
+    """The saved-turn ids an explained answer names: the quoted exact-words entry's (its id carries one) and the row's
+    (``source_turn``). [] = written before the ids."""
     import exact_words
 
+    out = [exact_words.mid_of(exp.turn_id or ""), str((getattr(ref, "metadata", None) or {}).get("source_turn") or "")]
+    return [m for m in dict.fromkeys(out) if m]
+
+
+async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str, mids: tuple = ()) -> int:
+    """Erase the owner's words behind an explained answer, BY the saved-turn ids ``mids`` (``_mids_of``): the quoted exact-words
+    entry and every entry of those turns, the night mind's observations of them, and the transcript rows flagged ``off_record`` so
+    the nightly catch-up cannot index them again. Without ids (an old entry or row), the words AS SAID - and words holding the
+    redaction placeholder RAISE ``exact_words.UnboundRedactedForget`` (a stored form names no turn; never a guess). RAISES on a
+    store failure (the caller must not confirm a forget that did not hold). Returns what it removed or flagged."""
+    import exact_words
     import night_mind
 
     n = 0
-    if exp.turn_id:
-        n += await exact_words.erase_turn(user_id, exp.turn_id)
+    if mids:
+        # the transcript flag and the night mind FIRST, the exact-words entries last: a failure part-way RAISES with the entries
+        # still there, and the retry (``_rearm`` keeps ``exp``, whose ids do not depend on them) reaches everything again
+        n += await exact_words.flag_transcript_turns(user_id, mids)
+        for mid in mids:
+            n += await night_mind.erase_words(user_id, mid)
+        n += await exact_words.erase_turns(user_id, mids)
+        return n + (await exact_words.erase_turn(user_id, exp.turn_id) if exp.turn_id else 0)
     texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
-    mids: list = []
+    if any(_PLACEHOLDER in w.lower() for w in (exp.quote, exp.text) if w):
+        raise exact_words.UnboundRedactedForget("redacted quote with no saved-turn id")
+    for words in texts:
+        n += await exact_words.forget_transcript(user_id, words)
+    n += await night_mind.erase_words(user_id, exp.turn_id, *texts)
     for words in texts:
         n += await exact_words.erase_text(user_id, words)
-        mids += await exact_words.transcript_turns(user_id, words, turn_id=exp.turn_id, said_tags=said_tags)
-    # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that
-    # held. A redacted quote names no observation by its text: its saved turn's id does (found above by the keyed identity), and only
-    # while the turn is still on the record, so the night mind goes FIRST, the transcript flag after
-    for mid in dict.fromkeys(mids):
-        n += await night_mind.erase_words(user_id, mid)
-    plain = [w for w in texts if "[redacted]" not in w.lower()] if mids else texts
-    n += await night_mind.erase_words(user_id, exp.turn_id, *plain)
-    for words in texts:
-        n += await exact_words.forget_transcript(user_id, words, turn_id=exp.turn_id, said_tags=said_tags)
-    return n
-
-
-def _said_tags(ref: Any) -> tuple:
-    """The row's keyed identity of its excerpt as said (``source_excerpt_said``), when the write boundary redacted it."""
-    tag = str((getattr(ref, "metadata", None) or {}).get("source_excerpt_said") or "")
-    return (tag,) if tag else ()
+    return n + (await exact_words.erase_turn(user_id, exp.turn_id) if exp.turn_id else 0)
 
 
 def _rearm(user_id: str, exp: "mp.Explained") -> None:
@@ -1479,7 +1487,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
             # the row was rejected already - possibly by an earlier "forget it" whose word erase failed: finish that job (idempotent)
             try:
-                left = await _erase_words(user_id, exp, ref.text or "", said_tags=_said_tags(ref))
+                left = await _erase_words(user_id, exp, ref.text or "", mids=tuple(_mids_of(exp, ref)))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
                 _rearm(user_id, exp)
@@ -1504,7 +1512,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
         try:
-            await _erase_words(user_id, exp, ref.text or "", said_tags=_said_tags(ref))
+            await _erase_words(user_id, exp, ref.text or "", mids=tuple(_mids_of(exp, ref)))
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)
@@ -1524,25 +1532,24 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
         svc = svc or _svc_default()
         await _speculation_barrier()
         try:
-            erased = await _erase_words(user_id, exp)
+            mids = tuple(_mids_of(exp))
+            erased = await _erase_words(user_id, exp, mids=mids)
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: say so, and keep the target for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
         gone = 0
         key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
-        # the quoted turn's keyed tag (a contact-redacted exact-words id ``xw-<key>~<tag>``): a row whose redacted excerpt equals
-        # the redacted quote but whose own tag differs is a look-alike from another turn (turn_forget.distinct_sayings)
-        xtag = (exp.turn_id or "").partition("~")[2]
-        import turn_forget
-        if key:
-            for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
-                ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
-                if ex == key and turn_forget.distinct_sayings(user_id, xtag, (r.metadata or {}).get("source_excerpt_said")):
-                    continue
-                if _owns(r.metadata or {}, user_id) and ex and (ex == key or key in ex):
-                    if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:
-                        gone += 1
+        for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
+            m = r.metadata or {}
+            if not _owns(m, user_id):
+                continue
+            src = str(m.get("source_turn") or "")
+            ex = re.sub(r"\s+", " ", str(m.get("source_excerpt") or "")).strip().lower()
+            # the rows of the quoted turn: by its saved-turn id; an OLD row (no id) only by its excerpt AS SAID
+            mine = (src in mids) if src else bool(not mids and key and ex and _PLACEHOLDER not in ex and (ex == key or key in ex))
+            if mine and await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:
+                gone += 1
         mp.clear_explained(user_id)
         logger.info("PROVENANCE_FORGET user=%s turn=1 rows=%d erased=%d", user_id, gone, erased)
         if not erased and not gone:

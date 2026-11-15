@@ -1620,6 +1620,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         anchor_text=anchor_for_write,
                         source_excerpt=excerpt,
                         turn_ref=turn_id,
+                        metadata=({"source_turn": turn_id} if turn_id else None),   # the saved turn: what a forget erases by
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
@@ -1672,6 +1673,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         anchor_text=anchor_for_write,
                         source_excerpt=excerpt,
                         turn_ref=turn_id,
+                        metadata=({"source_turn": turn_id} if turn_id else None),   # the saved turn: what a forget erases by
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
@@ -1692,6 +1694,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     anchor_text=anchor_for_write,
                     source_excerpt=excerpt,
                     user_turn_id=turn_id,
+                    metadata=({"source_turn": turn_id} if turn_id else None),   # the saved turn: what a forget erases by
                 )
             except MemoryServiceError as exc:
                 logger.warning("memory_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
