@@ -971,18 +971,19 @@ def _real_palace_ef():
 
 def test_dynamic_pad_vectors_equal_the_palaces_fixed_pad_vectors():
     import numpy as np
+    pytest.importorskip("chromadb")   # slim CI shards install NumPy, not Chroma
+    from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
     ef = _real_palace_ef()
     texts = [GIFT, WALK, "yes", "x " * 400, "What should I get my sister for her birthday?"]
-    fixed = np.asarray(ef(list(texts)), dtype=np.float32)
+    fixed = np.asarray(ONNXMiniLM_L6_V2._forward(ef, list(texts)), dtype=np.float32)   # chroma's own fixed-256 forward
     fast = rt._embed_raw(texts)
     assert fast.shape == fixed.shape
     assert float(np.sum(fast * fixed, axis=1).min()) > 0.9999   # same model, same tokens: padding carries no weight
-    assert rt._FAST["ef"] is ef                                  # the dynamic path ran (not the fallback)
     assert float(np.sum(rt._embed_raw([GIFT]) * fixed[:1])) > 0.9999   # a batch of one is the same as in a batch
 
 
-def test_dynamic_pad_falls_back_to_the_palace_call_on_any_surprise(monkeypatch):
+def test_embed_raw_accepts_any_ef_and_unit_normalises(monkeypatch):
     import numpy as np
     import memory_service
 

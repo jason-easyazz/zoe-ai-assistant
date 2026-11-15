@@ -14,13 +14,15 @@ about a millisecond; a blocking call shows up as lag of the same size as the blo
   the current one overtakes it), so a scrape every 15-60 s never misses a spike.
 
 A sample at or above ``WARN_S`` also logs ONE ``EVENT_LOOP_LAG`` warning per ``WARN_EVERY_S`` (grep
-``~/.zoe-logs/zoe-data.app.log``). Started from ``main.lifespan``; no flag, it costs four wake-ups a second.
+``~/.zoe-logs/zoe-data.app.log``). Started from ``main.lifespan``; no flag, it costs four wake-ups a second. ``_beat`` is
+the heartbeat ``loop_block_stacks`` watches from a thread to sample WHAT blocked the loop (``EVENT_LOOP_BLOCK``).
 Pinned by ``tests/test_router_off_loop.py``.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Callable, Optional
 
@@ -62,6 +64,19 @@ class _State:
 _state = _State()
 
 
+class _Beat:
+    """The monitor's heartbeat, read lock-free by ``loop_block_stacks`` from its own thread (tuple writes are atomic)."""
+
+    def __init__(self) -> None:
+        self.tid: Optional[int] = None         # the loop thread while a monitor runs
+        self.cur = (0, float("inf"))           # (seq, monotonic time the current sleep should wake)
+        self.done = (0, 0.0)                   # (seq, lag) of the last wake
+        self.big = (0, 0.0)                    # (seq, lag) of the last wake at or above WARN_S
+
+
+_beat = _Beat()
+
+
 def record(lag_s: float, *, now: Optional[float] = None) -> None:
     """Record one lag sample (seconds). Never raises."""
     try:
@@ -100,16 +115,33 @@ def reset_for_test() -> None:
 
 async def monitor(interval_s: float = INTERVAL_S, *, clock: Callable[[], float] = time.monotonic) -> None:
     """Run forever (until cancelled), recording how late each ``interval_s`` sleep wakes."""
-    while True:
-        t0 = clock()
-        await asyncio.sleep(interval_s)
-        record(clock() - t0 - interval_s)
+    b = _beat
+    b.tid = threading.get_ident()
+    try:
+        while True:
+            t0 = clock()
+            seq = b.cur[0] + 1
+            b.cur = (seq, t0 + interval_s)
+            await asyncio.sleep(interval_s)
+            lag = clock() - t0 - interval_s
+            b.done = (seq, lag)
+            if lag >= WARN_S:
+                b.big = (seq, lag)
+            record(lag)
+    finally:
+        b.tid = None
 
 
 def start() -> Optional["asyncio.Task"]:
     """Schedule ``monitor()`` on the running loop. Never raises (None when it could not start)."""
     try:
-        return asyncio.get_running_loop().create_task(monitor(), name="event_loop_lag_monitor")
+        task = asyncio.get_running_loop().create_task(monitor(), name="event_loop_lag_monitor")
     except Exception as exc:  # noqa: BLE001
         logger.warning("event-loop lag monitor not started (non-fatal): %s", exc)
         return None
+    try:
+        import loop_block_stacks  # A6: name what blocked it (flag ZOE_LOOP_BLOCK_STACKS)
+        loop_block_stacks.start()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("loop block watcher unavailable (non-fatal): %s", type(exc).__name__)
+    return task

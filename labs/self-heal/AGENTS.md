@@ -18,6 +18,12 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
 ## Local Contracts
 
 - Dispatch `dry` (default: plan only) | `local` (engine + gates + local commit + verify, no landing) | `full` (land).
+- Mode / landing policy (enforced in `Config.validate` and again at run start): `dry` any; `local` and
+  `full` + `github` (a human reads the unlanded branch / draft PR) may use the JUnit gate
+  `relevant_pytest`; `full` + `local` (nothing but the gates between the diff and the integration
+  branch) MUST list `supervised_pytest` in `local_gates`, verifies through the supervisor, and refuses
+  any diff the process-control screen matches. The supervised gate's residual (code written against
+  the runner) is in README "v3"; it is why full + local is allowed only with conditions.
 - Landing `github` (default) only ever opens a DRAFT PR labelled `self-heal`, one finding per PR,
   with the `zoe-self-heal:v1` marker block. Landing `local` makes no `gh`, GitHub or network call.
 - Every step checks the kill switch first and appends a row to `<state_dir>/audit.jsonl` (allow-listed
@@ -63,7 +69,13 @@ The loop (and anyone running it) must never:
   `selfheal/sandbox.py`; select a backend weaker than the best one that works on the box (`none` while
   bwrap works); add a config knob for network or writable paths; raise the sandbox limits; run
   `local` / `full` when no sandbox backend works (only `dry` may run, reason audited);
-- count a heal as healed on exit code alone: the reproduction NODE must have passed in the junit report;
+- count a heal as healed on exit code alone: the reproduction NODE must have passed in the junit report
+  (in `full` + `local`: in its own supervised process, exit 0 AND the nonce's token, never a report);
+- run `full` + `local` without `supervised_pytest`, or drop its process-control screen or supervised verify;
+- let the supervised gate take its node list, a test file it runs, a conftest / pytest config /
+  `sitecustomize` / `usercustomize` / `*.pth` from the heal tree instead of the base commit; run a node
+  in a writable tree, in a tree holding anything but base + the checked files, or two nodes in one
+  process; read a node's verdict from anything but its exit status + token; put the nonce on argv or env;
   accept an engine diff that adds a skip / xfail to a test file or touches `conftest.py` / pytest config;
 - heal from a detect run that has collection errors or no junit report;
 - start a second heal for a fault that has an open heal PR or an unlanded local heal branch;
@@ -71,6 +83,8 @@ The loop (and anyone running it) must never:
 - advance the integration ref without a write-ahead `landing_intent`, or clear it before a confirmed heal
   or a VERIFIED rollback (ref read back == snapshot); while a rollback is `rollback_stuck`, run anything
   (dry included) but the retry;
+- give a supervised node any writable path but a FRESH `<tree>/.selfheal-tmp` (never reused, deleted
+  after the node, inside the growth cap, never on `sys.path`, never copied into a tree);
 - give a sandboxed step a writable `/tmp` or any scratch outside the worktree, or skip the worktree
   growth cap (`sandbox_disk_mb` may only be lowered);
 - read a JUnit report from inside a worktree, or accept a missing, stale or unparseable report (or exit 0

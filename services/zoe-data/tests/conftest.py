@@ -109,13 +109,16 @@ def _exact_words_in_process_index():
     """The owner's verbatim-turn index (``exact_words``) is a Postgres table in production; no test has that pool. Since
     ``MemoryService.delete_user`` FAILS CLOSED when the verbatim erase fails, a test of the delete must not reach for a pool
     that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
+    import erase_watermark
     import exact_words
     import night_store
     import struggle_detector
+    erase_watermark.set_backend(erase_watermark.MemoryBackend())   # delete_user records the member's erase mark first (fail closed)
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     struggle_detector.set_backend(struggle_detector.MemoryBackend())   # struggle_events too (delete_user / forget fail closed)
     yield
+    erase_watermark.set_backend(None)
     exact_words.set_backend(None)
     night_store.set_backend(None)
     struggle_detector.reset()     # the worker task belongs to this test's loop
@@ -248,3 +251,20 @@ def jason_signed_in_at_the_panel(monkeypatch):
     monkeypatch.setattr(biometric_scope, "_fresh_panel_member", _pin)
     yield
     biometric_scope.reset_enrolment_grants()
+
+
+@pytest.fixture(autouse=True)
+def _forget_session_epochs_are_per_test(tmp_path, monkeypatch):
+    """``forget_session`` keeps member -> forget-epoch in a file under the home directory that the live service reads. Any
+    test reaching a real forget path used to write that REAL file (found 2026-11-14: five entries, one for a real member id),
+    and a later test then saw ``sess~f<epoch>`` instead of ``sess`` depending on run order. Every test gets its own empty
+    store; the module itself also refuses the real path under pytest."""
+    try:
+        import forget_session
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+    monkeypatch.setattr(forget_session, "_PATH", tmp_path / "forget_session_epochs.json")
+    monkeypatch.setattr(forget_session, "_EPOCH", {})
+    monkeypatch.setattr(forget_session, "_LOADED", False)
+    yield

@@ -278,8 +278,10 @@ did not become a generation is scratch: its checkpoint is deleted at the end of 
 leaves every run record, its wording key, event id (and, for a deleted user, the user key) become tombstones - also when no run has
 recorded it yet - so it never re-enters even if the same words are said again, any leftover run text is deleted, and a served (or
 being-swapped-in) generation that LEARNED it - itself or through any ancestor - is flagged `needs_retrain` (`--status` shows it). A pytest
-session can never reach the live ledger (`root()` refuses it; both conftests pin `ZOE_ROUTER_RETRAIN_DIR`). Weights cannot unlearn: the next adopted
-generation, trained without it, is the remedy. The ledger holds no words (event ids and truncated hashes); the words exist only for one
+session can never reach the live ledger (`root()` refuses it; both conftests pin `ZOE_ROUTER_RETRAIN_DIR`). Weights cannot unlearn in place: what a forget
+guarantees for a trained router is that the NEXT generation is trained from a lineage that never saw the example. `warm_start_choice` never
+continues from a flagged generation (or one with a flagged ancestor): it takes the newest clean ancestor, else the base checkpoint, and
+the run record says which (`warm_start_choice`: gen, why, count skipped). The flagged generation keeps serving until that one is adopted. The ledger holds no words (event ids and truncated hashes); the words exist only for one
 run in `work/<stamp>/*.texts.jsonl` (0600) and are deleted when it ends.
 
 **Audio (the #2109 blocker, closed).** `audio_ref` is now bound to the turn by time and withheld whenever that is ambiguous: with the

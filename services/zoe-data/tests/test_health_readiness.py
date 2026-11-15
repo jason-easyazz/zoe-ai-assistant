@@ -54,7 +54,9 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
         },
         "last_voice_turn_age_s": payload["last_voice_turn_age_s"],
         "panel_speaker": payload["panel_speaker"],
+        "forget_ledger": payload["forget_ledger"],
     }
+    assert payload["forget_ledger"] in ("configured", "unconfigured")    # an enum only (memory_forgotten.ledger_state)
     assert payload["db_pool"]["healthy"] is True
     assert set(payload["panel_speaker"]) == {"alarm", "panels"}         # panel_speaker_health.snapshot(): states + minutes, no panel id
 

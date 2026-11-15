@@ -36,7 +36,7 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
 // timersGet memo
 {
   let calls = 0; const outcomes = [];
-  const ctx = { apiGet: () => { calls++; const o = outcomes.shift(); return o === 'fail' ? Promise.reject(new Error('http 502')) : Promise.resolve({ timers: [] }); } };
+  const ctx = { sid: () => 'S', sessKey: () => 'S|m', apiGet: () => { calls++; const o = outcomes.shift(); return o === 'fail' ? Promise.reject(new Error('http 502')) : Promise.resolve({ timers: [] }); } };
   const code = 'var TIMERS_MEMO_MS=4000,_tmMemo={at:0,p:null};\n' + fn('timersGet') + '; ({ timersGet })';
   const { timersGet } = vm.runInNewContext(code, ctx);
   (async () => {
@@ -47,7 +47,7 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     timersGet(t0 + 4001); assert(calls === 2); ok('timers: after the memo window a new fetch goes out');
     await timersGet(t0 + 9000).catch(() => {}); assert(calls === 3);
     timersGet(t0 + 9100); assert(calls === 4); ok('timers: a FAILED fetch is not memoised — the next caller retries at once');
-    assert(/paintDockTimer\(\)\{[\s\S]{0,200}timersGet\(\)/.test(html) && /function paint\(\)\{timersGet\(\)/.test(html) && /function _tAlarmRefresh\(\)\{timersGet\(\)/.test(html)); ok('timers: dock chip, timer surface and alarm watcher all use timersGet');
+    assert(/paintDockTimer\(\)\{[\s\S]{0,200}timersGet\(\)/.test(html) && /function paint\(\)\{var s0=sessKey\(\);timersGet\(\)/.test(html) && /function _tAlarmRefresh\(\)\{timersGet\(\)/.test(html)); ok('timers: dock chip, timer surface and alarm watcher all use timersGet');
     // loadHA memo
     {
       let loads = 0; let resolveLoad;

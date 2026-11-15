@@ -370,6 +370,16 @@ async def forget_confirmed(user_id: str, alias: str) -> bool:
     return True
 
 
+def _permanence_note() -> str:
+    """'' when the forget ledger is configured; else the fixed honest line (memory_forgotten.UNCONFIGURED_NOTE). Never raises."""
+    try:
+        import memory_forgotten
+        return memory_forgotten.permanence_note()
+    except Exception:  # noqa: BLE001
+        return (" But I can't promise it stays forgotten until my forget setting is fixed. "
+                "Please tell whoever looks after me.")
+
+
 async def answer(user_id: str, suggestion_id: str, accept: bool) -> str:
     """A spoken or typed yes/no through the panel's own path (``execute_suggestion`` / ``mark_resolved``); asks the next question if one waits."""
     import pending_suggestions as ps
@@ -378,7 +388,7 @@ async def answer(user_id: str, suggestion_id: str, accept: bool) -> str:
     if accept:
         res = await ps.execute_suggestion(suggestion_id, user_id)
         if res.get("ok"):
-            head = "Done - I've forgotten that spelling too."
+            head = "Done - I've forgotten that spelling too." + _permanence_note()
         else:
             logger.info("forget_alias: confirm failed user=%s err=%s", user_id, res.get("error"))
             head = "I couldn't forget that just now, so nothing was changed. Ask me again and I'll retry."

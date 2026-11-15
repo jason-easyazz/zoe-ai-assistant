@@ -12,6 +12,7 @@ from .config import Config
 from .detectors import Ticket, node_statuses
 from .safety import is_test_path, rc_summary
 from .sandbox import Sandbox
+from .supervisor import gate_supervised_pytest
 
 
 def _lock(cfg: Config) -> list:
@@ -117,6 +118,7 @@ GATES = {
     "relevant_pytest": gate_relevant_pytest,
     "offline_lane": gate_offline_lane,
     "voice_replay": gate_voice_replay,
+    "supervised_pytest": gate_supervised_pytest,   # the verdict from outside the test process
 }
 
 

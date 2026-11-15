@@ -240,54 +240,18 @@ def _reset_state() -> None:
     _VECS.clear()
     _QUERY_EMBEDS["job"] = None
     _QUERY_EMBEDS["key"] = None
-    _FAST["ef"] = None
-    _FAST["tok"] = None
 
 
 _EMBED_LOCK = threading.Lock()
-#: the palace EF this module's tokenizer was built for (rebuilt if the palace swaps its EF) and that tokenizer
-_FAST: dict = {"ef": None, "tok": None}
-#: sentence-transformers' max_seq_length for this MiniLM (the palace EF truncates at the same length)
-MAX_TOKENS = 256
-
-
-def _embed_dynamic(ef: Any, texts: list) -> Any:
-    """The palace MiniLM's vectors (float32, not yet unit) with the batch padded to its LONGEST text, not to 256 tokens.
-
-    Chroma's ``ONNXMiniLM_L6_V2`` pads every text to a fixed 256 tokens, so a 10-word turn runs ~25x the tokens it needs: 41-165 ms
-    on the Orin CPU against ~4 ms padded to length (docs/knowledge/recall-every-turn.md). Mean pooling is attention-masked, so the
-    pad tokens carry no weight and the vectors are the same (cosine 1.00000 against the fixed-pad vectors on the 100 lab texts).
-    SAME session (``ef.model``) and same ``tokenizer.json`` as the palace; only a second tokenizer object with no fixed length, so
-    the palace's own embeds are untouched. Raises on anything unexpected: the caller falls back to ``ef(texts)``."""
-    import os
-
-    import numpy as np
-
-    if _FAST["ef"] is not ef:
-        from tokenizers import Tokenizer
-
-        tok = Tokenizer.from_file(os.path.join(ef.DOWNLOAD_PATH, ef.EXTRACTED_FOLDER_NAME, "tokenizer.json"))
-        tok.enable_truncation(max_length=MAX_TOKENS)
-        tok.enable_padding(pad_id=0, pad_token="[PAD]")
-        _FAST["tok"], _FAST["ef"] = tok, ef
-    enc = _FAST["tok"].encode_batch([str(t) for t in texts])
-    ids = np.array([e.ids for e in enc], dtype=np.int64)
-    mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
-    out = ef.model.run(None, dict(input_ids=ids, attention_mask=mask, token_type_ids=np.zeros_like(ids)))[0]
-    m = mask[..., None].astype(np.float32)
-    return (out * m).sum(1) / np.clip(m.sum(1), 1e-9, None)
 
 
 def _embed_raw(texts: list) -> Any:
+    """The palace EF's vectors, re-normalised. The EF itself pads each batch to its longest text (``palace_embed.DynamicPadMixin``),
+    so a 10-word turn costs ~4 ms rather than 41-165 ms; any other EF (or a surprise) is just called as it is."""
     import numpy as np
     from memory_service import _drawers_embedding_function
 
-    ef = _drawers_embedding_function()
-    try:
-        v = np.asarray(_embed_dynamic(ef, texts), dtype=np.float32)
-    except Exception as exc:  # noqa: BLE001 - any surprise (another EF, a missing file): the palace's own call, slower but the same
-        logger.debug("recall_every_turn: dynamic-pad embed unavailable (%s)", type(exc).__name__)
-        v = np.asarray(ef(list(texts)), dtype=np.float32)
+    v = np.asarray(_drawers_embedding_function()(list(texts)), dtype=np.float32)
     n = np.linalg.norm(v, axis=1, keepdims=True)
     n[n == 0.0] = 1.0
     return v / n

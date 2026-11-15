@@ -6,7 +6,7 @@ Negative controls (run by hand when written; each turns the named test red):
   * return True from ``_chat_session`` (a voice session gets an offer) -> test_offers_only_reach_the_events_owner;
   * delete the ``if s.get("last_day") == day or ...`` skip in ``pick_for_turn`` and the PER_DAY check -> test_one_offer_per_turn_and_two_a_day;
   * drop the cooldown loop in ``pick_for_turn`` -> test_no_records_a_decline_and_cools_down;
-  * skip ``_event_matches`` in ``pick_for_turn`` -> test_deleting_the_event_withdraws_its_offer;
+  * skip the ``_offered`` check in ``pick_for_turn`` -> test_deleting_the_event_withdraws_its_offer;
   * make ``erase_entity`` delete nothing -> test_forget_cascade_deletes_offers_naming_the_entity;
   * remove ``if not alarms.enabled()`` in ``_do`` -> test_wake_yes_with_alarms_off_writes_nothing;
   * remove the ``mode() != "on"`` check in ``match_reply`` -> test_flag_off_does_no_io.
@@ -66,7 +66,8 @@ async def _schema(db) -> None:
     for sql in (
         "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)",
         "CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, end_date TEXT,"
-        " location TEXT, all_day INTEGER DEFAULT 0, recurring TEXT, rrule TEXT, status TEXT, deleted INTEGER DEFAULT 0)",
+        " location TEXT, all_day INTEGER DEFAULT 0, recurring TEXT, rrule TEXT, status TEXT, deleted INTEGER DEFAULT 0, end_time TEXT,"
+        " timezone TEXT, rdates TEXT, exdates TEXT, recurrence_id TEXT, series_id TEXT)",
         "CREATE TABLE pending_suggestions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, action_type TEXT"
         " NOT NULL, description TEXT NOT NULL, list_type TEXT, when_hint TEXT, amount_hint TEXT, offer_phrase TEXT NOT NULL,"
         " pre_filled_slots TEXT, created_at TEXT NOT NULL, turns_elapsed INTEGER NOT NULL DEFAULT 0, expire_after_turns INTEGER"
@@ -121,6 +122,7 @@ def _env(monkeypatch):
 
 async def _with(path, fn):
     async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row          # the shared calendar read path reads rows by name, as the pool's records allow
         return await fn(db)
 
 
@@ -173,40 +175,47 @@ def test_no_wake_offer_when_the_usual_alarm_is_early_enough_or_unknown():
 
 
 # -- night: store ---------------------------------------------------------------------------------------------------------------
-def test_a_repeating_event_offers_for_its_next_occurrence_only():
+async def _repeat_offers(db, *rows, now=NOW):
+    for rid, start_date, start_time, rule in rows:
+        await db.execute("INSERT INTO events (id, user_id, title, start_date, start_time, end_date, location, all_day, rrule)"
+                         " VALUES (?, ?, 'Physio', ?, ?, '', '12 Example Street', 0, ?)", (rid, ANN, start_date, start_time, rule))
+    await db.commit()
+    events = [e for e in await ant._events(db, ANN, now) if e.id in {r[0] for r in rows}]
+    return ant.candidates(events, now=now, usual_wake=lambda d: None, adult=True)
+
+
+def test_a_repeating_event_offers_for_its_next_occurrence_only(dbpath):
     today = NOW.astimezone(ant._tz()).date()
-    anchor = today - timedelta(days=70)                                   # started ten weeks ago, same weekday as today
-    weekly = _ev(id="ev-rep", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
-                 recurring="weekly")
-    (offer,) = ant.candidates([weekly], now=NOW, usual_wake=lambda d: None, adult=True)
+    anchor = (today - timedelta(days=70)).isoformat()                    # started ten weeks ago, same weekday as today
+
+    async def go(db):
+        weekly = await _repeat_offers(db, ("ev-rep", anchor, "23:30", "weekly"))
+        fortnight = await _repeat_offers(db, ("ev-rr", anchor, "23:30", "FREQ=WEEKLY;INTERVAL=2"))
+        daily = await _repeat_offers(db, ("ev-day", anchor, "23:30", "daily"))
+        odd = await _repeat_offers(db, ("ev-odd", anchor, "23:30", "every blue moon"))
+        old = await _repeat_offers(db, ("ev-old", anchor, "23:30", ""))
+        return weekly, fortnight, daily, odd, old
+
+    (offer,), (o2,), daily, odd, old = run(_with(dbpath, go))
     assert offer.kind == "leave" and offer.slots["start_date"] == today.isoformat()      # the next one, not the anchor
     assert offer.key.startswith(f"leave:ev-rep:{today.isoformat()}T")                    # next week's is a new key, a new offer
-    rrule = _ev(id="ev-rr", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
-                recurring="FREQ=WEEKLY;INTERVAL=2")
-    (o2,) = ant.candidates([rrule], now=NOW, usual_wake=lambda d: None, adult=True)
     assert o2.slots["start_date"] == today.isoformat()                                   # 70 days = five fortnights
-    daily = _ev(id="ev-day", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
-                recurring="daily")
-    assert len(ant.candidates([daily], now=NOW, usual_wake=lambda d: None, adult=True)) == 1   # one offer, never fourteen
-    odd = _ev(id="ev-odd", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
-              recurring="every blue moon")
-    assert ant.candidates([odd], now=NOW, usual_wake=lambda d: None, adult=True) == []        # not understood: no guessed date
-    # control: the same event with no repeat and a start ten weeks ago offers nothing
-    assert ant.candidates([_ev(id="ev-old", title="Physio", location="12 Example Street", start_date=anchor.isoformat(),
-                               start_time="23:30")], now=NOW, usual_wake=lambda d: None, adult=True) == []
+    assert len(daily) == 1                                                               # one offer, never fourteen
+    assert odd == []                                                                     # not understood: no guessed date
+    assert old == []                                       # control: no repeat and a start ten weeks ago offers nothing
 
 
-def test_a_repeating_event_whose_start_today_has_passed_offers_for_the_one_after():
+def test_a_repeating_event_whose_start_today_has_passed_offers_for_the_one_after(dbpath):
     today = NOW.astimezone(ant._tz()).date()
-    anchor = today - timedelta(days=70)
-    weekly = _ev(id="ev-am", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="09:00",
-                 recurring="weekly")                                           # NOW is 22:00: this morning's has been and gone
-    (offer,) = [o for o in ant.candidates([weekly], now=NOW, usual_wake=lambda d: None, adult=True) if o.kind == "leave"]
-    assert offer.slots["start_date"] == (today + timedelta(days=7)).isoformat()
-    daily = _ev(id="ev-d", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="09:00",
-                recurring="daily")
-    (o2,) = [o for o in ant.candidates([daily], now=NOW, usual_wake=lambda d: None, adult=True) if o.kind == "leave"]
-    assert o2.slots["start_date"] == (today + timedelta(days=1)).isoformat()
+    anchor = (today - timedelta(days=70)).isoformat()
+
+    async def go(db):                                      # NOW is 22:00: this morning's has been and gone
+        return (await _repeat_offers(db, ("ev-am", anchor, "09:00", "weekly")),
+                await _repeat_offers(db, ("ev-d", anchor, "09:00", "daily")))
+
+    weekly, daily = run(_with(dbpath, go))
+    assert [o.slots["start_date"] for o in weekly if o.kind == "leave"] == [(today + timedelta(days=7)).isoformat()]
+    assert [o.slots["start_date"] for o in daily if o.kind == "leave"] == [(today + timedelta(days=1)).isoformat()]
 
 
 def test_a_repeating_event_is_read_from_the_calendar_and_its_offer_survives_the_recheck(dbpath):
@@ -218,13 +227,91 @@ def test_a_repeating_event_is_read_from_the_calendar_and_its_offer_survives_the_
                          " VALUES ('ev-rep', ?, 'Physio', ?, '23:30', '', '12 Example Street', 0, 'weekly')", (ANN, anchor))
         await db.commit()
         res = await ant.generate_for_user(ANN, now=NOW, db=db)
+        again = await ant.generate_for_user(ANN, now=NOW + timedelta(minutes=30), db=db)
         mine = [r for r in await _offers(db) if r["slots"]["event_id"] == "ev-rep"]
-        ev = await ant._event(db, ANN, "ev-rep")
-        return res, mine, ant._event_matches(ev, mine[0]["slots"]), ant._event_matches(ev, {**mine[0]["slots"], "start_date": (today + timedelta(days=1)).isoformat()})
+        still = await ant._offered(db, ANN, mine[0]["slots"])
+        wrong_day = await ant._offered(db, ANN, {**mine[0]["slots"], "start_date": (today + timedelta(days=1)).isoformat()})
+        return res, again, mine, still, wrong_day
 
-    res, mine, still, wrong_day = run(_with(dbpath, go))
+    res, again, mine, still, wrong_day = run(_with(dbpath, go))
     assert len(mine) == 1 and mine[0]["kind"] == "leave" and mine[0]["resolved"] == ant.OPEN
-    assert still is True and wrong_day is False            # the offer holds while the rule still lands on its day, and only then
+    assert mine[0]["key"] == f"leave:ev-rep:{today.isoformat()}T23:30" and again["stored"] == 0   # a re-run never duplicates it
+    assert still is not None and wrong_day is None         # the offer holds while the rule still lands on its day, and only then
+
+
+def test_an_offer_is_withdrawn_when_its_events_rule_becomes_unreadable(dbpath):
+    """The recheck applies the same guard as ``_events``: a repeat rule we cannot place gives no offer, so an EXISTING offer
+    does not survive (and ``answer`` does not act) once its event's rule changes to one. A supported rule keeps the offer."""
+    today = NOW.astimezone(ant._tz()).date()
+    anchor = (today - timedelta(days=70)).isoformat()
+
+    async def go(db):
+        await db.execute("INSERT INTO events (id, user_id, title, start_date, start_time, end_date, location, all_day, recurring)"
+                         " VALUES ('ev-rep', ?, 'Physio', ?, '23:30', '', '12 Example Street', 0, 'weekly')", (ANN, anchor))
+        await db.commit()
+        await ant.generate_for_user(ANN, now=NOW, db=db)
+        row = next(r for r in await _offers(db) if r["slots"]["event_id"] == "ev-rep")
+        await db.execute("UPDATE events SET recurring = 'daily' WHERE id = 'ev-rep'")          # control: still a supported rule
+        await db.commit()
+        kept = await ant._offered(db, ANN, row["slots"])
+        # an unreadable rule reads as its BASE date only, so put that base on the offered day (the case the guard exists for)
+        await db.execute("UPDATE events SET recurring = 'every blue moon', start_date = ? WHERE id = 'ev-rep'", (row["slots"]["start_date"],))
+        await db.commit()
+        dropped = await ant._offered(db, ANN, row["slots"])
+        reply = await ant.answer(ANN, row["id"], True, now=NOW, db=db)
+        return kept, dropped, reply, await ant._own_row(db, ANN, row["id"])
+
+    kept, dropped, reply, row = run(_with(dbpath, go))
+    assert kept is not None and dropped is None
+    assert reply == ant.GONE and row["resolved"] == ant.WITHDRAWN
+
+
+def test_a_zoned_flight_gets_household_times(dbpath):
+    """A flight stored at 09:40 in Sydney (UTC+11 in November) is 06:40 in Perth: the leave and wake times follow the household
+    clock. Before the shared read path the wall clock was read as household time (leave 07:10)."""
+    async def go(db):
+        await db.execute("INSERT INTO events (id, user_id, title, start_date, start_time, end_date, location, all_day, timezone)"
+                         " VALUES ('ev-syd', ?, 'Flight home', '2026-11-12', '09:40', '', 'Sydney Airport', 0, 'Australia/Sydney')",
+                         (ANN,))
+        await db.commit()
+        return [e for e in await ant._events(db, ANN, NOW) if e.id == "ev-syd"]
+
+    events = run(_with(dbpath, go))
+    assert [(e.start_date, e.start_time) for e in events] == [("2026-11-12", "06:40")]
+    (leave,) = [o for o in ant.candidates(events, now=NOW, usual_wake=lambda d: "07:00", adult=True) if o.kind == "leave"]
+    assert leave.slots["start_time"] == "06:40" and leave.slots["leave_time"] == "04:10"
+
+
+def test_exdate_cancelled_instance_and_unreadable_rule_get_no_offer(dbpath):
+    """Behaviour change: an EXDATE or a cancelled override removes that occurrence (the next one is offered instead). Unchanged: a
+    rule that is not understood offers nothing, even when its base date is inside the horizon."""
+    async def go(db):
+        for sql in ("INSERT INTO events (id, user_id, title, start_date, start_time, location, rrule, exdates) VALUES"
+                    " ('ev-ex', ?, 'Physio', '2026-11-05', '10:00', '12 Example Street', 'FREQ=WEEKLY', '[\"2026-11-12\"]')",
+                    "INSERT INTO events (id, user_id, title, start_date, start_time, location, rrule) VALUES"
+                    " ('ev-cx', ?, 'Dentist', '2026-11-05', '11:00', '12 Example Street', 'FREQ=WEEKLY')",
+                    "INSERT INTO events (id, user_id, title, start_date, start_time, location, status, series_id, recurrence_id)"
+                    " VALUES ('ev-cx-1', ?, 'Dentist', '2026-11-12', '11:00', '12 Example Street', 'cancelled', 'ev-cx', '2026-11-12')",
+                    "INSERT INTO events (id, user_id, title, start_date, start_time, location, recurring) VALUES"
+                    " ('ev-odd', ?, 'Doctor', '2026-11-13', '09:00', '12 Example Street', 'every blue moon')"):
+            await db.execute(sql, (ANN,))
+        await db.commit()
+        return {(e.id, e.start_date) for e in await ant._events(db, ANN, NOW) if e.id.startswith(("ev-ex", "ev-cx", "ev-odd"))}
+
+    assert run(_with(dbpath, go)) == {("ev-ex", "2026-11-19"), ("ev-cx", "2026-11-19")}
+
+
+def test_each_occurrence_is_its_own_offer_and_a_rerun_never_duplicates(dbpath):
+    """The key is ``<kind>:<event id>:<household date>T<HH:MM>``: next week's occurrence is a new offer, the same night re-run is not."""
+    async def go(db):
+        await db.execute("INSERT INTO events (id, user_id, title, start_date, start_time, location, recurring) VALUES"
+                         " ('ev-wk', ?, 'Physio', '2026-11-11', '10:00', '12 Example Street', 'weekly')", (ANN,))
+        await db.commit()
+        for now in (NOW, NOW + timedelta(hours=2), NOW + timedelta(days=7), NOW + timedelta(days=7, hours=2)):
+            await ant.generate_for_user(ANN, now=now, db=db)
+        return sorted((r["key"], r["resolved"]) for r in await _offers(db) if r["slots"]["event_id"] == "ev-wk")
+
+    assert run(_with(dbpath, go)) == [("leave:ev-wk:2026-11-11T10:00", ant.WITHDRAWN), ("leave:ev-wk:2026-11-18T10:00", ant.OPEN)]
 
 
 def test_generate_stores_once_per_event_and_shadow_stores_nothing(dbpath, monkeypatch):

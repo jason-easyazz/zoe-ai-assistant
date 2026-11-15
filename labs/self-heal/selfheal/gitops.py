@@ -16,7 +16,7 @@ from pathlib import Path
 from . import binaries
 from .config import inside_refused
 from .detectors import node_passed
-from .safety import WEAKEN, DiffReport, is_test_infra, is_test_path, looks_like_junit, rc_summary
+from .safety import PROCESS_CONTROL, WEAKEN, DiffReport, is_test_infra, is_test_path, looks_like_junit, rc_summary
 
 CMD_LOG: list = []
 JUNK = re.compile(r"(^|/)(__pycache__|\.pytest_cache)(/|$)|\.py[co]$")
@@ -110,14 +110,19 @@ def inspect_worktree(wt: str, base_sha: str) -> DiffReport:
         a, d, _path = line.split("\t", 2)
         rep.added += int(a) if a != "-" else 10**6   # binary: over any cap
         rep.deleted += int(d) if d != "-" else 0
-    # test weakening: a skip / xfail added to any test file (the reproduction's fixtures live there)
+    # test weakening: a skip / xfail added to any test file (the reproduction's fixtures live there);
+    # process control: an exit / introspection primitive added to non-test python (full + local only)
     for path in rep.files:
-        if is_test_path(path) and (Path(wt) / path).is_file():
-            added = ((Path(wt) / path).read_text(errors="replace") if path in untracked else
-                     "\n".join(x for x in git(wt, "diff", "-U0", base_sha, "--", path).splitlines()
-                               if x.startswith("+") and not x.startswith("+++")))
+        if not (path.endswith(".py") and (Path(wt) / path).is_file()):
+            continue
+        added = ((Path(wt) / path).read_text(errors="replace") if path in untracked else
+                 "\n".join(x for x in git(wt, "diff", "-U0", base_sha, "--", path).splitlines()
+                           if x.startswith("+") and not x.startswith("+++")))
+        if is_test_path(path):
             if WEAKEN.search(added):
                 rep.weakened_tests.append(path)
+        elif PROCESS_CONTROL.search(added):
+            rep.process_control.append(path)
     for path in rep.files:   # an engine never ships a test report: it could only be a forgery
         full = Path(wt) / path
         if path.lower().endswith(".xml") and full.is_file() and not full.is_symlink():
@@ -172,6 +177,10 @@ def run_repro(cfg, repo: str, ref: str, ticket, path: str, lock: list) -> ReproR
     try:
         if ticket.repro_files:
             git(path, "checkout", ticket.base_sha, "--", *ticket.repro_files)
+        if cfg.unattended():   # no human in the loop: the verdict comes from outside the test process
+            from .supervisor import lane_lock, supervised_repro   # noqa: PLC0415
+            with lane_lock(cfg):
+                return ReproResult(*supervised_repro(cfg, path, ticket))
         rc, out, xml = Sandbox(cfg).run_report(list(ticket.repro_cmd), path, cfg.gate_timeout_s, lock)
         if rc is None:
             return ReproResult(False, out)   # timeout | worktree_quota

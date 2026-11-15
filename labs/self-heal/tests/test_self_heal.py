@@ -102,8 +102,9 @@ def test_full_local_landing_rolls_back_on_failed_health_check(local_scratch):
     assert runner(cfg).run_once()["outcome"] == "all_capped"         # parked faults are not retried
 
 
-def test_full_local_landing_rolls_back_when_fix_only_weakened_the_test(local_scratch):
-    """Gates pass on the weakened test; verify re-runs the ORIGINAL test file and fails."""
+def test_full_local_landing_refuses_a_fix_that_only_weakened_the_test(local_scratch):
+    """v1/v2: the JUnit gate passed the weakened test and only verify caught it (rolled back). The
+    supervised gate runs the reproduction from the BASE copy, so the gate itself refuses."""
     cfg = local_scratch.cfg
     cfg.dispatch = "full"
     tip = gitops.rev(cfg.repo, "refs/heads/main")
@@ -112,9 +113,11 @@ def test_full_local_landing_rolls_back_when_fix_only_weakened_the_test(local_scr
         p = wt / "tests" / "test_calc.py"
         p.write_text(p.read_text().replace("== 5", "== -1"))
     out = runner(cfg, FakeEngine(cheat)).run_once()
-    assert out["outcome"] == "rolled_back", out
+    assert out["outcome"] == "discarded" and out["why"] == "gate_failed", out
     assert gitops.rev(cfg.repo, "refs/heads/main") == tip
-    assert next(iter(state(cfg)["faults"].values()))["parked"] is True
+    gate = [g for g in [a for a in audit(cfg) if a["step"] == "gates" and "gates" in a][-1]["gates"]
+            if g["gate"] == "supervised_pytest"][0]
+    assert "repro=no_proof" in gate["detail"] or "repro=rc=3" in gate["detail"], gate
 
 
 def test_local_landing_needs_no_gh_and_no_network(local_scratch, monkeypatch):

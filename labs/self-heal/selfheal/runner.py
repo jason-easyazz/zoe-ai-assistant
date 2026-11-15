@@ -21,7 +21,7 @@ from typing import Callable
 
 from . import binaries, gitops
 from .board import make_board
-from .config import Config
+from .config import SUPERVISED_GATE, Config
 from .detectors import COLLECTION_ERROR, Ticket, collection_errors, failing_test_tickets, run_detector
 from .engines import select_engine
 from .gates import gates_green, run_gates
@@ -130,6 +130,7 @@ class Runner:
             self.step("preflight")
             if self.bin_error:
                 raise Refused("unsafe_binary", f"{self.bin_error.name}:{self.bin_error.why}")
+            self._gate_names()   # full + local without the supervisor: refused before anything runs
             self.audit("preflight", "bins", bins=[f"{k}={v}" for k, v in sorted(self.bins.items())],
                        sandbox=f"{self.sandbox.backend}:{self.sandbox.why}")
             if self.engine_skips:
@@ -260,7 +261,11 @@ class Runner:
 
     def _gate_names(self) -> list:
         c = self.cfg
-        return c.local_gates if (c.dispatch == "full" and c.landing == "local") else c.gates
+        if c.unattended():
+            if SUPERVISED_GATE not in c.local_gates:
+                raise Refused("full_local_needs_supervisor", "")
+            return c.local_gates
+        return c.gates
 
     def _finish(self, state: State, ticket: Ticket, status: str, **detail) -> dict:
         rec = state.data["tickets"][ticket.id]

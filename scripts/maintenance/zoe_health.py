@@ -10,14 +10,22 @@ Probes, all bounded (2 s HTTP, 5 s docker/systemctl):
   * the spine's real ``/health`` (never ``is-active``, which lies while a model loads): zoe-data :8000,
     the 4B llama-server :11434, the Flue 2.x brain :3579, Kokoro :10201, the FunctionGemma router :11436;
   * Postgres (``pg_isready`` in zoe-database), containers in ``(unhealthy)`` / ``Restarting``;
-  * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable.
+  * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable;
+  * the restore drill has passed in the last 10 days (``zoe_restore_drill.py --check-stale``): a failed unit clears
+    when the next run is merely refused or never fires, so staleness is its own check. ONE voice: while the drill is
+    running it is the voice for its own bad spells (``--check-stale`` exit 6: stale, but it recorded a run in the last 2
+    days), so this check stays ok (report-only); it alerts only when the drill has stopped running (a dead timer), exit 4.
+  * the forget ledger: zoe-data's ``/health`` field ``forget_ledger`` (an enum; the secret itself is never read here).
+    ``unconfigured`` is red (a forget is not permanent); unreadable is ``unknown``, never red on its own.
 While the night window is open (``~/.zoe/night-window/WINDOW_OPEN``) the spine is stopped ON PURPOSE: its probes
 are skipped, not failed.
 
 Alerting is on TRANSITIONS only: a check must fail on two consecutive runs before it alerts (one restart window is
 not an outage), then stays quiet until it recovers, which sends one "recovered" line. State:
-``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the crash-loop watcher's sender -
-a process separate from zoe-data, so it can report zoe-data's death.
+``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the shared owner-alert helper
+(``zoe_crash_loop_watch.deliver``: retries + a durable outbox) - a process separate from zoe-data, so it can report
+zoe-data's death. The "owner alerts" check is red while that helper records alerting as broken (Telegram refused the
+credential, or no recipient), so the health log says so even though its own Telegram line cannot get through.
 
     python3 scripts/maintenance/zoe_health.py            # one run (the unit)
     python3 scripts/maintenance/zoe_health.py --dry-run  # probe + print, no state, no alert
@@ -63,6 +71,7 @@ class Check:
     name: str
     ok: bool
     detail: str
+    unknown: bool = False      # no verdict this run: printed, but neither alerts nor recovers (``transitions`` skips it)
 
 
 def http_ok(port: int, path: str = "/health", timeout: float = 2.0) -> tuple[bool, str]:
@@ -82,6 +91,17 @@ def _run(argv: list[str], timeout: float = 5.0) -> tuple[int, str]:
 
 
 NIGHT_TIMER = "zoe-night-window.timer"
+DRILL = REPO_ROOT / "scripts" / "maintenance" / "zoe_restore_drill.py"
+
+
+def restore_drill_check(run: Callable = _run) -> Check:
+    """A drill refused week after week, or a verify timer that stopped firing, never shows as a failed unit."""
+    rc, txt = run([sys.executable, str(DRILL), "--check-stale"], timeout=20.0)
+    line = (txt or "").strip().splitlines()[-1:] or [f"rc={rc}"]
+    # rc 6 = stale, but the drill is still running (a run recorded in the last 2 days): its own owner_alert cadence
+    # (transition, weekly reminder, "passed again") is the ONE voice, so this check stays ok (report-only; the line still
+    # says STALE in health.log). When the drill stops running (dead timer), rc becomes 4 and this check alerts instead.
+    return Check("restore drill", rc in (0, 6), line[0])
 
 
 def night_timer_check(run: Callable = _run) -> Check:
@@ -104,8 +124,29 @@ def _foreign_unit(unit: str) -> bool:
     return unit.startswith(FOREIGN_UNIT_PREFIXES)
 
 
+def fetch_forget_ledger(timeout: float = 2.0) -> Optional[str]:
+    """zoe-data's published forget-ledger state (``configured`` / ``unconfigured``), or None when it cannot be read."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{SPINE['zoe-data']}/health", timeout=timeout) as r:
+            state = json.loads(r.read().decode("utf-8", "replace")).get("forget_ledger")
+    except Exception:  # noqa: BLE001 - down / 503 / not JSON: the zoe-data check already covers down
+        return None
+    return state if state in ("configured", "unconfigured") else None
+
+
+def forget_ledger_check(state: Optional[str]) -> Check:
+    """Red while forgets cannot be permanent ("forgotten means forever" needs the ledger secret). Names no value."""
+    if state == "configured":
+        return Check("forget ledger", True, "configured")
+    if state == "unconfigured":
+        return Check("forget ledger", False, "unconfigured: a forget is not permanent until ZOE_FORGET_LEDGER_SALT is set "
+                                            "in zoe-data's env")
+    return Check("forget ledger", True, "unknown (zoe-data status unreadable)", unknown=True)
+
+
 def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _run,
-          night_open: Optional[bool] = None) -> list[Check]:
+          night_open: Optional[bool] = None,
+          forget_ledger: Optional[Callable[[], Optional[str]]] = None) -> list[Check]:
     out: list[Check] = []
     night = NIGHT_MARKER.exists() if night_open is None else night_open
     for name, port in SPINE.items():
@@ -122,6 +163,7 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     failed = sorted(u for u in (ln.split()[0] for ln in txt.splitlines() if ln.strip()) if not _foreign_unit(u)) if rc == 0 else []
     out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none"))
     out.append(night_timer_check(run))
+    out.append(restore_drill_check(run))
     du = shutil.disk_usage("/")
     pct = round(100 * du.used / du.total)
     out.append(Check("disk /", pct < DISK_WARN_PCT, f"{pct}% used"))
@@ -133,6 +175,8 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     except OSError:
         pass
     out.append(Check("memory", avail >= MEM_WARN_MB, f"MemAvailable {avail} MB"))
+    if forget_ledger is not None:
+        out.append(forget_ledger_check(forget_ledger()))
     return out
 
 
@@ -142,6 +186,8 @@ def transitions(checks: list[Check], state: dict) -> tuple[list[str], dict]:
     lines: list[str] = []
     new = dict(state)
     for c in checks:
+        if c.unknown:
+            continue
         s = dict(new.get(c.name, {"fails": 0, "alerted": False}))
         if c.ok:
             if s["alerted"]:
@@ -156,6 +202,26 @@ def transitions(checks: list[Check], state: dict) -> tuple[list[str], dict]:
     return lines, new
 
 
+def _ops():
+    spec = importlib.util.spec_from_file_location("_clw", REPO_ROOT / "scripts" / "maintenance" / "zoe_crash_loop_watch.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def alerting_check(broken: "Callable[[], Optional[dict]] | None" = None) -> Check:
+    """Red while owner alerts fail on a credential or a missing setting (the outbox's broken record)."""
+    try:
+        b = (broken or _ops().alerting_broken)()
+    except Exception as exc:  # noqa: BLE001
+        return Check("owner alerts", True, f"unreadable ({type(exc).__name__})")
+    if not b:
+        return Check("owner alerts", True, "ok")
+    since = datetime.fromtimestamp(float(b.get("since") or 0)).isoformat(timespec="minutes")
+    return Check("owner alerts", False, f"BROKEN since {since}: Telegram {b.get('reason', '?')} failure, alerts held in the outbox")
+
+
 def send(lines: list[str]) -> bool:
     """True when the lines were delivered (or there was nothing to send)."""
     if not lines:
@@ -163,12 +229,8 @@ def send(lines: list[str]) -> bool:
     if os.environ.get("ZOE_HEALTH_NO_ALERT"):
         return True
     try:
-        spec = importlib.util.spec_from_file_location("_clw", REPO_ROOT / "scripts" / "maintenance" /
-                                                      "zoe_crash_loop_watch.py")
-        mod = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(mod)
-        return bool(mod._telegram("Zoe health: " + "; ".join(lines)))
+        outcome, _reason = _ops().deliver("health", "Zoe health: " + "; ".join(lines))
+        return outcome in ("delivered", "uncertain", "queued")   # queued: the shared outbox retries it
     except Exception as exc:  # noqa: BLE001
         print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
         return False
@@ -188,12 +250,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args(argv)
-    checks = probe()
+    checks = probe(forget_ledger=fetch_forget_ledger) + [alerting_check()]
     stamp = datetime.now().isoformat(timespec="seconds")
     if NIGHT_MARKER.exists():
         print(f"[{stamp}] night window open: spine probes skipped")
     for c in checks:
-        print(f"[{stamp}] {'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
+        print(f"[{stamp}] {'?   ' if c.unknown else 'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
     if ns.dry_run:
         return 0 if all(c.ok for c in checks) else 1
     try:

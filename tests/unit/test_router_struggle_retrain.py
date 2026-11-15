@@ -14,6 +14,7 @@ Negative controls (run by hand when written; each turns the named tests red):
   * forget                           -> drop the tombstone filter in select_examples (test_a_forgotten_example_never_reenters)
   * shadow swaps                     -> make act() adopt when `decision.adopt` regardless of mode (test_shadow_never_swaps)
   * rollback                         -> skip restore_lkg in rollback() (test_rollback_restores_the_previous_generation)
+  * forget inherited by warm start   -> restore the old warm_start_for (served checkpoint, flag ignored) (test_a_flagged_...)
 """
 from __future__ import annotations
 
@@ -794,3 +795,65 @@ def test_a_commit_that_cannot_be_made_durable_is_rolled_back(sandbox, monkeypatc
     assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUFINCUMBENT" and data["served"] is None
     assert next(r for r in data["runs"] if r.get("gen") == "gs1")["status"] == "rolled_back_at_publish"
     assert not rr.adopt_marker().exists()
+
+
+# ── a forget reaches the NEXT generation's lineage (2026-11-14) ──────────────────
+def _lineage(tmp_path, flagged=(), missing=()):
+    """g1 <- g2 <- g3 (served): each with a checkpoint dir, the served GGUF's sha matching g3."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    served = _fake_gguf(tmp_path / "served.gguf", b"G3")
+    runs, parent = [], None
+    for g in ("g1", "g2", "g3"):
+        merged = tmp_path / g / "merged"
+        if g not in missing:
+            merged.mkdir(parents=True)
+        runs.append({"gen": g, "parent": parent, "status": "adopted", "merged": str(merged),
+                     "gguf_sha256": rs.sha256(served) if g == "g3" else "x", **({"needs_retrain": True} if g in flagged else {})})
+        parent = g
+    return {"served": "g3", "previous": "g2", "runs": runs}
+
+
+@pytest.fixture
+def served_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(rs, "SERVED_GGUF", tmp_path / "served.gguf")
+    monkeypatch.setattr(rs, "WARM_START", tmp_path / "base")
+
+
+def test_an_unflagged_lineage_warm_starts_from_the_served_generation_unchanged(tmp_path, served_file):
+    data = _lineage(tmp_path)
+    before = json.dumps(data, sort_keys=True)
+    c = rr.warm_start_choice(data)
+    assert c["path"] == Path(data["runs"][2]["merged"]) == rr.warm_start_for(data)
+    assert (c["gen"], c["skipped_flagged"]) == ("g3", 0)
+    assert json.dumps(data, sort_keys=True) == before                      # the choice never edits the ledger
+    assert rr.warm_start_for(_lineage(tmp_path / "m", missing=("g3",))) == rs.WARM_START   # as before: no checkpoint -> base
+
+
+def test_a_flagged_generation_is_never_a_warm_start_parent(tmp_path, served_file):
+    data = _lineage(tmp_path, flagged=("g3",))
+    c = rr.warm_start_choice(data)
+    assert c["gen"] == "g2" and c["path"] == Path(data["runs"][1]["merged"]) and c["skipped_flagged"] == 1
+    assert "never saw" in c["why"]
+    # negative control: the pre-fix rule (the served checkpoint, flag ignored) would have continued from the flagged g3
+    rec = rr.served_record(data)
+    assert rec["needs_retrain"] and Path(rec["merged"]).exists()
+
+
+def test_a_generation_with_a_flagged_ancestor_is_skipped_too(tmp_path, served_file):
+    c = rr.warm_start_choice(_lineage(tmp_path, flagged=("g2",)))          # g3 inherited what g2 learned
+    assert (c["gen"], c["skipped_flagged"]) == ("g1", 2)
+
+
+def test_with_no_clean_ancestor_the_base_is_used(tmp_path, served_file):
+    c = rr.warm_start_choice(_lineage(tmp_path, flagged=("g1",)))
+    assert c["path"] == rs.WARM_START and c["gen"] is None and c["skipped_flagged"] == 3
+
+
+def test_a_real_forget_moves_the_next_warm_start_off_the_served_generation(tmp_path, served_file):
+    data = _lineage(tmp_path)
+    data["runs"][2]["examples"] = [{"e": "ev-invented", "u": "u", "k": "k1", "s": "train"}]
+    ledger.update(lambda d: d.update(data))
+    assert rr.warm_start_choice(ledger.load())["gen"] == "g3"
+    ledger.forget(event_ids=["ev-invented"])
+    c = rr.warm_start_choice(ledger.load())
+    assert c["gen"] == "g2" and set(c) == {"path", "gen", "why", "skipped_flagged"}

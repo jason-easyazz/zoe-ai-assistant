@@ -49,6 +49,8 @@ DEFAULT_FORBIDDEN = [
     # test-runner config: a "fix" that reconfigures pytest is not a fix
     "conftest.py", "*/conftest.py", "pytest.ini", "*/pytest.ini", "pyproject.toml", "*/pyproject.toml",
     "setup.cfg", "*/setup.cfg", "tox.ini", "*/tox.ini",
+    # interpreter start-up hooks (the supervised gate also pins them to the base commit)
+    "sitecustomize.py", "*/sitecustomize.py", "usercustomize.py", "*/usercustomize.py", "*.pth",
 ]
 
 # --- HARD FLOOR: config may tighten these, never loosen them (Config.validate refuses) ----------
@@ -59,6 +61,7 @@ HARD_QUIET = ("01:30", "05:00")
 # The live checkout of THIS box, refused as repo / integration / apply target / worktree parent
 # whatever the config says (`live_checkout` in the config is an ADDITIONAL refused path).
 HARD_LIVE_CHECKOUT = "/home/zoe/assistant"
+SUPERVISED_GATE = "supervised_pytest"
 NETWORK_BINARIES = {"curl", "wget", "gh", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat", "socat",
                     "telnet", "ftp", "git", "docker", "pip", "pip3", "npm", "npx", "node", "bash", "sh",
                     "env", "sudo"}
@@ -162,8 +165,9 @@ class Config:
     test_lock_wait_s: int = 14000
     gate_timeout_s: int = 900
     gates: list = field(default_factory=lambda: ["validate_structure", "py_compile", "relevant_pytest"])
+    # full + local landing: no human reads the diff, so the verdict must come from the supervisor
     local_gates: list = field(default_factory=lambda: [
-        "validate_structure", "py_compile", "relevant_pytest", "offline_lane", "voice_replay"])
+        "validate_structure", "py_compile", "supervised_pytest", "offline_lane", "voice_replay"])
     offline_lane_cmd: list = field(default_factory=lambda: [
         PINNED_PYTHON, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-m", "ci_safe",
         "services/zoe-data/tests", "tests/unit"])
@@ -245,6 +249,13 @@ class Config:
             check_script_argv(self.voice_replay_cmd, "voice_replay_cmd")
         for argv in self.health_checks:
             check_health_argv(argv, self.python)
+        if self.unattended() and SUPERVISED_GATE not in self.local_gates:
+            raise ValueError("full + local landing lands with no human reading the diff: local_gates must "
+                             f"include {SUPERVISED_GATE!r} (the JUnit gate can be forged from inside the run)")
+
+    def unattended(self) -> bool:
+        """full + local: the one mode where nothing but the gates stands between a diff and `main`."""
+        return self.dispatch == "full" and self.landing == "local"
 
     def all_kill_switches(self) -> list:
         return [str(hard_kill_switch()), *self.kill_switches]
