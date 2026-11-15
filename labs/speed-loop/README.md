@@ -1,124 +1,218 @@
-# [lab] Speed loop
+# [code] Speed loop: guarded real replay adapter
 
-Borrow autoresearch's pattern: one metric, one bounded experiment, one narrow
-surface, keep/discard, repeat, morning ledger. No agent SDK, subscription, network,
-model, service import or extra dependency. Any coding agent follows [program.md](program.md).
-The driver changes a candidate dictionary, never repository or runtime settings.
+The metric is paired **warm pre-TTS milliseconds** (STT + resolve + brain), not
+speech-end-to-first-sound. The real backend is implemented; **no real run has
+been performed in this task**. Nothing imports this lab in production. Nothing
+here changes config, commits, pushes, starts a model, or installs a unit.
 
-The number is paired median **first-response milliseconds**, negative delta = faster.
-Fake numbers are invented. Real first sound remains unmeasured here.
+[code] `run_window.sh` checks guards, calibrates if missing, runs bounded child
+experiments, and writes `runs/window/morning.md`. Each child imports the canonical
+replay harness, using child-local STT with an untimed warm-up. Brain calls
+are dry (`replay_isolation=True`), fast-tier writes are disabled, and the user is
+synthetic. It still consumes the household's ONE brain slot: an owner-granted
+quiet window is required. This is not deployment or voice-gate evidence.
 
-## One proposed window
+## Source evidence and the three classes
 
-[lab] windows.json proposes Monday–Friday **10:00–14:00 local time**, no weekends.
-Edit after checking actual occupancy. This is not evidence the house is empty.
-The loader rejects overnight, overlapping, and maintenance-overlapping spans
-(01:55–03:30, 04:00–04:55), even if someone adds them to the proposal.
-Starts outside a window refuse; every arm checks the deadline. A partial paired
-corpus is ABANDON, never KEEP. Budget = 64 distinct synthetic turn IDs per arm,
-30 simulated seconds per experiment, 100 experiments / 600 simulated seconds per
-invocation by default. Real elapsed time is additionally bounded by the caller's timeout.
+[code] All locations below are in this checkout; loader refuses stale references.
+`F` = `services/zoe-data/zoe_flue_client.py`, `T` =
+`services/zoe-data/routers/voice_tts.py`, `S` =
+`services/zoe-data/voice_first_sound.py`, `M` =
+`services/zoe-data/memory_service.py`, `D` = `scripts/setup/zoe_voice_daemon.py`.
 
-Offline demonstration (explicit synthetic Monday; does not authorize real work):
+| Knob | Class | Executable read / definition |
+|---|---|---|
+| ZOE_FLUE_PREPOST_CONCURRENT | a, automatic | F:1948 |
+| ZOE_BRAIN_VOLATILE_AFTER_USER | a, automatic | F:3246 |
+| ZOE_MEMORY_TICK_DEFER_S | a, automatic | M:429 |
+| ZOE_CONTINUITY_CEILING_S | a, automatic | F:1636 |
+| _HOUSEHOLD_FETCH_BUDGET_S | b, owner code patch | F:1179 |
+| _CONTINUITY_PORTRAIT_TIMEOUT_S | b, owner code patch | F:1628 |
+| _PERSONA_REFRESH_BUDGET_S | b, owner code patch | F:509 |
+| ZOE_VOICE_FAST_FIRST_AUDIO | a, unexercised TTS | T:1209 |
+| _FIRST_UNIT_CLAUSE_MIN | b, owner code patch | T:1204 |
+| _FIRST_UNIT_SOFT_CAP | b, owner code patch | T:1205 |
+| ZOE_FIRST_SOUND_CLAUSE | a, unexercised TTS | S:26 |
+| ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS | a, unexercised TTS | S:63 |
+| ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS | a, unexercised TTS | S:64 |
+| ZOE_VAD_CLEAN_TAIL_MS | c, panel only | D:233 |
+| ZOE_VAD_CLEAN_FALL_CHUNKS | c, panel only | D:234 |
+| ZOE_VAD_HESITATION_TAIL_MS | c, panel only | D:236 |
+
+**a:** process environment read at call time. Four pre-TTS flags are measured;
+four TTS flags are excluded because this corpus adapter never synthesizes audio.
+**b:** needs owner flip/code patch and service restart for production. These five
+entries are Python constants, not environment controls. They could be measured
+in a separately patched private checkout, but this adapter deliberately does not
+patch source; saying they are technically live-service-only would be false.
+**c:** panel daemon import-time environment constants: unavailable to the Jetson
+replay. All excluded entries appear in the morning report.
+
+[code] Instrument construction evidence:
+
+- `scripts/perf/measure_voice.py:142-178` builds a replay subprocess using the
+  service interpreter; `:202-235` projects per-row timings and route/heard hashes.
+- `services/zoe-data/tests/replay_samples.py:97-105` loads `.env` with
+  `setdefault`, so explicit child overrides win. `:553-629` loads env, initializes
+  DB/router/tiers and imports voice functions **in that process**. `:645-710`
+  runs STT locally (remote is an optional instrument mode), then fast tiers in-process with `allow_writes=False`.
+  `:711-735` runs the brain with replay isolation. `:769-776` emits JSON.
+- `scripts/perf/measure_tts.py:139-148` imports the real first-unit extraction
+  functions in-process; `:201-229` applies them to whole replies and calls Kokoro.
+  That measures synthesis of an extracted unit, not streaming clause-release time.
+- `typed_env.py:1-16` documents call-time reads. `_f` registry declarations are
+  metadata, not executable reads: the first-sound reference was corrected to S:26.
+- `scripts/maintenance/voice_regression_probe.py` is the deployment regression
+  instrument. Its default corpus directory is read as AST data, never imported
+  or printed. We do not invoke it or write its shared gate artifacts.
+
+[code] `instrument.py` runs the same underlying replay as the timing orchestrator,
+with its JSON/manifest files intercepted **in memory**. It does not call the outer
+probe: that would write the shared gate result and cannot interleave turns. The
+wrapper emits the same numerical stage totals plus outcome fields. Replay prints,
+stderr and raw text JSON never reach files. Driver parsing positively selects
+numeric fields and hashes outcome fields; unknown child keys are discarded.
+
+## One real experiment
+
+1. Check every guard: current windows.json span, `night_busy.sh voice` exit **1**,
+   >=1500 MiB MemAvailable, and >=10 min since a conversation logger timestamp.
+   Unknown activity, unreadable logs or a guard error refuses. The actual tracked
+   night guard is `scripts/landing/night_busy.sh`; the requested maintenance path
+   does not exist. That guard also requires the owner's daytime permission marker.
+2. Acquire nonblocking `/tmp/zoe-voice-harness.lock`, recheck guards, bound the
+   experiment by both wall cap and window close. Recheck guards during child runs.
+3. Pin a seeded subset of top-level WAVs by content hash; keep names private in
+   process memory. Refuse an insufficient corpus. Same subset and order in both arms.
+4. For each turn launch A, B, A, B as fresh process groups with explicit automatic
+   flags in the child env only. Capture stage timings and said-versus-did signature
+   (verdict + route + heard hash). Average each arm's two observations.
+5. KEEP requires median saving >=15 ms, exact one-sided sign p<=.01, unchanged
+   outcomes, no stage median regression >5 ms, and p90 no more than 5 ms worse. Errors, unstable outcome, budget
+   expiry or activity cancel evidence. Kill child process group and release lock.
+6. Append sanitized per-turn results to replay-ledger.jsonl; KEEP updates only the
+   in-memory lab incumbent. Resume restores those values. Write an unapplied product-default patch
+   and draft PR body, then summarize sequential measured deltas. No live apply.
+
+[code] Source protection resolves each allowed symbol's unique AST definition/read,
+checks its exact line, and rejects forbidden enclosing function/class names and
+symbols. It never authorizes a target merely because the metadata line is positive.
+Tests plant wrong lines, a different symbol's line, a forbidden constant and a read
+inside an auth function; each must refuse, with an allowed-function positive control.
+
+## Calibration and small wins
+
+[code] A calibration runs three independent A/A interleaved batches. It records
+paired-difference standard deviation **sigma**, observed false-KEEP count/rate,
+stages exercised and sample-size planning numbers. Calibration is bound to HEAD +
+source hashes (dirty changes included), config, env-file/inherited-env hashes,
+interpreter, corpus hashes and seed. A stale/missing calibration causes calibration;
+nonzero false keeps or insufficient N refuses experiments. No numeric real noise
+or real false-keep claim exists before the first window.
+
+[inferred] With approximately normal independent paired noise and 80% power at
+one-sided alpha=.01, the sign/median planning approximation is:
+
+`N(delta) = max(7, ceil((pi/2) * ((2.32635 + .84162)*sigma/delta)^2))`
+
+| Measured paired sigma (ms), illustrative | 15 ms effect | 30 ms effect |
+|---|---:|---:|
+| 100 | 701 | 176 |
+| actual calibration | calibration.json turns_15 | calibration.json turns_30 |
+
+These are **distinct turn pairs**, four child observations per pair. They are
+planning estimates, not guarantees under skew, autocorrelation, p90 or correctness
+gates. At the exact 15 ms KEEP boundary there cannot be 80% probability that the
+sample median clears 15 ms: a symmetric estimator clears it only about half the
+time. The table describes detection vs zero; comfortably retaining a 15 ms saving
+requires lowering a predeclared practical threshold or measuring a larger effect.
+The loop does not quietly lower its 15 ms policy. Three A/A batches give a very
+weak false-keep estimate (0/3 is not evidence of a 1% long-run rate). Independent
+held-out confirmation and search-wide error control remain required before apply.
+
+## Loop efficiency
+
+[inferred] Rank by stage's plausible saving x knob range / common measurement
+cost. These priorities are hypotheses, not measurements. Skip stages unexercised
+in calibration; this conservatively skips memory if no brain turns ran. Every K
+experiments (default 3), refresh both A observations. Between refreshes reuse the
+first cached A while **still measuring a fresh A** drift sentinel on every turn:
+logical cached-A B fresh-A B; saves one child per pair. >15 ms sentinel drift
+invalidates the experiment/cache. Cache keys include full incumbent + corpus;
+KEEP changes invalidate reuse naturally. Use `--refresh-every 1` for strictly
+fresh ABAB throughout. Fresh children do not reproduce multi-turn KV-cache wins.
+Early stop can only DISCARD: even all remaining wins could not pass the fixed-N
+sign test, or an outcome already differs. Tests compare KEEP sets with reuse and
+early stop on/off, and verify ranking/filtering preserve eligible candidates.
+
+## Coordinator commands (inside an owner-granted window only)
+
+[code] The committed proposed window is weekdays **10:00–14:00 local**. A timer
+wake is not authorization: the night guard's owner daytime marker must also permit
+voice work. Do not change it from the lab. windows.json rejects maintenance spans
+01:55–03:30 and 04:00–04:55. Start with dry-run; it walks all guards and the lock
+without importing service code, loading a model or sending a request.
 
 ```sh
-~/.zoe/agent-tools/bin/quiet-wait.sh
-flock -x -w 14000 /tmp/zoe-precheck.lock timeout 30 python3 labs/speed-loop/loop.py \
-  --fake-start 2026-11-16T10:00:00+00:00 --seed 7 --max-experiments 100
+labs/speed-loop/run_window.sh --dry-run
+labs/speed-loop/run_window.sh --calibrate --turns 64 --cap 3600 \
+  --env-source /home/zoe/assistant/services/zoe-data/.env \
+  --output labs/speed-loop/runs/first-window
+labs/speed-loop/run_window.sh --turns 64 --cap 3600 --max-experiments 1 \
+  --env-source /home/zoe/assistant/services/zoe-data/.env \
+  --output labs/speed-loop/runs/first-window
 ```
 
-Follow the host memory/quiet rules before running. To follow program.md exactly,
-use `--max-experiments 1` with the same seed and output directory. The seeded
-schedule covers every knob once before trying extra values. Without
---fake-start the fake clock starts at current local time; elapsed measurement time
-is still simulated. The driver does not wait for future windows or run as a daemon.
-Artifacts must remain inside this lab. Use a fresh `--output` directory for a new
-study; continuing one ledger restores its best and skips tried values. Do not mix
-seeds, surfaces, corpora or budgets in one study. A crashed proposal/ledger write is
-not transactional: review orphan proposal files before continuing. One driver at a time.
+Read calibration.json first: if turns_15 >64, choose a larger N and new output
+folder and recalibrate. The child interpreter defaults to the service py312 venv;
+pass `--python` to override. `--service-dir` defaults to THIS checkout's zoe-data;
+never silently auto-resolves to live code. No command above prints env values or
+the corpus path. The outer driver is stdlib only.
 
-## KEEP rule and noise
+[code] Optional USER templates are **not installed**. Review paths before these
+owner-only commands (templates assume the merged checkout at `%h/assistant`):
 
-[code] Run incumbent/candidate on the same N turn IDs, interleaving arm order with
-a seeded shuffle. Re-measure the incumbent every experiment, rather than compare
-with a stale stored median. KEEP requires all four:
+```sh
+install -Dm644 labs/speed-loop/speed-loop.service ~/.config/systemd/user/speed-loop.service && install -m644 labs/speed-loop/speed-loop.timer ~/.config/systemd/user/speed-loop.timer
+systemctl --user daemon-reload && systemctl --user enable --now speed-loop.timer
+```
 
-- Paired median (after − before) ≤ **−15 ms**.
-- Exact one-sided sign test p ≤ **0.01**, ignoring exact ties.
-- Every paired said-versus-did outcome signature identical.
-- Candidate p90 ≤ incumbent p90 + **5 ms** (nearest-rank percentile).
+No template or script changes the permission marker. Runtime guards override the
+schedule. Removing/disabling the timer is the owner's normal rollback.
 
-64 turns per arm is the proposed default: with the fake independent ±8ms uniform
-arm noise, a true 20ms saving always has the right sign and p = 2^-64; the paired
-median typically clears 15ms. [inferred] For noisier real measurements, if only
-65% of paired deltas favor the candidate, about 64 pairs gives borderline sign
-evidence (42/64 gives p about 0.0084); it does NOT guarantee power or a 15ms median.
-Choose sample size/noise from a pilot; 20ms is not detectable under arbitrary noise.
-The 0.01 test is per experiment, not family-wise corrected; repeated search can
-select noise. Independently confirm retained changes before a PR, and use a held-out
-corpus. Outcome equality is only as strong as the instrument's signature.
+## Offline verification and remaining proof
 
-surface.json contains code defaults, not live flag values. Allowed values are
-conservative lab candidates, not a claim of safety. Env names are registered in
-flag_registry.py; constant entries require a reviewed code diff. References and
-defaults are checked by the local tests. The loader enforces a positive symbol/file
-allowlist plus a non-removable denylist and refuses unknown/redirection targets.
-It never executes a file path or arbitrary command from the surface.
+[code] `test_speed_loop.py` retains the original fake-backend net;
+`test_replay.py` exercises real child env, ABAB, lock exclusivity/release, timeout,
+activity cancellation, sanitization, calibration, stage filtering and cache reuse
+using only FakeInstrument. Test fixtures use synthetic text. Fake ground-truth
+results are not real performance results.
 
-## Morning tally
+[lab] This build's test execution status is recorded in the coordinator report.
+No real voice instrument, API call, model load, config change, restart, timer
+installation, git write or live deployment was performed. First-window noise,
+false keeps, latency, outcome stability, activity-log parser compatibility,
+private env/import integration, wrapper write-refusal compatibility, and the
+synthetic-user corpus coverage are unproven. TTS, actual first audio, panel VAD,
+combined retained changes and real multi-turn caching remain outside this adapter.
 
-Read runs/<run>/ledger.jsonl: knob, numeric/bool value, n, median before/after,
-paired delta_ms, verdict/reason enums, duration seconds, p. No utterance, reply,
-raw ID, exception string or backend payload is stored. KEEP emits
-keep-NNNN.patch.json (target, line, old/new value, full accumulated candidate).
-This is a proposal description, not an automatically applicable git patch.
-Proposals may overlap other builders' work; the coordinator reviews them.
+[code] Activity parsing follows `logging_setup.py:69-70` (ISO timestamp including
+numeric offset, level, logger). Child-local STT is deliberately used: remote STT
+logs under the watched voice logger and would self-cancel. The wrapper primes the
+real STT function once before the timed replay. Each child thus loads another
+Moonshine copy while it runs; 1500 MiB is the existing in-process harness floor,
+not a measured peak for this adapter. A failed model/import/warm-up refuses the
+arm. No TTS model is loaded. The warm-up and replay share one event loop; import-time pools/async locks in
+the imported pipeline remain an integration risk for the first owner window.
 
-| Kept change | Paired proven ms | Running total ms | Evidence |
-|---|---:|---:|---|
-| knob = value | −delta_ms | sum of retained deltas | ledger row / revision |
+[inferred] The cap is 3600 s per experiment (including child startup and warm-up);
+three calibration batches plus experiments must still fit inside the window. The
+four-fresh-child design is conservative and expensive. Startup/warm-up cost is
+not counted as a voice latency saving. A persistent instrument worker is a future
+optimization requiring isolation and cache-parity proof, not an assumed speedup.
 
-Totals add sequential measured deltas, not independent predictions. The synthetic
-100-experiment result belongs in [fake-tally.json](fake-tally.json), currently
-**not_run** because the mandatory quiet-wait cannot access the user service bus
-inside this sandbox. The fake model has four helpful, four harmful,
-four inert and four outcome-breaking knobs. Effects are deliberately unrelated to
-real knob performance. “Found” counts distinct helpful knobs retained, “missed”
-counts helpful knobs never retained; this does not mean every optimal value found.
-The ground-truth ms is the final retained configuration's noiseless saving.
-
-## ReplayBackend: deliberately unavailable
-
-Without --i-own-the-box it refuses; with that flag it still raises
-NotImplementedError. There is no subprocess, HTTP call, lock acquisition or env
-read in the stub. It must not be mistaken for a working real adapter.
-
-[code] Future adapter contract, after owner grants exclusive use of the one brain slot:
-
-1. Require a real clock (never --fake-start), explicit isolated worktree/service-dir,
-   fixed private clip manifest, synthetic user, scratch result paths and quiet window.
-   Run quiet-wait outside the harness lock; recheck window and remaining wall cap.
-2. Spawn a killable process group under `flock /tmp/zoe-voice-harness.lock`, with
-   timeout ≤ remaining window/run/experiment cap. Kill and reap the WHOLE group
-   on expiry. Do not implement real work as the cooperative synchronous fake call.
-3. Use scripts/maintenance/voice_regression_probe.py with --service-dir,
-   --baseline, --results, --trend, --samples N, --timeout, --user and --sample-dir;
-   use a pinned baseline manifest (not newest-N) and never --update-baseline on
-   an experimental arm. The scripts/perf/measure_voice.py instrument supports
-   --files-from <same-private-manifest> --service-dir --user --json --timeout.
-   ZOE_PERF=1 and candidate flag overrides belong to that lab child's env only.
-   Budget must include both instruments and both arms, not N new clips per tool.
-4. Current instruments resolve service env and brain endpoints: audit isolation
-   before enabling them. Constant candidates need a private patched worktree,
-   never source-file edits on the live checkout. No service restart here.
-5. Parse per-turn numeric latency and stable route/action/outcome signatures from
-   private artifacts; align by hashed corpus IDs, require exact N and no errors.
-   Aggregate-only output cannot support this loop's paired rule: extend the adapter
-   or instrument explicitly; never fabricate a paired first-sound result.
-
-The warm replay harness stops **before TTS**. Its timings are **relative drift**,
-not real speech-end-to-first-sound latency, and cannot validate TTS chunk or panel
-endpoint knobs. Those need isolated endpoint replay and a first-PCM instrument
-(e.g. measure_tts.py plus actual playback timing), semantic checks, and owner listening.
-The one slot requires the box to itself even during daytime. No live replay,
-latency win, deployment safety or production improvement is proved by this lab.
+[code] Admission checks require 1500 MiB before each child. While that child holds
+its admitted memory, polling uses an 800 MiB emergency reserve, not another full
+1500 MiB admission budget. Window/activity/night guards remain active. Polling
+runs every two seconds; an independent watchdog kills the group at its deadline
+if a guard read stalls. A household turn can contend until the next poll.

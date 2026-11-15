@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -25,7 +26,7 @@ ALLOWED = {
     'ZOE_CONTINUITY_CEILING_S': FLUE, '_HOUSEHOLD_FETCH_BUDGET_S': FLUE,
     '_CONTINUITY_PORTRAIT_TIMEOUT_S': FLUE, '_PERSONA_REFRESH_BUDGET_S': FLUE,
     'ZOE_VOICE_FAST_FIRST_AUDIO': TTS, '_FIRST_UNIT_CLAUSE_MIN': TTS,
-    '_FIRST_UNIT_SOFT_CAP': TTS, 'ZOE_FIRST_SOUND_CLAUSE': 'services/zoe-data/flag_registry.py',
+    '_FIRST_UNIT_SOFT_CAP': TTS, 'ZOE_FIRST_SOUND_CLAUSE': 'services/zoe-data/voice_first_sound.py',
     'ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS': 'services/zoe-data/voice_first_sound.py',
     'ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS': 'services/zoe-data/voice_first_sound.py',
     'ZOE_VAD_CLEAN_TAIL_MS': VAD, 'ZOE_VAD_CLEAN_FALL_CHUNKS': VAD,
@@ -53,8 +54,49 @@ def load_surface(path=HERE / 'surface.json'):
         # Never propose a value under the immutable endpoint safety floor.
         if name == 'ZOE_VAD_CLEAN_TAIL_MS' and any(v != 0 and v < 500 for v in values):
             raise ValueError('safety floor')
+        verify_source(knob)
         result[name] = knob
     return result
+
+
+def verify_source(knob, root=None):
+    """Resolve a read/definition by AST, then verify its advertised location."""
+    root = Path(root) if root else Path(__file__).resolve().parents[2]
+    path = (root / knob['file']).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError('forbidden source')
+    tree = ast.parse(path.read_text())
+    parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+    matches = []
+    for node in ast.walk(tree):
+        if knob['kind'] == 'constant':
+            match = isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == knob['name'] for t in node.targets)
+        else:
+            match = (isinstance(node, ast.Call) and node.args
+                     and isinstance(node.args[0], ast.Constant)
+                     and node.args[0].value == knob['name']
+                     and isinstance(node.func, (ast.Name, ast.Attribute))
+                     and (node.func.id if isinstance(node.func, ast.Name) else node.func.attr)
+                     in {'flag', 'env_bool', 'env_int', '_int_env', 'get', 'getenv'})
+        if match:
+            matches.append(node)
+    if len(matches) != 1 or matches[0].lineno != knob['line']:
+        raise ValueError('source symbol/line mismatch')
+    node = matches[0]
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if any(w in node.name.lower() for w in DENIED):
+                raise ValueError('forbidden source region')
+        if isinstance(node, (ast.If, ast.While)):
+            identifiers = [n.id for n in ast.walk(node.test) if isinstance(n, ast.Name)]
+            identifiers += [n.attr for n in ast.walk(node.test) if isinstance(n, ast.Attribute)]
+            if any(w in ident.lower() for ident in identifiers for w in DENIED):
+                raise ValueError('forbidden source region')
+    if any(w in knob['name'].lower() for w in DENIED):
+        raise ValueError('forbidden source symbol')
+    return matches[0]
 
 
 class Clock:
@@ -162,11 +204,12 @@ class FakeBackend:
 
 
 class ReplayBackend:
-    """Intentionally unwired; see README for the instrument adapter contract."""
-    def __init__(self, i_own_the_box=False):
-        if not i_own_the_box:
-            raise PermissionError('requires --i-own-the-box and an exclusive quiet window')
-        raise NotImplementedError('replay adapter is a stub; no process was started')
+    """Compatibility constructor: real adapter requires explicit guard objects."""
+    def __new__(cls, guards=None, **kwargs):
+        if guards is None or isinstance(guards, bool):
+            raise PermissionError('use run_window.sh with real guards')
+        from replay import ReplayBackend as Adapter
+        return Adapter(guards, **kwargs)
 
 
 def p90(values):
@@ -334,7 +377,7 @@ def main():
     parser.add_argument('--output', type=Path, default=HERE / 'runs' / 'fake')
     args = parser.parse_args()
     if args.backend == 'replay':
-        ReplayBackend(args.i_own_the_box)
+        parser.error('use labs/speed-loop/run_window.sh for guarded replay')
     surface = load_surface()
     clock = FakeClock(datetime.fromisoformat(args.fake_start) if args.fake_start else Clock().now())
     backend = FakeBackend(surface, clock)

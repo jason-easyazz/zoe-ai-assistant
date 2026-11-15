@@ -188,7 +188,7 @@ def test_hundred_reproducible_and_resume(setup):
 def test_replay_never_starts():
     with pytest.raises(PermissionError):
         sl.ReplayBackend()
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(PermissionError):
         sl.ReplayBackend(True)
 
 
@@ -196,3 +196,34 @@ def test_resume_refuses_changed_budget(setup):
     execute(setup, max_experiments=1)
     with pytest.raises(ValueError, match='fixed budget changed'):
         execute(setup, turns=32)
+
+
+@pytest.mark.parametrize('line', [1, 1636, 1626])
+def test_line_redirection_negative_controls(setup, line):
+    data = json.loads((Path(__file__).parent / 'surface.json').read_text())
+    data['knobs'][0]['line'] = line
+    path = setup[3] / 'redirect.json'
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='mismatch'):
+        sl.load_surface(path)
+
+
+def test_forbidden_region_negative_control(tmp_path):
+    p = tmp_path / 'source.py'
+    p.write_text('def auth_check():\n    return flag("SAFE_KNOB")\n')
+    knob = dict(name='SAFE_KNOB', kind='env', file='source.py', line=2)
+    with pytest.raises(ValueError, match='forbidden'):
+        sl.verify_source(knob, tmp_path)
+    p.write_text('def read_setting():\n    return flag("SAFE_KNOB")\n')
+    assert sl.verify_source(knob, tmp_path).lineno == 2
+    p.write_text('_CLEAN_TAIL_FLOOR_MS = 500\n')
+    with pytest.raises(ValueError, match='forbidden'):
+        sl.verify_source(dict(name='_CLEAN_TAIL_FLOOR_MS', kind='constant',
+                              file='source.py', line=1), tmp_path)
+
+
+def test_conditional_forbidden_region(tmp_path):
+    p = tmp_path / 'source.py'
+    p.write_text('if auth_ok:\n    result = flag("SAFE_KNOB")\n')
+    with pytest.raises(ValueError, match='forbidden'):
+        sl.verify_source(dict(name='SAFE_KNOB', kind='env', file='source.py', line=2), tmp_path)
