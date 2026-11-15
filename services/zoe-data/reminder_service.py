@@ -1,4 +1,5 @@
-"""Shared reminder persistence helpers for API and intent execution."""
+"""The reminder store: every entry point creates, snoozes and cancels through the ``*_reminder_record`` functions here,
+under ONE ownership rule (``load_for_actor``) and the household clock (``reminder_scan.zoe_now``)."""
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Mapping
 
 from fastapi import HTTPException
@@ -17,6 +18,29 @@ from models import ReminderCreate
 from push import broadcaster
 
 logger = logging.getLogger(__name__)
+
+# Spoken replies for the reminder verbs the keyword path answers in code (short, the tone of "Reminder set: X.").
+SPOKEN = {
+    "past_day": "That day has already passed, so I haven't set the reminder.",
+    "past_time": "That time has already passed today, so I haven't set the reminder.",
+    "cancelled": "Reminder cancelled: {title}.",
+    "cancel_not_found": "I couldn't find that reminder, so nothing has changed.",
+    "cancel_failed": "I couldn't cancel that reminder just now, so nothing has changed.",
+}
+
+
+class ReminderPastError(HTTPException):
+    """A 422 for a day or time that has already gone (the scan never fires those). ``spoken`` is what a person is told."""
+
+    def __init__(self, detail: str, spoken: str):
+        super().__init__(status_code=422, detail=detail)
+        self.spoken = spoken
+
+
+def kernel_seam(verb: str, actor: Mapping[str, object], reminder_id: str | None = None) -> None:
+    """Where the zoe-os kernel call for each reminder verb will sit (WP-42 shadow, then WP-43 authority): called once per
+    create / edit / snooze / done / cancel, after the ownership rule and before the write. A no-op today: no kernel code."""
+    return None
 
 
 def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str | None:
@@ -56,9 +80,9 @@ def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str |
 
     def _not_past(d: date) -> str:
         if d < today:
-            raise HTTPException(
-                status_code=422,
-                detail=f"due_date {text!r} is already past ({d.isoformat()}); a reminder for a past day can never fire",
+            raise ReminderPastError(
+                f"due_date {text!r} is already past ({d.isoformat()}); a reminder for a past day can never fire",
+                SPOKEN["past_day"],
             )
         return d.isoformat()
 
@@ -190,6 +214,23 @@ def normalize_recurrence_fields(
     return rrule, first.isoformat()
 
 
+def refuse_past_due(due_date: str | None, due_time: str | None, *, now_utc: datetime | None = None) -> None:
+    """A one-off for today at a clock time already gone never fires (the scan skips it), so it is refused. Time-only rows
+    are daily, date-only rows have the same-day fallback, and recurring rows are anchored ahead: none is refused."""
+    if not due_date or not due_time:
+        return
+    from proactive.triggers.reminder_scan import _parse_due_time, build_run_at
+
+    hm = _parse_due_time(due_time)
+    now = now_utc or datetime.now(timezone.utc)
+    run_at = build_run_at(due_date, hm[0], hm[1], now) if hm else None
+    if run_at is not None and run_at <= now:
+        raise ReminderPastError(
+            f"due_time {due_time!r} on {due_date} is already past; a reminder for a past time can never fire",
+            SPOKEN["past_time"],
+        )
+
+
 def row_to_dict(row) -> dict | None:
     """Convert asyncpg/compat rows to a plain reminder dict."""
     if row is None:
@@ -226,9 +267,12 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     due_date = normalize_due_date(payload.due_date, now_utc=now_utc)
     due_time = normalize_due_time(payload.due_time)
     recurring_pattern, due_date = normalize_recurrence_fields(payload.recurring_pattern, due_date, due_time, now_utc=now_utc)
+    if not recurring_pattern:
+        refuse_past_due(due_date, due_time, now_utc=now_utc)
     reminder_type = payload.reminder_type
     if recurring_pattern and reminder_type == "one-time":
         reminder_type = "recurring"
+    kernel_seam("create", user)
 
     await db.execute(
         """INSERT INTO reminders (
@@ -279,4 +323,117 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         except Exception:
             logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
     await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
+    return reminder
+
+
+# ── The ONE ownership-and-visibility rule (the REST router's, the most complete of the five that were in the tree) ────────
+# SEE own + family rows (another member's personal row: 404); EDIT / CANCEL: anyone who sees it (family rows are shared);
+# SNOOZE / DONE: the owner only (403); VISIBILITY: only the owner changes it (dropped for others). ``own_only=True`` keeps a
+# STRICTER entry point stricter (the MCP edit / delete tools, the spoken cancel): another member's family row is 404 there.
+_OWNER_ONLY = {"snooze": "snooze", "done": "acknowledge"}
+
+
+async def load_for_actor(db, actor: Mapping[str, object], reminder_id: str, *, verb: str, own_only: bool = False) -> dict:
+    user_id = str(actor["user_id"])
+    cursor = await db.execute(
+        "SELECT * FROM reminders WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0 AND id = ?",
+        [user_id, reminder_id],
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    row = dict(row)
+    is_owner = row.get("user_id") == user_id
+    if own_only and not is_owner:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    if verb in _OWNER_ONLY and not is_owner:
+        raise HTTPException(status_code=403, detail=f"Not authorised to {_OWNER_ONLY[verb]} this reminder")
+    return row
+
+
+async def _cancel_reminder_jobs_safe(reminder_id: str) -> None:
+    """Cancel a reminder's pending jobs BEFORE a state change commits (B2). Best-effort: the in-job claim is the backstop."""
+    try:
+        from proactive.triggers.reminders import cancel_reminder_jobs
+        await cancel_reminder_jobs(reminder_id)
+    except Exception:
+        logger.exception("reminder resync: cancel stale jobs failed for %s", reminder_id)
+
+
+async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
+    """Reschedule at the CURRENT next fire time, AFTER the write: a future snooze (an edit keeps it), else the due time."""
+    try:
+        cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        r = dict(row)
+        if not (r.get("is_active") and not r.get("acknowledged") and not r.get("deleted")):
+            return
+        snoozed = r.get("snoozed_until")
+        if snoozed:
+            try:
+                snooze_at = datetime.fromisoformat(str(snoozed).replace("Z", "+00:00"))
+                if snooze_at.tzinfo is None:
+                    snooze_at = snooze_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                snooze_at = None
+            if snooze_at and snooze_at > datetime.now(timezone.utc):
+                from proactive.triggers.reminders import schedule_reminder
+                await schedule_reminder(user_id=r.get("user_id"), message=r.get("title") or "Reminder",
+                                        send_at=snooze_at, item_id=reminder_id)
+            return  # snooze in the past → reminder_scan will re-pick it up
+        if r.get("due_time") or r.get("due_date"):
+            from proactive.triggers.reminder_scan import schedule_due_reminder
+            await schedule_due_reminder(db, row)
+    except Exception:
+        logger.exception("reminder resync: reschedule failed for %s", reminder_id)
+
+
+async def _reread(db, reminder_id: str) -> dict | None:
+    cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
+    return row_to_dict(await cursor.fetchone())
+
+
+async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: str, *, own_only: bool = False) -> dict:
+    """Cancel a reminder (soft delete): the pending job is cancelled BEFORE the row is marked deleted."""
+    await require_feature_access(db, actor, feature="reminders", action="delete")
+    await load_for_actor(db, actor, reminder_id, verb="cancel", own_only=own_only)
+    kernel_seam("cancel", actor, reminder_id)
+    await _cancel_reminder_jobs_safe(reminder_id)
+    await db.execute("UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
+    await db.commit()
+    await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id}, user_id=str(actor["user_id"]))
+    return {"ok": True, "id": reminder_id}
+
+
+async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: str, minutes: int, *,
+                                 now_utc: datetime | None = None) -> dict:
+    """Snooze (owner only): ``snoozed_until`` is a UTC instant it re-fires at; due date, time and rule are untouched."""
+    await require_feature_access(db, actor, feature="reminders", action="snooze")
+    user_id = str(actor["user_id"])
+    row = await load_for_actor(db, actor, reminder_id, verb="snooze")
+    minutes = int(minutes)
+    snooze_at = (now_utc or datetime.now(timezone.utc)) + timedelta(minutes=minutes)
+    snoozed_until = snooze_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    kernel_seam("snooze", actor, reminder_id)
+    # B2: cancel the OLD-time job before the state change commits; the generation bump voids an already-claimed one.
+    await _cancel_reminder_jobs_safe(reminder_id)
+    await db.execute(
+        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
+        "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
+        [snoozed_until, reminder_id],
+    )
+    await _create_notification(db, user_id=user_id, notif_type="reminder_snoozed", title="Reminder Snoozed",
+                               message=f"Reminder snoozed for {minutes} minutes",
+                               data={"reminder_id": reminder_id, "snoozed_until": snoozed_until})
+    await db.commit()
+    try:  # a one-shot at snoozed_until so the reminder re-fires when the snooze ends
+        from proactive.triggers.reminders import schedule_reminder
+        await schedule_reminder(user_id=row.get("user_id") or user_id, message=row.get("title") or "Reminder",
+                                send_at=snooze_at.replace(microsecond=0), item_id=reminder_id)
+    except Exception:
+        logger.exception("reminder snooze: reschedule at snoozed_until failed for %s", reminder_id)
+    reminder = await _reread(db, reminder_id)
+    await broadcaster.broadcast("reminders", "reminder_snoozed", reminder, user_id=user_id)
     return reminder

@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import zoneinfo
-from datetime import datetime, date
+from datetime import date, datetime, timezone
 
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
@@ -37,9 +37,14 @@ class PeopleHealthTrigger(ProactiveTrigger):
 
     trigger_type = "people_health"
 
-    async def check(self, db) -> list[TriggerResult]:
-        now_local = datetime.now(_ZOE_TZ)
-        if now_local.hour != _FIRE_HOUR:
+    def __init__(self) -> None:
+        # The household day this trigger last ran its check. The slow loop polls every few minutes, so an hour-only gate
+        # fired the same "you haven't spoken to X" nudge about a dozen times inside the 9 o'clock hour.
+        self._checked_day: date | None = None
+
+    async def check(self, db, now_utc: datetime | None = None) -> list[TriggerResult]:
+        now_local = (now_utc or datetime.now(timezone.utc)).astimezone(_ZOE_TZ)
+        if now_local.hour != _FIRE_HOUR or self._checked_day == now_local.date():
             return []
 
         try:
@@ -71,8 +76,8 @@ class PeopleHealthTrigger(ProactiveTrigger):
                 log.warning("PeopleHealthTrigger.check failed: %s", exc)
                 return []
 
+        self._checked_day = now_local.date()  # only once the read worked: a failed read is retried on the next tick
         results: list[TriggerResult] = []
-        today = date.today()
         for row in rows:
             d = dict(row)
             last_c = d.get("last_contacted_at")

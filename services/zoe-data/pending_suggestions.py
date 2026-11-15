@@ -856,6 +856,42 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
         return 0
 
 
+def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
+    """(due_date, due_time) of a reminder offer: its slots, else ``when_hint`` read by the spoken-reminder grammar, else as a day."""
+    due_date = slots.get("due_date") or slots.get("date") or None
+    due_time = slots.get("due_time") or slots.get("time") or None
+    hint = str(slots.get("when_hint") or "").strip()
+    if hint and not (due_date or due_time):
+        from intent_router import _extract_simple_reminder_slots
+
+        parsed = _extract_simple_reminder_slots(f"remind me to {title} {hint}") or {}
+        due_date, due_time = parsed.get("date") or None, parsed.get("time") or None
+        if not (due_date or due_time):
+            due_date = hint
+    return due_date, due_time
+
+
+async def _create_suggested_reminder(slots: dict, user_id: str) -> dict:
+    """An accepted reminder offer goes through the one writer (it was a raw INSERT with no date or time, which never fires).
+    An offer with no day or time is refused and stays open, never stored as a reminder that cannot fire."""
+    from intent_router import _load_direct_execution_user
+    from models import ReminderCreate
+    from reminder_service import create_reminder_record
+
+    title = str(slots.get("title") or slots.get("description") or "Reminder").strip()
+    due_date, due_time = _suggested_when(title, slots)
+    if not (due_date or due_time):
+        raise ValueError("reminder_needs_time")
+    async with get_db_ctx() as db:  # a connection of its own: the suggestion row's transaction stays as it was
+        user = await _load_direct_execution_user(db, user_id)
+        if not user:
+            raise ValueError("unknown_user")
+        reminder = await create_reminder_record(
+            ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db)
+    return {"reminder_id": reminder.get("id"), "title": title,
+            "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time")}
+
+
 async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
     if action == "list_add":
         lt = slots.get("list_type", "shopping")
@@ -892,17 +928,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
         return {"item_id": item_id, "list_id": list_id, "text": text}
 
     if action == "reminder_create":
-        rid = str(uuid.uuid4())
-        title = slots.get("title") or slots.get("description", "Reminder")
-        await conn.execute(
-            """INSERT INTO reminders (id, user_id, title, description, reminder_type,
-               category, priority, due_date, due_time, is_active, acknowledged, visibility, deleted)
-               VALUES ($1, $2, $3, '', 'general', 'general', 'medium', NULL, NULL, 1, 0, 'personal', 0)""",
-            rid,
-            user_id,
-            title,
-        )
-        return {"reminder_id": rid, "title": title}
+        return await _create_suggested_reminder(slots, user_id)
 
     if action == "calendar_create":
         eid = str(uuid.uuid4())
