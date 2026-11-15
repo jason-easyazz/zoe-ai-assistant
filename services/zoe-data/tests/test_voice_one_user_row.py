@@ -69,6 +69,7 @@ def _gated(chat, before):
             async def execute(sql, params=()):
                 if sql.lstrip().upper().startswith("INSERT INTO CHAT_MESSAGES") and params[2] == "user":
                     seen["n"] += 1
+                    chat.attempted_user_ids = getattr(chat, "attempted_user_ids", []) + [params[0]]   # the id each insert tried
                     await before(seen["n"])
                 return await real(sql, params)
             db.execute = execute
@@ -190,7 +191,8 @@ def test_a_failed_arrival_insert_is_recovered_under_the_turns_id(world, monkeypa
 
     arrival, noted = run(scenario())
     _assert_one_row(chat, noted)
-    assert _users(chat) == [getattr(arrival, "mid", _users(chat)[0])]
+    assert arrival.mid and _users(chat) == [arrival.mid]                  # the ONE stored row carries the id minted at turn start
+    assert chat.attempted_user_ids == [arrival.mid, arrival.mid]          # the failed insert and the recovery tried the SAME id
 
 
 def test_an_arrival_that_never_reached_its_insert_is_counted_by_the_recovery(world, monkeypatch):
@@ -229,6 +231,9 @@ def test_when_both_inserts_fail_there_is_no_row_no_id_and_the_turns_writes_are_u
 
     arrival, noted = run(scenario())
     assert _users(chat) == [] and not arrival.saved
+    # this PR's part of the case: both failed inserts were attempted under the one id minted at turn start (the rest of the
+    # test is #2574's unbound path, kept here because a turn with no committed id must still behave that way afterwards)
+    assert arrival.mid and chat.attempted_user_ids == [arrival.mid, arrival.mid]
     turn = turn_forget.previous_turn(UID)
     assert turn is not None and turn.mids == () and noted == [WORDS]
     monkeypatch.setattr(db_pool, "get_db_ctx", store)                     # the capture sees the store every forget test sees
