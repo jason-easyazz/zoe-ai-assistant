@@ -115,6 +115,7 @@ bad outcome.
 | an action's declared arguments are checked before its driver runs | `test_describe_params.py` | `check_params` always yes: the driver runs on malformed arguments |
 | an action for a person must cite an event about that person | `test_cause_binding.py` | `Dispatcher._concerns` always yes: a deputy acts for one person on another's word |
 | the brain's tools are derived from the kernel; the turn's own values are hidden from the model | `test_brain_bridge.py` | a bridge that shows every parameter, or accepts `asked` from the model |
+| a tool call is bound to the turn it came from: a late call from an earlier turn is refused `stale_turn` and reaches no driver | `test_turn_binding.py` | `BridgeServer._bound` returns whatever turn is open: turn N's call writes into turn N+1's person's list |
 | forgetting a person removes the effect in the stores, not only the events | `test_brain_bridge.py` | a keeper that ignores the notice |
 | kernel down or lost mid-call is said honestly and writes nothing half-way | `test_brain_bridge.py` | (a kill between write and receipt is `uncertain`, never done) |
 
