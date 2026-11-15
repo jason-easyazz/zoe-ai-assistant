@@ -48,7 +48,7 @@ is invented.
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
-| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` / `erase_item` / `health` / `list_digest` ops, revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` / `erase_item` / `health` / `list_digest` ops, revokes remembered; owner-only template under `scripts/setup/systemd/` |
 | `tests/authority_proc.py`, `tests/test_authority.py` | the authority daemon as its own process with one SIGKILL point or one control armed, and its tests |
 
 ## Run it
@@ -160,49 +160,17 @@ acknowledged add is lost and the test sees it), `no_member_forget` (the erase's 
 **Where the database lives (owner decision 2026-11-15).** The kernel keeps its OWN SQLite file, never tables in the main database,
 in a permanent home beside Zoe's other stores (`~/.zoe/music-assistant/`, `~/.zoe/night-extract/`, `~/.zoe/omi-recordings/`, ...):
 **proposed `~/.zoe/zoe-os/zoe-os.db`** (directory 0700, file 0600; `authority.PERMANENT_DB`). ONE setting names it:
-`ZOE_OS_KERNEL_DB` in the unit template, passed to the daemon as `--db` (both daemons take it), and the same registered flag in zoe-data
-(`os_authority.kernel_db_path()`, used only to name the store; zoe-data never opens the file). Without `--db` the lab default is
+`ZOE_OS_KERNEL_DB` in the shared service config, passed to the daemon as `--db` (both daemons take it), and the same name is reserved for the production client
+(absent on this branch; its integration must register the setting and never open the file). Without `--db` the lab default is
 `STATE/kernel/zoe-os.db`. A daemon given `--db` refuses to start while that file is missing but the old `~/.zoe/os-shadow/kernel/zoe-os.db`
 still exists, so a skipped move can never start an empty kernel beside an unmoved record.
 
-**One-time move (owner step, before installing either unit with `--db`; nothing here does it).** Stop the kernel, copy consistently,
-check, then remove the old copy (a second copy would be a store no forget reaches):
-
-    systemctl --user stop zoe-os-shadow-kernel.service zoe-os-authority-kernel.service 2>/dev/null
-    mkdir -p -m 700 ~/.zoe/zoe-os
-    python3 -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close(); c=sqlite3.connect(sys.argv[2]); assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; print('events', c.execute('SELECT COUNT(*) FROM events').fetchone()[0])" ~/.zoe/os-shadow/kernel/zoe-os.db ~/.zoe/zoe-os/zoe-os.db \
-      && chmod 600 ~/.zoe/zoe-os/zoe-os.db \
-      && rm -f ~/.zoe/os-shadow/kernel/zoe-os.db ~/.zoe/os-shadow/kernel/zoe-os.db-wal ~/.zoe/os-shadow/kernel/zoe-os.db-shm
-
-**Nightly backup (from the day shadow is on).** A concrete addition to `scripts/maintenance/mempalace-nightly-backup.sh`, the nightly
-job that already snapshots a live SQLite file with Python's online backup API (the `sqlite3` CLI is not installed on the Jetson); not
-`postgres-nightly-backup.sh`, which is `pg_dump` only. Proposed block, after the MemPalace rotation (not applied by this change):
-
-    ZOE_OS_DB="${ZOE_OS_KERNEL_DB:-$HOME/.zoe/zoe-os/zoe-os.db}"
-    ZOE_OS_ROOT="${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
-    if [[ -f "$ZOE_OS_DB" ]]; then
-      mkdir -p -m 700 "$ZOE_OS_ROOT"
-      out="$ZOE_OS_ROOT/zoe-os-$(date +%Y%m%d-%H%M%S).db"
-      python3 - "$ZOE_OS_DB" "$out" <<'PY'
-    import sqlite3, sys
-    src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)   # WAL: a reader beside the live kernel, never a file copy
-    dst = sqlite3.connect(sys.argv[2])
-    src.backup(dst)                                                  # one consistent snapshot, committed WAL frames included
-    dst.close(); src.close()
-    chk = sqlite3.connect(f"file:{sys.argv[2]}?mode=ro", uri=True)
-    assert chk.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert chk.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()   # a kernel database, not an empty file
-    PY
-      chmod 600 "$out" && gzip -9 "$out"
-      ls -1t "$ZOE_OS_ROOT"/zoe-os-*.db.gz | tail -n +8 | xargs -r rm -f       # keep 7, like the palace
-    fi
-
-Never `cp` the live `.db` (its `-wal` holds committed adds the main file does not have yet). `creds.json` and `k.sock` are re-made at
-every start and are never backed up; `people.json` is re-written from `users`. **Restore check** (run on the copy, kernel stopped):
-`gunzip` it to the `--db` path, then the integrity check above, then start the daemon and read `health` (`schema` 1, `last_write_ok`
-true) and `scripts/maintenance/os_authority_reconcile.py` (`kernel_only=0`). A restore older than a forget must re-apply the forget
-(the repo-wide backup rule in `services/zoe-data/forget_reach.py`): re-run `delete_user` / the entity forget for anything forgotten
-after the backup's date. The backup holds the same words the kernel does, so it ages out with the 35-day rule.
+**Installation, move, backup and restore (owner only).** Use the reviewed
+[service runbook](../../docs/knowledge/zoe-os-kernel-service.md). It replaces the
+manual backup snippet with the online SQLite snapshot, integrity check, compression
+and seven-copy rotation in the nightly job. Never copy a live WAL database file.
+The restore drill opens only scratch copies; a restore older than a forget must
+reapply that forget. Socket and credentials are regenerated, never backed up.
 
 **Not done here.** Retention (a sweep as written would drop list rows: their receipts must be exempt first, D5), power loss (WAL with
 `synchronous=NORMAL` survives a kill, not necessarily a power cut), the roster push (D6), the guardian model (D7).
@@ -249,3 +217,13 @@ Review correction: authorised explainer and twin display results retain househol
 tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
 also clears the owner's reduced twin facts through its watermark after source retention,
 while cross-owner cleanup matches explicit erased request sequences.
+
+## Service lifecycle draft
+
+The authority unit template moved to `scripts/setup/systemd/`; the old lab copy was
+removed. The runnable installation, database move, backup enrollment and rollback
+steps are now in [the owner runbook](../../docs/knowledge/zoe-os-kernel-service.md).
+Its backup implementation replaces the former illustrative snippet. No agent has
+installed or run it. This branch does not contain the production clients named
+above: land and verify their flags/fallback before enablement. Read-only health
+(`read_only=1`) is for observation; the default health op still probes writes.

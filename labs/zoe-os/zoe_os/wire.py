@@ -53,7 +53,7 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "describe": {},
     "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
     # served by the AUTHORITY daemon only (``authority.py``, additive): a plain KernelServer answers them ``internal``
-    "health": {},
+    "health": {"read_only": ((int,), False)},
     "erase_member": {"subject": ((str,), True)},
     "erase_item": {"digest": ((str,), True)},
     "list_digest": {},

@@ -56,8 +56,8 @@ with its own README/RUNBOOK and is self-contained.
   stdlib process that records every real list add beside the live path in its OWN store under `~/.zoe/os-shadow/`; never authoritative, owner
   opt-in, never auto-installed or auto-enabled, and inert until `ZOE_OS_LIST_SHADOW=shadow` is also set for zoe-data. zoe-data reaches it ONLY over
   its Unix socket (`services/zoe-data/os_shadow.py`, no import from `labs/`); contract `docs/knowledge/zoe-os-list-shadow.md`).
-  `zoe-os/` -> `labs/zoe-os/zoe-os-authority-kernel.service` (the Zoe OS AUTHORITY kernel, `labs/zoe-os/authority.py`: the same state directory
-  and socket, `Conflicts=` the shadow unit; the template stays under the lab, never installed by any script; it decides a spoken list add only while
+  `zoe-os/` -> `scripts/setup/systemd/zoe-os-authority-kernel.service` (the Zoe OS AUTHORITY kernel, `labs/zoe-os/authority.py`: the same state directory
+  and socket, `Conflicts=` the shadow unit; the template is owner-installed from scripts/setup/systemd, never auto-enabled; it decides a spoken list add only while
   `ZOE_OS_LIST_ADD_AUTHORITY=kernel` is set for zoe-data, which falls back to its unchanged path whenever the kernel is down, slow or unhealthy,
   `services/zoe-data/os_authority.py`; stage (c) of `docs/knowledge/zoe-os-integration.md`).
   No other lab may ship a unit without amending this contract.)
@@ -574,3 +574,13 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `shadow_daemon.py` is the one long-running entry point: the kernel + the lab list, reminder and alarm drivers (plus its own `list.remove` over the list rows) for zoe-data's SHADOW of list add / list remove / reminder create / alarm create (`docs/knowledge/zoe-os-list-shadow.md`, `docs/knowledge/zoe-os-integration.md`),
   started only by the owner-installed `zoe-os-shadow-kernel.service` (see Forbidden); `services/zoe-data/tests/test_os_shadow_contract.py` runs the zoe-data client against it
   and is skipped with a named reason when this lab is absent.
+
+### Zoe OS authority deployment exception (draft)
+
+`zoe-os/authority.py` may run as the owner-installed optional service and be explicitly
+updated by CD after the main service. Its template is under `scripts/setup/systemd`,
+not copied under the lab. This is the third explicit lab-hosted deploy exception;
+all other labs stay isolated. No `services/` import may cross into this package.
+The authority and shadow units are mutually exclusive. Read-only health uses
+`health(read_only=1)`; deploy uses default write-health. Tests are explicit lab
+selection plus `tests/unit/test_zoe_os_kernel_service.py`, never implicit lab collection.

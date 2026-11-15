@@ -448,3 +448,9 @@ tests/unit/test_reap_stale_omnigent_runners.py` (offline, `ci_safe`, canned
 fixtures + a fake clock + synthetic `/proc` trees — no network, no live
 Omnigent), plus the dogfood pattern — review changes to this script with the
 script itself.
+
+### Optional Zoe OS authority lifecycle (draft)
+
+- `maintenance/zoe_os_kernel.{sh,conf}` + `zoe_os_kernel_ops.py` own launch, bounded health/report, deploy retry and WAL-safe backup. One source-location variable; no production imports of labs. Never print credentials, paths or flag values.
+- `setup/systemd/zoe-os-authority-kernel.service` replaces the lab template; owner-only install/enable, conflicts with shadow, 64M/96M ceiling, zero swap, no memory reservation, main has no hard dependency. Keep owner overrides as drop-ins.
+- CD's optional kernel step runs after main restart, only installed+enabled, non-fatal with warning/pending retry, and defers on the night marker. Existing night/quiet gates remain binding. `zoe-backup.service.d/50-os-kernel.conf` enrolls the online snapshot in the existing nightly schedule; the drill checks scratch restores. Owner runbook: `docs/knowledge/zoe-os-kernel-service.md`.

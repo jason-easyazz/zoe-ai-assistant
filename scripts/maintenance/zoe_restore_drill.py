@@ -588,6 +588,11 @@ def run_drill(p, backup_root: Path, now: datetime, sb: Sandbox, python: str) -> 
     scratch = Path(tempfile.mkdtemp(prefix="drill-", dir=scratch_root))
     os.chmod(scratch, 0o700)
     try:
+        kernel_ops = _load("zoe_os_kernel_ops")
+        f, n = kernel_ops.drill(backup_root / "zoe-os", scratch,
+                                (p.home / ".zoe/zoe-os/zoe-os.db").is_file(), now.timestamp())
+        res.findings += f
+        res.notes += n
         try:
             drill_postgres(sb, backup_root, now, res)
         except Exception as exc:  # noqa: BLE001 - every failure must reach the alert

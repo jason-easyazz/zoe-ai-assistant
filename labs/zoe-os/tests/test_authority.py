@@ -211,3 +211,21 @@ def test_the_database_lives_where_db_says_and_an_unmoved_old_record_stops_the_st
     p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0]), "--db", str(state[0] / "new.db")],
                        capture_output=True, text=True, timeout=30)
     assert p.returncode != 0 and "was not moved" in p.stderr and not (state[0] / "new.db").exists()
+
+
+def test_read_only_health_never_opens_a_write_transaction(state):
+    import authority
+    path = state[0]
+    kernel, server, _ = authority.build(path)
+    try:
+        statements = []
+        kernel.spine._db.set_trace_callback(statements.append)
+        result = server._op_health(None, {"read_only": 1})
+        assert result["alive"] is True and result["schema"] == 1
+        assert not any(s.startswith(("BEGIN", "UPDATE", "INSERT")) for s in statements)
+        assert wire.check_args("health", {"read_only": 1}) == ""
+        server._op_health(None, {})
+        assert any(s.startswith("BEGIN IMMEDIATE") for s in statements)
+    finally:
+        server.shutdown()
+        kernel.close()

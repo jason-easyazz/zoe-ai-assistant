@@ -830,3 +830,24 @@ memory, like grants, so a restart returns everyone to "not shared". And the limi
 forces a surface to call it.
 
 Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).
+
+## 13. Kernel service location decision (draft, 2026-11-15)
+
+Choose **(b): retain `labs/zoe-os` with an explicit reviewed deploy step**, as the
+Flue brain already does. No production service imports labs: clients use the Unix
+wire, and the operations helper independently speaks that protocol. Moving the
+flat package now would mix import-path and pytest-collection changes with lifecycle
+work and enlarge review without improving that boundary. Lab tests remain explicitly
+selected; operational tests live under `tests/unit`. This exception does not permit
+other labs into the runtime. `KERNEL_SOURCE_REL` in
+`scripts/maintenance/zoe_os_kernel.conf` is the sole source-location setting for
+launch and change detection. A later promotion can change it in one line once the
+separate package move preserves these entry points.
+
+The authority template now lives under `scripts/setup/systemd`, replacing the lab
+copy. The shadow template remains for comparison only: the two conflict, share a
+socket, and must never run together. Installation and enablement remain owner-only.
+The main service has no dependency on the kernel. CD restarts main first, then
+refreshes the optional authority; the client must fall back during that gap and
+reload reissued credentials. The client named by the lab README is absent on this
+branch: validate that contract before enabling. [Owner runbook](../knowledge/zoe-os-kernel-service.md).

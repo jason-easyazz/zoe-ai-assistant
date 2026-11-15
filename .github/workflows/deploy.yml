@@ -771,3 +771,12 @@ jobs:
           printf '%s\n' "${DEPLOY_TARGET_SHA}" > "${DEPLOY_STATE_DIR}/last-deployed-sha.tmp"
           mv -f "${DEPLOY_STATE_DIR}/last-deployed-sha.tmp" "${DEPLOY_STATE_DIR}/last-deployed-sha"
           echo "last-deployed-sha = ${DEPLOY_TARGET_SHA}"
+
+      # LAST on purpose: the kernel is optional, so neither a failure nor its (bounded) wait may delay or fail the
+      # zoe-data health check, the voice gate or the deployed-SHA marker above.
+      - name: Restart optional Zoe OS kernel (if changed)
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          cd "${ZOE_CHECKOUT:-$HOME/assistant}"
+          bash scripts/maintenance/zoe_os_kernel.sh deploy

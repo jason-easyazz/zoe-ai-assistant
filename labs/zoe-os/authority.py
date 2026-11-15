@@ -19,7 +19,7 @@ The shadow daemon (``shadow_daemon.py``) plus three things an authority needs an
 A revoke is remembered: at start every roster member is granted the brain's acts EXCEPT one whose newest ``brain`` grant change in
 the log is a revoke (the shadow re-granted everyone on every start, which an authority must not do).
 
-Lab only, stdlib only; never started by any script or deploy (unit template ``zoe-os-authority-kernel.service`` beside this file).
+Stdlib only; owner-installed optional service, explicitly updated by deploy (unit template under ``scripts/setup/systemd/``).
 """
 from __future__ import annotations
 
@@ -171,8 +171,11 @@ class AuthorityServer(KernelServer):
 
     def _op_health(self, conn, a: dict) -> dict:
         """Alive, the schema, and whether a write goes through RIGHT NOW (a no-op write in its own transaction): an unhealthy answer
-        is the fallback signal, and it can never stick, because every health call writes again."""
+        is the fallback signal. Optional read_only=1 observes without a write (ground truth)."""
         db = self.kernel.spine._db
+        if a.get("read_only") == 1:
+            db.execute("SELECT value FROM meta WHERE key = 'authority_schema'").fetchone()
+            return {"alive": True, "schema": SCHEMA, "last_write_ok": self.last_write_ok}
         try:
             db.execute("BEGIN IMMEDIATE")
             db.execute("UPDATE meta SET value = value WHERE key = 'authority_schema'")

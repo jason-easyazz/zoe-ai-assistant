@@ -11,6 +11,7 @@ Open Knowledge Format bundle — markdown + YAML frontmatter, cross-linked, read
 This is **knowledge / records** (descriptive facts), not a DOX contract. See the root `AGENTS.md` rule "Knowledge vs. Records (OKF)": binding rules live in `AGENTS.md`; this bundle curates what is *true* about Zoe and may be maintained by the autonomous knowledge loop.
 
 ## Concepts
+- [Optional Zoe OS kernel service](zoe-os-kernel-service.md) — draft owner install, lifecycle, WAL backup, health and rollback; not applied.
 
 - [The member register (ZOE_MEMBER_REGISTER, flag-dark)](member-register.md) - identity as four stored layers; per-member register (length, formality, humour, pace, liked topics) learned only from stated or confirmed signals, editable and forgettable (tombstones), a fixed kid-safe register behind its own flag, the default for guests; one `zoe-register:` line after the stable cached prefix (sidecar `register.ts`), warm-aware; routes, probes, owner steps
 - [Panel relay R1 - the box side](panel-relay-r1-box.md) - zoe-data relay ingress (`ZOE_RELAY_INGRESS`: never guest, no address, certificate-bound, panel principal only), the nginx relay listener (off unless `ssl/relay/listener.conf` exists), the household CA / frpc tooling, measured results, the owner steps in order and what is still pending (C3, the panel side).

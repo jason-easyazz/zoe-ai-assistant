@@ -55,3 +55,5 @@ Repository-level test suites: unit, integration, performance, e2e, intent-system
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+- Optional OS kernel operations are pinned by `unit/test_zoe_os_kernel_service.py` (fake systemd, scratch WAL database) and `unit/test_restore_drill.py`; read-only wire health is pinned in `labs/zoe-os/tests/test_authority.py`. Never point these at household state.

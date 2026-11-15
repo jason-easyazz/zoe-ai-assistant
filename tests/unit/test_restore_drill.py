@@ -977,3 +977,20 @@ def test_ignore_window_samples_memory_once_and_its_help_says_so(monkeypatch, tmp
     with pytest.raises(SystemExit):
         drill.main(["--help"])
     assert "sampled ONCE" in " ".join(capsys.readouterr().out.split())
+
+
+def test_kernel_drill_restores_only_to_scratch(tmp_path):
+    ops = _load("zoe_os_kernel_ops")
+    import sqlite3
+    source = tmp_path / "synthetic.db"
+    with sqlite3.connect(source) as db:
+        db.execute("CREATE TABLE meta (key TEXT, value BLOB)")
+        db.execute("INSERT INTO meta VALUES ('shield_key', X'01')")
+    root = tmp_path / "backups"
+    ops.backup(source, root)
+    findings, notes = ops.drill(root, tmp_path, True, datetime.now(timezone.utc).timestamp())
+    assert not findings and "scratch" in notes[0]
+    assert ops.drill(tmp_path / "absent", tmp_path, False, 0) == ([], [])
+    assert ops.drill(tmp_path / "absent", tmp_path, True, 0)[0] == ["kernel: no backup"]
+    next(root.glob("*.gz")).write_bytes(b"corrupt")
+    assert "failed" in ops.drill(root, tmp_path, True, 0)[0][0]

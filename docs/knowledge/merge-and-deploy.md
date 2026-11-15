@@ -745,3 +745,15 @@ matched a symlink) and `tests/unit/test_no_tracked_symlinks.py`. After the fix d
     systemctl --user restart flue-zoe-telegram
 
 Never commit a worktree's `node_modules` symlink; the guard test fails any tracked symlink into `/home/` or any tracked `node_modules`.
+
+### Optional Zoe OS authority service (draft)
+
+The added step after zoe-data restart invokes `zoe_os_kernel.sh deploy`, only for
+an installed and enabled authority unit. Main boots independently and the validated
+client falls back until the kernel answers write-health. The shared config supplies
+the source path; changed source since `DEPLOY_BASE_SHA`, failed pending updates or
+unhealthy kernels restart after the tree moves. A night marker defers it. Failures
+warn, write a job summary and retain a pending retry without failing the whole
+deploy. `continue-on-error` covers unexpected helper failure. No earlier gate,
+other restart, rollback or deployed-SHA logic changes. Units are never installed
+by CD. [Owner steps and backup/restore](zoe-os-kernel-service.md).

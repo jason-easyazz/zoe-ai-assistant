@@ -1,0 +1,33 @@
+# Owner opt-in template. No installer or deploy enables this unit.
+# ~20 MB reported resident: 64/96 MB leaves margin and bounds a leak. No swap or memory-reserve protection: those are the voice stack's; this daemon is expendable under pressure.
+[Unit]
+Description=Zoe OS authority kernel (optional list authority)
+Before=zoe-data.service
+Conflicts=zoe-os-shadow-kernel.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant
+# Database: ZOE_OS_KERNEL_DB in maintenance/zoe_os_kernel.conf; socket: STATE/k.sock.
+ExecStart=/bin/bash %h/assistant/scripts/maintenance/zoe_os_kernel.sh start
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+UMask=0077
+MemoryHigh=64M
+MemoryMax=96M
+OOMScoreAdjust=500
+Nice=10
+CPUWeight=20
+IOWeight=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.zoe/os-shadow %h/.zoe/zoe-os
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=default.target
