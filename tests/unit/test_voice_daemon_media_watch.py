@@ -122,6 +122,82 @@ def test_parse_sink_inputs(daemon):
     assert daemon._parse_sink_inputs("garbage\nCorked: yes\n") == []          # no block header: nothing
 
 
+def test_an_oversized_listing_is_unknown_never_a_truncated_parse(daemon):
+    """A listing over the bound must NOT be parsed by its head: a foreign stream past the cut would read as "no media" and
+    let a sound play over it. Over the bound is UNKNOWN (None), so the close stays silent."""
+    pad = _block(1, OWN + 1, "yes") * (daemon._MEDIA_MAX_LIST_BYTES // len(_block(1, OWN + 1, "yes")) + 1)
+    listing = pad + _block(99, 7000, "no")                      # the only foreign, playing stream sits past the bound
+    assert len(listing) > daemon._MEDIA_MAX_LIST_BYTES
+    clock = _Clock()
+    w, box = _watch(daemon, listing, clock)
+    w.refresh()
+    assert w._ok is False and w.snapshot()[0] is None          # unknown, never False
+    box["text"] = _block(1, 7000, "no")                         # positive control: the same stream, in bound, is seen
+    w.refresh()
+    assert w._foreign is True
+
+
+class _FakeListProc:
+    """A ``pactl list`` child whose stdout is a real pipe fed by a thread, so the reader's bound is exercised for real."""
+
+    def __init__(self, payload: bytes, rc: int = 0):
+        import os as _os
+        r, wfd = _os.pipe()
+        self.stdout = _os.fdopen(r, "rb", buffering=0)
+        self._rc, self.killed, self.fed = rc, False, 0
+
+        def _feed():
+            try:
+                with _os.fdopen(wfd, "wb", buffering=0) as fh:
+                    for i in range(0, len(payload), 4096):
+                        fh.write(payload[i:i + 4096])
+                        self.fed += 4096
+            except (BrokenPipeError, OSError):
+                pass
+
+        self._t = threading.Thread(target=_feed, daemon=True)
+        self._t.start()
+
+    def poll(self):
+        return None if self._t.is_alive() and not self.killed else self._rc
+
+    def wait(self, timeout=None):
+        self._t.join(timeout)
+        return self._rc
+
+    def kill(self):
+        self.killed = True
+
+
+def test_the_listing_is_bounded_while_it_is_read(daemon, monkeypatch):
+    """The reader stops at the bound: a huge listing is abandoned (child killed) and reported unknown; it is never
+    captured whole first. An in-bound listing is returned as text."""
+    big = (_block(1, OWN + 1, "yes") * 20000).encode()
+    assert len(big) > 8 * daemon._MEDIA_MAX_LIST_BYTES
+    procs = []
+
+    def _popen(*a, **k):
+        procs.append(_FakeListProc(big))
+        return procs[-1]
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", _popen)
+    assert daemon._media_list_sink_inputs(timeout_s=5.0) is None
+    assert procs[0].killed
+    small = _block(1, 7000).encode()
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: _FakeListProc(small))
+    assert daemon._media_list_sink_inputs(timeout_s=5.0) == small.decode()
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: _FakeListProc(small, rc=1))
+    assert daemon._media_list_sink_inputs(timeout_s=5.0) is None   # a failed pactl is unknown
+
+
+def test_the_listing_reader_never_captures_everything_first():
+    """Static pin: the reader does not use a capture-everything call (subprocess.run / communicate / check_output)."""
+    src = DAEMON.read_text(encoding="utf-8")
+    body = src[src.index("def _media_list_sink_inputs("):src.index("def _media_spawn_subscribe(")]
+    for banned in ("subprocess.run(", ".communicate(", "check_output(", "capture_output"):
+        assert banned not in body, banned
+
+
 def test_proc_ppid_reads_the_field_after_the_last_paren(daemon, tmp_path, monkeypatch):
     stat = tmp_path / "stat"
     stat.write_bytes(b"4242 (a (weird) name) S 777 4242 4242 0 -1")
