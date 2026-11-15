@@ -39,6 +39,20 @@ recorded in the cut-over plan.
 9. **Cost does not grow with history.** Everyday actions, undo and forget do bounded work; the step-budget tests pin it.
 10. **It works alone.** No network, no cloud, no code-hosting site is needed to run or test it.
 
+## How a feature moves onto the kernel
+
+Owner direction 2026-11-15; phases, proofs and decisions are in `docs/architecture/zoe-os-cutover-plan.md`.
+
+- **New features** that write a household action are built to go through the kernel, or at least to publish their receipts to
+  it, from the start.
+- **Existing actions** move one at a time, in this order: shadow (the kernel is shown each real action and its verdict is
+  compared; it controls nothing), the pass mark for that action, authority behind its own default-off flag with the old path as
+  the fallback, then the duplicate rule code is removed.
+- A kernel fault (down, slow, unsure) never fails or stalls a turn: the old path runs and the fallback is counted. A real
+  refusal by the kernel (no permission, forgotten) is honoured.
+- Forget and member delete reach the kernel before the kernel holds anything of a person.
+- Flags, units and restarts are the owner's and the landing session's.
+
 ## Forbidden
 
 - Importing this package from `services/`, or reaching its database from anywhere but the kernel process.
