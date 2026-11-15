@@ -352,8 +352,9 @@ def test_a_legacy_target_takes_the_legacy_rows_and_never_a_bound_row(world, monk
 
 @pytest.mark.parametrize("broken", [False, True])
 def test_a_bound_row_is_never_matched_by_text_when_the_forget_has_an_id(world, monkeypatch, broken):
-    """A forget WITH a saved-turn id compares no words at all: rows of another turn holding the target's very words survive, and a
-    legacy row with those words is not this turn's either. Control (``broken``): the old text fallback (night_mind before this
+    """A forget WITH a saved-turn id never matches a BOUND row by its words: rows of another turn holding the target's very words
+    survive. The decision is per row, so a LEGACY entry with those words (no saved turn of its own: it may be this turn's from
+    before ids were stamped) is taken; that errs toward forgetting and reaches legacy rows only. Control (``broken``): the old text fallback (night_mind before this
     change: the words over every observation) takes the other turn's observation."""
     svc, chat = world
     _old, bound = _plant_partition(svc)
@@ -363,7 +364,7 @@ def test_a_bound_row_is_never_matched_by_text_when_the_forget_has_an_id(world, m
     run(turn_forget.erase_turn_words(UID, ("m-target",), (LEGACY_SAID,)))
     words, night, approved = _state(svc)
     assert ("bound" in night) is (not broken)
-    assert "xw-bound@m-other" in words and "xw-legacy" in words and bound.id in approved
+    assert "xw-bound@m-other" in words and "xw-legacy" not in words and bound.id in approved
 
 
 def test_row_is_from_turn_consults_no_words_for_a_bound_or_non_turn_row():
