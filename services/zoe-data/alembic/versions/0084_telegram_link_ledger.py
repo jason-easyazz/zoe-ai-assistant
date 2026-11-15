@@ -23,41 +23,54 @@ rows go, so a token redeemed in its last minutes could be redeemed again until i
 
 from __future__ import annotations
 
-from alembic import op
+import logging
+
+from alembic import context, op
 
 revision = "0084"
 down_revision = "0080"
 branch_labels = None
 depends_on = None
 
+logger = logging.getLogger("alembic.runtime.migration")
+
 TABLE = "telegram_link_redemptions"
 INDEX = "uq_user_preferences_telegram_id"
 _TID = "(prefs::jsonb ->> 'telegram_id')"
+#: the duplicate-holder cleanup (logged with its row count when run against a live database)
+DEDUPE = f"""UPDATE user_preferences
+               SET prefs = ((prefs::jsonb - 'telegram_id') - 'telegram_link_proof')::text, updated_at = NOW()
+             WHERE {_TID} IN (
+                   SELECT {_TID} FROM user_preferences
+                    WHERE {_TID} <> ''
+                    GROUP BY 1 HAVING COUNT(*) > 1)"""
 
 
 def statements() -> list[str]:
-    """The upgrade statements, in order. Pure (no bind), so a test can read them."""
+    """The upgrade statements, in order. Pure (no bind), so a test can read them. The table name is written out in the CREATE
+    TABLE text (not interpolated): ``forget_reach`` finds per-member tables by reading these files."""
     return [
-        f"""CREATE TABLE IF NOT EXISTS {TABLE} (
+        """CREATE TABLE IF NOT EXISTS telegram_link_redemptions (
                token_id TEXT PRIMARY KEY,
                user_id TEXT NOT NULL,
                expires_at DOUBLE PRECISION NOT NULL,
                redeemed_at DOUBLE PRECISION NOT NULL
            )""",
         f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_user ON {TABLE} (user_id)",
-        f"""UPDATE user_preferences
-               SET prefs = ((prefs::jsonb - 'telegram_id') - 'telegram_link_proof')::text, updated_at = NOW()
-             WHERE {_TID} IN (
-                   SELECT {_TID} FROM user_preferences
-                    WHERE {_TID} <> ''
-                    GROUP BY 1 HAVING COUNT(*) > 1)""",
+        DEDUPE,
         f"CREATE UNIQUE INDEX IF NOT EXISTS {INDEX} ON user_preferences ({_TID}) WHERE {_TID} <> ''",
     ]
 
 
 def upgrade() -> None:
     for sql in statements():
-        op.execute(sql)
+        if sql is DEDUPE and not context.is_offline_mode():
+            # a live bind: run it here so the number of rows changed can be logged (a count only, never an id)
+            result = op.get_bind().exec_driver_sql(sql)
+            logger.info("0084: cleared the messaging link from %d member preference row(s) whose id had more than one holder",
+                        max(int(result.rowcount or 0), 0))
+        else:
+            op.execute(sql)       # offline (``--sql``): rendered; there is no result to count
 
 
 def downgrade() -> None:
