@@ -1008,7 +1008,11 @@ async def load_chat_rows(since: float, until: float, db=None) -> list[dict]:
 
     async def _q(conn):
         rows = await (await conn.execute(sql, (float(since), float(until)))).fetchall()
-        return [dict(zip(cols, tuple(r))) for r in rows]
+        rows = [dict(zip(cols, tuple(r))) for r in rows]
+        # a member's turns at or before their erase watermark are never reviewed (erase_watermark); unreadable = their rows are dropped
+        import erase_watermark
+        return await erase_watermark.keep_after(rows, owner=lambda r: r["owner"], at=lambda r: r["ts"], reader="self_review",
+                                                strict=False)
 
     if db is not None:
         return await _q(db)

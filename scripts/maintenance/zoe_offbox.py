@@ -645,20 +645,31 @@ def backup_tier(cfg: Config, tier: str, paths: list[Path]) -> str:
 # ── alerting ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def alert(text: str) -> None:
-    """Telegram via the crash-loop watcher's sender (a separate process from zoe-data). Never carries a secret."""
+def alert(text: str) -> bool:
+    """Telegram via the crash-loop watcher's sender (a separate process from zoe-data). Never carries a secret.
+
+    Returns True when the alert was HANDED OFF: the shared ``deliver()`` returned any outcome but ``failed`` (delivered,
+    uncertain, held in the outbox for retry, or given up loudly), or alerts are switched off on purpose
+    (``ZOE_OFFBOX_NO_ALERT``). False when it was not: ``deliver()`` returned ``failed`` (the outbox could not store it -
+    it never sends unstored) or the sender could not be loaded / raised. Never raises an Exception; a caller that keeps
+    a cadence (the restore drill) records "alerted" only on True."""
     print(f"ALERT: {text}", file=sys.stderr)
     if os.environ.get("ZOE_OFFBOX_NO_ALERT"):
-        return
+        return True
     try:
         spec = importlib.util.spec_from_file_location("_clw", REPO_ROOT / "scripts" / "maintenance" /
                                                       "zoe_crash_loop_watch.py")
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(mod)
-        mod.deliver("backup", f"Zoe backup: {text}")   # the shared outbox retries it if Telegram is down
+        outcome, reason = mod.deliver("backup", f"Zoe backup: {text}")   # the shared outbox retries it if Telegram is down
     except Exception as exc:  # noqa: BLE001 - the alert path must never mask the failure it reports
         print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
+        return False
+    if outcome == "failed":
+        print(f"alert not handed off: {reason}", file=sys.stderr)
+        return False
+    return True
 
 
 # ── commands ─────────────────────────────────────────────────────────────────────────────────────────────────────

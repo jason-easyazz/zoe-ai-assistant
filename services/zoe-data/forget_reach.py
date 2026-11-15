@@ -42,7 +42,7 @@ WORDS, BIOMETRIC, DERIVED, METADATA, CONFIG = "words", "biometric", "derived", "
 @dataclass(frozen=True)
 class Store:
     key: str                          # the table name, or a short id for a non-table store
-    kind: str                         # pg_table | palace | chroma | file | corpus | backup | vault
+    kind: str                         # pg_table | palace | chroma | file | corpus | backup | vault | db | memory (in process)
     holds: str                        # WORDS | BIOMETRIC | DERIVED | METADATA | CONFIG
     status: str                       # REACHED | OUT_OF_SCOPE | GAP
     why: str = ""                     # one line; required unless the store is reached by both paths
@@ -61,6 +61,7 @@ def _t(key, holds, status, why="", member=None, entity=None):
 _OMI_M = "omi_recordings.forget_user"
 _CONTACTS_M = "contacts_store.forget_user"
 _OWN = "Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user."
+_DERIVED_M = "member_derived_forget.forget_user"     # what Zoe derived about the member (portrait, card, loops, proactive rows, offers)
 _NOWORDS = "No words and no biometrics: ids, flags, times or counters only."
 
 TABLES: tuple[Store, ...] = (
@@ -91,6 +92,9 @@ TABLES: tuple[Store, ...] = (
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("omi_day_candidates", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("conversation_notes", WORDS, REACHED, member="conversation_notes.forget_user", entity="conversation_notes.erase_entity"),
+    # the superseded-value registry (0080): ids, closed labels and numbers only, but an age is household content, so WORDS-grade.
+    # Also erased by the topic forget, "forget that" and MemoryService.erase_rows (pinned in tests/test_memory_value_registry.py).
+    _t("memory_value_registry", WORDS, REACHED, member="memory_value_registry.forget_user", entity="memory_value_registry.erase_entity"),
     _t("contact_fields", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("contact_sources", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("source_contacts", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
@@ -108,15 +112,11 @@ TABLES: tuple[Store, ...] = (
     _t("learned_voiceprints_0071", METADATA, OUT_OF_SCOPE,
        "Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the "
        "same migration; it never exists on the Postgres box the dumps read."),
-    # --- derived rows only the ENTITY path reaches (delete_user leaves them: a member-erase gap, ledgered) ---
-    _t("user_portraits", DERIVED, GAP, "Entity forget deletes a portrait that names the entity; delete_user does not remove it.",
-       entity="memory_forget_cascade._run"),
-    _t("user_model_cards", DERIVED, GAP, "Entity forget deletes a card that names the entity; delete_user does not remove it.",
-       entity="memory_forget_cascade._run"),
-    _t("open_loops", WORDS, GAP, "Entity forget resolves a loop that names the entity; delete_user does not touch the rows.",
-       entity="memory_forget_cascade._run"),
-    _t("proactive_candidates", DERIVED, GAP, "Entity forget deletes candidates naming the entity; delete_user does not.",
-       entity="memory_forget_cascade._run"),
+    # --- rows Zoe DERIVES about the member: delete_user removes all of them, the entity forget the ones naming the entity ---
+    _t("user_portraits", DERIVED, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),
+    _t("user_model_cards", DERIVED, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),
+    _t("open_loops", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),          # the entity forget resolves the loop instead
+    _t("proactive_candidates", DERIVED, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),
     _t("people", WORDS, GAP, "Entity forget soft-deletes the person row (kept with deleted=1); delete_user does not touch people.",
        entity="memory_forget_cascade._run"),
     _t("person_relationships", DERIVED, GAP, "Entity forget closes the edges (valid_to); delete_user does not.",
@@ -128,18 +128,17 @@ TABLES: tuple[Store, ...] = (
        "their calendar-less local events (household-visible by default) stay until the owner decides delete vs keep for the household. "
        "The entity forget scrubs only legacy metadata.attendees.", member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
     _t("memory_forgotten", METADATA, OUT_OF_SCOPE,
-       "The forget LEDGER itself: salted hashes, no names. It must survive a forget to keep the forget enforced."),
+       "The forget LEDGER itself: salted hashes, no names, plus one erase WATERMARK per erased member (erase_watermark: an id and a "
+       "time). It must survive a forget to keep the forget enforced."),
     # --- the verbatim transcript ---
     _t("chat_sessions", WORDS, GAP, "Entity forget redacts titles in place (forget_redact.on_forget); delete_user does not delete sessions.",
        entity="forget_redact.on_forget"),
-    _t("chat_messages", WORDS, GAP, "Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages.",
+    _t("chat_messages", WORDS, GAP, "Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages "
+       "(owner decision pending), but every background transcript miner skips the member's turns at or before their erase watermark (erase_watermark.keep_after).",
        entity="forget_redact.on_forget"),
     _t("chat_feedback", WORDS, GAP, "Holds a corrected_response (words); neither path reaches it."),
     _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
-    _t("pending_suggestions", WORDS, GAP, "Offer text naming people can outlive the forget (person offers are withdrawn by name; "
-       "anticipation offers naming the entity are deleted by the cascade; a TOPIC forget withdraws the offers holding the topic or a "
-       "name from the forgotten words: forget_topic._withdraw_offers); delete_user does not reach the table.",
-       entity="memory_forget_cascade._run"),
+    _t("pending_suggestions", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),   # Zoe's offers; topic forget: forget_topic._withdraw_offers
     # --- member-owned product data: the member's own lists, notes, calendar, journal, money ---
     _t("notes", WORDS, GAP, _OWN + " Holds free text."),
     _t("journal_entries", WORDS, GAP, _OWN + " Holds free text."),
@@ -163,11 +162,11 @@ TABLES: tuple[Store, ...] = (
     _t("notifications", WORDS, REACHED, member="notifications_store.forget_user"),   # every row of the member, any writer; no entity eraser
     _t("music_listening_events", METADATA, OUT_OF_SCOPE, "Listening history: titles/artists, no household words; the music journal has its own controls."),
     # --- proactive / voice delivery plumbing ---
-    _t("proactive_deliveries", DERIVED, GAP, "Delivery ledger rows keyed by candidate; text is in the candidate, not here."),
+    _t("proactive_deliveries", DERIVED, REACHED, member=_DERIVED_M),   # delivery ledger rows keyed by candidate (cue words)
     _t("proactive_outcome_edges", DERIVED, REACHED, member="outcome_edges.erase_user"),   # opaque item ids + outcomes only: no word for an entity forget to erase
-    _t("proactive_ledger_lines", WORDS, GAP, "Holds the spoken line (words); neither path reaches it."),
-    _t("proactive_pending", WORDS, GAP, "Holds the message text; neither path reaches it."),
-    _t("proactive_scheduled", WORDS, GAP, "Holds the message text; neither path reaches it."),
+    _t("proactive_ledger_lines", WORDS, REACHED, member=_DERIVED_M),   # the line Zoe spoke to the member
+    _t("proactive_pending", WORDS, GAP, "Holds the message text of a queued send (reminders the member set); owner decision with reminders."),
+    _t("proactive_scheduled", WORDS, GAP, "Holds the message text of a scheduled send (reminders the member set); owner decision with reminders."),
     _t("proactive_responses", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("voice_announcements", WORDS, GAP, "Holds the announcement message; short-lived (expires_at) but not erased on forget."),
     # --- identity / biometric enrolment ---
@@ -265,6 +264,10 @@ OTHER: tuple[Store, ...] = (
           "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "
           "the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate.",
           entity="self_review.erase_entity", markers=("candidate-cells.jsonl",)),
+    Store("pending_correction_markers", "memory", METADATA, REACHED, "correction_marker.py (ZOE_CORRECTION_PENDING_MARKER): in process only, "
+          "member id + chat turn id + time + hashed subject keys, NO words (the packet fetches the turn's text from chat_messages by id). "
+          "TTL 2 h, lost on restart; every forget path drops the member's markers (turn, topic, entity, delete_user).",
+          member="correction_marker.forget_user", entity="correction_marker.forget_user", markers=("PENDING_CORRECTION",)),
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),

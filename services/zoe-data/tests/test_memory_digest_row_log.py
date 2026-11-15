@@ -4,9 +4,9 @@ Why (the day-sim 6n diagnosis, 2026-10-08): the extractor's exact wording and th
 a live incident could not be replayed - the cause had to be guessed. Each stored / parked / edited / held row now logs
 
     MEMORY_ROW lane=<turn_digest|digest|emotional> outcome=<stored|parked|edited|held> user=<id> id=<row id>
-    class=<authority class> promoted=<yes|no> basis=<authority basis> status=<status> type=<type> wording='<row text>'
+    class=<authority class> promoted=<yes|no> basis=<authority basis> status=<status> type=<type> row=len=<chars> utt=<12 hex>
 
-The wording is the ROW's text (after the write boundary's scrub), never the owner's turn. These tests pin the line's
+The line carries a length+hash TAG of the ROW's text (never the words, never the owner's turn). These tests pin the line's
 shape, that it is post-turn only, and that a failure to log never fails a digest. Synthetic names only.
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ import types
 
 import pytest
 
+import log_redaction
 import memory_authority as ma
 import memory_digest
 import memory_service
@@ -31,8 +32,9 @@ pytestmark = pytest.mark.ci_safe
 LINE = re.compile(
     r"^MEMORY_ROW lane=(?P<lane>turn_digest|digest|emotional) outcome=(?P<outcome>stored|parked|edited|held) "
     r"user=(?P<user>\S+) id=(?P<id>\S+) class=(?P<cls>\S+) promoted=(?P<promoted>yes|no) basis=(?P<basis>\S+) "
-    r"status=(?P<status>\S+) type=(?P<type>\S+) wording=(?P<wording>'.*'|\".*\")$")
+    r"status=(?P<status>\S+) type=(?P<type>\S+) row=(?P<wording>len=\d+ utt=[0-9a-f]{12})$")
 
+TAG = log_redaction.utterance_tag
 T1 = "I've been getting migraines most afternoons lately and it's starting to worry me."
 FACT = "User has been getting migraines most afternoons lately"
 
@@ -61,7 +63,7 @@ def test_a_stored_row_logs_its_id_class_promotion_and_the_extractors_wording(mon
     assert got["lane"] == "turn_digest" and got["outcome"] == "stored" and got["user"] == UID
     assert got["id"] == row_id and got["cls"] == meta["authority_class"] == ma.USER_STATED_DERIVED
     assert got["promoted"] == "yes" and got["basis"] == ma.VERBATIM_BASIS and got["status"] == "approved"
-    assert got["wording"] == repr(FACT)
+    assert got["wording"] == TAG(FACT)
     assert T1 not in line                      # the row text only - never the owner's turn
 
 
@@ -91,7 +93,7 @@ def test_a_parked_row_is_logged_as_parked(monkeypatch, caplog):
     asyncio.run(go())
     lines = [_parse(x) for x in _lines(caplog)]
     assert [x["outcome"] for x in lines] == ["parked"]
-    assert lines[0]["status"] in ("disputed", "pending") and lines[0]["wording"] == repr("User lives in Hobart")
+    assert lines[0]["status"] in ("disputed", "pending") and lines[0]["wording"] == TAG("User lives in Hobart")
 
 
 def test_an_edited_row_is_logged_when_the_reconciler_updates_a_stored_one(monkeypatch, caplog):
@@ -115,7 +117,7 @@ def test_an_edited_row_is_logged_when_the_reconciler_updates_a_stored_one(monkey
 
     asyncio.run(go())
     lines = [_parse(x) for x in _lines(caplog)]
-    assert [x["outcome"] for x in lines] == ["edited"] and lines[0]["wording"] == repr(updated)
+    assert [x["outcome"] for x in lines] == ["edited"] and lines[0]["wording"] == TAG(updated)
 
 
 def test_a_dropped_fact_leaves_no_row_line(monkeypatch, caplog):
@@ -148,7 +150,7 @@ def test_a_logging_failure_never_fails_the_digest():
     memory_digest.log_row("turn_digest", UID, None, "stored")
 
 
-def test_a_long_wording_is_capped(caplog):
+def test_a_long_row_is_tagged_with_its_full_length(caplog):
     caplog.set_level(logging.INFO)
 
     class Ref:
@@ -156,7 +158,34 @@ def test_a_long_wording_is_capped(caplog):
 
     memory_digest.log_row("digest", UID, Ref, "stored")
     [line] = _lines(caplog)
-    assert len(_parse(line)["wording"]) <= memory_digest._ROW_LOG_WORDING_MAX + 4
+    assert _parse(line)["wording"] == TAG(Ref.text) and "xxxxx" not in line
+
+
+SENTINEL = "Zorblax-tangerine-9137"
+
+
+def _records_text(caplog):
+    return [(r.getMessage(), str(r.args), str(r.msg)) for r in caplog.records]
+
+
+def test_log_row_emits_the_row_text_in_no_record_message_or_args(caplog):
+    caplog.set_level(logging.DEBUG)
+
+    class Ref:
+        id, text, metadata = "r-1", f"User keeps a {SENTINEL} in the shed", {"authority_class": "x", "claim_lexical": SENTINEL}
+
+    memory_digest.log_row("turn_digest", UID, Ref, "stored")
+    assert caplog.records
+    for parts in _records_text(caplog):
+        assert all(SENTINEL.split("-")[0] not in p and "shed" not in p for p in parts[:3]), parts
+    assert any(TAG(Ref.text) in r.getMessage() for r in caplog.records)
+
+
+def test_negative_control_the_old_wording_shape_would_leak(caplog):
+    """The pre-fix call shape (``wording=%r`` of the text) puts the sentinel in the message: the assertion above bites."""
+    caplog.set_level(logging.INFO)
+    logging.getLogger(memory_digest.__name__).info("MEMORY_ROW lane=%s wording=%r", "digest", f"a {SENTINEL} b")
+    assert any(SENTINEL in r.getMessage() for r in caplog.records)
 
 
 # ── the nightly digest ──────────────────────────────────────────────────────────────────────────────
@@ -220,9 +249,10 @@ def test_the_nightly_digest_logs_a_stored_row_and_a_held_one(night_svc, monkeypa
     ])
     got = [_parse(x) for x in _lines(caplog)]
     by_word = {g["wording"]: g for g in got}
-    assert by_word[repr(supported)]["lane"] == "digest" and by_word[repr(supported)]["outcome"] == "stored"
-    assert by_word[repr(supported)]["status"] == "approved"
-    assert by_word[repr(supported)]["id"] in night_svc._col.rows
+    assert by_word[TAG(supported)]["lane"] == "digest" and by_word[TAG(supported)]["outcome"] == "stored"
+    assert by_word[TAG(supported)]["status"] == "approved"
+    assert by_word[TAG(supported)]["id"] in night_svc._col.rows
     held = [g for g in got if g["outcome"] == "held"]
-    assert len(held) == 1 and "Dagny" in held[0]["wording"] and held[0]["status"] != "approved"
+    assert len(held) == 1 and held[0]["wording"] == TAG(unsupported) and held[0]["status"] != "approved"
+    assert all("Dagny" not in x and "Hobart" not in x for x in _lines(caplog))
     assert all(transcript not in x for x in _lines(caplog))     # never the owner's text
