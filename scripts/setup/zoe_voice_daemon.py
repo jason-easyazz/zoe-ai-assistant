@@ -4179,7 +4179,7 @@ class _FirstSound:
         if REFLEX_MODE == "off":
             self.skip = "-"
         else:
-            self.skip = self.reflex.skip if self.reflex is not None else _shadow_reflex_skip(self)
+            self.skip = ("-" if self.reflex.pending else self.reflex.skip) if self.reflex is not None else _shadow_reflex_skip(self)
 
     def _take_close(self) -> None:
         c = dict(_turn_close)
@@ -4276,7 +4276,8 @@ class _FirstSound:
             c["fall"] if c is not None and c.get("fall") in ("clean", "hesitating") else "none",
             self._muted(c), self.rel_ms(self.first_end), self._media(c),
             int(c.get("media_age_ms", -1)) if c is not None else -1,
-            1 if self.spk is True else 0 if self.spk is False else -1, spk_ms if spk_ms >= 0 else -1)
+            1 if self.spk is True else 0 if self.spk is False else -1, spk_ms if spk_ms >= 0 else -1) + (
+                " reflex_pending=1" if self.reflex is not None and self.reflex.pending else "")
 
     @staticmethod
     def _media(c: "dict | None") -> int:
@@ -4475,13 +4476,15 @@ def _reflex_note_safety(fs: "_FirstSound", v: object) -> None:
 
 
 def _reflex_safety_line(fs: "_FirstSound") -> "str | None":
-    """``REFLEX_SAFETY mode=<shadow|on> would_play=<0|1> class=<enum|unknown>`` for a turn the controller decided, else
+    """``REFLEX_SAFETY mode=<shadow|on> would_play=<0|1|pending> class=<enum|unknown>`` for a decided or pending turn, else
     None. ``would_play=1`` with a class other than none/unknown is a turn the reflex would have played before a safety
-    reply: the number the contract asks the shadow to count. Enums and 0/1 only."""
+    reply: the number the contract asks the shadow to count. A worker still running at turn end is ``pending``, never
+    mistaken for a settled zero. Only the turn logs this snapshot; the worker never logs a second safety line."""
     ctl = fs.reflex
-    if ctl is None or not ctl._decided:
+    if REFLEX_MODE == "off" or ctl is None or not (ctl.pending or ctl._decided):
         return None
-    return "REFLEX_SAFETY mode=%s would_play=%d class=%s" % (ctl.mode, 1 if ctl.would_play else 0, fs.safety or "unknown")
+    would_play = "pending" if ctl.pending else "1" if ctl.would_play else "0"
+    return "REFLEX_SAFETY mode=%s would_play=%s class=%s" % (ctl.mode, would_play, fs.safety or "unknown")
 
 
 def _reflex_note_voice(v: object) -> None:
@@ -4533,6 +4536,7 @@ class _ReflexTurn:
         self.started_at: "float | None" = None
         self._decided = False
         self.would_play = False          # decide() said "heard" (in shadow: would have played); read by the safety count
+        self.pending = False            # FIRST_SOUND snapshot: worker had not finished at turn end
         self._reply = threading.Event()  # the reply's first audio arrived (set by the reply path: its ONLY reflex action)
         self._over = threading.Event()   # the turn ended
         self._thread = threading.Thread(target=self._run, daemon=True, name="reflex-turn")
@@ -4546,14 +4550,14 @@ class _ReflexTurn:
         self._reply.set()
 
     def end(self) -> None:
+        """Signal only. Unsettled FIRST_SOUND fields are unknown, marked by reflex_pending=1."""
+        self.pending = self._thread.is_alive()
         self._over.set()
-        if self._thread.is_alive():      # the TURN's end (the reply has finished): let the reflex thread settle its fields
-            self._thread.join(timeout=0.25)
-        if self.skip == "-" and self.kind == "none" and self.take is None and not self._decided:
-            self.skip = "late"           # the turn was over before a decision: never a "would have played"
 
     def fields(self, fs: "_FirstSound") -> tuple:
         """(reflex kind, at_ms, dur_ms, cut, gap_ms) for the FIRST_SOUND line."""
+        if self.pending:
+            return "none", -1, -1, -1, -1  # unknown, not a claim that nothing played or that a cut finished
         if self.kind != "heard" or self.started_at is None:
             return "none", -1, -1, 0, -1
         gap = 0 if self.cut else -1       # a cut reflex had no gap: the reply started over its tail
@@ -4583,6 +4587,7 @@ class _ReflexTurn:
                 return
             if self._over.is_set() or _shutdown.is_set():
                 self.skip = "late"
+                self._log(decided_ms, obs, "none")
                 return
             with _REFLEX_LOCK:
                 state = dict(_REFLEX_STATE)
@@ -4642,7 +4647,7 @@ class _ReflexTurn:
         # reply's first audio; if the reply came while the take still plays, terminate it.
         deadline = time.monotonic() + take.dur_ms / 1000.0 + 2.0
         while proc.poll() is None and time.monotonic() < deadline:
-            if self._reply.wait(timeout=0.01):
+            if self._reply.is_set() or self._over.wait(timeout=0.01) or _shutdown.is_set():
                 if proc.poll() is None:
                     self.cut = True
                     self._reap(proc, kill=True)
@@ -4896,17 +4901,20 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     finally:
         _fs_local.turn = prev
         try:
-            _reflex_end(fs)  # no reflex may start after the turn is over
+            if REFLEX_MODE != "off":
+                _reflex_end(fs)  # signal only: no turn-path wait for the daemon worker
         except Exception:  # noqa: BLE001
             pass
         try:
-            fs.shadow_reflex()  # after the stream: a shadow decide(), logged as skip=, never acted on
+            if REFLEX_MODE != "off":
+                fs.shadow_reflex()  # after the stream: a shadow decide(), logged as skip=, never acted on
         except Exception:  # noqa: BLE001
             pass
         try:
-            safety_line = _reflex_safety_line(fs)  # the shadow's safety count (the server's class, at the turn's end)
-            if safety_line:
-                log.info("%s", safety_line)
+            if REFLEX_MODE != "off":
+                safety_line = _reflex_safety_line(fs)  # one snapshot, never wait for the worker's decision
+                if safety_line:
+                    log.info("%s", safety_line)
         except Exception:  # noqa: BLE001
             pass
         for make in (fs.pcm_line, lambda: fs.line(_TALK.take())):
@@ -4941,7 +4949,8 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
         fs.speaker(voice_claim, _fs_now() if scored_here else None)
     except Exception:  # noqa: BLE001
         pass
-    _reflex_begin(fs)  # REFLEX_MODE shadow / on: decide (and maybe play) on its own thread, off the path to the POST
+    if REFLEX_MODE != "off":
+        _reflex_begin(fs)  # decide (and maybe play) on its own thread, off the path to the POST
     if speculation is not None:
         speculation.voice_claim = voice_claim
     _last_turn_flags.clear()
@@ -5055,8 +5064,9 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
                 reply = obj.get("reply", "") or reply
                 continue
             if obj.get("done"):
-                _reflex_note_voice(obj.get("voice"))
-                _reflex_note_safety(fs, obj.get("safety"))
+                if REFLEX_MODE != "off":
+                    _reflex_note_voice(obj.get("voice"))
+                    _reflex_note_safety(fs, obj.get("safety"))
                 reply = obj.get("reply", "") or reply
                 if obj.get("cancelled") and speculation is not None:
                     # The server dropped the speculative turn: nothing was and
