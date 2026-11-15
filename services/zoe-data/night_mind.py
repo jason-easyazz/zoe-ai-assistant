@@ -1989,29 +1989,27 @@ def partition_observations(obs: Any) -> tuple[list, list]:
 
 
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
-    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. With its saved turn
-    (``turn_id``: the chat message id every new observation carries): the observations saved from it, BY ID ONLY - another turn's
-    observation can hold the very same words (a look-alike whose difference the scrub removed), so ``texts`` are never compared.
-    Without one (a LEGACY target, ``turn_forget.erase_turn_words``): only the LEGACY observations (``partition_observations``: saved
-    with no turn id) whose quote sits inside - or contains - any of ``texts``; over-inclusive there by design. A store failure is
-    RAISED."""
+    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. PER ROW
+    (``partition_observations``): a BOUND observation (saved with a turn id) goes only when its id is ``turn_id`` - another turn's
+    observation can hold the very same words (a look-alike whose difference the scrub removed), so no text is compared with it;
+    a LEGACY observation (saved with no turn id) goes when its quote sits inside - or contains - any of ``texts``, whether or not
+    ``turn_id`` is given (over-inclusive there by design). A store failure is RAISED."""
     if not (user_id or "").strip():
         return 0
     tid = str(turn_id or "").strip()
-    wanted = [] if tid else [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
     if not wanted and not tid:
         return 0
     async with _user_lock(user_id):
         try:
             backend = night_store.get_backend()
             bound, legacy = partition_observations(await backend.observations(user_id))
-            if tid:
-                hit = [o for o in bound if str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
-            else:
-                hit = [o for o in legacy if (o["quote"] or "").strip()
-                       and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
-                if hit:
-                    logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(hit))
+            hit = [o for o in bound if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
+            old = [o for o in legacy if (o["quote"] or "").strip()
+                   and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+            if old:
+                logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(old))
+            hit += old
             if not hit:
                 return 0
             pattern = re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in hit}, key=len, reverse=True)))

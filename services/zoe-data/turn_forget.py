@@ -500,10 +500,14 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
     """Erase what a forgotten turn's WORDS left outside the memory rows - the saved transcript turn (flagged ``off_record``), the
     night mind's observations, the exact-words entries - and return how much. THE one dispatcher every turn forget uses:
 
-    * with the turn's saved-turn ids ``mids``: by those ids ONLY; ``texts`` are never compared.
-    * without (a LEGACY target: an entry or row written before the ids): the words resolve to the saved turns holding them
-      (over-inclusive: a look-alike turn goes too, accepted here only), which are then erased by id, plus the legacy entries and
-      observations that carry no id, by their words. Logged ``TURN_FORGET code=legacy_text``.
+    Bound versus legacy is decided PER ROW, never per target:
+
+    * BOUND rows (a transcript turn named by id, an observation / entry carrying a saved-turn id) are erased by the ids ``mids``
+      only - their words are never compared, however alike.
+    * LEGACY rows (an observation / entry written with no id) are matched by the turn's words ``texts`` whether or not the target
+      has ids (a turn backfilled after the upgrade has an id while its older rows still do not); over-inclusive there by design.
+    * With no ids at all, the words also resolve to the saved turns holding them (``legacy_transcript_ids``), which are then erased
+      by id. Logged ``TURN_FORGET code=legacy_text``.
 
     The transcript and the night mind FIRST, the exact-words entries last: a failure part-way RAISES with the entries still there,
     so a retry reaches everything again. RAISES on a store failure (the caller must not confirm)."""
@@ -511,11 +515,11 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
     import night_mind
 
     ids = [str(m) for m in dict.fromkeys(mids or ()) if m]
-    legacy = not ids
-    words = [w for w in dict.fromkeys(texts or ()) if w and w.strip()] if legacy else []
-    if legacy and not words:
+    resolve = not ids                         # no ids: the words name the saved turns too (the transcript lookup)
+    words = [w for w in dict.fromkeys(texts or ()) if w and w.strip()]
+    if not ids and not words:
         return 0
-    if legacy:
+    if words:
         logger.info("TURN_FORGET code=legacy_text texts=%d", len(words))
     n, failure = 0, None
 
@@ -529,7 +533,7 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
             failure = failure or exc
             logger.warning("TURN_FORGET code=eraser_failed step=%s (%s)", getattr(coro_fn, "__name__", "?"), type(exc).__name__)
 
-    if legacy:
+    if resolve:
         for w in words:
             await step(exact_words.forget_transcript, user_id, w)                  # the transcript flag, from the one read
             try:
@@ -541,14 +545,14 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
         await step(exact_words.flag_transcript_turns, user_id, ids)
     for mid in ids:
         await step(night_mind.erase_words, user_id, mid)
-    if legacy:
-        await step(night_mind.erase_words, user_id, "", *words)              # observations saved with no turn id
+    if words:
+        await step(night_mind.erase_words, user_id, "", *words)              # LEGACY observations (no turn id), by their words
     # the exact-words entries LAST, and only when everything before held: an entry left behind keeps the retry able to find them
     if failure is None and ids:
         await step(exact_words.erase_turns, user_id, ids)
     if failure is None:
         for w in words:
-            await step(exact_words.erase_text, user_id, w)                    # entries indexed before the ids
+            await step(exact_words.erase_text, user_id, w)                    # LEGACY entries (no id), by their words
     if failure is not None:
         raise failure
     return n

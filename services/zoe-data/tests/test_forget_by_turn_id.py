@@ -422,3 +422,64 @@ def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, 
     second = _forget_last(svc, chat, "b", None)
     assert second.startswith("Done"), _diagnosis("forget_last retry", second, before, _left(svc, chat), caplog)
     assert chat.off(chat.mid("b")) and "b" not in _xw_rows() and not chat.off(chat.mid("a"))
+
+
+# ── PER ROW, never per target (review P1, PR #2574): a turn backfilled AFTER the upgrade has an id, its older fact does not ─────
+
+BACKFILLED = "My piano teacher lives next to the old bakery"
+
+
+def _plant_backfilled(svc, chat):
+    """A pre-upgrade fact (no source_turn) whose transcript turn is indexed afterwards WITH its saved-turn id (what
+    ``backfill_recent`` does: ``index_turn(..., message_id=<chat_messages.id>)``), beside a bound row of ANOTHER turn with the same
+    words and a legacy row whose words do not match."""
+    from routers.chat import _save_chat_message
+
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", BACKFILLED, user_id=UID)) is True
+    mid = next(m for m, (c, _meta) in chat.rows.items() if c == BACKFILLED)
+
+    def legacy(text, excerpt):
+        ref = run(svc.ingest(text, user_id=UID, source="turn_digest", status="approved", source_excerpt=excerpt))
+        for k in ("source_turn", "source_kind"):
+            svc._collection().rows[ref.id][1].pop(k, None)              # written before the ids
+        return ref
+    old = legacy("User's piano teacher lives next to the old bakery", BACKFILLED)
+    unrelated = legacy("User's dentist lives next to the old bakery", "My dentist lives next to the old bakery")
+    mine = run(svc.ingest("User has a piano teacher near the old bakery", user_id=UID, source="turn_digest", status="approved",
+                          source_excerpt=BACKFILLED, metadata={"source_turn": mid}))
+    other = run(svc.ingest("User's piano teacher lives by the old bakery", user_id=UID, source="turn_digest", status="approved",
+                           source_excerpt=BACKFILLED, metadata={"source_turn": "m-another-turn"}))
+    assert run(xw.index_turn(UID, BACKFILLED, message_id=mid)) is True           # the backfill: the entry now carries the id
+    tid = next(k[1] for k in xw.get_backend().rows)
+    assert xw.mid_of(tid) == mid
+    return {"old": old, "unrelated": unrelated, "mine": mine, "other": other, "tid": tid}
+
+
+def _forget_backfilled(path, svc, planted):
+    if path == "forget_it_after_why":
+        stored = xw.get_backend().rows[(UID, planted["tid"])]["text"]
+        exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=planted["tid"])
+        return run(pa._forget_turn(UID, exp, svc=svc))
+    if path == "forget_last":
+        return run(intent_router.execute_intent(intent_router.Intent("memory_forget_last", {}), UID))
+    import memory_space
+
+    return "Done" if run(memory_space.forget_row(UID, planted["mine"].id, svc=svc)) == "forgotten" else "not done"
+
+
+@pytest.mark.parametrize("path", ["forget_it_after_why", "forget_last", "memory_space"])
+def test_a_legacy_fact_of_a_backfilled_turn_is_forgotten_with_it(world, path):
+    """The target turn HAS an id (its entry was backfilled), yet the fact written before the upgrade has none: bound versus legacy
+    is decided per ROW, so that legacy fact is matched by its words and goes - the answer is Done because it is gone. The id rule
+    still holds for every bound row (another turn's row with the very same words stays), and a legacy row whose words do not match
+    stays. Fails on e27797bfb for forget-it and the memory-space erase (they decided legacy-ness per target)."""
+    svc, chat = world
+    planted = _plant_backfilled(svc, chat)
+    reply = _forget_backfilled(path, svc, planted)
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert reply.startswith("Done"), reply
+    assert planted["old"].id not in approved and planted["mine"].id not in approved          # the turn's rows, legacy and bound
+    assert planted["other"].id in approved                                                    # another turn's bound row: by id only
+    assert planted["unrelated"].id in approved                                                # a legacy row that does not match

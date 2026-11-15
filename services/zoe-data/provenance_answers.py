@@ -1391,10 +1391,10 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
             r_ex = str(m.get("source_excerpt") or "").strip().lower()
             r_kind, r_src = turn_forget.provenance(m)
             r_src = r_src if r_kind == "turn" else ""
-            if (src or r_src) and r_src != src:
-                continue                                     # saved-turn ids decide: a row with one is NEVER a twin by its text
+            if r_src and r_src != src:
+                continue                                     # PER ROW: a row with its own saved turn is NEVER a twin by its text
             by_id = bool(src) and r_src == src               # the same saved turn: no text needed to say so
-            if not by_id:                                    # neither side has a saved turn (legacy / non-turn): the words decide
+            if not by_id:                                    # the candidate has no saved turn (legacy / non-turn): the words decide
                 if turn and r_turn and r_turn != turn:
                     continue                                 # two different saved turns: a different fact, however alike the words
                 if excerpt and r_ex and excerpt not in r_ex and r_ex not in excerpt:
@@ -1442,7 +1442,8 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str, mids: tup
     store failure (the caller must not confirm a forget that did not hold). Returns what it removed or flagged."""
     import exact_words
 
-    n = await turn_forget.erase_turn_words(user_id, mids, () if mids else (exp.quote, exp.text, *extra))
+    # the words always travel: bound rows go by ``mids`` only, the LEGACY rows (no id of their own) by these words - per row
+    n = await turn_forget.erase_turn_words(user_id, mids, (exp.quote, exp.text, *extra))
     return n + (await exact_words.erase_turn(user_id, exp.turn_id) if exp.turn_id else 0)
 
 
@@ -1523,16 +1524,15 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
         rows = [r for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT),
                                                   READ_BUDGET_S) if _owns(r.metadata or {}, user_id)]
         # the rows of the quoted turn (``turn_forget.partition``): a bound row by its saved-turn id only (a non-turn row is no
-        # turn's); a LEGACY row, and only for a legacy target, by its excerpt holding the quote - as said, or as redacted
-        # (over-inclusive by design, legacy rows only)
+        # turn's); a LEGACY row by its excerpt holding the quote - as said, or as redacted (over-inclusive by design, legacy only)
         bound, legacy = turn_forget.partition(rows)
         mine = [r for r in bound if turn_forget.provenance(r.metadata) in {("turn", m) for m in mids}]
-        if not mids:
-            keys = [k for k in {key, turn_forget.scrubbed_form(exp.text or exp.quote)} if k]
-            for r in legacy:
-                ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
-                if ex and any(ex == k or k in ex for k in keys):
-                    mine.append(r)
+        # PER ROW: a legacy row is matched by the quote even when the target has ids (its turn was backfilled after the upgrade)
+        keys = [k for k in {key, turn_forget.scrubbed_form(exp.text or exp.quote)} if k]
+        for r in legacy:
+            ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
+            if ex and any(ex == k or k in ex for k in keys):
+                mine.append(r)
         for r in mine:
             if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:
                 gone += 1

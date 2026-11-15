@@ -513,7 +513,7 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             ka, sa = turn_forget.provenance(meta)
             kb, sb = turn_forget.provenance(m)
             sa, sb = (sa if ka == "turn" else ""), (sb if kb == "turn" else "")
-            if (sa or sb) and sa != sb:     # identity decides: a row with a saved turn is NEVER a twin by its words
+            if sb and sb != sa:             # PER ROW: a candidate with its own saved turn is NEVER a twin by its words
                 continue
             same_turn = False
             if ex_a and ex_b:
