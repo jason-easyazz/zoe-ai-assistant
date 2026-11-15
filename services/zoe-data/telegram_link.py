@@ -288,10 +288,13 @@ async def unlink(db, user_id: str, *, by: str) -> bool:
     """Remove ``user_id``'s link and record who did it (``by``: "self" | "admin"). Returns whether one existed."""
     from user_prefs import delete_prefs, read_prefs, set_prefs
 
-    had = bool((await read_prefs(db, user_id)).get(KEY_ID))
-    await delete_prefs(user_id, (KEY_ID, KEY_PROOF), db=db)
+    async with db.transaction():      # the removal and its record commit together, in order with any redemption
+        await _member_lock(db, user_id)
+        had = bool((await read_prefs(db, user_id)).get(KEY_ID))
+        await delete_prefs(user_id, (KEY_ID, KEY_PROOF), db=db)
+        if had:
+            await set_prefs(user_id, {KEY_CHANGE: {"event": "unlinked", "at": _now_iso(), "by": by}}, db=db)
     if had:
-        await set_prefs(user_id, {KEY_CHANGE: {"event": "unlinked", "at": _now_iso(), "by": by}}, db=db)
         logger.warning("telegram link removed for user %s (by %s)", user_id, by)
     return had
 
@@ -315,11 +318,14 @@ async def forget_user(user_id: str) -> int:
                 await _member_lock(db, uid)
                 had = bool((await read_prefs(db, uid)).get(KEY_ID))
                 await delete_prefs(uid, (KEY_ID, KEY_PROOF, KEY_CHANGE), db=db)
-            await db.execute(f"DELETE FROM {REDEMPTIONS} WHERE user_id = ?", (uid,))
+                # Same transaction, same lock: the link and the member's redemption rows go together or not at all.
+                await db.execute(f"DELETE FROM {REDEMPTIONS} WHERE user_id = ?", (uid,))
     except Exception as exc:  # noqa: BLE001
         from conversation_notes import _no_store       # the one "nothing stored to erase" rule (a lost pool still raises)
 
-        if _no_store(exc):
+        # "Nothing stored" is true only when the preferences store itself is absent. A missing redemptions table (code ahead of
+        # its migration) rolled the link removal back too, so that is a failed erase: raise, the caller retries.
+        if _no_store(exc) and REDEMPTIONS not in str(exc):
             return 0
         logger.error("telegram link forget failed (%s): link NOT erased", type(exc).__name__)
         raise

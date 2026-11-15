@@ -5,6 +5,8 @@ Opt-in, against a THROWAWAY database only (its name must contain "test" or "scra
 
     TELEGRAM_LINK_TEST_PG_URL=postgresql://... python3 -B -m pytest -p no:cacheprovider -q services/zoe-data/tests/test_telegram_link_postgres.py
 
+Run it FROM THE REPO ROOT with the system python3: it relies on the root pytest.ini (pythonpath, asyncio mode).
+
 Not ``ci_safe`` (the slim lane has no database); without the variable every test skips. Each test runs in its OWN new schema
 holding only the tables the link code touches (``users``, ``user_preferences``, ``memory_forgotten``, then migration 0084's own
 statements), dropped at teardown, so the database's other contents and its migration state are never read or changed. Real code

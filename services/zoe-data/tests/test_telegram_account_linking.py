@@ -372,6 +372,35 @@ def test_the_member_erase_removes_the_link_and_its_records(monkeypatch):
     assert _prefs(db, "member-a") == {"theme": "dark"}
 
 
+def test_the_member_erase_is_all_or_nothing(monkeypatch):
+    """The link and the member's redemption rows are erased in ONE transaction: a failure on the second leaves neither half done
+    (the caller fails closed and retries), never a link gone with the rows left behind."""
+    import asyncio
+    import db_pool
+    import telegram_link
+
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55505", "telegram_link_proof": {"via": "signed_link"}}})
+    db.redemptions["tok-a"] = ("member-a", 9e12)
+    real = db.execute
+
+    async def failing(sql, params=()):
+        if " ".join(sql.split()).startswith("DELETE FROM telegram_link_redemptions WHERE user_id ="):
+            raise RuntimeError("injected")
+        return await real(sql, params)
+
+    db.execute = failing
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    with pytest.raises(RuntimeError):
+        asyncio.run(telegram_link.forget_user("member-a"))
+    assert _prefs(db, "member-a").get("telegram_id") == "55505", "the link removal rolled back with the failed delete"
+    assert "tok-a" in db.redemptions
+
+
 # ─── 1b. Durable single use, one holder per account, no moved link, the member erase (alembic 0084) ─────────────
 
 
