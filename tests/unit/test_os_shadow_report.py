@@ -77,9 +77,29 @@ def _client_literal(name):
 
 
 def test_the_allowlists_are_the_codes_the_client_writes():
-    assert set(_client_literal("RESULTS")) | {"live_noop"} == rep.ALLOWED["result"]
+    assert set(_client_literal("RESULTS")) == rep.ALLOWED["result"]                  # exactly: every code the client can write, no more
+    assert {"hook", "worker", "code"} <= rep.ALLOWED["reason"] and "noop" in rep.ALLOWED["live"]     # shadow_error reasons, live_noop
     assert set(_client_literal("LIST_CLASSES")) | {"other"} == rep.ALLOWED["cls"]
     assert {code for _, code in _client_literal("_REASONS")} | {"other"} <= rep.ALLOWED["reason"]
     src = (ROOT / "services" / "zoe-data").rglob("*.py")
     sources = {m for p in src if "tests" not in p.parts for m in re.findall(r'note_add\(.{0,240}?source="(\w+)"', p.read_text("utf-8"), re.S)}
     assert sources and sources <= rep.ALLOWED["src"], sources - rep.ALLOWED["src"]      # every call site's src is a known code
+
+
+def test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted(tmp_path, capsys):
+    lines = [line(), line("something_new", "verified"), line("live_noop", "none").replace("live=added", "live=noop"),
+             line("shadow_error", "none", "worker", 0.0), line("no_input", "none"), line(src="brand_new_src"),
+             line() + " src=rest",                                   # a repeated key: rejected, and counted
+             "OS_SHADOW_LIST_ADD src=spoken hop_ms=1.0"]             # no result: rejected, and counted
+    recs, rejected = rep.parse_counted(lines)
+    s = rep.summarize(recs, rejected)
+    assert s["adds_logged"] == 6 and s["rejected"] == 2 and s["adds_logged"] + s["rejected"] == len(lines)
+    assert s["unknown"] == 1 and s["unknown_fields"] == 1 and s["shadow_errors"] == 1
+    assert s["not_compared"] == {"live_noop": 1, "no_input": 1, "shadow_error": 1}
+    assert s["compared"] == 3 and s["match"] == 2 and s["match_rate"] == round(2 / 3, 4)       # the unknown one is not a match
+    assert s["match"] + sum(s["mismatch"].values()) + s["unknown"] + sum(s["not_compared"].values()) == s["adds_logged"]
+    f = tmp_path / "log"
+    f.write_text("\n".join(lines) + "\n")
+    assert rep.main([str(f)]) == 0
+    out = capsys.readouterr().out
+    assert "| unknown result (counted as not a match) | 1 |" in out and "rejected lines 2" in out and "something_new" not in out

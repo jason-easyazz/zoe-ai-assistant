@@ -7,10 +7,15 @@ person) from the files named on the command line, or stdin. Read-only; stdlib on
     python3 scripts/maintenance/os_shadow_report.py ~/.zoe-logs/zoe-data.*
     python3 scripts/maintenance/os_shadow_report.py --json < some.log
 
-The numbers: match rate = ``match`` / compared adds (an add the kernel was asked about and answered or failed on; not-compared codes
-``member_not_in_roster`` / ``dropped_erased`` / ``queue_full`` are listed apart and are not in it); hop p50 / p95 over compared adds
-the kernel answered. ``live_noop`` and the not-compared codes that never log a line are in-process counters (``os_shadow.counters()``),
-not in the log, so they are absent here.
+With the flag on the client writes exactly ONE line per add, whatever happened to it, so every add is in the table. The numbers: match
+rate = ``match`` / compared adds (an add the kernel was asked about and answered or failed on; the not-compared codes
+``member_not_in_roster`` / ``dropped_erased`` / ``queue_full`` / ``live_noop`` / ``worker_down`` / ``no_input`` / ``shadow_error`` are
+listed apart and are not in it); hop p50 / p95 over compared adds the kernel answered.
+
+Nothing is dropped: a result code this reader does not know is counted as ``unknown`` (a compared add that is not a match: the
+conservative side), a line with the marker that cannot be read (a repeated key, no result, a bad number) is counted as ``rejected``,
+and ``unknown_fields`` counts lines with any other field outside its closed set. ``match + mismatch + unknown + not_compared`` always
+equals ``adds_logged``, and ``adds_logged + rejected`` equals the marker lines read.
 """
 from __future__ import annotations
 
@@ -26,16 +31,17 @@ UNKNOWN = "unknown"
 ALLOWED = {
     "src": frozenset({"spoken", "single", "skybridge", "rest", "suggestion"}),
     "cls": frozenset({"shopping", "todo", "personal", "other"}),
-    "live": frozenset({"added", "refused"}),
+    "live": frozenset({"added", "refused", "noop"}),
     "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
     "result": frozenset({"worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
                          "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
-                         "queue_full", "live_noop"}),
+                         "queue_full", "live_noop", "no_input", "shadow_error"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
-                         "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake"}),
+                         "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
+                         "hook", "worker", "code"}),
 }
 NUMBERS = ("hop_ms", "q_ms")
-NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop", "worker_down"}
+NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop", "worker_down", "no_input", "shadow_error"}
 MISMATCH = ("kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs", "list_differs",
             "kernel_malformed", "kernel_unavailable", "timeout")
 
@@ -62,15 +68,22 @@ def clean(fields: list) -> "dict | None":
     return rec
 
 
-def parse(lines) -> list[dict]:
-    out = []
+def parse_counted(lines) -> tuple[list[dict], int]:
+    """``(records, rejected)``: every marker line is either a record or counted as rejected, never silently skipped."""
+    out, rejected = [], 0
     for raw in lines:
         m = LINE.search(raw)
         if m:
             rec = clean(m.group(1).split())
-            if rec is not None:
+            if rec is None:
+                rejected += 1
+            else:
                 out.append(rec)
-    return out
+    return out, rejected
+
+
+def parse(lines) -> list[dict]:
+    return parse_counted(lines)[0]
 
 
 def pct(values: list[float], p: float) -> float:
@@ -80,7 +93,7 @@ def pct(values: list[float], p: float) -> float:
     return v[min(len(v) - 1, max(0, int(round(p / 100 * (len(v) - 1)))))]
 
 
-def summarize(recs: list[dict]) -> dict:
+def summarize(recs: list[dict], rejected: int = 0) -> dict:
     results = Counter(r["result"] for r in recs)
     compared = [r for r in recs if r["result"] not in NOT_COMPARED]
     answered = [r["hop_ms"] for r in compared if r.get("kernel") not in (None, "none")]
@@ -91,6 +104,9 @@ def summarize(recs: list[dict]) -> dict:
         "mismatch": {k: results[k] for k in MISMATCH if results[k]},
         "refused_by_reason": dict(Counter(r.get("reason", "-") for r in compared if r["result"] == "kernel_refused_live_did")),
         "not_compared": {k: results[k] for k in sorted(NOT_COMPARED) if results[k]},
+        "unknown": results[UNKNOWN], "rejected": rejected,
+        "unknown_fields": sum(1 for r in recs if any(v == UNKNOWN for k, v in r.items() if k != "result")),
+        "shadow_errors": results["shadow_error"],
         "kernel_unavailable": results["kernel_unavailable"], "timeouts": results["timeout"],
         "hop_ms_p50": round(pct(answered, 50), 2), "hop_ms_p95": round(pct(answered, 95), 2), "hop_answered": len(answered),
         "by_src": dict(Counter(r.get("src", "?") for r in recs)), "by_cls": dict(Counter(r.get("cls", "?") for r in recs)),
@@ -102,11 +118,14 @@ def render(s: dict) -> str:
     rows = [f"list adds logged: {s['adds_logged']}    compared: {s['compared']}    match: {s['match']} ({rate})", "",
             "| result | count |", "|---|---|", f"| match | {s['match']} |"]
     rows += [f"| {k} | {v} |" for k, v in s["mismatch"].items()]
+    if s["unknown"]:
+        rows.append(f"| unknown result (counted as not a match) | {s['unknown']} |")
     rows += [f"| (not compared) {k} | {v} |" for k, v in s["not_compared"].items()]
     if s["refused_by_reason"]:
         rows += ["", "kernel refused, by reason: " + ", ".join(f"{k}={v}" for k, v in sorted(s["refused_by_reason"].items()))]
     rows += ["", f"kernel hop (publish + act), {s['hop_answered']} answered adds: p50 {s['hop_ms_p50']} ms, p95 {s['hop_ms_p95']} ms",
-             f"kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}",
+             f"kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}    shadow errors: {s['shadow_errors']}",
+             f"unreadable: rejected lines {s['rejected']}    unknown result {s['unknown']}    lines with an unknown field {s['unknown_fields']}",
              "by source: " + ", ".join(f"{k}={v}" for k, v in sorted(s["by_src"].items())),
              "by list class: " + ", ".join(f"{k}={v}" for k, v in sorted(s["by_cls"].items()))]
     return "\n".join(rows)
@@ -122,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             lines += fh.readlines()
     if not paths:
         lines = sys.stdin.readlines()
-    s = summarize(parse(lines))
+    s = summarize(*parse_counted(lines))
     print(json.dumps(s, indent=2) if as_json else render(s))
     return 0
 

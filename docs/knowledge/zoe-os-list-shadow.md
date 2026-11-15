@@ -115,7 +115,9 @@ The log line (INFO, logger `os_shadow`, in `~/.zoe-logs/zoe-data.*`) carries **n
     OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
 
 `src` is one of `spoken|single|skybridge|rest`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
-`q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table.
+`q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table. It drops nothing: a result code it does not know is
+counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected`, and the totals always add up to the
+lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
 
 ## 6. Speed and safety of the hook [lab]
 
