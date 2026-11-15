@@ -47,3 +47,35 @@ def test_the_reader_never_echoes_a_line(tmp_path, capsys):
     rep.main(["--json", str(f)])
     assert "Quillon" not in capsys.readouterr().out
     assert json.dumps(rep.summarize(rep.parse([line()])))
+
+
+def act(verb, result="match", kernel="verified", reason="-", hop=1.0, cls="-"):
+    return (f"2030-01-01 10:00:00 INFO os_shadow: OS_SHADOW_ACT verb={verb} src=service cls={cls} live=added kernel={kernel} "
+            f"result={result} reason={reason} hop_ms={hop:.1f} q_ms=0.1")
+
+
+def test_the_per_verb_table_buckets_every_line_exactly_once():
+    lines = [act("reminder_create", hop=h) for h in range(1, 11)]                       # 10 agree, hops 1..10
+    lines += [act("reminder_create", "not_expressible", "none", "recurring", 0.0, cls="repeat"),
+              act("reminder_create", "item_differs", "verified", "-", 3.0),
+              act("reminder_create", "timeout", "none", "timeout", 1500.0),
+              act("reminder_create", "dropped_erased", "none", "-", 0.0)]
+    lines += [act("alarm_create", "kernel_refused_live_did", "refused", "no_grant", 2.0), act("alarm_create", hop=4.0)]
+    lines += [line(hop=2.0)]                                                              # the older marker reads as list_add
+    s = rep.summarize(rep.parse(lines))
+    r = s["verbs"]["reminder_create"]
+    assert (r["seen"], r["agree"], r["disagree"], r["unavailable"], r["not_compared"]) == (14, 10, 2, 1, 1)
+    assert r["agree"] + r["disagree"] + r["unavailable"] + r["not_compared"] == r["seen"]
+    assert r["agree_rate"] == round(10 / 12, 4)                                           # unavailable is never in the rate
+    assert r["disagree_by_reason"] == {"item_differs:-": 1, "not_expressible:recurring": 1}
+    assert r["hop_answered"] == 11 and r["hop_ms_p50"] == 5.0 and r["hop_ms_p90"] == 9.0   # the 1500 ms timeout is not a hop
+    a = s["verbs"]["alarm_create"]
+    assert (a["agree"], a["disagree"], a["agree_rate"]) == (1, 1, 0.5)
+    assert list(s["verbs"]) == ["list_add", "reminder_create", "alarm_create"] and s["verbs"]["list_add"]["agree"] == 1
+    text = rep.render(s)
+    assert "| reminder_create | 14 | 10 | 2 | 1 | 1 | 83.3% | 5.0 | 9.0 |" in text
+
+
+def test_a_result_code_the_reader_does_not_know_counts_as_disagree():
+    s = rep.summarize(rep.parse([act("list_remove", "something_new", "verified")]))
+    assert s["verbs"]["list_remove"]["disagree"] == 1 and s["verbs"]["list_remove"]["agree_rate"] == 0.0

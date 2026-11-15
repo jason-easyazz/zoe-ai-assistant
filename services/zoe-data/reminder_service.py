@@ -11,6 +11,7 @@ from typing import Mapping
 
 from fastapi import HTTPException
 
+import os_shadow
 import write_receipts
 from guest_policy import require_feature_access
 from models import ReminderCreate
@@ -262,6 +263,9 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     await db.commit()
     # The receipt the write-claim guard checks a reply against (write_receipts.py): the row is committed.
     write_receipts.record(user_id, "reminder", reminder_id, "create_reminder_record")
+    # The Zoe OS shadow (os_shadow.py): after the commit, never raises, a no-op unless ZOE_OS_SHADOW_VERBS names reminder_create
+    os_shadow.note_reminder_create(user_id, source="service", note=payload.title, due_date=due_date, due_time=due_time,
+                                   recurring=bool(recurring_pattern))
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()

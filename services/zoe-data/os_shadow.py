@@ -1,8 +1,11 @@
-"""Zoe OS list-add SHADOW client (docs/knowledge/zoe-os-list-shadow.md).
+"""Zoe OS SHADOW client (docs/knowledge/zoe-os-list-shadow.md, docs/knowledge/zoe-os-integration.md).
 
-Every list add the household really made is ALSO proposed to a Zoe OS kernel, which records the event and a receipt in its OWN
-store; the two outcomes are compared and logged as one codes-only line. The existing add path stays the only thing that changes the
-household's list. Flag ``ZOE_OS_LIST_SHADOW`` = ``off`` (default) | ``shadow``; there is no ``on``: the kernel is never
+Every list add (and, when named in ``ZOE_OS_SHADOW_VERBS``, every reminder create, alarm create and spoken list-item remove) the
+household really made is ALSO proposed to a Zoe OS kernel, which records the event and a receipt in its OWN store; the two outcomes
+are compared and logged as one codes-only line. The existing write path stays the only thing that changes the household's data.
+Flag ``ZOE_OS_LIST_SHADOW`` = ``off`` (default) | ``shadow`` is the ONE switch (it keeps its name: every verb rides it, and the
+forget fail-closed rule hangs off it); ``ZOE_OS_SHADOW_VERBS`` (default ``list_add``) names which verbs are shadowed while it is
+on, so flipping the switch alone still shadows list add only, exactly as before. There is no ``on``: the kernel is never
 authoritative here.
 
 Boundaries (each pinned by ``tests/test_os_shadow.py``):
@@ -10,12 +13,13 @@ Boundaries (each pinned by ``tests/test_os_shadow.py``):
 * NO import from ``labs/``. The kernel is reached over its Unix socket with the wire protocol below, which is the kernel's
   documented v1 (``labs/zoe-os/zoe_os/wire.py``); ``tests/test_os_shadow_contract.py`` runs this client against the real lab kernel
   when the lab code is present, so the two cannot drift silently.
-* The hook (``note_add``) runs AFTER the live add has committed, is O(1), never blocks and never raises: it puts one tuple on a
+* The hook (``note_act``; ``note_add`` / ``note_reminder_create`` / ``note_alarm_create`` / ``note_list_remove`` are its thin
+  per-verb argument builders) runs AFTER the live write has committed, is O(1), never blocks and never raises: it puts one tuple on a
   bounded queue. A single worker THREAD does all socket work, so a slow or dead kernel can neither slow nor break a turn.
 * Erase-safe: a proposal for a member who is being erased (``user_erase_gate``) is dropped, and forget jobs go through the SAME
   FIFO queue, so a proposal queued before an erase is sent before the forget and removed by it.
 * Forget reaches the kernel (``forget_user`` / ``erase_entity`` / ``erase_topic``): fail-closed while the flag is ``shadow``.
-* Logs carry closed codes only: never an item, a list name or a person's name.
+* Logs carry closed codes only: never an item, a list name, a reminder note or a person's name.
 
 Stdlib only (plus ``typed_env`` / ``user_erase_gate``).
 """
@@ -42,7 +46,14 @@ import user_erase_gate
 logger = logging.getLogger(__name__)
 
 FLAG = "ZOE_OS_LIST_SHADOW"
+VERBS_FLAG = "ZOE_OS_SHADOW_VERBS"
 DIR_FLAG = "ZOE_OS_SHADOW_DIR"
+
+#: shadow verb -> (kernel action, the proof key the kernel's read-back returns, the argument it must equal)
+VERBS = {"list_add": ("list.add", "item", "item"), "list_remove": ("list.remove", "item", "item"),
+         "reminder_create": ("remind.set", "note", "note"), "alarm_create": ("alarm.set", "alarm", "time")}
+DEFAULT_VERBS = "list_add"
+REMIND_MAX_MIN = 10080         # the kernel's ``remind.set`` takes 1..10080 whole minutes from now
 
 # ---- the wire (kernel protocol v1; see the module docstring) ----------------------------------------------------------------------
 WIRE_VERSION = 1
@@ -55,6 +66,11 @@ QUEUE_MAX = 64
 
 SKILL_VOICE, SKILL_BRAIN, SKILL_PANEL = "voice", "brain", "panel"
 UTTERANCE_TEXT = "shadow list add"          # the cause event carries no household words: the item rides the act only
+
+
+def utterance_text(verb: str) -> str:
+    """The cause event's fixed text for a verb (``shadow list add`` for list add, as before): never the household's words."""
+    return UTTERANCE_TEXT if verb == "list_add" else "shadow " + verb.replace("_", " ")
 
 
 class KernelRefused(Exception):
@@ -86,6 +102,19 @@ def mode() -> str:
         return "shadow" if str(typed_env.flag(FLAG)).strip().lower() == "shadow" else "off"
     except Exception:  # noqa: BLE001 - a flag read must never break a turn
         return "off"
+
+
+def verbs() -> frozenset:
+    """The verbs shadowed while ``mode()`` is ``shadow``: ``ZOE_OS_SHADOW_VERBS`` (comma list), unknown names ignored; unset or
+    unreadable = list add only (the behaviour before the verb list existed)."""
+    try:
+        import typed_env
+
+        raw = typed_env.flag(VERBS_FLAG)
+    except Exception:  # noqa: BLE001
+        raw = DEFAULT_VERBS
+    items = raw.split(",") if isinstance(raw, str) else raw
+    return frozenset(str(v).strip().lower() for v in items if str(v).strip().lower() in VERBS)
 
 
 def state_dir() -> Path:
@@ -220,7 +249,7 @@ class _Conn:
 
 
 # ---- comparison ---------------------------------------------------------------------------------------------------------------------
-RESULTS = ("match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
+RESULTS = ("match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full")
 _REASONS = (("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
@@ -233,10 +262,12 @@ def reason_code(reason: str) -> str:
     return next((code for needle, code in _REASONS if needle in low), "other")
 
 
-def compare(live: str, kernel: Optional[dict], sent: dict) -> tuple[str, str]:
-    """``(result, kernel_state)``. ``live``: added | refused. ``kernel``: the act receipt (a dict), ``{"refused": reason}`` or None.
-    ``sent``: ``{"item", "list"}`` as proposed. The member is the connection's own business: a receipt names the person it acted for,
-    so a mismatch there is ``kernel_malformed``."""
+def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add") -> tuple[str, str]:
+    """``(result, kernel_state)``. ``live``: added | refused (added = the live write landed, whatever the verb). ``kernel``: the act
+    receipt (a dict), ``{"refused": reason}`` or None. ``sent``: the kernel args as proposed. ``item_differs`` means the kernel's
+    read-back names a different value than was sent (the item, the reminder note, the alarm time). The member is the connection's own
+    business: a receipt names the person it acted for, so a mismatch there is ``kernel_malformed``."""
+    _action, pkey, akey = VERBS[verb]
     if kernel is None:
         return "kernel_unavailable", "none"
     if "refused" in kernel:
@@ -248,18 +279,19 @@ def compare(live: str, kernel: Optional[dict], sent: dict) -> tuple[str, str]:
     if state != "verified":
         return "kernel_unverified_live_did", state
     proof = kernel.get("proof")
-    if not isinstance(proof, dict) or "item" not in proof:
+    if not isinstance(proof, dict) or pkey not in proof:
         return "kernel_malformed", state
-    if proof["item"] != sent["item"]:
+    if proof[pkey] != sent[akey]:
         return "item_differs", state
-    if "list" in proof and proof["list"] != sent["list"]:
+    if "list" in proof and proof["list"] != sent.get("list"):
         return "list_differs", state
     return "match", state
 
 
-# ---- counters and the one line per add ----------------------------------------------------------------------------------------------
-_counts: Counter = Counter()
-_hops: list = []                 # kernel hop ms of compared adds (bounded)
+# ---- counters and the one line per shadowed write ------------------------------------------------------------------------------------
+_counts: Counter = Counter()     # result -> n, all verbs (what the list-add tests read)
+_vcounts: Counter = Counter()    # (verb, result) -> n
+_hops: list = []                 # kernel hop ms of compared writes (bounded)
 _lock = threading.Lock()
 LIST_CLASSES = ("shopping", "todo", "personal")
 
@@ -269,18 +301,28 @@ def counters() -> dict:
         return dict(_counts)
 
 
-def _tally(result: str, hop_ms: Optional[float] = None) -> None:
+def counters_by_verb() -> dict:
+    """``{verb: {result: n}}`` since start-up (includes the codes that never log a line, e.g. ``live_noop``, ``queue_full``)."""
+    with _lock:
+        out: dict = {}
+        for (verb, result), n in _vcounts.items():
+            out.setdefault(verb, {})[result] = n
+        return out
+
+
+def _tally(result: str, hop_ms: Optional[float] = None, verb: str = "list_add") -> None:
     with _lock:
         _counts[result] += 1
+        _vcounts[(verb, result)] += 1
         if hop_ms is not None:
             _hops.append(hop_ms)
             del _hops[:-500]
 
 
-def _log(source: str, cls: str, live: str, kernel_state: str, result: str, reason: str, hop_ms: float, q_ms: float) -> None:
-    """ONE line per list add; codes and numbers only (tests/test_os_shadow.py plants words and checks none reach it)."""
-    logger.info("OS_SHADOW_LIST_ADD src=%s cls=%s live=%s kernel=%s result=%s reason=%s hop_ms=%.1f q_ms=%.1f",
-                source, cls, live, kernel_state, result, reason or "-", hop_ms, q_ms)
+def _log(verb: str, source: str, cls: str, live: str, kernel_state: str, result: str, reason: str, hop_ms: float, q_ms: float) -> None:
+    """ONE line per shadowed write; codes and numbers only (tests/test_os_shadow*.py plant words and check none reach it)."""
+    logger.info("OS_SHADOW_ACT verb=%s src=%s cls=%s live=%s kernel=%s result=%s reason=%s hop_ms=%.1f q_ms=%.1f",
+                verb, source, cls, live, kernel_state, result, reason or "-", hop_ms, q_ms)
 
 
 # ---- the worker ---------------------------------------------------------------------------------------------------------------------
@@ -363,8 +405,8 @@ def _run() -> None:
         try:
             if not replayed:
                 replayed = _replay_pending(kernel)
-            if job[0] == "add":
-                _do_add(kernel, *job[1:])
+            if job[0] == "act":
+                _do_act(kernel, *job[1:])
             else:
                 _do_forget(kernel, job[1], job[2], job[3], job[4])
         except Exception as exc:  # noqa: BLE001 - the worker never dies and never raises into a turn
@@ -373,28 +415,35 @@ def _run() -> None:
                 job[4].set_exception(exc)
 
 
-def _do_add(kernel: _Kernel, user_id: str, source: str, cls: str, live: str, item: str, list_name: str, gen: int,
-            queued_at: float) -> None:
+def _do_act(kernel: _Kernel, verb: str, user_id: str, source: str, cls: str, live: str, raw: dict, gen: int,
+            queued_at: float, wall_at: float) -> None:
     started = time.perf_counter()
     q_ms = (started - queued_at) * 1000
     if user_id not in roster():
-        _tally("member_not_in_roster")
+        _tally("member_not_in_roster", verb=verb)
         return
     if user_erase_gate.generation(user_id) != gen or user_erase_gate.in_progress(user_id):
-        _tally("dropped_erased")
+        _tally("dropped_erased", verb=verb)
         return
-    sent = {"item": item, "list": list_name}
+    try:
+        sent, why = kernel_args(verb, raw, wall_at)
+    except Exception:  # noqa: BLE001 - a field the client could not read is counted against the kernel, never silently lost
+        sent, why = None, "parse"
+    if sent is None:              # the live write is something the kernel's verb cannot say: a disagreement, never sent
+        _tally("not_expressible", verb=verb)
+        _log(verb, source, cls, live, "none", "not_expressible", why, 0.0, q_ms)
+        return
+    action = VERBS[verb][0]
     result_kernel: Optional[dict] = None
     reason, result = "", ""
     try:
-        ev = kernel.call(SKILL_VOICE, "publish", kind="utterance", subject=user_id, payload={"text": UTTERANCE_TEXT})
+        ev = kernel.call(SKILL_VOICE, "publish", kind="utterance", subject=user_id, payload={"text": utterance_text(verb)})
         seq = ev.get("seq") if isinstance(ev, dict) else None
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise KernelProtocol("no seq")
         if time.perf_counter() - started > JOB_DEADLINE_S:
             raise socket.timeout()
-        rec = kernel.call(SKILL_BRAIN, "act", action="list.add", on_behalf_of=user_id,
-                          args={"item": item, "list": list_name, "asked": seq}, caused_by=[seq])
+        rec = kernel.call(SKILL_BRAIN, "act", action=action, on_behalf_of=user_id, args={**sent, "asked": seq}, caused_by=[seq])
         if not isinstance(rec, dict) or not isinstance(rec.get("verified"), bool) or not isinstance(rec.get("outcome"), str):
             raise KernelProtocol("bad receipt")
         result_kernel = rec
@@ -411,9 +460,38 @@ def _do_add(kernel: _Kernel, user_id: str, source: str, cls: str, live: str, ite
     hop_ms = (time.perf_counter() - started) * 1000
     kstate = "none"
     if not result:
-        result, kstate = compare(live, result_kernel, sent)
-    _tally(result, hop_ms if kstate != "none" else None)
-    _log(source, cls, live, kstate, result, reason, hop_ms, q_ms)
+        result, kstate = compare(live, result_kernel, sent, verb)
+    _tally(result, hop_ms if kstate != "none" else None, verb=verb)
+    _log(verb, source, cls, live, kstate, result, reason, hop_ms, q_ms)
+
+
+def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], str]:
+    """The live write's fields as the kernel verb's args, or ``(None, reason_code)`` when the verb cannot express it. Runs on the
+    WORKER (any parsing or import happens off the turn). ``wall_at``: the wall clock when the live write committed."""
+    if verb in ("list_add", "list_remove"):
+        return {"item": raw["item"], "list": raw["list"]}, ""
+    if verb == "alarm_create":
+        hhmm = str(raw.get("time") or "")
+        if len(hhmm) != 5 or hhmm[2] != ":" or not (hhmm[:2] + hhmm[3:]).isdigit() or int(hhmm[:2]) > 23 or int(hhmm[3:]) > 59:
+            return None, "time"
+        return {"time": hhmm}, ""
+    # reminder_create: the kernel's remind.set is ONE-SHOT, in whole minutes from now (1..10080)
+    if raw.get("recurring"):
+        return None, "recurring"
+    if not raw.get("due_time"):
+        return None, "no_time"           # production fires a date-only reminder at the household default time; the verb has no "default"
+    from datetime import datetime, timezone
+
+    from proactive.triggers.reminder_scan import _parse_due_time, build_run_at     # production's own due instant, never a copy
+
+    hm = _parse_due_time(str(raw["due_time"]))
+    run_at = build_run_at(raw.get("due_date"), hm[0], hm[1], datetime.fromtimestamp(wall_at, timezone.utc)) if hm else None
+    if run_at is None:
+        return None, "time"
+    minutes = int(round((run_at.timestamp() - wall_at) / 60.0))
+    if not 1 <= minutes <= REMIND_MAX_MIN:
+        return None, "range"
+    return {"note": raw["note"], "in_minutes": minutes}, ""
 
 
 # ---- the hook -----------------------------------------------------------------------------------------------------------------------
@@ -422,29 +500,62 @@ def list_class(list_type: Optional[str]) -> str:
     return lt if lt in LIST_CLASSES else "other"
 
 
-def note_add(user_id: Optional[str], *, source: str, list_type: Optional[str], list_name: Optional[str], item: Optional[str],
-             landed: bool = True) -> None:
-    """A list add finished (call AFTER the live commit). ``landed`` False = nothing was written (already on the list, replayed):
-    counted, never proposed. Never raises, never blocks, O(1); a flag of ``off`` returns before anything is touched."""
+def note_act(verb: str, user_id: Optional[str], *, source: str, raw: dict, cls: str = "-", landed: bool = True) -> None:
+    """THE hook: a live write of ``verb`` committed (call AFTER the commit). ``raw``: the fields ``kernel_args`` turns into the
+    kernel's args (nothing is parsed here). ``landed`` False = nothing was written: counted, never proposed. Never raises, never
+    blocks, O(1); with the switch off, or the verb not in ``ZOE_OS_SHADOW_VERBS``, it returns before anything is touched."""
     try:
-        if mode() != "shadow":
+        if mode() != "shadow" or verb not in verbs():
             return
         if not landed:
-            _tally("live_noop")
+            _tally("live_noop", verb=verb)
             return
-        uid, text = (user_id or "").strip(), (item or "").strip()
-        if not uid or not text:
+        uid = (user_id or "").strip()
+        if not uid:
             return
         if user_erase_gate.in_progress(uid):
-            _tally("dropped_erased")
+            _tally("dropped_erased", verb=verb)
             return
         _ensure_worker()
-        _q.put_nowait(("add", uid, source, list_class(list_type), "added", text, (list_name or list_type or "shopping").strip() or "shopping",
-                       user_erase_gate.generation(uid), time.perf_counter()))
+        _q.put_nowait(("act", verb, uid, source, cls, "added", raw, user_erase_gate.generation(uid), time.perf_counter(), time.time()))
     except queue.Full:
-        _tally("queue_full")
+        _tally("queue_full", verb=verb)
     except Exception:  # noqa: BLE001 - shadow must never break the turn
         return
+
+
+def note_add(user_id: Optional[str], *, source: str, list_type: Optional[str], list_name: Optional[str], item: Optional[str],
+             landed: bool = True) -> None:
+    """A list add finished (call AFTER the live commit). ``landed`` False = nothing was written (already on the list, replayed)."""
+    text = (item or "").strip()
+    if landed and not text:
+        return
+    note_act("list_add", user_id, source=source, cls=list_class(list_type), landed=landed,
+             raw={"item": text, "list": (list_name or list_type or "shopping").strip() or "shopping"})
+
+
+def note_list_remove(user_id: Optional[str], *, source: str, list_type: Optional[str], list_name: Optional[str],
+                     item: Optional[str]) -> None:
+    """A list item was removed (call AFTER the commit). The kernel's post-condition is "that item is not on the list"."""
+    text = (item or "").strip()
+    if text:
+        note_act("list_remove", user_id, source=source, cls=list_class(list_type),
+                 raw={"item": text, "list": (list_name or list_type or "shopping").strip() or "shopping"})
+
+
+def note_reminder_create(user_id: Optional[str], *, source: str, note: Optional[str], due_date: Optional[str],
+                         due_time: Optional[str], recurring: bool) -> None:
+    """A reminder row committed (``reminder_service.create_reminder_record``): its stored fields, parsed on the worker."""
+    text = (note or "").strip()
+    if text:
+        note_act("reminder_create", user_id, source=source, cls="repeat" if recurring else "once",
+                 raw={"note": text, "due_date": due_date, "due_time": due_time, "recurring": bool(recurring)})
+
+
+def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optional[str], repeat: Optional[str]) -> None:
+    """An alarm row committed (``alarms.create_alarm``). The kernel's alarm is one time per person: the repeat rule rides ``cls``."""
+    note_act("alarm_create", user_id, source=source, cls="once" if (repeat or "once") == "once" else "repeat",
+             raw={"time": str(time_hhmm or "")})
 
 
 # ---- forget -------------------------------------------------------------------------------------------------------------------------
@@ -580,6 +691,7 @@ def _reset_for_tests() -> None:
     _roster_cache = (0.0, None, frozenset())
     with _lock:
         _counts.clear()
+        _vcounts.clear()
         del _hops[:]
     while True:
         try:

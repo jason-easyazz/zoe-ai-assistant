@@ -5103,6 +5103,9 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     item_text = normalize_item_text(str(target_item.get("text") or intent.item_text))
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     _audit_list_item("remove", user_id, list_id, item_id)
+    import os_shadow      # after the commit: a no-op unless ZOE_OS_SHADOW_VERBS names list_remove, never raises
+
+    os_shadow.note_list_remove(user_id, source="skybridge", list_type=list_type, list_name=intent.list_name, item=item_text)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]

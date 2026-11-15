@@ -131,14 +131,16 @@ class FakeKernel:
             raise ConnectionError
         if mode == "wrong_shape":
             return self._ok(conn, req, {"hello": 1})
-        proof = {"item": a["args"]["item"]}
+        # the read-back each lab driver returns (labs/zoe-os/zoe_os/brain/drivers.py): list -> item, reminder -> note, alarm -> time
+        pkey, akey = {"remind.set": ("note", "note"), "alarm.set": ("alarm", "time")}.get(a["action"], ("item", "item"))
+        proof = {pkey: a["args"][akey]}
         verified, outcome = True, "verified"
         if mode == "unverified":
             verified, outcome, proof = False, "unverified", None
         elif mode == "uncertain":
             verified, outcome, proof = False, "uncertain", None
         elif mode == "item_differs":
-            proof = {"item": a["args"]["item"] + " x"}
+            proof = {pkey: a["args"][akey] + " x"}
         elif mode == "list_differs":
             proof["list"] = "somewhere else"
         elif mode == "no_proof_item":
@@ -161,6 +163,7 @@ def kernel(monkeypatch):
     (state / "people.json").write_text(json.dumps({"people": [MEMBER]}))
     monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(state))
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    monkeypatch.delenv("ZOE_OS_SHADOW_VERBS", raising=False)       # the default: list add only
     monkeypatch.setattr(os_shadow, "OP_TIMEOUT_S", 0.3)
     os_shadow._reset_for_tests()
     user_erase_gate.reset()
@@ -216,8 +219,8 @@ def test_a_real_add_is_recorded_as_an_event_and_a_receipt_and_matches(kernel, ca
     assert pub["kind"] == "utterance" and pub["subject"] == MEMBER and pub["payload"] == {"text": os_shadow.UTTERANCE_TEXT}
     assert act["action"] == "list.add" and act["on_behalf_of"] == MEMBER and act["caused_by"] == [1]
     assert act["args"] == {"item": ITEM, "list": "Shopping", "asked": 1}
-    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_LIST_ADD" in r.getMessage()]
-    assert line.startswith("OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=")
+    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
+    assert line.startswith("OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=")
 
 
 @pytest.mark.parametrize("mode,result,kstate,reason", [
@@ -240,7 +243,7 @@ def test_each_mismatch_class_is_named_and_logged_as_codes(kernel, caplog, mode, 
     add()
     settle(1)
     assert os_shadow.counters() == {result: 1}
-    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_LIST_ADD" in r.getMessage()]
+    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
     assert f"kernel={kstate} result={result} reason={reason} " in line
 
 
@@ -269,7 +272,7 @@ def test_kernel_down_is_one_code_per_add_and_the_circuit_stops_reconnecting(kern
         add()
     settle(3)
     assert os_shadow.counters() == {"kernel_unavailable": 3}
-    lines = [r.getMessage() for r in caplog.records if "OS_SHADOW_LIST_ADD" in r.getMessage()]
+    lines = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
     assert len(lines) == 3 and all("kernel=none result=kernel_unavailable" in ln for ln in lines)
     assert "reason=circuit" in lines[1]               # the second add did not even try to connect
 
@@ -338,7 +341,7 @@ def test_the_log_line_carries_no_words(kernel, caplog):
     add(item="tangerines for Quillon", list_name="Quillon's list")
     settle(1)
     text = " ".join(r.getMessage() for r in caplog.records)
-    assert "OS_SHADOW_LIST_ADD" in text and not any(w in text for w in ("Quillon", "tangerine"))
+    assert "OS_SHADOW_ACT verb=list_add" in text and not any(w in text for w in ("Quillon", "tangerine"))
 
 
 def test_the_hook_costs_almost_nothing(kernel, monkeypatch, capsys):

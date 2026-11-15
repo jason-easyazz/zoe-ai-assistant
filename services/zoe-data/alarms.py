@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+import os_shadow
 from time_utils import zoe_timezone
 
 logger = logging.getLogger(__name__)
@@ -378,6 +379,7 @@ async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "on
             (aid, owner, _clean_label(label), hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, nxt, now, now))
         await log_event(db, aid, "created", f"{hhmm} {rule}", now=now)
     await db.commit()
+    os_shadow.note_alarm_create(owner, source="service", time_hhmm=hhmm, repeat=rule)    # Zoe OS shadow: after the commit, never raises
     return await get_alarm(db, aid)  # type: ignore[return-value]
 
 
