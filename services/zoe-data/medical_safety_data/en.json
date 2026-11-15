@@ -131,5 +131,18 @@
    "did {SUBJ} just {BASE}", "{HAS} {ED}", "{HAS} just {ED}", "{PERF} {ED}",
    "{PERF} just {ED}", "{SUBJ} just {ED}", "{THINK} {SUBJ} {ED}", "{THINK} {SUBJ} just {ED}"
   ]
+ },
+ "too_many": {
+  "_note": "Too many / too much of a medicine, said in the PRESENT or RECENT past (medical_safety.too_many_ingestion, flag ZOE_MEDICAL_TOO_MANY). A CLOSED allow-list: frames over the self_assess slots plus {TAKE} (a take form: no substance needed, 'did i take too many'), {SWALLOW} (the same), {HAD} (a substance from the ingestion lexicon, 'extra_substances' or self_assess 'drug_names' minus 'drug_words_also_food_or_drink' REQUIRED: 'had too many biscuits' / 'too much ice cream' never fire), {AMT} and an optional substance. A take form with no substance must END the clause (or be 'of them / now / again'): 'took too many photos' never fires. A past time or a condition never fires (_tm_not_now; the present perfect 'has had' is recent). tests/test_medical_too_many.py generates its sets from these lists.",
+  "extra_substances": ["pills", "tablets", "capsules", "medicine", "medicines", "medication", "medications", "meds", "doses"],
+  "drug_words_also_food_or_drink": ["ice", "coke", "crack"],
+  "amount": ["too many", "too much", "way too many", "way too much"],
+  "verbs": {"TAKE": ["take", "took", "taken"], "HAD": ["had"], "SWALLOW": ["swallowed"]},
+  "frames": [
+   "did {SUBJ} {TAKE}", "did {SUBJ} just {TAKE}", "{SUBJ} {TAKE}", "{SUBJ} just {TAKE}", "{THINK} {SUBJ} {TAKE}",
+   "{THINK} {SUBJ} just {TAKE}", "{PERF} {TAKE}", "{PERF} just {TAKE}", "{HAS} {TAKE}", "{SUBJ} might have {TAKE}",
+   "{PERF} {HAD}", "{PERF} just {HAD}", "{SUBJ} {HAD}", "{SUBJ} just {HAD}", "{THINK} {SUBJ} {HAD}", "{HAS} {HAD}",
+   "{SUBJ} {SWALLOW}", "{SUBJ} just {SWALLOW}", "{THINK} {SUBJ} {SWALLOW}", "{PERF} {SWALLOW}"
+  ]
  }
 }
