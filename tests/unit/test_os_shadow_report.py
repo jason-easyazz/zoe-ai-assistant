@@ -78,7 +78,7 @@ def _client_literal(name):
 
 def test_the_allowlists_are_the_codes_the_client_writes():
     assert set(_client_literal("RESULTS")) == rep.ALLOWED["result"]                  # exactly: every code the client can write, no more
-    assert {"hook", "worker", "code"} <= rep.ALLOWED["reason"] and "noop" in rep.ALLOWED["live"]     # shadow_error reasons, live_noop
+    assert {"hook", "worker", "code", "pending_forget"} <= rep.ALLOWED["reason"] and "noop" in rep.ALLOWED["live"]     # shadow_error reasons, live_noop
     assert set(_client_literal("LIST_CLASSES")) | {"other", "once", "repeat", "-"} == rep.ALLOWED["cls"]   # reminder/alarm: once|repeat
     assert {code for _, code in _client_literal("_REASONS")} | {"other"} <= rep.ALLOWED["reason"]
     src = (ROOT / "services" / "zoe-data").rglob("*.py")
@@ -162,3 +162,31 @@ def test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted(tmp_p
     assert rep.main([str(f)]) == 0
     out = capsys.readouterr().out
     assert "rejected lines 2" in out and "unknown result 2" in out and "something_new" not in out and "another_new" not in out
+
+
+def test_every_literal_reason_the_client_writes_is_known_to_the_reader():
+    """Static: every string the client can put in ``reason=`` (an outcome dict, a ``reason=`` keyword, an assignment to ``reason``)
+    is in the reader's allowlist, so a new reason is never shown as ``unknown`` by accident."""
+    import ast
+
+    def consts(n):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            return {n.value}
+        if isinstance(n, ast.IfExp):
+            return consts(n.body) | consts(n.orelse)
+        return set()
+
+    tree = ast.parse((ROOT / "services" / "zoe-data" / "os_shadow.py").read_text("utf-8"))
+    found = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Dict):
+            found |= {c for k, v in zip(n.keys, n.values) if isinstance(k, ast.Constant) and k.value == "reason" for c in consts(v)}
+        if isinstance(n, ast.Call):
+            found |= {c for kw in n.keywords if kw.arg == "reason" for c in consts(kw.value)}
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                names = [t] if isinstance(t, ast.Name) else (t.elts if isinstance(t, ast.Tuple) else [])
+                vals = [n.value] if isinstance(t, ast.Name) else (n.value.elts if isinstance(n.value, ast.Tuple) else [])
+                found |= {c for tn, v in zip(names, vals) if getattr(tn, "id", "") == "reason" for c in consts(v)}
+    found.discard("")
+    assert found and found <= rep.ALLOWED["reason"], found - rep.ALLOWED["reason"]

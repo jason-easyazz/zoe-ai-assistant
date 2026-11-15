@@ -460,16 +460,18 @@ class _Kernel:
 
 def _run() -> None:
     kernel = _Kernel()
-    replayed = False
     while True:
         job = _q.get()
         if job[0] == "stop":
             for skill in list(kernel.conns):
                 kernel.drop(skill)
             return
-        if not replayed:
-            try:                      # its own try: a replay that fails must never cost the job behind it (a write keeps its one line)
-                replayed = _replay_pending(kernel)
+        if _pending_members is None or _pending_members:
+            # BEFORE EVERY job while anything is parked (or this process has not read the park file yet: the first job after a start
+            # reads it, so a park from before a restart is replayed first). Known-empty costs one global read per job, no file I/O.
+            # Its own try: a replay that fails must never cost the job behind it (an add keeps its one line).
+            try:
+                _replay_pending(kernel, force=job[0] == "forget")
             except Exception as exc:  # noqa: BLE001 - kept pending, tried again before the next job
                 logger.warning("OS_SHADOW replay error=%s", type(exc).__name__)
         try:
@@ -506,6 +508,10 @@ def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict,
         return {"result": "member_not_in_roster"}
     if user_erase_gate.generation(user_id) != gen or user_erase_gate.in_progress(user_id):
         return {"result": "dropped_erased"}
+    if _pending_members is None or user_id in _pending_members:
+        # a forget for this member is parked and has not reached the kernel (the replay just before this job failed): an add must
+        # never reach the kernel ahead of the member's forget. None = the park file could not be read: fail closed for everyone.
+        return {"result": "dropped_erased", "reason": "pending_forget"}
     try:
         sent, why = kernel_args(verb, raw, wall_at)
     except Exception:  # noqa: BLE001 - a field the client could not read is counted against the kernel, never silently lost
@@ -673,6 +679,10 @@ class PendingUnreadable(OSError):
 
 
 _pending_mutex = threading.Lock()
+#: the parked members as this process last saw them in the park file, kept in step with it under the same lock (``_pending_add``,
+#: ``_replay_pending``): None = not read yet in this process / unreadable, so the worker reads the file before its next job. A park
+#: written by ANOTHER process is seen at this worker's next start (zoe-data is the only writer in production).
+_pending_members: Optional[frozenset] = None
 
 
 class _pending_locked:
@@ -743,9 +753,13 @@ def _pending_write(members: list) -> None:
 
 
 def _pending_add(member: str) -> None:
-    """Park a forget for a later replay. RAISES if it cannot be made durable: the caller then fails the erase closed."""
+    """Park a forget for a later replay. RAISES if it cannot be made durable: the caller then fails the erase closed. Blocking (an
+    ``flock`` wait and two fsyncs): never call it on the event loop (``_forget`` hands it to an executor)."""
+    global _pending_members
     with _pending_locked():
-        _pending_write(_pending_read() + [member])
+        members = _pending_read() + [member]
+        _pending_write(members)
+        _pending_members = frozenset(members)
 
 
 def _pending_done(members: set) -> None:
@@ -754,15 +768,24 @@ def _pending_done(members: set) -> None:
         _pending_write([m for m in _pending_read() if m not in members])
 
 
-def _replay_pending(kernel: _Kernel) -> bool:
-    """Forgets that could not reach the kernel while the flag was off are re-sent (whole member: the safe over-forget) before the
-    first job after a restart. True once nothing is pending."""
-    kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
+def _replay_pending(kernel: _Kernel, force: bool = True) -> bool:
+    """Parked forgets (the flag was off, the kernel was down, the queue was full) are re-sent (whole member: the safe over-forget)
+    before the next job, every job, until none is left. True once nothing is pending; ``_pending_members`` follows the file.
+    ``force`` False (the replay ahead of an add): an open circuit is respected, so a dead kernel costs no connect per add; the adds of
+    a parked member are dropped meanwhile (``_add_outcome``), never sent ahead of the forget."""
+    global _pending_members
     try:
         with _pending_locked():
             todo = _pending_read()
+            _pending_members = frozenset(todo)
     except OSError:
-        return False                  # unreadable: kept as it is, tried again before the next job
+        _pending_members = None       # unreadable: kept as it is, read again before the next job (adds fail closed meanwhile)
+        return False
+    if not todo:
+        return True
+    if not force and time.monotonic() < kernel.down_until:
+        return False
+    kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
     done = set()
     for member in todo:
         try:
@@ -774,8 +797,11 @@ def _replay_pending(kernel: _Kernel) -> bool:
         if done:
             _pending_done(done)
         with _pending_locked():
-            return not _pending_read()
+            left = _pending_read()
+            _pending_members = frozenset(left)
+        return not left
     except OSError:
+        _pending_members = None
         return False
 
 
@@ -810,25 +836,38 @@ def _do_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optio
 
 
 async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> int:
+    """Never blocks the event loop: the job goes on the queue with ``put_nowait``; a full queue (or a worker that cannot start) PARKS
+    the forget durably (the blocking park runs in an executor) instead of waiting. What the caller is told stays honest: a confirmed
+    forget returns its count; with the flag ``shadow`` anything unconfirmed raises ``ShadowForgetUnavailable`` (parked or not); with
+    it off a parked forget returns 0 (deferred: replayed before the next job), and one that could not be parked raises."""
     if not provisioned():
         return 0                      # no kernel was ever installed here: nothing recorded, no socket touched
     strict = mode() == "shadow"
     fut: concurrent.futures.Future = concurrent.futures.Future()
+    code = ""
     try:
         _ensure_worker()
-        _q.put(("forget", user_id, entity, topic, fut), timeout=2.0)
-        return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=FORGET_TIMEOUT_S)
-    except Exception as exc:  # noqa: BLE001
-        if strict:
-            logger.error("OS_SHADOW forget NOT confirmed code=%s", type(exc).__name__)
-            raise ShadowForgetUnavailable(type(exc).__name__) from exc
-        try:                          # flag off: do not block the erase, but never lose it - replayed before the next shadow job
-            _pending_add(user_id)
-        except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
-            logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
-            raise ShadowForgetUnavailable(f"not parked ({type(park_exc).__name__})") from park_exc
-        logger.warning("OS_SHADOW forget deferred (flag off) code=%s", type(exc).__name__)
-        return 0
+        _q.put_nowait(("forget", user_id, entity, topic, fut))
+    except Exception as exc:  # noqa: BLE001 - queue.Full above all: park, never wait on the loop
+        code = "queue_full" if isinstance(exc, queue.Full) else type(exc).__name__
+    if not code:
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=FORGET_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001
+            code = type(exc).__name__
+            if strict:
+                logger.error("OS_SHADOW forget NOT confirmed code=%s", code)
+                raise ShadowForgetUnavailable(code) from exc
+    try:                              # not confirmed: never lose it - replayed before the next job
+        await asyncio.get_running_loop().run_in_executor(None, _pending_add, user_id)
+    except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
+        logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
+        raise ShadowForgetUnavailable(f"not parked ({type(park_exc).__name__})") from park_exc
+    if strict:                        # only a forget that never reached the queue gets here with the flag on
+        logger.error("OS_SHADOW forget NOT confirmed, parked code=%s", code)
+        raise ShadowForgetUnavailable(f"{code} (parked)")
+    logger.warning("OS_SHADOW forget deferred (flag off) code=%s", code)
+    return 0
 
 
 async def forget_user(user_id: str) -> int:
@@ -872,8 +911,9 @@ def main(argv: Optional[list] = None) -> int:
 
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
-    global _roster_cache, _worker, _down_logged
+    global _roster_cache, _worker, _down_logged, _pending_members
     _down_logged = False
+    _pending_members = None           # a restart: the next worker reads the park file before its first job
     if _worker is not None and _worker.is_alive():
         _q.put(("stop",))
         _worker.join(timeout=5)

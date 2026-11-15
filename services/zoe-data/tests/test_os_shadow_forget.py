@@ -241,5 +241,116 @@ def test_a_failing_replay_never_costs_the_add_behind_it_its_line(kernel, monkeyp
     assert os_shadow.revive()
     add()
     settle(1)
-    assert os_shadow.counters() == {"match": 1}
-    assert sum(r.getMessage().startswith("OS_SHADOW_ACT verb=list_add ") for r in caplog.records) == 1
+    # the park file was never read, so whether a forget is parked is unknown: the add fails closed (never sent ahead of a forget)
+    # and still writes its one line
+    assert os_shadow.counters() == {"dropped_erased": 1}
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("OS_SHADOW_ACT verb=list_add ")]
+    assert " reason=pending_forget " in line
+
+
+# ---- forgotten means forever: a parked forget reaches the kernel before any later add, and a forget never blocks the loop ----------
+def _creds(kernel, sock):
+    (kernel.state / "creds.json").write_text(json.dumps({"socket": sock, "creds": {s: c.hex() for s, c in kernel.creds.items()}}))
+
+
+@pytest.mark.asyncio
+async def test_a_forget_that_failed_as_the_first_job_still_goes_before_the_next_add_in_the_same_process(kernel, monkeypatch):
+    monkeypatch.setattr(os_shadow, "CIRCUIT_S", 0.0)
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    _creds(kernel, str(kernel.dir / "gone.sock"))
+    assert await os_shadow.forget_user(MEMBER) == 0                       # the worker's FIRST job: failed, parked
+    assert _pending(kernel) == [MEMBER]
+    _creds(kernel, kernel.path)
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")                    # same worker, no restart
+    add()
+    settle(1)
+    assert [op for _, op, _ in kernel.calls] == ["forget", "publish", "act"]
+    assert not (kernel.state / "pending-forgets.json").exists() and os_shadow._pending_members == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_while_the_kernel_is_still_down_a_parked_members_add_is_dropped_never_sent_first(kernel, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    _creds(kernel, str(kernel.dir / "gone.sock"))
+    assert await os_shadow.forget_user(MEMBER) == 0                       # parked; the failed connect opened the 5 s circuit
+    _creds(kernel, kernel.path)
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    add()
+    settle(1)
+    assert os_shadow.counters() == {"dropped_erased": 1} and [op for _, op, _ in kernel.calls if op == "act"] == []
+    assert any(" result=dropped_erased reason=pending_forget " in r.getMessage() for r in caplog.records)
+    assert _pending(kernel) == [MEMBER]                                   # still parked: replayed once the circuit closes
+
+
+def test_a_parked_forget_the_kernel_refuses_keeps_that_members_adds_out(kernel):
+    os_shadow._pending_add(MEMBER)
+    os_shadow._reset_for_tests()                                          # a restart: the park file is read before the first job
+    kernel.forget_mode = "refuse_all"
+    assert os_shadow.revive()
+    add()
+    settle(1)
+    assert os_shadow.counters() == {"dropped_erased": 1}
+    assert [op for _, op, _ in kernel.calls] == ["forget"]                # tried first; refused; the add never went
+    assert _pending(kernel) == [MEMBER]
+
+
+@pytest.mark.asyncio
+async def test_after_a_restart_the_parked_forget_is_replayed_before_the_first_job_even_a_forget(kernel, monkeypatch):
+    os_shadow._pending_add(MEMBER)
+    os_shadow._reset_for_tests()
+    assert os_shadow._pending_members is None                             # this process has not read the file yet
+    assert os_shadow.revive()
+    assert await os_shadow.forget_user("member-b") == 3
+    assert [a["subject"] for _, a in forgets(kernel)] == [MEMBER, "member-b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["off", "shadow"])
+async def test_a_full_queue_never_blocks_the_loop_and_the_forget_is_parked_not_lost(kernel, monkeypatch, flag):
+    import asyncio
+    import queue
+
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", flag)
+    ticks = []
+
+    async def ticker():
+        while True:
+            ticks.append(time.perf_counter())
+            await asyncio.sleep(0.005)
+
+    full: queue.Queue = queue.Queue(maxsize=1)
+    full.put_nowait(("stop",))
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "_q", full)
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0.02)
+        before, t0 = len(ticks), time.perf_counter()
+        if flag == "off":
+            assert await os_shadow.forget_user(MEMBER) == 0              # deferred, and said so
+        else:
+            with pytest.raises(os_shadow.ShadowForgetUnavailable):       # the flag on: not confirmed is never "forgotten"
+                await os_shadow.forget_user(MEMBER)
+        took = time.perf_counter() - t0
+        await asyncio.sleep(0.02)
+        t.cancel()
+    assert took < 0.5, f"the forget held the loop {took:.2f} s"         # the old blocking put held it 2 s
+    assert len(ticks) > before                                            # other tasks ran
+    assert _pending(kernel) == [MEMBER]
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    add()
+    settle(1)
+    assert [op for _, op, _ in kernel.calls] == ["forget", "publish", "act"]
+
+
+def test_no_forget_coroutine_makes_a_blocking_queue_or_park_call():
+    """Structure: inside an async function of os_shadow.py, no ``.put(`` / ``.get(`` with a wait, and the park (flock + fsync) only
+    through an executor."""
+    tree = ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]:
+        for c in ast.walk(fn):
+            if isinstance(c, ast.Call):
+                name = getattr(c.func, "attr", getattr(c.func, "id", ""))
+                assert name not in ("put", "get", "_pending_add", "_pending_done", "_pending_write", "join", "sleep"), (fn.name, name)

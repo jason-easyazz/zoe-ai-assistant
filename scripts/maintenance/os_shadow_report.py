@@ -49,7 +49,7 @@ ALLOWED = {
                          "dropped_erased", "queue_full", "live_noop", "no_input", "shadow_error"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
-                         "recurring", "no_time", "range", "time", "parse", "hook", "worker", "code"}),
+                         "recurring", "no_time", "range", "time", "parse", "hook", "worker", "code", "pending_forget"}),
 }
 NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop", "worker_down", "no_input", "shadow_error"}
 UNAVAILABLE = ("kernel_unavailable", "timeout")
