@@ -246,7 +246,7 @@ def test_report_passes_a_clean_day_and_fails_each_condition_by_name(tmp_path):
     few = fixture(tmp_path, lambda ls: [x for x in ls if not ("verb=alarm_create" in x and "result=match" in x)] + [shadow(T0 + 9, "alarm_create")] * 150)
     assert not few["pass"] and any("judged" in f for f in few["verbs"]["alarm_create"]["fails"])
     bad = fixture(tmp_path, extra=[shadow(T0 + 50, "list_add", "kernel_refused_live_did", "no_grant", kernel="refused")] * 3)
-    assert any("agreement" in f for f in bad["verbs"]["list_add"]["fails"]) and any("unexplained" in f for f in bad["verbs"]["list_add"]["fails"])
+    assert any(f.startswith("agreement") for f in bad["verbs"]["list_add"]["fails"]) and any("unexplained" in f for f in bad["verbs"]["list_add"]["fails"])
     assert bad["disagreement_request_ids"]["list_add"] and all(i.startswith("r") for i in bad["disagreement_request_ids"]["list_add"])
     one = fixture(tmp_path, extra=[shadow(T0 + 50, "list_remove", "item_differs")])
     assert one["verbs"]["list_remove"]["fails"] == ["unexplained disagreement: item_differs:-"]
