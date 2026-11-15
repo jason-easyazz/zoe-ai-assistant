@@ -13,17 +13,15 @@ from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
 from models import ReminderCreate, ReminderUpdate, SnoozeBody
-from push import broadcaster
-from reminder_service import (
+from reminder_service import (  # noqa: F401 - the two job helpers are re-exported for older importers
     _cancel_reminder_jobs_safe,
-    _create_notification,
     _reschedule_reminder_due_safe,
+    acknowledge_reminder_record,
     create_reminder_record,
     delete_reminder_record,
-    normalize_due_date,
-    normalize_due_time,
     row_to_dict,
     snooze_reminder_record,
+    update_reminder_record,
 )
 
 log = logging.getLogger(__name__)
@@ -111,12 +109,6 @@ async def list_today_reminders(
     return {"reminders": reminders}
 
 
-def _is_rrule(pattern) -> bool:
-    from reminder_recurrence import parse_rrule
-
-    return bool(pattern) and parse_rrule(str(pattern)) is not None
-
-
 def _due_today(reminder: dict, today: date) -> bool:
     """One-off rows: due_date is today or unset (unchanged). RRULE rows: the
     rule has an occurrence today. Legacy free-text patterns keep the old test."""
@@ -142,89 +134,8 @@ async def update_reminder(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Update an existing reminder."""
-    await require_feature_access(db, user, feature="reminders", action="update")
-    user_id = user["user_id"]
-    where = f"{_visibility_filter_sql()} AND id = ?"
-    cursor = await db.execute(
-        "SELECT * FROM reminders WHERE " + where,
-        [user_id, reminder_id],
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Reminder not found")
-    # Household model: family-visible reminders are editable by any signed-in
-    # member (mirrors calendar #1303 / people) — the visibility filter above
-    # already scopes the lookup to family-or-own.
-    # …but only the OWNER may change visibility: a non-owner flipping a family
-    # reminder to 'personal' would hijack it out of the household's (and the
-    # owner's) view entirely (Greptile P1).
-    is_owner = dict(row).get("user_id") == user_id
-
-    updates = []
-    params = []
-    data = payload.model_dump(exclude_unset=True)
-    if not is_owner:
-        data.pop("visibility", None)
-    existing = dict(row)
-    if "due_date" in data and _is_rrule(existing.get("recurring_pattern")):
-        # A recurring row's due_date is the rule's ANCHOR, not a due day.
-        if data["due_date"] is not None and str(data["due_date"]) == str(existing.get("due_date")):
-            # An edit form re-sending the stored (usually past) anchor is not a
-            # date change: keep the anchor and the rule's phase, never 422 it.
-            data.pop("due_date")
-        else:
-            # Re-anchor to the first occurrence on/after the new date (today when
-            # cleared). A NULL anchor would make the scan re-anchor to "today"
-            # every cycle, so a monthly or every-3-days rule would fire DAILY.
-            from reminder_service import normalize_recurrence_fields
-
-            due_time = normalize_due_time(data["due_time"]) if "due_time" in data else existing.get("due_time")
-            _, data["due_date"] = normalize_recurrence_fields(
-                existing["recurring_pattern"], normalize_due_date(data["due_date"]), due_time
-            )
-    for key, value in data.items():
-        if key == "is_active":
-            updates.append("is_active = ?")
-            params.append(1 if value else 0)
-        elif key == "due_date":
-            updates.append("due_date = ?")
-            params.append(normalize_due_date(value))
-        elif key == "due_time":
-            updates.append("due_time = ?")
-            params.append(normalize_due_time(value))
-        else:
-            updates.append(f"{key} = ?")
-            params.append(value)
-
-    if not updates:
-        return row_to_dict(row)
-
-    updates.append("updated_at = NOW()")
-    # Bump the schedule generation so any old-time job that already won its claim
-    # self-voids at fire time instead of delivering at the stale time.
-    updates.append("schedule_generation = COALESCE(schedule_generation, 0) + 1")
-    params.append(reminder_id)
-
-    # B2: cancel the OLD-time job BEFORE the state change auto-commits, so it
-    # can't fire in the gap. The in-job claim + generation re-check are the final
-    # backstop for a sub-second in-flight boundary.
-    await _cancel_reminder_jobs_safe(reminder_id)
-    await db.execute(
-        f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
-    await db.commit()
-
-    # Reschedule at the new due-time.
-    await _reschedule_reminder_due_safe(db, reminder_id)
-
-    cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
-    row = await cursor.fetchone()
-    reminder = row_to_dict(row)
-
-    await broadcaster.broadcast("reminders", "reminder_updated", reminder, user_id=user_id)
-    return reminder
+    """Update an existing reminder (any member may edit a family reminder; only the owner changes visibility)."""
+    return await update_reminder_record(db, user, reminder_id, payload.model_dump(exclude_unset=True))
 
 
 @router.delete("/{reminder_id}", response_model=dict)
@@ -254,63 +165,8 @@ async def acknowledge_reminder(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Mark a reminder as acknowledged."""
-    await require_feature_access(db, user, feature="reminders", action="acknowledge")
-    user_id = user["user_id"]
-    where = f"{_visibility_filter_sql()} AND id = ?"
-    cursor = await db.execute(
-        "SELECT * FROM reminders WHERE " + where,
-        [user_id, reminder_id],
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Reminder not found")
-    if dict(row).get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Not authorised to acknowledge this reminder")
-
-    recurring = _is_rrule(dict(row).get("recurring_pattern"))
-    if recurring:
-        # A recurring (RRULE) reminder is done for THIS occurrence only: the row
-        # stays live and the next occurrence is scheduled (strictly after now).
-        # Stopping the series is delete / is_active=false, never "Complete".
-        # Clear a pending snooze (it would re-alert this occurrence) and bump the
-        # generation so a job already running for it self-voids at fire time.
-        # The bump lands BEFORE the cancel (below, after commit): a scan racing
-        # the cancel then sees the old unfired job or the NEW generation, never
-        # leaves a stale-generation job that would self-void and skip the next one.
-        await db.execute(
-            "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
-            "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
-            [reminder_id],
-        )
-    else:
-        # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
-        # state change auto-commits so it can't still fire; the in-job obligation
-        # re-read also aborts a sub-second in-flight job.
-        await _cancel_reminder_jobs_safe(reminder_id)
-        await db.execute(
-            "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
-            [reminder_id],
-        )
-    await _create_notification(
-        db,
-        user_id=user_id,
-        notif_type="reminder_acknowledged",
-        title="Reminder Done",
-        message=f"Reminder acknowledged: {dict(row).get('title', 'Reminder')}",
-        data={"reminder_id": reminder_id},
-    )
-    await db.commit()
-    if recurring:
-        await _cancel_reminder_jobs_safe(reminder_id)
-        await _reschedule_reminder_due_safe(db, reminder_id)
-
-    cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
-    row = await cursor.fetchone()
-    reminder = row_to_dict(row)
-
-    await broadcaster.broadcast("reminders", "reminder_acknowledged", reminder, user_id=user_id)
-    return reminder
+    """Mark a reminder as acknowledged (owner only; an RRULE row is done for this occurrence)."""
+    return await acknowledge_reminder_record(db, user, reminder_id)
 
 
 @router.get("/notifications/pending", response_model=dict)

@@ -1,5 +1,5 @@
-"""The reminder store: every entry point creates, snoozes and cancels through the ``*_reminder_record`` functions here,
-under ONE ownership rule (``load_for_actor``) and the household clock (``reminder_scan.zoe_now``)."""
+"""The reminder store: every entry point creates, edits, snoozes, completes and cancels through the ``*_reminder_record``
+functions here, under ONE ownership rule (``load_for_actor``) and the household clock (``reminder_scan.zoe_now``)."""
 
 from __future__ import annotations
 
@@ -351,6 +351,12 @@ async def load_for_actor(db, actor: Mapping[str, object], reminder_id: str, *, v
     return row
 
 
+def is_rrule(pattern) -> bool:
+    from reminder_recurrence import parse_rrule
+
+    return bool(pattern) and parse_rrule(str(pattern)) is not None
+
+
 async def _cancel_reminder_jobs_safe(reminder_id: str) -> None:
     """Cancel a reminder's pending jobs BEFORE a state change commits (B2). Best-effort: the in-job claim is the backstop."""
     try:
@@ -395,6 +401,43 @@ async def _reread(db, reminder_id: str) -> dict | None:
     return row_to_dict(await cursor.fetchone())
 
 
+async def update_reminder_record(db, actor: Mapping[str, object], reminder_id: str, changes: Mapping[str, object], *,
+                                 own_only: bool = False) -> dict:
+    """Edit: dates/times normalised, an RRULE row re-anchored, old job cancelled before and rescheduled after the write."""
+    await require_feature_access(db, actor, feature="reminders", action="update")
+    user_id = str(actor["user_id"])
+    existing = await load_for_actor(db, actor, reminder_id, verb="edit", own_only=own_only)
+    data = dict(changes)
+    if existing.get("user_id") != user_id:
+        data.pop("visibility", None)
+    if "due_date" in data and is_rrule(existing.get("recurring_pattern")):
+        # A recurring row's due_date is the rule's ANCHOR, not a due day.
+        if data["due_date"] is not None and str(data["due_date"]) == str(existing.get("due_date")):
+            data.pop("due_date")  # an edit form re-sending the stored anchor is not a date change: never 422 it
+        else:  # re-anchor on/after the new date (today when cleared); a NULL anchor would make a monthly rule fire DAILY
+            due_time = normalize_due_time(data["due_time"]) if "due_time" in data else existing.get("due_time")
+            _, data["due_date"] = normalize_recurrence_fields(
+                existing["recurring_pattern"], normalize_due_date(data["due_date"]), due_time)
+    updates, params = [], []
+    convert = {"is_active": lambda v: 1 if v else 0, "due_date": normalize_due_date, "due_time": normalize_due_time}
+    for key, value in data.items():
+        updates.append(f"{key} = ?")
+        params.append(convert[key](value) if key in convert else value)
+    if not updates:
+        return row_to_dict(existing)
+    kernel_seam("edit", actor, reminder_id)
+    updates.append("updated_at = NOW()")
+    updates.append("schedule_generation = COALESCE(schedule_generation, 0) + 1")
+    params.append(reminder_id)
+    await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
+    await db.execute(f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?", params)
+    await db.commit()
+    await _reschedule_reminder_due_safe(db, reminder_id)
+    reminder = await _reread(db, reminder_id)
+    await broadcaster.broadcast("reminders", "reminder_updated", reminder, user_id=user_id)
+    return reminder
+
+
 async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: str, *, own_only: bool = False) -> dict:
     """Cancel a reminder (soft delete): the pending job is cancelled BEFORE the row is marked deleted."""
     await require_feature_access(db, actor, feature="reminders", action="delete")
@@ -436,4 +479,34 @@ async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: s
         logger.exception("reminder snooze: reschedule at snoozed_until failed for %s", reminder_id)
     reminder = await _reread(db, reminder_id)
     await broadcaster.broadcast("reminders", "reminder_snoozed", reminder, user_id=user_id)
+    return reminder
+
+
+async def acknowledge_reminder_record(db, actor: Mapping[str, object], reminder_id: str) -> dict:
+    """Mark a reminder done (owner only). A one-off is done for good; an RRULE row is done for THIS occurrence only."""
+    await require_feature_access(db, actor, feature="reminders", action="acknowledge")
+    user_id = str(actor["user_id"])
+    row = await load_for_actor(db, actor, reminder_id, verb="done")
+    kernel_seam("done", actor, reminder_id)
+    recurring = is_rrule(row.get("recurring_pattern"))
+    if recurring:
+        # The row stays live; clear a snooze and bump the generation BEFORE the cancel (after commit), so a racing scan
+        # never leaves a stale-generation job that would self-void and skip the next occurrence.
+        await db.execute(
+            "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
+            "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
+            [reminder_id],
+        )
+    else:
+        await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
+        await db.execute("UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
+    await _create_notification(db, user_id=user_id, notif_type="reminder_acknowledged", title="Reminder Done",
+                               message=f"Reminder acknowledged: {row.get('title', 'Reminder')}",
+                               data={"reminder_id": reminder_id})
+    await db.commit()
+    if recurring:
+        await _cancel_reminder_jobs_safe(reminder_id)
+        await _reschedule_reminder_due_safe(db, reminder_id)
+    reminder = await _reread(db, reminder_id)
+    await broadcaster.broadcast("reminders", "reminder_acknowledged", reminder, user_id=user_id)
     return reminder

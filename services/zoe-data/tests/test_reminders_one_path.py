@@ -109,6 +109,15 @@ async def test_one_rule(visibility, actor, verb, own_only, expect):
         assert exc.value.status_code == expect
 
 
+@pytest.mark.asyncio
+async def test_only_the_owner_changes_visibility(quiet):
+    db = _Store(visibility="family")
+    await rs.update_reminder_record(db, _actor(B), "rem-1", {"title": "take pills twice", "visibility": "personal"})
+    (sql, _), = db.updates()
+    assert "title = ?" in sql and "visibility" not in sql and quiet["seam"] == ["edit"]
+    assert quiet["jobs"] == [{"rescheduled": "rem-1"}]
+
+
 # ── the store verbs: snooze is owner-only and a UTC instant; cancel honours own_only ───────────────────────────────────────
 @pytest.mark.asyncio
 async def test_snooze_is_owner_only_and_keeps_the_due_fields(quiet):
