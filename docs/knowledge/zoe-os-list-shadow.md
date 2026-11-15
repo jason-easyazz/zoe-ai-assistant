@@ -81,7 +81,9 @@ The comparison is made for each list add that really landed (`os_shadow.compare`
 | outcome class | `added` | `verified` / `unverified` / `uncertain` / `refused` |
 
 Result codes (the closed set; one per add): `match`, `kernel_refused_live_did` (with `reason=` `no_grant|manifest|params|cause|forgotten|other`),
-`kernel_unverified_live_did`, `item_differs`, `list_differs`, `kernel_malformed`, `kernel_unavailable`, `timeout`,
+`kernel_unverified_live_did`, `item_differs`, `list_differs`, `member_differs` (a verified receipt for ANOTHER member, or `kernel_malformed` for
+none), `kernel_malformed` (`reason=crossed` when the reply's `v` / `id` is not this request's: a stale or crossed reply is never the answer),
+`kernel_unavailable`, `timeout`,
 and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop` (`live=noop`), `worker_down`, `no_input` (no member
 or no item) and `shadow_error` (the shadow's OWN failure: `reason=hook` at the door, `worker` in the worker, `code` for a code outside the set).
 With the flag on, EVERY `note_add` call writes exactly one line, with the same eight fields, through the one emitter `_finish`; `RESULTS` in
@@ -94,7 +96,9 @@ The log line (INFO, logger `os_shadow`, in `~/.zoe-logs/zoe-data.*`) carries **n
 
     OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
 
-`src` is one of `spoken|single|skybridge|rest`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
+Every field is from a closed set (`os_shadow.SOURCES`, `CLASSES`, `LIVE`, `KERNEL_STATES`, `REASONS`, `RESULTS`) or a number; `_finish`
+maps anything else to `other` / `none`, so no caller argument can put text in the line or a counter key. `src` is one of
+`spoken|single|skybridge|rest|suggestion|service|other`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
 `q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table.
 
 ## 6. Speed and safety of the hook [lab]
