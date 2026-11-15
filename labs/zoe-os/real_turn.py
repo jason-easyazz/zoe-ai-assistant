@@ -22,6 +22,7 @@ bridge, the kernel and releases the lock. Synthetic people and invented words on
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import datetime as dt
 import fcntl
 import hashlib
@@ -388,8 +389,9 @@ def refusals(args, probes: Probes, *, held_lock: bool) -> list[tuple[str, str]]:
 # ---- the run -------------------------------------------------------------------------------------------
 def take_lock(path: str):
     path = lab_path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with lab_directory(path.parent) as directory:
+        fd = os.open(path.name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600,
+                     dir_fd=directory)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -406,6 +408,39 @@ def lab_path(path) -> Path:
     if not any(resolved.is_relative_to(base.resolve()) for base in (STATE_DIR, PRIVATE_TOOLS_DIR)):
         raise ValueError("lab path outside allowed state directories")
     return resolved
+
+
+@contextmanager
+def lab_directory(path):
+    """Pin each directory component; refuse a symlink swapped in after validation.
+
+    Lock and result opens use these descriptors. Temporary stack files still use
+    path-based APIs: this runner does not isolate them from a hostile same-user
+    directory rename. It is not a security boundary against that user.
+    """
+    path = lab_path(path)
+    fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in path.parts[1:]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def write_lab_text(path, text):
+    path = lab_path(path)
+    with lab_directory(path.parent) as directory:
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(text)
 
 
 def free_port(port: int) -> bool:
@@ -627,7 +662,8 @@ def run(args, probes: Probes) -> int:
             for guard, why in bad:
                 print(f"REFUSED [{guard}]: {why}", file=sys.stderr)
             return EXIT_LOCK if any(g == "lock" for g, _ in bad) and len(bad) == 1 else EXIT_REFUSED
-        out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with lab_directory(out_dir):
+            pass
         before, t_start = cache_state(args.llama_url, probes), probes.now()
         stack = Stack(args, tmp)
         llama = args.llama_url
@@ -667,9 +703,9 @@ def run(args, probes: Probes) -> int:
             fixture.append({"turn": n, "text": text, "frames": reduce_frames(got["frames"]), "proposals": props})
         verify = verify_kernel(stack, rows, turns)
         after = cache_state(llama, probes)
-        lab_path(out_dir / "recorded_turns.json").write_text(json.dumps(
+        write_lab_text(out_dir / "recorded_turns.json", json.dumps(
             {"note": "synthetic members and words; model text reduced to length+hash", "turns": fixture}, indent=1))
-        lab_path(out_dir / "result.json").write_text(json.dumps({"rows": rows, "verify": verify, "before": before,
+        write_lab_text(out_dir / "result.json", json.dumps({"rows": rows, "verify": verify, "before": before,
                                                         "after": after, "dry_run": args.dry_run, "set": args.set,
                                                         "policy": args.policy, "summary": summarize(rows)}, indent=1))
         report(rows, verify, before, after, journal_numbers(t_start) if not args.dry_run else {}, args, out_dir)
