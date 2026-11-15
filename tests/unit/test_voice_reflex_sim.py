@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -89,6 +90,43 @@ def test_decision_lines_are_summarised_and_the_report_has_no_free_text():
     assert SIM.summarise_decisions(["x"]) == "no REFLEX_DECISION lines"
     rep = SIM.report(SIM.synthetic_turns(50), "synthetic")
     assert "under 1 s" in rep and "Under 0.6 s is 0 by construction" in rep
+
+
+FREE = ("pineapple", "zebracrossing", "PINEAPPLE", "Zebra")       # invented free text planted in every field a line carries
+
+
+def _words(text: str) -> "set[str]":
+    return set(re.findall(r"[A-Za-z][A-Za-z_]+", text))
+
+
+def test_no_free_text_from_a_log_line_ever_reaches_the_output():
+    """The privacy property, tested for real: free text planted in every field of a REFLEX_DECISION line (the skip, the take,
+    the bank, around the line), in a would-be marker line and in a would-be turn line never appears in any output. The
+    output's words are only the fixed vocabulary: the skip enum, would_play / other, and the report's own wording."""
+    planted = [
+        "pineapple REFLEX_DECISION mode=shadow kind=none skip=zebracrossing take=pineapple decided_ms=190 talk_obs_ms=4 "
+        "noise_db=-70 spk=1 media=0 win=wake bank=Zebra trailing PINEAPPLE",
+        "REFLEX_DECISION mode=shadow kind=heard skip=- take=Zebra decided_ms=200 talk_obs_ms=4 noise_db=-70 spk=1 media=0 "
+        "win=wake bank=pineapple",
+        "REFLEX_DECISION mode=shadow kind=none skip=talking take=- decided_ms=250 talk_obs_ms=0 noise_db=-70 spk=1 media=0 "
+        "win=zebracrossing bank=-",
+    ]
+    out = SIM.summarise_decisions(planted)
+    assert not (_words(out) & set(FREE)), out
+    assert "other: 1" in out and "would_play: 1" in out           # the forged skip is counted, as "other", never echoed
+    allowed = set(SIM.RX.LOG_SKIPS) | {"would_play", "other", "decisions", "decided_ms"}
+    assert _words(out) <= allowed, _words(out) - allowed
+    marks = ["2026-01-01 12:00:20 DISTRESS_HANDOFF pineapple", "2026-01-01 12:00:20 Zebra", "zebracrossing"]
+    assert not (_words(repr(SIM.join_safety(planted, marks))) & set(FREE))
+    turns = SIM.parse_turns(["2026-01-01 12:00:00 C 640 pineapple", "2026-01-01 12:00:00 C 640",
+                             "2026-01-01 12:00:02 T 2.1", "Zebra 2026-01-01 12:00:03 T 1.0"])
+    assert len(turns) == 1
+    assert not (_words(SIM.report(turns, "saved extract")) & set(FREE))
+
+
+def test_the_free_text_check_can_fail():
+    """NEGATIVE CONTROL for the test above: the same check flags an output that echoes a planted word."""
+    assert _words("- zebracrossing: 1 (100.0%)") & set(FREE)
 
 
 def test_join_safety_counts_would_play_turns_near_a_server_marker():

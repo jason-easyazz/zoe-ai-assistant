@@ -235,8 +235,8 @@ def summarise_decisions(lines: Iterable[str]) -> str:
     if not n:
         return "no REFLEX_DECISION lines"
     skips: "dict[str, int]" = {}
-    for m in rows:
-        key = "would_play" if m.group(2) == "heard" else m.group(3)
+    for m in rows:   # only the shipped skip enum is ever echoed: any other word (a forged or corrupt line) is "other"
+        key = "would_play" if m.group(2) == "heard" else m.group(3) if m.group(3) in RX.LOG_SKIPS else "other"
         skips[key] = skips.get(key, 0) + 1
     dec = [int(m.group(4)) for m in rows]
     out = [f"{n} decisions; decided_ms p50 {_percentile(dec, .5):.0f} p95 {_percentile(dec, .95):.0f}", ""]
