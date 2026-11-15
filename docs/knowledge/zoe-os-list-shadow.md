@@ -121,9 +121,30 @@ A slow kernel is cut off per operation (0.5 s) and per add (1.5 s); a full queue
 into a turn (`test_the_live_add_is_identical_with_the_shadow_off_dead_or_on`: the rows the live path writes and the outcome it returns are identical
 with the flag off, with the kernel dead, refusing, closing the connection mid-call, or answering garbage).
 
-## 7. Owner steps
+## 7. Owner steps (nothing is done by the PRs)
 
-(Lands with the last PRs of this stack. Nothing is turned on by any PR.)
+**Merge order.** (1) the zoe-data PRs (hook, forget reach, report) can land on `main` alone: with the flag off they do nothing. (2) The lab
+stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be merged before the kernel exists on `main`: the daemon needs
+`zoe_os/kernel.py`, `server.py`, `wire.py`, `capability.py`, `receipts.py`, `spine.py` and `brain/drivers.py`. (3) then the kernel PR
+(daemon, unit template, contract test).
+
+**Turn on** (after 1-3 are merged and deployed):
+
+    mkdir -p ~/.zoe/os-shadow && chmod 700 ~/.zoe/os-shadow
+    # the roster: every member id, once (and again when a member is added). Ids only; the count is all it prints.
+    docker exec zoe-database psql -U zoe -d zoe -tAc "SELECT id FROM users ORDER BY id" | xargs python3 ~/assistant/services/zoe-data/os_shadow.py --write-roster
+    cp ~/assistant/scripts/setup/systemd/zoe-os-shadow-kernel.service ~/.config/systemd/user/
+    systemctl --user daemon-reload && systemctl --user enable --now zoe-os-shadow-kernel.service
+    # verify the kernel is up and the credentials were written (names only, never print them)
+    systemctl --user is-active zoe-os-shadow-kernel.service && ls -l ~/.zoe/os-shadow/
+    # the flag, then a zoe-data restart
+    echo 'ZOE_OS_LIST_SHADOW=shadow' >> ~/assistant/services/zoe-data/.env && systemctl --user restart zoe-data
+
+**Verify**: add one item by voice, then `grep OS_SHADOW_LIST_ADD ~/.zoe-logs/zoe-data.*  | tail -3` shows `result=match`.
+**Read a week**: `python3 scripts/maintenance/os_shadow_report.py ~/.zoe-logs/zoe-data.*`.
+**Roll back**: remove the `ZOE_OS_LIST_SHADOW` line and restart zoe-data (the hook becomes a flag read again); optionally
+`systemctl --user disable --now zoe-os-shadow-kernel.service`. Leave `~/.zoe/os-shadow/` in place so a later member erase can still reach the kernel
+(a forget while the unit is stopped is parked in `pending-forgets.json` and replayed), or delete the directory to erase the whole shadow record.
 
 ## 8. Not done, not proven
 
