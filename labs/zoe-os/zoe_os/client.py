@@ -14,12 +14,13 @@ import time
 from . import wire
 from .events import Event, Kind
 from .receipts import Receipt
-from .spine import Refused
+from .spine import EventCache, Refused
 
 
 class Client:
     def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0) -> None:
         self.skill, self._timeout, self._id = skill, timeout, 0
+        self._cache_conn = (path, skill, credential)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
         self.sock.connect(path)
@@ -105,6 +106,8 @@ class Client:
 
     def run(self, skill, *, from_seq: int | None = None) -> int:
         """Feed a skill everything pending for its manifest's reads. Returns events handled."""
+        if not hasattr(self, "cache"):
+            self.cache = EventCache(self._cache_history)
         sub, handled = self.subscribe(kinds=skill.manifest["reads"], from_seq=from_seq), 0
         for ev in self.drain(sub):
             handled += 1
@@ -113,6 +116,15 @@ class Client:
             except Refused:
                 pass
         return handled
+
+    def _cache_history(self):
+        """A short-lived reader: closing it releases the replay subscription on the kernel.
+        Repeated cache reads must not exhaust this client's subscription allowance."""
+        reader = Client(*self._cache_conn, timeout=self._timeout)
+        try:
+            return reader.drain(reader.subscribe(from_seq=0))
+        finally:
+            reader.close()
 
 
 class _RemoteSub:

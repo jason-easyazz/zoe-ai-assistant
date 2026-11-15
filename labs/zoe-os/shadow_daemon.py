@@ -9,6 +9,7 @@ receipt beside it, in its OWN store. Read ``docs/knowledge/zoe-os-list-shadow.md
 State directory (default ``$ZOE_OS_SHADOW_DIR`` or ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
 
     people.json   {"people": [member ids]}   REQUIRED, written by the owner (``os_shadow.export_roster``); read at start
+    known-people.json  every id ever in people.json (never shrinks): who the kernel can still FORGET
     creds.json    {"socket": path, "creds": {"voice": hex, "brain": hex, "panel": hex}}   written here, 0600, on every start
     k.sock        the Unix socket (0600)
     kernel/       the kernel's SQLite spine (events, receipts, intents), 0600
@@ -82,14 +83,36 @@ def state_dir(arg: str | None) -> Path:
     return Path(arg or os.environ.get("ZOE_OS_SHADOW_DIR") or Path.home() / ".zoe" / "os-shadow")
 
 
+def remember_people(state: Path, people: list) -> list:
+    """``known-people.json``: every id ever in the roster (never shrinks), written atomically, 0600, BEFORE the kernel serves."""
+    path = state / "known-people.json"
+    try:
+        before = [str(p) for p in json.loads(path.read_text("utf-8"))["people"]]
+    except FileNotFoundError:
+        before = []
+    known = sorted(set(before) | set(people))
+    tmp = state / "known-people.json.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"people": known}, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    return known
+
+
 def build(state: Path, db: str | None = None):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
     people = json.loads((state / "people.json").read_text("utf-8"))["people"]
     if not people or not all(isinstance(p, str) and p for p in people):
         raise SystemExit("people.json has no members: the shadow kernel records nothing for a household it does not know")
+    known = remember_people(state, people)
     path = Path(db).expanduser() if db else state / "kernel" / "zoe-os.db"      # --db: the permanent home (authority.PERMANENT_DB)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    k = Kernel(str(path), [Person(p) for p in people])
+    # EVERY id this kernel was ever started with stays a person it knows, so a member taken off people.json can still be forgotten
+    # (zoe-data forgets by id and reads "only a person can ask to forget" as "never recorded": this is what makes that true).
+    # Only the CURRENT roster is granted anything below: a removed member is forgettable, never proposable.
+    k = Kernel(str(path), [Person(p) for p in known])
     lists = Lists().register(k)
     register_list_remove(k, lists)
     reminders, alarms = Reminders(time.time).register(k), Alarms().register(k)

@@ -8,25 +8,29 @@ tool name and arguments. There is no way to name a member in a ``/propose`` call
     GET  /tools     the derived tool schemas (what the app registers)
     POST /turn      {"member": ..., "cause": n}   (runner only: the model has no route to this)
     POST /propose   {"tool": name, "arguments": {...}} -> {"status", "say", "receipt"}
-    GET  /log       every proposal so far: tool, arguments, status, ms (the recorded tool-call frames)
+    GET  /log       proposal ids, status codes and timing only
 
 Bound to 127.0.0.1 on a port the runner chose. It holds the bridge (a socket path and a credential)
-and nothing else. ``/turn`` is refused from any connection that is not the runner's own: the runner
-passes a one-time ``X-Runner`` token that is never given to the Node app.
+and nothing else. Every route requires the runner's ``X-Runner`` token; the trusted Node
+forwarder receives a derived token for tools/propose only through its environment, never
+through a model argument or schema. It cannot set turns or read the runner's log.
 """
 from __future__ import annotations
 
 import json
+import hmac
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .bridge import BrainBridge, Turn
+from ..diagnostics import proposal_record
 
 
 class BridgeServer:
     def __init__(self, bridge: BrainBridge, runner_token: str, port: int = 0) -> None:
         self.bridge, self.token, self.turn = bridge, runner_token, None
+        self.app_token = hmac.new(runner_token.encode(), b'proposal-forwarder', 'sha256').hexdigest()
         self.log: list[dict] = []
         self._lock = threading.Lock()
         outer = self
@@ -52,6 +56,8 @@ class BridgeServer:
                 return obj if isinstance(obj, dict) else {}
 
             def do_GET(self):
+                if not self._authorized():
+                    return self._send(403, {"error": "runner only"})
                 if self.path == "/tools":
                     self._send(200, outer.bridge.tools())
                 elif self.path == "/log":
@@ -60,10 +66,10 @@ class BridgeServer:
                     self._send(404, {"error": "no such route"})
 
             def do_POST(self):
+                if not self._authorized():
+                    return self._send(403, {"error": "runner only"})
                 body = self._body()
                 if self.path == "/turn":
-                    if self.headers.get("X-Runner") != outer.token:
-                        return self._send(403, {"error": "runner only"})
                     outer.turn = Turn(str(body["member"]), int(body["cause"]))
                     return self._send(200, {"ok": True})
                 if self.path != "/propose":
@@ -74,12 +80,18 @@ class BridgeServer:
                     t0 = time.perf_counter_ns()
                     out = outer.bridge.propose(outer.turn, str(body.get("tool")), body.get("arguments"))
                     ms = (time.perf_counter_ns() - t0) / 1e6
-                    outer.log.append({"turn": outer.turn.cause, "tool": body.get("tool"),
-                                      "arguments": body.get("arguments"), "status": out.status,
-                                      "receipt": out.receipt, "say": out.say, "reason": out.reason, "shape": out.shape, "hop_ms": round(ms, 3)})
+                    outer.log.append(proposal_record(outer.turn.cause, body.get("tool"), out, ms))
                 self._send(200, {"status": out.status, "say": out.say, "receipt": out.receipt})
 
+            def _authorized(self):
+                supplied = self.headers.get("X-Runner", "")
+                runner = hmac.compare_digest(supplied.encode(), outer.token.encode())
+                app = hmac.compare_digest(supplied.encode(), outer.app_token.encode())
+                return bool(outer.token) and (runner or (app and self.path in {'/tools', '/propose'}))
+
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), H)
+        # The stdlib default prints exception details from untrusted requests to stderr.
+        self.httpd.handle_error = lambda *args: None
         self.port = self.httpd.server_address[1]
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
