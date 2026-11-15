@@ -105,7 +105,7 @@ the list, it does not resolve one, and its read-back is `{"item"}` only. Both be
 
 The log line (INFO, logger `os_shadow`, in `~/.zoe-logs/zoe-data.*`) carries **no item, no list name, no person**:
 
-    OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
+    OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
 
 `src` is one of `spoken|single|skybridge|rest`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
 `q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table.
@@ -140,7 +140,7 @@ stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be m
     # the flag, then a zoe-data restart
     echo 'ZOE_OS_LIST_SHADOW=shadow' >> ~/assistant/services/zoe-data/.env && systemctl --user restart zoe-data
 
-**Verify**: add one item by voice, then `grep OS_SHADOW_LIST_ADD ~/.zoe-logs/zoe-data.*  | tail -3` shows `result=match`.
+**Verify**: add one item by voice, then `grep 'OS_SHADOW_ACT verb=list_add' ~/.zoe-logs/zoe-data.*  | tail -3` shows `result=match`.
 **Read a week**: `python3 scripts/maintenance/os_shadow_report.py ~/.zoe-logs/zoe-data.*`.
 **Roll back**: remove the `ZOE_OS_LIST_SHADOW` line and restart zoe-data (the hook becomes a flag read again); optionally
 `systemctl --user disable --now zoe-os-shadow-kernel.service`. Leave `~/.zoe/os-shadow/` in place so a later member erase can still reach the kernel
@@ -153,4 +153,5 @@ stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be m
 * The kernel driver's list is in memory, has no dedupe and no list resolution: a week of shadow proves the record, receipts, availability,
   latency and forget reach, not that the kernel could replace the live list logic (dedupe, household/personal visibility, list resolution).
 * Children are treated as adults in the shadow roster (no guardian model in `users`); not a consent model for anything authoritative.
-* `reminders` and `alarms` are not shadowed.
+* Reminder create, alarm create and the spoken list remove are shadowed too since the widening, each named in `ZOE_OS_SHADOW_VERBS`
+  (default `list_add` only): see [zoe-os-integration.md](zoe-os-integration.md), which also carries the staged path to the authority.

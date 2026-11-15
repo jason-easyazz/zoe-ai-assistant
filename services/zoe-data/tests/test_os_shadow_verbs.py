@@ -8,15 +8,16 @@ on purpose reads as disagree in the owner's report, verb by verb. Names, notes a
 """
 from __future__ import annotations
 
-import ast
 import importlib.util
 import logging
+import re
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 import os_shadow
+import test_os_shadow_hook as hook_scan
 from test_os_shadow import MEMBER, SVC, kernel, settle  # noqa: F401  (kernel is a fixture)
 
 pytestmark = pytest.mark.ci_safe
@@ -221,36 +222,44 @@ async def test_the_live_alarm_create_is_identical_with_the_kernel_on_dead_or_dis
     assert sum(os_shadow.counters_by_verb()["alarm_create"].values()) == 3
 
 
-# ---- structure pins: every writer of these tables is shadowed or named ------------------------------------------------------------
-def _consts(src: str):
-    return [n.value for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
-
-
-def _calls(src: str, name: str) -> bool:
-    return any(isinstance(n, ast.Call) and getattr(n.func, "attr", "") == name and getattr(n.func.value, "id", "") == "os_shadow"
-               for n in ast.walk(ast.parse(src)))
-
-
-#: verb -> (what marks a writer of it in the source, the hook it must call, {shadowed}, {not shadowed: reason})
+# ---- structure pins: every WRITER FUNCTION of a shadowed verb is hooked or named (the list-add scan, test_os_shadow_hook.py) ------
+_T = r'["`]?(?:\w+["`]?\.["`]?)?'
+#: verb -> (the SQL a writer of it runs, any spelling; writer helpers; the hook it must call; the table, for the prefilter;
+#:          {"file::function": why it is NOT shadowed})
 WRITERS = {
-    "reminder_create": (lambda c: "INSERT INTO reminders" in c, "note_reminder_create", {"reminder_service.py"},
-                        {"pending_suggestions.py": "Zoe's own offer, accepted by the member: not a spoken create; a later, separate decision"}),
-    "alarm_create": (lambda c: "INSERT INTO alarms" in c, "note_alarm_create", {"alarms.py"}, {}),
-    "list_remove": (lambda c: "UPDATE list_items SET deleted = 1" in c, "note_list_remove", {"skybridge_service.py"},
-                    {"list_service.py": "rename_item's merge retires a duplicate row: a correction, not a remove the member asked for",
-                     "routers/lists.py": "the REST delete reads no item text; shadowing it needs the text read first (a later, separate change)"}),
+    "reminder_create": (re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+" + _T + r"reminders\b"), frozenset(), "note_reminder_create",
+                        "reminders", {"pending_suggestions.py::_execute_action": "OUT OF SCOPE: Zoe's own offer, accepted by the member, "
+                                                                                 "not a member's create; a later, separate decision"}),
+    "alarm_create": (re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+" + _T + r"alarms\b"), frozenset(), "note_alarm_create",
+                     "alarms", {}),
+    "list_remove": (re.compile(r"(?is)\b(?:update\s+" + _T + r"list_items[\"`]?\s+set\s+(?:[^;]*?,\s*)?deleted\s*=\s*(?:1|true)\b"
+                               r"|delete\s+from\s+" + _T + r"list_items\b)"), frozenset(), "note_list_remove", "list_items",
+                    {"list_service.py::rename_item_on_list": "OUT OF SCOPE: the merge retires a duplicate row; a correction, not a remove",
+                     "routers/lists.py::delete_item": "OUT OF SCOPE for now: the REST delete reads no item text; shadowing it needs the "
+                                                      "text read first (a later, separate change)"}),
 }
 
 
-def _service_files():
-    skip = {"tests", "alembic", "node_modules", "__pycache__"}
-    return [p for p in SVC.rglob("*.py") if not skip.intersection(p.relative_to(SVC).parts)]
-
-
 @pytest.mark.parametrize("verb", sorted(WRITERS))
-def test_every_writer_of_a_shadowed_verb_is_shadowed_or_named_with_a_reason(verb):
-    marks, hook, shadowed, excused = WRITERS[verb]
-    found = {p.relative_to(SVC).as_posix() for p in _service_files() if any(marks(c) for c in _consts(p.read_text("utf-8")))}
-    assert found == shadowed | set(excused), f"{verb}: a writer is neither shadowed nor excused: {found ^ (shadowed | set(excused))}"
-    for rel in shadowed:
-        assert _calls((SVC / rel).read_text("utf-8"), hook), f"{rel} writes {verb} but never calls os_shadow.{hook}"
+def test_every_writer_function_of_a_shadowed_verb_is_hooked_or_named_with_a_reason(verb):
+    sql, helpers, hook, table, excused = WRITERS[verb]
+    sites, bare = hook_scan.scan(sql, helpers, frozenset({hook}), table)
+    assert bare == set(excused), f"{verb}: a writer function neither calls os_shadow.{hook} nor is named: {sorted(bare ^ set(excused))}"
+    assert sites - bare, f"{verb}: no hooked writer found at all (the pattern is wrong)"
+
+
+@pytest.mark.parametrize("verb,sql", [
+    ("reminder_create", "insert into reminders (id) values (1)"), ("reminder_create", 'INSERT INTO "public"."reminders" (id)'),
+    ("alarm_create", "Insert\n Into alarms (id)"), ("list_remove", "UPDATE list_items SET deleted = 1 WHERE id = $1"),
+    ("list_remove", "update list_items set updated_at = NOW(), deleted = TRUE where id = ?"), ("list_remove", "DELETE FROM list_items WHERE id = 1")])
+def test_the_verb_detectors_read_every_spelling(verb, sql):
+    pattern = WRITERS[verb][0]
+    assert hook_scan.writer_sites(f"async def f(db):\n    await db.execute({sql!r})", pattern) == ["f"]
+    assert hook_scan.writer_sites(f"async def f(db):\n    await db.execute({sql[:6]!r} + {sql[6:]!r})", pattern) == ["f"]
+    assert hook_scan.writer_sites("def f():\n    return 'SELECT * FROM reminders, alarms, list_items'", pattern) == []
+
+
+def test_a_hooked_writer_does_not_hide_an_unhooked_one_for_a_new_verb():
+    src = ("async def a(db):\n    await db.execute('INSERT INTO alarms (id) VALUES (1)')\n    os_shadow.note_alarm_create('u')\n"
+           "async def b(db):\n    await db.execute('insert into alarms (id) values (2)')\n")
+    assert hook_scan.unhooked(src, WRITERS["alarm_create"][0], frozenset(), frozenset({"note_alarm_create"})) == ["b"]

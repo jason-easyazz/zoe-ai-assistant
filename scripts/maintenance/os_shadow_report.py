@@ -28,6 +28,22 @@ from collections import Counter
 
 LINE = re.compile(r"OS_SHADOW_(ACT|LIST_ADD)\s+(.*)")
 VERB_ORDER = ("list_add", "list_remove", "reminder_create", "alarm_create")
+#: every field the report reads, with its CLOSED set of values (os_shadow.py writes only these). Anything else becomes ``unknown`` (and
+#: an unknown result is a disagreement): the report never echoes a value it does not know, so a planted or corrupted field cannot print text.
+UNKNOWN = "unknown"
+ALLOWED = {
+    "verb": frozenset(VERB_ORDER),
+    "src": frozenset({"spoken", "single", "skybridge", "rest", "service"}),
+    "cls": frozenset({"shopping", "todo", "personal", "other", "once", "repeat", "-"}),
+    "live": frozenset({"added", "refused"}),
+    "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
+    "result": frozenset({"match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused",
+                         "item_differs", "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster",
+                         "dropped_erased", "queue_full", "live_noop"}),
+    "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
+                         "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
+                         "recurring", "no_time", "range", "time", "parse"}),
+}
 NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop"}
 UNAVAILABLE = ("kernel_unavailable", "timeout")
 AGREE = ("match",)
@@ -46,21 +62,40 @@ def bucket(result: str) -> str:
     return "disagree"          # every other code, including one this reader does not know yet: the conservative side
 
 
+def clean(fields: list, legacy: bool = False) -> "dict | None":
+    """One line's ``key=value`` pairs as a record of KNOWN keys with CLOSED values, or None (the line is rejected): a key given twice
+    (a later copy must never override the writer's), no ``result`` or ``verb`` (an ``OS_SHADOW_LIST_ADD`` line is ``list_add``), or a
+    ``hop_ms`` that is not a number. Unknown keys are dropped; an unknown value becomes ``unknown``."""
+    seen: dict = {}
+    for kv in fields:
+        if "=" not in kv:
+            continue
+        key, value = kv.split("=", 1)
+        if key in seen:
+            return None
+        seen[key] = value
+    if legacy:
+        if "verb" in seen:
+            return None
+        seen["verb"] = "list_add"
+    if "result" not in seen or "verb" not in seen:
+        return None
+    rec = {k: (seen[k] if seen[k] in ALLOWED[k] else UNKNOWN) for k in ALLOWED if k in seen}
+    try:
+        rec["hop_ms"] = float(seen.get("hop_ms", "nan"))
+    except ValueError:
+        return None
+    return rec
+
+
 def parse(lines) -> list[dict]:
     out = []
     for raw in lines:
         m = LINE.search(raw)
-        if not m:
-            continue
-        rec = dict(kv.split("=", 1) for kv in m.group(2).split() if "=" in kv)
-        if m.group(1) == "LIST_ADD":
-            rec.setdefault("verb", "list_add")
-        try:
-            rec["hop_ms"] = float(rec.get("hop_ms", "nan"))
-        except ValueError:
-            continue
-        if "result" in rec and "verb" in rec:
-            out.append(rec)
+        if m:
+            rec = clean(m.group(2).split(), legacy=m.group(1) == "LIST_ADD")
+            if rec is not None:
+                out.append(rec)
     return out
 
 

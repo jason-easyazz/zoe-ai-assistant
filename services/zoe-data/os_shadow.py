@@ -117,6 +117,11 @@ def verbs() -> frozenset:
     return frozenset(str(v).strip().lower() for v in items if str(v).strip().lower() in VERBS)
 
 
+def wants(verb: str) -> bool:
+    """The switch is ``shadow`` AND the verb is listed: what a call site checks before any extra read it does only for the shadow."""
+    return mode() == "shadow" and verb in verbs()
+
+
 def state_dir() -> Path:
     try:
         import typed_env
@@ -505,7 +510,7 @@ def note_act(verb: str, user_id: Optional[str], *, source: str, raw: dict, cls: 
     kernel's args (nothing is parsed here). ``landed`` False = nothing was written: counted, never proposed. Never raises, never
     blocks, O(1); with the switch off, or the verb not in ``ZOE_OS_SHADOW_VERBS``, it returns before anything is touched."""
     try:
-        if mode() != "shadow" or verb not in verbs():
+        if not wants(verb):
             return
         if not landed:
             _tally("live_noop", verb=verb)
