@@ -4056,6 +4056,24 @@ class _PostCloseTalk:
         if prob >= VAD_ENDPOINT_THRESHOLD:
             self.chunks += 1
 
+    def peek(self, now: float) -> "tuple[bool | None, int]":
+        """(talking, observed_ms) RIGHT NOW, for the reflex: True = at least one speech chunk since the close (never talk
+        over it); False = the monitor's mic has covered >= _REFLEX_TALK_MIN_OBS_MS after the close and its newest chunk is
+        recent (<= _REFLEX_TALK_STALE_MS old) with none of them speech; None = nobody listened yet (no monitor, mic still
+        opening, no close, already stopped by a first sound). Read-only; the monitor thread owns the counters."""
+        t = _turn_close.get("t")
+        if not (self.armed and self.opened) or self.stopped or t is None:
+            return None, 0
+        first, last, chunks = self.first_cap, self.last_end, self.chunks
+        if first is None or last is None:
+            return None, 0
+        obs = max(0, int(round((last - max(first, t)) * 1000.0)))
+        if chunks >= 1:
+            return True, obs
+        if obs < _REFLEX_TALK_MIN_OBS_MS or (now - last) * 1000.0 > _REFLEX_TALK_STALE_MS:
+            return None, obs
+        return False, obs
+
     def take(self) -> "tuple[int, int, int]":
         """(talk_chunks, still_talking, obs_ms); (-1, 0, 0) when no monitor listened for this turn or no close is known."""
         t = _turn_close.get("t")
@@ -4099,16 +4117,20 @@ class _FirstSound:
         self.gap_max = 0
         self.spk: "bool | None" = None       # the at-close speaker verdict (_spk_verdict), None = not scored
         self.spk_at: "float | None" = None   # when it was ready (monotonic)
+        self.spk_user: "str | None" = None   # the claimed member id: used ONLY to match REFLEX_SILENT_MEMBERS, never logged
         self.skip = "-"                       # the SHADOW reflex decision's skip (never acted on)
+        self.reflex: "_ReflexTurn | None" = None   # the real-time reflex controller (REFLEX_MODE shadow / on), else None
 
     def speaker(self, claim: object, at: "float | None") -> None:
         """The turn's speaker claim came back at ``at`` (None = the claim was not scored on this turn)."""
         self.spk = _spk_verdict(claim)
         self.spk_at = at if self.spk is not None else None
+        self.spk_user = claim[0] if self.spk is True and isinstance(claim, tuple) and claim else None
 
     def shadow_reflex(self) -> None:
-        """Fill ``skip`` from a SHADOW decide() on this turn's real inputs. Log-only: plays nothing, loads no bank."""
-        self.skip = _shadow_reflex_skip(self)
+        """Fill ``skip``: the real-time controller's decision when REFLEX_MODE ran one for this turn, else the post-hoc SHADOW
+        decide() on this turn's real inputs (REFLEX_MODE off). Neither plays anything here."""
+        self.skip = self.reflex.skip if self.reflex is not None else _shadow_reflex_skip(self)
 
     def _take_close(self) -> None:
         c = dict(_turn_close)
@@ -4192,14 +4214,15 @@ class _FirstSound:
             c = self._close
         rule = c["rule"] if c is not None and c.get("rule") in _CLOSE_RULES + ("cap", "other") else "none"
         kind = self.kind if self.kind in _SERVER_KINDS + ("unknown", "none") else "unknown"
-        skip = self.skip if _reflex is not None and self.skip in _reflex.SKIPS else "-"
+        skip = self.skip if _reflex is not None and self.skip in _reflex.LOG_SKIPS else "-"
         spk_ms = self.rel_ms(self.spk_at) if self.spk is not None else -1
-        return ("FIRST_SOUND close=%s=%dms post_ms=%d reflex=none skip=%s reflex_at_ms=-1 reflex_dur_ms=-1 "
-                "reflex_cut=0 reflex_wait_ms=0 server_first_ms=%d server_kind=%s gap_ms=-1 still_talking=%d "
+        rf = self.reflex.fields(self) if self.reflex is not None else ("none", -1, -1, 0, -1)   # kind, at, dur, cut, gap
+        return ("FIRST_SOUND close=%s=%dms post_ms=%d reflex=%s skip=%s reflex_at_ms=%d reflex_dur_ms=%d "
+                "reflex_cut=%d reflex_wait_ms=0 server_first_ms=%d server_kind=%s gap_ms=%d still_talking=%d "
                 "talk_chunks=%d chunks=%d underrun_max_ms=%d underrun_sum_ms=%d obs_ms=%d win=%s quiet_ms=%d fall=%s "
                 "muted_ms=%d first_end_ms=%d media=%d media_age_ms=%d spk=%d spk_ms=%d") % (
-            rule, int(c["ms"]) if rule != "none" else 0, self.rel_ms(self.post_at), skip, self.rel_ms(self.first_at),
-            kind, int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum, int(talk[2]),
+            rule, int(c["ms"]) if rule != "none" else 0, self.rel_ms(self.post_at), rf[0], skip, rf[1], rf[2], rf[3],
+            self.rel_ms(self.first_at), kind, rf[4], int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum, int(talk[2]),
             self.win, int(c.get("quiet_ms", -1)) if c is not None else -1,
             c["fall"] if c is not None and c.get("fall") in ("clean", "hesitating") else "none",
             self._muted(c), self.rel_ms(self.first_end), self._media(c),
@@ -4240,56 +4263,318 @@ def _spk_verdict(claim: object) -> "bool | None":
         return None
 
 
-def _rms_dbfs(frames: "list | None", n: int) -> "float | None":
-    """RMS of the first ``n`` frames (the pre-roll / lookback before the recording proper) in dBFS; None when there are none."""
+def _rms_floor_dbfs(frames: "list | None", n: int) -> "float | None":
+    """The QUIETEST 80 ms chunk (dBFS) among the first ``n`` frames (the pre-roll / lookback before the recording proper):
+    an estimate of the room's floor. The whole-window RMS used before held the wake word itself, so ``noisy`` fired on
+    nearly every wake turn (docs/knowledge/voice-reflex-noise-input.md); the minimum chunk is the pause around it. Steady
+    music or TV keeps even the quietest chunk high, which is what ``noisy`` is for. None when there are no frames."""
     try:
         if not frames or n <= 0:
             return None
-        a = np.frombuffer(b"".join(frames[:n]), dtype=np.int16).astype(np.float64)
-        if a.size == 0:
-            return None
-        rms = float(np.sqrt(np.mean(a * a)))
-        return max(-120.0, min(0.0, 20.0 * math.log10(max(rms, 1e-9) / 32768.0)))
+        best = None
+        for f in frames[:n]:
+            a = np.frombuffer(f, dtype=np.int16)
+            if a.size == 0:
+                continue
+            rms = float(np.sqrt(np.mean(a.astype(np.float64) ** 2)))
+            db = max(-120.0, min(0.0, 20.0 * math.log10(max(rms, 1e-9) / 32768.0)))
+            best = db if best is None else min(best, db)
+        return best
     except Exception:  # noqa: BLE001
         return None
 
 
+def _reflex_ctx(fs: "_FirstSound", *, talking: "bool | None", verdict_ms: "float | None", bank=None, state=None):
+    """The reflex's inputs for this turn from the close-time snapshot. An input the daemon cannot state maps to the SILENT
+    side: unknown speech length -> 0 (short), unknown mute -> 80 ms (muted), unknown floor -> 0 dBFS (noisy), unknown idle ->
+    1000 h (idle_greeting). ``bank`` None = no bank (``no_bank`` once every other guard passes)."""
+    c = fs._close
+    rule = c.get("rule")
+    rule = "max_duration" if rule == "cap" else rule if rule in _reflex.RULES else "other"
+    muted = fs._muted(c)
+    noise = _rms_floor_dbfs(c.get("frames"), int(c.get("skip", 0) or 0))
+    idle_s, speech_ms, hour = c.get("idle_s"), c.get("speech_ms"), c.get("hour")
+    return _reflex.Ctx(
+        rule=rule, speech_ms=speech_ms if isinstance(speech_ms, int) and speech_ms >= 0 else 0,
+        muted_ms=muted if muted >= 0 else 80, turn_kind=fs.win, capped=c.get("rule") == "cap",
+        other_player=c.get("busy"), noise_dbfs=noise if noise is not None else 0.0,
+        local_hour=hour if isinstance(hour, int) and 0 <= hour <= 23 else 12,
+        since_last_s=_reflex.since_last(state, _fs_now()) if state is not None else None,
+        idle_h=(idle_s / 3600.0) if isinstance(idle_s, (int, float)) and idle_s >= 0 else 1000.0,
+        prev_question=bool(c.get("prev_q")), chain_turns_since=None,
+        bank_voice=bank.voice if bank is not None else None,
+        current_voice=_reflex_current_voice() if bank is not None else None,
+        takes=bank.take_ids if bank is not None else (),
+        committed=c.get("committed") is True, media_active=c.get("media"), talking=talking,
+        guest=(True if fs.spk_user is not None and fs.spk_user in _reflex_silent_members()
+               else False if fs.spk is True else True if fs.spk is False else None),
+        speaker_accept=fs.spk, speaker_model=_rn34.MODEL_ID if (fs.spk is not None and _rn34 is not None) else None,
+        verdict_ms=verdict_ms)
+
+
 def _shadow_reflex_skip(fs: "_FirstSound") -> str:
-    """What the reflex WOULD have decided for this turn: decide() over the real close-time inputs, with the master switch
-    forced on IN THIS CALL ONLY so every other guard is evaluated. Returns a skip reason (or "-"). It plays nothing, loads no
-    bank (no bank = takes () = ``no_bank`` once every other guard passes, i.e. "would have played"), and runs at the turn's
-    end, after the stream, never on the audio path. An input the daemon cannot state maps to the SILENT side: unknown speech
-    length -> 0 (short), unknown mute -> 80 ms (muted), unknown pre-roll level -> 0 dBFS (noisy), unknown idle -> 1000 h.
-    OPEN (docs/knowledge/voice-reflex-noise-input.md): the pre-roll holds the wake word, so ``noisy`` will dominate."""
+    """The POST-HOC shadow (REFLEX_MODE off): what decide() WOULD have said on the real close-time inputs, the master switch
+    forced on IN THIS CALL ONLY. Plays nothing, loads no bank (no bank = ``no_bank`` once every other guard passes, i.e.
+    "would have played"), runs at the turn's end after the stream. It does NOT evaluate the still-talking rule (that needs the
+    live mic window): ``talking`` is passed as False here, so only REFLEX_MODE shadow / on states it."""
     if _reflex is None:
         return "-"
     try:
         import dataclasses
-        c = fs._close
-        if c is None:
+        if fs._close is None:
             return "not_committed"
-        rule = c.get("rule")
-        rule = "max_duration" if rule == "cap" else rule if rule in _reflex.RULES else "other"
-        muted = fs._muted(c)
-        noise = _rms_dbfs(c.get("frames"), int(c.get("skip", 0) or 0))
-        idle_s = c.get("idle_s")
-        speech_ms = c.get("speech_ms")
-        hour = c.get("hour")
-        ctx = _reflex.Ctx(
-            rule=rule, speech_ms=speech_ms if isinstance(speech_ms, int) and speech_ms >= 0 else 0,
-            muted_ms=muted if muted >= 0 else 80, turn_kind=fs.win, capped=c.get("rule") == "cap",
-            other_player=c.get("busy"), noise_dbfs=noise if noise is not None else 0.0,
-            local_hour=hour if isinstance(hour, int) and 0 <= hour <= 23 else 12,
-            since_last_s=None, idle_h=(idle_s / 3600.0) if isinstance(idle_s, (int, float)) and idle_s >= 0 else 1000.0,
-            prev_question=bool(c.get("prev_q")), chain_turns_since=None, bank_voice=None, current_voice=None, takes=(),
-            committed=c.get("committed") is True, media_active=c.get("media"),
-            guest=False if fs.spk is True else True if fs.spk is False else None,
-            speaker_accept=fs.spk, speaker_model=_rn34.MODEL_ID if (fs.spk is not None and _rn34 is not None) else None,
-            verdict_ms=(lambda v: v if v >= 0 else None)(fs.rel_ms(fs.spk_at)) if fs.spk is not None else None)
+        ctx = _reflex_ctx(fs, talking=False,
+                          verdict_ms=(lambda v: v if v >= 0 else None)(fs.rel_ms(fs.spk_at)) if fs.spk is not None else None)
         d = _reflex.decide(ctx, None, s=dataclasses.replace(_reflex.settings(), enabled=True))
         return d.skip if d.skip in _reflex.SKIPS else "-"
     except Exception:  # noqa: BLE001  # the instrument never costs the line
         return "-"
+
+
+# ── Panel reflex wiring (REFLEX_MODE = off | shadow | on, default OFF; docs/knowledge/voice-reflex.md) ─────────────────────
+# ONE switch, read at import:  off (default) = nothing runs but the post-hoc ``skip=`` above;  shadow = the real decision is
+# made on every eligible turn, with the real bank, and LOGGED (``REFLEX_DECISION``), no sound;  on = it may play one take.
+# The env ``REFLEX_ENABLED`` the module reads is IGNORED here (modes force it per call), so there is no second switch.
+# Nothing here runs on the audio path or before the POST: the decision and the player live on ONE short thread per turn. The
+# reply is never delayed: when its first audio arrives (``_reflex_note_reply`` in the first-chunk branch), a pending reflex is
+# dropped (skip ``reply_first``) and a playing one is CUT (terminate), never waited for. The reflex player is NOT registered
+# (``_register_tts_process``): a registered player would start the barge monitor's grace before the reply's onset.
+REFLEX_MODE = (os.environ.get("REFLEX_MODE") or "off").strip().lower()
+if REFLEX_MODE not in ("off", "shadow", "on"):
+    REFLEX_MODE = "off"
+_REFLEX_TALK_MIN_OBS_MS = 160    # the post-close mic must have covered this long before "nobody is talking" can be stated
+_REFLEX_TALK_STALE_MS = 300      # ... and its newest chunk must be this fresh
+_REFLEX_POLL_S = 0.02
+_REFLEX_BANK = None              # the loaded Bank (zoe_voice_reflex.Bank) or None
+_REFLEX_STATE: dict = {}         # {"recent": [<=2 take ids], "last_at": monotonic s}: in memory, reset by a restart
+_REFLEX_LOCK = threading.Lock()
+_REFLEX_CUR: "_ReflexTurn | None" = None
+_REFLEX_DONE_VOICE: "str | None" = None   # the household voice named by a done frame (additive key; absent on today's server)
+
+
+def _reflex_current_voice() -> "str | None":
+    """The household's current voice: a done frame's ``voice`` when the server sends one, else the panel's declared
+    ``REFLEX_VOICE``. None = unknown = ``voice_mismatch`` = silence. A voice change needs a re-rendered bank AND this value."""
+    v = _REFLEX_DONE_VOICE or (os.environ.get("REFLEX_VOICE") or "").strip()
+    return v or None
+
+
+def _reflex_silent_members() -> "frozenset[str]":
+    """Members the reflex never plays for (``REFLEX_SILENT_MEMBERS``, comma-separated ids in the panel's .env.voice, e.g. the
+    children): treated as a guest, so silent. The panel has no age or role for a member; this is the owner's explicit list."""
+    raw = os.environ.get("REFLEX_SILENT_MEMBERS") or ""
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def _reflex_note_voice(v: object) -> None:
+    global _REFLEX_DONE_VOICE
+    try:
+        if _reflex is not None and isinstance(v, str) and _reflex.VOICE_RE.fullmatch(v):
+            _REFLEX_DONE_VOICE = v
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _reflex_init() -> None:
+    """Load the bank once at start (mode shadow / on). Fail silent: no module, no voice, no valid bank = ``no_bank``."""
+    global _REFLEX_BANK
+    if REFLEX_MODE == "off":
+        return
+    log.info("REFLEX_MODE=%s", REFLEX_MODE)
+    if _reflex is None or PANEL_PLATFORM == "mac":
+        log.warning("REFLEX_MODE=%s but %s: the reflex stays silent", REFLEX_MODE,
+                    "zoe_voice_reflex.py is not deployed" if _reflex is None else "this is not a Pi panel")
+        return
+    try:
+        import dataclasses
+        voice = _reflex_current_voice()
+        res = _reflex.load_bank(voice or "", None, dataclasses.replace(_reflex.settings(), enabled=True))
+        _REFLEX_BANK = res.bank
+        log.info("REFLEX_BANK result=%s voice=%s bank=%s takes=%d", res.reason, voice or "-",
+                 res.bank.sha8 if res.bank else "-", len(res.bank.takes) if res.bank else 0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("REFLEX_BANK load failed (%s): the reflex stays silent", type(exc).__name__)
+
+
+class _ReflexTurn:
+    """One turn's reflex. Decides on its own thread (never before the POST, never on the audio path), logs ONE
+    ``REFLEX_DECISION`` line, and in mode ``on`` plays at most one take. Numbers and fixed enums only."""
+
+    def __init__(self, fs: "_FirstSound", mode: str, bank):
+        self.fs, self.mode, self.bank = fs, mode, bank
+        self.t_close = float(fs._close["t"])
+        self.skip = "-"                  # the decision's skip, or a runtime skip; "-" = heard (or, in shadow, would have)
+        self.kind = "none"               # "heard" only once a take was really written to a player
+        self.take: "str | None" = None
+        self.dur_ms = -1
+        self.at_ms = -1
+        self.cut = False
+        self.started_at: "float | None" = None
+        self._decided = False
+        self._reply = threading.Event()  # the reply's first audio arrived
+        self._over = threading.Event()   # the turn ended
+        self._lock = threading.Lock()
+        self._proc = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name="reflex-turn")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def note_reply(self) -> None:
+        """The reply's first audio is about to be written. A lock and at most one signal: never waits."""
+        self._reply.set()
+        with self._lock:
+            p = self._proc
+        if p is not None and p.poll() is None:
+            self.cut = True
+            try:
+                p.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def end(self) -> None:
+        self._over.set()
+        if self.skip == "-" and self.kind == "none" and self.take is None and not self._decided:
+            self.skip = "late"           # the turn was over before a decision: never a "would have played"
+
+    def fields(self, fs: "_FirstSound") -> tuple:
+        """(reflex kind, at_ms, dur_ms, cut, gap_ms) for the FIRST_SOUND line."""
+        if self.kind != "heard" or self.started_at is None:
+            return "none", -1, -1, 0, -1
+        gap = 0 if self.cut else -1       # a cut reflex had no gap: the reply started over its tail
+        if not self.cut and fs.first_at is not None:
+            gap = max(0, int(round((fs.first_at - (self.started_at + self.dur_ms / 1000.0)) * 1000.0)))
+        return "heard", self.at_ms, self.dur_ms, 1 if self.cut else 0, gap
+
+    def _run(self) -> None:
+        try:
+            import dataclasses
+            s = dataclasses.replace(_reflex.settings(), enabled=True)
+            deadline = s.score_deadline_ms / 1000.0
+            talking, obs = None, 0
+            while True:                  # wait (off the audio path) for the post-close mic to say whether anyone is talking
+                now = _fs_now()
+                talking, obs = _TALK.peek(now)
+                if (talking is not None or now - self.t_close >= deadline or self._reply.is_set()
+                        or self._over.is_set() or _shutdown.is_set()):
+                    break
+                time.sleep(_REFLEX_POLL_S)
+            now = _fs_now()
+            decided_ms = (now - self.t_close) * 1000.0
+            self._decided = True
+            if self._reply.is_set():
+                self.skip = "reply_first"
+                self._log(decided_ms, obs, "none")
+                return
+            if self._over.is_set() or _shutdown.is_set():
+                self.skip = "late"
+                return
+            with _REFLEX_LOCK:
+                state = dict(_REFLEX_STATE)
+            d = _reflex.decide(_reflex_ctx(self.fs, talking=talking, verdict_ms=decided_ms, bank=self.bank, state=state),
+                               state, s=s)
+            self.skip, self.take = d.skip, d.take
+            self._log(decided_ms, obs, d.kind)
+            if d.kind == "heard" and self.mode == "on":
+                self._play(d)
+        except Exception as exc:  # noqa: BLE001  # a reflex failure never touches the turn
+            self._decided = True
+            if self.skip == "-":
+                self.skip = "player_failed" if self.kind == "none" else self.skip
+            log.debug("reflex: %s", type(exc).__name__)
+
+    def _log(self, decided_ms: float, obs: int, kind: str) -> None:
+        c = self.fs._close or {}
+        noise = _rms_floor_dbfs(c.get("frames"), int(c.get("skip", 0) or 0))
+        log.info("REFLEX_DECISION mode=%s kind=%s skip=%s take=%s decided_ms=%d talk_obs_ms=%d noise_db=%d spk=%d media=%d "
+                 "win=%s bank=%s", self.mode, kind, self.skip, self.take or "-", int(round(decided_ms)), int(obs),
+                 int(round(noise)) if noise is not None else -999,
+                 1 if self.fs.spk is True else 0 if self.fs.spk is False else -1, self.fs._media(c), self.fs.win,
+                 self.bank.sha8 if self.bank is not None else "-")
+
+    def _play(self, d) -> None:
+        take = self.bank.takes.get(d.take) if self.bank is not None else None
+        if take is None:
+            self.skip = "no_bank"
+            return
+        if self._reply.is_set() or self._over.is_set():
+            self.skip = "reply_first"    # late-skip: the reply (or the end of the turn) came before the player could start
+            return
+        try:
+            proc = _PLATFORM.start_pcm_stream(_reflex.BANK_RATE, _reflex.BANK_CHANNELS, _reflex.BANK_WIDTH)
+        except Exception:  # noqa: BLE001
+            self.skip = "player_failed"
+            return
+        with self._lock:
+            if self._reply.is_set() or self._over.is_set():
+                late = True
+            else:
+                late, self._proc = False, proc
+        if late:
+            self.skip = "reply_first"
+            self._reap(proc, kill=True)
+            return
+        try:
+            t0 = _fs_now()
+            proc.stdin.write(take.pcm)
+            proc.stdin.close()
+        except Exception:  # noqa: BLE001
+            self.skip = "player_failed"
+            self._reap(proc, kill=True)
+            return
+        self.started_at, self.dur_ms, self.kind = t0, int(take.dur_ms), "heard"
+        self.at_ms = int(round((t0 - self.t_close) * 1000.0))
+        global _REFLEX_STATE
+        with _REFLEX_LOCK:
+            _REFLEX_STATE = _reflex.record(_REFLEX_STATE, d, _fs_now())
+        self._reap(proc, kill=False, timeout=take.dur_ms / 1000.0 + 2.0)
+
+    @staticmethod
+    def _reap(proc, *, kill: bool, timeout: float = 1.0) -> None:
+        try:
+            if kill:
+                proc.kill()
+            proc.wait(timeout=timeout)
+        except Exception:  # noqa: BLE001
+            try:
+                proc.kill()
+                proc.wait(timeout=1.0)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _reflex_begin(fs: "_FirstSound") -> None:
+    """Start this turn's reflex controller (REFLEX_MODE shadow / on). Never raises, never waits."""
+    global _REFLEX_CUR
+    try:
+        if (REFLEX_MODE == "off" or _reflex is None or PANEL_PLATFORM == "mac" or fs._speculative
+                or fs._close is None):
+            return
+        ctl = _ReflexTurn(fs, REFLEX_MODE, _REFLEX_BANK)
+        fs.reflex = ctl
+        _REFLEX_CUR = ctl
+        ctl.start()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _reflex_end(fs: "_FirstSound") -> None:
+    global _REFLEX_CUR
+    ctl = fs.reflex
+    if ctl is not None:
+        ctl.end()
+        if _REFLEX_CUR is ctl:
+            _REFLEX_CUR = None
+
+
+def _reflex_note_reply() -> None:
+    """Called where the reply's first audio is about to be written. Never raises; a no-op with no reflex this turn."""
+    ctl = _REFLEX_CUR
+    if ctl is not None:
+        try:
+            ctl.note_reply()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _fs_note_write(t_start: float, t_end: float, dur_s: float) -> None:
@@ -4315,6 +4600,7 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         return aplay
     pcm = _trim_chunk_silence(pcm, rate, ch, width)
     if aplay is None:
+        _reflex_note_reply()  # the reply's first audio: a reflex still playing is CUT, never waited for (a lock and a signal)
         # A player that cannot start raises (Popen: FileNotFoundError; Mac: OSError /
         # NotImplementedError). _do_single_turn_stream treats that as "nothing played"
         # and falls back to the blocking turn, instead of counting the reply as heard.
@@ -4488,6 +4774,10 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     finally:
         _fs_local.turn = prev
         try:
+            _reflex_end(fs)  # no reflex may start after the turn is over
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             fs.shadow_reflex()  # after the stream: a shadow decide(), logged as skip=, never acted on
         except Exception:  # noqa: BLE001
             pass
@@ -4523,6 +4813,7 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
         fs.speaker(voice_claim, _fs_now() if scored_here else None)
     except Exception:  # noqa: BLE001
         pass
+    _reflex_begin(fs)  # REFLEX_MODE shadow / on: decide (and maybe play) on its own thread, off the path to the POST
     if speculation is not None:
         speculation.voice_claim = voice_claim
     _last_turn_flags.clear()
@@ -4623,6 +4914,7 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
             if "full_audio" in obj:
                 # Skybridge/confirmation path: voice_command returned one full
                 # audio blob (wav or mp3). Play it via the robust player.
+                _reflex_note_reply()
                 if not played_any:
                     _recording_active.clear()
                 if ttfa is None:
@@ -4634,6 +4926,7 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
                 reply = obj.get("reply", "") or reply
                 continue
             if obj.get("done"):
+                _reflex_note_voice(obj.get("voice"))
                 reply = obj.get("reply", "") or reply
                 if obj.get("cancelled") and speculation is not None:
                     # The server dropped the speculative turn: nothing was and
@@ -6202,6 +6495,7 @@ def main():
         _MEDIA = _MediaWatch()
         _MEDIA.start()
         log.info("Media watch started (log-only).")
+    _reflex_init()  # REFLEX_MODE shadow / on only: load the sound bank (fail silent)
 
     # P-W2.3: server-pushed spoken announcements (morning brief etc.).
     threading.Thread(

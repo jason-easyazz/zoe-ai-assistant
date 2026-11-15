@@ -180,15 +180,12 @@ def test_the_forced_switch_is_load_bearing_and_local(daemon):
     assert REFLEX.settings().enabled is False
 
 
-def test_shadow_decide_never_plays_and_never_loads_a_bank(daemon, monkeypatch, caplog):
+def test_post_hoc_shadow_never_plays_and_never_loads_a_bank(daemon, monkeypatch, caplog):
     for name in ("load_bank", "load_bank_dir", "pick_take", "record", "handshake_block"):
         monkeypatch.setattr(REFLEX, name, lambda *a, **k: pytest.fail("the shadow reached the playback side"))
     ok, line, writes, posts = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))
     assert _f(line, "skip") == "no_bank"
-    src = DAEMON.read_text(encoding="utf-8")
-    for forbidden in ("_reflex.load_bank", "_reflex.record(", "_reflex.handshake_block", "_reflex.pick_take",
-                      "_ReflexPlayer", "REFLEX_DIR"):
-        assert forbidden not in src, forbidden
+    assert daemon.REFLEX_MODE == "off" and daemon._REFLEX_CUR is None and daemon._REFLEX_BANK is None   # nothing is wired in off
     assert ok is True and len(writes) == 3          # the reply's three chunks only: no extra player, no extra write
 
 
