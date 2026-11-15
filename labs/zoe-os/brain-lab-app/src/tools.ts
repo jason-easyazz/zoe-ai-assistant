@@ -3,7 +3,8 @@
  * those schemas (BrainBridge.tools(), OpenAI function shape) to OSLAB_TOOLS_FILE before this
  * process starts; nothing is hand-written here. `run()` forwards the model's arguments to the bridge
  * over localhost and returns the ONE sentence the kernel's receipt produced. There is no member,
- * store, token or credential in this file: who the turn is for is set by the runner on the bridge.
+ * store or member selector in this file: who the turn is for is set by the runner on the bridge.
+ * A forwarder token comes from the runner's environment; it cannot set a turn or read the log.
  */
 import { readFileSync } from 'node:fs';
 import { defineTool } from '@flue/runtime';
@@ -30,7 +31,7 @@ async function forward(tool: string, args: unknown): Promise<string> {
   try {
     const r = await fetch(`${bridgeUrl()}/propose`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'X-Runner': process.env.OSLAB_BRIDGE_TOKEN ?? '' },
       body: JSON.stringify({ tool, arguments: args }),
       signal: AbortSignal.timeout(15_000),
     });

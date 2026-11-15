@@ -801,6 +801,11 @@ class Spine:
         while True:
             rows = self._fetch(after, kinds, subject, batch)
             for ev in rows:
+                # A suspended iterator owns stale objects: refresh by primary key at yield
+                # time, including surviving receipts whose snapshots were scrubbed.
+                ev = self._get(ev.seq)
+                if ev is None:
+                    continue
                 if self._deliverable(reader, ev):
                     yield ev
             if len(rows) < batch:

@@ -209,4 +209,4 @@ def test_a_day_with_reminders_replays_through_the_harness(k):
                  no_accept=["reminder.create", "reminder.delete"])      # asked for first-hand
     report = replay(day, [Reminders()])
     assert report.counts == {"offers": 1, "actions": 2, "refusals": 0, "claims": 1, "findings": 0}
-    assert '[card, accepted] "Reminder: water the plants"' in report.text
+    assert '[card, accepted]' in report.text and 'water the plants' not in report.text

@@ -24,6 +24,9 @@ class Context:
     def now(self) -> float:
         return self.kernel.clock()
 
+    def purge(self, action: str, args: dict, notice: Event) -> None:
+        self.kernel.actions.purge(self.skill, action, args, notice)
+
     def publish(self, kind: Kind, *, subject: str | None, payload: dict,
                 caused_by: tuple[int, ...], visibility: Visibility = Visibility.PRIVATE) -> Event:
         return self.kernel.spine.publish(Event(kind, self.skill, subject, visibility, payload,
