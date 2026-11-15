@@ -524,6 +524,24 @@ def test_control_an_opted_in_user_is_caught_up(monkeypatch, index):
     assert wrote == 2 and len(index.rows) == 2
 
 
+def test_the_catch_up_never_recopies_a_turn_said_at_or_before_the_members_erase(monkeypatch, index):
+    """A member erase removes ``exact_turns`` but not ``chat_messages``: the night's catch-up must not copy the old turns back
+    (``erase_watermark``). ``test_control_an_opted_in_user_is_caught_up`` is the control: both turns copied without an erase."""
+    import datetime as dt
+
+    import erase_watermark
+    import user_prefs
+
+    async def opted_in(_uid, **_kw):
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    monkeypatch.setattr(erase_watermark, "_now", lambda: dt.datetime.fromtimestamp(NOW - 3600 - 1050, tz=dt.timezone.utc))
+    run(erase_watermark.record(USER))                                     # between turn 2 (older) and turn 1 (newer)
+    rows = [(*_turn(i)[:4], dt.datetime.fromtimestamp(_turn(i)[2], tz=dt.timezone.utc).isoformat()) for i in (1, 2)]
+    wrote, _ = _catch_up(monkeypatch, index, rows)
+    assert wrote == 1 and len(index.rows) == 1
+
+
 def test_the_catch_up_never_indexes_a_turn_the_speaker_gate_rejected(monkeypatch, index):
     import user_prefs
 

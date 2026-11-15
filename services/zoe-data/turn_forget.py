@@ -134,6 +134,53 @@ def is_forget_turn(text: str) -> bool:
         return False
 
 
+def instruction_patterns() -> list:
+    """The compiled patterns ``is_forget_instruction`` decides by (through ``is_forget_turn``, ``memory_quality``, ``forget_topic``
+    and ``intent_router``): ONE list, so a reader that needs a coarse prefilter (``scripts/maintenance/forget_command_rows_audit.py``)
+    derives it from the detector itself instead of keeping a second word list. Pinned: blanking every pattern here makes the
+    detector accept nothing (``tests/test_forget_command_rows_audit.py``)."""
+    import forget_topic
+    import memory_quality
+    from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
+
+    return [memory_quality._FORGET_WHOLE_RE, memory_quality._FORGET_I_SAID_RE, memory_quality._FORGET_CLAUSE_RE,
+            _FORGET_LAST_RE, _FORGET_ENTITY_RE, forget_topic._TOPIC_RE, forget_topic._CLAUSE_RE]
+
+
+def is_forget_instruction(text: str) -> bool:
+    """Is ``text`` a FORGET COMMAND of any kind: a short retraction of the previous turn (``is_forget_turn``, bounded by
+    ``memory_quality.FORGET_MAX_WORDS`` exactly as the chat capture bounds it), a TOPIC forget ("forget that I told you about
+    my brother", ``forget_topic.parse``) or an ENTITY forget ("forget everything about Dana", ``intent_router._FORGET_ENTITY_RE``)?
+    The union of the existing detectors, no pattern of its own. Pure; never raises.
+
+    Such a turn is an instruction, never a fact: its saved row is flagged off the record and every transcript reader skips it
+    (QA round 10a: a topic forget writes no ledger entry, so idle consolidation re-mined the command itself into "the user told
+    Zoe about their brother", and Zoe then reported "a record of a past conversation about him")."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    try:
+        import memory_quality
+
+        if len(t.split()) <= memory_quality.FORGET_MAX_WORDS and is_forget_turn(t):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import forget_topic
+
+        if forget_topic.parse(t) is not None:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from intent_router import _FORGET_ENTITY_RE
+
+        return bool(_FORGET_ENTITY_RE.match(t))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ── the turn notes ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 def note_user_turn(user_id: Optional[str], text: str, *, now: Optional[float] = None) -> None:
@@ -211,6 +258,9 @@ def retract(user_id: str, turn: Turn, *, now: Optional[float] = None) -> None:
             while len(_retracted) > _MAX_USERS:
                 _retracted.popitem(last=False)
         logger.info("TURN_FORGET user=%s retracted=1", user_id)
+        import correction_marker
+
+        correction_marker.forget_user(user_id, reason="forget_turn")   # any forget drops the member's pending corrections
     except Exception:  # noqa: BLE001
         logger.warning("turn_forget.retract failed", exc_info=True)
 
@@ -221,6 +271,12 @@ def mark_forgotten(user_id: str, turn: Turn) -> None:
         for tr in _turns.get(user_id) or ():
             if tr.tid == turn.tid:
                 tr.text = ""
+    try:  # the rows are flagged off the record by now: clear the pending corrections AGAIN, after the flagging (retract
+        import correction_marker  # cleared them before it; a marker set in between must not outlive the forget)
+
+        correction_marker.forget_user(user_id, reason="forget_turn")
+    except Exception:  # noqa: BLE001
+        logger.warning("turn_forget.mark_forgotten: marker clear failed", exc_info=True)
 
 
 def _live(user_id: str, t: float) -> list:

@@ -697,7 +697,11 @@ async def backfill_recent(user_id: str, *, hours: Optional[int] = None) -> int:
             if not rows:
                 break
             seen += len(rows)
-            for row in rows:
+            # never re-copy a turn said at or before the member's erase watermark (erase_watermark). Unreadable: raises, caught below
+            # (nothing written tonight; the catch-up is idempotent, so the next run redoes it)
+            import erase_watermark
+            for row in await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[4] if len(r) > 4 else r[2],
+                                                          reader="exact_words_backfill"):
                 _mid, content, epoch, metadata = row[0], row[1], row[2], row[3]
                 if speaker_rejected(metadata):
                     continue
