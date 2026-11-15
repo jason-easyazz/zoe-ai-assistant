@@ -409,10 +409,19 @@ def _sa_data() -> dict:
     return _data()["self_assess"]
 
 
-def _sa_not_after(key: str) -> str:
-    """A lookahead refusing the condition only when an EXPLICIT idiom / sport / art phrase from the data follows it ("stroke of
-    luck", "stroke in the pool", "heart attack on a plate"); never a bare function word ("a stroke on my left side" fires)."""
-    phrases = [p for p in _sa_data().get("condition_not_after", {}).get(key, []) if p.split() and not set(p.split()) <= _FUNCTION_WORDS]
+def _sa_term_key(term: str) -> str:
+    return re.sub(r"[\s-]+", "", term.lower())
+
+
+def _sa_not_after(term: str) -> str:
+    """A lookahead refusing ONE condition term only when an EXPLICIT idiom / sport / art phrase listed for THAT EXACT TERM follows it
+    ("stroke of luck", "stroke in the pool", "heart attack on a plate"); never a bare function word ("a stroke on my left side"
+    fires), and never another term of the same condition ("heat stroke in the pool", "a mini stroke in the water" fire: the
+    swim-stroke phrases belong to a bare "stroke"; review of #2525). Terms compare with spaces and hyphens removed, because the
+    term regex accepts either ("heart attack" / "heart-attack" / "heartattack" are one term)."""
+    want = _sa_term_key(term)
+    phrases = [p for g in _sa_data().get("term_not_after", []) if want in {_sa_term_key(t) for t in g.get("terms", [])}
+               for p in g.get("phrases", []) if p.split() and not set(p.split()) <= _FUNCTION_WORDS]
     if not phrases:
         return ""
     return r"(?!\s+(?:" + "|".join(r"\s+".join(map(re.escape, p.split())) for p in sorted(phrases, key=len, reverse=True)) + r")(?!\w))"
@@ -425,7 +434,7 @@ def _sa_cond() -> "tuple[str, dict]":
     alts = []
     for t in sorted(keys, key=len, reverse=True):
         rx = r"[\s-]?".join(re.escape(w) for w in re.split(r"[\s-]+", t))
-        alts.append(rx + _sa_not_after(keys[t]))
+        alts.append(rx + _sa_not_after(t))
     return "(?:" + "|".join(alts) + r")(?!\w)", keys
 
 

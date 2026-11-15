@@ -632,10 +632,16 @@ def test_pinned_a_heart_question_beside_a_stated_drug_ingestion_gets_the_heart_r
 
 # ── review #2525 PRRT ...ff5C: an exclusion is an explicit idiom phrase, never a bare function word ──────────────────────────
 def test_no_exclusion_in_the_data_is_a_bare_function_word():
-    for key, phrases in _sa().get("condition_not_after", {}).items():
-        assert key in _sa()["conditions"]
-        for p in phrases:
-            assert not set(p.split()) <= medical_safety._FUNCTION_WORDS, (key, p)
+    assert "condition_not_after" not in _sa()                     # exclusions are bound to exact terms, never a whole condition
+    every_term = {medical_safety._sa_term_key(t) for terms in _sa()["conditions"].values() for t in terms}
+    for group in _sa().get("term_not_after", []):
+        if "_note" in group:
+            continue
+        assert group["terms"] and group["phrases"]
+        for t in group["terms"]:
+            assert medical_safety._sa_term_key(t) in every_term, t
+        for p in group["phrases"]:
+            assert not set(p.split()) <= medical_safety._FUNCTION_WORDS, (group["terms"], p)
     for p in _sa()["verb_idiom_objects"] + _sa()["verb_idiom_unless_asked"]:
         assert not set(p.split()) <= medical_safety._FUNCTION_WORDS, p
 
@@ -783,3 +789,88 @@ def test_control_the_prefix_matching_guard_swallowed_the_ordinary_tails():
     assert len(eaten) == 12 and eaten == ORDINARY_TAILS[:12]          # exactly the tails that start with a fiction word
     new = re.compile(medical_safety._SA_FICTION)
     assert all(new.match(" " + t) for t in ORDINARY_TAILS) and not any(new.match(" " + t) for t in FICTION_TAILS)
+
+
+# -- an idiom exclusion belongs to the EXACT term it lists (review of #2525: the swim-stroke phrases suppressed heat stroke) ----------
+PLACE_TIME_TAILS = ORDINARY_TAILS + ["in the water", "in the pool", "on the water", "at the beach", "in the ocean", "in the bath",
+                                     "in the lake", "in the river", "at the gym", "on the field", "on the court", "on the track",
+                                     "in the sauna", "in bed", "in the garden", "in this pool"]
+PRESENT_FRAMES = ["is this {C} {T}", "am i having {C} {T}", "i think im having {C} {T}", "is she having {C} {T}"]
+
+
+def _excluded_pairs() -> set:
+    """Every (term key, phrase) the data lists, one by one: the ONLY sentences allowed not to fire."""
+    return {(medical_safety._sa_term_key(t), p) for g in _sa().get("term_not_after", []) if "_note" not in g
+            for t in g["terms"] for p in g["phrases"]}
+
+
+def _noun_terms() -> list:
+    return [(key, t) for key, terms in sorted(_sa()["conditions"].items()) for t in terms]
+
+
+def test_every_condition_term_fires_with_every_place_or_time_tail_except_the_listed_idioms():
+    excluded, misses, fired_idioms, checked = _excluded_pairs(), [], [], 0
+    for key, term in _noun_terms():
+        art = f"an {term}" if term[0] in "aeiou" else f"a {term}"
+        for tail in PLACE_TIME_TAILS:
+            listed = (medical_safety._sa_term_key(term), tail) in excluded
+            for frame in PRESENT_FRAMES:
+                text = frame.replace("{C}", art).replace("{T}", tail)
+                got = medical_safety.self_assessment(text)
+                checked += 1
+                if listed and got.cls:
+                    fired_idioms.append(text)
+                if not listed and got != _expected(key):
+                    misses.append(text)
+    assert checked > 1500 and not misses, misses[:10]
+    assert not fired_idioms, fired_idioms[:10]
+
+
+def test_the_reported_heat_stroke_sentences_fire_and_the_bare_swim_stroke_does_not(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    for text in ("am i having heatstroke in the water", "am i having a heat stroke in the pool", "is this a mini stroke in the water",
+                 "is this sunstroke on the water", "is this a tia in the pool", "is this cardiac arrest on a plate"):
+        assert medical_safety.self_assessment(text).cls == "red_call", text
+        assert run(medical_safety.handle(text, "demo_bar_00000001")), text
+    for text in ("is this a stroke in the pool", "am i having a stroke of luck", "is this a heart attack on a plate",
+                 "is this a heart-attack on a plate", "is this a stoke in the pool"):
+        assert medical_safety.self_assessment(text).cls == "", text
+
+
+def test_no_exclusion_can_silence_a_sentence_that_names_a_different_condition_term():
+    """For every listed (terms, phrase): put the phrase after EVERY OTHER term of EVERY condition. It must still fire."""
+    silenced = []
+    for group in _sa().get("term_not_after", []):
+        if "_note" in group:
+            continue
+        own = {medical_safety._sa_term_key(t) for t in group["terms"]}
+        for key, term in _noun_terms():
+            if medical_safety._sa_term_key(term) in own:
+                continue
+            art = f"an {term}" if term[0] in "aeiou" else f"a {term}"
+            for phrase in group["phrases"]:
+                text = f"is this {art} {phrase}"
+                if medical_safety.self_assessment(text) != _expected(key):
+                    silenced.append(text)
+    assert not silenced, silenced[:10]
+
+
+def _clear_sa_caches():
+    for name in dir(medical_safety):
+        fn = getattr(medical_safety, name)
+        if name.startswith("_sa_") and hasattr(fn, "cache_clear"):
+            fn.cache_clear()
+
+
+def test_control_binding_the_swim_phrases_to_the_whole_condition_silences_heat_stroke(monkeypatch):
+    data = medical_safety._data()["self_assess"]
+    every_stroke = list(data["conditions"]["stroke"])
+    widened = [dict(g, terms=every_stroke) if "stroke" in g.get("terms", []) else g for g in data["term_not_after"]]
+    monkeypatch.setitem(data, "term_not_after", widened)
+    _clear_sa_caches()
+    try:
+        assert medical_safety.self_assessment("am i having a heat stroke in the pool").cls == ""      # the reported failure, reproduced
+    finally:
+        monkeypatch.undo()
+        _clear_sa_caches()
+    assert medical_safety.self_assessment("am i having a heat stroke in the pool").cls == "red_call"
