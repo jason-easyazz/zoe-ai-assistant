@@ -1986,6 +1986,52 @@ def partition_observations(obs: Any) -> tuple[list, list]:
     return turn_forget.split(obs, key=lambda o: {"quote": o.get("quote"), "turn_id": o.get("turn_id")})
 
 
+def _row_anchors(obs: "list[dict]", title: str) -> "set[str]":
+    """``anchors_of`` over STORED observations (``who`` is the stored string): the names and distinctive words they carry."""
+    out: "set[str]" = set()
+    for o in obs:
+        out |= {"@" + n for n in ({w.lower() for w in re.findall(r"[A-Za-z]{3,}", str(o.get("who") or ""))}
+                                  | set(names_in(str(o.get("quote") or "")))) - _NOT_NAMES}
+        out |= set(_words(str(o.get("quote") or ""))[:14])
+    return out | set(_words(title))
+
+
+async def _rederive_threads(backend: Any, user_id: str, thread_ids: "dict[str, int]") -> int:
+    """After an id-scoped erase took observations out of these threads (``thread_ids``: thread -> how many): every SURVIVING thread's derived fields are rebuilt from
+    the observations it still has, so none carries the erased turn's content. A thread's title is copied text or a model summary
+    of its moments and records no provenance, so it is KEPT only when every one of its distinctive words is still in a surviving
+    quote; otherwise it is re-derived the way an unnamed group is titled (the first eight words of the earliest surviving quote).
+    anchors (copied words and names), topic, last_feeling, weight_max, the day range and mentions_n are recomputed from the
+    survivors. No model call. Returns the threads rewritten."""
+    if not thread_ids:
+        return 0
+    threads = {t["id"]: t for t in await backend.threads(user_id) if t["id"] in thread_ids}
+    n = 0
+    for tid, t in threads.items():
+        live = [o for o in await backend.observations(user_id, thread_id=tid) if (o.get("quote") or "").strip()]
+        if not live:
+            continue                                   # an orphan is removed by ``erase_matching`` itself
+        live.sort(key=lambda o: (o.get("said_at") or 0.0, o["id"]))
+        quotes = [str(o["quote"]) for o in live]
+        kept = set().union(*(set(_words(q)) for q in quotes))
+        title = str(t.get("title") or "")
+        if not title or not set(_words(title)) <= kept:
+            title = " ".join(quotes[0].split()[:8])
+        feel = [o for o in live if (o.get("feeling") or "none") != "none"]
+        days = [str(o.get("day") or "") for o in live if o.get("day")]
+        row = dict(t, title=title, anchors=" ".join(sorted(_row_anchors(live, title)))[:600],
+                   topic=topic_of(quotes + [title]), last_feeling=(feel[-1]["feeling"] if feel else "none"),
+                   weight_max=max(int(o.get("weight") or 1) for o in live),
+                   mentions_n=max(len(live), int(t.get("mentions_n") or 0) - int(thread_ids.get(tid, 0))),
+                   first_day=(min(days) if days else t.get("first_day", "")), last_day=(max(days) if days else t.get("last_day", "")))
+        if row != t:
+            await backend.put_thread(row)
+            n += 1
+    if n:
+        logger.info("NIGHT_MIND_FORGET code=threads_rederived n=%d", n)
+    return n
+
+
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. PER ROW
     (``partition_observations``): a BOUND observation (saved with a turn id) goes only when its id is ``turn_id`` - another turn's
@@ -2013,6 +2059,12 @@ async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
             pattern = re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in hit}, key=len, reverse=True)))
             # ``only_ids`` always: the pattern alone would also take another turn's observation that holds the same words
             n = int(await backend.erase_matching(user_id, pattern, only_ids=sorted(o["id"] for o in hit)) or 0)
+            # a thread that SURVIVES (it still has other observations) must not keep fields derived from what was erased
+            removed: "dict[str, int]" = {}
+            for o in hit:
+                if o.get("thread_id"):
+                    removed[str(o["thread_id"])] = removed.get(str(o["thread_id"]), 0) + 1
+            n += await _rederive_threads(backend, user_id, removed)
         except Exception as exc:  # noqa: BLE001
             if _no_table(exc):
                 return 0

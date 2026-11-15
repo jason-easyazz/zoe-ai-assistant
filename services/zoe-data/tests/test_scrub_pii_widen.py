@@ -203,12 +203,18 @@ def test_surrounding_words_survive():
     ("my ssn is 123-45-6789", ("my ssn is 123-45-6789", "ssn")),
     ("the pin 482155 again", ("the pin 482155 again", "totp")),
     ("use key AKIAIOSFODNN7EXAMPLE now", ("use key AKIAIOSFODNN7EXAMPLE now", "aws_key")),
-    # before 2026-11-16 this was "... is [REDACTED] the fridge" (any word after "is" was redacted); a place word is now kept
-    ("The wifi password is on the fridge", ("The wifi password is on the fridge", None)),
     ("", ("", None)),
 ])
 def test_existing_behaviour_is_unchanged(text, want):
     assert scrub_pii(text) == want
+
+
+def test_a_place_word_after_password_is_is_now_kept_a_deliberate_change():
+    """A DELIBERATE CHANGE (2026-11-16), not existing behaviour: the old scrubber redacted ANY word after "password is", so
+    "The wifi password is on the fridge" was stored as "... is [REDACTED] the fridge" - the meaning changed. Now a state or place
+    word after "<label> is / was" (``_LABELLED_NOT_VALUES``) is not a value and is kept; everything else is still redacted."""
+    assert scrub_pii("The wifi password is on the fridge") == ("The wifi password is on the fridge", None)
+    assert scrub_pii("The wifi password is zebrafiddle")[0] == "The wifi password is [REDACTED]"     # control: a value still goes
 
 
 # ── the callers' contract: the night mind's verbatim gate rejects any changed text ─────────────────────────────────
