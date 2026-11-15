@@ -115,7 +115,7 @@ class Keeper:
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is not Kind.FORGET:
             return
-        person, gone = ev.payload.get("subject"), set(ev.payload.get("seqs", ()))
+        person, gone = ctx.forgotten_subject(ev), set(ev.payload.get("seqs", ()))
         scoped = "scope" in ev.payload
         for store in self.stores:
             if isinstance(store, Alarms):

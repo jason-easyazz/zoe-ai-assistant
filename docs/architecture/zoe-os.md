@@ -137,6 +137,16 @@ grant. A guest cannot grant. Revoking takes effect on the next delivery.
 store, and one `Enforcer` that the spine and the action dispatcher both call. A skill that asks for more than
 its manifest is refused and the refusal is an event. Grant changes are events only an auditor can read.
 
+**Erased consent [code, lab verification pending].** In the kernel, a grant authorises only while its
+grant-change record is live. `GrantStore.of` and `all_for` check that record on every read, so the enforcer,
+action dispatcher, skills, surface descriptions and brain bridge all see an erased grant as no grant.
+The explainer reads only live grant-change events and therefore cannot explain an erased grant.
+Whole-member forget reaches grant records naming the member as person, guardian or sharing recipient, and refusal records
+whose `who` is that member. An event-list forget reaches only selected records belonging to the person,
+plus their descendants. Entity/topic forget reaches records only if their payload matches that scope.
+Unrelated grants survive a scoped forget. A fresh explicit grant is required to authorise later actions.
+The twin's sharing grants also require their recorded event to remain live; erased sharing never opens a line.
+
 **Exists [code].** Roles and a capability matrix (`guest_policy.py`), the authority table with coded floors
 (`household_authority.py`), and a written design for ability manifests and connected accounts:
 [zoe-abilities.md](zoe-abilities.md). The lab manifest is deliberately the same idea as that document's
@@ -149,7 +159,8 @@ no single enforcement point: each feature checks for itself.
 
 **Contract.** When a person asks to forget, their events are gone: from replay, from export, from every
 subscriber's queue, from events that were derived from them, and from the bytes on disk. A subscriber that was
-offline during the forget and replays later gets nothing. Nobody can bring the words back by re-publishing them.
+offline during the forget and replays later gets nothing. Nobody can bring those words back into an event
+concerning the forgetting person. Another member may use the identical sentence privately elsewhere.
 
 **Prototype [lab]** (`spine.py` `forget`): only the person (or a child's guardian) may ask. The kernel
 1. collects every event about the person, including events that only mention them;
@@ -160,13 +171,46 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
    drops its own derived state;
 6. keeps a keyed hash of the forgotten free text, first-hand and derived alike (text that only ever lived in a
    skill's derived event is forgotten too). A skill that later tries to publish the same words, even nested
-   inside another payload (a list, a tuple or a dictionary), is refused. A trusted adapter recording the
-   person saying the same thing again is new reality, is allowed, and lifts that hash. The cost **[inferred]**:
-   the hash is household-wide, so an identical derived string (a templated offer with the same times) is
-   refused for everyone until a trusted adapter records it first-hand;
+   inside another payload (a list, a tuple or a dictionary), is refused when the event concerns that person.
+   The hash belongs to the forgetting person, including text that lived only in a derived event about
+   someone else. Trusted adapters also obey the shield and cannot lift it by recording the words again;
 7. reaches the action bookkeeping: an intent row tied to an erased event keeps no person, skill, action,
    grant or cause. A still-live sequence number stays as a bare marker, so forgetting only a receipt does not
-   make the person's yes usable again.
+   make the person's yes usable again. Whole-member erase also deletes all that member's intent rows,
+   including rows with no event links, and erases indexed grant and refusal records.
+
+**Per-person publication rule [code, lab verification pending].** For a private event, concerning A means
+that A is its subject, a declared mention, its source identity, or a name appearing as whole words in a
+payload string or dictionary key, at any depth (including tuples). The person identifier is the lab's
+name; aliases and pronouns are not resolved. Household and kernel visibility are checked against every
+person's shields even when B is the subject: A could receive them. A private event solely for B may carry
+A's forgotten sentence or third-party name if it neither names nor mentions A. This applies to individual
+publishes, batches, trusted origins and kernel-service appends. A refusal whose metadata would itself
+repeat forgotten content is stored as an anonymous marker. Existing cause checks still reject any
+reference to an erased event.
+
+Whole-member erase removes all indexed events concerning A and their descendants. It shields their old
+free text for A; it does not ban A's identity or prevent fresh events with different text or new consent.
+The durable notice and ledger use a keyed owner hash instead of A's identifier. In-process skill contexts
+resolve the hash against the already-known roster; consumers unable to resolve it must discard cached state
+conservatively. Scoped notices retain their subject and erased-event list; a later whole-member erase also
+erases those notices. The roster is consent configuration in memory, not a table erased by forget.
+
+**Lab store upgrade.** Existing `shield` rows remain household-wide forever; they cannot safely be
+attributed to one owner. Existing `entity_shield` rows also remain household-wide. New rows use indexed
+`(fingerprint, owner-hash)` tables, so publication work depends on the incoming payload, not log or shield
+history. Old grant/refusal/forget payload references are indexed once on opening the store, using the
+live-kind index. If a whole-member erase removes the owner metadata needed to evaluate a legacy entity
+hash, the store retains a permanent fail-closed marker: it refuses all named/string payloads globally.
+This deliberately over-blocks legacy stores rather than forgetting how to recognise an old forbidden name;
+new stores never need that fallback. Legacy global shields are an explicit exception to B's new freedom.
+
+**Conflicting prior guarantees.** The former first-hand reassertion exception is removed: the owner's
+never-republish rule wins. Erasing grants also means a reminder skill cannot use its old grant to delete
+from an external store after whole-member forget. It drops its in-memory state, but external-store erasure
+needs an independent kernel-owned erase mechanism; the former reminder-store cleanup claim no longer holds.
+The event tables and action authorisation fail closed. No production migration or external-store erase
+mechanism is introduced here.
 
 **Exists [code].** The production forget is strong and hand-maintained: a ledger that cannot list what it
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
@@ -176,8 +220,10 @@ wins races with background writers (`user_erase_gate.py`), and the inventory tes
 `memory_forgotten.py` and `forget_topic.py` **[code]** and rebuilt, not imported. An entity is a name of one to
 six whole words, case and punctuation blind; the person's events that name it are erased with everything
 derived, and a keyed hash of the name is kept per person (never the name), so a skill that writes the name about
-that person again is refused, in new words, nested, or as a dictionary key. A first-hand mention is recorded and
-lifts nothing; only the person's explicit release does. A topic is its content words, and an event is about it
+that person again is refused, in new words, nested, or as a dictionary key. B can mention that third party
+in private events that do not concern A; a household event cannot resurrect it for A. First-hand mentions
+also obey the shield; only the person's explicit entity release lifts that name shield (not forgotten text).
+A topic is its content words, and an event is about it
 only when it holds every one; more than twelve matching events is refused whole. A scope with no words is
 refused and never widens to "everything".
 

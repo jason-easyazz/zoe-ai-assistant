@@ -21,6 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..spine import Refused
 
 SNOOZE_MINUTES = 10
 
@@ -117,12 +118,20 @@ class Reminders:
         create receipt is among the erased events."""
         gone = set(notice.payload.get("seqs", ()))
         scoped = "scope" in notice.payload
+        person = ctx.forgotten_subject(notice)
+        if person is None:
+            self._items.clear()
+            self._offered.clear()
+            return
         for rid, item in sorted(self._items.items()):
-            if item["person"] != notice.payload.get("subject"):
+            if item["person"] != person:
                 continue
             if scoped and not ({item["receipt"], item["asked"]} & gone):
                 continue
-            ctx.act("reminder.delete", item["person"], {"id": rid}, caused_by=(notice.seq,))
+            try:
+                ctx.act("reminder.delete", item["person"], {"id": rid}, caused_by=(notice.seq,))
+            except Refused:
+                pass  # erased consent cannot authorise even external-store cleanup
             del self._items[rid]
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}

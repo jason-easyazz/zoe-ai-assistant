@@ -80,6 +80,12 @@ def test_scoped_forget_has_bounded_sql_work(history):
         assert spine.forget(PERSON, actor=PERSON, seqs=[rows[-1].seq]).count == 1
 
 
+def test_whole_forget_of_absent_member_does_not_scan_unrelated_history(history):
+    spine, _, _ = history
+    with vm_budget(spine._db):
+        assert spine.forget('member-absent', actor='member-absent').count == 0
+
+
 def test_negative_control_detects_one_statement_full_scan(history):
     spine, _, _ = history
     with pytest.raises(AssertionError, match='unbounded SQL work'):

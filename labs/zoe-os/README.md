@@ -66,6 +66,7 @@ bad outcome.
 | a forgotten event is withdrawn from a live queue | `test_forget.py` | `Subscription._purge_forgotten` a no-op: the queued sentinel is delivered |
 | the forget reaches everything derived | `test_forget.py` | `Spine._closure` returns only the seed: a derived copy survives |
 | forgotten words cannot be re-published by a skill | `test_forget.py`, `test_attack.py` | `Spine._shielded` always no: the words are back on the spine |
+| per-person shields allow unrelated private reuse by B; forgetting grant/refusal records removes consent | `test_forget_owner.py` (verification pending) | old global text shield refuses B; omitting payload-reference indexing leaves grant/refusal rows naming A |
 | the bytes are gone from disk | `test_forget.py`, `test_attack.py` | positive control: the sentinel is in the files before the forget |
 | no action without the manifest and that person's grant | `test_receipts.py`, `test_attack.py` | `Dispatcher._authorize` always yes: the light is toggled for someone who never agreed |
 | a consequential action needs the person's own unused yes | `test_receipts.py`, `test_skills.py` | (declined, missing, reused and someone else's yes are each refused) |
@@ -148,6 +149,12 @@ A skill's own store is outside the kernel: a skill that ignores a forget notice 
 (`test_HONEST_LIMIT_a_skill_that_ignores_the_notice_...`). A forget by entity or topic cannot match an event
 whose content has aged out (`test_HONEST_LIMIT_a_scoped_forget_...`). Retention has a chosen policy (record,
 section 9) and no scheduler: nothing expires until something calls the sweep.
+
+Whole-member forget now erases consent records too. The reminder skill therefore cannot use its erased
+grant for external-store cleanup, even when it obeys the notice; it drops its cache and records a refusal.
+The kernel-side brain keeper erases its stores directly without consulting a skill grant. Per-person shield
+and legacy-store rules, including anonymous whole-member notices, are in the architecture record §2.3–2.4.
+Trusted origins can no longer reassert forgotten text for the forgetting member.
 
 When two people enable the same skill, the kernel lets it derive something for one from the other's private
 event; the rehearsal reports that, the kernel does not stop it. A forget by name does not reach the twin's

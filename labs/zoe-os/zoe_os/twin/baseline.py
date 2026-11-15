@@ -86,7 +86,8 @@ class Twin:
     # ---- learning: one reduced fact per event -------------------------------------------------
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is Kind.FORGET:
-            self._forget(ev)
+            from dataclasses import replace
+            self._forget(replace(ev, payload={**ev.payload, 'subject': ctx.forgotten_subject(ev)}))
         elif ev.visibility.value == "private" and ev.subject:
             self._observe(ev)
 
@@ -119,6 +120,9 @@ class Twin:
 
     def _forget(self, notice: Event) -> None:
         person, seqs = notice.payload.get("subject"), notice.payload.get("seqs")
+        if person is None:
+            self.days.clear()
+            return
         if seqs is None:
             self.days.pop(person, None)                                # everything about them
             return

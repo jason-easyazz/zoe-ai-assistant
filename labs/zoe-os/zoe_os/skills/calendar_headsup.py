@@ -27,8 +27,8 @@ class CalendarHeadsUp:
 
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is Kind.FORGET:
-            gone = ev.payload.get("subject")
-            self._open = {k: v for k, v in self._open.items() if v[0] != gone}
+            gone = ctx.forgotten_subject(ev)
+            self._open = {k: v for k, v in self._open.items() if gone is not None and v[0] != gone}
         elif ev.kind is Kind.CALENDAR_CHANGE and ev.payload["change"] == "created":
             self._maybe_offer(ev, ctx)
         elif ev.kind is Kind.OFFER_RESPONSE and ev.payload["offer_id"] in self._open:

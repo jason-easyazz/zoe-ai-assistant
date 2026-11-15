@@ -170,7 +170,7 @@ def on_disk(k) -> bytes:
     return b"".join(open(p, "rb").read() for p in glob.glob(k.path + "*"))
 
 
-def test_forget_erases_the_reminder_from_the_log_the_skill_and_the_store(k):
+def test_whole_forget_erases_log_and_cache_but_cannot_use_erased_grant_for_store_cleanup(k):
     mine = ask(k, SAM, f"ring {SENTINEL}", NOW)
     theirs = ask(k, ALEX, "alex's reminder", NOW)
     tick(k)
@@ -178,8 +178,9 @@ def test_forget_erases_the_reminder_from_the_log_the_skill_and_the_store(k):
     k.spine.forget(SAM, actor=SAM)
     k.pump()
     assert SENTINEL.encode() not in on_disk(k)
-    assert mine not in k.store.rows and SENTINEL not in str(k.skill._items)
-    assert theirs in k.store.rows and theirs in k.skill._items and refusal_reasons(k) == []
+    assert mine in k.store.rows and SENTINEL not in str(k.skill._items)
+    assert theirs in k.store.rows and theirs in k.skill._items
+    assert refusal_reasons(k) == ['no grant from that person']
     assert len(tick(k, NOW + HOUR)) == 1                         # ALEX's still fires; SAM's is gone
 
 

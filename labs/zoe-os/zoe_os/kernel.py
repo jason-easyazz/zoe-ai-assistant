@@ -23,6 +23,12 @@ class Context:
     def now(self) -> float:
         return self.kernel.clock()
 
+    def forgotten_subject(self, notice: Event) -> str | None:
+        """Resolve an opaque notice against the already-known household roster."""
+        return notice.payload.get('subject') or next(
+            (p for p in self.kernel.grants.people
+             if self.kernel.spine._owner(p).hex() == notice.payload.get('subject_hash')), None)
+
     def publish(self, kind: Kind, *, subject: str | None, payload: dict,
                 caused_by: tuple[int, ...], visibility: Visibility = Visibility.PRIVATE) -> Event:
         return self.kernel.spine.publish(Event(kind, self.skill, subject, visibility, payload,
@@ -40,6 +46,7 @@ class Kernel:
         self.grants = GrantStore(people, on_change=self._grant_changed)
         self.enforcer = Enforcer(self.grants)
         self.spine = Spine(path, self.enforcer, queue_size=queue_size, clock=clock)
+        self.grants.record_live = lambda seq: seq is not None and self.spine._get(seq) is not None
         # grant ids must not restart at g1: a receipt names the grant it ran under
         self.grants._ids = itertools.count(1 + self.spine._db.execute(
             "SELECT COUNT(*) FROM events WHERE kind = 'grant_change'").fetchone()[0])
@@ -52,10 +59,11 @@ class Kernel:
         self._skills: list[tuple[object, object, Context]] = []
 
     def _grant_changed(self, change: str, g: Grant) -> None:
-        self.spine._kernel_append(Event(
+        record = self.spine._kernel_append(Event(
             Kind.GRANT_CHANGE, KERNEL, visibility=Visibility.KERNEL,
             payload={"change": change, "grant_id": g.id, "skill": g.skill, "person": g.person,
                      "guardian": g.guardian}))
+        g.record_seq = record.seq
 
     def install(self, skill) -> None:
         """Register a skill's manifest and subscribe it to exactly what the manifest reads."""

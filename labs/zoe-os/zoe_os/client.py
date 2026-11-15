@@ -18,6 +18,11 @@ from .spine import Refused
 
 
 class Client:
+    @staticmethod
+    def forgotten_subject(notice: Event) -> str | None:
+        """Anonymous notices require remote consumers to discard all cached state."""
+        return notice.payload.get('subject')
+
     def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0) -> None:
         self.skill, self._timeout, self._id = skill, timeout, 0
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

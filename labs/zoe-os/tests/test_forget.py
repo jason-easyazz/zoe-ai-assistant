@@ -107,7 +107,8 @@ def test_every_subscriber_is_told_to_forget_and_the_notice_carries_no_content(sp
     spine.publish(say(A, SENTINEL))
     spine.forget(A, actor=A)
     (notice,) = drain(sub)
-    assert notice.kind is Kind.FORGET and notice.payload == {"subject": A, "upto": 1, "count": 1}
+    assert notice.kind is Kind.FORGET and notice.payload == {
+        "subject_hash": spine._owner(A).hex(), "upto": 1, "count": 1}
 
 
 def test_events_that_mention_the_person_go_too(spine):
@@ -151,7 +152,7 @@ def test_forgetting_survives_a_restart(spine):
     again = Spine(spine.path, spine.authorizer)
     assert SENTINEL not in texts(again.replay("all"))
     with pytest.raises(Refused, match="forgotten content"):
-        again.publish(offer(B, SENTINEL, live.seq))
+        again.publish(offer(A, SENTINEL, live.seq))
     again.close()
 
 
@@ -177,11 +178,12 @@ def test_negative_control_without_the_shield_the_words_come_back(spine, monkeypa
     assert SENTINEL in texts(spine.replay("all"))
 
 
-def test_saying_it_again_first_hand_is_new_reality_not_resurrection(spine):
+def test_first_hand_cannot_lift_a_persons_shield(spine):
     spine.publish(say(A, "buy oat milk"))
     spine.forget(A, actor=A)
-    fresh = spine.publish(say(A, "buy oat milk"))            # the voice adapter is an origin
-    assert spine.publish(offer(A, "buy oat milk", fresh.seq)).seq
+    with pytest.raises(Refused, match="forgotten content"):
+        spine.publish(say(A, "buy oat milk"))
+    assert spine.publish(say(B, "buy oat milk")).seq
 
 
 def test_only_the_person_may_forget_their_events(spine):

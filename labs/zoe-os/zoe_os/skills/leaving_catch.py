@@ -22,7 +22,11 @@ class LeavingCatch:
 
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is Kind.FORGET:
-            self._undone.pop(ev.payload.get("subject", ""), None)   # drop what we derived
+            gone = ctx.forgotten_subject(ev)
+            if gone is None:
+                self._undone.clear()
+            else:
+                self._undone.pop(gone, None)
         elif ev.kind is Kind.ROUTINE_STEP and ev.payload["routine"] == "take-with-you":
             items = self._undone.setdefault(ev.subject, {})
             if ev.payload["done"]:
