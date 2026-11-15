@@ -87,7 +87,12 @@ def mode() -> str:
 
 
 def state_dir() -> Path:
-    raw = os.environ.get(DIR_FLAG, "").strip()
+    try:
+        import typed_env
+
+        raw = str(typed_env.flag(DIR_FLAG)).strip()
+    except Exception:  # noqa: BLE001
+        raw = ""
     return Path(raw) if raw else Path.home() / ".zoe" / "os-shadow"
 
 
