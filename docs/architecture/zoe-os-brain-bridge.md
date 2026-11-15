@@ -154,3 +154,26 @@ the box's PATH, so the `pi --mode rpc` route could not even be tried.
   act for one on the strength of the other's event (`test_cause_binding.py`). It changed the premise of five
   existing negative controls (they now switch this rule off too, and one expected refusal reason moved earlier in
   the chain). That is a decision for the owner, not an implementation detail.
+
+## Running the real turn (the guarded runner)
+
+Built, dry-run green, not yet run for real. One-time build (done in daylight, copies the sidecar's `node_modules`
+read-only, never touches the live unit): `bash labs/zoe-os/prep_real_turn.sh`.
+
+The real run (a fixed set of five synthetic turns, 5-minute wall clock, 200-token cap per model call, own port 3591):
+
+    bash labs/zoe-os/run_real_turn.sh --i-own-the-slot --owner-approved-daytime
+
+Drop `--owner-approved-daytime` to keep the 22:00-01:50 window; the 01:50-04:55 night span is never overridable.
+`--dry-run` swaps the model for a mock llama and is safe at any time. It refuses (exit 3, reasons on stderr; exit 2 if
+the harness lock is held) unless: the flag; the window; the lock; no python voice probe process; no lander
+voice-hold; speech active; no night job active; every llama slot idle; MemAvailable above `--mem-floor` (1500);
+zoe-data's app log untouched for `--log-quiet-s` (60) seconds. On any exit the lab app's process group, bridge and
+kernel are stopped and the lock released.
+
+Output: a table per turn (expected tool, tool called, right tool, arguments valid, kernel outcome, model ms vs kernel
+hop ms), the kernel checks (receipt, why, undo, forget removes effects and bytes), and the cost to the household
+(the slot's held prompt size before, which is the upper bound its next turn may re-prefill, plus counter deltas and
+the llama journal's re-prefill and eviction counts). The recorded fixture (tool frames verbatim, model text reduced
+to length and hash) is written to `--out` (default `~/.zoe/agent-tools/real-turn-<time>/recorded_turns.json`).
+Differences from the live sidecar, stated: stock pi-ai wire (no text-tool-call recovery, no prompt policy).
