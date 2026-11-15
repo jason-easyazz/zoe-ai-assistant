@@ -264,10 +264,28 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
 
 async def forget(svc: Any, user_id: str, topic: str) -> Result:
     """Forget the topic. Never raises: a failure is a ``Result`` that says what was and was not done."""
+    try:
+        return await _forget(svc, user_id, topic)
+    finally:   # any forget drops the member's pending corrections - AFTER their transcript turns went off the record
+        try:   # never raises: a failing clear must not replace the forget's own result or exception
+            import correction_marker
+
+            correction_marker.forget_user(user_id, reason="forget_topic")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PENDING_CORRECTION clear_failed reason=forget_topic user=%s err=%s", user_id, type(exc).__name__)
+
+
+async def _forget(svc: Any, user_id: str, topic: str) -> Result:
     res = Result()
     groups = topic_groups(topic)
     if not groups:
         return res
+    try:     # an EARLIER forget's registry erase that failed (its durable marker): finish it before this one
+        import memory_forget_cascade
+
+        await memory_forget_cascade.retry_pending(user_id)
+    except Exception:  # noqa: BLE001 - never raises; a failure leaves the marker for the next healthy pass
+        pass
     try:
         rows = await _owned_rows(svc, user_id, groups)
     except Exception as exc:  # noqa: BLE001
@@ -320,6 +338,27 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
                 clear()
             except Exception:  # noqa: BLE001 - in-process and never raises; nothing here may break the forget
                 pass
+    # The superseded-value registry (0080), the durable turn-keyed clear, also BEFORE anything that destroys the evidence it is found by: the retracted turns' ids
+    # come from the turn notes and the exact-words index, which ``_erase_words`` below blanks. A failure here leaves both intact
+    # (so the member's repeat finds the same turns) AND a durable pending marker in the forget ledger (``value_registry_topic``):
+    # the next healthy pass over-forgets the member's registry entries even if nobody repeats the forget.
+    try:     # entries tied to these rows, about a person a topic word names, or recorded from a retracted turn (raises on a store error)
+        import memory_value_registry
+        import value_correction
+
+        await memory_value_registry.erase_topic(user_id, row_ids=[r.id for r in rows],
+                                                name_matches=lambda name: any(row_matches([g], name) for g in groups),
+                                                turn_ids=[value_correction.turn_id_of(user_id, t) for t in list(said) + list(indexed)])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: value registry erase failed (%s) - nothing else erased, retry recorded", type(exc).__name__)
+        try:
+            import memory_forget_cascade
+
+            await memory_forget_cascade._mark_pending(user_id, [memory_forget_cascade.VALUE_REGISTRY_TOPIC])
+        except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
+            pass
+        res.store_down = True
+        return res
     try:
         # the words before the rows, like every forget: the in-flight capture of those turns cannot land
         res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)

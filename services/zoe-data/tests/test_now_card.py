@@ -534,7 +534,7 @@ def test_the_wake_warm_sends_the_card_the_next_turn_sends(lab, monkeypatch, sent
 
 def test_the_seam_has_one_construction_site_and_the_sidecar_mirrors_the_prefix():
     src = Path(zc.__file__).read_text()
-    assert src.count("_wrap_message_with_now_card(\n        outbound_message, await _now_card_context_block(") == 1
+    assert src.count('_wrap_message_with_now_card(\n        outbound_message, await _pre.take("now_card", lambda: _now_card_context_block(') == 1
     ts = (LAB / "src" / "now-card.ts").read_text()
     assert "NOW_CARD_ENVELOPE_PREFIX = '%s'" % zc._NOW_CARD_ENVELOPE_PREFIX in ts
     assert nc.MAX_TOKENS * 4 <= 200 * 4 and "NOW_CARD_MAX_CHARS = NOW_CARD_MAX_TOKENS * 4" in ts
