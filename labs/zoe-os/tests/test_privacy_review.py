@@ -7,7 +7,7 @@ import pytest
 
 from spine_helpers import AllowList
 from zoe_os.brain import serve
-from zoe_os.brain.bridge import Outcome, Turn
+from zoe_os.brain.bridge import Outcome
 from zoe_os.brain.drivers import Alarms, Keeper, Lists, Reminders
 from zoe_os.events import Event, Kind
 from zoe_os.replay import Recording, build_report, diff
@@ -76,13 +76,13 @@ def http_face(monkeypatch):
     bridge = SimpleNamespace(tools=lambda: [], propose=lambda *a: Outcome(
         'done', PLANT, 17, PLANT, {PLANT: [PLANT]}))
     server = serve.BridgeServer(bridge, 'synthetic-token')
-    server.turn = Turn('member-b', 11)
+    turn_id = server.open_turn('member-b', 11)
 
     def request(method, path, token=None, body=None):
         h = object.__new__(server.httpd.handler)
         h.path = path
         data = json.dumps(body or {}).encode()
-        h.headers = {'Content-Length': str(len(data))}
+        h.headers = {'Content-Length': str(len(data)), 'X-Turn': turn_id}
         if token is not None:
             h.headers['X-Runner'] = token
         h.rfile, h.wfile = io.BytesIO(data), io.BytesIO()

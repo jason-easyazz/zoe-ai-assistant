@@ -132,11 +132,12 @@ class Dispatcher:
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
         self._purges: dict[str, tuple[str, str]] = {}
+        self._purge_do: dict[str, Do] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
                  doc: str = "", params: dict | None = None,
-                 purge_key: tuple[str, str] | None = None) -> None:
+                 purge_key: tuple[str, str] | None = None, purge: Do | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -145,12 +146,20 @@ class Dispatcher:
         ``minimum`` / ``maximum`` for a number). With it, ``act`` refuses (and records) any
         arguments that are not exactly that shape BEFORE the driver runs, and ``catalog``
         can describe the action to a caller. Without it nothing is checked and the action is
-        not described (the behaviour every earlier action has)."""
+        not described (the behaviour every earlier action has).
+
+        ``purge`` is the driver the erasure duty runs (default: ``do``). A store whose ``do`` acts
+        only on the person's OWN rows gives its owner-blind delete here: an action reaches one
+        person's rows, an erasure notice reaches the erased requests of every owner."""
         self._actions[action] = (do, verify, needs_accept)
         if purge_key is not None:
             self._purges[action] = purge_key
         else:
             self._purges.pop(action, None)
+        if purge is not None and purge_key is not None:
+            self._purge_do[action] = purge
+        else:
+            self._purge_do.pop(action, None)
         self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
@@ -172,7 +181,7 @@ class Dispatcher:
             if set(args) != {key} or args[key] not in {f'{prefix}{s}' for s in live.payload.get('seqs', ())}:
                 raise Refused('invalid purge id')
             do, verify, _ = self._actions[action]
-            result = do(live.payload['subject'], args)
+            result = self._purge_do.get(action, do)(live.payload['subject'], args)
             if not verify(live.payload['subject'], args, result):
                 raise Refused('purge unconfirmed')
 

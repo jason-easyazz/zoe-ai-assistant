@@ -375,7 +375,7 @@ jobs:
         run: |
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci" pytest \
             -o faulthandler_timeout=300 \
-            tests/unit -m ci_safe \
+            labs/zoe-os/tests tests/unit -m ci_safe \
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto" \
             -p pytest_shard_ledger \
@@ -434,7 +434,7 @@ jobs:
         run: |
           set -o pipefail
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci" pytest \
-            tests/unit -m ci_safe \
+            labs/zoe-os/tests tests/unit -m ci_safe \
             -q --collect-only \
             --override-ini="asyncio_mode=auto" \
             -p pytest_shard_ledger | tail -n 3

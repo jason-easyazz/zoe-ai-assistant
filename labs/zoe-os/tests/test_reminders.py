@@ -1,8 +1,9 @@
-"""Reminders as a kernel skill against a fake, rule-free store: create, fire, snooze, forget.
+"""Reminders as a kernel skill against a fake store: create, fire, snooze, forget.
 
 The second half is the point of the exercise: rules production implements inside the
 reminders feature are enforced here by the KERNEL, shown by a careless or hostile variant of
-the skill being stopped while the store itself checks nothing.
+the skill being stopped while the store checks none of them. (The store checks only whose row
+an id names, which the kernel cannot see: ``test_reminder_owner.py``.)
 """
 from __future__ import annotations
 

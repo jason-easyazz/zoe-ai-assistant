@@ -6,9 +6,17 @@ runner through ``POST /turn`` and the model's tool call only ever reaches ``POST
 tool name and arguments. There is no way to name a member in a ``/propose`` call.
 
     GET  /tools     the derived tool schemas (what the app registers)
-    POST /turn      {"member": ..., "cause": n}   (runner only: the model has no route to this)
-    POST /propose   {"tool": name, "arguments": {...}} -> {"status", "say", "receipt"}
-    GET  /log       proposal ids, status codes and timing only
+    POST /turn      {"member": ..., "cause": n} -> {"ok", "turn": id}   (runner only)
+    POST /propose   {"tool": name, "arguments": {...}} + X-Turn: id -> {"status", "say", "receipt"}
+    GET  /log       turn ids, proposal ids, status codes and timing only
+
+Every proposal is BOUND to the turn it came from. ``POST /turn`` mints a fresh turn id (never
+reused) and the runner uses it as the Flue agent instance id (the ``/agents/lab/<id>`` route
+segment); the app's tools close over that instance id and send it in ``X-Turn``, outside the
+model's arguments, so the model cannot choose or alter it. A proposal whose id is not the
+CURRENT turn's (a Flue operation left running after its turn timed out, still submitting tool
+calls) is refused with the fixed code ``stale_turn``, logged like every other proposal, and
+never reaches the bridge or a driver: it cannot act under the next turn's person and cause.
 
 Bound to 127.0.0.1 on a port the runner chose. It holds the bridge (a socket path and a credential)
 and nothing else. Every route requires the runner's ``X-Runner`` token; the trusted Node
@@ -19,17 +27,25 @@ from __future__ import annotations
 
 import json
 import hmac
+import itertools
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .bridge import BrainBridge, Turn
+from .bridge import BrainBridge, Outcome, Turn
 from ..diagnostics import proposal_record
+
+STALE = Outcome("refused", "That request belonged to an earlier turn. Nothing changed.", reason="stale_turn")
 
 
 class BridgeServer:
     def __init__(self, bridge: BrainBridge, runner_token: str, port: int = 0) -> None:
-        self.bridge, self.token, self.turn = bridge, runner_token, None
+        self.bridge, self.token = bridge, runner_token
+        self.turn: Turn | None = None
+        self.turn_id: str | None = None
+        self._turns = itertools.count(1)
+        self._issued: dict[str, Turn] = {}      # every id ever minted: a late call is attributed to ITS turn
         self.app_token = hmac.new(runner_token.encode(), b'proposal-forwarder', 'sha256').hexdigest()
         self.log: list[dict] = []
         self._lock = threading.Lock()
@@ -70,17 +86,28 @@ class BridgeServer:
                     return self._send(403, {"error": "runner only"})
                 body = self._body()
                 if self.path == "/turn":
-                    outer.turn = Turn(str(body["member"]), int(body["cause"]))
-                    return self._send(200, {"ok": True})
+                    return self._send(200, {"ok": True, "turn": outer.open_turn(str(body["member"]), int(body["cause"]))})
                 if self.path != "/propose":
                     return self._send(404, {"error": "no such route"})
+                supplied = self.headers.get("X-Turn", "")
                 with outer._lock:
-                    if outer.turn is None:
-                        return self._send(409, {"status": "invalid", "say": "No turn is open. Nothing changed."})
-                    t0 = time.perf_counter_ns()
-                    out = outer.bridge.propose(outer.turn, str(body.get("tool")), body.get("arguments"))
-                    ms = (time.perf_counter_ns() - t0) / 1e6
-                    outer.log.append(proposal_record(outer.turn.cause, body.get("tool"), out, ms))
+                    # The turn is the one the proposal CARRIES, checked against the current one under
+                    # the same lock as the call: never "whatever turn is open when the call arrives".
+                    bound = outer._bound(supplied)
+                    if bound is None:
+                        if outer.turn_id is None and not supplied:
+                            return self._send(409, {"status": "invalid", "say": "No turn is open. Nothing changed."})
+                        # Never sent to the bridge: no driver runs. Attributed to its own turn only when
+                        # the id is one this server minted; caller text never reaches the log.
+                        own = outer._issued.get(supplied)
+                        out, ms, turn, turn_id = STALE, 0.0, own, supplied if own else None
+                    else:
+                        turn, turn_id = bound
+                        t0 = time.perf_counter_ns()
+                        out = outer.bridge.propose(turn, str(body.get("tool")), body.get("arguments"))
+                        ms = (time.perf_counter_ns() - t0) / 1e6
+                    outer.log.append(proposal_record(turn.cause if turn else None, body.get("tool"), out, ms,
+                                                     turn_id=turn_id))
                 self._send(200, {"status": out.status, "say": out.say, "receipt": out.receipt})
 
             def _authorized(self):
@@ -94,6 +121,23 @@ class BridgeServer:
         self.httpd.handle_error = lambda *args: None
         self.port = self.httpd.server_address[1]
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def open_turn(self, member: str, cause: int) -> str:
+        """Open a new turn and return its id. Ids are never reused (a counter plus random bytes), so
+        a late call from ANY earlier turn, or one made up, is not the current turn."""
+        with self._lock:
+            self.turn = Turn(member, cause)
+            self.turn_id = f"turn-{next(self._turns)}-{secrets.token_hex(8)}"
+            self._issued[self.turn_id] = self.turn
+            return self.turn_id
+
+    def _bound(self, supplied: str) -> tuple[Turn, str] | None:
+        """The turn a proposal carries, if and only if it is the CURRENT turn. Caller holds the lock."""
+        if self.turn is None or self.turn_id is None or not isinstance(supplied, str):
+            return None
+        if not hmac.compare_digest(supplied.encode(), self.turn_id.encode()):
+            return None
+        return self.turn, self.turn_id
 
     def start(self) -> "BridgeServer":
         self._thread.start()

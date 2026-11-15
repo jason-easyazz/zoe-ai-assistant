@@ -13,6 +13,14 @@ def identifier(value):
     return hashlib.sha256(str(value).encode()).hexdigest()[:16]
 
 
-def proposal_record(turn, tool, out, ms):
-    return {'turn': turn, 'tool': identifier(tool), 'status': code(out.status, STATUSES),
-            'receipt': out.receipt if type(out.receipt) is int else None, 'hop_ms': round(ms, 3)}
+#: the bridge seam's own refusal codes that may appear in a log (kernel reason strings never do)
+SEAM_CODES = frozenset({'stale_turn'})
+
+
+def proposal_record(turn, tool, out, ms, *, turn_id=None):
+    rec = {'turn': turn, 'turn_id': turn_id if isinstance(turn_id, str) else None, 'tool': identifier(tool),
+           'status': code(out.status, STATUSES),
+           'receipt': out.receipt if type(out.receipt) is int else None, 'hop_ms': round(ms, 3)}
+    if out.reason in SEAM_CODES:
+        rec['code'] = out.reason
+    return rec

@@ -34,7 +34,7 @@ is invented.
 | `zoe_os/explain.py` | "why did you do that?": the chain behind an action, refusal or offer, and one sentence built by code |
 | `zoe_os/replay.py` | the replay harness: a recorded day in, a deterministic report out, a diff between two skill versions |
 | `zoe_os/retention.py` | full, then a skeleton, then a count. The owner chose the "balanced" policy (2026-11-14); nothing sweeps by itself |
-| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store |
+| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store that acts only on the person's own rows (the erasure `purge` reaches every owner) |
 | `zoe_os/twin/days.py` | the household twin's day generator: synthetic days for a seed, awkward days on purpose |
 | `zoe_os/twin/baseline.py` | the twin skill: what is normal per person, as counts; "not enough days yet" below ten working days |
 | `zoe_os/twin/rehearse.py` | a changed skill against generated and recorded days: privacy failures first, then every difference |
@@ -105,7 +105,8 @@ bad outcome.
 | an explanation never shows another person's private event, not even its number | `test_explain.py` | no visibility check: the private words are in the answer |
 | undo is for the person (or a child's guardian), once, and never faked | `test_undo.py` | no ownership check; no once rule; "the last reversible action" instead of "the last action" |
 | the same recording gives the same report, byte for byte | `test_replay.py` | (checked across three processes with different hash seeds and time zone) |
-| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the rule-free store moves it |
+| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the store moves it |
+| an action for one person cannot snooze, ack, delete or overwrite another person's reminder by id; a foreign id answers like a missing one | `test_reminder_owner.py` | `ReminderStore._own` ignores the owner: SAM's action changes ALEX's reminder |
 | a forget still reaches what derived from an event that aged out | `test_retention.py` | expiry that drops the links, or retires a skeleton early: the copy survives |
 
 ### The brain bridge ([record](../../docs/architecture/zoe-os-brain-bridge.md))
@@ -115,6 +116,7 @@ bad outcome.
 | an action's declared arguments are checked before its driver runs | `test_describe_params.py` | `check_params` always yes: the driver runs on malformed arguments |
 | an action for a person must cite an event about that person | `test_cause_binding.py` | `Dispatcher._concerns` always yes: a deputy acts for one person on another's word |
 | the brain's tools are derived from the kernel; the turn's own values are hidden from the model | `test_brain_bridge.py` | a bridge that shows every parameter, or accepts `asked` from the model |
+| a tool call is bound to the turn it came from: a late call from an earlier turn is refused `stale_turn` and reaches no driver | `test_turn_binding.py` | `BridgeServer._bound` returns whatever turn is open: turn N's call writes into turn N+1's person's list |
 | forgetting a person removes the effect in the stores, not only the events | `test_brain_bridge.py` | a keeper that ignores the notice |
 | kernel down or lost mid-call is said honestly and writes nothing half-way | `test_brain_bridge.py` | (a kill between write and receipt is `uncertain`, never done) |
 

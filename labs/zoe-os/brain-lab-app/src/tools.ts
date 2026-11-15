@@ -5,6 +5,9 @@
  * over localhost and returns the ONE sentence the kernel's receipt produced. There is no member,
  * store or member selector in this file: who the turn is for is set by the runner on the bridge.
  * A forwarder token comes from the runner's environment; it cannot set a turn or read the log.
+ * Each call carries the turn it belongs to in `X-Turn`: the agent instance id, which the runner set
+ * to the id the bridge minted for that turn (the `/agents/lab/<id>` route segment). It is never a
+ * model argument, so the model cannot choose it, and a call that outlives its turn is refused.
  */
 import { readFileSync } from 'node:fs';
 import { defineTool } from '@flue/runtime';
@@ -27,11 +30,11 @@ export function bridgeUrl(): string {
   return process.env.OSLAB_BRIDGE_URL ?? '';
 }
 
-async function forward(tool: string, args: unknown): Promise<string> {
+async function forward(turn: string, tool: string, args: unknown): Promise<string> {
   try {
     const r = await fetch(`${bridgeUrl()}/propose`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Runner': process.env.OSLAB_BRIDGE_TOKEN ?? '' },
+      headers: { 'content-type': 'application/json', 'X-Runner': process.env.OSLAB_BRIDGE_TOKEN ?? '', 'X-Turn': turn },
       body: JSON.stringify({ tool, arguments: args }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -42,7 +45,7 @@ async function forward(tool: string, args: unknown): Promise<string> {
   }
 }
 
-export function labTools() {
+export function labTools(turn: string) {
   const file = process.env.OSLAB_TOOLS_FILE;
   if (!file) return [];
   const fns = (JSON.parse(readFileSync(file, 'utf8')) as { function: Fn }[]).map((t) => t.function);
@@ -55,7 +58,7 @@ export function labTools() {
       name: fn.name,
       description: fn.description,
       input: v.object(entries),
-      run: async ({ data }) => forward(fn.name, data),
+      run: async ({ data }) => forward(turn, fn.name, data),
     });
   });
 }
