@@ -132,7 +132,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-134 stores: 60 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+134 stores: 67 reached, 31 out of scope, 36 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -174,10 +174,10 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `panel_voice_clusters` | pg_table | biometric | gap | - | Passive named guests (0073): unknown panel voices held for the household owner. Erased by expiry (14 days, hourly sweep), by naming (the voice becomes a guest's print), and by the owner's DELETE /api/voice/unknown-voices; a member erase does not reach them and they hold no name an entity forget could match. Never in the dumps (BIOMETRIC_TABLES). |
 | `panel_voice_samples` | pg_table | biometric | gap | - | The embeddings behind panel_voice_clusters (never audio), erased with their voice. Never in the dumps (BIOMETRIC_TABLES). |
 | `learned_voiceprints_0071` | pg_table | metadata | out_of_scope | - | Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the same migration; it never exists on the Postgres box the dumps read. |
-| `user_portraits` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes a portrait that names the entity; delete_user does not remove it. |
-| `user_model_cards` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes a card that names the entity; delete_user does not remove it. |
-| `open_loops` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget resolves a loop that names the entity; delete_user does not touch the rows. |
-| `proactive_candidates` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes candidates naming the entity; delete_user does not. |
+| `user_portraits` | pg_table | derived | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
+| `user_model_cards` | pg_table | derived | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
+| `open_loops` | pg_table | words | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
+| `proactive_candidates` | pg_table | derived | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
 | `people` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget soft-deletes the person row (kept with deleted=1); delete_user does not touch people. |
 | `person_relationships` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget closes the edges (valid_to); delete_user does not. |
 | `event_attendees` | pg_table | words | gap | member: `calendar_forget.forget_user` / entity: `memory_forget_cascade._run` | Entity forget anonymises the attendee row; delete_user removes the attendees of the member's synced and in-calendar events (calendar_forget.forget_user), not of their calendar-less local events (owner decision: household-visible items). |
@@ -187,7 +187,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `chat_messages` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages (owner decision pending), but every background transcript miner skips the member's turns at or before their erase watermark (erase_watermark.keep_after). |
 | `chat_feedback` | pg_table | words | gap | - | Holds a corrected_response (words); neither path reaches it. |
 | `background_tasks` | pg_table | words | gap | - | Holds the task text and its result; neither path reaches it. |
-| `pending_suggestions` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Offer text naming people can outlive the forget (person offers are withdrawn by name; anticipation offers naming the entity are deleted by the cascade; a TOPIC forget withdraws the offers holding the topic or a name from the forgotten words: forget_topic._withdraw_offers); delete_user does not reach the table. |
+| `pending_suggestions` | pg_table | words | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
 | `notes` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `journal_entries` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `lists` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. List items name people and places. |
@@ -208,11 +208,11 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `ambient_memory` | pg_table | words | gap | - | Ambient captured memory text; neither path reaches it. |
 | `notifications` | pg_table | words | reached | member: `notifications_store.forget_user` | - |
 | `music_listening_events` | pg_table | metadata | out_of_scope | - | Listening history: titles/artists, no household words; the music journal has its own controls. |
-| `proactive_deliveries` | pg_table | derived | gap | - | Delivery ledger rows keyed by candidate; text is in the candidate, not here. |
+| `proactive_deliveries` | pg_table | derived | reached | member: `member_derived_forget.forget_user` | - |
 | `proactive_outcome_edges` | pg_table | derived | reached | member: `outcome_edges.erase_user` | - |
-| `proactive_ledger_lines` | pg_table | words | gap | - | Holds the spoken line (words); neither path reaches it. |
-| `proactive_pending` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
-| `proactive_scheduled` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
+| `proactive_ledger_lines` | pg_table | words | reached | member: `member_derived_forget.forget_user` | - |
+| `proactive_pending` | pg_table | words | gap | - | Holds the message text of a queued send (reminders the member set); owner decision with reminders. |
+| `proactive_scheduled` | pg_table | words | gap | - | Holds the message text of a scheduled send (reminders the member set); owner decision with reminders. |
 | `proactive_responses` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `voice_announcements` | pg_table | words | gap | - | Holds the announcement message; short-lived (expires_at) but not erased on forget. |
 | `speaker_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
