@@ -136,9 +136,10 @@ def test_one_receipt_cannot_back_a_second_claim_even_after_a_restart(k):
     receipt, _ = move(k)
     first = claim(k, receipt)
     assert ClaimAuditor(k.spine, k.enforcer).scan() == []
-    again = claim(k, receipt)
-    assert [c.seq for c in ClaimAuditor(k.spine, k.enforcer).scan()] == [again.seq]   # a fresh auditor
-    assert first.seq < again.seq
+    with pytest.raises(Refused, match="receipt"):
+        claim(k, receipt)
+    assert ClaimAuditor(k.spine, k.enforcer).scan() == []  # a fresh auditor sees only the backed claim
+    assert first.seq > receipt.seq
 
 
 # ---- #2547: forget reaches the action bookkeeping (intents), and a yes stays spent ---------------

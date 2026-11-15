@@ -169,7 +169,8 @@ def test_a_malformed_proposal_changes_nothing_with_or_without_the_adapters_check
     for prevalidate in (True, False):
         br = box.bridge(prevalidate=prevalidate)
         out = br.propose(box.say(ALEX, "x"), tool, args)
-        assert out.status in ("invalid", "refused") and "Nothing changed" in out.say or out.status == "invalid"
+        assert out.status in ("invalid", "refused")
+        assert "Nothing changed" in out.say
         br.close()
     assert box.sup("state") == {"lists": {}, "reminders": {}, "alarms": {}}
 

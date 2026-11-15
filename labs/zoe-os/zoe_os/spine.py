@@ -27,6 +27,7 @@ import os
 import sqlite3
 import threading
 import time
+from dataclasses import replace
 from collections import deque
 from typing import Callable, Iterable, Iterator, NamedTuple, Protocol
 
@@ -109,6 +110,24 @@ class Refused(Exception):
 class ForgetResult(NamedTuple):
     count: int      # events erased, including derived ones
     upto: int       # the forget covers everything up to this sequence number
+
+
+class EventCache:
+    """A kernel-backed subscriber view. Keep sequence numbers, never copies of event bodies.
+
+    Each access re-reads the authorized live log, so forget reaches this view immediately,
+    even if the subscriber ignores the notice. Arbitrary private copies are outside Python's
+    in-process boundary; this is the supported cache contract.
+    """
+    def __init__(self, history: Callable[[], Iterable[Event]]) -> None:
+        self._history = history
+        self._seqs: set[int] = set()
+
+    def append(self, event: Event) -> None:
+        self._seqs.add(event.seq)
+
+    def __iter__(self):
+        return (event for event in self._history() if event.seq in self._seqs)
 
 
 MAX_TOPIC_EVENTS = 12   # a topic forget matching more first-hand events than this is refused
@@ -212,14 +231,28 @@ class Spine:
         """Append a batch in one transaction. One refusal rejects the whole batch."""
         events = list(events)
         with self._lock:
+            claimed = set()
             for ev in events:
-                reason = self._publish_refusal(ev)
+                reason = self._publish_refusal(ev) or self._claim_refusal(ev, claimed)
                 if reason:
                     self._refuse(ev.source, f"publish {ev.kind.value}", reason)
             for ev in events:
                 if self._shield and self.authorizer.is_origin(ev.source):
                     self._reassert(ev.payload)
             return self._append(events)
+
+    def _claim_refusal(self, ev: Event, claimed: set) -> str:
+        """Fail closed before append/delivery, including duplicates in the same batch."""
+        if ev.kind is not Kind.CLAIM:
+            return ""
+        from .receipts import ClaimAuditor
+        seq = ev.payload.get("receipt_seq")
+        candidate = replace(ev, seq=self.last_seq + 1)  # never trust a caller-supplied sequence
+        if type(seq) is not int or not 0 < seq <= self.last_seq or seq not in ev.caused_by or seq in claimed or \
+                not ClaimAuditor(self, self.authorizer).backed(candidate):
+            return "claim requires an unused verified matching receipt"
+        claimed.add(seq)
+        return ""
 
     def _publish_refusal(self, ev: Event) -> str:
         if ev.kind in KERNEL_ONLY:
@@ -620,6 +653,7 @@ class Subscription:
         self.lagged = 0                       # times the queue filled and we fell back
         self._epoch = spine._epoch
         self.closed = False
+        self.cache = EventCache(lambda: self.spine.replay(self.reader, kinds=self.kinds, subject=self.subject))
 
     def _matches(self, ev: Event) -> bool:
         if ev.kind is Kind.FORGET:
@@ -666,6 +700,7 @@ class Subscription:
                 while self._queue:
                     ev = self._queue.popleft()
                     if self.spine._deliverable(self.reader, ev):
+                        self.cache.append(ev)
                         return ev
                 if not self._live:
                     continue
