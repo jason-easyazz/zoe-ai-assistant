@@ -568,8 +568,9 @@ def test_migration_0084_holds_both_guarantees_and_keeps_one_head():
     assert "CREATE TABLE IF NOT EXISTS telegram_link_redemptions ( token_id TEXT PRIMARY KEY" in sql
     assert ("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_preferences_telegram_id ON user_preferences "
             "((prefs::jsonb ->> 'telegram_id')) WHERE (prefs::jsonb ->> 'telegram_id') <> ''") in sql
-    # existing duplicate holders are cleared BEFORE the index is built, so the upgrade cannot fail on them
-    assert sql.index("HAVING COUNT(*) > 1") < sql.index("CREATE UNIQUE INDEX")
+    # every link without the current proof (so every duplicate holder too) is removed BEFORE the index is built
+    assert "'telegram_link_proof' ->> 'v', '') <> '2'" in sql
+    assert sql.index("- 'telegram_id'") < sql.index("CREATE UNIQUE INDEX")
     revs, downs = set(), set()
     for f in versions.glob("*.py"):
         src = f.read_text()
@@ -591,8 +592,15 @@ def _resolve(db: FakePrefsDB, monkeypatch, tid: str):
 
 
 def test_resolver_registered_returns_user_id(monkeypatch):
-    db = FakePrefsDB(seed={"member-a": {"telegram_id": "99999"}})
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "99999", "telegram_link_proof": {"via": "signed_link", "v": 2}}})
     assert _resolve(db, monkeypatch, "99999") == "member-a"
+
+
+def test_resolver_acts_for_nobody_on_a_link_without_the_current_proof(monkeypatch):
+    """A link made before both sides had to prove control (no proof, or an older proof) is never honoured."""
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55540"},
+                           "member-b": {"telegram_id": "55541", "telegram_link_proof": {"via": "signed_link"}}})
+    assert _resolve(db, monkeypatch, "55540") is None and _resolve(db, monkeypatch, "55541") is None
 
 
 def test_resolver_unregistered_returns_null(monkeypatch):
@@ -606,7 +614,8 @@ def test_resolver_acts_for_nobody_when_the_link_is_ambiguous(monkeypatch):
 
 
 def test_resolver_acts_for_nobody_once_the_member_account_is_inactive_or_gone(monkeypatch):
-    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55507"}, "member-b": {"telegram_id": "55508"}},
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55507", "telegram_link_proof": {"via": "signed_link", "v": 2}},
+                           "member-b": {"telegram_id": "55508", "telegram_link_proof": {"via": "signed_link", "v": 2}}},
                      accounts={"member-a": 0})
     assert _resolve(db, monkeypatch, "55507") is None   # deactivated
     assert _resolve(db, monkeypatch, "55508") is None   # no account at all (deleted)

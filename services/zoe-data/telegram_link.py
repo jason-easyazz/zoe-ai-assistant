@@ -173,6 +173,15 @@ LINKED, ALREADY_LINKED, HELD_BY_OTHER = "linked", "already_linked", "held_by_oth
 MEMBER_LINKED, TOKEN_SPENT, MEMBER_GONE = "member_linked", "token_spent", "member_gone"
 TOKEN_EXPIRED = "token_expired"
 
+#: The proof a link must carry to be honoured. Links made before proof of control of both sides was required carry none (or an
+#: older shape): alembic 0084 removes them and ``resolve`` never honours one, so every live link is a proven one.
+PROOF_VERSION = 2
+
+
+def proven(prefs: dict) -> bool:
+    proof = prefs.get(KEY_PROOF)
+    return isinstance(proof, dict) and proof.get("v") == PROOF_VERSION
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -250,7 +259,7 @@ async def link(db, user_id: str, tid: str, username: Optional[str] = None, *, to
     """
     from user_prefs import read_prefs, set_prefs
 
-    proof = {"via": "signed_link", "at": _now_iso()}
+    proof = {"via": "signed_link", "v": PROOF_VERSION, "at": _now_iso()}
     cleaned = (username or "").lstrip("@").strip()[:64]
     if cleaned:
         proof["username"] = cleaned
@@ -351,13 +360,18 @@ async def _account_active(db, user_id: str) -> bool:
 
 
 async def resolve(db, tid: str) -> Optional[str]:
-    """The member ``tid`` is linked to, or None: no link, a link more than one member holds (ambiguous, refused), or a link
-    whose member is no longer an active account (deleted or deactivated). Fails closed on a lookup error."""
+    """The member ``tid`` is linked to, or None: no link, a link more than one member holds (ambiguous, refused), a link that
+    carries no current proof (made before both sides had to prove control), or a link whose member is no longer an active account (deleted or deactivated). Fails closed on a lookup error."""
     try:
         holders = await _holders(db, tid)
         if len(holders) != 1:
             if holders:
                 logger.warning("telegram resolve refused: %d members hold one account", len(holders))
+            return None
+        from user_prefs import read_prefs
+
+        if not proven(await read_prefs(db, holders[0])):
+            logger.warning("telegram resolve refused: the link carries no current proof")
             return None
         return holders[0] if await _account_active(db, holders[0]) else None
     except Exception as exc:  # noqa: BLE001 - not knowing who someone is means acting for nobody

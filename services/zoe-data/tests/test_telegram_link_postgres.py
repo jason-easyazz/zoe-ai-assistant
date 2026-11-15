@@ -125,21 +125,25 @@ async def _link(w: World, uid: str, tid: str, token: str):
     return await tl.link(await w.db(), uid, tid, token_id=token_id, expires_at=exp)
 
 
-# (a) the migration: existing duplicate holders are cleared, the index exists, the database refuses a second holder
+# (a) the migration: every link without the current proof is removed (duplicate holders included), the index exists, the database refuses a second holder
 async def test_migration_clears_duplicate_holders_and_the_index_refuses_a_second(world):
     a, b = world.members
     c = await world.raw()
     await c.execute("INSERT INTO users (id, name) VALUES ('m-solo', 'synthetic')")
+    await c.execute("INSERT INTO users (id, name) VALUES ('m-proven', 'synthetic')")
     for uid, prefs in ((a, '{"telegram_id": "70001", "theme": "dark"}'), (b, '{"telegram_id": "70001"}'),
-                       ("m-solo", '{"telegram_id": "70002"}')):
+                       ("m-solo", '{"telegram_id": "70002", "telegram_link_proof": {"via": "signed_link"}}'),
+                       ("m-proven", '{"telegram_id": "70009", "telegram_link_proof": {"via": "signed_link", "v": 2}}')):
         await c.execute("INSERT INTO user_preferences (user_id, prefs) VALUES ($1, $2)", uid, prefs)
     await world.apply_0084()
     assert await world.holders("70001") == []
-    assert await world.holders("70002") == ["m-solo"]          # an unambiguous link is untouched
+    assert await world.holders("70002") == []                  # a link made before proof was required goes too
+    assert await world.holders("70009") == ["m-proven"]        # a link with the current proof is kept
     assert await c.fetchval("SELECT prefs::jsonb ->> 'theme' FROM user_preferences WHERE user_id = $1", a) == "dark"
     assert await c.fetchval("SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
                             world.schema, tl.TID_INDEX) == 1
     await world.apply_0084()                                     # a rerun is a no-op
+    assert await world.holders("70009") == ["m-proven"]
     await c.execute("UPDATE user_preferences SET prefs = '{\"telegram_id\": \"70003\"}' WHERE user_id = $1", a)
     with pytest.raises(asyncpg.UniqueViolationError):
         await c.execute("UPDATE user_preferences SET prefs = '{\"telegram_id\": \"70003\"}' WHERE user_id = $1", b)
