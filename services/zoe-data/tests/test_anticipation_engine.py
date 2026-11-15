@@ -2,7 +2,7 @@
 phase 1 rows (``pending_suggestions``), and created -> surfaced -> accepted / declined / expired runs through phase 1's code.
 Real sqlite; placeholder household (adults ``ava`` and ``ben``, child ``kit``, guest ``remy``).
 
-Negative controls (run when written; each turns the named test red):
+Negative controls (run 2026-11-15 on mutated copies of the tree, in groups; each turned the named test red):
   * drop ``if (o.rule, _source_event(o.sources)) not in taken`` -> test_the_pack_is_stored_in_the_same_rows_once;
   * store in ``shadow`` (drop ``if m != "on": return``) -> test_shadow_logs_counts_and_rule_ids_only;
   * drop ``if _quiet_hours(now): return None`` -> test_no_offer_in_quiet_hours_and_never_stacked;
@@ -363,3 +363,113 @@ def test_a_topic_forget_reaches_answered_offers(dbpath, monkeypatch):
 
     gone, left = run(_with(dbpath, go))
     assert gone == 1 and "chore_night_before" not in left and len(left) == 5
+
+
+# -- learning and the member's own controls (anticipation_learning over the stored rows) -------------------------------------------
+# Negative controls (run 2026-11-15). NOT caught: dropping ``and not tune(r["kind"]).quiet`` in pick_for_turn - the learned priority
+# shift and the re-check already keep a quiet rule's open offer from being said, so that filter is a second lock no test isolates.
+# Caught:
+# call ``anticipation_rules.offers`` without ``tune=`` -> test_three_noes_in_a_row_silence_a_rule_and_why_is_exact; without
+# ``disabled=`` -> test_a_member_can_switch_a_rule_off_and_on; sort by the frozen ``slots["priority"]`` -> test_yeses_move_a_rule_up_the_order.
+async def _votes(db, rule, outcome, when, n=3):
+    """``n`` answered offers of ``rule`` (the rows the learning loop counts), a minute apart from ``when``."""
+    for i in range(n):
+        slots = {"outcome": outcome, "answered_at": ant._iso(when + timedelta(minutes=i))}
+        await db.execute("INSERT INTO pending_suggestions (id, user_id, session_id, action_type, description, list_type, amount_hint,"
+                         " offer_phrase, pre_filled_slots, created_at, resolved) VALUES (?, ?, 'anticipation', 'anticipation', ?, ?, ?, 'x', ?, ?, ?)",
+                         (f"vote-{rule}-{i}", AVA, f"Yesteryear {rule}", rule, f"{rule}:old:{i}", json.dumps(slots), ant._iso(when),
+                          ant.DECLINED if outcome == "dismissed" else ant.DONE))
+    await db.commit()
+
+
+def test_three_noes_in_a_row_silence_a_rule_and_why_is_exact(dbpath):
+    async def go(db):
+        await _votes(db, "child_cover", "dismissed", NIGHT - timedelta(days=3))
+        return await ant.generate_for_user(AVA, now=NIGHT, db=db), await ant.explain(AVA, "child_cover", now=NIGHT, db=db)
+
+    result, why = run(_with(dbpath, go))
+    assert result["rules"] == {k: v for k, v in AVA_RULES.items() if k != "child_cover"}
+    assert (why["status"], why["dismissed"], why["no_run"], why["quiet_until"]) == ("quiet", 3, 3, "2027-01-05")
+    assert why["why"] == "You said no 3 times in a row (the last on 2026-11-06), so I stopped offering it. I'll offer it once more after 2027-01-05."
+
+
+def test_a_forgotten_offer_takes_its_vote_with_it(dbpath):
+    async def go(db):
+        await _votes(db, "child_cover", "dismissed", NIGHT - timedelta(days=3))
+        gone = await ant.erase_entity(db, AVA, re.compile(r"\byesteryear\b", re.IGNORECASE))
+        return gone, await ant.generate_for_user(AVA, now=NIGHT, db=db)
+
+    gone, result = run(_with(dbpath, go))
+    assert gone == 3 and result["rules"] == AVA_RULES                    # the votes are gone, so the rule offers again
+
+
+def test_an_open_offer_of_a_rule_gone_quiet_is_not_said(dbpath):
+    async def go(db):
+        await ant.generate_for_user(AVA, now=NIGHT, db=db)
+        await _votes(db, "child_cover", "dismissed", NIGHT - timedelta(days=2))
+        return [await ant.pick_for_turn(AVA, f"chat-{i}", now=MORNING + timedelta(minutes=i), db=db) for i in range(2)]
+
+    said = run(_with(dbpath, go))                                        # both of the day's two: neither is the quiet rule's
+    assert said[0].kind == "leave" and all(s is None or s.kind != "child_cover" for s in said)
+
+
+def test_yeses_move_a_rule_up_the_order(dbpath):
+    async def go(db):
+        await _votes(db, "leave", "acted", NIGHT - timedelta(days=2))
+        await ant.generate_for_user(AVA, now=NIGHT, db=db)
+        return await ant.pick_for_turn(AVA, "chat-1", now=MORNING, db=db), await ant.explain(AVA, "leave", now=MORNING, db=db)
+
+    s, why = run(_with(dbpath, go))
+    assert s.kind == "leave" and (why["status"], why["acted"], why["priority"], why["lead_h"]) == ("offering", 3, 98, 18)   # 70 + 28 > child_cover's 85
+
+
+def test_a_member_can_switch_a_rule_off_and_on(dbpath):
+    async def go(db):
+        await ant.generate_for_user(AVA, now=NIGHT, db=db)
+        off = await ant.set_rule(AVA, "chore_night_before", False, now=MORNING, db=db)
+        row = _by_rule(await ant._rows(db, AVA))["chore_night_before"]
+        again = await ant.generate_for_user(AVA, now=MORNING, db=db)
+        said = [await ant.pick_for_turn(AVA, f"chat-{i}", now=MORNING + timedelta(days=i), db=db) for i in range(2)]
+        untouched = await ant.erase_entity(db, AVA, re.compile(r"rule_off|chore_night"))        # the control row holds no words
+        still_off = (await ant.explain(AVA, "chore_night_before", now=MORNING, db=db))["status"]
+        ben = (await ant.explain(BEN, "chore_night_before", now=MORNING, db=db))["status"]
+        on = await ant.set_rule(AVA, "chore_night_before", True, now=MORNING, db=db)
+        return off, row, again, said, untouched, still_off, ben, on, await ant.set_rule(AVA, "no_such_rule", False, db=db)
+
+    off, row, again, said, untouched, still_off, ben, on, unknown = run(_with(dbpath, go))
+    assert off["status"] == "off" and off["why"] == "You switched this kind of offer off."
+    assert (row["resolved"], row["slots"]["outcome"]) == (ant.WITHDRAWN, "switched_off")
+    assert "chore_night_before" not in again["rules"] and all(s is None or s.kind != "chore_night_before" for s in said)
+    assert untouched == 1 and still_off == "off" and ben == "offering"   # 1 = the withdrawn bins OFFER (its slots name the rule), not the switch
+    assert on["status"] == "offering" and unknown is None
+
+
+def test_the_controls_do_no_io_when_off(monkeypatch):
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+
+    def no_conn(db=None):
+        raise AssertionError("flag off must not touch the store")
+
+    monkeypatch.setattr(ant, "_conn", no_conn)
+    assert run(ant.explain(AVA)) is None and run(ant.set_rule(AVA, "leave", False)) is None
+
+
+def test_the_two_routes_are_404_while_the_flag_is_off(monkeypatch):
+    from fastapi import HTTPException
+
+    from routers import proactive as routes
+
+    async def allowed(db, user, **kw):
+        return None
+
+    def no_conn(db=None):
+        raise AssertionError("flag off must not touch the store")
+
+    monkeypatch.setattr(routes, "require_feature_access", allowed)
+    monkeypatch.setattr(ant, "_conn", no_conn)
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    for call in (routes.anticipation_rules_why(user={"user_id": AVA}, db=None),
+                 routes.anticipation_rule_switch("leave", routes.AnticipationRuleBody(enabled=False), user={"user_id": AVA}, db=None)):
+        with pytest.raises(HTTPException) as err:
+            run(call)
+        assert err.value.status_code == 404

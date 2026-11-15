@@ -106,3 +106,22 @@ Not built yet: the panel card and the phone as surfaces (an offer waits for a ch
 title, sentence or arguments name the entity (`anticipation.erase_entity`, the cascade's `anticipation_offers` step); a
 topic forget deletes the open ones and the answered ones (`pending_suggestions.withdraw_matching`). The learning loop's
 votes ARE the answered rows, so a forgotten offer's vote goes with it. Inventory: [forget-reach.md](forget-reach.md).
+
+## The learning loop
+
+`anticipation_learning` - pure, deterministic, no model. Per member and per rule, from that member's answered offers:
+
+| what | rule |
+|---|---|
+| the votes | every answered anticipation row keeps its rule, its outcome (`acted` / `dismissed` / `ignored`) and when. Those rows ARE the state: no second table, and a forget that deletes an offer deletes its vote |
+| priority | score = yeses - noes - half the ignoreds, each weighted by age (half-life 30 days); priority shift = 10 x score, capped at +/- 30, added to the rule's base. Under 20 the rule is not offered |
+| said earlier | a rule the member keeps accepting may be said earlier: +6 hours of lead per yes in a row, up to +18 |
+| goes quiet | three noes in a row (an ignored offer neither counts nor breaks the run; a yes ends it) silence the rule for 60 days from the last no. Then it is offered once more: another no and it is quiet again from that day |
+| switched off | a member can switch one rule off for themselves (`anticipation.set_rule`; one control row, `list_type = 'rule_off'`, no words in it). Their open offers of that rule are withdrawn |
+
+**Why?** `anticipation.explain(user_id[, rule_id])` answers "why did you offer this?" and "why did you stop offering
+that?" from the stored counts, e.g. *"You said no 3 times in a row (the last on 2026-11-06), so I stopped offering it. I'll
+offer it once more after 2027-01-05."* Routes (the caller's own state only; 404 while the flag is off):
+`GET /api/proactive/anticipation/rules`, `POST /api/proactive/anticipation/rules/{rule_id}` `{"enabled": false}`.
+
+Learning is per RULE, not per kind of event: three noes to a leave-by for road trips also silence the leave-by for flights.
