@@ -122,7 +122,7 @@ def _strings(node):
     elif isinstance(node, dict):
         for value in node.values():
             yield from _strings(value)
-    elif isinstance(node, list):
+    elif isinstance(node, (list, tuple)):     # a tuple is a JSON array on disk
         for value in node:
             yield from _strings(value)
 
@@ -135,7 +135,7 @@ def _keys_and_strings(node):
         for key, value in node.items():
             yield key
             yield from _keys_and_strings(value)
-    elif isinstance(node, list):
+    elif isinstance(node, (list, tuple)):     # a tuple is a JSON array on disk
         for value in node:
             yield from _keys_and_strings(value)
 
@@ -148,7 +148,7 @@ def _content(node):
                 yield value
             else:
                 yield from _content(value)
-    elif isinstance(node, list):
+    elif isinstance(node, (list, tuple)):     # a tuple is a JSON array on disk
         for value in node:
             yield from _content(value)
 
@@ -403,21 +403,23 @@ class Spine:
         return dead
 
     def _tombstone(self, seqs: list[int]) -> None:
-        """Erase the rows in place, remember a keyed hash of their first-hand free text."""
+        """Erase the rows in place, remember a keyed hash of their free text: first-hand AND
+        derived (text that only ever lived in a derived event is forgotten too)."""
         fps: set[bytes] = set()
         self._db.execute("BEGIN IMMEDIATE")
         try:
             for chunk in _chunks(seqs):
                 marks = ",".join("?" * len(chunk))
-                for source, payload in self._db.execute(
-                        f"SELECT source, payload FROM events WHERE seq IN ({marks})", chunk):
-                    if payload and self.authorizer.is_origin(source):
+                for (payload,) in self._db.execute(
+                        f"SELECT payload FROM events WHERE seq IN ({marks})", chunk):
+                    if payload:
                         fps.update(self._fp(text) for text in _content(json.loads(payload)))
                 self._db.execute(
                     "UPDATE events SET tombstoned = 1, payload = NULL, mentions = NULL, subject = NULL,"
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
+            self._scrub_intents(set(seqs))
             self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
             self._db.execute("COMMIT")
         except BaseException:
@@ -425,6 +427,35 @@ class Spine:
             raise
         self._shield |= fps
         self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # old page images leave the WAL file
+
+    def _scrub_intents(self, dead: set[int]) -> None:
+        """Forget reaches the action bookkeeping (``receipts.Dispatcher``): an intent tied to an
+        erased event keeps no person, skill, action, grant or cause. A sequence number that is
+        still LIVE stays as a bare marker (a spent yes, an undone action), so forgetting only a
+        receipt never makes that yes or that undo usable again. Runs inside ``_tombstone``'s
+        transaction. An intent left open by a dead kernel and tied to a forgotten event is closed
+        here with no receipt: the forget wins over the later "uncertain" receipt."""
+        hit: dict[int, tuple] = {}
+        for chunk in _chunks(sorted(dead), 300):            # three IN lists: stay under 999 params
+            marks = ",".join("?" * len(chunk))
+            for row in self._db.execute(
+                    f"SELECT id, accept_seq, undoes FROM intents WHERE receipt_seq IN ({marks})"
+                    f" OR accept_seq IN ({marks}) OR undoes IN ({marks})", chunk * 3):
+                hit[row[0]] = row
+        for row_id, accept, undoes, causes in self._db.execute(
+                "SELECT id, accept_seq, undoes, caused_by FROM intents WHERE receipt_seq IS NULL").fetchall():
+            if dead & set(json.loads(causes or "[]")):
+                hit[row_id] = (row_id, accept, undoes)
+        for row_id, accept, undoes in hit.values():
+            accept = accept if accept not in dead else None
+            undoes = undoes if undoes not in dead else None
+            if accept is None and undoes is None:
+                self._db.execute("DELETE FROM intents WHERE id = ?", (row_id,))
+            else:
+                self._db.execute(
+                    "UPDATE intents SET ts = 0, skill = '', action = '', person = '', grant_id = NULL,"
+                    " caused_by = '[]', receipt_seq = 0, accept_seq = ?, undoes = ? WHERE id = ?",
+                    (accept, undoes, row_id))
 
     def _fp(self, text: str) -> bytes:
         norm = " ".join(text.casefold().split()).encode()
@@ -512,6 +543,25 @@ class Spine:
         args.append(limit)
         with self._lock:
             return [_row_to_event(r) for r in self._db.execute(" ".join(sql), args)]
+
+    def _newest(self, kinds: frozenset[Kind], subject: str | None, batch: int = 200) -> Iterator[Event]:
+        """Live rows of these kinds, NEWEST first, paged (kernel-internal). "The last X" must not
+        come from a capped oldest-first read, which stops short of the newest on a long log."""
+        before = self.last_seq + 1
+        while True:
+            sql = [f"SELECT {_COLS} FROM events WHERE seq < ? AND tombstoned = 0",
+                   f"AND kind IN ({','.join('?' * len(kinds))})"]
+            args: list = [before, *sorted(k.value for k in kinds)]
+            if subject:
+                sql.append("AND seq IN (SELECT seq FROM people WHERE person = ?)")
+                args.append(subject)
+            sql.append("ORDER BY seq DESC LIMIT ?")
+            with self._lock:
+                rows = [_row_to_event(r) for r in self._db.execute(" ".join(sql), [*args, batch])]
+            yield from rows
+            if len(rows) < batch:
+                return
+            before = rows[-1].seq
 
     def _check_subscribe(self, reader: str, kinds, subject) -> frozenset[Kind] | None:
         kinds = frozenset(Kind(k) for k in kinds) | {Kind.FORGET} if kinds else None

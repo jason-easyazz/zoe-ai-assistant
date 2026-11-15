@@ -88,6 +88,7 @@ bad outcome.
 | a receipt and a used yes survive a killed kernel | `test_durable.py` | the used yes held in memory: one yes buys two actions |
 | an unbacked claim is found after a restart, once | `test_durable.py` | a trusting auditor finds nothing |
 | a kill between the write and the receipt is reported `uncertain`, never done, never retried | `test_durable.py` | no write-ahead intent: no trace; a recovery that says "done": a false claim passes |
+| review fixes: derived-only text and tuple-wrapped words or names stay forgotten; a child's grant opens only the child's events; one receipt backs one claim; a forget scrubs the intent rows and a yes stays spent; "the last action" is the newest | `test_review_findings.py` | each test failed on the code before its fix (the old code is the control) |
 
 ### Explain, undo, replay, reminders, retention
 

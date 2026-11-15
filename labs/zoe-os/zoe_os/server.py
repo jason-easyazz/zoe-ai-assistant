@@ -287,8 +287,9 @@ class KernelServer:
             return {"event": wire.event_to_wire(ev), "causes": seen,
                     "hidden_causes": len(causes) - len(seen)}
         m = store.manifests[conn.name]
-        mine = [e for e in spine._fetch(0, frozenset({Kind.REFUSAL}), None, 100_000)
-                if e.payload.get("who") == conn.name][-20:]
+        newest = (e for e in spine._newest(frozenset({Kind.REFUSAL}), None)
+                  if e.payload.get("who") == conn.name)
+        mine = [e for _, e in zip(range(20), newest)][::-1]      # its 20 newest, oldest first
         return {"skill": conn.name, "protocol": wire.VERSION,
                 "manifest": {"reads": {k.value: v.value for k, v in m.reads.items()},
                              "emits": sorted(k.value for k in m.emits), "acts": sorted(m.acts)},

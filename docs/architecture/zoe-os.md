@@ -129,8 +129,9 @@ leaving).
 
 **Contract.** A skill ships a manifest: the event kinds it reads and how private, the kinds it emits, the named
 actions it performs. That is a ceiling. Each person then grants the skill all or part of it. No grant, no
-access. A child's grant needs one of that child's guardians. A guest cannot grant. Revoking takes effect on the
-next delivery.
+access. A child's grant needs one of that child's guardians, and opens only that child's own events: a
+household-visible event of anyone else, or a household event about nobody in particular, needs an adult's
+grant. A guest cannot grant. Revoking takes effect on the next delivery.
 
 **Prototype [lab]** (`capability.py`): the manifest format (unknown keys, kinds or levels are errors), a grant
 store, and one `Enforcer` that the spine and the action dispatcher both call. A skill that asks for more than
@@ -157,9 +158,15 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
 4. withdraws matching events from every live queue;
 5. tells every subscriber, whatever its filters, with a notice that carries no content, so a well-behaved skill
    drops its own derived state;
-6. keeps a keyed hash of the forgotten free text. A skill that later tries to publish the same words, even
-   nested inside another payload, is refused. A trusted adapter recording the person saying the same thing
-   again is new reality, is allowed, and lifts that hash.
+6. keeps a keyed hash of the forgotten free text, first-hand and derived alike (text that only ever lived in a
+   skill's derived event is forgotten too). A skill that later tries to publish the same words, even nested
+   inside another payload (a list, a tuple or a dictionary), is refused. A trusted adapter recording the
+   person saying the same thing again is new reality, is allowed, and lifts that hash. The cost **[inferred]**:
+   the hash is household-wide, so an identical derived string (a templated offer with the same times) is
+   refused for everyone until a trusted adapter records it first-hand;
+7. reaches the action bookkeeping: an intent row tied to an erased event keeps no person, skill, action,
+   grant or cause. A still-live sequence number stays as a bare marker, so forgetting only a receipt does not
+   make the person's yes usable again.
 
 **Exists [code].** The production forget is strong and hand-maintained: a ledger that cannot list what it
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
@@ -190,10 +197,12 @@ their state onto it.
 **Contract.** An action runs only through the dispatcher. It needs the skill's manifest, that person's grant,
 a cause, and, for any action marked consequential, the person's own accepted offer from this same skill, used
 once. After the action the driver reads back what it did. The receipt records what, by which skill, under
-which grant, with what proof. A claim ("I moved your alarm") must cite a verified receipt.
+which grant, with what proof. A claim ("I moved your alarm") must cite a verified receipt, and one receipt
+backs one claim.
 
 **Prototype [lab]** (`receipts.py`): the dispatcher, the read-back, and a detector that finds claims with no
-receipt, an unverified receipt, or a receipt for a different action. A driver that reports success and did
+receipt, an unverified receipt, a receipt for a different action, or a receipt an earlier live claim already
+cited (read from the log, so a restart does not reset it). A driver that reports success and did
 nothing gets an unverified receipt, and the honest skill then makes no claim (tested).
 
 **Exists [code].** This is the area closest to done in production. `write_receipts.py` and
