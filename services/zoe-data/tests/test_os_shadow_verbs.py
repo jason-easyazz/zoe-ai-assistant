@@ -52,7 +52,7 @@ def test_with_only_the_switch_on_the_new_verbs_touch_nothing(kernel):
     remind()
     os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="07:30", repeat="once")
     os_shadow.note_list_remove(MEMBER, source="skybridge", list_type="shopping", list_name="Shopping", item="rice")
-    assert os_shadow._q.qsize() == 0 and os_shadow.counters() == {} and os_shadow._worker is None
+    assert os_shadow._q.qsize() == 0 and os_shadow.counters() == {} and kernel.calls == []
     os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="rice")   # list add: as before
     settle(1)
     assert os_shadow.counters_by_verb() == {"list_add": {"match": 1}}
@@ -228,8 +228,7 @@ _T = r'["`]?(?:\w+["`]?\.["`]?)?'
 #:          {"file::function": why it is NOT shadowed})
 WRITERS = {
     "reminder_create": (re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+" + _T + r"reminders\b"), frozenset(), "note_reminder_create",
-                        "reminders", {"pending_suggestions.py::_execute_action": "OUT OF SCOPE: Zoe's own offer, accepted by the member, "
-                                                                                 "not a member's create; a later, separate decision"}),
+                        "reminders", {}),
     "alarm_create": (re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+" + _T + r"alarms\b"), frozenset(), "note_alarm_create",
                      "alarms", {}),
     "list_remove": (re.compile(r"(?is)\b(?:update\s+" + _T + r"list_items[\"`]?\s+set\s+(?:[^;]*?,\s*)?deleted\s*=\s*(?:1|true)\b"
@@ -240,11 +239,18 @@ WRITERS = {
 }
 
 
+#: verb -> {"file::writer": the one caller that holds the hook, after the transaction the writer runs in}
+HOOKED_BY_CALLER = {"reminder_create": {"pending_suggestions.py::_execute_action": "execute_suggestion"}}
+
+
 @pytest.mark.parametrize("verb", sorted(WRITERS))
 def test_every_writer_function_of_a_shadowed_verb_is_hooked_or_named_with_a_reason(verb):
     sql, helpers, hook, table, excused = WRITERS[verb]
     sites, bare = hook_scan.scan(sql, helpers, frozenset({hook}), table)
-    assert bare == set(excused), f"{verb}: a writer function neither calls os_shadow.{hook} nor is named: {sorted(bare ^ set(excused))}"
+    by_caller = HOOKED_BY_CALLER.get(verb, {})
+    named = set(excused) | set(by_caller)
+    assert bare == named, f"{verb}: a writer function neither reaches os_shadow.{hook} nor is named: {sorted(bare ^ named)}"
+    hook_scan.assert_hooked_by_caller(by_caller, frozenset({hook}))
     assert sites - bare, f"{verb}: no hooked writer found at all (the pattern is wrong)"
 
 

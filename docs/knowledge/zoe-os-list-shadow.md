@@ -26,7 +26,8 @@ One live write core is two functions and a REST route. Every path below ends in 
 | Pendant day review applying an approved list item | `omi_review_apply.py:148` | `list_service.add_item_to_list` (`list_service.py:534`), no receipts list | `list_service.py:609` / `:655`, `source=single` |
 | Skybridge voice resolver ("add X to the shopping list" at the panel) | `routers/voice_tts.py:4623` `resolve_skybridge_request` -> `skybridge_service.py:3569` -> `_resolve_list_add_item` (`:4882`) and the "this list" path `:4626` | its own inline INSERT in `_add_spoken_items` (`skybridge_service.py:4786`) | `skybridge_service.py:4871`, `source=skybridge` |
 | UI / REST "add an item" | `routers/lists.py` `POST /{list_type}/{list_id}/items` | `create_item_record` directly | `routers/lists.py:389`, `source=rest` |
-| Zoe's own accepted offer (`pending_suggestions.py:887`), the trip packing list (`anticipation.py:620`) | an offer the member accepted | inline INSERT / `create_item_record` | **not shadowed**, with a reason each in `tests/test_os_shadow_hook.py` `NOT_SHADOWED` |
+| a suggestion the member accepted (`pending_suggestions._execute_action`, inside the transaction) | the member's yes | inline INSERT | **shadowed** by its only caller `execute_suggestion`, after the commit (`src=suggestion`; `HOOKED_BY_CALLER` in `tests/test_os_shadow_hook.py`) |
+| the trip packing list (`anticipation._do`) | Zoe starts it from one offer, many items | `create_item_record` | **not shadowed**: system-generated, no member add to compare (`NOT_SHADOWED`) |
 
 **The seam.** There is no single function all four share: `write_receipts.record(user, "list", row_id, why)` is called by all of them but
 carries no item, no list and no outcome. So the hook is four one-line calls, and a static test
@@ -63,7 +64,7 @@ without the lab stack and the contract test starts running the day both are pres
 | what runs | `labs/zoe-os/shadow_daemon.py`: the lab kernel + the lab `Lists` driver + the `Keeper` that erases the driver's rows when the kernel forgets. The driver's rows are **in memory**; the durable record is the spine (events + receipts) |
 | when it is down | the shadow logs ONE line per add with `result=kernel_unavailable` and carries on; a 5 s circuit stops it reconnecting per add; the live add is untouched. `Restart=on-failure` brings it back; the client re-reads `creds.json` on every reconnect, so a re-issued credential needs no zoe-data restart |
 | supervision | systemd only. There is no watchdog: a dead shadow is visible in the report (`kernel_unavailable` count), by design not an alarm |
-| roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json` and restart the unit |
+| roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json` and restart the unit. A FORGET never consults the roster: it is sent by the member's id whatever `people.json` says now (a member taken off it may still have records); only the kernel's own "never knew them" refusal reads as nothing to forget, which is sound because the daemon keeps every id it was ever started with |
 
 ## 4. Privacy and forget [code; lab for the kernel's own forget]
 
@@ -78,7 +79,10 @@ The kernel record holds list items (household words) in the spine, in receipts (
 * **Topic forget** (`forget_topic._forget`): `os_shadow.erase_topic` (kernel `forget(topic=...)`), failure = `store_down` + the same marker.
 * A scope the kernel refuses to match falls back to a whole-member forget (a scope that matches nothing never widens, but this store may).
 * **Flag off but a kernel was once installed** (`creds.json` exists): forget still tries; if it cannot reach the kernel it records the member
-  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. **Flag off and no
+  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. The park is a
+  locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
+  ran is kept; a park that cannot be made durable (disk, an unreadable file, which is never overwritten) FAILS the erase closed
+  (`ShadowForgetUnavailable`) instead of letting it say done. **Flag off and no
   `creds.json`**: nothing was ever recorded, no socket is touched.
 * Erase ordering: forget jobs and proposals share ONE FIFO queue and one worker, so a proposal queued before an erase is sent before the
   forget and removed by it; one queued after is dropped (`user_erase_gate` generation moved / erase in progress: `dropped_erased`).

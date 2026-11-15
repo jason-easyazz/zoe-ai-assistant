@@ -80,6 +80,9 @@ def test_the_allowlists_are_the_codes_the_client_writes():
     assert set(_client_literal("RESULTS")) | {"live_noop"} == rep.ALLOWED["result"]
     assert set(_client_literal("LIST_CLASSES")) | {"other", "once", "repeat", "-"} == rep.ALLOWED["cls"]   # reminder/alarm: once|repeat
     assert {code for _, code in _client_literal("_REASONS")} | {"other"} <= rep.ALLOWED["reason"]
+    src = (ROOT / "services" / "zoe-data").rglob("*.py")
+    sources = {m for p in src if "tests" not in p.parts for m in re.findall(r'note_\w+\(.{0,240}?source="(\w+)"', p.read_text("utf-8"), re.S)}
+    assert sources and sources <= rep.ALLOWED["src"], sources - rep.ALLOWED["src"]      # every call site's src is a known code
 
 
 def act(verb, result="match", kernel="verified", reason="-", hop=1.0, cls="-"):

@@ -33,18 +33,18 @@ VERB_ORDER = ("list_add", "list_remove", "reminder_create", "alarm_create")
 UNKNOWN = "unknown"
 ALLOWED = {
     "verb": frozenset(VERB_ORDER),
-    "src": frozenset({"spoken", "single", "skybridge", "rest", "service"}),
+    "src": frozenset({"spoken", "single", "skybridge", "rest", "service", "suggestion"}),
     "cls": frozenset({"shopping", "todo", "personal", "other", "once", "repeat", "-"}),
     "live": frozenset({"added", "refused"}),
     "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
-    "result": frozenset({"match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused",
+    "result": frozenset({"worker_down", "match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused",
                          "item_differs", "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster",
                          "dropped_erased", "queue_full", "live_noop"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
                          "recurring", "no_time", "range", "time", "parse"}),
 }
-NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop"}
+NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop", "worker_down"}
 UNAVAILABLE = ("kernel_unavailable", "timeout")
 AGREE = ("match",)
 MISMATCH = ("kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs", "list_differs",

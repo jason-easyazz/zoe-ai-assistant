@@ -30,6 +30,7 @@ Per verb, from `scripts/maintenance/os_shadow_report.py` over the zoe-data logs:
 | unavailable | `kernel_unavailable` / `timeout`: no verdict; never counted in the rate |
 | agree rate | agree / (agree + disagree) |
 | hop p50 / p90 | publish + act round trip, over writes the kernel answered |
+| (not compared) `worker_down` | a turn found no live worker: dropped and counted, never a thread started on the turn |
 
 [code] Every logged write lands in exactly one bucket, and a result code the reader does not know is counted as disagree.
 [lab] The negative control `test_a_kernel_that_disagrees_on_purpose_is_disagree_for_every_verb_in_the_report` runs the same traffic
@@ -58,9 +59,9 @@ Where each verb is hooked (after the commit, never raises, one bounded queue put
 
 | verb | kernel action | live call site | not shadowed (named in the writer scan, with the reason) |
 |---|---|---|---|
-| `list_add` | `list.add` | `list_service.add_item_to_list` / `add_items_to_list`, `skybridge_service._add_spoken_items`, `routers/lists.py` REST add | `pending_suggestions`, `anticipation` (Zoe's own offers) |
+| `list_add` | `list.add` | `list_service.add_item_to_list` / `add_items_to_list`, `skybridge_service._add_spoken_items`, `routers/lists.py` REST add, an accepted suggestion (`pending_suggestions.execute_suggestion`, after its transaction) | `anticipation` (a packing list Zoe makes itself) |
 | `list_remove` | `list.remove` | `skybridge_service` spoken remove | REST delete (reads no item text), `rename_item`'s merge (a correction) |
-| `reminder_create` | `remind.set` | `reminder_service.create_reminder_record` | `pending_suggestions` (an accepted offer) |
+| `reminder_create` | `remind.set` | `reminder_service.create_reminder_record`, an accepted suggestion (`execute_suggestion`; it has no due time, so it reads `not_expressible:no_time`) | none |
 | `alarm_create` | `alarm.set` | `alarms.create_alarm` (every caller: REST, voice, anticipation) | none |
 
 What the kernel's verbs cannot express is counted as a disagreement, never sent: a recurring reminder, a date-only reminder (live

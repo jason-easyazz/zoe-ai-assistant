@@ -15,7 +15,9 @@ Boundaries (each pinned by ``tests/test_os_shadow.py``):
   when the lab code is present, so the two cannot drift silently.
 * The hook (``note_act``; ``note_add`` / ``note_reminder_create`` / ``note_alarm_create`` / ``note_list_remove`` are its thin
   per-verb argument builders) runs AFTER the live write has committed, is O(1), never blocks and never raises: it puts one tuple on a
-  bounded queue. A single worker THREAD does all socket work, so a slow or dead kernel can neither slow nor break a turn.
+  bounded queue. A single worker THREAD does all socket work, so a slow or dead kernel can neither slow nor break a turn. The
+  turn never starts that thread: it starts at import (start-up); a turn that finds it dead drops and counts (``worker_down``), and
+  ``revive`` (start-up, a forget) brings it back.
 * Erase-safe: a proposal for a member who is being erased (``user_erase_gate``) is dropped, and forget jobs go through the SAME
   FIFO queue, so a proposal queued before an erase is sent before the forget and removed by it.
 * Forget reaches the kernel (``forget_user`` / ``erase_entity`` / ``erase_topic``): fail-closed while the flag is ``shadow``.
@@ -254,7 +256,7 @@ class _Conn:
 
 
 # ---- comparison ---------------------------------------------------------------------------------------------------------------------
-RESULTS = ("match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
+RESULTS = ("worker_down", "match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full")
 _REASONS = (("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
@@ -336,10 +338,14 @@ _worker: Optional[threading.Thread] = None
 _worker_guard = threading.Lock()
 
 
+def _worker_alive() -> bool:
+    w = _worker
+    return w is not None and w.is_alive()
+
+
 def _ensure_worker() -> None:
-    """Lock-free when the worker is up (the normal case: it is started at import while the flag is ``shadow``, off every turn).
-    Otherwise ONE caller starts it; a caller that finds another one starting it never waits on the guard: its job is queued and
-    drained by the worker that other caller is starting."""
+    """Start the worker if it is not running. NEVER called on a turn: only at import (start-up), by ``revive`` and by the forget path
+    (an erase, not a turn). One caller starts it; a caller that finds another one starting it never waits on the guard."""
     global _worker
     if _worker is not None and _worker.is_alive():
         return
@@ -351,6 +357,28 @@ def _ensure_worker() -> None:
             _worker.start()
     finally:
         _worker_guard.release()
+
+
+def revive() -> bool:
+    """Bring a dead or never-started worker back, OFF the turn (start-up, a forget, an operator). True if a worker is running after."""
+    try:
+        _ensure_worker()
+    except Exception:  # noqa: BLE001
+        pass
+    return _worker_alive()
+
+
+_down_logged = False
+
+
+def _worker_down(verb: str = "list_add") -> None:
+    """A turn found no live worker: the proposal is dropped and counted (``worker_down``); the turn never starts a thread. Said ONCE per
+    process in the log, so a dead worker is visible without a line per add."""
+    global _down_logged
+    _tally("worker_down", verb=verb)
+    if not _down_logged:
+        _down_logged = True
+        logger.warning("OS_SHADOW worker down: proposals dropped (worker_down) until a start-up or a forget revives it")
 
 
 def _start_at_import() -> None:
@@ -521,7 +549,9 @@ def note_act(verb: str, user_id: Optional[str], *, source: str, raw: dict, cls: 
         if user_erase_gate.in_progress(uid):
             _tally("dropped_erased", verb=verb)
             return
-        _ensure_worker()
+        if not _worker_alive():           # never Thread.start() on a turn: drop, count, revive off the turn
+            _worker_down(verb)
+            return
         _q.put_nowait(("act", verb, uid, source, cls, "added", raw, user_erase_gate.generation(uid), time.perf_counter(), time.time()))
     except queue.Full:
         _tally("queue_full", verb=verb)
@@ -568,48 +598,131 @@ def _pending_path() -> Path:
     return state_dir() / "pending-forgets.json"
 
 
+class PendingUnreadable(OSError):
+    """``pending-forgets.json`` exists but is not a list of ids: never overwritten (that would drop the forgets it holds)."""
+
+
+_pending_mutex = threading.Lock()
+
+
+class _pending_locked:
+    """The parked-forget file is read-modify-written only under BOTH a thread lock and an ``flock`` on a sibling lock file, so two
+    forgets (two threads, or zoe-data and a second process) never overwrite each other. Held only for one read or one write."""
+
+    def __enter__(self):
+        import fcntl
+
+        _pending_mutex.acquire()
+        try:
+            path = _pending_path()
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.fd = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except BaseException:
+            _pending_mutex.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            os.close(self.fd)             # closing drops the flock
+        finally:
+            _pending_mutex.release()
+        return False
+
+
 def _pending_read() -> list:
+    """The parked members. Missing file = none; a file that is there but unreadable RAISES ``PendingUnreadable`` (fail closed)."""
+    path = _pending_path()
     try:
-        raw = json.loads(_pending_path().read_text("utf-8"))
-        return [str(x) for x in raw] if isinstance(raw, list) else []
-    except (OSError, ValueError):
+        text = path.read_text("utf-8")
+    except FileNotFoundError:
         return []
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        raise PendingUnreadable("pending-forgets.json is not json") from exc
+    if not isinstance(raw, list):
+        raise PendingUnreadable("pending-forgets.json is not a list")
+    return [str(x) for x in raw]
 
 
 def _pending_write(members: list) -> None:
+    """Atomic and durable: a unique temp file, fsync, rename, fsync of the directory. Raises on any failure (never swallowed)."""
     path = _pending_path()
     if not members:
         path.unlink(missing_ok=True)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump(sorted(set(members)), fh)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(sorted(set(members)), fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    dfd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def _pending_add(member: str) -> None:
+    """Park a forget for a later replay. RAISES if it cannot be made durable: the caller then fails the erase closed."""
+    with _pending_locked():
+        _pending_write(_pending_read() + [member])
+
+
+def _pending_done(members: set) -> None:
+    """Drop the members a replay confirmed; re-read under the lock so a forget parked WHILE the replay ran is kept."""
+    with _pending_locked():
+        _pending_write([m for m in _pending_read() if m not in members])
 
 
 def _replay_pending(kernel: _Kernel) -> bool:
     """Forgets that could not reach the kernel while the flag was off are re-sent (whole member: the safe over-forget) before the
     first job after a restart. True once nothing is pending."""
-    left = []
     kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
-    for member in _pending_read():
+    try:
+        with _pending_locked():
+            todo = _pending_read()
+    except OSError:
+        return False                  # unreadable: kept as it is, tried again before the next job
+    done = set()
+    for member in todo:
         try:
             _kernel_forget(kernel, member, None, None)
+            done.add(member)
         except Exception:  # noqa: BLE001
-            left.append(member)
-    _pending_write(left)
-    return not left
+            pass
+    try:
+        if done:
+            _pending_done(done)
+        with _pending_locked():
+            return not _pending_read()
+    except OSError:
+        return False
+
+
+#: the kernel's own refusal when it has never known the subject (``capability.may_forget``). The shadow daemon never forgets a member
+#: it was started with (it keeps every id it ever had: ``shadow_daemon.py``), so this refusal means nothing was ever recorded for them.
+NEVER_KNOWN = "only a person can ask to forget"
 
 
 def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optional[str]) -> int:
-    if member not in roster():
-        return 0                      # never proposed for them: nothing recorded, nothing to forget
+    """Forget by the member's id, ALWAYS: the current roster says who may be PROPOSED now, not who has records (a member taken off
+    ``people.json`` may still have events from before). Only the kernel's own "never knew them" is read as nothing to forget."""
     scoped: dict = {"entity": entity} if entity is not None else ({"topic": topic} if topic is not None else {})
     try:
         out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
-    except KernelRefused:
+    except KernelRefused as exc:
+        if NEVER_KNOWN in (exc.reason or "").lower():
+            return 0
         if not scoped:
             raise
         out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # unmatchable scope: over-forget, the safe error
@@ -640,9 +753,10 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
             logger.error("OS_SHADOW forget NOT confirmed code=%s", type(exc).__name__)
             raise ShadowForgetUnavailable(type(exc).__name__) from exc
         try:                          # flag off: do not block the erase, but never lose it - replayed before the next shadow job
-            _pending_write(_pending_read() + [user_id])
-        except OSError:
-            pass
+            _pending_add(user_id)
+        except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
+            logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
+            raise ShadowForgetUnavailable(f"not parked ({type(park_exc).__name__})") from park_exc
         logger.warning("OS_SHADOW forget deferred (flag off) code=%s", type(exc).__name__)
         return 0
 
@@ -688,7 +802,8 @@ def main(argv: Optional[list] = None) -> int:
 
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
-    global _roster_cache, _worker
+    global _roster_cache, _worker, _down_logged
+    _down_logged = False
     if _worker is not None and _worker.is_alive():
         _q.put(("stop",))
         _worker.join(timeout=5)

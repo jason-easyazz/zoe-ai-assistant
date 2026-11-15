@@ -67,12 +67,14 @@ async def _require_list_item_mutation_access(
     user: dict,
     action: str,
     panel: bool = False,
-) -> None:
+) -> dict:
+    """Authorise an item write on the list, or raise 403/404. Returns the list row it authorised against (id, owner, visibility,
+    name): the caller's list NAME without another query (the Zoe OS shadow mirrors a custom list by it)."""
     user_id = user["user_id"]
     viewer = _viewer_id(user)
     cursor = await db.execute(
         """
-        SELECT id, user_id, visibility FROM lists
+        SELECT id, user_id, visibility, name FROM lists
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
@@ -83,23 +85,10 @@ async def _require_list_item_mutation_access(
         raise HTTPException(status_code=404, detail="List not found")
     list_data = dict(row)
     if viewer is not None and list_data.get("user_id") == user_id:
-        return
+        return list_data
     if list_data.get("visibility") == "family" and (role_from_user(user) != "guest" or panel):
-        return
+        return list_data
     raise HTTPException(status_code=403, detail=f"Not authorised to {action} items in this list")
-
-
-async def _shadow_list_name(db, list_id: str):
-    """The list's NAME for the Zoe OS shadow (os_shadow.py), so a custom list is mirrored by its name, not its type. Read only while
-    the shadow is on (with it off: no query, None); any failure is None (the shadow then names the type). Never raises."""
-    if not os_shadow.wants("list_add"):
-        return None
-    try:
-        cursor = await db.execute("SELECT name FROM lists WHERE id = ?", (list_id,))
-        row = await cursor.fetchone()
-        return (str(dict(row).get("name") or "").strip() or None) if row else None
-    except Exception:  # noqa: BLE001 - shadow must never break the add
-        return None
 
 
 def _can_manage_list(list_data: dict, user: dict) -> bool:
@@ -372,7 +361,7 @@ async def add_item(
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_item_mutation_access(db, list_id, list_type, user, "add", panel)
+    target = await _require_list_item_mutation_access(db, list_id, list_type, user, "add", panel)
 
     record = await create_item_record(
         db,
@@ -399,7 +388,7 @@ async def add_item(
     result = _row_to_dict(row)
 
     _audit_item("add", actor, list_id, item_id)
-    os_shadow.note_add(user_id, source="rest", list_type=list_type, list_name=await _shadow_list_name(db, list_id), item=result.get("text"))
+    os_shadow.note_add(user_id, source="rest", list_type=list_type, list_name=(target or {}).get("name"), item=result.get("text"))
     await broadcaster.broadcast(
         "lists",
         "list_updated",
