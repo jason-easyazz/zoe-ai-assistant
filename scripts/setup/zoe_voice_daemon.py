@@ -3994,7 +3994,8 @@ except Exception:  # noqa: BLE001  # not deployed: the shadow decision is simply
     _reflex = None
 # ONE switch, read at import: REFLEX_MODE = off (default; anything else is off) | shadow | on. With ``off`` NOTHING reflex-
 # related runs on a turn: no decide(), no pre-roll RMS, and ``skip=-`` on the line (pinned by
-# tests/unit/test_voice_daemon_shadow_reflex.py). ``shadow`` makes the decision and logs it; ``on`` may also play (below).
+# tests/unit/test_voice_daemon_shadow_reflex.py). ``shadow`` makes the decision and logs it; ``on`` is BLOCKED (below:
+# ``_REFLEX_ON_ALLOWED``) and runs exactly as ``shadow`` until an at-close crisis / medical / refusal gate exists.
 REFLEX_MODE = (os.environ.get("REFLEX_MODE") or "off").strip().lower()
 if REFLEX_MODE not in ("off", "shadow", "on"):
     REFLEX_MODE = "off"
@@ -4417,12 +4418,29 @@ def _shadow_reflex_skip(fs: "_FirstSound") -> str:
 
 # ── Panel reflex wiring (REFLEX_MODE = off | shadow | on, default OFF; docs/knowledge/voice-reflex.md) ─────────────────────
 # The ONE switch REFLEX_MODE is read above:  off (default) = nothing runs (``skip=-``);  shadow = the real decision is made on
-# every eligible turn, with the real bank, and LOGGED (``REFLEX_DECISION``), no sound;  on = it may play one take.
+# every eligible turn, with the real bank, and LOGGED (``REFLEX_DECISION``), no sound;  on = it may play one take - but ONLY
+# when ``_REFLEX_ON_ALLOWED`` is True, and it is False: see below.
 # The env ``REFLEX_ENABLED`` the module reads is IGNORED here (modes force it per call), so there is no second switch.
 # Nothing here runs on the audio path or before the POST: the decision and the player live on ONE short thread per turn. The
 # reply is never delayed: when its first audio arrives (``_reflex_note_reply`` in the first-chunk branch), a pending reflex is
 # dropped (skip ``reply_first``) and a playing one is CUT (terminate), never waited for. The reflex player is NOT registered
 # (``_register_tts_process``): a registered player would start the barge monitor's grace before the reply's onset.
+# ``on`` IS BLOCKED. The contract: the reflex must not be able to play before a crisis / medical / refusal reply, and nothing
+# at the close can know the turn is one (the panel has no transcript until the server's first frame, ~0.4 s after the POST,
+# later than the reflex would play). Until a gate that CAN know exists, ``REFLEX_MODE=on`` runs as ``shadow`` (decides, logs
+# ``mode=shadow``, plays nothing) and says so once at start. Flipping this constant is a reviewed code change, not a setting:
+# it is pinned False by tests/unit/test_voice_daemon_reflex_wiring.py, and docs/knowledge/voice-reflex.md says "on" is not
+# allowed. The tests that exercise the (gated) player set it True on their own module copy only.
+_REFLEX_ON_ALLOWED = False
+
+
+def _reflex_effective_mode(mode: str) -> str:
+    """The mode a turn really runs in: ``on`` without ``_REFLEX_ON_ALLOWED`` is ``shadow`` (never a sound)."""
+    if mode == "on" and not _REFLEX_ON_ALLOWED:
+        return "shadow"
+    return mode if mode in ("off", "shadow", "on") else "off"
+
+
 _REFLEX_TALK_MIN_OBS_MS = 160    # the post-close mic must have covered this long before "nobody is talking" can be stated
 _REFLEX_TALK_STALE_MS = 300      # ... and its newest chunk must be this fresh
 _REFLEX_POLL_S = 0.02
@@ -4455,6 +4473,9 @@ def _reflex_init() -> None:
     if REFLEX_MODE == "off":
         return
     log.info("REFLEX_MODE=%s", REFLEX_MODE)
+    if _reflex_effective_mode(REFLEX_MODE) != REFLEX_MODE:
+        log.warning("REFLEX_MODE=on is BLOCKED: no at-close crisis/medical/refusal gate exists; running as shadow, nothing "
+                    "plays (docs/knowledge/voice-reflex.md)")
     if _reflex is None or PANEL_PLATFORM == "mac":
         log.warning("REFLEX_MODE=%s but %s: the reflex stays silent", REFLEX_MODE,
                     "zoe_voice_reflex.py is not deployed" if _reflex is None else "this is not a Pi panel")
@@ -4549,7 +4570,7 @@ class _ReflexTurn:
                                state, s=s)
             self.skip, self.take = d.skip, d.take
             self._log(decided_ms, obs, d.kind)
-            if d.kind == "heard" and self.mode == "on":
+            if d.kind == "heard" and self.mode == "on" and _REFLEX_ON_ALLOWED:   # on is BLOCKED: see _REFLEX_ON_ALLOWED
                 self._play(d)
         except Exception as exc:  # noqa: BLE001  # a reflex failure never touches the turn
             self._decided = True
@@ -4624,7 +4645,7 @@ def _reflex_begin(fs: "_FirstSound") -> None:
         if (REFLEX_MODE == "off" or _reflex is None or PANEL_PLATFORM == "mac" or fs._speculative
                 or fs._close is None):
             return
-        ctl = _ReflexTurn(fs, REFLEX_MODE, _REFLEX_BANK)
+        ctl = _ReflexTurn(fs, _reflex_effective_mode(REFLEX_MODE), _REFLEX_BANK)
         fs.reflex = ctl
         _REFLEX_CUR = ctl
         ctl.start()
