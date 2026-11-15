@@ -2,21 +2,22 @@
 
 A first reply that re-prefilled its whole prompt costs ~5 s instead of ~1.2 s and has regressed three times; a log line
 nobody reads is not a guard. ``zoe_flue_client._panel_kv_alarm`` (household panel turns only, never probe/harness traffic)
-calls ``note_first_miss`` and the owner gets ONE Telegram message a day through the ops sender the crash-loop watcher and
-the backup drill use (``scripts/maintenance/zoe_crash_loop_watch._telegram``: separate token path, survives zoe-data).
+calls ``note_first_miss`` and the owner gets ONE Telegram message a day through the shared owner-alert helper
+(``scripts/maintenance/zoe_crash_loop_watch.deliver``: separate token path, survives zoe-data, bounded retries, and a
+durable outbox that re-sends an undelivered alert later instead of losing it).
 The message carries the day's miss count so far and yesterday's. State: ``~/.zoe/kv-miss-alert.json`` (counts only).
 ``ZOE_PANEL_KV_MISS_ALERT=0`` turns it off. Never raises, never blocks a turn (all work, state I/O included, runs on a
-daemon thread). The day is marked alerted only after a successful send; a failed send is retried on later misses, at most
-``MAX_ATTEMPTS_PER_DAY`` a day.
+daemon thread). The day is marked alerted once the alert was delivered or is held in the outbox; only an alert that could not
+even be stored is retried on later misses, at most ``MAX_ATTEMPTS_PER_DAY`` a day.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import importlib.util
 import json
 import logging
 import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _lock = threading.Lock()
-_last_failure = ""   # why the last send failed (a closed category of the ops sender's stderr line: never free text, see _redact)
+_last_failure = ""   # why the last send failed: a transport class from the ops helper's closed vocabulary, never free text
 _alerted_day = ""   # in-process record: the 1/day limit holds even when the state file cannot be written
 
 
@@ -54,34 +55,82 @@ def _yesterday(now: "float | None" = None) -> str:
     return (datetime.date(t.tm_year, t.tm_mon, t.tm_mday) - datetime.timedelta(days=1)).isoformat()
 
 
-def _redact(line: str) -> str:
-    """The sender's stderr line as a CLOSED category, never free text: the line can carry a recipient, a chat id or a URL
-    with the bot token, so only a fixed vocabulary (and an HTTP status number) is ever logged."""
-    low = (line or "").lower()
-    m = re.search(r"http error (\d{3})", low)
-    if m:
-        return f"http_{m.group(1)}"
-    for needle, label in (("no alert recipient", "no_recipient"), ("cannot read telegram env", "no_env"),
-                          ("timed out", "timeout"), ("urlopen error", "network"), ("telegram send failed", "send_failed")):
-        if needle in low:
-            return label
-    return "other"
+_ops_mod = None   # the ops sender module, loaded once per process (tests inject one pointed at temp paths)
+ALERT_CODE = "kv_miss_first"
+
+
+def _ops_module():
+    """``scripts/maintenance/zoe_crash_loop_watch.py``: the shared owner-alert helper (``deliver``: retries, a durable
+    outbox, a marker per outcome) on the ops Telegram path (separate token file, survives zoe-data)."""
+    global _ops_mod
+    if _ops_mod is None:
+        spec = importlib.util.spec_from_file_location(
+            "_zoe_clw", _REPO_ROOT / "scripts" / "maintenance" / "zoe_crash_loop_watch.py")
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+        _ops_mod = mod
+    return _ops_mod
+
+
+def _marker_log(line: str) -> None:
+    quiet = any(f"event={e} " in line for e in ("raised", "delivered", "uncertain", "healed"))
+    (logger.info if quiet else logger.warning)("%s", line)
 
 
 def _ops_send(text: str) -> bool:
-    """The repo's ops Telegram path. Under pytest it never reaches the network."""
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
-    spec = importlib.util.spec_from_file_location(
-        "_zoe_clw", _REPO_ROOT / "scripts" / "maintenance" / "zoe_crash_loop_watch.py")
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    lines: "list[str]" = []   # the sender reports a failure (no token / no recipient / HTTP error) through this, not the process-wide stderr
-    ok = bool(mod._telegram(text, report=lines.append))
+    """Hand the alert to the shared helper. True once it was delivered OR is held in the durable outbox (which retries
+    it); False only when it could not even be stored and the direct send failed. Under pytest it never reaches the
+    network or ``~/.zoe`` unless a test injected the ops module."""
     global _last_failure
-    _last_failure = "" if ok else _redact((("\n".join(lines)).strip().splitlines() or ["no reason given"])[-1])
-    return ok
+    if os.environ.get("PYTEST_CURRENT_TEST") and _ops_mod is None:
+        return False
+    outcome, reason = _ops_module().deliver(ALERT_CODE, text, log=_marker_log)
+    _last_failure = "" if outcome == "delivered" else str(reason)
+    if reason in ("auth", "config"):
+        _notice_owner_now()
+    if outcome in ("queued", "gave_up"):
+        logger.warning("kv_miss_alert: alert not delivered now, held in the outbox for retry: %s", _last_failure)
+    return outcome in ("delivered", "uncertain", "queued")
+
+
+def alerting_spells() -> list:
+    """The ops helper's recent broken spells [{since, reason, healed}], [] when none or unreadable. Read-only; under
+    pytest only when a test injected the ops module."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and _ops_mod is None:
+        return []
+    try:
+        return list(_ops_module().alerting_spells())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+_loop = None   # zoe-data's event loop, captured by note_first_miss (called on it): the owner notice is created there
+
+
+def _notice_owner_now() -> None:
+    """zoe-data itself just saw alerting break: create the owner's panel notification NOW on its event loop, rather
+    than waiting for the 5-minute tick. Never raises; nothing when there is no loop (tests, sync mode)."""
+    loop = _loop
+    if loop is None or loop.is_closed():
+        return
+    try:
+        import notifications_store
+
+        asyncio.run_coroutine_threadsafe(notifications_store.sync_alerting_broken(), loop)
+    except Exception:  # noqa: BLE001
+        logger.debug("kv_miss_alert: owner notice not scheduled", exc_info=True)
+
+
+def alerting_broken() -> "dict | None":
+    """The ops helper's open "owner alerting is broken" record (credential refused / no setting), else None. Read-only;
+    under pytest only when a test injected the ops module."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and _ops_mod is None:
+        return None
+    try:
+        return _ops_module().alerting_broken()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 MAX_ATTEMPTS_PER_DAY = 3   # a failed send (Telegram down) is retried on later misses that day, never more than this
@@ -92,9 +141,14 @@ def note_first_miss(first_prompt: int, first_cache: int, *, now: "float | None" 
     """Count one cold first turn and send the day's single alert. ALL work (state file I/O included) runs on a daemon
     thread, so the voice turn that hit the miss never waits on storage; ``sync=True`` (tests) runs it inline and returns
     the text sent, or None."""
+    global _loop
     try:
         if not _enabled():
             return None
+        try:
+            _loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
         if sync:
             return _record_and_send(first_prompt, first_cache, now, send)
         threading.Thread(target=_record_and_send, args=(first_prompt, first_cache, now, send),
