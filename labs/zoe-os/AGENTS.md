@@ -61,7 +61,10 @@ Owner direction 2026-11-15; phases, proofs and decisions are in `docs/architectu
   compared; it controls nothing), the pass mark for that action, authority behind its own default-off flag with the old path as
   the fallback, then the duplicate rule code is removed.
 - A kernel fault (down, slow, unsure) never fails or stalls a turn: the old path runs and the fallback is counted. A real
-  refusal by the kernel (no permission, forgotten) is honoured.
+  refusal by the kernel is honoured and is FINAL: "no permission" and every forget-class refusal (the text or name was
+  forgotten, or the request derives from something forgotten) are never treated as "kernel unavailable" and never fall back,
+  because the old path would write the forgotten thing straight back. Every client of the kernel has a test that plants
+  exactly that case.
 - Forget and member delete reach the kernel before the kernel holds anything of a person.
 - Flags, units and restarts are the owner's and the landing session's.
 
