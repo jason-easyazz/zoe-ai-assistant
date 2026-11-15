@@ -76,7 +76,7 @@ class BridgeServer:
                     ms = (time.perf_counter_ns() - t0) / 1e6
                     outer.log.append({"turn": outer.turn.cause, "tool": body.get("tool"),
                                       "arguments": body.get("arguments"), "status": out.status,
-                                      "receipt": out.receipt, "say": out.say, "hop_ms": round(ms, 3)})
+                                      "receipt": out.receipt, "say": out.say, "reason": out.reason, "shape": out.shape, "hop_ms": round(ms, 3)})
                 self._send(200, {"status": out.status, "say": out.say, "receipt": out.receipt})
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), H)

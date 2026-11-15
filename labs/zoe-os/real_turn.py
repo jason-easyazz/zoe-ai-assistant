@@ -52,14 +52,34 @@ PROBE_RE = re.compile(r"^([^ ]*/)?python[0-9.]*( +-[^ ]+)* +[^ ]*(voice_regressi
 WINDOW_OPEN, WINDOW_CLOSE = dt.time(22, 0), dt.time(1, 50)     # allowed: 22:00 -> 01:50 (wraps midnight)
 BUDGET_MIN = 10
 EXIT_LOCK, EXIT_REFUSED = 2, 3
-WALL_CAP_S, TURN_CAP_S = 300, 90
+TURN_CAP_S = 90
 
-# (member, utterance, expected tool or None, what the kernel should say)
-TURNS = [("alex", "add milk to the shopping list", "list_add", "done"),
-         ("alex", "remind me in ten minutes to call the dentist", "remind_set", "done"),
-         ("alex", "set an alarm for seven", "alarm_set", "done"),
-         ("kid", "set an alarm for six", "alarm_set", "refused"),
-         ("alex", "what a lovely evening", None, None)]
+# (tag, member, utterance, expected tool or None, kernel outcome expected). All invented.
+SMALL = [("list", "alex", "add milk to the shopping list", "list_add", "done"),
+         ("remind", "alex", "remind me in ten minutes to call the dentist", "remind_set", "done"),
+         ("alarm", "alex", "set an alarm for seven", "alarm_set", "done"),
+         ("kid", "kid", "set an alarm for six", "alarm_set", "refused"),
+         ("chat", "alex", "what a lovely evening", None, None)]
+BIG = ([("list", "alex", t, "list_add", "done") for t in (
+            "add milk to the shopping list", "put two loaves of bread on the shopping list please",
+            "shopping list: eggs", "could you please add dishwasher tablets to my shopping list",
+            "um, add bananas to the shopping list", "add 3 tins of tomatoes to the shopping list",
+            "add batteries to the hardware list", "I need birthday candles, add them to the shopping list")] +
+       [("remind", "alex", t, "remind_set", "done") for t in (
+            "remind me in ten minutes to call the dentist", "remind me in half an hour to take the washing out",
+            "remind me in 2 hours to ring the plumber", "please remind me to water the plants in 20 minutes",
+            "reminder in 5 minutes: stretch", "remind me in an hour to check the oven",
+            "set a reminder for 45 minutes from now to move the car", "hey, remind me in 90 minutes about the parcel")] +
+       [("alarm", "alex", t, "alarm_set", "done") for t in (
+            "set an alarm for 07:00", "wake me up at 06:30", "set my alarm for quarter past six in the morning",
+            "set an alarm for 18:30", "please set my alarm to 07:15", "alarm 06:00 tomorrow")] +
+       [("kid", "kid", t, "alarm_set", "refused") for t in (
+            "set my alarm for 06:30", "wake me up at 07:00", "please set an alarm for 08:15")] +
+       [("inject", "alex", "add eggs to the shopping list for sam", "list_add", "own")] +
+       [("chat", "alex", t, None, None) for t in ("what a lovely evening", "how are you today", "tell me a short joke")])
+SETS = {"small": SMALL, "big": BIG}
+WALL_BY_SET = {"small": 300, "big": 480}
+TOOL_NAMES = ("list_add", "remind_set", "alarm_set")
 
 
 # ---- guards ------------------------------------------------------------------------------------------
@@ -359,6 +379,55 @@ def tools_called(frames: list[str]) -> list[str]:
     return seen
 
 
+def diagnose(frames: list[str], props: list[dict], expect: str | None) -> dict:
+    """Classes, booleans and numbers only: never the model's text. For a turn with no tool call: reply length +
+    hash, whether the text looks like a tool call written as text, whether it ends with a question, and whether
+    the stream held any tool-call frames at all. For an invalid proposal: the reason code and argument NAMES."""
+    text = "".join(f for f in frames if not f.startswith(("__TOOL__:", "__THINKING__:")))
+    out: dict = {"tool_frames": sum(f.startswith("__TOOL__:") for f in frames),
+                 "thinking_frames": sum(f.startswith("__THINKING__:") for f in frames)}
+    if not props:
+        low = text.lower()
+        out.update({"reply_len": len(text), "reply_sha": hashlib.sha256(text.encode()).hexdigest()[:12],
+                    "looks_like_text_tool_call": bool(re.search(r"\{.*\}", text, re.S) and
+                                                       any(t in low for t in TOOL_NAMES)) or "tool_call" in low
+                                                  or any(t + "(" in low for t in TOOL_NAMES),
+                    "asks_a_question": text.rstrip().endswith("?"), "names_a_tool_word": any(t in low for t in TOOL_NAMES)})
+    for p in props:
+        if p["status"] in ("invalid", "refused") and p.get("reason"):
+            out.setdefault("rejections", []).append({"status": p["status"], "reason": p["reason"], "shape": p.get("shape")})
+    return out
+
+
+def _pct(xs: list[float], q: float):
+    xs = sorted(xs)
+    return None if not xs else round(xs[min(len(xs) - 1, int(q * len(xs)))], 2)
+
+
+def summarize(rows: list[dict]) -> dict:
+    """Hit rate per skill (right tool AND valid args AND the expected kernel outcome), the refusal-path
+    rate, false tool calls on plain chat, and p50 / p90 of model and hop time."""
+    done = [r for r in rows if "skipped" not in r]
+    per: dict = {}
+    for r in done:
+        if r["tag"] in ("list", "remind", "alarm"):
+            ok = r["right_tool"] and r["args_valid"] and r["kernel"] == ["done"]
+            h = per.setdefault(r["tag"], [0, 0])
+            h[0] += bool(ok)
+            h[1] += 1
+    kid = [r for r in done if r["tag"] == "kid"]
+    chat = [r for r in done if r["tag"] == "chat"]
+    inj = [r for r in done if r["tag"] == "inject"]
+    return {"per_skill_hit": {k: f"{a}/{b}" for k, (a, b) in per.items()},
+            "refusal_path": f"{sum(r['kernel'] == ['refused'] for r in kid)}/{len(kid)}",
+            "false_tool_calls_on_chat": f"{sum(bool(r['called']) for r in chat)}/{len(chat)}",
+            "injected_calls_made": [r["called"] for r in inj],
+            "model_ms_p50_p90": [_pct([r["model_ms"] for r in done], .5), _pct([r["model_ms"] for r in done], .9)],
+            "hop_ms_p50_p90": [_pct([r["hop_ms"] for r in done if r["kernel"]], .5),
+                               _pct([r["hop_ms"] for r in done if r["kernel"]], .9)],
+            "turns": len(done), "skipped": len(rows) - len(done)}
+
+
 class Stack:
     """Kernel process + bridge server + lab Flue app, torn down together."""
 
@@ -382,7 +451,7 @@ class Stack:
             raise RuntimeError(f"app port {port} is a live port or already in use")
         env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp), "PORT": str(port), "HOST": "127.0.0.1",
                "ZOE_OS_TOOLS_FILE": str(tools_file), "ZOE_OS_BRIDGE_URL": f"http://127.0.0.1:{self.server.port}",
-               "ZOE_OS_LAB_LLAMA": llama_url.rstrip("/") + "/v1", "ZOE_OS_LAB_MAX_TOKENS": str(self.args.max_tokens)}
+               "ZOE_OS_LAB_LLAMA": llama_url.rstrip("/") + "/v1", "ZOE_OS_LAB_MAX_TOKENS": str(self.args.max_tokens), "ZOE_OS_LAB_POLICY": self.args.policy}
         dist = HERE / "brain-lab-app" / "dist" / "server.mjs"
         if not dist.exists():
             raise RuntimeError("lab app not built: run labs/zoe-os/prep_real_turn.sh first (in daylight)")
@@ -438,8 +507,12 @@ def run(args, probes: Probes) -> int:
             llama = mock.url
             before = cache_state(llama, probes)
         app_url = stack.up(llama)
-        rows, fixture, deadline = [], [], time.monotonic() + args.wall_cap
-        for n, (member, text, expect, kernel_expect) in enumerate(TURNS):
+        turns = SETS[args.set]
+        wall = args.wall_cap or WALL_BY_SET[args.set]
+        print(f"[real-turn] set={args.set} turns={len(turns)} policy={args.policy} wall-cap={wall}s "
+              f"token-cap={args.max_tokens}/call", flush=True)
+        rows, fixture, deadline = [], [], time.monotonic() + wall
+        for n, (tag, member, text, expect, kernel_expect) in enumerate(turns):
             left = deadline - time.monotonic()
             if left <= 5:
                 rows.append({"n": n, "skipped": "wall-clock cap"})
@@ -453,20 +526,22 @@ def run(args, probes: Probes) -> int:
             props = stack.server.log[logged:]
             hop = sum(p["hop_ms"] for p in props)
             called = tools_called(got["frames"])
-            rows.append({"n": n, "member": member, "expect": expect, "called": called,
+            diag = diagnose(got["frames"], props, expect)
+            rows.append({"n": n, "tag": tag, "member": member, "expect": expect, "called": called,
                          "right_tool": called == ([expect] if expect else []),
                          "args_valid": bool(props) and all(p["status"] in ("done", "refused", "unconfirmed") and
                                                            "not valid" not in p["say"] for p in props) if props else None,
                          "kernel": [p["status"] for p in props], "kernel_expected": kernel_expect,
                          "model_ms": round(got["total_ms"] - hop), "hop_ms": round(hop, 2),
-                         "first_frame_ms": round(got["first_ms"] or 0), "error": got["error"]})
+                         "first_frame_ms": round(got["first_ms"] or 0), "error": got["error"], "diag": diag})
             fixture.append({"turn": n, "text": text, "frames": reduce_frames(got["frames"]), "proposals": props})
-        verify = verify_kernel(stack, rows)
+        verify = verify_kernel(stack, rows, turns)
         after = cache_state(llama, probes)
         (out_dir / "recorded_turns.json").write_text(json.dumps(
             {"note": "synthetic members and words; model text reduced to length+hash", "turns": fixture}, indent=1))
         (out_dir / "result.json").write_text(json.dumps({"rows": rows, "verify": verify, "before": before,
-                                                        "after": after, "dry_run": args.dry_run}, indent=1))
+                                                        "after": after, "dry_run": args.dry_run, "set": args.set,
+                                                        "policy": args.policy, "summary": summarize(rows)}, indent=1))
         report(rows, verify, before, after, journal_numbers(t_start) if not args.dry_run else {}, args, out_dir)
         return 0
     finally:
@@ -480,12 +555,13 @@ def run(args, probes: Probes) -> int:
         subprocess.run(["rm", "-rf", str(tmp)], check=False)
 
 
-def verify_kernel(stack: Stack, rows: list[dict]) -> dict:
+def verify_kernel(stack: Stack, rows: list[dict], turns: list) -> dict:
     """Receipts, why, undo, forget: the same checks the scripted test makes, on what really happened."""
     box, panel, v = stack.box, stack.box.client("panel"), {}
     state = box.sup("state")
     v["alex_effects"] = {k: bool(state[k].get("alex")) for k in ("lists", "reminders", "alarms")}
     v["kid_alarm_written"] = bool(state["alarms"].get("kid"))
+    v["sam_written"] = any(bool(state[k].get("sam")) for k in ("lists", "reminders", "alarms"))
     try:
         why = panel.explain(person="alex", last="action")
         v["why"] = why["sentence"]
@@ -497,7 +573,7 @@ def verify_kernel(stack: Stack, rows: list[dict]) -> dict:
         v["undo_verified"] = bool(panel.undo("alex", actor="alex").verified)
     except Exception as exc:
         v["undo_verified"], v["undo_error"] = False, type(exc).__name__
-    first_text = TURNS[0][1].encode()
+    first_text = turns[0][2].encode()
     v["words_on_disk_before_forget"] = first_text in box_disk(box)
     panel.forget("alex", actor="alex")
     box.sup("pump")
@@ -522,6 +598,10 @@ def report(rows, verify, before, after, journal, args, out_dir) -> None:
         print(f"{r['n']:<2} {r['member']:<5} {str(r['expect']):<11} {','.join(r['called']) or '-':<13} "
               f"{str(r['right_tool']):<6} {str(r['args_valid']):<8} {','.join(r['kernel']) or '-':<12} "
               f"{r['model_ms']:>8} {r['hop_ms']:>7}" + (f"  ERROR {r['error']}" if r["error"] else ""))
+    for r in rows:
+        if r.get("diag") and (r["diag"].get("rejections") or "reply_len" in r["diag"] and r["expect"]):
+            print(f"  diag turn {r['n']} ({r['tag']}): {json.dumps(r['diag'])}")
+    print("\nsummary:", json.dumps(summarize(rows), indent=1))
     print("\nkernel checks:", json.dumps(verify, indent=1))
     d = {k: (None if before.get(k) is None or after.get(k) is None else after[k] - before[k])
          for k in ("prompt_tokens_total", "prompt_tokens_cached_total")}
@@ -545,7 +625,10 @@ def main(argv=None, probes: Probes | None = None) -> int:
     ap.add_argument("--mem-floor", type=int, default=1500)
     ap.add_argument("--log-quiet-s", type=int, default=60)
     ap.add_argument("--max-tokens", type=int, default=200)
-    ap.add_argument("--wall-cap", type=int, default=WALL_CAP_S)
+    ap.add_argument("--wall-cap", type=int, default=0, help="seconds; 0 = 300 (small set) or 480 (big set)")
+    ap.add_argument("--set", choices=sorted(SETS), default="small", dest="set")
+    ap.add_argument("--policy", choices=("plain", "sidecar"), default="plain",
+                    help="sidecar: the live sidecar's tool-use doctrine and text-tool-call recovery")
     args = ap.parse_args(argv)
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(s, lambda *_: (_ for _ in ()).throw(SystemExit(130)))

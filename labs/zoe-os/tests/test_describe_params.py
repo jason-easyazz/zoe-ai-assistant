@@ -68,3 +68,13 @@ def test_the_catalog_is_data_only(k):
     (entry,) = k.actions.catalog(["thing.do"])
     assert entry == {"action": "thing.do", "doc": "Do a thing", "params": PARAMS,
                      "needs_accept": False, "reversible": False}
+
+
+def test_pattern_minimum_and_maximum_refuse_what_the_type_alone_would_let_through():
+    p = {"time": {"type": "string", "required": True, "max": 5, "pattern": r"([01]\d|2[0-3]):[0-5]\d"},
+         "n": {"type": "integer", "required": True, "minimum": 1, "maximum": 10}}
+    ok = {"time": "07:30", "n": 5}
+    assert receipts.check_params(p, ok) == ""
+    for bad in ({"time": "seven", "n": 5}, {"time": "6:00 AM", "n": 5}, {"time": "25:00", "n": 5},
+                {"time": "07:30", "n": 0}, {"time": "07:30", "n": 11}):
+        assert receipts.check_params(p, bad) == "wrong argument type", bad

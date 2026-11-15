@@ -207,3 +207,61 @@ def test_the_quiet_guard_reads_turn_loggers_only_and_never_a_message():
         assert rt.last_turn_age_s(housekeeping, now) == 5
     finally:
         rt.TURN_LOGGERS = old
+
+
+# ---- the big set, the diagnostics and the summary (no model) -----------------------------------------------------
+def test_the_sets_have_the_stated_shape_and_small_stays_the_default():
+    from collections import Counter
+    assert Counter(t[0] for t in rt.BIG) == {"list": 8, "remind": 8, "alarm": 6, "kid": 3, "inject": 1, "chat": 3}
+    assert len(rt.SMALL) == 5 and rt.WALL_BY_SET == {"small": 300, "big": 480}
+    assert len({t[2] for t in rt.BIG}) == len(rt.BIG)
+    assert all(t[1] == "kid" and t[3] == "alarm_set" and ":" in t[2] for t in rt.BIG if t[0] == "kid"), \
+        "kid phrasings carry a clock time so the arguments are VALID and the grant refusal really runs"
+
+
+def test_diagnose_a_text_tool_call_a_question_and_a_plain_reply():
+    textual = rt.diagnose(['{"name": "list_add", "arguments": {"item": "x"}}'], [], "list_add")
+    assert textual["looks_like_text_tool_call"] and textual["tool_frames"] == 0 and textual["reply_len"] > 0
+    q = rt.diagnose(["Which list did you mean?"], [], "list_add")
+    assert q["asks_a_question"] and not q["looks_like_text_tool_call"] and "Which" not in str(q)
+    plain = rt.diagnose(["Sure thing."], [], "remind_set")
+    assert not plain["asks_a_question"] and not plain["looks_like_text_tool_call"]
+
+
+def test_diagnose_an_invalid_proposal_has_names_and_a_reason_never_values():
+    props = [{"status": "invalid", "reason": "wrong argument type",
+              "shape": {"present": ["time"], "missing": [], "unknown": [], "bad_value": ["time"]}}]
+    d = rt.diagnose(["__TOOL__:{}"], props, "alarm_set")
+    assert d["rejections"] == [{"status": "invalid", "reason": "wrong argument type", "shape": props[0]["shape"]}]
+    assert "6:00" not in str(d)
+
+
+def test_summarize_hit_rates_refusals_false_calls_and_percentiles():
+    def row(tag, called, kernel, ok=True, model=100, hop=1.0):
+        return {"tag": tag, "called": called, "right_tool": ok, "args_valid": bool(kernel), "kernel": kernel,
+                "model_ms": model, "hop_ms": hop}
+    rows = [row("list", ["list_add"], ["done"]), row("list", [], [], ok=False), row("kid", ["alarm_set"], ["refused"]),
+            row("kid", ["alarm_set"], ["invalid"]), row("chat", [], [], model=50), row("chat", ["list_add"], ["done"]),
+            {"n": 9, "skipped": "wall-clock cap"}]
+    s = rt.summarize(rows)
+    assert s["per_skill_hit"] == {"list": "1/2"} and s["refusal_path"] == "1/2"
+    assert s["false_tool_calls_on_chat"] == "1/2" and s["skipped"] == 1 and s["turns"] == 6
+    assert s["model_ms_p50_p90"][0] == 100
+
+
+def test_the_wall_cap_is_stated_in_the_run_output(capsys, tmp_path, monkeypatch):
+    class Stop:
+        def __init__(self, *a):
+            pass
+
+        def up(self, llama):
+            raise RuntimeError("stop after the banner")
+
+        def down(self):
+            pass
+    monkeypatch.setattr(rt, "Stack", Stop)
+    with pytest.raises(RuntimeError):
+        rt.main(["--i-own-the-slot", "--dry-run", "--set", "big", "--lock", str(tmp_path / "l"),
+                 "--out", str(tmp_path / "o")], probes())
+    # the banner prints after Stack.up, which raised first: assert the numbers the banner is built from
+    assert rt.WALL_BY_SET["big"] == 480

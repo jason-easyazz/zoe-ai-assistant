@@ -53,8 +53,9 @@ class Reminders:
             "remind.set", self.add, self.added, needs_accept=False, snapshot=self.snapshot,
             undo=self.put_back, doc="Set a reminder for the person",
             params={"note": {"type": "string", "required": True, "description": "what to remind"},
-                    "in_minutes": {"type": "integer", "required": True,
-                                   "description": "minutes from now"},
+                    "in_minutes": {"type": "integer", "required": True, "minimum": 1, "maximum": 10080,
+                                   "description": "minutes from now as a whole number "
+                                                  "(half an hour is 30, 2 hours is 120)"},
                     "asked": ASKED})
         return self
 
@@ -82,7 +83,8 @@ class Alarms:
             "alarm.set", self.do, self.verify, needs_accept=False, snapshot=self.snapshot,
             undo=self.put_back, doc="Set the person's alarm time",
             params={"time": {"type": "string", "required": True, "max": 5,
-                             "description": "24-hour HH:MM"}, "asked": ASKED})
+                             "pattern": r"([01]\d|2[0-3]):[0-5]\d",
+                             "description": "24-hour HH:MM with two digits each, such as 07:00 or 18:30"}, "asked": ASKED})
         return self
 
     def do(self, person, args):

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -79,6 +80,10 @@ def check_params(params: dict | None, args: object) -> str:
             return "wrong argument type"
         if isinstance(v, str) and not (0 < len(v.strip()) and len(v) <= spec.get("max", MAX_STR)):
             return "wrong argument type"
+        if isinstance(v, str) and "pattern" in spec and not re.fullmatch(spec["pattern"], v):
+            return "wrong argument type"
+        if not isinstance(v, str) and not (spec.get("minimum", v) <= v <= spec.get("maximum", v)):
+            return "wrong argument type"
     return ""
 
 
@@ -96,7 +101,8 @@ class Dispatcher:
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
         ``params`` declares the arguments: ``{name: {"type": "string"|"integer"|"number",
-        "description": text, "required": bool}}``. With it, ``act`` refuses (and records) any
+        "description": text, "required": bool}}`` (optionally ``max`` length and ``pattern`` for a string,
+        ``minimum`` / ``maximum`` for a number). With it, ``act`` refuses (and records) any
         arguments that are not exactly that shape BEFORE the driver runs, and ``catalog``
         can describe the action to a caller. Without it nothing is checked and the action is
         not described (the behaviour every earlier action has)."""

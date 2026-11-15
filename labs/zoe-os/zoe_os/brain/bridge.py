@@ -50,6 +50,16 @@ class Outcome:
     status: str          # done | unconfirmed | refused | invalid | unavailable | unknown
     say: str             # the one sentence the brain gets back
     receipt: int | None = None
+    reason: str = ""             # the kernel's (or the adapter's) fixed reason code, for diagnostics
+    shape: dict | None = None    # argument NAMES present / missing / unknown / wrong-typed: never values
+
+
+def shape(visible: dict, arguments: object) -> dict:
+    """Which arguments a proposal had, by NAME only: present, missing, unknown, and failing their own check."""
+    args = arguments if isinstance(arguments, dict) else {}
+    return {"present": sorted(args), "missing": sorted(n for n, s in visible.items() if s.get("required") and n not in args),
+            "unknown": sorted(set(args) - set(visible)),
+            "bad_value": sorted(n for n, s in visible.items() if n in args and check_params({n: s}, {n: args[n]}))}
 
 
 def tool_name(action: str) -> str:
@@ -97,7 +107,7 @@ class BrainBridge:
                 "name": name, "description": entry["doc"],
                 "parameters": {"type": "object", "additionalProperties": False,
                                "required": sorted(n for n, s in vis.items() if s.get("required")),
-                               "properties": {n: {"type": s["type"], "description": s["description"]}
+                               "properties": {n: {k: s[k] for k in ("type", "description", "pattern", "minimum", "maximum") if k in s}
                                               for n, s in vis.items()}}}})
         return out
 
@@ -114,10 +124,11 @@ class BrainBridge:
         if self.prevalidate:
             bad = check_params(self._visible(entry), arguments)
             if bad:
-                return Outcome("invalid", SAY[bad])
+                return Outcome("invalid", SAY[bad], reason=bad, shape=shape(self._visible(entry), arguments))
         args = dict(arguments) if isinstance(arguments, dict) else {}
         if any(entry["params"].get(k, {}).get("from") == "turn" for k in args):
-            return Outcome("invalid", SAY["unknown argument"])    # the model never supplies what the turn does
+            return Outcome("invalid", SAY["unknown argument"], reason="unknown argument",
+                           shape=shape(self._visible(entry), arguments))    # the model never supplies what the turn does
         for name, spec in entry["params"].items():
             if spec.get("from") == "turn":
                 args[name] = turn.cause
@@ -131,7 +142,7 @@ class BrainBridge:
             r = client.act(entry["action"], turn.member, args, caused_by=[turn.cause])
         except Refused as exc:
             reason = str(exc).split(": ", 2)[-1]        # the kernel's text is "who: attempted: reason"
-            return Outcome("refused", SAY.get(reason, SAY_OTHER))
+            return Outcome("refused", SAY.get(reason, SAY_OTHER), reason=reason)
         except wire.WireError as exc:
             return Outcome("invalid" if exc.code == wire.BAD_REQUEST else "refused", SAY_OTHER)
         except (OSError, ConnectionError):

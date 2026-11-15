@@ -11,21 +11,44 @@ import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-WORDS = {"six": 6, "seven": 7, "ten": 10}
+WORDS = {"five": 5, "six": 6, "seven": 7, "ten": 10}
+
+
+def _minutes(t: str):
+    t = t.lower()
+    if "half an hour" in t:
+        return 30
+    for pat, mult in ((r"(\d+)\s*hours?", 60), (r"(\d+)\s*minutes?", 1)):
+        m = re.search(pat, t)
+        if m:
+            return int(m.group(1)) * mult
+    if "an hour" in t:
+        return 60
+    m = re.search(r"(\w+) minutes?", t)
+    return WORDS.get(m.group(1)) if m else None
 
 
 def call_for(text: str):
-    m = re.match(r"add (.+?) to the (\w+) list$", text.strip(), re.I)
-    if m:
-        return "list_add", {"item": m.group(1)}
-    m = re.match(r"remind me in (\w+) minutes? to (.+)$", text.strip(), re.I)
-    if m:
-        n = WORDS.get(m.group(1).lower()) or int(m.group(1))
-        return "remind_set", {"note": m.group(2), "in_minutes": n}
-    m = re.match(r"set an alarm for (\w+)$", text.strip(), re.I)
-    if m:
-        h = WORDS.get(m.group(1).lower()) or int(m.group(1))
-        return "alarm_set", {"time": f"{h:02d}:00"}
+    t = text.strip()
+    low = t.lower()
+    if "remind" in low or "reminder" in low:
+        n = _minutes(t)
+        m = re.search(r"\bto (.+?)(?: in .*)?$", t) or re.search(r": (.+)$", t) or re.search(r"about (.+)$", t)
+        return ("remind_set", {"note": (m.group(1) if m else "that"), "in_minutes": n}) if n else None
+    if "alarm" in low or "wake me" in low:
+        m = re.search(r"(\d{1,2}):(\d\d)", t)
+        if m:
+            return "alarm_set", {"time": f"{int(m.group(1)):02d}:{m.group(2)}"}
+        if "quarter past six" in low:
+            return "alarm_set", {"time": "06:15"}
+        m = re.search(r"(?:for|at|to) (\w+)$", t)
+        h = WORDS.get(m.group(1).lower()) if m else None
+        return ("alarm_set", {"time": f"{h:02d}:00"}) if h else None
+    m = (re.search(r"(?:add|put) (.+?) (?:to|on) (?:the |my )?(\w+) list", t, re.I)
+         or re.match(r"(\w+) list: (.+)$", t, re.I))
+    if m and ("add " in low or "put " in low or "list:" in low):
+        item = m.group(1) if "list:" not in t else m.group(2)
+        return "list_add", {"item": item}
     return None
 
 

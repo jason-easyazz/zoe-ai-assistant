@@ -13,6 +13,12 @@ import {
   streamSimple as streamSimpleOpenAI,
 } from '@earendil-works/pi-ai/api/openai-completions';
 import type { Model, Provider } from '@earendil-works/pi-ai';
+// ARM B (ZOE_OS_LAB_POLICY=sidecar): the live sidecar's text-tool-call recovery, imported unchanged and read-only
+// from labs/flue-zoe-brain-2x/src/text-tool-calls.ts (it only needs pi-ai). The sidecar applies it in
+// src/providers/capped-completions.ts cappedStream*: a call the model PRINTED as text becomes a real call.
+import { recoverTextToolCalls } from '../../../flue-zoe-brain-2x/src/text-tool-calls.ts';
+
+export const sidecarPolicy = (): boolean => (process.env.ZOE_OS_LAB_POLICY ?? '') === 'sidecar';
 
 export const LAB_PROVIDER_ID = 'zoelab';
 export const LAB_MODEL_SPECIFIER = `${LAB_PROVIDER_ID}/local`;
@@ -38,8 +44,10 @@ export function labModel(): Model<'openai-completions'> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const capped = (fn: any) => (model: any, context: any, options?: any) =>
-  fn(model, context, { ...options, temperature: 0.1, maxTokens: maxTokens() });
+const capped = (fn: any) => (model: any, context: any, options?: any) => {
+  const inner = fn(model, context, { ...options, temperature: 0.1, maxTokens: maxTokens() });
+  return sidecarPolicy() ? recoverTextToolCalls(inner, context.tools) : inner;
+};
 
 export function createLabProvider(): Provider {
   return createProvider({

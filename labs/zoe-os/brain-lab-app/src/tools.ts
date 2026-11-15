@@ -12,10 +12,14 @@ import * as v from 'valibot';
 type Spec = { type: 'string' | 'integer' | 'number' };
 type Fn = { name: string; description: string; parameters: { required: string[]; properties: Record<string, Spec & { description?: string }> } };
 
-function field(spec: Spec) {
-  if (spec.type === 'string') return v.pipe(v.string(), v.trim(), v.minLength(1));
-  if (spec.type === 'integer') return v.pipe(v.number(), v.integer());
-  return v.number();
+// Types only: the kernel (and the adapter's check) own range and format, so a bad value reaches them and
+// is DIAGNOSED rather than bounced by this layer. The description IS sent to the model (valibot metadata ->
+// JSON schema), which is where the kernel's format hint ("24-hour HH:MM") reaches it.
+function field(spec: Spec & { description?: string }) {
+  const d = v.description(spec.description ?? '');
+  if (spec.type === 'string') return v.pipe(v.string(), v.trim(), v.minLength(1), d);
+  if (spec.type === 'integer') return v.pipe(v.number(), v.integer(), d);
+  return v.pipe(v.number(), d);
 }
 
 export function bridgeUrl(): string {

@@ -249,3 +249,19 @@ def test_HONEST_LIMIT_a_brain_running_as_the_kernels_user_can_still_find_the_dat
     file modes) stops that: shown in a root sandbox elsewhere, not here."""
     links = [Path(p).resolve() for p in glob.glob(f"/proc/{box.proc.pid}/fd/*")]
     assert any(str(p).endswith("zoe-os.db") for p in links)
+
+
+def test_an_unformatted_alarm_time_is_refused_not_confirmed(box, bridge):
+    """A real run once recorded a confirmed alarm for the time "seven": the format is now the kernel's rule."""
+    for bad in ("seven", "6:00 AM"):
+        out = bridge.propose(box.say(ALEX, "alarm"), "alarm_set", {"time": bad})
+        assert out.status == "invalid" and out.reason == "wrong argument type"
+        assert out.shape == {"present": ["time"], "missing": [], "unknown": [], "bad_value": ["time"]}
+        assert bad not in str(out)                                  # names, never values
+    assert box.sup("state")["alarms"] == {}
+    assert bridge.propose(box.say(ALEX, "alarm"), "alarm_set", {"time": "07:00"}).status == "done"
+
+
+def test_the_kids_valid_alarm_reaches_the_grant_check_and_is_refused_with_a_reason(box, bridge):
+    out = bridge.propose(box.say(KID, "wake me up at 07:00"), "alarm_set", {"time": "07:00"})
+    assert out.status == "refused" and out.reason == "no grant from that person"

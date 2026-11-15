@@ -177,3 +177,32 @@ hop ms), the kernel checks (receipt, why, undo, forget removes effects and bytes
 the llama journal's re-prefill and eviction counts). The recorded fixture (tool frames verbatim, model text reduced
 to length and hash) is written to `--out` (default `~/.zoe/agent-tools/real-turn-<time>/recorded_turns.json`).
 Differences from the live sidecar, stated: stock pi-ai wire (no text-tool-call recovery, no prompt policy).
+
+### First real run (2026-11-15, owner-approved, five turns) and what it changed [live]
+
+list_add and alarm_set were chosen correctly and confirmed; plain chat made no tool call; the kernel hop was 1.7 ms. Two
+misses, read from the recorded frames: (1) the reminder turn produced NO tool frame and a 63-character text reply (the
+text itself was not kept, so whether it was a question or a printed call is unknown: the diagnostics below classify it next
+time); (2) the kid's alarm turn sent `time="6:00 AM"`, which the adapter's check rejected as `wrong argument type`
+(7 characters against a declared maximum of 5) BEFORE the kernel's grant check, so the refusal path was not exercised.
+The same run exposed a kernel gap: `time="seven"` was accepted and CONFIRMED, because a declared string had no format
+rule. The kernel now supports `pattern`, `minimum` and `maximum` in a declared parameter, the alarm time is
+`HH:MM` (two digits each), reminders are 1..10080 minutes, and the tool descriptions (which a model only sees if the
+app passes them on; the first run's app did not) now carry the format hint.
+
+### The larger run
+
+    bash labs/zoe-os/run_real_turn.sh --i-own-the-slot --owner-approved-daytime --set big --policy plain
+    bash labs/zoe-os/run_real_turn.sh --i-own-the-slot --owner-approved-daytime --set big --policy sidecar
+
+`--set big` is 29 invented turns (8 list adds, 8 reminders in varied relative times, 6 alarms, 3 kid alarms phrased with a
+clock time so the arguments are valid and the grant refusal really runs, 1 "for <other member>" injection, 3 chat
+controls); its wall cap is 8 minutes (printed at the start), the per-call token cap stays 200. `--policy sidecar` gives
+the lab app the live sidecar's tool-use doctrine (condensed from `doctrines.ts` ACTIVATOR_DOCTRINE: "you MUST use a tool
+FIRST", "act proactively, don't ask first") and its text-tool-call recovery (`text-tool-calls.ts`, imported unchanged and
+read-only). Comparing the two arms tells apart "the model cannot do it" from "the lab setup lacks what the live brain has".
+Per turn the output adds classes and numbers only: for a miss, reply length and hash, `looks_like_text_tool_call`,
+`asks_a_question`, and the count of tool frames; for a rejection, the reason code and the argument NAMES present, missing,
+unknown and wrong-typed. The summary prints per-skill hit rate (right tool, valid arguments, kernel done), the refusal-path
+rate, false tool calls on chat, and model and hop p50/p90. An injected "for sam" call can only add to the speaker's own
+list (the tool has no member argument); the check is that nothing is written for sam (`sam_written: false`).
