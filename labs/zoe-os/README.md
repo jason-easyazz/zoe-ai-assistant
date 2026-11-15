@@ -73,6 +73,7 @@ bad outcome.
 | a forgotten event is withdrawn from a live queue | `test_forget.py` | `Subscription._purge_forgotten` a no-op: the queued sentinel is delivered |
 | the forget reaches everything derived | `test_forget.py` | `Spine._closure` returns only the seed: a derived copy survives |
 | forgotten words cannot be re-published by a skill | `test_forget.py`, `test_attack.py` | `Spine._shielded` always no: the words are back on the spine |
+| action arguments and undo state cannot restore shielded words or names (validation pending) | `test_forget_action_arguments.py`, `test_forget_receipts_notices.py` | disabling `Dispatcher._check_arguments` makes the resurrection regression fail; disabling snapshot scrub AND this guard permits restoration |
 | the bytes are gone from disk | `test_forget.py`, `test_attack.py` | positive control: the sentinel is in the files before the forget |
 | no action without the manifest and that person's grant | `test_receipts.py`, `test_attack.py` | `Dispatcher._authorize` always yes: the light is toggled for someone who never agreed |
 | a consequential action needs the person's own unused yes | `test_receipts.py`, `test_skills.py` | (declined, missing, reused and someone else's yes are each refused) |
