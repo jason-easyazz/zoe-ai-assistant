@@ -1124,3 +1124,97 @@ def test_a_failure_after_the_runs_are_found_leaves_the_evidence_for_the_retry(en
     monkeypatch.setattr(mof, "_lists", real)
     _delete(svc)                                       # the retry
     assert "run-a-in-b" not in _ids(store, "chat_ag_ui_runs")
+
+
+# ── the consume commits on its OWN connection before the erase transaction opens; the rows go inside it ─────────────────────────
+
+class _RecordingConn:
+    """An ``AsyncpgCompat``-shaped connection over the test store: ``commit`` is a NO-OP (as on Postgres), ``transaction()`` is the only
+    way to commit a group of writes, and every statement is logged with its connection number and transaction depth (0 = autocommit)."""
+
+    def __init__(self, inner, n, log):
+        self.inner, self.n, self.log, self.depth = inner, n, log, 0
+
+    def execute(self, sql, params=()):
+        self.log.append((self.n, self.depth, " ".join(sql.split())))
+        return self.inner.execute(sql, params)
+
+    def transaction(self):
+        @contextlib.asynccontextmanager
+        async def tx():
+            self.log.append((self.n, self.depth, "BEGIN"))
+            self.depth += 1
+            try:
+                yield
+            finally:
+                self.depth -= 1
+                self.log.append((self.n, self.depth, "END"))
+        return tx()
+
+    async def commit(self):
+        pass
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def test_the_consume_commits_on_its_own_connection_before_the_erase_transaction_opens(env, store, monkeypatch):
+    """On Postgres a statement outside ``transaction()`` autocommits and ``commit`` does nothing. The old code consumed and DELETED the
+    scheduled rows on the erase connection before its transaction opened, so the DELETE committed on its own and a late failure did not
+    roll it back (the Postgres test read fired as NULL: no row). Now: the consume is committed on another connection first, and the
+    DELETE runs inside the erase transaction."""
+    svc, _col = env
+    log, count = [], [0]
+
+    @contextlib.asynccontextmanager
+    async def pool():
+        count[0] += 1
+        yield _RecordingConn(store, count[0], log)
+    monkeypatch.setattr(mof, "_db", pool)
+    _delete(svc)
+    at = {e[2]: i for i, e in reversed(list(enumerate(log)))}            # the FIRST index of each statement
+    consume = at["UPDATE proactive_scheduled SET fired = 1 WHERE user_id = ?"]
+    pending = at["DELETE FROM proactive_pending WHERE user_id = ?"]
+    erase_conn = log[pending][0]
+    begin = max(i for i, e in enumerate(log[:pending]) if e[0] == erase_conn and e[1] == 0 and e[2] == "BEGIN")
+    end = min(i for i, e in enumerate(log) if i > pending and e[0] == erase_conn and e[1] == 0 and e[2] == "END")
+    delete = at["DELETE FROM proactive_scheduled WHERE user_id = ?"]
+    assert log[delete][0] == erase_conn and begin < delete < end, "the scheduled rows are deleted INSIDE the erase transaction"
+    c_conn, c_depth = log[consume][0], log[consume][1]
+    assert c_conn != erase_conn, "the consume runs on its own connection"
+    closed = c_depth == 0 or any(e[0] == c_conn and e[1] == 0 and e[2] == "END" for e in log[consume:begin])
+    assert closed and consume < begin, "the consume is committed before the erase transaction opens"
+
+
+# ── a session another member owns that held only the member's turns ───────────────────────────────────────────────────────────
+
+def test_a_session_another_member_owns_that_held_only_the_members_turns_keeps_its_row_and_loses_every_run(env, store):
+    """'s-b-only-a' is B's, and its one turn was A's (A at B's panel): it is EMPTIED by the erase. Its row stays (B's), but every run in
+    it goes (one nobody can be shown to have started, and one whose run state names B: no turn either answered is left) and its title
+    resets. In B's session 's-b' (B's turn and A's turn) the shared-session rule holds: the unattributable run goes, B's run stays. B's
+    session A never spoke in is untouched. The old code kept every run of the emptied session."""
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-b-only-a', ?, 'what A asked')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('oa-1', 's-b-only-a', 'user', 'A asks', ?)",
+                (_meta(A),))
+        await x("INSERT INTO openclaw_run_state VALUES ('rs-b-x', ?, 'B asks')", (B,))
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-oa-none', 's-b-only-a', 'r-nobody', '[\"a reply to A\"]')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-oa-b', 's-b-only-a', 'rs-b-x', '[\"a reply\"]')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sb-none', 's-b', 'r-nobody-2', '[\"a reply\"]')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sb-b', 's-b', 'rs-b-x', '[\"a reply to B\"]')")
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-b-own', ?, 'B only')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('bo-1', 's-b-own', 'user', 'B alone')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-bo', 's-b-own', 'r-bo', '[\"a reply to B\"]')")
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    assert not _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b-only-a'"), "no run of the emptied session survives"
+    assert not _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-b-only-a'")
+    assert _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-b-only-a'") == [(B, "New Chat")], "the row stays B's"
+    assert {r[0] for r in _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b'")} == {"run-sb-b"}
+    assert {r[0] for r in _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-b'")} == {"m6"}
+    assert _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b-own'") == [("run-bo",)], "untouched"
+    assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-b-own'") == [("B only",)]

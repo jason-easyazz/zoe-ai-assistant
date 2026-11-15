@@ -14,8 +14,9 @@ that would be needed. A shared chat session never keeps the member as its owner,
 member's (``_hand_over``, ``_shared_runs``).
 
 Fail closed like the other erasers: a store that cannot be cleared RAISES (the caller retries the whole delete); a table that is not
-migrated, or a process that never had a database pool, holds nothing. Scheduled sends are consumed BEFORE their rows go (a job whose row
-is gone claims nothing and never fires) and their scheduler jobs cancelled where this process runs the scheduler. Takes no erase gate:
+migrated, or a process that never had a database pool, holds nothing. Scheduled sends are consumed (``fired = 1``) on their own connection,
+COMMITTED before the erase transaction opens (a fire running now sees it at once), their scheduler jobs cancelled where this process
+runs the scheduler, and their rows deleted inside the erase transaction. Takes no erase gate:
 it runs before the memory lock, like ``member_derived_forget``. Logs counts only.
 """
 from __future__ import annotations
@@ -191,13 +192,40 @@ async def _await_inflight_fires(r: _Run, user_id: str) -> None:
         await asyncio.sleep(_POLL_S)
 
 
-async def _scheduled_sends(r: _Run, user_id: str) -> None:
-    """The member's scheduled reminder sends: consumed first (a job that fires finds no claimable row), jobs cancelled where this
-    process runs the scheduler, then the rows deleted."""
-    await _await_inflight_fires(r, user_id)
-    jobs = [str(x[0]) for x in await r.rows("SELECT apscheduler_job_id FROM proactive_scheduled WHERE user_id = ?", (user_id,)) if x[0]]
-    await r.run("UPDATE proactive_scheduled SET fired = 1 WHERE user_id = ?", (user_id,))
-    await r.db.commit()
+@contextlib.asynccontextmanager
+async def _committed(db):
+    """Writes that are COMMITTED, visible to every other connection, when the block exits. Postgres: their own real transaction
+    (``db_pool.AsyncpgCompat.commit`` is a NO-OP, so only leaving ``transaction()`` commits). aiosqlite: ``commit`` (rolled back on
+    failure)."""
+    tx = _tx_of(db)
+    if tx is not None:
+        async with tx():
+            yield
+        return
+    try:
+        yield
+    except BaseException:
+        await db.rollback()
+        raise
+    await db.commit()
+
+
+async def _consume_scheduled_sends(user_id: str) -> int:
+    """The member's scheduled reminder sends are CONSUMED (``fired = 1``: the delivery claim, ``reminders._claim_scheduled_for_fire``,
+    matches only ``fired = 0``) on their OWN connection and COMMITTED before the erase transaction opens, so a fire running now sees it
+    at once; then their scheduler jobs are cancelled where this process runs the scheduler. The rows themselves are deleted INSIDE the
+    erase transaction (``forget_user``). If that transaction fails, the rows stay consumed for a member who still exists: those sends
+    are simply not delivered (startup reconcile re-registers only ``fired = 0`` rows), and the retry finds them consumed (no claim to
+    wait for, the UPDATE matches again harmlessly, an already-removed job is ``CancelResult.ABSENT``) and deletes them. Returns rows
+    changed."""
+    async with _db() as db:
+        r = _Run(db)
+        await _await_inflight_fires(r, user_id)
+        async with _committed(db):
+            r.savepoints = _tx_of(db) is not None           # a never-migrated table must not abort this transaction either
+            jobs = [str(x[0]) for x in await r.rows("SELECT apscheduler_job_id FROM proactive_scheduled WHERE user_id = ?", (user_id,))
+                    if x[0]]
+            await r.run("UPDATE proactive_scheduled SET fired = 1 WHERE user_id = ?", (user_id,))
     # A fire that ALREADY claimed a row is not stopped by fired=1; it is stopped at delivery time: _fire_reminder refuses a send whose
     # member has an erase mark at or after the row (written before this step). Cancel errors are NOT swallowed (fail closed: the
     # delete is retried); only "this process runs no scheduler" is not an error - the jobstore is shared, and the consumed row cannot fire.
@@ -208,14 +236,15 @@ async def _scheduled_sends(r: _Run, user_id: str) -> None:
         except RuntimeError as exc:
             if "not started" not in str(exc):
                 raise
-    await r.run("DELETE FROM proactive_scheduled WHERE user_id = ?", (user_id,))
+    return r.removed
 
 
 async def _transcript(r: _Run, user_id: str) -> None:
     """The member's chat turns (any session, by the per-turn owner rule); then the sessions they own that are now empty (with their
-    AG-UI runs); a session they own that still holds someone else's turns keeps those turns, loses its title (the member's words) and
-    is handed to a remaining participant (``_hand_over``); and in every surviving session they owned or spoke in, the AG-UI runs not
-    shown to be another member's (``_shared_runs``). No surviving chat row names the member."""
+    AG-UI runs); a session ANOTHER member owns that held only the member's turns stays that member's but loses every run and its title;
+    a session they own that still holds someone else's turns keeps those turns, loses its title (the member's words) and is handed to a
+    remaining participant (``_hand_over``); and in every surviving session they owned or spoke in that still holds turns, the AG-UI runs
+    not shown to be another member's (``_shared_runs``). No surviving chat row names the member."""
     # FIRST, while the evidence exists: every AG-UI run the member STARTED, in ANY session (another member's too, even one holding no turn
     # of theirs). ``openclaw_run_state`` is the only link from a run to its starter, and it is deleted later with the OWNED rows.
     started = sorted({str(x[0]) for x in await r.rows("SELECT id FROM openclaw_run_state WHERE user_id = ?", (user_id,)) if x[0]})
@@ -240,12 +269,20 @@ async def _transcript(r: _Run, user_id: str) -> None:
         for x in await r.rows(f"SELECT id, user_id FROM chat_sessions WHERE id IN ({', '.join('?' * len(part))})", tuple(part)):
             sess_owner[str(x[0])] = str(x[1] or "")
     gone = [s for s in empty if sess_owner.get(s, "") in (user_id, *_GUESTS) or s not in sess_owner]
+    # EMPTIED but KEPT: a session ANOTHER member owns whose every turn was the member's (a candidate only through ``touched``, so the erase
+    # removed at least one turn there and none is left). The row stays (it is that member's); EVERY run in it goes, whoever started it:
+    # no turn it answered survives, so its reply text can only derive from the member's deleted turns. Its title (made from the session's
+    # first words: the member's) is reset.
+    kept_empty = [s for s in empty if s not in set(gone)]
+    for at in range(0, len(kept_empty), _CHUNK):
+        part = kept_empty[at:at + _CHUNK]
+        await r.run(f"UPDATE chat_sessions SET title = 'New Chat' WHERE id IN ({', '.join('?' * len(part))})", tuple(part))
     # a shared session the member owned is handed to a remaining participant, or goes when none is left (``_hand_over``); then the runs
     # of every surviving session they owned or spoke in; then the gone sessions (children before parents: the FK-order test)
     orphans = [sid for sid in shared if sid in set(owned) and not await _hand_over(r, user_id, sid)]
     await r.by_ids("DELETE FROM chat_messages WHERE session_id", orphans)
     await _shared_runs(r, user_id, [sid for sid in shared if sid not in set(orphans)])
-    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans)
+    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty)
     await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans)
 
 
@@ -438,11 +475,12 @@ async def forget_user(user_id: str) -> int:
     if not uid:
         return 0
     try:
+        consumed = await _consume_scheduled_sends(uid)   # its OWN connection, committed before the erase opens: a fire sees it at once
         async with _db() as db:
             r = _Run(db)
+            r.removed = consumed
             # CHILD BEFORE PARENT (the migrations' foreign keys; pinned by test_member_delete_everything's FK-order test): the
             # single-author rows first (a note / journal entry / attendee / per-person row may point at a contact or event deleted below)
-            await _scheduled_sends(r, uid)          # commits its consume (fired = 1) on its own: a fire must see it at once
             # Every LINK is read before the rows it leads to are deleted, and deleted after them, all in ONE transaction (``_atomic``):
             # run state -> runs (``_transcript``, first), session owner / turn metadata -> sessions and turns, private list -> items,
             # contact -> per-person rows, speaker profile -> legacy recordings, cluster -> samples.
@@ -450,6 +488,7 @@ async def forget_user(user_id: str) -> int:
                 r.savepoints = _tx_of(db) is not None
                 # the queued notifications BEFORE the transcript: one claimed right now seeds a chat session, and that seed is either
                 # removed by the transcript step below or undone by claim_pending's own post-check (session_utils)
+                await r.run("DELETE FROM proactive_scheduled WHERE user_id = ?", (uid,))   # consumed above, committed
                 await r.run("DELETE FROM proactive_pending WHERE user_id = ?", (uid,))
                 await _transcript(r, uid)
                 for table in OWNED:

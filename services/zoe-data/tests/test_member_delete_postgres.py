@@ -108,9 +108,10 @@ class World:
         """``db_pool.get_db_ctx`` for ``forget_user`` (``db_compat.get_compat_db`` reads it at call time): a FRESH connection."""
         yield db_pool.AsyncpgCompat(await self.raw())
 
-    async def ids(self, table: str, where: str = "TRUE", *args) -> set:
+    async def ids(self, table: str, where: str = "TRUE", *args, col: str = "id") -> set:
+        """``col`` of the matching rows (``id`` by default; a table keyed otherwise, e.g. ``ui_panel_sessions.panel_id``, names it)."""
         c = await self.raw()                                      # always a SEPARATE connection: only committed rows are visible
-        return {r[0] for r in await c.fetch(f"SELECT id FROM {table} WHERE {where}", *args)}
+        return {r[0] for r in await c.fetch(f"SELECT {col} FROM {table} WHERE {where}", *args)}
 
     async def naming(self, uid: str) -> list:
         """Every (table, row) of the test schema with ``uid`` in any column."""
@@ -226,12 +227,18 @@ async def test_a_late_failure_rolls_back_every_statement_and_the_retry_finishes(
     a = world.a
     await _seed(world)
     real = mof._lists
+    seen = {}
 
     async def boom(*_a):
+        # INSIDE the open erase transaction, read from a SEPARATE connection: the consume is already committed (a fire claiming now
+        # sees fired = 1), and the row's DELETE (inside the transaction) is not
+        c = await world.raw()
+        seen["during"] = await c.fetchval("SELECT fired FROM proactive_scheduled WHERE id = $1", f"ps-{a}")
         raise ConnectionError("store down mid-erase")
     monkeypatch.setattr(mof, "_lists", boom)              # runs AFTER the run ids were collected and the runs / turns deleted
     with pytest.raises(ConnectionError):
         await mof.forget_user(a)
+    assert seen == {"during": 1}, "while the erase transaction is open, another connection sees the row, consumed"
     assert "run-a-in-b" in await world.ids("chat_ag_ui_runs"), "the run is still there"
     assert "rs-a-in-b" in await world.ids("openclaw_run_state"), "and so is the evidence that it was A's"
     assert {"sh-a", f"m-{a}"} <= await world.ids("chat_messages"), "the turns are still there"
@@ -239,11 +246,13 @@ async def test_a_late_failure_rolls_back_every_statement_and_the_retry_finishes(
     c = await world.raw()
     assert await c.fetchval("SELECT user_id FROM chat_sessions WHERE id = 's-shared'") == a, "the hand-over rolled back"
     assert await c.fetchval("SELECT fired FROM proactive_scheduled WHERE id = $1", f"ps-{a}") == 1, \
-        "the scheduled-send consume commits BEFORE the transaction, on purpose: a running fire must see it at once"
+        "the consume committed BEFORE the transaction (its own connection) and stays; the row's DELETE rolled back with the rest"
+    assert await c.fetchval("SELECT fired FROM proactive_scheduled WHERE id = $1", f"ps-{world.b}") == 0, "B's send is untouched"
     monkeypatch.setattr(mof, "_lists", real)
-    await mof.forget_user(a)                              # the retry
+    await mof.forget_user(a)                              # the retry: the already-consumed row does not hold it, and it goes
     assert "run-a-in-b" not in await world.ids("chat_ag_ui_runs")
     assert not await world.ids("openclaw_run_state", "user_id = $1", a)
+    assert await world.ids("proactive_scheduled") == {f"ps-{world.b}"}
 
 
 # (c) a never-migrated table: its statement fails INSIDE the transaction; the savepoint keeps the transaction alive
@@ -255,7 +264,8 @@ async def test_a_table_that_was_never_migrated_does_not_abort_the_transaction(wo
     await mof.forget_user(a)                                         # also crosses every OWNED table this schema never created
     assert await world.ids("chat_ag_ui_runs") == {f"run-{b}"}, "the statements before the missing table committed"
     assert await world.ids("list_items") == {f"li-{b}", "li-fam"}, "and so did the ones after it"
-    assert not await world.ids("ui_panel_sessions", "user_id = $1", a)
+    assert not await world.ids("ui_panel_sessions", "user_id = $1", a, col="panel_id")
+    assert await world.ids("ui_panel_sessions", col="panel_id") == {f"panel-{b}"}
 
 
 # (d) the migrations' foreign keys: no violation in the delete order; the users row is NOT this eraser's, and the kept family rows
@@ -294,3 +304,32 @@ async def test_another_members_write_runs_beside_the_erase_and_survives(world):
     assert {f"b-note-{i}" for i in range(20)} <= await world.ids("notes")
     c = await world.raw()
     assert await c.fetchval("SELECT user_id FROM chat_sessions WHERE id = 's-shared'") == b
+
+
+# (f) a session ANOTHER member owns that held only A's turn is emptied: its row stays B's, every run in it goes, its title resets; in B's
+#     own session holding B's and A's turns the unattributable run goes and B's run stays; B's session A never spoke in is untouched
+async def test_a_session_another_member_owns_that_held_only_the_members_turns_loses_every_run(world):
+    a, b = world.a, world.b
+    await _seed(world)
+    c = await world.raw()
+    x = c.execute
+    await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-b-only-a', $1, 'what A asked')", b)
+    await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('oa-1', 's-b-only-a', 'user', 'A asks', $1)",
+            _meta(a))
+    await x("INSERT INTO openclaw_run_state (id, session_id, user_id) VALUES ('rs-b-x', 's-b-only-a', $1)", b)
+    await x("INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events) VALUES ('run-oa-none', 's-b-only-a', 'r-nobody', '[]')")
+    await x("INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events) VALUES ('run-oa-b', 's-b-only-a', 'rs-b-x', '[]')")
+    await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('m-a-at-b', $1, 'user', 'A at B''s panel', $2)",
+            f"s-{b}", _meta(a))
+    await x("INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events) VALUES ('run-sb-none', $1, 'r-nobody-2', '[]')", f"s-{b}")
+    await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-b-own', $1, 'B only')", b)
+    await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('bo-1', 's-b-own', 'user', 'B alone')")
+    await x("INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events) VALUES ('run-bo', 's-b-own', 'r-bo', '[]')")
+    await mof.forget_user(a)
+    assert tuple(await c.fetchrow("SELECT user_id, title FROM chat_sessions WHERE id = 's-b-only-a'")) == (b, "New Chat"), \
+        "the row stays B's"
+    assert not await world.ids("chat_messages", "session_id = 's-b-only-a'")
+    assert not await world.ids("chat_ag_ui_runs", "session_id = 's-b-only-a'"), "no run of the emptied session survives"
+    assert await world.ids("chat_ag_ui_runs", "session_id = $1", f"s-{b}") == {f"run-{b}"}, "B's run stays, the unattributable one goes"
+    assert await world.ids("chat_messages", "session_id = $1", f"s-{b}") == {f"m-{b}"}
+    assert await world.ids("chat_ag_ui_runs", "session_id = 's-b-own'") == {"run-bo"}, "untouched"
