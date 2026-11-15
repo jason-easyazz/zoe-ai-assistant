@@ -63,15 +63,14 @@ def test_attack_2_acting_without_a_grant(scene):
 def test_attack_3_resurrecting_a_forgotten_subject(scene):
     k, bad = scene
     live = forget_sam(k)
+    assert FORGOTTEN not in str([e.payload for e in bad.cache])
     assert bad.resurrect(k, SAM, live) == []
-    assert refusal_reasons(k) == [
-        "derives from a forgotten event", "carries forgotten content", "carries forgotten content",
-        "asks for more than its manifest", "kernel-only kind"]
+    assert refusal_reasons(k) == ["kernel-only kind"]  # no forgotten event remains to resurrect
     for reader in ("audit", bad.name):
         assert FORGOTTEN not in str(k.spine.export(reader))
     raw = b"".join(open(p, "rb").read() for p in glob.glob(k.path + "*"))
     assert FORGOTTEN.encode() not in raw
-    assert FORGOTTEN in str([e.payload for e in bad.cache])   # honest limit: its own memory
+    assert FORGOTTEN not in str([e.payload for e in bad.cache])
 
 
 def test_every_refusal_is_an_event_an_auditor_can_read_and_none_carries_content(scene):
@@ -80,7 +79,7 @@ def test_every_refusal_is_an_event_an_auditor_can_read_and_none_carries_content(
     bad.act_without_grant(k, ALEX, 1)
     bad.resurrect(k, SAM, forget_sam(k))
     recorded = [e for e in k.spine.replay("audit") if e.kind is Kind.REFUSAL]
-    assert len(recorded) == len(bad.refused) == k.spine.refusals == 10
+    assert len(recorded) == len(bad.refused) == k.spine.refusals == 6
     assert {e.payload["who"] for e in recorded} == {bad.name}
     assert VICTIM_SECRET not in str([e.payload for e in recorded])
     assert FORGOTTEN not in str([e.payload for e in recorded])
@@ -112,6 +111,18 @@ def test_control_without_the_tombstone_the_forgotten_words_replay(scene, monkeyp
 
 def test_control_without_the_shield_the_forgotten_words_are_republished(scene, monkeypatch):
     k, bad = scene
+    stolen = list(bad.cache)  # deliberately model an unsupported private copy to attack the shield
+    live = forget_sam(k)
+    bad.cache = stolen
     monkeypatch.setattr(Spine, "_shielded", lambda self, payload: False)
-    back = bad.resurrect(k, SAM, forget_sam(k))
+    back = bad.resurrect(k, SAM, live)
     assert len(back) == 2 and FORGOTTEN in str(k.spine.export("audit") + [e.payload for e in back])
+
+
+def test_control_an_unmanaged_cache_retains_forgotten_words(scene):
+    k, bad = scene
+    stolen = list(bad.cache)
+    forget_sam(k)
+    assert FORGOTTEN not in str([e.payload for e in bad.cache])
+    with pytest.raises(AssertionError):
+        assert FORGOTTEN not in str([e.payload for e in stolen])  # old list-cache behaviour

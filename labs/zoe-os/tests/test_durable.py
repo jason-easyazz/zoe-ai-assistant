@@ -92,26 +92,29 @@ def test_control_if_the_used_yes_were_only_in_memory_one_yes_buys_two_actions(bo
     assert len(box.written()) == 2
 
 
-def test_a_claim_with_no_verified_receipt_is_found_after_a_restart_exactly_once(box):
+def test_a_claim_with_no_verified_receipt_is_refused_and_stays_absent_after_restart(box):
     grants(box)
     mover = box.client("mover")
     good = mover.act("light.toggle", SAM, ROOM, caused_by=[said(box)])
     backed = mover.publish("claim", subject=SAM, caused_by=[good.seq],
                            payload={"action": "light.toggle", "receipt_seq": good.seq})
-    bare = mover.publish("claim", subject=SAM, caused_by=[good.seq], payload={"action": "alarm.move"})
-    box.restart()                                            # killed before any scan ran
-    assert box.sup("scan")["unbacked"] == [bare.seq]
-    assert backed.seq not in box.sup("scan")["unbacked"]
+    with pytest.raises(Refused, match="receipt"):
+        mover.publish("claim", subject=SAM, caused_by=[good.seq], payload={"action": "alarm.move"})
+    box.restart()
+    assert box.sup("scan")["unbacked"] == []
     box.restart()
     assert box.sup("scan")["unbacked"] == []                 # judged once: the cursor is durable
     grants(box)
-    assert [f["claim_seq"] for f in box.audit("audit_finding")] == [bare.seq]
+    assert box.audit("audit_finding") == []
+    assert box.reasons() == ["claim requires an unused verified matching receipt"]
 
 
 def test_control_a_trusting_auditor_finds_nothing_after_the_restart(box):
     grants(box)
-    box.client("mover").publish("claim", subject=SAM, caused_by=[said(box)],
-                                payload={"action": "alarm.move"})
+    box.control("trusting_auditor")
+    cause = said(box)
+    box.client("mover").publish("claim", subject=SAM, caused_by=[cause],
+                                payload={"action": "alarm.move", "receipt_seq": cause})
     box.restart("trusting_auditor")
     assert box.sup("scan")["unbacked"] == []
 
@@ -132,9 +135,10 @@ def test_a_kill_inside_the_action_is_reported_as_uncertain_never_done_never_retr
     (finding,) = box.audit("audit_finding")
     assert finding == {"finding": "action_outcome_uncertain", "who": "mover",
                        "action": "light.toggle", "receipt_seq": receipt["seq"]}
-    claim = box.client("mover").publish("claim", subject=SAM, caused_by=[receipt["seq"]], payload={
-        "action": "light.toggle", "receipt_seq": receipt["seq"]})
-    assert box.sup("scan")["unbacked"] == [claim.seq]        # "I did it" on an uncertain receipt
+    with pytest.raises(Refused, match="receipt"):
+        box.client("mover").publish("claim", subject=SAM, caused_by=[receipt["seq"]], payload={
+            "action": "light.toggle", "receipt_seq": receipt["seq"]})
+    assert box.sup("scan")["unbacked"] == []
     box.restart()
     assert box.recovered == []                               # recovered once, not at every start
 

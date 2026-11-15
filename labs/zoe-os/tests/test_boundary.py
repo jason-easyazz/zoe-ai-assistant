@@ -78,20 +78,18 @@ def test_attack_3_resurrecting_a_forgotten_subject(scene):
     box, bad = scene
     r = bad.do("resurrect", SAM, forget_sam(box))
     assert r["out"] == []
-    assert box.reasons() == [
-        "derives from a forgotten event", "carries forgotten content", "carries forgotten content",
-        "asks for more than its manifest", "kernel-only kind"]
+    assert box.reasons() == ["kernel-only kind"]
     assert FORGOTTEN.encode() not in box.on_disk()
-    assert FORGOTTEN in str(r["cache"])       # honest limit: the copy in its own process
+    assert FORGOTTEN not in str(r["cache"])
 
 
-def test_all_ten_attempts_are_refused_and_recorded_with_no_content(scene):
+def test_all_remaining_attempts_are_refused_and_recorded_with_no_content(scene):
     box, bad = scene
     bad.do("read_private_of", ALEX)
     bad.do("act_without_grant", ALEX, box.cause)
     r = bad.do("resurrect", SAM, forget_sam(box))
     recorded = box.audit()
-    assert len(recorded) == len(r["refused"]) == 10
+    assert len(recorded) == len(r["refused"]) == 6
     assert {e["who"] for e in recorded} == {HELPER}
     assert VICTIM_SECRET not in str(recorded) and FORGOTTEN not in str(recorded)
 
@@ -118,8 +116,10 @@ def test_control_without_the_tombstone_the_forgotten_words_replay(scene):
 
 def test_control_without_the_shield_the_forgotten_words_are_republished(scene):
     box, bad = scene
+    live = forget_sam(box)
+    bad.do("plant_stale_copy", SAM, box.cause, FORGOTTEN)
     box.control("no_shield")
-    back = bad.do("resurrect", SAM, forget_sam(box))["out"]
+    back = bad.do("resurrect", SAM, live)["out"]
     assert len(back) == 2 and FORGOTTEN in str(back)
 
 

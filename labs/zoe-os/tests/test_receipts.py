@@ -151,13 +151,16 @@ def test_the_claim_detector(world):
 
     def claim(action, receipt_seq, cause):
         payload = {"action": action} | ({"receipt_seq": receipt_seq} if receipt_seq else {})
-        return spine.publish(Event(Kind.CLAIM, "mover", subject=P, payload=payload,
-                                   caused_by=(cause,)))
+        return Event(Kind.CLAIM, "mover", subject=P, payload=payload, caused_by=(cause,))
 
-    backed = claim("alarm.move", good.seq, good.seq)
-    no_receipt = claim("alarm.move", None, good.seq)
-    unverified = claim("alarm.move", bad.seq, bad.seq)
-    wrong_action = claim("light.toggle", good.seq, good.seq)
+    backed = spine.publish(claim("alarm.move", good.seq, good.seq))
+    invalid = [claim("alarm.move", None, good.seq), claim("alarm.move", bad.seq, bad.seq),
+               claim("light.toggle", good.seq, good.seq)]
+    for event in invalid:
+        with pytest.raises(Refused, match="receipt"):
+            spine.publish(event)
+    # Legacy/corrupt rows bypassing public publish are still diagnosed by the auditor.
+    no_receipt, unverified, wrong_action = [spine._kernel_append(e) for e in invalid]
     found = auditor.scan()
     assert [c.seq for c in found] == [no_receipt.seq, unverified.seq, wrong_action.seq]
     assert backed.seq not in [c.seq for c in found]
@@ -169,7 +172,7 @@ def test_the_claim_detector(world):
 def test_negative_control_a_detector_that_trusts_claims_finds_nothing(world, monkeypatch):
     spine, actions, _ = world
     cause = offer_and_answer(spine).seq
-    spine.publish(Event(Kind.CLAIM, "mover", subject=P, payload={"action": "alarm.move"},
+    spine._kernel_append(Event(Kind.CLAIM, "mover", subject=P, payload={"action": "alarm.move"},
                         caused_by=(cause,)))
     monkeypatch.setattr(ClaimAuditor, "backed", lambda self, claim: True)
     assert ClaimAuditor(spine, spine.authorizer).scan() == []

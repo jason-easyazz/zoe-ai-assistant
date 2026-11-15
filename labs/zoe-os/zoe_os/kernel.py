@@ -11,7 +11,7 @@ from .events import Event, Kind, Visibility
 from .explain import Explainer
 from .retention import POLICY, Retention
 from .receipts import ClaimAuditor, Dispatcher, Receipt
-from .spine import KERNEL, Refused, Spine
+from .spine import KERNEL, EventCache, Refused, Spine
 
 
 class Context:
@@ -19,6 +19,7 @@ class Context:
 
     def __init__(self, kernel: "Kernel", skill: str) -> None:
         self.kernel, self.skill = kernel, skill
+        self.cache = EventCache(lambda: kernel.spine.replay(skill))
 
     def now(self) -> float:
         return self.kernel.clock()

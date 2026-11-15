@@ -168,7 +168,9 @@ concerning the forgetting person. Another member may use the identical sentence 
 3. erases the payloads in place (SQLite `secure_delete`, then a write-ahead-log truncate) and marks the rows;
 4. withdraws matching events from every live queue;
 5. tells every subscriber, whatever its filters, with a notice that carries no content, so a well-behaved skill
-   drops its own derived state;
+   drops its own derived state. The supported subscriber cache (`Subscription.cache`, `Context.cache`, and the
+   socket client's cache) stores sequence numbers only and reads bodies from the authorized live log. Forgotten
+   source and derived events disappear from that view immediately, without waiting for a notice or `pump()`;
 6. keeps a keyed hash of the forgotten free text, first-hand and derived alike (text that only ever lived in a
    skill's derived event is forgotten too). A skill that later tries to publish the same words, even nested
    inside another payload (a list, a tuple or a dictionary), is refused when the event concerns that person.
@@ -227,9 +229,11 @@ A topic is its content words, and an event is about it
 only when it holds every one; more than twelve matching events is refused whole. A scope with no words is
 refused and never widens to "everything".
 
-**Missing, and the honest limits of the lab version.** A skill that already copied the words into its own
-memory keeps them: the kernel can refuse to take them back and can tell the skill to forget, but cannot reach
-into another program. **Reworded content is not caught**: a paraphrase that avoids the name and the exact old
+**Missing, and the honest limits of the lab version.** The supported cache is kernel-owned; a private body copy
+outside that cache violates its contract. Python cannot prevent arbitrary copying in the same process or erase
+another program's memory. Separate derived stores still depend on their forget handlers (including the twin and
+reminder store); this cache change does not turn them into kernel-owned stores. **Reworded content is not caught**:
+a paraphrase that avoids the name and the exact old
 sentences, a near spelling, part of a name, a pronoun or a role ("my sister"). A test asserts that the first
 three get through, so the limit is pinned. Production has near-spelling probes and asks "did you also
 mean ...?" **[code]**; the lab does not.
@@ -246,10 +250,14 @@ once. After the action the driver reads back what it did. The receipt records wh
 which grant, with what proof. A claim ("I moved your alarm") must cite a verified receipt, and one receipt
 backs one claim.
 
-**Prototype [lab]** (`receipts.py`): the dispatcher, the read-back, and a detector that finds claims with no
-receipt, an unverified receipt, a receipt for a different action, or a receipt an earlier live claim already
-cited (read from the log, so a restart does not reset it). A driver that reports success and did
-nothing gets an unverified receipt, and the honest skill then makes no claim (tested).
+**Prototype [code]** (`spine.py`, `receipts.py`): public publishing refuses a claim before append or delivery
+unless it cites a verified receipt matching its skill, subject and action, unused by an earlier live claim.
+That receipt must also be a causal parent, so forgetting the proof withdraws the derived claim.
+Batch publishing also refuses two claims spending the same receipt; one invalid claim rejects the whole batch.
+The check reads the durable log, so reconstructing the auditor does not reset receipt use. This is a synchronous
+publish check; `pump()` need not race subscribers with an asynchronous audit. `ClaimAuditor.scan()` remains a
+diagnostic for legacy or corrupt rows that bypassed public publishing, not the enforcement mechanism.
+A driver that reports success and did nothing gets an unverified receipt and cannot back a published claim.
 
 **Exists [code].** This is the area closest to done in production. `write_receipts.py` and
 `write_claim_guard.py` are exactly this idea for five kinds of write, enforced where every brain turn ends
@@ -335,7 +343,7 @@ shows the attack working:
 
 | Attack from another process | Control that makes it succeed |
 |---|---|
-| the ten attempts of the malicious skill (read, act, resurrect) | the same four as in-process |
+| the malicious skill (read, act, resurrect); the kernel-owned cache loses forgotten text | the same four as in-process |
 | forged identity: another skill's name, a `source` field, a skill granting itself | no credential check |
 | replayed credential: a captured handshake, a credential that was re-issued | a predictable challenge |
 | oversized frame (refused before its body is read) | no size cap |

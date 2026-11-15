@@ -175,8 +175,21 @@ Output: a table per turn (expected tool, tool called, right tool, arguments vali
 hop ms), the kernel checks (receipt, why, undo, forget removes effects and bytes), and the cost to the household
 (the slot's held prompt size before, which is the upper bound its next turn may re-prefill, plus counter deltas and
 the llama journal's re-prefill and eviction counts). The recorded fixture (tool frames verbatim, model text reduced
-to length and hash) is written to `--out` (default `~/.zoe/agent-tools/real-turn-<time>/recorded_turns.json`).
+to length and hash) is written to `--out` (default `labs/zoe-os/.state/real-turn-<time>/recorded_turns.json`).
 Differences from the live sidecar, stated: stock pi-ai wire (no text-tool-call recovery, no prompt policy).
+
+Runner boundaries [code]: `--llama-url` accepts only an `http` loopback origin (`127.0.0.0/8`, `[::1]`,
+or `localhost`) with an explicit port. Userinfo, encoded hosts, alternate numeric encodings, paths, queries and
+fragments are refused before I/O. Python HTTP calls disable environment proxies and redirects; the lab Node
+process installs a loopback-only fetch wrapper forcing `redirect: error`, including the provider's calls.
+`--lock` and `--out` must resolve beneath `.state/` in the lab or the one private tools directory
+`~/.zoe/agent-tools/zoe-os/`; traversal and symlink escapes are refused. The lab lock defaults to
+`.state/real-turn.lock`. A real run also locks the fixed `/tmp/zoe-voice-harness.lock` read-only, without creating
+or writing it, and refuses if unavailable. An operator must provision that shared lock before a real run.
+The quiet-log scanner reads individual bytes, buffers at most a 160-byte timestamp/level/logger prefix,
+and discards each message byte without decoding or accumulating bodies. Process detection uses `comm` and,
+for Python only, argv[0]/argv[1] basenames; it never reads later credential arguments. Interpreter options or
+unreadable process identity are conservatively treated as busy rather than scanning deeper into argv.
 
 ### First real run (2026-11-15, owner-approved, five turns) and what it changed [live]
 
