@@ -556,7 +556,8 @@ async def resolve_legacy_ids(user_id: str, texts: Any) -> tuple:
     return tuple(out)
 
 
-async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, resolved: bool = False) -> int:
+async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, resolved: bool = False, row_ids: Any = (),
+                           at: Optional[float] = None) -> int:
     """Erase what a forgotten turn's WORDS left outside the memory rows - the saved transcript turn (flagged ``off_record``), the
     night mind's observations, the exact-words entries - and return how much. THE one dispatcher every turn forget uses:
 
@@ -569,6 +570,11 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
     * With no ids at all, the words also resolve to the saved turns holding them (``legacy_transcript_ids``), which are then erased
       by id. Logged ``TURN_FORGET code=legacy_text``.
 
+    Also, so no forget path can skip them: the conversation notes made from the turn (``conversation_notes.erase_for_turns``: by
+    the note's own turn ids, a legacy note by these words or the turn's time ``at``), and for the memory rows the forget rejected
+    (``row_ids``) the stored user-model card that cites them (``user_model_card.invalidate_for_rows``) and the superseded-value
+    registry entries tied to them (``memory_value_registry.erase_for_rows``).
+
     The transcript and the night mind FIRST, the exact-words entries last: a failure part-way RAISES with the entries still there,
     so a retry reaches everything again. RAISES on a store failure (the caller must not confirm)."""
     import exact_words
@@ -579,7 +585,8 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
     # words' own read (``forget_transcript``), exactly the rows those ids came from
     resolve = not ids or resolved
     words = [w for w in dict.fromkeys(texts or ()) if w and w.strip()]
-    if not ids and not words:
+    rows = [str(r) for r in dict.fromkeys(row_ids or ()) if r]
+    if not ids and not words and not rows:
         return 0
     if words:
         logger.info("TURN_FORGET code=legacy_text texts=%d", len(words))
@@ -616,6 +623,18 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
         await step(night_mind.erase_words, user_id, mid)
     if words:
         await step(night_mind.erase_words, user_id, "", *words)              # LEGACY observations (no turn id), by their words
+    if ids or words or at is not None:
+        import conversation_notes
+
+        async def erase_conversation_notes():                                # the notes made from the turn
+            return await conversation_notes.erase_for_turns(user_id, ids, words, at=at)
+        await step(erase_conversation_notes)
+    if rows:
+        import memory_value_registry
+        import user_model_card
+
+        await step(user_model_card.invalidate_for_rows, user_id, rows)        # the stored card citing a rejected row
+        await step(memory_value_registry.erase_for_rows, user_id, rows)       # registry entries tied to them
     # the exact-words entries LAST, and only when everything before held: an entry left behind keeps the retry able to find them
     if failure is None and ids:
         await step(exact_words.erase_turns, user_id, ids)

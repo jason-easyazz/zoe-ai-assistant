@@ -999,3 +999,76 @@ def test_a_surviving_thread_whose_title_came_from_the_survivor_keeps_it(world):
     t = _thread()
     assert t["title"] == " ".join(HOSE.split()[:8])                          # supported by what survives: kept as it was
     assert "pottery" not in t["anchors"] and "@odalys" not in t["anchors"]
+
+
+# ── every forget path reaches the conversation notes, the stored user-model card and the value registry through the ONE
+#    dispatcher (cross-review, PR #2574) ──────────────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def side_stores(monkeypatch):
+    """Spies on the three side erasers the dispatcher must reach (their own store logic is tested in their own files)."""
+    import conversation_notes
+    import memory_value_registry
+    import user_model_card
+
+    seen = {"notes": [], "card": [], "registry": []}
+
+    async def notes(user_id, mids=(), texts=(), *, at=None):
+        seen["notes"].append((set(mids), list(texts)))
+        return 0
+
+    async def card(user_id, row_ids):
+        seen["card"].append(set(row_ids))
+        return 0
+
+    async def registry(user_id, row_ids, **_kw):
+        seen["registry"].append(set(row_ids))
+        return 0
+    monkeypatch.setattr(conversation_notes, "erase_for_turns", notes)
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    monkeypatch.setattr(memory_value_registry, "erase_for_rows", registry)
+    return seen
+
+
+@pytest.mark.parametrize("path", ["forget_it_after_why", "forget_it_fact", "memory_space", "forget_last"])
+def test_every_forget_path_reaches_the_notes_card_and_registry(world, side_stores, path):
+    """Through each path: the conversation notes are erased by the turn's saved-turn id (a note with no ids by these words), and
+    the stored card / registry entries are invalidated for every fact row the forget rejected. On 27fb26749 forget-it and the
+    memory-space erase never reached the notes, and no path invalidated the stored card."""
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    assert _run_path(path, svc, w).startswith("Done")
+    assert any(w["mid"] in mids for mids, _t in side_stores["notes"]), side_stores["notes"]
+    assert any(w["fact"] in rows for rows in side_stores["card"]), side_stores["card"]
+    assert any(w["fact"] in rows for rows in side_stores["registry"]), side_stores["registry"]
+    assert not any(w["other_fact"] in rows for rows in side_stores["card"] + side_stores["registry"])   # another turn's: untouched
+
+
+def test_the_topic_forget_invalidates_the_card_for_what_it_archived(world, side_stores):
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    res = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert not (res.store_down or res.failed) and res.forgotten
+    assert any(w["fact"] in rows for rows in side_stores["card"]) and any(w["fact"] in rows for rows in side_stores["registry"])
+
+
+def test_a_failing_card_invalidation_fails_the_forget_and_the_retry_finishes(world, monkeypatch):
+    """The stored card could not be deleted: the forget is NOT confirmed (it still holds the words), everything else reachable
+    went, and the same forget again completes it."""
+    import user_model_card
+
+    svc, chat = world
+    w = _plant_kind(svc, chat, "turn")
+    down = {"on": True}
+
+    async def card(user_id, row_ids):
+        if down["on"]:
+            raise RuntimeError("card store down")
+        return 1
+    monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
+    stored = xw.get_backend().rows[(UID, w["entry"])]["text"]
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=w["entry"])
+    assert not run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert chat.off(w["mid"])                                                   # the rest that was reachable still went
+    down["on"] = False
+    assert run(pa._forget_turn(UID, mp._state(UID).explained, svc=svc)).startswith("Done")

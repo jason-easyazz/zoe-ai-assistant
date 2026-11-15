@@ -1387,3 +1387,22 @@ def test_a_fact_mined_from_the_noted_conversation_is_not_a_later_update(monkeypa
     # unknown provenance and no statement time: ingestion time counts (fail safe)
     facts[:] = [_FactRow("They entered the race entry for the half marathon", NOW - 600)]
     assert run(cn._defer_to_facts(OWNER, [_race_note(["msg-1"])])) == []
+
+
+def test_forget_that_takes_a_note_by_its_own_turn_ids_and_a_legacy_note_by_words(member, monkeypatch):
+    """``erase_for_turns`` (what the one forget dispatcher calls on every path), per row: a note that records its source turns goes
+    only when the forgotten turn is one of them - never by words, however alike; a note with no turn ids (legacy) goes by the
+    words of the forgotten turn."""
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    cn.set_llm(_llm())
+    run(cn.run_member(OWNER, now=NOW))
+    count = lambda: member.q("SELECT COUNT(*) FROM conversation_notes")[0][0]      # noqa: E731
+    said = CHAT[0][0]
+    assert count() == 1
+    assert run(cn.erase_for_turns(OWNER, ["m-another-turn"], [said])) == 0 and count() == 1     # bound: never by its words
+    assert run(cn.erase_for_turns(OWNER, ["m1"], [])) == 1 and count() == 0                     # by one of its own turns
+    run(cn.run_member(OWNER, now=NOW))
+    member.conn.execute("UPDATE conversation_notes SET turn_ids = '[]'")                         # a note written before the ids
+    member.conn.commit()
+    assert run(cn.erase_for_turns(OWNER, [], ["set a timer for ten minutes"])) == 0 and count() == 1   # unrelated words: kept
+    assert run(cn.erase_for_turns(OWNER, ["m-another-turn"], [said])) == 1 and count() == 0             # legacy: by the words

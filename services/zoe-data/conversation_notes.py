@@ -34,7 +34,7 @@ SERVE (flag ``on`` only; ``shadow`` logs what it would inject and returns ""):
   * named guests - ``guest_lines`` (``named_guests.brain_block``): that guest's notes, theirs only.
 
 FORGET (forgotten means forever): ``forget_user`` (member erase), ``erase_entity`` (the entity-forget cascade), ``erase_topic``
-("forget what I told you about ..."), ``erase_for_text`` ("forget that"), ``erase_people`` (a guest's erase / "forget Quinn"), and a
+("forget what I told you about ..."), ``erase_for_turns`` ("forget that", via ``turn_forget.erase_turn_words``; ``erase_for_text`` is its older words-only form), ``erase_people`` (a guest's erase / "forget Quinn"), and a
 STRICT serve-time ledger filter on every read. Nothing about a note ever enters a log: counts and 8-char ids only.
 
 CHILDREN. A minor's note carries no mood (no emotional profile of a child) and its summary is asked to be neutral; a guest child the same.
@@ -1180,6 +1180,32 @@ async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None)
             if a is not None and b is not None and a - pad <= at <= b + pad:
                 return True
         return len(mine) >= 2 and len(_tokens(all_text) & mine) >= 2
+
+    return await _delete_where(user_id, doomed, people_id="", strict=True)
+
+
+async def erase_for_turns(user_id: str, mids: Iterable[str] = (), texts: Iterable[str] = (), *, at: Optional[float] = None) -> int:
+    """A forgotten TURN's notes, per row (``turn_forget.erase_turn_words``, the one dispatcher every turn forget uses). A note that
+    records its source turns (``turn_ids``: chat_messages ids) is bound: it goes only when one of them is one of ``mids``, however
+    alike its words. A note with no chat turn ids (written before they were recorded, or a backfilled one whose ids are event-log
+    ids) is legacy: the old rule - its words share >= 2 content words with the turn (``texts``), or its time span covers ``at``.
+    The member's own notes only (a guest's are not "that"). RAISES on a store failure; 0 when there is no notes store."""
+    want = {str(m) for m in (mids or ()) if m}
+    words = [w for w in (_tokens(t) for t in (texts or ()) if t) if len(w) >= 2]
+    if not want and not words and at is None:
+        return 0
+    pad = 2700.0
+
+    def doomed(s: "Stored", all_text: str) -> bool:
+        ids = {str(t) for t in s.turn_ids if t}
+        if ids and s.source != "backfill":
+            return bool(ids & want)                            # bound: by its saved-turn ids only
+        if at is not None:
+            a, b = _epoch_of(s.started_at), _epoch_of(s.ended_at)
+            if a is not None and b is not None and a - pad <= at <= b + pad:
+                return True
+        toks = _tokens(all_text)
+        return any(len(toks & w) >= 2 for w in words)
 
     return await _delete_where(user_id, doomed, people_id="", strict=True)
 
