@@ -45,7 +45,8 @@ ALLOWED = {
     "live": frozenset({"added", "refused", "noop"}),
     "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
     "result": frozenset({"worker_down", "match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused",
-                         "item_differs", "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster",
+                         "item_differs", "list_differs", "schedule_differs", "schedule_unproven", "member_differs",
+                         "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster",
                          "dropped_erased", "queue_full", "live_noop", "no_input", "shadow_error"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
@@ -55,7 +56,8 @@ NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_no
 UNAVAILABLE = ("kernel_unavailable", "timeout")
 AGREE = ("match",)
 MISMATCH = ("kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs", "list_differs",
-            "kernel_malformed", "not_expressible", "kernel_unavailable", "timeout")
+            "schedule_differs", "schedule_unproven", "member_differs", "kernel_malformed", "not_expressible", "kernel_unavailable",
+            "timeout")
 DISAGREE = tuple(m for m in MISMATCH if m not in UNAVAILABLE)
 
 
@@ -124,11 +126,44 @@ def _answered(recs: list[dict]) -> list[float]:
     return [r["hop_ms"] for r in recs if bucket(r["result"]) in ("agree", "disagree") and r.get("kernel") not in (None, "none")]
 
 
+#: the owner's pass mark for handing a verb to the kernel (docs/knowledge/zoe-os-integration.md), per verb
+PASS_MIN_COMPARED = 200          # at least 200 compared actions (agree + disagree)
+PASS_AGREE = (995, 1000)         # at least 99.5% agreement
+PASS_UNAVAILABLE = (1, 100)      # unavailable UNDER 1% of the actions the kernel was asked about (agree + disagree + unavailable)
+PASS_P90_MS = 10.0               # hop p90 UNDER 10 ms
+#: a disagreement the machine cannot even name (an unknown result code, or a reason it does not know / only knows as "other")
+UNNAMED_REASONS = (UNKNOWN, "other")
+
+
+def verdict(agree: int, disagree: int, unavailable: int, unexplained: int, hop_p90: float) -> dict:
+    """The five numbers of the pass mark, each checked exactly (no rounding), and which ones fail. ``unexplained`` == 0 is the part a
+    machine can check; every listed disagreement still has to be explained by a person before the flip."""
+    judged, asked = agree + disagree, agree + disagree + unavailable
+    fails = []
+    if judged < PASS_MIN_COMPARED:
+        fails.append(f"compared {judged} < {PASS_MIN_COMPARED}")
+    if not judged or agree * PASS_AGREE[1] < PASS_AGREE[0] * judged:
+        fails.append(f"agreement {(agree / judged * 100 if judged else 0):.2f}% < 99.5%")
+    if unexplained:
+        fails.append(f"{unexplained} disagreement(s) with no known code or reason")
+    if asked and unavailable * PASS_UNAVAILABLE[1] >= PASS_UNAVAILABLE[0] * asked:
+        fails.append(f"unavailable {unavailable / asked * 100:.2f}% >= 1%")
+    if not judged or hop_p90 >= PASS_P90_MS:
+        fails.append(f"hop p90 {hop_p90:.2f} ms >= {PASS_P90_MS:g} ms" if judged else "no answered hop")
+    return {"pass": not fails, "fails": fails}
+
+
 def verb_summary(recs: list[dict]) -> dict:
     b = Counter(bucket(r["result"]) for r in recs)
     judged = b["agree"] + b["disagree"]
+    asked = judged + b["unavailable"]
     hops = _answered(recs)
+    unexplained = sum(1 for r in recs if bucket(r["result"]) == "disagree"
+                      and (r["result"] == UNKNOWN or r.get("reason", "-") in UNNAMED_REASONS))
     return {
+        "compared": judged, "unexplained": unexplained,
+        "unavailable_rate": round(b["unavailable"] / asked, 4) if asked else None,
+        "verdict": verdict(b["agree"], b["disagree"], b["unavailable"], unexplained, pct(hops, 90)),
         "seen": len(recs), "agree": b["agree"], "disagree": b["disagree"], "unavailable": b["unavailable"],
         "not_compared": b["not_compared"], "agree_rate": round(b["agree"] / judged, 4) if judged else None,
         "unknown": sum(1 for r in recs if r["result"] == UNKNOWN), "shadow_errors": sum(1 for r in recs if r["result"] == "shadow_error"),
@@ -142,21 +177,26 @@ def verb_summary(recs: list[dict]) -> dict:
 
 
 def summarize(recs: list[dict], rejected: int = 0) -> dict:
-    """The per-verb table (``verbs``) plus the list-add totals the first report gave (kept: same names, same meaning)."""
+    """The per-verb table (``verbs``, each verb its own row, an unknown verb as ``unknown``) plus the list-add totals the first report
+    gave: those are over ``list_add`` lines ONLY (same names, same meaning, whatever other verbs are in the log). ``lines_logged``,
+    ``rejected``, ``unknown``, ``unknown_fields`` and ``shadow_errors`` are over every line."""
+    every = recs
+    recs = [r for r in every if r["verb"] == "list_add"]
     results = Counter(r["result"] for r in recs)
     compared = [r for r in recs if r["result"] not in NOT_COMPARED]
     answered = [r["hop_ms"] for r in compared if r.get("kernel") not in (None, "none")]
     n = len(compared)
-    verbs = sorted({r["verb"] for r in recs}, key=lambda v: (VERB_ORDER.index(v) if v in VERB_ORDER else 99, v))
+    verbs = sorted({r["verb"] for r in every}, key=lambda v: (VERB_ORDER.index(v) if v in VERB_ORDER else 99, v))
+    every_results = Counter(r["result"] for r in every)
     return {
-        "verbs": {v: verb_summary([r for r in recs if r["verb"] == v]) for v in verbs},
+        "verbs": {v: verb_summary([r for r in every if r["verb"] == v]) for v in verbs}, "lines_logged": len(every),
         "adds_logged": len(recs), "compared": n,
         "match": results["match"], "match_rate": round(results["match"] / n, 4) if n else None,
         "mismatch": {k: results[k] for k in MISMATCH if results[k]},
         "refused_by_reason": dict(Counter(r.get("reason", "-") for r in compared if r["result"] == "kernel_refused_live_did")),
         "not_compared": {k: results[k] for k in sorted(NOT_COMPARED) if results[k]},
-        "unknown": results[UNKNOWN], "rejected": rejected, "shadow_errors": results["shadow_error"],
-        "unknown_fields": sum(1 for r in recs if any(v == UNKNOWN for k, v in r.items() if k != "result")),
+        "unknown": every_results[UNKNOWN], "rejected": rejected, "shadow_errors": every_results["shadow_error"],
+        "unknown_fields": sum(1 for r in every if any(v == UNKNOWN for k, v in r.items() if k != "result")),
         "kernel_unavailable": results["kernel_unavailable"], "timeouts": results["timeout"],
         "hop_ms_p50": round(pct(answered, 50), 2), "hop_ms_p95": round(pct(answered, 95), 2), "hop_answered": len(answered),
         "by_src": dict(Counter(r.get("src", "?") for r in recs)), "by_cls": dict(Counter(r.get("cls", "?") for r in recs)),
@@ -165,18 +205,23 @@ def summarize(recs: list[dict], rejected: int = 0) -> dict:
 
 def render(s: dict) -> str:
     rate = "n/a" if s["match_rate"] is None else f"{s['match_rate'] * 100:.1f}%"
-    rows = ["| verb | seen | agree | disagree | unavailable | not compared | agree rate | hop p50 ms | hop p90 ms |",
-            "|---|---|---|---|---|---|---|---|---|"]
+    rows = ["| verb | seen | agree | disagree | unavailable | not compared | unknown | agree rate | unavailable rate | hop p50 ms | "
+            "hop p90 ms |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for verb, v in s["verbs"].items():
         vr = "n/a" if v["agree_rate"] is None else f"{v['agree_rate'] * 100:.1f}%"
-        rows.append(f"| {verb} | {v['seen']} | {v['agree']} | {v['disagree']} | {v['unavailable']} | {v['not_compared']} | {vr} | "
-                    f"{v['hop_ms_p50']} | {v['hop_ms_p90']} |")
+        ur = "n/a" if v["unavailable_rate"] is None else f"{v['unavailable_rate'] * 100:.1f}%"
+        rows.append(f"| {verb} | {v['seen']} | {v['agree']} | {v['disagree']} | {v['unavailable']} | {v['not_compared']} | "
+                    f"{v['unknown']} | {vr} | {ur} | {v['hop_ms_p50']} | {v['hop_ms_p90']} |")
     for verb, v in s["verbs"].items():
         if v["disagree_by_reason"]:
             rows.append(f"{verb} disagreements: " + ", ".join(f"{k}={n}" for k, n in v["disagree_by_reason"].items()))
-    rows += ["", f"all verbs: logged {s['adds_logged']}    compared: {s['compared']}    match: {s['match']} ({rate})",
-             f"kernel hop (publish + act), {s['hop_answered']} answered: p50 {s['hop_ms_p50']} ms, p95 {s['hop_ms_p95']} ms",
-             f"kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}    shadow errors: {s['shadow_errors']}",
+    rows.append("")
+    for verb, v in s["verbs"].items():
+        rows.append(f"{verb}: " + ("PASS" if v["verdict"]["pass"] else "NOT YET (" + "; ".join(v["verdict"]["fails"]) + ")"))
+    rows += ["", f"list add: logged {s['adds_logged']}    compared: {s['compared']}    match: {s['match']} ({rate})",
+             f"list add kernel hop (publish + act), {s['hop_answered']} answered: p50 {s['hop_ms_p50']} ms, p95 {s['hop_ms_p95']} ms",
+             f"list add kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}",
+             f"all verbs: lines {s['lines_logged']}    shadow errors: {s['shadow_errors']}",
              f"unreadable: rejected lines {s['rejected']}    unknown result {s['unknown']} (counted as disagree)    "
              f"lines with an unknown field {s['unknown_fields']}",
              "by source: " + ", ".join(f"{k}={v}" for k, v in sorted(s["by_src"].items())),

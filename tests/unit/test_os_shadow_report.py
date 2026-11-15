@@ -110,7 +110,7 @@ def test_the_per_verb_table_buckets_every_line_exactly_once():
     assert (a["agree"], a["disagree"], a["agree_rate"]) == (1, 1, 0.5)
     assert list(s["verbs"]) == ["list_add", "reminder_create", "alarm_create"] and s["verbs"]["list_add"]["agree"] == 1
     text = rep.render(s)
-    assert "| reminder_create | 14 | 10 | 2 | 1 | 1 | 83.3% | 5.0 | 9.0 |" in text
+    assert "| reminder_create | 14 | 10 | 2 | 1 | 1 | 0 | 83.3% | 7.7% | 5.0 | 9.0 |" in text
 
 
 def test_a_result_code_the_reader_does_not_know_counts_as_disagree():
@@ -149,7 +149,8 @@ def test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted(tmp_p
              "OS_SHADOW_ACT verb=list_add src=spoken hop_ms=1.0"]    # no result: rejected, and counted
     recs, rejected = rep.parse_counted(lines)
     s = rep.summarize(recs, rejected)
-    assert s["adds_logged"] == 8 and s["rejected"] == 2 and s["adds_logged"] + s["rejected"] == len(lines)
+    assert s["lines_logged"] == 8 and s["rejected"] == 2 and s["lines_logged"] + s["rejected"] == len(lines)
+    assert s["adds_logged"] == 6                                       # the list-add totals count list-add lines only
     assert s["unknown"] == 2 and s["unknown_fields"] == 1 and s["shadow_errors"] == 2
     la, al = s["verbs"]["list_add"], s["verbs"]["alarm_create"]
     assert (la["seen"], la["agree"], la["disagree"], la["not_compared"], la["unknown"]) == (6, 2, 1, 3, 1)
@@ -190,3 +191,59 @@ def test_every_literal_reason_the_client_writes_is_known_to_the_reader():
                 found |= {c for tn, v in zip(names, vals) if getattr(tn, "id", "") == "reason" for c in consts(v)}
     found.discard("")
     assert found and found <= rep.ALLOWED["reason"], found - rep.ALLOWED["reason"]
+
+
+
+# ---- the list-add totals are list adds; every verb is judged on its own, against the owner's five numbers -------------------------
+def test_other_verbs_in_the_log_never_change_the_list_add_numbers():
+    adds = [line(hop=h) for h in (1, 2, 3)] + [line("kernel_refused_live_did", "refused", "no_grant", 2.0), line("timeout", "none", "timeout", 0)]
+    others = ([act("reminder_create", "schedule_differs", hop=50.0)] * 7 + [act("alarm_create", "kernel_unavailable", "none", "circuit", 0.0)] * 4
+              + [act("list_remove", hop=99.0)] * 5)
+    alone, mixed = rep.summarize(rep.parse(adds)), rep.summarize(rep.parse(adds + others))
+    keys = ("adds_logged", "compared", "match", "match_rate", "mismatch", "refused_by_reason", "not_compared", "kernel_unavailable",
+            "timeouts", "hop_ms_p50", "hop_ms_p95", "hop_answered", "by_src", "by_cls")
+    assert {k: mixed[k] for k in keys} == {k: alone[k] for k in keys}
+    assert mixed["verbs"]["list_add"] == alone["verbs"]["list_add"]
+    assert (mixed["verbs"]["reminder_create"]["disagree_by_result"], mixed["verbs"]["alarm_create"]["unavailable_rate"]) == (
+        {"schedule_differs": 7}, 1.0)
+    assert mixed["lines_logged"] == len(adds) + len(others)
+
+
+def test_an_unknown_verb_and_an_unknown_code_are_their_own_counted_rows(capsys, tmp_path):
+    lines = [act("list_add"), act("list_add", "brand_new_code"), act("list_add").replace("verb=list_add", "verb=teleport")]
+    s = rep.summarize(rep.parse(lines))
+    assert s["verbs"]["unknown"]["seen"] == 1 and s["verbs"]["list_add"]["unknown"] == 1
+    f = tmp_path / "log"
+    f.write_text("\n".join(lines) + "\n")
+    rep.main([str(f)])
+    out = capsys.readouterr().out
+    assert "| unknown | 1 |" in out and "teleport" not in out and "brand_new_code" not in out
+
+
+def _week(agree, disagree=0, unavailable=0, hop=1.0, slow=0, reason="-"):
+    """``agree`` matches at ``hop`` ms (the slowest ``slow`` of them at 50 ms), ``disagree`` item_differs, ``unavailable`` timeouts."""
+    out = [act("reminder_create", hop=(50.0 if i < slow else hop)) for i in range(agree)]
+    out += [act("reminder_create", "item_differs", reason=reason, hop=hop)] * disagree
+    out += [act("reminder_create", "timeout", "none", "timeout", 0.0)] * unavailable
+    return rep.summarize(rep.parse(out))["verbs"]["reminder_create"]["verdict"]
+
+
+def test_the_pass_line_at_each_boundary():
+    assert _week(200)["pass"] and not _week(199)["pass"]                                         # 200 compared actions
+    assert _week(199)["fails"] == ["compared 199 < 200"]
+    assert _week(995, 5)["pass"]                                                                  # exactly 99.5%
+    assert _week(994, 6)["fails"] == ["agreement 99.40% < 99.5%"]
+    assert _week(1000, 0, 10)["pass"]                                                             # 0.99%: under 1%
+    assert _week(990, 0, 10)["fails"] == ["unavailable 1.00% >= 1%"]                               # 1.0% is not UNDER 1%
+    assert _week(991, 0, 9)["pass"]                                                                # 0.9%
+    assert _week(300, hop=9.9)["pass"] and _week(300, hop=10.0)["fails"] == ["hop p90 10.00 ms >= 10 ms"]
+    assert not _week(300, slow=40)["pass"] and _week(300, slow=20)["pass"]                         # the p90, not the max
+    assert _week(995, 5, reason="other")["fails"] == ["5 disagreement(s) with no known code or reason"]
+
+
+def test_the_pass_line_is_rendered_per_verb(capsys, tmp_path):
+    f = tmp_path / "log"
+    f.write_text("\n".join([act("alarm_create", hop=2.0)] * 200 + [act("list_add")]) + "\n")
+    rep.main([str(f)])
+    out = capsys.readouterr().out
+    assert "alarm_create: PASS" in out and "list_add: NOT YET (compared 1 < 200)" in out
