@@ -8,8 +8,7 @@ import glob
 
 from twin_helpers import learn
 
-from zoe_os.events import Kind
-from zoe_os.replay import play
+from zoe_os.events import Event, Kind
 from zoe_os.retention import DAY, OPTIONS, Retention
 from zoe_os.twin.baseline import NOT_ENOUGH, OFF, OK, Twin, describe
 from zoe_os.twin.days import SAMPLE, generate
@@ -46,7 +45,7 @@ def test_forgetting_a_person_removes_their_baseline_and_leaves_everyone_elses(tm
 
 
 def test_negative_control_a_twin_that_ignores_the_notice_still_knows_what_was_forgotten(tmp_path, monkeypatch):
-    monkeypatch.setattr(Twin, "_forget", lambda self, notice: None)
+    monkeypatch.setattr(Twin, "_forget", lambda self, notice, ctx=None: None)
     k, twin, _ = taught(tmp_path)
     k.spine.forget("kid", actor="alex")
     k.pump()
@@ -72,8 +71,14 @@ def test_a_forgotten_person_is_not_banned_new_days_start_a_new_baseline(tmp_path
     k, twin, now = learn(tmp_path, days[:28])
     k.spine.forget("kid", actor="alex")
     k.pump()
+    k.grants.grant('kid', 'twin', guardian='alex')
+    # New consent and new words: an origin cannot reassert the old routine text.
     for day in days[28:]:
-        play(k, day, now)
+        now[0] = day.events[0]['t']
+        source = next(row['source'] for row in day.events if row['kind'] == 'routine_step')
+        k.spine.publish(Event(Kind.ROUTINE_STEP, source, 'kid',
+                               payload={'routine': 'synthetic', 'item': 'fresh token', 'done': True}))
+        k.pump()
     fresh = twin.normal("kid", "workday")
     assert (fresh.status, fresh.days) == (NOT_ENOUGH, 2) and list(twin.days["kid"]) == ["2030-04-01", "2030-04-02"]
     k.close()
@@ -90,7 +95,8 @@ def test_the_twins_reduced_copy_outlives_the_kernels_events_and_a_forget_still_r
     k.pump()
     assert SENTINEL not in known(twin) and "kid" not in twin.days
     notices = k.spine._fetch(0, frozenset({Kind.FORGET}), None, 10)
-    assert notices and {e.payload["subject"] for e in notices} == {"kid"}
+    assert notices and {e.payload['subject_hash'] for e in notices} == {k.spine._owner('kid').hex()}
+    assert all(e.payload['scope'] == 'person' and 'seqs' in e.payload for e in notices)
     k.close()
 
 

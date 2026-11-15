@@ -171,16 +171,18 @@ def on_disk(k) -> bytes:
     return b"".join(open(p, "rb").read() for p in glob.glob(k.path + "*"))
 
 
-def test_forget_erases_the_reminder_from_the_log_the_skill_and_the_store(k):
+def test_whole_forget_purges_store_before_erasing_consent_and_then_drops_cache(k):
     mine = ask(k, SAM, f"ring {SENTINEL}", NOW)
     theirs = ask(k, ALEX, "alex's reminder", NOW)
     tick(k)
     assert SENTINEL.encode() in on_disk(k) and SENTINEL in str(k.store.rows)
     k.spine.forget(SAM, actor=SAM)
+    assert mine not in k.store.rows  # synchronous: no notice/pump needed for store erasure
     k.pump()
     assert SENTINEL.encode() not in on_disk(k)
-    assert mine not in k.store.rows and SENTINEL not in str(k.skill._items)
-    assert theirs in k.store.rows and theirs in k.skill._items and refusal_reasons(k) == []
+    assert SENTINEL not in str(k.store.rows) + str(k.skill._items)
+    assert theirs in k.store.rows and theirs in k.skill._items
+    assert refusal_reasons(k) == []
     assert len(tick(k, NOW + HOUR)) == 1                         # ALEX's still fires; SAM's is gone
 
 
@@ -192,14 +194,109 @@ def test_a_topic_forget_takes_only_the_matching_reminder(k):
     assert gone not in k.store.rows and kept in k.store.rows and SENTINEL.encode() not in on_disk(k)
 
 
-def test_HONEST_LIMIT_a_skill_that_ignores_the_notice_leaves_the_words_in_its_store(k, monkeypatch):
-    """The control for the test above, and a real limit: the store is outside the kernel."""
+def test_receipt_only_forget_purges_the_matching_store_row(k):
+    gone = ask(k, SAM, SENTINEL, NOW)
+    kept = ask(k, SAM, 'synthetic separate reminder', NOW)
+    receipt = k.skill._items[gone]['receipt']
+    k.spine.forget(SAM, actor=SAM, seqs=[receipt])
+    assert gone not in k.store.rows and kept in k.store.rows
+
+
+def test_whole_forget_purges_orphaned_store_rows_without_skill_memory(k):
+    ask(k, SAM, SENTINEL, NOW)
+    k.skill._items.clear()
+    k.store.rows['synthetic-orphan'] = {'owner': SAM, 'note': SENTINEL}
+    k.spine.forget(SAM, actor=SAM)
+    assert k.store.rows == {}
+
+
+def test_kernel_purges_store_even_when_skill_ignores_the_notice(k, monkeypatch):
+    """The skill's unsupported private state remains a limit; its store is purged."""
     monkeypatch.setattr(Reminders, "_forget", lambda self, notice, ctx: None)
     ask(k, SAM, f"ring {SENTINEL}", NOW)
     k.spine.forget(SAM, actor=SAM)
     k.pump()
     assert SENTINEL.encode() not in on_disk(k)                   # the kernel's own copy is gone
-    assert SENTINEL in str(k.store.rows)                         # the skill's store still has it
+    assert k.store.rows == {}
+    assert SENTINEL in str(k.skill._items)  # arbitrary process memory still needs cooperation
+
+
+def test_purge_happens_while_grant_is_live_and_cannot_be_used_as_an_action(k):
+    rid = ask(k, SAM, SENTINEL, NOW)
+    original = k._store_purges['reminders']
+    seen = []
+
+    def purge(person, events):
+        seen.append(k.grants.of('reminders', person) is not None)
+        original[0](person, events)
+
+    k._store_purges['reminders'] = (purge, original[1])
+    for action in ('store.purge', 'reminders.purge', 'register_store_purge'):
+        with pytest.raises(Refused, match='asks for more than its manifest'):
+            k.actions.act('reminders', action, SAM, {}, caused_by=(1,))
+    # Declaring and granting a made-up purge action still cannot reach the driver.
+    k.grants.install({'skill': 'synthetic-attacker', 'acts': ['store.purge']})
+    k.grants.grant(SAM, 'synthetic-attacker')
+    with pytest.raises(Refused, match='no such action'):
+        k.actions.act('synthetic-attacker', 'store.purge', SAM, {}, caused_by=(1,))
+    with pytest.raises(Refused, match='only a person can ask to forget'):
+        k.spine.forget(SAM, actor='reminders')
+    assert rid in k.store.rows and seen == []
+    k.spine.forget(SAM, actor=SAM)
+    assert seen == [True, True] and k.store.rows == {}
+    assert k.grants.of('reminders', SAM) is None
+    # A normal delete cannot acquire the purge authority after consent is erased.
+    fresh = emit(k, Kind.UTTERANCE, 'voice', SAM, text='synthetic new request')
+    with pytest.raises(Refused, match='no grant from that person'):
+        k.actions.act('reminders', 'reminder.delete', SAM, {'id': rid}, caused_by=(fresh.seq,))
+    assert seen == [True, True]
+
+
+@pytest.mark.parametrize('failure', ['exception', 'unverified'])
+def test_failed_purge_aborts_forget_and_retry_finishes_without_reauthorising(k, failure):
+    rid = ask(k, SAM, SENTINEL, NOW)
+    original = k._store_purges['reminders']
+    before = k.spine.last_seq
+
+    def fail(person, events):
+        raise RuntimeError('synthetic store unavailable')
+
+    k._store_purges['reminders'] = ((fail, original[1]) if failure == 'exception'
+                                   else (lambda p, e: None, original[1]))
+    with pytest.raises((RuntimeError, Refused)):
+        k.spine.forget(SAM, actor=SAM)
+    assert rid in k.store.rows and k.grants.of('reminders', SAM) is not None
+    assert not [e for e in of_kind(k, Kind.FORGET) if e.seq > before]
+    k._store_purges['reminders'] = original
+    k.spine.forget(SAM, actor=SAM)
+    assert k.store.rows == {} and k.grants.of('reminders', SAM) is None
+
+
+def test_negative_control_without_kernel_cleanup_the_store_oracle_fails(k, monkeypatch):
+    ask(k, SAM, SENTINEL, NOW)
+    monkeypatch.setattr(k.spine, '_before_forget', None)
+    k.spine.forget(SAM, actor=SAM)
+    with pytest.raises(AssertionError):
+        assert k.store.rows == {}
+    assert SENTINEL in str(k.store.rows)
+    k.pump()
+    assert k.store.rows == {}  # replay cleanup remains a second, independent safety path
+
+
+def test_retry_after_log_rollback_finishes_an_already_completed_external_purge(k, monkeypatch):
+    ask(k, SAM, SENTINEL, NOW)
+    real = k.spine._scrub_intents
+
+    def fail(dead):
+        raise RuntimeError('synthetic failure after external purge')
+
+    monkeypatch.setattr(k.spine, '_scrub_intents', fail)
+    with pytest.raises(RuntimeError):
+        k.spine.forget(SAM, actor=SAM)
+    assert k.store.rows == {} and k.grants.of('reminders', SAM) is not None
+    monkeypatch.setattr(k.spine, '_scrub_intents', real)
+    k.spine.forget(SAM, actor=SAM)
+    assert k.store.rows == {} and k.grants.of('reminders', SAM) is None
 
 
 # ---- and it replays -------------------------------------------------------------------------------

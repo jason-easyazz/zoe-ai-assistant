@@ -78,7 +78,8 @@ def test_snapshot_forget_bytes_and_undo_after_restart(tmp_path, scope, legacy):
 
 
 def test_snapshot_scrub_keeps_nonforgotten_before_rows(tmp_path):
-    k = boot(tmp_path / 'kernel.db')
+    path = tmp_path / 'kernel.db'
+    k = boot(path)
     rows = Lists().register(k)
     k.install(Keeper(rows))
     add(k, rows, KEEP)
@@ -86,8 +87,69 @@ def test_snapshot_scrub_keeps_nonforgotten_before_rows(tmp_path):
     add(k, rows, 'silver reed token')
     k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
     k.pump()
+    assert SECRET.encode() not in disk(path)
+    assert not k.spine._shielded(Event(Kind.ACTION_RECEIPT, 'kernel', PERSON,
+                                     payload={'proof': {'restored': {'item': KEEP}}}))
     assert k.actions.undo(PERSON, actor=PERSON).verified
     assert [r['item'] for r in rows.rows[PERSON]] == [KEEP]
+    assert SECRET.encode() not in disk(path)
+    assert SECRET not in str(k.spine._db.execute('SELECT payload FROM events').fetchall())
+    k.close()
+
+
+@pytest.mark.parametrize('opaque', [False, True])
+def test_legacy_snapshot_index_backfills_once_before_forget(tmp_path, opaque):
+    import json
+    path = tmp_path / 'kernel.db'
+    k = boot(path)
+    rows = Lists().register(k)
+    first, _ = add(k, rows, SECRET)
+    _, second = add(k, rows, KEEP)
+    if opaque:
+        p = k.spine._get(second.seq).payload
+        p['undo']['before'].pop('provenance')
+        k.spine._db.execute('UPDATE events SET payload=? WHERE seq=?', (json.dumps(p), second.seq))
+    # Emulate a store from before the index existed, then upgrade on restart.
+    k.spine._db.execute('DROP TABLE snapshot_dependencies')
+    k.spine._db.execute('DROP TABLE opaque_snapshots')
+    k.spine._db.execute("DELETE FROM meta WHERE key='snapshot_index_v1'")
+    k.close()
+    k = boot(path)
+    assert k.spine._db.execute("SELECT 1 FROM meta WHERE key='snapshot_index_v1'").fetchone()
+    k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
+    assert SECRET.encode() not in disk(path)
+    k.close()
+    k = boot(path)
+    rows.rows[PERSON] = [{'item': KEEP, 'asked': 999}]
+    rows.register(k)
+    if opaque:
+        with pytest.raises(Refused, match='without provenance'):
+            k.actions.undo(PERSON, actor=PERSON)
+    else:
+        assert k.actions.undo(PERSON, actor=PERSON).verified
+        assert rows.rows[PERSON] == []
+    k.close()
+
+
+def test_snapshot_dependencies_survive_scrub_and_rollback_then_member_erase(tmp_path):
+    k = boot(tmp_path / 'kernel.db')
+    rows = Lists().register(k)
+    first, _ = add(k, rows, SECRET)
+    survivor, _ = add(k, rows, KEEP)
+    _, last = add(k, rows, 'synthetic third row')
+    before = k.spine._db.execute('SELECT * FROM snapshot_dependencies ORDER BY 1,2').fetchall()
+    k.spine._db.execute("CREATE TEMP TRIGGER stop_erase BEFORE INSERT ON forget_ledger "
+                        "BEGIN SELECT RAISE(ABORT, 'synthetic interruption'); END")
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):
+        k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
+    assert k.spine._db.execute('SELECT * FROM snapshot_dependencies ORDER BY 1,2').fetchall() == before
+    k.spine._db.execute('DROP TRIGGER stop_erase')
+    k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
+    assert k.spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall() == [(survivor.seq, last.seq)]
+    k.spine.forget(PERSON, actor=PERSON)
+    assert not k.spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall()
+    assert not k.spine._db.execute('SELECT * FROM opaque_snapshots').fetchall()
     k.close()
 
 
@@ -163,7 +225,13 @@ def test_forget_scrubs_a_surviving_undo_readback_proof(tmp_path):
     k.close()
 
 
-def test_control_without_snapshot_scrub_undo_resurrects_forgotten_row(tmp_path, monkeypatch):
+@pytest.mark.parametrize('disable_shield', [False, True])
+def test_control_without_snapshot_scrub_shield_refuses_dirty_receipt_or_row_resurrects(
+        tmp_path, monkeypatch, disable_shield):
+    """With the snapshot scrub patched off, an undo would restore a forgotten row. NOTE what the two halves show: with the
+    shield ON the undo is refused, but only AFTER the driver has put the row back (the last assert holds in both halves), so
+    the append shield is a second line that keeps the dirty RECEIPT out of the record, not a guard on the row. The snapshot
+    scrub is what protects the row; this control exists to show that."""
     path = tmp_path / 'kernel.db'
     k = boot(path)
     rows = Lists().register(k)
@@ -172,11 +240,18 @@ def test_control_without_snapshot_scrub_undo_resurrects_forgotten_row(tmp_path, 
     add(k, rows, KEEP)
     monkeypatch.setattr(Spine, '_scrub_snapshots', lambda *_: None, raising=False)
     monkeypatch.setattr(k.actions, '_check_arguments', lambda *_: None)
-    monkeypatch.setattr(Spine, '_payload_refusal', lambda *_: False)   # and the kernel-write guard behind it
     k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
     k.pump()
     assert SECRET.encode() in disk(path)
-    assert k.actions.undo(PERSON, actor=PERSON).verified
+    if disable_shield:
+        # Isolate the snapshot protection: the independent append shield would
+        # otherwise refuse the dirty receipt AFTER the driver restored the row.
+        monkeypatch.setattr(Spine, '_shielded', lambda *_: False)
+        monkeypatch.setattr(Spine, '_payload_refusal', lambda *_: False)   # and the kernel-write guard that calls it
+        assert k.actions.undo(PERSON, actor=PERSON).verified
+    else:
+        with pytest.raises(Refused, match='forgotten_kernel_content'):
+            k.actions.undo(PERSON, actor=PERSON)
     assert [r['item'] for r in rows.rows[PERSON]] == [SECRET]
     k.close()
 
@@ -259,7 +334,8 @@ def test_all_chunks_replay_after_partial_delivery_restart(tmp_path, n, truncate,
     # A crash after the first handled chunk, with the external store surviving.
     k.pump(max_rounds=1)
     assert len(rows.rows.get(PERSON, [])) == n - 256
-    assert len(store.rows) == n - 256
+    # The registered store is purged synchronously before any notice is delivered.
+    assert len(store.rows) == 0
     k.close()
     k = boot(path)
     k.install(Keeper(rows))
@@ -269,7 +345,7 @@ def test_all_chunks_replay_after_partial_delivery_restart(tmp_path, n, truncate,
     k.grants.grant(PERSON, 'reminders')
     k.pump()
     assert len(rows.rows.get(PERSON, [])) == (n - 256 if truncate else 0)
-    assert len(store.rows) == (n - 256 if truncate else 0)
+    assert len(store.rows) == 0
     assert len(twin.days.get(PERSON, {}).get('2032-06-01', {})) == (n - 256 if truncate else 0)
     if not truncate:
         assert [s for e in notices for s in e.payload['seqs']] == [e.seq for e in events]

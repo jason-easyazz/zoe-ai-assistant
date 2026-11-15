@@ -277,3 +277,35 @@ def test_purge_cannot_delete_an_id_outside_live_notice(tmp_path):
         assert store.rows == {'r99999': {'note': 'copper fern'}}
     finally:
         k.close()
+
+
+def test_a_purge_whose_person_cannot_be_resolved_is_refused_and_runs_no_driver(tmp_path, monkeypatch):
+    """An anonymous whole-person notice names its subject only by a keyed hash. If that hash matches no known person, the
+    purge is not confirmed and the erasure driver is never run for nobody; once it resolves, the same purge completes."""
+    from test_forget_receipts_notices import boot, PERSON
+    from zoe_os.skills.reminders import Reminders as SkillReminders
+    from reminder_store import ReminderStore
+    from zoe_os.spine import Refused
+
+    k = boot(tmp_path / 'purge.db')
+    try:
+        store = ReminderStore().register(k)
+        k.install(SkillReminders())
+        request = k.spine.publish(Event(Kind.UTTERANCE, 'voice', PERSON, payload={'text': PLANT}))
+        k.spine.forget(PERSON, actor=PERSON)
+        notice = next(e for e in k.spine._fetch(0, None, None, 100) if e.kind is Kind.FORGET)
+        assert not notice.payload.get('subject') and notice.payload.get('subject_hash')      # the anonymous form
+        rid = f'r{request.seq}'
+        store.rows = {rid: {'note': PLANT, 'owner': PERSON}}
+        ran = []
+        real = store.purge_one
+        k.actions._purge_do['reminder.delete'] = lambda subject, args: (ran.append(subject), real(subject, args))[1]
+        with monkeypatch.context() as m:
+            m.setattr(k.spine, '_owner', lambda person: b'\x00' * 8)                          # the hash matches nobody
+            with pytest.raises(Refused, match='^purge unresolved$'):
+                k.actions.purge('reminders', 'reminder.delete', {'id': rid}, notice)
+        assert ran == [] and rid in store.rows                                                # no driver, nothing confirmed
+        k.actions.purge('reminders', 'reminder.delete', {'id': rid}, notice)                  # resolvable again: completes
+        assert ran == [PERSON] and store.rows == {}
+    finally:
+        k.close()

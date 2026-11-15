@@ -80,6 +80,12 @@ def test_scoped_forget_has_bounded_sql_work(history):
         assert spine.forget(PERSON, actor=PERSON, seqs=[rows[-1].seq]).count == 1
 
 
+def test_whole_forget_of_absent_member_does_not_scan_unrelated_history(history):
+    spine, _, _ = history
+    with vm_budget(spine._db):
+        assert spine.forget('member-absent', actor='member-absent').count == 0
+
+
 def test_negative_control_detects_one_statement_full_scan(history):
     spine, _, _ = history
     with pytest.raises(AssertionError, match='unbounded SQL work'):
@@ -190,17 +196,40 @@ def test_open_intent_cause_is_still_scrubbed(history):
     assert spine._db.execute('SELECT id FROM intents WHERE id=?', (intent,)).fetchone() is None
 
 
-def test_new_schema_stays_inside_oversized_frame_disk_ceiling(tmp_path):
-    path = tmp_path / 'size.db'
-    spine = Spine(str(path))
+def test_new_schema_keeps_oversized_body_off_disk(tmp_path):
+    from world import household
+
+    # Match the socket launcher, including its initial audit grant. An empty
+    # DenyAll spine understated the live WAL pages in the failing wire scenario.
+    kernel = household(tmp_path)
+    spine = kernel.spine
     try:
         for _ in range(2):
             with pytest.raises(Refused, match='frame too large'):
                 spine._refuse('unverified-peer', 'send a frame', 'frame too large')
-        # Include WAL and SHM while open, just like the wire test's oracle.
-        assert sum(p.stat().st_size for p in tmp_path.glob('size.db*')) < 200_000
+        # Same body and oracle as test_boundary_attacks; schema size is not the
+        # guarantee. Include WAL and SHM while the store is open.
+        body = b'x' * 200_000
+        on_disk = b''.join(p.read_bytes() for p in tmp_path.glob('zoe-os.db*'))
+        assert body[:4096] not in on_disk
+        assert len(on_disk) < 2 * len(body)
     finally:
-        spine.close()
+        kernel.close()
+
+
+def test_negative_control_detects_oversized_body_on_disk(tmp_path, monkeypatch):
+    real = Spine._refuse
+
+    def leaking_refusal(self, *args, **kwargs):
+        # Simulate a boundary that retained the body before rejecting it. This
+        # must fail the content oracle regardless of schema/WAL overhead.
+        self._db.execute('UPDATE events SET payload=? WHERE seq=(SELECT MIN(seq) FROM events)',
+                         ('{"text":"' + 'x' * 200_000 + '"}',))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Spine, '_refuse', leaking_refusal)
+    with pytest.raises(AssertionError):
+        test_new_schema_keeps_oversized_body_off_disk(tmp_path)
 
 
 def test_snapshot_source_lookup_chunks_and_expired_receipt_cleanup(tmp_path):
