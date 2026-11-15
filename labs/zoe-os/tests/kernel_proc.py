@@ -121,6 +121,9 @@ def main() -> None:
             out = {"unbacked": [c.seq for c in k.auditor.scan()]}
         elif msg["cmd"] == "control":
             CONTROLS[msg["name"]](srv)
+        elif msg["cmd"] == "retire":       # retention's two stages, now: the rows leave the log
+            k.spine._expire(msg["seqs"])
+            k.spine._retire(msg["seqs"])
         elif msg["cmd"] == "reissue":
             out = {"cred": srv.issue(msg["skill"]).hex()}
         elif msg["cmd"] == "stop":

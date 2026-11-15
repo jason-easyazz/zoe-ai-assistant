@@ -21,7 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..provenance import erased_request
+from ..provenance import erased_request, still_live, unresolved_person
 
 SNOOZE_MINUTES = 10
 
@@ -141,5 +141,14 @@ class Reminders:
         if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
             for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
                 ctx.purge('reminder.delete', {'id': rid}, notice)
+        if unresolved_person(notice, ctx):
+            # Possibly anyone: an item whose request and receipt both left the log is in no
+            # list. Keep only items with a still-readable source (the restart path would
+            # relearn exactly those from receipts). The kernel's whole-member store sweep has
+            # already reached the external rows.
+            keep = still_live(ctx, self.manifest["reads"],
+                              {s for item in self._items.values() for s in (item['receipt'], item['asked'])})
+            self._items = {rid: item for rid, item in self._items.items()
+                           if {item['receipt'], item['asked']} & keep}
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}

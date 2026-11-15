@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
-from ..provenance import erased_request
+from ..provenance import erased_request, still_live, unresolved_person
 
 EARLY_HOUR = 8
 LEAD = timedelta(minutes=45)
@@ -30,6 +30,11 @@ class CalendarHeadsUp:
         if ev.kind is Kind.FORGET:
             self._open = {k: v for k, v in self._open.items()
                           if not erased_request(ev, int(k.removeprefix('headsup-')), v[0])}
+            if unresolved_person(ev, ctx):     # possibly anyone: keep only still-readable sources
+                keep = still_live(ctx, self.manifest["reads"],
+                                  {int(k.removeprefix('headsup-')) for k in self._open})
+                self._open = {k: v for k, v in self._open.items()
+                              if int(k.removeprefix('headsup-')) in keep}
         elif ev.kind is Kind.CALENDAR_CHANGE and ev.payload["change"] == "created":
             self._maybe_offer(ev, ctx)
         elif ev.kind is Kind.OFFER_RESPONSE and ev.payload["offer_id"] in self._open:

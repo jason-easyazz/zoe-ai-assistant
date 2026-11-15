@@ -29,6 +29,10 @@ class Context:
             (p for p in self.kernel.grants.people
              if self.kernel.spine._owner(p).hex() == notice.payload.get('subject_hash')), None)
 
+    def live_seqs(self, kinds, after: int) -> set[int]:
+        """The same answer ``Client.live_seqs`` gives a remote skill."""
+        return {e.seq for e in self.kernel.spine.replay(self.skill, after, kinds=kinds)}
+
     def purge(self, action: str, args: dict, notice: Event) -> None:
         self.kernel.actions.purge(self.skill, action, args, notice)
 

@@ -5,7 +5,7 @@ It only ever OFFERS. Its manifest declares no actions, so the kernel would refus
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..provenance import erased_request
+from ..provenance import erased_request, still_live, unresolved_person
 
 MIN_CONFIDENCE = 0.8
 
@@ -27,6 +27,11 @@ class LeavingCatch:
                 self._undone[person] = {k: s for k, s in items.items() if not erased_request(ev, s, person)}
                 if not self._undone[person]:
                     self._undone.pop(person, None)
+            if unresolved_person(ev, ctx):     # possibly anyone: keep only still-readable sources
+                keep = still_live(ctx, self.manifest["reads"],
+                                  {s for items in self._undone.values() for s in items.values()})
+                self._undone = {p: kept for p, items in self._undone.items()
+                                if (kept := {k: s for k, s in items.items() if s in keep})}
         elif ev.kind is Kind.ROUTINE_STEP and ev.payload["routine"] == "take-with-you":
             items = self._undone.setdefault(ev.subject, {})
             if ev.payload["done"]:

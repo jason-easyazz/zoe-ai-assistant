@@ -280,4 +280,6 @@ their layout; these DDL changes compact fresh stores, without rewriting old ones
 Review correction: authorised explainer and twin display results retain household content;
 tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
 also clears the owner's reduced twin facts through its watermark after source retention,
-while cross-owner cleanup matches explicit erased request sequences.
+while cross-owner cleanup matches explicit erased request sequences. It also erases events about
+another member whose payload names the forgotten member's id (record, "Combined forget transaction"), and a remote skill that
+cannot resolve the anonymous notice keeps only state whose source it can still read.

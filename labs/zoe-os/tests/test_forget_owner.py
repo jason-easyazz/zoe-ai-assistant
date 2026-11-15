@@ -7,6 +7,7 @@ from zoe_os.capability import Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.kernel import Kernel
 from zoe_os.brain.bridge import BrainBridge, Turn
+from zoe_os import spine as spine_mod
 from zoe_os.spine import Refused, Spine
 from zoe_os.twin.unusual import Sharing
 
@@ -190,6 +191,9 @@ def test_whole_forget_sweeps_all_tables_and_erased_consent_refuses_action(kernel
 def test_negative_control_unindexed_grant_and_refusal_survive_old_forget(kernel, monkeypatch):
     k = kernel
     monkeypatch.setattr(k.spine, '_index_record', lambda *args: None)
+    # The nested-identity index (test_forget_nested.py) also finds a member id in these
+    # payloads; remove it too so this control still shows the records surviving.
+    monkeypatch.setattr(spine_mod, '_nested_ids', lambda *args: set())
     k.grants.grant(A, 'skill')
     with pytest.raises(Refused):
         k.spine._refuse(A, 'synthetic attempt', 'synthetic reason')

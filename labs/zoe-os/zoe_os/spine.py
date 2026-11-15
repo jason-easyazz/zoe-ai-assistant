@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS people (
   seq INTEGER NOT NULL, person TEXT NOT NULL, PRIMARY KEY (person, seq)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS people_seq ON people(seq);
+CREATE TABLE IF NOT EXISTS nested_people (
+  seq INTEGER NOT NULL, person TEXT NOT NULL, PRIMARY KEY (person, seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS nested_people_seq ON nested_people(seq);
+CREATE TABLE IF NOT EXISTS nested_members (owner BLOB PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS causes (
   seq INTEGER NOT NULL, cause INTEGER NOT NULL, PRIMARY KEY (seq, cause)
 ) WITHOUT ROWID;
@@ -219,6 +224,24 @@ def _content(node):
             yield from _content(value)
 
 
+def _nested_ids(kind, payload: dict, people, members) -> set[str]:
+    """Known member ids a payload names as a WHOLE string value or a dict key, at any depth,
+    other than the event's own subject and mentions. Exact match only: an id inside longer
+    free text is the name shield's and the entity forget's job, not this index's. A receipt's
+    saved before-state is a copy whose source rows carry their own links (the snapshot scrub
+    reaches it when they die); indexing it would erase an unrelated surviving action."""
+    if not members:
+        return set()
+    if kind is Kind.ACTION_RECEIPT and (isinstance(payload.get('undo'), dict) or
+                                        isinstance(payload.get('proof'), dict)):
+        payload = dict(payload)
+        if isinstance(payload.get('undo'), dict):
+            payload['undo'] = {'args': payload['undo'].get('args', {})}
+        if isinstance(payload.get('proof'), dict):
+            payload['proof'] = {k: v for k, v in payload['proof'].items() if k != 'restored'}
+    return {s for s in _keys_and_strings(payload) if s in members} - set(people)
+
+
 def _chunks(items: list, size: int = 500):
     for i in range(0, len(items), size):
         yield items[i:i + size]
@@ -240,8 +263,13 @@ _COLS = "seq, ts, kind, source, subject, visibility, payload, mentions, caused_b
 
 class Spine:
     def __init__(self, path: str, authorizer: Authorizer | None = None, *,
-                 queue_size: int = 256, clock: Callable[[], float] = time.time) -> None:
+                 queue_size: int = 256, clock: Callable[[], float] = time.time,
+                 members: Iterable[str] | None = None) -> None:
         self.authorizer: Authorizer = authorizer or DenyAll()
+        # The member ids a payload can name (``_nested_ids``): the kernel's people by default.
+        store = getattr(self.authorizer, 'store', None)
+        self._members: frozenset[str] = frozenset(
+            members if members is not None else getattr(store, 'people', None) or ())
         self.queue_size = queue_size
         self._clock = clock
         self._lock = threading.RLock()
@@ -279,6 +307,7 @@ class Spine:
                     "WHERE tombstoned=0 AND kind IN ('grant_change','refusal','forget')").fetchall():
                 self._index_record(seq, Kind(kind), json.loads(payload or '{}'))
             self._db.execute("INSERT INTO meta VALUES ('record_people_v1', 1)")
+        self._backfill_nested()
         self._shield: set[bytes] = {r[0] for r in self._db.execute("SELECT fp FROM shield")}
         self._entities: dict[str, set[bytes]] = {}      # person -> keyed hashes of forgotten names
         for person, fp in self._db.execute("SELECT subject, fp FROM entity_shield"):
@@ -392,6 +421,10 @@ class Spine:
                      json.dumps(ev.caused_by) if ev.caused_by else None))
                 seq = cur.lastrowid
                 self._index_record(seq, ev.kind, ev.payload)
+                nested = _nested_ids(ev.kind, ev.payload, ev.people, self._members)
+                if nested:
+                    self._db.executemany("INSERT OR IGNORE INTO nested_people VALUES (?,?)",
+                                         [(seq, p) for p in nested])
                 if ev.kind is Kind.ACTION_RECEIPT:
                     self._index_snapshot(seq, ev.subject, ev.payload)
                 if ev.kind is Kind.CLAIM:
@@ -474,6 +507,9 @@ class Spine:
                 if selected is None:
                     seed.update(r[0] for r in self._db.execute(
                         "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto)))
+                    if whole:     # an event about someone else whose payload names this member
+                        seed.update(r[0] for r in self._db.execute(
+                            "SELECT seq FROM nested_people WHERE person = ? AND seq <= ?", (subject, upto)))
                 else:
                     for chunk in _chunks(selected):
                         marks = ','.join('?' * len(chunk))
@@ -630,6 +666,7 @@ class Spine:
                     "UPDATE events SET tombstoned = 1, source = '', payload = NULL, mentions = NULL, subject = NULL,"
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM nested_people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk)
@@ -728,6 +765,31 @@ class Spine:
                 for seq, person, raw in batch:
                     self._index_snapshot(seq, person, json.loads(raw or '{}'))
             self._db.execute("INSERT INTO meta VALUES ('snapshot_index_v1', 1)")
+            self._db.execute('COMMIT')
+        except BaseException:
+            self._db.execute('ROLLBACK')
+            raise
+
+    def _backfill_nested(self) -> None:
+        """Index nested member ids in rows written before this index, or before a member was
+        known. Once per member at open (a keyed hash marks it done, never the id), 256 bodies
+        at a time; never per write or per forget. Expired and forgotten rows hold no payload."""
+        missing = {m for m in self._members if not self._db.execute(
+            "SELECT 1 FROM nested_members WHERE owner = ?", (self._owner(m),)).fetchone()}
+        if not missing:
+            return
+        self._db.execute('BEGIN IMMEDIATE')
+        try:
+            cursor = self._db.execute("SELECT seq, kind, subject, mentions, payload FROM events"
+                                      " WHERE tombstoned = 0 AND payload IS NOT NULL")
+            while batch := cursor.fetchmany(256):
+                for seq, kind, subject, mentions, raw in batch:
+                    people = {subject, *(json.loads(mentions) if mentions else ())}
+                    nested = _nested_ids(Kind(kind), json.loads(raw), people, missing)
+                    self._db.executemany("INSERT OR IGNORE INTO nested_people VALUES (?,?)",
+                                         [(seq, p) for p in nested])
+            self._db.executemany("INSERT OR IGNORE INTO nested_members VALUES (?)",
+                                 [(self._owner(m),) for m in missing])
             self._db.execute('COMMIT')
         except BaseException:
             self._db.execute('ROLLBACK')
@@ -839,7 +901,7 @@ class Spine:
                         "INSERT INTO retired_counts (day, kind, n) SELECT date(ts, 'unixepoch'), kind,"
                         f" COUNT(*) FROM events WHERE tombstoned = {EXPIRED} AND seq IN ({marks})"
                         " GROUP BY 1, 2 ON CONFLICT(day, kind) DO UPDATE SET n = n + excluded.n", chunk)
-                    for table in ("events", "people", "causes"):
+                    for table in ("events", "people", "nested_people", "causes"):
                         self._db.execute(f"DELETE FROM {table} WHERE seq IN ({marks})", chunk)
                     self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
                     self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)

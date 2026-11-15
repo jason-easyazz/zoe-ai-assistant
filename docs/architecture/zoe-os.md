@@ -1070,6 +1070,21 @@ whole-person erasure of names without truncating the reviewed notice protocol.
 Explicit erased request IDs match every owner's stores and caches. Whole-person
 purge additionally sweeps orphaned owner rows; the twin clears reduced owner facts
 through the notice watermark even when source retention has removed their events.
+A remote skill (`Client`) holds no key to resolve `subject_hash`, so an unresolved
+whole-person notice means "possibly any member", never "nobody": the twin, leaving
+catch, calendar heads-up and reminder caches keep only state whose source event the
+skill can still read (`provenance.still_live`, one replay of its own reads from its
+oldest held source) and drop the rest. Another member's state with a live source
+survives; their state whose source had also left the log is dropped and relearned.
+
+Whole-person selection also follows `nested_people`: a known member id that an
+ordinary payload holds as a whole string value or a dict key, at any depth, other
+than the subject and mentions. Ids inside longer free text are not identities here
+(the name shield covers those). Receipt before-state copies are excluded, as in
+entity matching; the snapshot scrub reaches them through their sources. Rows written
+before the index, or before a member was known, are backfilled once per member at
+open (marked by a keyed hash, never the id). Scoped, entity and topic forgets do not
+use this index.
 
 Trusted bootstrap registers synchronous purges for brain lists/reminders/alarms
 and the reminder fixture. The reminder skill retains the reviewed replay delete:

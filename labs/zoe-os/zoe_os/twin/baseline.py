@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
-from ..provenance import erased_request
+from ..provenance import erased_request, still_live, unresolved_person
 from ..retention import TWIN_WINDOW_DAYS
 
 MIN_DAYS = {"workday": 10, "weekend": 6}
@@ -92,6 +92,19 @@ class Twin:
             if person is None and ctx is not None:
                 person = ctx.forgotten_subject(ev)
             self._forget(replace(ev, payload={**ev.payload, 'subject': person}))
+            if unresolved_person(ev, ctx):
+                # Possibly anyone: the forgotten member's facts whose sources already left the
+                # log are in no list. Keep only facts whose source is still readable.
+                held = {v[1] for days in self.days.values() for facts in days.values()
+                        for v in facts.values()}
+                keep = still_live(ctx, self.manifest["reads"], held)
+                for person in list(self.days):
+                    for day, facts in list(self.days[person].items()):
+                        self.days[person][day] = {k: v for k, v in facts.items() if v[1] in keep}
+                        if not self.days[person][day]:
+                            del self.days[person][day]
+                    if not self.days[person]:
+                        del self.days[person]
         elif ev.visibility.value == "private" and ev.subject:
             self._observe(ev)
 
