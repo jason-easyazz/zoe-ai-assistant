@@ -187,3 +187,55 @@ def test_the_floor_has_no_verdict_input():
     import inspect
 
     assert "speaker" not in inspect.signature(csf.resolve).parameters and "speaker" not in inspect.signature(csf.check).parameters
+
+
+# -- the voice-mode header on the STREAMING path (review blocker) ---------------------------------------------------------------
+
+class _Stop(Exception):
+    pass
+
+
+def _first_user_save(monkeypatch, voice_mode):
+    """Drive locked_chat_stream just far enough to see the kwargs the user turn is persisted with."""
+    seen = {}
+
+    async def ensure(*_a, **_k):
+        return None
+
+    async def save(session_id, role, content, user_id=None, **kw):
+        seen.update(kw)
+        raise _Stop
+
+    monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", ensure)
+    monkeypatch.setattr(chat_router, "_save_chat_message", save)
+
+    async def drive():
+        kw = {} if voice_mode is None else {"voice_mode": voice_mode}
+        async for _ in chat_router.locked_chat_stream("hello", "s-stream", dict(MEMBER), **kw):
+            pass
+
+    with pytest.raises(_Stop):
+        asyncio.run(drive())
+    return seen
+
+
+def test_streaming_with_the_voice_mode_header_gets_no_typed_verdict(monkeypatch):
+    assert _first_user_save(monkeypatch, True) == {}
+
+
+@pytest.mark.parametrize("voice_mode", [False, None])
+def test_streaming_without_it_gets_the_verdict(monkeypatch, voice_mode):
+    assert _first_user_save(monkeypatch, voice_mode) == {"speaker_verified": True, "speaker_source": "typed_signed_in"}
+
+
+def test_the_endpoint_threads_the_header_into_both_paths():
+    """The endpoint reads X-Voice-Mode once and hands it to the streaming generator AND the non-stream save."""
+    import inspect
+
+    src = inspect.getsource(chat_router.chat)
+    import re
+
+    assert re.search(r"locked_chat_stream\([^)]*voice_mode=is_voice_mode", src, re.S)        # streaming: locked_chat_stream(...)
+    assert "_typed_verdict_kw(user, req_channel, voice_mode=is_voice_mode)" in src         # non-stream persist
+    assert chat_router._typed_verdict_kw(MEMBER, "chat", voice_mode=True) == {}            # non-stream, header: none
+    assert chat_router._typed_verdict_kw(MEMBER, "chat", voice_mode=False)["speaker_source"] == "typed_signed_in"

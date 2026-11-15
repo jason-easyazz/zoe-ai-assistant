@@ -1488,11 +1488,12 @@ async def chat_stream_generator(
     *,
     req_panel_id: str | None = None,
     channel: str = "chat",
+    voice_mode: bool = False,
 ):
     user_id = user["user_id"]
     await _ensure_user_and_chat_session(session_id, user_id)
     # Persist user turn immediately — enables history for Zoe Agent on the NEXT request
-    await _save_chat_message(session_id, "user", message, user_id=user_id, **_typed_verdict_kw(user, channel))
+    await _save_chat_message(session_id, "user", message, user_id=user_id, **_typed_verdict_kw(user, channel, voice_mode=voice_mode))
     # Frustration signal detection (non-blocking, session-scoped)
     _check_frustration(session_id, user_id, message)
     enc = EventEncoder()
@@ -2430,6 +2431,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 user,
                 req_panel_id=req_panel_id,
                 channel=req_channel,
+                voice_mode=is_voice_mode,
             ),
             media_type="text/event-stream",
             headers={
