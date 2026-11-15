@@ -680,6 +680,10 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         # candidate (and asked about), so the old row must NOT be retired here.
         logger.info("MEMORY_STORE_HELD source=%s", source)
         return "dropped"
+    if old_id and str((getattr(ref, "metadata", None) or {}).get("status") or "approved") != "approved":
+        # write, verify, retire (QA round 10): a successor that is not a served row never retires the old one
+        logger.info("MEMORY_SUPERSEDE_REFUSED source=%s old=%s reason=successor_not_served", source, old_id)
+        return "stored"
     if old_id and new_id and new_id != old_id:
         try:
             if hasattr(svc, "supersede_by"):

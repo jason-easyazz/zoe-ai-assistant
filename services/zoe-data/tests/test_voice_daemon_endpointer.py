@@ -276,6 +276,37 @@ def test_barge_monitor_requires_live_tts_process():
     assert proc.terminated
 
 
+def test_barge_monitor_runs_with_the_first_sound_instrument_absent_or_failing():
+    """The first-sound instrument (_TALK) only counts. With it absent (this rig's sliced globals never define it)
+    or raising on every call, the monitor must behave exactly as before: silent with no player, firing during one."""
+    class _Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("instrument down")
+
+    for talk in (None, _Boom()):
+        g, clock = _barge_globals(active_playback=lambda: None)
+        if talk is None:
+            assert "_TALK" not in g
+        else:
+            g["_TALK"] = talk
+        def _no_mic(self, **kw):
+            raise OSError("no mic")
+        mon = g["_BargeMonitor"](type("PA", (), {"open": _no_mic})())
+        mon.start()            # begin() absent or raising must not stop the thread from starting
+        assert mon._thread is not None
+        mon._thread.join(timeout=2)
+        g, clock = _barge_globals(active_playback=lambda: None)
+        if talk is not None:
+            g["_TALK"] = talk
+        assert not _run_monitor(g, clock, [0.99] * 40)
+        proc = _Proc()
+        g2, clock2 = _barge_globals(active_playback=lambda: (proc, 1000.0))
+        if talk is not None:
+            g2["_TALK"] = talk
+        assert _run_monitor(g2, clock2, [0.99] * 40)
+        assert proc.terminated
+
+
 def test_active_playback_requires_a_running_player():
     """_active_playback (the monitor's only view of "is Zoe speaking") is None
     unless a registered player is still running."""

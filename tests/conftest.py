@@ -140,3 +140,20 @@ def mock_household():
             {"user_id": "test_user_456", "role": "member"}
         ]
     }
+
+
+@pytest.fixture(autouse=True)
+def _forget_session_epochs_are_per_test(tmp_path, monkeypatch):
+    """``forget_session`` keeps member -> forget-epoch in a file under the home directory that the live service reads. Any
+    test reaching a real forget path used to write that REAL file (found 2026-11-14: five entries, one for a real member id),
+    and a later test then saw ``sess~f<epoch>`` instead of ``sess`` depending on run order. Every test gets its own empty
+    store; the module itself also refuses the real path under pytest."""
+    try:
+        import forget_session
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+    monkeypatch.setattr(forget_session, "_PATH", tmp_path / "forget_session_epochs.json")
+    monkeypatch.setattr(forget_session, "_EPOCH", {})
+    monkeypatch.setattr(forget_session, "_LOADED", False)
+    yield
