@@ -210,7 +210,9 @@ def reminder_next_fire(row: dict, after: float, tz: tzinfo, default_hm: tuple[in
         return None
     floor = max(after, row.get("after", 0.0))
     snoozed = row.get("snoozed_until")
-    if snoozed and snoozed > floor:       # the row's own floor binds a snooze too: nothing at or before it ever fires
+    # A snooze writes the row's floor AT its own time, so a snooze equal to the floor is the live snooze and fires. One BEHIND
+    # the floor was overtaken by a later write (a done, an edit) and must never fire.
+    if snoozed and snoozed > after and snoozed >= row.get("after", 0.0):
         return snoozed
     if row.get("at") is not None:
         return row["at"] if row["at"] > floor else None
