@@ -745,3 +745,41 @@ def test_control_without_the_combine_the_speaker_is_told_to_wait_on_the_other_pe
     monkeypatch.setattr(medical_safety, "speaker_call_now", lambda _t: medical_safety.NONE)      # 88aea93a1's behaviour
     reply = run(medical_safety.handle("am i having a heart attack and my dad swallowed sleeping pills", "demo_bar_00000001"))
     assert _opening("heart") not in reply
+
+
+# -- an ordinary place or time after the question never reads as fiction (review of #2525: the fiction guard matched word PREFIXES) -----
+ORDINARY_TAILS = [   # the first twelve START with a fiction word: shower / show, playground / play, bookshop / book ...
+    "in the shower", "on the playground", "in the bookshop", "in the moviegoer queue", "on the gameday bus", "on the filmore st corner",
+    "in the storyboard room", "in the playroom", "on the showground", "in the bookcase aisle", "in the gameroom", "on the seriesly long drive",
+    "in the kitchen", "in the car", "in the garden", "in the garage", "on the bus", "on the couch", "in the bathroom", "in this heat",
+    "at work", "at school", "right now", "tonight", "this morning", "after dinner",
+]
+FICTION_TAILS = [f"{prep} {det} {word}" for prep, det in (("in", "the"), ("on", "the"), ("in", "this"), ("in", "that"))
+                 for word in ("movie", "film", "show", "book", "game", "episode", "series", "story", "novel", "play")]
+
+
+def _condition_terms() -> list:
+    return [(key, terms[0]) for key, terms in sorted(medical_safety._data()["self_assess"]["conditions"].items())]
+
+
+@pytest.mark.parametrize("tail", ORDINARY_TAILS)
+def test_every_condition_fires_with_an_ordinary_place_or_time_after_it(tail, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    for key, term in _condition_terms():
+        text = f"is this {term} {tail}"
+        assert medical_safety.self_assessment(text) == _expected(key), text
+        assert run(medical_safety.handle(text, "demo_bar_00000001")), text
+
+
+@pytest.mark.parametrize("tail", FICTION_TAILS)
+def test_a_real_fiction_frame_still_never_fires(tail):
+    for _key, term in _condition_terms():
+        assert medical_safety.self_assessment(f"is this {term} {tail}").cls == "", (term, tail)
+
+
+def test_control_the_prefix_matching_guard_swallowed_the_ordinary_tails():
+    old = re.compile(r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play))")
+    eaten = [t for t in ORDINARY_TAILS if not old.match(" " + t)]
+    assert len(eaten) == 12 and eaten == ORDINARY_TAILS[:12]          # exactly the tails that start with a fiction word
+    new = re.compile(medical_safety._SA_FICTION)
+    assert all(new.match(" " + t) for t in ORDINARY_TAILS) and not any(new.match(" " + t) for t in FICTION_TAILS)
