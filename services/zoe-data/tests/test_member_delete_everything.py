@@ -1074,3 +1074,53 @@ def test_the_members_push_endpoints_and_panel_sign_ins_go_and_a_later_push_finds
         return await push.send_push_to_user(A, "x"), await push.send_push_to_user(B, "x")
     assert asyncio.run(later()) == (0, 1)
     assert push_lane.sent == ["https://push.invalid/" + B], "a push to the deleted member finds no endpoint; B's still sends"
+
+
+# ── a run the member started in another member's session that holds no turn of theirs ────────────────────────────────────────
+
+def _seed_run_in_bs_session(store):
+    async def seed():
+        x = store.execute
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-b2', ?, 'B again')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('b2-1', 's-b2', 'user', 'B asks', ?)", (_meta(B),))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('b2-2', 's-b2', 'assistant', 'to B', ?)",
+                (_meta(B),))
+        await x("INSERT INTO openclaw_run_state VALUES ('rs-a-in-b', ?, 'A asks')", (A,))
+        await x("INSERT INTO openclaw_run_state VALUES ('rs-b-in-b', ?, 'B asks')", (B,))
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-a-in-b', 's-b2', 'rs-a-in-b', '[\"a reply to A\"]')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-b-in-b', 's-b2', 'rs-b-in-b', '[\"a reply to B\"]')")
+        await store.commit()
+    asyncio.run(seed())
+
+
+def test_a_run_the_member_started_in_another_members_session_goes_with_no_turn_of_theirs_there(env, store):
+    """The session holds NO turn of A's, so neither the owned sessions nor A's turns lead to it: only A's run-state row does, and it is
+    read before the owned rows delete it. B's turns and B's own run there stay."""
+    svc, _col = env
+    _seed_run_in_bs_session(store)
+    _delete(svc)
+    assert "run-a-in-b" not in _ids(store, "chat_ag_ui_runs")
+    assert {"run-b-in-b"} <= _ids(store, "chat_ag_ui_runs")
+    assert {r[0] for r in _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-b2'")} == {"b2-1", "b2-2"}
+    assert _q(store, "SELECT user_id FROM chat_sessions WHERE id = 's-b2'") == [(B,)]
+    assert not _q(store, "SELECT id FROM openclaw_run_state WHERE user_id = ?", (A,))
+
+
+def test_a_failure_after_the_runs_are_found_leaves_the_evidence_for_the_retry(env, store, monkeypatch):
+    """Every erase step runs in one transaction: a failure after the run ids were collected (and their records deleted) rolls back,
+    so the run-state rows and the run records are both still there, and the retry finishes."""
+    svc, _col = env
+    _seed_run_in_bs_session(store)
+    real = mof._lists
+
+    async def boom(*_a):
+        raise ConnectionError("store down mid-erase")
+    monkeypatch.setattr(mof, "_lists", boom)
+    with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
+        _delete(svc)
+    assert "run-a-in-b" in _ids(store, "chat_ag_ui_runs"), "the run record is back (rolled back)"
+    assert _q(store, "SELECT id FROM openclaw_run_state WHERE id = 'rs-a-in-b'") == [("rs-a-in-b",)], "and so is the evidence"
+    assert "m1" in _ids(store, "chat_messages"), "every step of the erase rolled back together"
+    monkeypatch.setattr(mof, "_lists", real)
+    _delete(svc)                                       # the retry
+    assert "run-a-in-b" not in _ids(store, "chat_ag_ui_runs")

@@ -20,6 +20,7 @@ it runs before the memory lock, like ``member_derived_forget``. Logs counts only
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -61,14 +62,50 @@ def _db():
     return get_compat_db()
 
 
+@contextlib.asynccontextmanager
+async def _nothing():
+    yield
+
+
+def _tx_of(db):
+    """The connection's own transaction factory (the asyncpg pool connection, through ``AsyncpgCompat``), or None (aiosqlite: one
+    implicit transaction until ``commit``)."""
+    tx = getattr(db, "transaction", None)
+    return tx if callable(tx) else None
+
+
+@contextlib.asynccontextmanager
+async def _atomic(db):
+    """ONE transaction for every erase step: a failure anywhere rolls ALL of them back, so the retry still finds every link (a run-state
+    row, a session owner, a turn's metadata) that leads it to the rows it has to erase. Postgres: a real transaction (each statement
+    of ``_Run`` then runs in its own savepoint, so a not-migrated table does not abort it). aiosqlite: the implicit transaction, rolled
+    back here on failure."""
+    tx = _tx_of(db)
+    if tx is not None:
+        async with tx():
+            yield
+        return
+    try:
+        yield
+    except BaseException:
+        await db.rollback()
+        raise
+
+
 class _Run:
     def __init__(self, db):
         self.db, self.removed, self.order = db, 0, []      # ``order``: the tables DELETEd from, in the order the statements ran
+        self.savepoints = False                              # inside ``_atomic`` on a connection with transactions: True
+
+    def _sp(self):
+        tx = _tx_of(self.db) if self.savepoints else None
+        return tx() if tx is not None else _nothing()
 
     async def rows(self, sql: str, params: tuple) -> list:
         try:
-            cur = await self.db.execute(sql, params)
-            return list(await cur.fetchall())
+            async with self._sp():
+                cur = await self.db.execute(sql, params)
+                return list(await cur.fetchall())
         except Exception as exc:  # noqa: BLE001
             if _missing_table(exc):
                 return []
@@ -79,7 +116,8 @@ class _Run:
         if m:
             self.order.append(m.group(1))
         try:
-            cur = await self.db.execute(sql, params)
+            async with self._sp():
+                cur = await self.db.execute(sql, params)
         except Exception as exc:  # noqa: BLE001
             if _missing_table(exc):
                 return 0
@@ -178,6 +216,10 @@ async def _transcript(r: _Run, user_id: str) -> None:
     AG-UI runs); a session they own that still holds someone else's turns keeps those turns, loses its title (the member's words) and
     is handed to a remaining participant (``_hand_over``); and in every surviving session they owned or spoke in, the AG-UI runs not
     shown to be another member's (``_shared_runs``). No surviving chat row names the member."""
+    # FIRST, while the evidence exists: every AG-UI run the member STARTED, in ANY session (another member's too, even one holding no turn
+    # of theirs). ``openclaw_run_state`` is the only link from a run to its starter, and it is deleted later with the OWNED rows.
+    started = sorted({str(x[0]) for x in await r.rows("SELECT id FROM openclaw_run_state WHERE user_id = ?", (user_id,)) if x[0]})
+    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE run_id", started)
     rows = await r.rows(TRANSCRIPT_SQL, (user_id, *_id_patterns(user_id)))
     mine = [str(x[0]) for x in rows if _turn_owner(x[2], x[3]) == user_id]
     touched = sorted({str(x[1]) for x in rows if _turn_owner(x[2], x[3]) == user_id and x[1]})
@@ -233,8 +275,9 @@ async def _existing_users(r: _Run, ids: list):
     if not ids:
         return set()
     try:
-        cur = await r.db.execute(f"SELECT id FROM users WHERE id IN ({', '.join('?' * len(ids))})", tuple(ids))
-        return {str(x[0]) for x in await cur.fetchall()}
+        async with r._sp():
+            cur = await r.db.execute(f"SELECT id FROM users WHERE id IN ({', '.join('?' * len(ids))})", tuple(ids))
+            return {str(x[0]) for x in await cur.fetchall()}
     except Exception as exc:  # noqa: BLE001
         if _missing_table(exc):
             return None
@@ -399,20 +442,26 @@ async def forget_user(user_id: str) -> int:
             r = _Run(db)
             # CHILD BEFORE PARENT (the migrations' foreign keys; pinned by test_member_delete_everything's FK-order test): the
             # single-author rows first (a note / journal entry / attendee / per-person row may point at a contact or event deleted below)
-            await _scheduled_sends(r, uid)
-            # the queued notifications BEFORE the transcript: one claimed right now seeds a chat session, and that seed is either
-            # removed by the transcript step below or undone by claim_pending's own post-check (session_utils)
-            await r.run("DELETE FROM proactive_pending WHERE user_id = ?", (uid,))
-            await _transcript(r, uid)
-            for table in OWNED:
-                await r.run(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
-            await _lists(r, uid)
-            await _events(r, uid)           # its attendee rows reference people (SET NULL): events before contacts
-            await _people(r, uid)
-            await _ambient(r, uid)          # reads the member's speaker profiles: before they go
-            await _panel_voices(r, uid)
-            await _biometrics(r, uid)
-            await db.commit()
+            await _scheduled_sends(r, uid)          # commits its consume (fired = 1) on its own: a fire must see it at once
+            # Every LINK is read before the rows it leads to are deleted, and deleted after them, all in ONE transaction (``_atomic``):
+            # run state -> runs (``_transcript``, first), session owner / turn metadata -> sessions and turns, private list -> items,
+            # contact -> per-person rows, speaker profile -> legacy recordings, cluster -> samples.
+            async with _atomic(db):
+                r.savepoints = _tx_of(db) is not None
+                # the queued notifications BEFORE the transcript: one claimed right now seeds a chat session, and that seed is either
+                # removed by the transcript step below or undone by claim_pending's own post-check (session_utils)
+                await r.run("DELETE FROM proactive_pending WHERE user_id = ?", (uid,))
+                await _transcript(r, uid)
+                for table in OWNED:
+                    await r.run(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
+                await _lists(r, uid)
+                await _events(r, uid)           # its attendee rows reference people (SET NULL): events before contacts
+                await _people(r, uid)
+                await _ambient(r, uid)          # reads the member's speaker profiles: before they go
+                await _panel_voices(r, uid)
+                await _biometrics(r, uid)
+                await db.commit()
+            r.savepoints = False
             last_order[:] = r.order
     except Exception as exc:  # noqa: BLE001
         if _no_pool(exc):
