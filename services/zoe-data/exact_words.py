@@ -313,30 +313,25 @@ NON_TURN_KINDS = frozenset({"lab"})
 REFUSED = {"no_source_turn": 0}
 
 
-def _prov_of(turn_id: str) -> str:
-    return (turn_id or "").rpartition(_MID_SEP)[2] if _MID_SEP in (turn_id or "") else ""
-
-
 def mid_of(turn_id: str) -> str:
-    """The saved-turn (``chat_messages.id``) id an indexed turn's id carries; '' for a row indexed before the ids, and for an
-    entry from a non-turn source (``@src:<kind>``)."""
-    p = _prov_of(turn_id)
-    return "" if p.startswith(_KIND_PREFIX) else p
+    """The saved-turn (``chat_messages.id``) id an indexed turn's id carries (``turn_forget.classify``); '' for a legacy entry and
+    for an entry from a non-turn source (``@src:<kind>``)."""
+    import turn_forget
+    kind, value = turn_forget.classify(turn_id or "")
+    return value if kind == turn_forget.TURN else ""
 
 
 def is_legacy(turn_id: str) -> bool:
-    """An entry indexed BEFORE saved-turn ids: it names neither a saved turn nor a source kind. Only these are ever matched by
-    their words (``erase_text``)."""
-    return not _prov_of(turn_id)
+    """An entry indexed BEFORE saved-turn ids (``turn_forget.classify``): only these are ever matched by their words."""
+    import turn_forget
+    return turn_forget.classify(turn_id or "")[0] == turn_forget.LEGACY
 
 
 def partition(rows: Iterable) -> tuple[list, list]:
-    """``(bound, legacy)`` of ``(turn_id, text)`` index rows: THE one place a forget splits entries. A bound entry (a saved-turn
-    id or a source kind) is erased by its id alone (``erase_turns``); only a legacy entry is handed to a text matcher."""
-    bound, legacy = [], []
-    for row in rows or ():
-        (legacy if is_legacy(row[0]) else bound).append(row)
-    return bound, legacy
+    """``(bound, legacy)`` of ``(turn_id, text)`` index rows (``turn_forget.split``): a bound entry (a saved-turn id or a source
+    kind) is erased by its id alone; only a legacy entry is handed to a text matcher."""
+    import turn_forget
+    return turn_forget.split(rows, key=lambda row: row[0])
 
 
 def _is_a_question(text: str) -> bool:

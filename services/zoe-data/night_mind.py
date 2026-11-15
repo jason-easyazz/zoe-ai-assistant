@@ -1980,12 +1980,10 @@ def _flat(text: Any) -> str:
 
 
 def partition_observations(obs: Any) -> tuple[list, list]:
-    """``(bound, legacy)`` observations: bound = saved with the turn's id (``turn_id``, the chat message id), erased by that id
-    alone; legacy = saved with none - the ONLY observations a text matcher is ever handed (``erase_words``)."""
-    bound, legacy = [], []
-    for o in obs or ():
-        (bound if str(o.get("turn_id") or "").strip() else legacy).append(o)
-    return bound, legacy
+    """``(bound, legacy)`` observations (``turn_forget.split``): bound = saved with the turn's id, erased by that id alone; legacy =
+    saved with none - the ONLY observations a text matcher is ever handed (``erase_words``)."""
+    import turn_forget
+    return turn_forget.split(obs, key=lambda o: {"quote": o.get("quote"), "turn_id": o.get("turn_id")})
 
 
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:

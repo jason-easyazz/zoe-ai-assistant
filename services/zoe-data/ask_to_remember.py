@@ -510,9 +510,11 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             if ref_is_ask and is_ask_row(m) and ta and tb and ta != tb:
                 continue
             import turn_forget
-            ka, sa = turn_forget.provenance(meta)
-            kb, sb = turn_forget.provenance(m)
-            sa, sb = (sa if ka == "turn" else ""), (sb if kb == "turn" else "")
+            ka, sa = turn_forget.classify(meta)
+            kb, sb = turn_forget.classify(m)
+            if ka == turn_forget.KIND or kb == turn_forget.KIND:
+                continue                    # bound to a non-turn source: only that row, never a twin
+            sa, sb = (sa if ka == turn_forget.TURN else ""), (sb if kb == turn_forget.TURN else "")
             if sb and sb != sa:             # PER ROW: a candidate with its own saved turn is NEVER a twin by its words
                 continue
             same_turn = False

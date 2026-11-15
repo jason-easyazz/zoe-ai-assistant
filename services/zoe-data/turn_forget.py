@@ -405,24 +405,69 @@ _PLACEHOLDER = "[redacted]"
 KIND_KEY = "source_kind"
 
 
-def provenance(meta: Optional[dict]) -> tuple[str, str]:
-    """A row's write-time provenance: ``("turn", <saved-turn id>)``, ``("kind", <non-turn source kind>)``, or ``("legacy", "")``
-    for a row written before the ids (it names neither)."""
-    meta = meta or {}
+TURN, KIND, LEGACY = "turn", "kind", "legacy"
+_ENTRY_SEP, _ENTRY_KIND = "@", "src:"     # an exact-words entry id: ``xw-<key>[~<tag>]@<saved-turn id>`` or ``...@src:<kind>``
+
+
+def classify(row: Any) -> tuple[str, str]:
+    """THE one place a forget decides what a row IS, per row - for every store a forget reaches:
+
+    * an exact-words entry id (a ``str``): ``@<id>`` / ``@src:<kind>`` / no ``@``;
+    * a night-mind observation (a mapping with ``quote`` and ``turn_id``): its ``turn_id`` / none;
+    * a memory row (``.metadata``) or its metadata: ``source_turn`` / ``source_kind`` / neither.
+
+    Returns ``(TURN, <saved-turn id>)`` - erased by that id only; ``(KIND, <non-turn source kind>)`` - bound to a source that is
+    no saved turn: only that row goes, by its own key, and nothing else is matched for it (no transcript, no words); or
+    ``(LEGACY, "")`` - written before provenance was stamped: the ONLY kind a text matcher is ever handed."""
+    if isinstance(row, str):
+        if _ENTRY_SEP not in row:
+            return LEGACY, ""
+        p = row.rpartition(_ENTRY_SEP)[2]
+        if not p:
+            return LEGACY, ""
+        return (KIND, p[len(_ENTRY_KIND):]) if p.startswith(_ENTRY_KIND) else (TURN, p)
+    meta = getattr(row, "metadata", row)
+    meta = meta if isinstance(meta, dict) else {}
+    if "quote" in meta and "turn_id" in meta and "source_turn" not in meta:
+        tid = str(meta.get("turn_id") or "").strip()
+        return (TURN, tid) if tid else (LEGACY, "")
     src = str(meta.get("source_turn") or "")
     if src:
-        return "turn", src
+        return TURN, src
     kind = str(meta.get(KIND_KEY) or "")
-    return ("kind", kind) if kind else ("legacy", "")
+    return (KIND, kind) if kind else (LEGACY, "")
+
+
+def provenance(meta: Optional[dict]) -> tuple[str, str]:
+    """``classify`` of a memory row's metadata (kept name)."""
+    return classify(meta or {})
+
+
+def split(rows: Any, key: Any = None) -> tuple[list, list]:
+    """``(bound, legacy)`` by ``classify`` (``key`` picks what to classify from each row): a bound row (TURN or KIND) never
+    meets a text matcher; only a legacy row does. Every store's partition is this."""
+    bound, legacy = [], []
+    for r in rows or ():
+        (legacy if classify(key(r) if key else r)[0] == LEGACY else bound).append(r)
+    return bound, legacy
 
 
 def partition(rows: Any) -> tuple[list, list]:
-    """``(bound, legacy)`` of memory rows (``.metadata``): THE one place a forget splits them. A bound row is the turn's only by
-    its saved-turn id (a non-turn kind is no turn's at all); only a legacy row is ever handed to a text matcher."""
-    bound, legacy = [], []
-    for r in rows or ():
-        (legacy if provenance(getattr(r, "metadata", None))[0] == "legacy" else bound).append(r)
-    return bound, legacy
+    """``(bound, legacy)`` of memory rows (``.metadata``): ``split``."""
+    return split(rows)
+
+
+def target_of(entry_id: str = "", meta: Optional[dict] = None) -> tuple[tuple, bool]:
+    """What a forget TARGET (an explained answer's exact-words entry and / or its memory row) names: ``(mids, source_only)``.
+    ``mids`` = its saved-turn ids; ``source_only`` = it names no saved turn but IS bound to a non-turn source (only that row goes,
+    nothing is matched for it); neither = a legacy target (the words fallback)."""
+    mids, kinds = [], 0
+    for c in (classify(entry_id) if entry_id else (LEGACY, ""), classify(meta) if meta else (LEGACY, "")):
+        if c[0] == TURN and c[1] not in mids:
+            mids.append(c[1])
+        elif c[0] == KIND:
+            kinds += 1
+    return tuple(mids), bool(kinds and not mids)
 
 
 def scrubbed_form(text: str) -> str:
@@ -566,5 +611,6 @@ def reset() -> None:  # tests
 
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
-    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset", "provenance", "partition", "erase_turn_words",
+    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset", "provenance", "partition", "erase_turn_words", "classify",
+    "split", "target_of",
 ]

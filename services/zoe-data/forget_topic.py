@@ -217,8 +217,12 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
         # confirmed and a retry finds the same entries again - nothing is left unfindable. By the entry's saved-turn id; a legacy
         # entry by its words (as said or as redacted: over-inclusive by design).
         for tid, text in hits.items():
-            mid = exact_words.mid_of(tid)
-            await (exact_words.flag_transcript_turns(user_id, [mid]) if mid else exact_words.forget_transcript(user_id, text))
+            kind, mid = turn_forget.classify(tid)              # PER ROW: by its saved turn / only itself / by its words
+            if kind == turn_forget.TURN:
+                await exact_words.flag_transcript_turns(user_id, [mid])
+            elif kind == turn_forget.LEGACY:
+                await exact_words.forget_transcript(user_id, text)
+            # KIND (a non-turn source, ``@src:<kind>``): the entry is deleted below and no transcript is touched
         erased = int(await backend.delete(user_id, list(hits)) or 0)
     return retracted, erased
 

@@ -484,3 +484,159 @@ def test_a_legacy_fact_of_a_backfilled_turn_is_forgotten_with_it(world, path):
     assert planted["old"].id not in approved and planted["mine"].id not in approved          # the turn's rows, legacy and bound
     assert planted["other"].id in approved                                                    # another turn's bound row: by id only
     assert planted["unrelated"].id in approved                                                # a legacy row that does not match
+
+
+# ── THREE ROW KINDS x EVERY FORGET PATH (turn_forget.classify): @<id> by id only; @src:<kind> only itself; legacy by words ──────
+
+KW = "My kayak paddles live in the blue shed behind the garage"
+OTHER_MID = "m-another-turn-kw"
+
+
+def _plant_kind(svc, chat, kind):
+    """The target turn's transcript (saved through the real path) and ONE target per store of the given kind, beside bystanders
+    holding the very same words: an entry and a fact bound to ANOTHER saved turn (always survive), and - unless the target is
+    itself legacy - a legacy entry, fact and observation (they go only by the per-row words fallback, never for a non-turn
+    target)."""
+    from routers.chat import _save_chat_message
+
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", KW, user_id=UID)) is True
+    mid = next(m for m, (c, _meta) in chat.rows.items() if c == KW)
+    now, be, nt = time.time(), xw.get_backend(), night_store.get_backend()
+
+    def entry(tid):
+        run(be.add(UID, tid, now, KW, xw.tokens_column(KW), "chat"))
+        return tid
+
+    def fact(text, prov):
+        ref = run(svc.ingest(text, user_id=UID, source="turn_digest", status="approved", source_excerpt=KW))
+        meta = svc._collection().rows[ref.id][1]
+        for k in ("source_turn", "source_kind"):
+            meta.pop(k, None)
+        meta.update(prov)
+        return ref.id
+
+    def obs(oid, turn_id):
+        run(nt.put_observation(night_store.obs_row(id=oid, user_id=UID, turn_id=turn_id, quote=KW, day="2026-10-08", said_at=now)))
+        return oid[2:]
+
+    prov = {"turn": {"source_turn": mid}, "kind": {"source_kind": "omi_recording"}, "legacy": {}}[kind]
+    w = {"mid": mid,
+         "entry": entry({"turn": f"xw-target@{mid}", "kind": "xw-target@src:lab", "legacy": "xw-target"}[kind]),
+         "fact": fact("User keeps kayak paddles in the blue shed behind the garage", prov),
+         "other_entry": entry(f"xw-other@{OTHER_MID}"),
+         "other_fact": fact("User stores kayak paddles in a blue shed behind the garage", {"source_turn": OTHER_MID})}
+    if kind != "kind":
+        w["obs"] = obs("o-target", mid if kind == "turn" else "")
+    if kind != "legacy":
+        w["old_entry"] = entry("xw-old")
+        w["old_fact"] = fact("User's kayak paddles live in the blue shed behind the garage", {})
+        w["old_obs"] = obs("o-old", "")
+    return w
+
+
+def _run_path(path, svc, w):
+    if path == "forget_it_after_why":                                  # the quoted exact-words entry is the target
+        stored = xw.get_backend().rows[(UID, w["entry"])]["text"]
+        return run(pa._forget_turn(UID, mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored,
+                                                     turn_id=w["entry"]), svc=svc))
+    if path == "forget_it_fact":                                       # the explained FACT row is the target
+        ref = run(svc.get(w["fact"]))
+        return run(pa.forget_it(UID, mp.Explained(seq=1, row_id=ref.id, ts=time.time(), text=ref.text,
+                                                  quote=str(ref.metadata.get("source_excerpt") or ""), turn_id=""), svc=svc))
+    if path == "memory_space":
+        import memory_space
+        return "Done" if run(memory_space.forget_row(UID, w["fact"], svc=svc)) == "forgotten" else "not done"
+    if path == "forget_last":                                          # the target is the saved TURN itself
+        return run(intent_router.execute_intent(intent_router.Intent("memory_forget_last", {}), UID))
+    if path == "night_mind":                                           # the dispatcher with the turn's id, as forget-last calls it
+        run(turn_forget.erase_turn_words(UID, (w["mid"],), (KW,)))
+        return "Done"
+    raise AssertionError(path)
+
+
+#: (path, kind) -> what must be GONE (True) or STAY (False). Unlisted keys are not asserted (a legacy twin by the fuzzy overlap rule,
+#: or a store the path does not own). ``transcript`` = the target turn's saved transcript flagged off the record.
+_MATRIX = {
+    ("forget_it_after_why", "turn"): dict(entry=True, transcript=True, fact=True, obs=True, old_entry=True, old_obs=True),
+    ("forget_it_after_why", "kind"): dict(entry=True, transcript=False, fact=False, old_entry=False, old_fact=False, old_obs=False),
+    ("forget_it_after_why", "legacy"): dict(entry=True, transcript=True, fact=True, obs=True),
+    ("forget_it_fact", "turn"): dict(fact=True, transcript=True, entry=True, obs=True, old_entry=True),
+    ("forget_it_fact", "kind"): dict(fact=True, transcript=False, entry=False, old_entry=False, old_fact=False, old_obs=False),
+    ("forget_it_fact", "legacy"): dict(fact=True, transcript=True, entry=True, obs=True),
+    ("memory_space", "turn"): dict(fact=True, transcript=True, entry=True, obs=True, old_entry=True),
+    ("memory_space", "kind"): dict(fact=True, transcript=False, entry=False, old_entry=False, old_fact=False, old_obs=False),
+    ("memory_space", "legacy"): dict(fact=True, transcript=True, entry=True, obs=True),
+    ("forget_last", "turn"): dict(fact=True, transcript=True, entry=True, obs=True, old_fact=True),
+    ("forget_last", "kind"): dict(fact=False, transcript=True, entry=False, old_fact=True),
+    ("forget_last", "legacy"): dict(fact=True, transcript=True, entry=True, obs=True),
+    ("night_mind", "turn"): dict(obs=True, old_obs=True),
+    ("night_mind", "legacy"): dict(obs=True),
+}
+
+
+def _gone(svc, chat, w):
+    rows = {k[1] for k in xw.get_backend().rows}
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    night = set(_night())
+    out = {"transcript": chat.off(w["mid"])}
+    for k in ("entry", "other_entry", "old_entry"):
+        if k in w:
+            out[k] = w[k] not in rows
+    for k in ("fact", "other_fact", "old_fact"):
+        if k in w:
+            out[k] = w[k] not in approved
+    for k in ("obs", "old_obs"):
+        if k in w:
+            out[k] = w[k] not in night
+    return out
+
+
+@pytest.mark.parametrize("path,kind", sorted(_MATRIX))
+def test_each_row_kind_through_each_forget_path(world, path, kind):
+    """Per row, three kinds: bound to a saved turn = by id only; bound to a NON-TURN source = only that row (no saved transcript is
+    flagged, no legacy row with the same words is taken: it was not the target); legacy = by its words. Rows of ANOTHER saved turn
+    with the very same words survive every cell."""
+    svc, chat = world
+    w = _plant_kind(svc, chat, kind)
+    reply = _run_path(path, svc, w)
+    gone = _gone(svc, chat, w)
+    assert reply.startswith("Done"), (reply, gone)
+    assert gone.get("other_entry") is False and gone.get("other_fact") is False, gone          # another turn: by id only
+    for key, want in _MATRIX[(path, kind)].items():
+        if key in gone:
+            assert gone[key] is want, (key, want, gone)
+
+
+def test_a_non_turn_kind_beats_a_coincidental_words_match_at_write_time(world):
+    """A pendant quote that happens to equal a just-saved chat turn is still the recording's: the explicit / lane kind is stamped,
+    never that turn's id (``_write_provenance`` resolves the kind before ``turn_ref``)."""
+    svc, chat = world
+    from routers.chat import _save_chat_message
+
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", KW, user_id=UID)) is True
+    assert memory_service._write_provenance(UID, "omi_review", {}, KW, None) == {"source_kind": "omi_recording"}
+    assert memory_service._write_provenance(UID, "turn_digest", {"source_kind": "omi_recording"}, KW, None) == {
+        "source_kind": "omi_recording"}
+    assert "source_turn" in memory_service._write_provenance(UID, "turn_digest", {}, KW, None)            # control: a chat lane
+
+
+@pytest.mark.parametrize("kind,flagged", [("turn", True), ("kind", False), ("legacy", True)])
+def test_the_topic_forget_treats_each_index_hit_by_its_kind(world, kind, flagged):
+    """forget_topic's index hits, per row: an entry of a saved turn flags that turn by id; a legacy entry by its words; an entry
+    bound to a NON-TURN source (``@src:<kind>``) is deleted and NO saved transcript is flagged for it (on e27797bfb its empty
+    ``mid_of`` sent it to the words matcher, which flagged the look-alike transcript). The turn notes are cleared so only the
+    index hit can reach the transcript."""
+    svc, chat = world
+    w = _plant_kind(svc, chat, kind)
+    be = xw.get_backend()
+    for tid in [k[1] for k in be.rows if k[1] != w["entry"]]:
+        run(be.delete(UID, [tid]))                                     # the target entry alone (a topic forget takes every hit)
+    turn_forget.reset()
+    res = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert not (res.store_down or res.failed), res
+    assert w["entry"] not in {k[1] for k in be.rows}
+    assert chat.off(w["mid"]) is flagged

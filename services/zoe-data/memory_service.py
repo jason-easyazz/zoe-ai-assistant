@@ -1625,20 +1625,25 @@ def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Op
     turn the words are (``turn_forget.turn_ref``, resolved now while they are as said). Never raises."""
     src_turn = str(extra.pop("source_turn", "") or "")
     kind = str(extra.pop("source_kind", "") or "")
-    if not src_turn:
-        try:
-            import turn_forget
-
-            src_turn = turn_forget.turn_ref(user_id, source_excerpt or "")
-        except Exception:  # noqa: BLE001
-            src_turn = ""
     if src_turn:
         return {"source_turn": src_turn}
+    # a NON-TURN source (the caller's explicit kind, else its lane's) wins over a coincidental words match with a recent chat turn:
+    # a pendant quote that happens to equal what was just typed is still the recording's, never that turn's
     if kind not in NON_TURN_KINDS:
         kind = _LANE_KINDS.get((source or "").strip(), "")
-    if not kind and not (source_excerpt or "").strip() and not (user_turn_id or "").strip():
-        kind = "no_turn"
-    return {"source_kind": kind} if kind else {_UNBOUND_KEY: True}
+    if kind:
+        return {"source_kind": kind}
+    try:
+        import turn_forget
+
+        src_turn = turn_forget.turn_ref(user_id, source_excerpt or "")
+    except Exception:  # noqa: BLE001
+        src_turn = ""
+    if src_turn:
+        return {"source_turn": src_turn}
+    if not (source_excerpt or "").strip() and not (user_turn_id or "").strip():
+        return {"source_kind": "no_turn"}
+    return {_UNBOUND_KEY: True}
 
 
 def _refuse_unbound(md: dict, writer: str) -> bool:
