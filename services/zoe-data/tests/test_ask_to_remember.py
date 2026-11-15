@@ -584,3 +584,13 @@ def test_guest_predicate_is_the_shared_one_case_and_device_token_included():
         assert atr._is_guest(uid) is True, uid
     for uid in ("jason", "demo_user", "guestavo"):
         assert atr._is_guest(uid) is False, uid
+
+
+@pytest.mark.parametrize("said,kept", [
+    ("Remember that my plumber's number is 0400 000 000", "my plumber's number is 0400 000 000"),
+    ("Remember that the plumber works from 1 Example St", "the plumber works from 1 Example St"),
+])
+def test_a_contact_fact_the_owner_asks_to_keep_is_stored_intact(svc, said, kept):
+    """scrub_pii(contact=False): a tradesperson's number or address is a household fact, not a secret."""
+    assert say(svc, said) in atr._CONFIRM
+    assert [r.text for r in rows(svc)] == [kept]
