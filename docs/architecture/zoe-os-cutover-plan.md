@@ -172,8 +172,8 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 |---|---|---|
 | D1 | The pass mark for a verb | the Phase 2 numbers, reached by synthetic day + corpus replay + real use, not by waiting 14 days |
 | D2 | Kernel as its own service, or inside the main service | its own service: a kernel fault must not take Zoe down, and it is the only way to a real trust boundary |
-| D3 | Where the kernel's database lives | under Zoe's one data root, beside the other stores, not in a private tools folder |
-| D4 | Back it up | yes, from Phase 1: it holds reminder notes, which are words |
+| D3 | Where the kernel's database lives | **Decided 2026-11-15 (owner: "option a"):** its own database file (never tables in the main database: only the kernel process opens it, which is what makes a receipt trustworthy), in a permanent location beside Zoe's other data rather than the experiment folder, and in the nightly backup. The exact path is settled when the service unit is written |
+| D4 | Back it up | **Decided with D3:** yes, in the nightly backup from the day shadow goes on; it holds reminder notes, which are words |
 | D5 | Who runs the retention sweep | the night window, after a daytime rehearsal |
 | D6 | How the kernel learns of members | the main service pushes add and remove; the kernel never reads the member table itself |
 | D7 | A child's permissions | a guardian grants on the child's behalf; until decided, kernel authority falls back to today's rule for children |
