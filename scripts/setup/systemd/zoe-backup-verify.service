@@ -1,11 +1,11 @@
-# Weekly RESTORE DRILL (deep dive 2 S0-8) + the MONTHLY off-box restore drill (architecture deep dive A5).
+# RESTORE DRILL (deep dive 2 S0-8; timer daily, drill weekly when due) + the MONTHLY off-box restore drill (architecture deep dive A5).
 # On-box: zoe_restore_drill.py restores the newest dumps into a THROWAWAY pg17 + pgvector container (never the live
 # instance), checks row counts against each dump's manifest, pgvector, Alembic and an HNSW build + query, opens the
 # palace with chromadb and runs a vector query, and checks the host archive. Off-box (monthly): restores every tier
 # from the411, compares sha256 with what was sent, reads 1/12 of the repo's data, checks the 35-day bound.
 # Tracked 2026-10-18; was ~/scripts/maintenance/zoe-backup-verify.sh.
 [Unit]
-Description=Weekly Zoe backup restore drill (+ monthly off-box restore drill)
+Description=Zoe backup restore drill (daily check, weekly drill when due; + monthly off-box drill)
 Wants=network-online.target
 After=network-online.target zoe-backup.service zoe-offbox-backup.service
 
