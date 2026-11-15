@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -78,7 +79,7 @@ def _main_env(monkeypatch, p, sent):
     monkeypatch.setenv("ZOE_OFFBOX_CONFIG_DIR", str(p.config_dir))
     monkeypatch.setenv("ZOE_OFFBOX_STATE_DIR", str(p.state_dir))
     monkeypatch.setenv("ZOE_OFFBOX_STAGE_DIR", str(p.stage_dir))
-    monkeypatch.setattr(ob, "alert", lambda text: sent.append(text))
+    monkeypatch.setattr(ob, "alert", lambda text: sent.append(text) or True)
 
 
 # ── target adapters ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -148,6 +149,68 @@ def test_a_box_that_was_never_configured_stays_quiet(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_OFFBOX_CONFIG_DIR", str(tmp_path / "nope"))
     monkeypatch.setattr(ob, "alert", lambda text: sent.append(text))
     assert ob.main(["backup", "--ignore-window"]) == 2 and not sent
+
+
+@pytest.mark.parametrize("kind", ["rest", "local"])
+@pytest.mark.parametrize("key", ["restic.pass", "age-recipients.txt"])
+@pytest.mark.parametrize("command", ["backup", "drill"])
+def test_missing_key_alert_cadence_and_recovery(box, monkeypatch, kind, key, command):
+    p, _, _ = box
+    if kind == "rest":
+        env = p.config_dir / "offbox.env"
+        env.write_text(env.read_text().replace("ZOE_BACKUP_TARGET=local\n", "")
+                       + "RESTIC_REPOSITORY=rest:https://backup.example/lab/\n"
+                         "RESTIC_REST_USERNAME=lab\nRESTIC_REST_PASSWORD=synthetic\n")
+    key_file = p.config_dir / key
+    contents = key_file.read_text()
+    key_file.unlink()
+    sent = []
+    _main_env(monkeypatch, p, sent)
+    now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls):
+            return now
+
+    monkeypatch.setattr(ob, "datetime", Clock)
+    monkeypatch.setattr(ob, "cmd_backup", lambda *a: 0)
+    monkeypatch.setattr(ob, "cmd_drill", lambda *a: 0)
+    args = [command, "--ignore-window"]
+    assert ob.main(args) == 3
+    assert len(sent) == 1
+    for days in [0, 1, 2, 3, 4, 5, 6]:
+        now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc) + timedelta(days=days)
+        assert ob.main(args) == 3
+        assert len(sent) == 1
+    now += timedelta(days=1)
+    assert ob.main(args) == 3
+    assert len(sent) == 2 and "weekly reminder" in sent[-1]
+    key_file.write_text(contents)
+    key_file.chmod(0o600)
+    assert ob.main(args) == 0
+    assert len(sent) == 3 and "configuration recovered" in sent[-1]
+    state = json.loads((p.state_dir / "key_alert.json").read_text())
+    assert "alert_at" not in state and "alert_since" not in state
+    assert ob.main(args) == 0 and len(sent) == 3
+    key_file.unlink()
+    assert ob.main(args) == 3 and len(sent) == 4  # new transition, even on the same day
+    for text in sent:
+        assert str(p.home) not in text and str(key_file) not in text
+        assert key not in text and contents.strip() not in text
+        assert "box-key" not in text and OWNER_RECIPIENT not in text
+
+
+def test_missing_key_alert_retries_until_handed_off(box, monkeypatch):
+    p, _, _ = box
+    (p.config_dir / "restic.pass").unlink()
+    sent = []
+    _main_env(monkeypatch, p, sent)
+    monkeypatch.setattr(ob, "alert", lambda text: sent.append(text) or False)
+    for _ in range(2):
+        assert ob.main(["backup", "--ignore-window"]) == 3
+    assert len(sent) == 2
+    assert not (p.state_dir / "key_alert.json").exists()
 
 
 # ── dry run ─────────────────────────────────────────────────────────────────────────────────────────────────────

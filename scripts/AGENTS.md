@@ -185,6 +185,8 @@ Log to journal (systemd) or an explicit log path; scripts that fail silently hav
 
 ## Verification
 
+- Configured-but-missing off-box keys are faults (exit 3; never-configured stays exit 2). `backup`/`drill` reuse `zoe_restore_drill.owner_alert`/`owner_cleared` with separate `key_alert.json`: transition, at most weekly, then one configuration-recovery alert after `load_config` passes. Alerts contain no key paths or material; record cadence only after shared-outbox handoff.
+
 For timer-driven scripts, run once manually with the unit's exact ExecStart line and check `systemctl --user status <unit>` after the next scheduled fire.
 
 For `deploy_zoe_data_when_ready.sh`, run `pytest services/zoe-data/tests/test_deploy_zoe_data_when_ready.py`; the test uses fake git live trees and never restarts production.

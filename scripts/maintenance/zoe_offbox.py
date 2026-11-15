@@ -44,7 +44,7 @@ Commands (all print no secret; read-only towards the box's data):
     zoe_offbox.py drill [--force]  # monthly restore + checksum + retention check (zoe-backup-verify)
     zoe_offbox.py restore --identity FILE --tier T --target DIR [--snapshot ID]   # OWNER, disaster recovery
 
-Exit: 0 ok, 1 failure (alerted), 2 bad invocation / not configured, 3 refused (quiet hours, low memory).
+Exit: 0 ok, 1 failure (alerted), 2 bad invocation / not configured, 3 refused (including configured-but-missing keys).
 """
 from __future__ import annotations
 
@@ -752,6 +752,29 @@ def alert(text: str) -> bool:
 # ── commands ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
+def key_alert_state(p: Paths, now: datetime, *, missing: bool) -> None:
+    """Reuse the restore drill's weekly spell cadence and shared outbox, with a separate key-fault state.
+
+    Only backup/drill call this. Configuration recovery means load_config passed, not that a backup landed.
+    Fixed messages deliberately carry neither configured paths nor key material.
+    """
+    name = "zoe_restore_drill"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+    cadence = sys.modules[name]
+    state = p.state_dir / "key_alert.json"
+    if missing:
+        cadence.owner_alert(state, now, "off-box backup refused: a configured encryption key file is missing; "
+                            "no backup can be written (runbook offbox-backup.md)", sender=alert)
+    else:
+        cadence.owner_cleared(state, "off-box backup key configuration recovered: configured key files are available again",
+                              sender=alert)
+
+
 def _salt(p: Paths) -> bytes:
     f = p.state_dir / "name.salt"
     if not f.exists():
@@ -1193,6 +1216,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_drill_key(p)
     try:
         cfg = load_config(p)
+        if ns.cmd in ("backup", "drill"):
+            key_alert_state(p, now, missing=False)
         if ns.cmd == "check":
             print(f"configured: target {cfg.target.kind if cfg.target else '?'}, recipients {cfg.recipients}, restic {cfg.restic}, age {cfg.age}")
             print(f"household sources: {[s.label for s in household_sources(p) if s.path and s.path.exists()]}")
@@ -1211,7 +1236,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         if ns.cmd in ("backup", "drill") and exc.alert:
-            alert(f"{ns.cmd} refused on {socket.gethostname()}: {exc}")
+            if isinstance(exc, KeyMissing):
+                key_alert_state(p, now, missing=True)
+            else:
+                alert(f"{ns.cmd} refused on {socket.gethostname()}: {exc}")
         return 3
     except Exception as exc:  # noqa: BLE001
         print(f"FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
