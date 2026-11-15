@@ -8,7 +8,7 @@ from test_forget_receipts_notices import PERSON, boot, disk
 from zoe_os.brain.drivers import Keeper, Lists, Reminders
 from zoe_os.events import Event, Kind
 from zoe_os.receipts import Dispatcher
-from zoe_os.spine import Refused
+from zoe_os.spine import Refused, Spine
 
 SECRET = 'mauve thistle parcel'
 NAME = 'Velnora Mossquill'
@@ -86,7 +86,8 @@ def test_allowed_action_receipt_and_proof_unchanged(tmp_path):
             'action': 'list.add', 'skill': 'brain', 'grant_id': r.grant_id,
             'args_digest': hashlib.sha256(json.dumps(args, sort_keys=True).encode()).hexdigest()[:16],
             'proof': r.proof, 'verified': True, 'outcome': 'verified', 'error': '',
-            'reversible': True, 'undo': {'args': args, 'before': {'provenance': 1, 'rows': []}}}
+            'reversible': True, 'asked': fresh.seq,
+            'undo': {'args': args, 'before': {'provenance': 1, 'rows': []}}}
     finally:
         k.close()
 
@@ -112,6 +113,7 @@ def test_action_cannot_name_forgotten_entity_in_new_words(tmp_path, action):
 
 def test_control_disabling_argument_check_restores_forgotten_text(tmp_path, monkeypatch):
     monkeypatch.setattr(Dispatcher, '_check_arguments', lambda *_: None)
+    monkeypatch.setattr(Spine, '_payload_refusal', lambda *_: False)   # the kernel-write guard is the second line
     # The exact positive regression must fail when only the new guard is removed.
     with pytest.raises(pytest.fail.Exception, match='DID NOT RAISE'):
         test_action_cannot_restore_forgotten_arguments(tmp_path, 'list.add', 'seqs')
@@ -142,3 +144,10 @@ def test_undo_checks_saved_arguments_and_snapshot_even_without_scrub(tmp_path, m
         assert k.spine._db.execute('SELECT COUNT(*) FROM intents').fetchone()[0] == count
     finally:
         k.close()
+
+
+def test_kernel_write_guard_still_refuses_when_the_argument_check_is_gone(tmp_path, monkeypatch):
+    """Second line of defence: with only the dispatcher's check removed, the record itself refuses the write."""
+    monkeypatch.setattr(Dispatcher, '_check_arguments', lambda *_: None)
+    with pytest.raises(AssertionError, match='forgotten_kernel_content'):   # refused, by the other guard
+        test_action_cannot_restore_forgotten_arguments(tmp_path, 'list.add', 'seqs')

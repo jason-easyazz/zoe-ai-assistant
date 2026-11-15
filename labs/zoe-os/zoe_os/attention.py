@@ -48,6 +48,14 @@ class Attention:
 
     def route(self, offer: Event, *, hour: int, day: int) -> str:
         """Decide the channel for one offer and record why."""
+        with self.spine._lock:
+            live = self.spine._get(offer.seq)
+            if live is None or live.kind is not Kind.OFFER:
+                self.spine._refuse(KERNEL, "route", "invalid_offer")
+            return self._route(live, hour=hour, day=day)
+
+    def _route(self, offer: Event, *, hour: int, day: int) -> str:
+        """Route the kernel-owned offer under the spine lock, never caller metadata."""
         person = offer.subject or ""
         s = self.setting(person)
         quiet = (hour >= s.quiet_from_hour or hour < s.quiet_to_hour) \

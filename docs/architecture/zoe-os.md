@@ -185,6 +185,16 @@ malformed legacy scopes purge that person's subscriber state: over-erasing a sto
 possibly forgotten content. Keeper, reminders, twin, leaving-catch and calendar-heads-up share this rule.
 
 List, reminder and alarm driver snapshots now declare versioned per-row request provenance (`asked`).
+The kernel sets provenance: after authorising the action and its cause, the dispatcher overwrites
+`asked` with the single validated `caused_by` sequence (and fills a declared `asked` if omitted).
+Actions using this scalar provenance refuse multiple causes before any driver write. Drivers use
+that value; reminder skills learn it from kernel receipts. A refusal never stores caller text:
+unknown or unauthorised actions use `unknown_action`, unverified identities use `unverified-peer`,
+and errors use fixed reasons. Audit findings cite source sequences rather than copying claim action
+text; kernel appends check both content and name shields, including argument keys, and derived
+records retain subject/cause links so forget reaches them. These changes are statically reviewed only;
+the new boundary regressions have not been run.
+
 Forget scrubs affected rows from surviving undo snapshots and from undo read-back proofs. Undo then
 restores only survivors; it does not depend causally on every old row (which would erase unrelated later
 actions). Entity/topic matching excludes these before-state copies and handles them through the same scrub.
@@ -195,11 +205,12 @@ Queued receipts refresh their bodies after forget, so they cannot deliver the pr
 
 **Action argument shields [code; tests not run].** The dispatcher checks every action's arguments
 before writing an intent or running a driver, using the same `_payload_refusal` as publish:
-`_shielded` visits string values through nested dictionaries, lists and tuples; `_names_forgotten`
-also visits dictionary keys. Shield scope is unchanged (word hashes remain household-wide).
+`_shielded` and `_names_forgotten` visit string values and dictionary keys through nested
+dictionaries, lists and tuples. Shield scope is unchanged (word hashes remain household-wide).
 Undo checks both saved arguments and the complete before-state before opening its intent or restoring
 rows, in addition to the provenance scrub above. Refusals carry only the fixed code
-`forgotten_action_arguments`, never argument text. Allowed receipts and proofs keep their existing shape.
+`forgotten_action_arguments`, never argument text. Receipts for actions using `asked` also expose
+the kernel-bound sequence directly; driver proofs keep their existing shape.
 Socket-free regressions live in `tests/test_forget_action_arguments.py`; removing the argument guard
 makes the list resurrection regression fail (a planted negative control, execution pending).
 

@@ -109,6 +109,10 @@ class DenyAll:
 class Refused(Exception):
     """Raised to the caller; the same refusal is also appended as a REFUSAL event."""
 
+    def __init__(self, message: str, *, reason: str = 'request_refused') -> None:
+        super().__init__(message)
+        self.reason = reason
+
 
 class ForgetResult(NamedTuple):
     count: int      # events erased, including derived ones
@@ -302,6 +306,8 @@ class Spine:
     def _cause_refusal(self, source: str, caused_by: tuple[int, ...]) -> str:
         """A cause must exist, be live, and be something the publisher may itself read."""
         for cause in caused_by:
+            if type(cause) is not int or cause <= 0:
+                return "invalid_cause"
             row = self._db.execute(
                 f"SELECT {_COLS}, tombstoned FROM events WHERE seq = ?", (cause,)).fetchone()
             if row is None:
@@ -318,6 +324,8 @@ class Spine:
         """Kernel services (receipts, grants, forget) append without the publish checks.
         ``then(seq)`` runs INSIDE the same transaction: the event and its bookkeeping land together."""
         with self._lock:
+            if self._payload_refusal(event):
+                self._refuse(KERNEL, "kernel_write", "forgotten_kernel_content")
             return self._append([event], then)[0]
 
     def _append(self, events: list[Event], then: Callable[[int], None] | None = None) -> list[Event]:
@@ -363,10 +371,14 @@ class Spine:
     def _refuse(self, who: str, attempted: str, reason: str) -> None:
         """Record the refusal as an event (no content: who, what was tried, why), then raise."""
         with self._lock:
+            # A failed identity/actor check must not turn the claimed name into content.
+            store = getattr(self.authorizer, 'store', None)
+            if store is not None and who not in store.manifests and who not in store.people and who != KERNEL:
+                who = 'unverified-peer'
             self.refusals += 1
             self._append([Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL,
                                 payload={"who": who, "attempted": attempted, "reason": reason})])
-        raise Refused(f"{who}: {attempted}: {reason}")
+        raise Refused(f"{who}: {attempted}: {reason}", reason=reason)
 
     # ---- forget -------------------------------------------------------------------
     def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None,
@@ -614,7 +626,7 @@ class Spine:
 
     def _shielded(self, payload: dict) -> bool:
         """Does this payload carry, anywhere, a string a person asked to forget?"""
-        return bool(self._shield) and any(self._fp(s) in self._shield for s in _strings(payload))
+        return bool(self._shield) and any(self._fp(s) in self._shield for s in _keys_and_strings(payload))
 
     def _reassert(self, payload: dict) -> None:
         """A trusted adapter recorded these words again first-hand: that is new reality."""

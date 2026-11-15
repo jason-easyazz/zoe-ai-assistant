@@ -159,7 +159,7 @@ class KernelServer:
             conn.name = claimed
             wire.write_frame(conn.sock, {"v": wire.VERSION, "ok": True}, timeout=self.frame_deadline)
             return True
-        self._record(UNVERIFIED, f"connect as {claimed}", reason)
+        self._record(UNVERIFIED, "connect", reason)
         self._error(conn, None, code, reason)
         return False
 
@@ -188,19 +188,24 @@ class KernelServer:
                     result = getattr(self, "_op_" + op)(conn, args)
             return {"v": wire.VERSION, "id": rid, "ok": True, "result": result}
         except Refused as exc:                      # already a REFUSAL event on the spine
-            return _err(rid, wire.REFUSED, str(exc))
-        except ConsentError as exc:
-            return _err(rid, wire.REFUSED, str(exc))
+            return _err(rid, wire.REFUSED, str(exc))   # who/attempted are kernel vocabulary by now (see _refuse)
+        except ConsentError:
+            self._record(conn.name, f"request {op}", "consent_refused")
+            return _err(rid, wire.REFUSED, "consent_refused")
         except (ValueError, TypeError, KeyError):   # a bad kind, level, cause or payload shape
             self._record(conn.name, f"request {op}", "malformed request")
             return _err(rid, wire.BAD_REQUEST, "malformed request")
-        except Exception as exc:                    # never take the kernel down with a request
-            return _err(rid, wire.INTERNAL, type(exc).__name__)
+        except Exception:                    # exception names can also contain input
+            return _err(rid, wire.INTERNAL, "internal_error")
 
     def _op_publish(self, conn: _Conn, a: dict) -> dict:
         mentions = a.get("mentions", ())
         if not all(isinstance(m, str) for m in mentions):
             raise ValueError("mentions are names")
+        people = self.kernel.grants.people
+        if any(m not in people for m in mentions) or (
+                a.get('subject') is not None and a['subject'] not in people):
+            raise ValueError("unknown person")
         ev = Event(a["kind"], conn.name, a.get("subject"), a.get("visibility", "private"),
                    a["payload"], mentions, a.get("caused_by", ()))
         return wire.event_to_wire(self.kernel.spine.publish(ev))

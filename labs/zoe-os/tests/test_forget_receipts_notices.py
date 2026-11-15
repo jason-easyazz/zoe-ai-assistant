@@ -116,6 +116,7 @@ def test_control_without_snapshot_scrub_undo_resurrects_forgotten_row(tmp_path, 
     add(k, rows, KEEP)
     monkeypatch.setattr(Spine, '_scrub_snapshots', lambda *_: None, raising=False)
     monkeypatch.setattr(k.actions, '_check_arguments', lambda *_: None)
+    monkeypatch.setattr(Spine, '_payload_refusal', lambda *_: False)   # and the kernel-write guard behind it
     k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
     k.pump()
     assert SECRET.encode() in disk(path)
