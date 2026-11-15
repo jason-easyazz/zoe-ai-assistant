@@ -89,6 +89,19 @@ async def _require_list_item_mutation_access(
     raise HTTPException(status_code=403, detail=f"Not authorised to {action} items in this list")
 
 
+async def _shadow_list_name(db, list_id: str):
+    """The list's NAME for the Zoe OS shadow (os_shadow.py), so a custom list is mirrored by its name, not its type. Read only while
+    the shadow is on (with it off: no query, None); any failure is None (the shadow then names the type). Never raises."""
+    if os_shadow.mode() != "shadow":
+        return None
+    try:
+        cursor = await db.execute("SELECT name FROM lists WHERE id = ?", (list_id,))
+        row = await cursor.fetchone()
+        return (str(dict(row).get("name") or "").strip() or None) if row else None
+    except Exception:  # noqa: BLE001 - shadow must never break the add
+        return None
+
+
 def _can_manage_list(list_data: dict, user: dict) -> bool:
     """Rename / delete the LIST itself: its owner, or any signed-in member for a list owned by a shared account (the kiosk guest
     or the household) - nobody else could ever remove a duplicate a guest created."""
@@ -386,7 +399,7 @@ async def add_item(
     result = _row_to_dict(row)
 
     _audit_item("add", actor, list_id, item_id)
-    os_shadow.note_add(user_id, source="rest", list_type=list_type, list_name=list_type, item=result.get("text"))
+    os_shadow.note_add(user_id, source="rest", list_type=list_type, list_name=await _shadow_list_name(db, list_id), item=result.get("text"))
     await broadcaster.broadcast(
         "lists",
         "list_updated",
