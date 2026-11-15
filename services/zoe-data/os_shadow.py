@@ -11,7 +11,9 @@ Boundaries (each pinned by ``tests/test_os_shadow.py``):
   documented v1 (``labs/zoe-os/zoe_os/wire.py``); ``tests/test_os_shadow_contract.py`` runs this client against the real lab kernel
   when the lab code is present, so the two cannot drift silently.
 * The hook (``note_add``) runs AFTER the live add has committed, is O(1), never blocks and never raises: it puts one tuple on a
-  bounded queue. A single worker THREAD does all socket work, so a slow or dead kernel can neither slow nor break a turn.
+  bounded queue. A single worker THREAD does all socket work, so a slow or dead kernel can neither slow nor break a turn. The
+  turn never starts that thread: it starts at import (start-up); a turn that finds it dead drops and counts (``worker_down``), and
+  ``revive`` (start-up, a forget) brings it back.
 * Erase-safe: a proposal for a member who is being erased (``user_erase_gate``) is dropped, and forget jobs go through the SAME
   FIFO queue, so a proposal queued before an erase is sent before the forget and removed by it.
 * Forget reaches the kernel (``forget_user`` / ``erase_entity`` / ``erase_topic``): fail-closed while the flag is ``shadow``.
@@ -218,7 +220,7 @@ class _Conn:
 
 
 # ---- comparison ---------------------------------------------------------------------------------------------------------------------
-RESULTS = ("match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
+RESULTS = ("worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full")
 _REASONS = (("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
@@ -287,10 +289,14 @@ _worker: Optional[threading.Thread] = None
 _worker_guard = threading.Lock()
 
 
+def _worker_alive() -> bool:
+    w = _worker
+    return w is not None and w.is_alive()
+
+
 def _ensure_worker() -> None:
-    """Lock-free when the worker is up (the normal case: it is started at import while the flag is ``shadow``, off every turn).
-    Otherwise ONE caller starts it; a caller that finds another one starting it never waits on the guard: its job is queued and
-    drained by the worker that other caller is starting."""
+    """Start the worker if it is not running. NEVER called on a turn: only at import (start-up), by ``revive`` and by the forget path
+    (an erase, not a turn). One caller starts it; a caller that finds another one starting it never waits on the guard."""
     global _worker
     if _worker is not None and _worker.is_alive():
         return
@@ -302,6 +308,28 @@ def _ensure_worker() -> None:
             _worker.start()
     finally:
         _worker_guard.release()
+
+
+def revive() -> bool:
+    """Bring a dead or never-started worker back, OFF the turn (start-up, a forget, an operator). True if a worker is running after."""
+    try:
+        _ensure_worker()
+    except Exception:  # noqa: BLE001
+        pass
+    return _worker_alive()
+
+
+_down_logged = False
+
+
+def _worker_down() -> None:
+    """A turn found no live worker: the proposal is dropped and counted (``worker_down``); the turn never starts a thread. Said ONCE per
+    process in the log, so a dead worker is visible without a line per add."""
+    global _down_logged
+    _tally("worker_down")
+    if not _down_logged:
+        _down_logged = True
+        logger.warning("OS_SHADOW worker down: proposals dropped (worker_down) until a start-up or a forget revives it")
 
 
 def _start_at_import() -> None:
@@ -428,7 +456,9 @@ def note_add(user_id: Optional[str], *, source: str, list_type: Optional[str], l
         if user_erase_gate.in_progress(uid):
             _tally("dropped_erased")
             return
-        _ensure_worker()
+        if not _worker_alive():           # never Thread.start() on a turn: drop, count, revive off the turn
+            _worker_down()
+            return
         _q.put_nowait(("add", uid, source, list_class(list_type), "added", text, (list_name or list_type or "shopping").strip() or "shopping",
                        user_erase_gate.generation(uid), time.perf_counter()))
     except queue.Full:
@@ -464,7 +494,8 @@ def main(argv: Optional[list] = None) -> int:
 
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
-    global _roster_cache, _worker
+    global _roster_cache, _worker, _down_logged
+    _down_logged = False
     if _worker is not None and _worker.is_alive():
         _q.put(("stop",))
         _worker.join(timeout=5)
