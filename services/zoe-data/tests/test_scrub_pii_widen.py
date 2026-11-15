@@ -55,6 +55,14 @@ SECRET_CATCH: dict[str, list[tuple[str, str]]] = {
         ("Password Zebrafiddle, ok", "Zebrafiddle"),
         ("the password for the wifi is zebrafiddle", "zebrafiddle"),
         ("the password to my laptop was zebrafiddle", "zebrafiddle"),
+        # "<label> is / was": default redact, an introducer takes the words after it (invented words)
+        ("my password is zebrafiddle", "zebrafiddle"),                   # already caught before 2026-11-15
+        ("my password is the word zebrafiddle", "zebrafiddle"),
+        ("my password is my dog's name", "dog's"),
+        ("the passcode is 4821", "4821"),                                # already caught before 2026-11-15
+        ("the password was zebrafiddle", "zebrafiddle"),
+        ("password is: zebrafiddle", "zebrafiddle"),
+        ("my password is on the fridge: zebrafiddle", "zebrafiddle"),   # a kept state word, then the value after a colon
     ],
     "labelled_account": [
         ("my account number is 12345678", "12345678"),
@@ -130,6 +138,9 @@ MUST_NOT: list[str] = [
     "our password policy changed", "the file is password protected", "the password prompt froze", "use the password hint",
     "the password box is empty", "the password change worked", "the password rules are strict", "the password for the wifi",
     "I forgot my password.", "the password was reset yesterday", "change your password now", "my password doesn't work",
+    # "<label> is / was" + a STATE / PLACE / negation word (``_LABELLED_NOT_VALUES``): about the password, not its value
+    "my password is not working", "The wifi password is on the fridge", "the password is wrong",
+    "the password is written on the fridge",
     # email / address concepts
     "send an email to the school", "I'll email you", "down the road", "we walked 5 km down the road",
     "she lives at the end of the street", "I live at home", "the road was closed", "my address is changing",
@@ -192,7 +203,8 @@ def test_surrounding_words_survive():
     ("my ssn is 123-45-6789", ("my ssn is 123-45-6789", "ssn")),
     ("the pin 482155 again", ("the pin 482155 again", "totp")),
     ("use key AKIAIOSFODNN7EXAMPLE now", ("use key AKIAIOSFODNN7EXAMPLE now", "aws_key")),
-    ("The wifi password is on the fridge", ("The wifi password is [REDACTED] the fridge", None)),
+    # before 2026-11-16 this was "... is [REDACTED] the fridge" (any word after "is" was redacted); a place word is now kept
+    ("The wifi password is on the fridge", ("The wifi password is on the fridge", None)),
     ("", ("", None)),
 ])
 def test_existing_behaviour_is_unchanged(text, want):
@@ -240,12 +252,38 @@ def test_a_long_adversarial_string_is_fast(blob):
 
 @pytest.mark.parametrize("word", ["zebrafiddle", "quokkamarble", "Sunflowerlamp", "tangerine-cloud", "velvetkite",
                                   "marmalade7", "orbitpancake", "ziggurat"])
-@pytest.mark.parametrize("form", ["my password {w}", "the password was {w}", "passphrase {w} please", "password: {w}"])
+@pytest.mark.parametrize("form", ["my password {w}", "the password was {w}", "passphrase {w} please", "password: {w}",
+                                  "my password is {w}", "the passcode is {w} ok", "the token was {w}"])
 def test_any_unlisted_word_after_password_is_redacted(word, form):
     """FAIL-CLOSED: the token after "password" is a value unless it is on the closed non-secret list (``_PASSWORD_NOT_VALUES``),
     so an invented word nobody listed is always redacted."""
     import memory_service
 
-    assert word.lower() not in memory_service._PASSWORD_NOT_VALUES
+    assert word.lower() not in memory_service._PASSWORD_NOT_VALUES and word.lower() not in memory_service._LABELLED_NOT_VALUES
     out, reject = scrub_pii(form.format(w=word))
     assert reject is None and word not in out and R in out
+
+
+def _labelled_not_values():
+    import memory_service
+
+    # collection must not depend on the list existing (the old-code control collects this file): a missing list fails the test
+    return sorted(getattr(memory_service, "_LABELLED_NOT_VALUES", None) or {"not", "on", "wrong"})
+
+
+@pytest.mark.parametrize("word", _labelled_not_values())
+@pytest.mark.parametrize("form", ["my password is {w} today", "the password was {w}", "the pin is {w}"])
+def test_every_listed_state_word_after_is_or_was_is_left_alone(word, form):
+    """The closed list after "<label> is / was" is real: each word on it is kept (the sentence is about the secret). After ":" or
+    "=" no word is excused (a colon always introduces a value)."""
+    text = form.format(w=word)
+    assert scrub_pii(text) == (text, None)
+    assert word not in scrub_pii(f"password: {word}")[0].split(": ", 1)[1]
+
+
+def test_no_introducer_is_on_the_kept_list():
+    """The is / was list must not excuse a word that INTRODUCES a value ("is the word ...", "is my dog's name")."""
+    import memory_service
+
+    assert not memory_service._LABELLED_NOT_VALUES & memory_service._LABELLED_INTRODUCERS
+    assert not memory_service._LABELLED_NOT_VALUES & {"the", "a", "an", "my", "our", "your", "his", "her", "their"}

@@ -1357,8 +1357,47 @@ _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _BANKING_CONTEXT_RE = re.compile(r"(?i)\b(iban|bank|account|swift|bic|transfer)\b")
 _LABELLED_SECRET_RE = re.compile(
-    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:is|=|:)\s*)\S+",
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:is|was)\s*[:=]?|[:=])\s*)(\S+)"
+    r"((?:\s{1,8}[^\s,;.!?]+){0,6})",
 )
+#: after "<label> is / was" (NOT after = or :, which always introduce a value) the first word is kept only when it says what STATE
+#: the secret is in or WHERE it is, or negates: a closed, whole-word list. Deliberately tighter than ``_PASSWORD_NOT_VALUES``: no
+#: article, possessive or other word that commonly INTRODUCES a value ("is the word ...", "is my dog's name") - those redact.
+_LABELLED_NOT_VALUES = frozenset({
+    "not", "wrong", "incorrect", "invalid", "expired", "working", "broken", "gone", "lost", "forgotten", "missing", "saved",
+    "stored", "kept", "written", "hidden", "somewhere", "there", "here", "on", "in", "under", "behind", "inside", "with",
+    "still", "now", "too", "also", "different", "changed", "reset", "weak", "strong", "long", "short", "old", "new", "blank",
+    "empty", "unset",
+})
+#: a first word that INTRODUCES the value: the value is the next words, so up to six more tokens of the clause go with it
+_LABELLED_INTRODUCERS = frozenset({"the", "a", "an", "my", "our", "your", "his", "her", "their", "its", "just", "called", "like",
+                                   "simply", "basically", "literally"})
+#: a kept "<label> is on the fridge: <value>": the value after a colon / equals sign later in the SAME clause (bounded) is redacted
+_LABELLED_KEPT_VALUE_RE = re.compile(
+    r"(?i)\b((?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\s*(?:is|was)\s+"
+    r"(?:" + "|".join(sorted(_LABELLED_NOT_VALUES, key=len, reverse=True)) + r")\b[^.;!?\n:=]{0,60}?[:=]\s*)\S+"
+)
+
+
+def _for_sub(m: "re.Match[str]") -> str:
+    """``_FOR_PASSWORD_RE``'s replacement: never excused; an introducer takes the rest of the clause."""
+    word = m.group(3).strip(".,;:!?\"'’").lower()
+    return m.group(1) + m.group(2) + _REDACT + ("" if word in _LABELLED_INTRODUCERS else m.group(4))
+
+
+def _labelled_sub(m: "re.Match[str]") -> str:
+    """``_LABELLED_SECRET_RE``'s replacement: the label and connector stay; the value goes - unless (is / was only) the first word
+    is on ``_LABELLED_NOT_VALUES``; an introducer takes the next words of the clause with it (default redact)."""
+    word = m.group(3).strip(".,;:!?\"'’").lower()
+    if m.group(2).strip().lower() in ("is", "was") and word in _LABELLED_NOT_VALUES:
+        return m.group(0)
+    if word in _LABELLED_INTRODUCERS:
+        return m.group(1) + m.group(2) + _REDACT
+    return m.group(1) + m.group(2) + _REDACT + m.group(4)
+
+
+def _scrub_labelled(text: str) -> str:
+    return _LABELLED_KEPT_VALUE_RE.sub(r"\1" + _REDACT, _LABELLED_SECRET_RE.sub(_labelled_sub, text))
 
 # ── widened classes (2026-11-15). Every label list is CLOSED and lives HERE only; a label never redacts without a value
 # (a code / number needs a digit), so "the alarm code changed", "the dress code is casual" and "pineapple" are untouched.
@@ -1418,14 +1457,19 @@ _PASSWORD_NOT_VALUES = (
     "you", "we", "they", "he", "she", "my", "your", "our", "their", "now", "then", "too", "yet", "already", "today",
     "please", "here", "there",
 )
-#: label, separator, value. A ``for / to <thing>`` label needs an explicit is / was / = / : before its value; the value is one
-#: whitespace-free token (digit groups may follow), and the token after a bare label must not be on the closed list. Every repeat
-#: is bounded or confined to one token, and the match is anchored on the label (linear: the adversarial timing test)
+#: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
+#: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
+#: token, and the match is anchored on the label (linear: the adversarial timing test)
+_PASSWORD_VALUE = r"[^\s,;!?.][^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,12}){0,3}"
 _BARE_PASSWORD_RE = re.compile(
-    r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30}"
-    r"(?=\s{0,8}(?:is|was|=|:))|password|passphrase)\b"
-    r"(\s{0,8}(?:(?:is|was|=|:|-|'s|’s)\s{0,8})?)"
-    rf"((?!(?:{_alt(_PASSWORD_NOT_VALUES)})(?![\w'’-]))[^\s,;!?.][^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{{2,12}}){{0,3}})"
+    r"(?i)\b(password|passphrase)\b(\s{0,8}(?:(?:=|:|-|'s|’s)\s{0,8})?)"
+    rf"((?!(?:{_alt(_PASSWORD_NOT_VALUES)})(?![\w'’-])){_PASSWORD_VALUE})"
+)
+#: "the password for the wifi is <value>" / "... to my laptop was <value>": the labelled form, an explicit connector, no word excused
+#: (an introducer takes the rest of the clause, as in ``_labelled_sub``)
+_FOR_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30})"
+    rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})((?:\s{{1,8}}[^\s,;.!?]+){{0,6}})"
 )
 _ACCOUNT_RE = re.compile(
     rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
@@ -1568,7 +1612,9 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
         return text, "iban"
 
     # a bare password (letters-only too) is redacted here as well: ``_scrub_secrets`` skips a text with no digit at all
-    redacted = _scrub_secrets(_BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, _LABELLED_SECRET_RE.sub(r"\1\2" + _REDACT, text)))
+    redacted = _FOR_PASSWORD_RE.sub(_for_sub, _scrub_labelled(text))
+    redacted = _BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, redacted)   # a password said without "is", letters-only too
+    redacted = _scrub_secrets(redacted)
     return (_scrub_contact(redacted) if contact else redacted), None
 
 
