@@ -719,31 +719,41 @@ async def flag_transcript_turns(user_id: str, mids: Iterable[str]) -> int:
     return n
 
 
-async def legacy_transcript_ids(user_id: str, text: str) -> list[str]:
-    """The saved user turns (``chat_messages`` ids) holding ``text`` - as said, or (a redacted legacy quote) as the boundary would
+async def _legacy_transcript_rows(user_id: str, text: str) -> list[tuple]:
+    """``(id, metadata)`` of the saved user turns holding ``text`` - as said, or (a redacted legacy quote) as the boundary would
     have redacted them: how a LEGACY forget target (an entry or row written before the ids) resolves to saved turns. Over-inclusive
-    by design (a look-alike turn is returned too). RAISES on a store failure. Only with the SQL index; [] = none."""
+    by design (a look-alike turn is returned too). One read (``_transcript_candidates``). RAISES on a store failure. SQL index only."""
     forms = _legacy_forms(text)
     if not (user_id or "").strip() or not forms or not isinstance(get_backend(), SqlBackend):
         return []
-    out: list[str] = []
+    out: dict = {}
     for key in forms:
         needle = _needle(key)
         if not needle:
             continue
-        for row_id, content, _meta in await _transcript_candidates(user_id, needle):
+        for row_id, content, meta in await _transcript_candidates(user_id, needle):
             said = _squash(str(content or "")).lower()
             if key in said or (PLACEHOLDER in key and key in _squash(_scrub(str(content or ""))).lower()):
-                if str(row_id) not in out:
-                    out.append(str(row_id))
-    return out
+                out.setdefault(str(row_id), meta)
+    return list(out.items())
+
+
+async def legacy_transcript_ids(user_id: str, text: str) -> list[str]:
+    """The saved-turn ids a LEGACY target's words resolve to (``_legacy_transcript_rows``)."""
+    return [rid for rid, _m in await _legacy_transcript_rows(user_id, text)]
 
 
 async def forget_transcript(user_id: str, text: str) -> int:
-    """Flag the saved turns a LEGACY target's words resolve to (``legacy_transcript_ids``) ``off_record``, so the nightly readers
-    never rebuild them. A forget with saved-turn ids uses ``flag_transcript_turns`` and never this. RAISES on a store failure."""
-    ids = await legacy_transcript_ids(user_id, text)
-    return await flag_transcript_turns(user_id, ids) if ids else 0
+    """Flag the saved turns a LEGACY target's words resolve to ``off_record`` (from the rows that one read returned: no second
+    read by id), so the nightly readers never rebuild them. A forget with saved-turn ids uses ``flag_transcript_turns`` and never
+    this. RAISES on a store failure. 0 = nothing newly flagged."""
+    from memory_provenance import OFF_RECORD_JSON_MARK
+    flagged = 0
+    for row_id, meta in await _legacy_transcript_rows(user_id, text):
+        if OFF_RECORD_JSON_MARK not in str(meta or ""):
+            await _set_transcript_metadata(row_id, _off_record_meta(meta))
+            flagged += 1
+    return flagged
 
 
 async def delete_user(user_id: str) -> int:

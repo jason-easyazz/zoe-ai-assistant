@@ -517,9 +517,13 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
         if not words:
             return 0
         logger.info("TURN_FORGET code=legacy_text texts=%d", len(words))
+    n = 0
+    if legacy:
         for w in words:
+            n += await exact_words.forget_transcript(user_id, w)                     # the transcript flag, from the one read
             ids += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in ids]
-    n = await exact_words.flag_transcript_turns(user_id, ids) if ids else 0
+    else:
+        n += await exact_words.flag_transcript_turns(user_id, ids)
     for mid in ids:
         n += await night_mind.erase_words(user_id, mid)
     if legacy:
