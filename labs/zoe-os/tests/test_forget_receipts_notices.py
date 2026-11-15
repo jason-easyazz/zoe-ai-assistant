@@ -228,6 +228,10 @@ def test_forget_scrubs_a_surviving_undo_readback_proof(tmp_path):
 @pytest.mark.parametrize('disable_shield', [False, True])
 def test_control_without_snapshot_scrub_shield_refuses_dirty_receipt_or_row_resurrects(
         tmp_path, monkeypatch, disable_shield):
+    """With the snapshot scrub patched off, an undo would restore a forgotten row. NOTE what the two halves show: with the
+    shield ON the undo is refused, but only AFTER the driver has put the row back (the last assert holds in both halves), so
+    the append shield is a second line that keeps the dirty RECEIPT out of the record, not a guard on the row. The snapshot
+    scrub is what protects the row; this control exists to show that."""
     path = tmp_path / 'kernel.db'
     k = boot(path)
     rows = Lists().register(k)

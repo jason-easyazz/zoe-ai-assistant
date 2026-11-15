@@ -184,6 +184,10 @@ class Dispatcher:
             person = live.payload.get('subject') or next(
                 (p for p in self.enforcer.store.people
                  if self.spine._owner(p).hex() == live.payload.get('subject_hash')), None)
+            if person is None:
+                # An anonymous notice whose subject hash names no known person: the driver is never run for nobody, and
+                # the purge is not confirmed (the caller keeps its target and retries).
+                raise Refused('purge unresolved')
             result = self._purge_do.get(action, do)(person, args)
             if not verify(person, args, result):
                 raise Refused('purge unconfirmed')
