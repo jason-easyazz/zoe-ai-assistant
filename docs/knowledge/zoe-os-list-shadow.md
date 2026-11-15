@@ -135,8 +135,9 @@ Every field is from a closed set (`os_shadow.SOURCES`, `CLASSES`, `LIVE`, `KERNE
 maps anything else to `other` / `none`, so no caller argument can put text in the line or a counter key. `src` is one of
 `spoken|single|skybridge|rest|suggestion|service|other`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
 `q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table. It drops nothing: a result code it does not know is
-counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected`, and the totals always add up to the
-lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
+counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected` (a repeated key, no result, or a
+`hop_ms` / `q_ms` that is missing, empty, not a number, nan / inf, negative or over a day), an unknown KEY is counted by an 8-hex tag of
+its name (never the name: it is caller text in principle), and the totals always add up to the lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
 
 ## 6. Speed and safety of the hook [lab]
 

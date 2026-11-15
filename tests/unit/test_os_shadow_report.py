@@ -1,6 +1,7 @@
 """The week-of-shadow reader turns OS_SHADOW_LIST_ADD lines into the comparison table (scripts/maintenance/os_shadow_report.py)."""
 import importlib.util
 import json
+import math
 import re
 from pathlib import Path
 
@@ -131,3 +132,56 @@ def test_every_literal_reason_the_client_writes_is_known_to_the_reader():
                 found |= {c for tn, v in zip(names, vals) if getattr(tn, "id", "") == "reason" for c in consts(v)}
     found.discard("")
     assert found and found <= rep.ALLOWED["reason"], found - rep.ALLOWED["reason"]
+
+
+def _client_tuple(name):
+    """A tuple literal from os_shadow.py whose items may be names of string constants there (``CROSSED``) or ``A + (...)``."""
+    import ast
+    tree = ast.parse((ROOT / "services" / "zoe-data" / "os_shadow.py").read_text("utf-8"))
+    consts = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+              for t in n.targets if isinstance(t, ast.Name)}
+
+    def ev(node):
+        if isinstance(node, ast.BinOp):
+            return ev(node.left) + ev(node.right)
+        if isinstance(node, ast.Name):
+            return _client_tuple(node.id)
+        return tuple(consts[e.id] if isinstance(e, ast.Name) else e.value for e in node.elts)
+
+    node = next(n.value for n in tree.body if isinstance(n, ast.Assign) and name in [getattr(t, "id", None) for t in n.targets])
+    return ev(node)
+
+
+def test_every_closed_set_the_client_writes_is_the_readers():
+    assert set(_client_tuple("SOURCES")) | {"other"} == rep.ALLOWED["src"]
+    assert set(_client_tuple("KERNEL_STATES")) == rep.ALLOWED["kernel"]
+    assert set(_client_tuple("LIVE")) == rep.ALLOWED["live"]
+    assert set(_client_tuple("CLASSES")) <= rep.ALLOWED["cls"]
+    assert set(_client_tuple("REASONS")) <= rep.ALLOWED["reason"], set(_client_tuple("REASONS")) - rep.ALLOWED["reason"]
+    log = (ROOT / "services" / "zoe-data" / "os_shadow.py").read_text("utf-8")
+    keys = re.findall(r"(\w+)=%", log[log.index("OS_SHADOW_LIST_ADD src="):].split('"', 1)[0])
+    assert set(keys) <= set(rep.ALLOWED) | set(rep.NUMBERS), keys             # every field the client WRITES, the reader knows
+
+
+@pytest.mark.parametrize("hop", ["nan", "inf", "-inf", "", "-1.0", "1e300", "abc", None])
+def test_a_number_that_is_not_a_measurement_rejects_the_line(hop):
+    good = line()
+    bad = re.sub(r" hop_ms=\S+", "" if hop is None else f" hop_ms={hop}", good)
+    recs, rejected = rep.parse_counted([good] * 200 + [bad])
+    s = rep.summarize(recs, rejected)
+    assert rejected == 1 and s["adds_logged"] == 200 and s["match"] == 200
+    assert math.isfinite(s["hop_ms_p50"]) and math.isfinite(s["hop_ms_p95"]) and s["hop_ms_p95"] == 1.0
+    bad_q = good.replace("q_ms=0.1", "q_ms=nan")
+    assert rep.parse_counted([bad_q])[1] == 1
+
+
+def test_an_unknown_key_is_counted_by_a_tag_never_by_its_name(tmp_path, capsys):
+    planted = line() + " Zq7Secret=1"
+    s = rep.summarize(*rep.parse_counted([planted, planted, line()]))
+    tag = rep.key_tag("Zq7Secret")
+    assert s["unknown_keys"] == {tag: 2} and s["adds_logged"] == 3
+    f = tmp_path / "log"
+    f.write_text(planted + "\n")
+    rep.main([str(f)])
+    out = capsys.readouterr().out
+    assert f"{tag}=1" in out and "Zq7Secret" not in out

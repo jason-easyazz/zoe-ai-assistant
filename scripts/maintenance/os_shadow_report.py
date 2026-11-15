@@ -19,7 +19,9 @@ equals ``adds_logged``, and ``adds_logged + rejected`` equals the marker lines r
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
 import sys
 from collections import Counter
@@ -29,27 +31,38 @@ LINE = re.compile(r"OS_SHADOW_LIST_ADD\s+(.*)")
 #: report never echoes a value it does not know, so a planted or corrupted field cannot print text.
 UNKNOWN = "unknown"
 ALLOWED = {
-    "src": frozenset({"spoken", "single", "skybridge", "rest", "suggestion"}),
+    "src": frozenset({"spoken", "single", "skybridge", "rest", "suggestion", "service", "other"}),
     "cls": frozenset({"shopping", "todo", "personal", "other"}),
     "live": frozenset({"added", "refused", "noop"}),
     "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
     "result": frozenset({"worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
                          "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
-                         "queue_full", "live_noop", "no_input", "shadow_error"}),
+                         "queue_full", "live_noop", "no_input", "shadow_error", "member_differs",
+                         "member_unproven"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
-                         "hook", "worker", "code", "pending_forget"}),
+                         "hook", "worker", "code", "pending_forget", "crossed",
+                         "forgotten_before"}),
 }
 NUMBERS = ("hop_ms", "q_ms")
+#: a number above this is not a measurement (the add's whole budget is 1.5 s; a day in the queue is already absurd): rejected
+MAX_MS = 86_400_000.0
 NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop", "worker_down", "no_input", "shadow_error"}
 MISMATCH = ("kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs", "list_differs",
-            "kernel_malformed", "kernel_unavailable", "timeout")
+            "member_differs", "member_unproven", "kernel_malformed", "kernel_unavailable", "timeout")
+
+
+def key_tag(key: str) -> str:
+    """An unknown KEY's name is caller-controlled text in principle: never printed raw, only as an 8-hex tag (enough to tell two
+    unknown keys apart and to grep the writer for them)."""
+    return hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:8]
 
 
 def clean(fields: list) -> "dict | None":
     """One line's ``key=value`` pairs as a record of KNOWN keys with CLOSED values, or None (the line is rejected): a key given twice
-    (a later copy must never override the writer's), no ``result``, or a ``hop_ms`` that is not a number. Unknown keys are dropped;
-    an unknown value becomes ``unknown``."""
+    (a later copy must never override the writer's), no ``result``, or a number field (``hop_ms``, ``q_ms``) that is missing,
+    empty, not a number, not finite (nan, inf), negative or above ``MAX_MS``. An unknown value becomes ``unknown``; an unknown KEY
+    is kept as its tag in ``_unknown_keys`` (counted and shown, never its name)."""
     seen: dict = {}
     for kv in fields:
         if "=" not in kv:
@@ -61,10 +74,17 @@ def clean(fields: list) -> "dict | None":
     if "result" not in seen:
         return None
     rec = {k: (seen[k] if seen[k] in ALLOWED[k] else UNKNOWN) for k in ALLOWED if k in seen}
-    try:
-        rec["hop_ms"] = float(seen.get("hop_ms", "nan"))
-    except ValueError:
-        return None
+    for k in NUMBERS:
+        try:
+            v = float(seen[k])
+        except (KeyError, ValueError):
+            return None
+        if not math.isfinite(v) or v < 0 or v > MAX_MS:
+            return None
+        rec[k] = v
+    extra = sorted(k for k in seen if k not in ALLOWED and k not in NUMBERS)
+    if extra:
+        rec["_unknown_keys"] = tuple(key_tag(k) for k in extra)
     return rec
 
 
@@ -106,6 +126,7 @@ def summarize(recs: list[dict], rejected: int = 0) -> dict:
         "not_compared": {k: results[k] for k in sorted(NOT_COMPARED) if results[k]},
         "unknown": results[UNKNOWN], "rejected": rejected,
         "unknown_fields": sum(1 for r in recs if any(v == UNKNOWN for k, v in r.items() if k != "result")),
+        "unknown_keys": dict(sorted(Counter(t for r in recs for t in r.get("_unknown_keys", ())).items())),
         "shadow_errors": results["shadow_error"],
         "kernel_unavailable": results["kernel_unavailable"], "timeouts": results["timeout"],
         "hop_ms_p50": round(pct(answered, 50), 2), "hop_ms_p95": round(pct(answered, 95), 2), "hop_answered": len(answered),
@@ -126,6 +147,7 @@ def render(s: dict) -> str:
     rows += ["", f"kernel hop (publish + act), {s['hop_answered']} answered adds: p50 {s['hop_ms_p50']} ms, p95 {s['hop_ms_p95']} ms",
              f"kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}    shadow errors: {s['shadow_errors']}",
              f"unreadable: rejected lines {s['rejected']}    unknown result {s['unknown']}    lines with an unknown field {s['unknown_fields']}",
+             "unknown keys (tag=lines): " + (", ".join(f"{t}={n}" for t, n in s["unknown_keys"].items()) or "none"),
              "by source: " + ", ".join(f"{k}={v}" for k, v in sorted(s["by_src"].items())),
              "by list class: " + ", ".join(f"{k}={v}" for k, v in sorted(s["by_cls"].items()))]
     return "\n".join(rows)
