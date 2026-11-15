@@ -392,7 +392,15 @@ _SA_A = r"(?:a\s+|an\s+|the\s+)?(?:(?:big|massive|major|small|little|minor|mild|
 _SA_WHO = r"(?:i|you|he|she|they|we|it|this|that|my\s+[a-z]+|our\s+[a-z]+|your\s+[a-z]+|the\s+(?:baby|kid|child|man|woman)|(?!(?:a|an|the|what|which|how|there|here)(?!\w))[a-z]+)"
 # whole words only: without the trailing boundary "in the shower" (show), "on the playground" (play), "in the bookshop" (book) were
 # read as fiction and the emergency reply was withheld (fail-open; review of #2525)
-_SA_FICTION = r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play)(?!\w))"
+_SA_FICTION_WORDS = r"(?:movie|film|show|book|game|episode|series|story|novel|play)"
+
+
+def _sa_fiction() -> str:
+    """The fiction guard: "... in the movie / on the show". Whole words only, and NOT when the word is the first half of a physical
+    place ("in the game room", "at the book club", "in the movie theatre": ``fiction_place_after`` in the data), where the
+    emergency reply must not be withheld (fail-open; review of #2525)."""
+    places = "|".join(re.escape(w) for w in sorted(_sa_data().get("fiction_place_after", []), key=len, reverse=True)) or "(?!)"
+    return (r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+" + _SA_FICTION_WORDS + r"(?!\w)(?![\s-]+(?:" + places + r")(?!\w)))")
 #: a "stroke" that is not the condition: "stroke of luck / genius", a stroke on the water / in the pool / of the game
 #: function words no exclusion may be on its own (a bare "on" / "of" after a condition dropped "a stroke on my left side")
 _FUNCTION_WORDS = frozenset("a an the of on in at to for with by from down up my his her their our your this that it is was".split())
@@ -446,7 +454,12 @@ def _sa_verbs() -> "tuple[dict, dict]":
     never gates firing. The caffeine family (``verb_idiom_unless_asked``) is handled in ``self_assessment``."""
     idioms = _sa_data().get("verb_idiom_objects", [])
     idiom_rx = "|".join(r"\s+".join(map(re.escape, w.split())) for w in sorted(idioms, key=len, reverse=True)) or "(?!)"
-    guard = rf"(?!\s+on\s+(?:(?:my|his|her|their|the|some|all|that|this|those|these|a|an|so|way|too|much|many|lots|of)\s+)*(?:{idiom_rx})(?!\w))"
+    # an idiom object ("overdosed on sugar") never wins when a MEDICINE word follows it within a few words ("sugar-coated tablets",
+    # "sugar free cough syrup": ``verb_idiom_not_before``): that is a real medicine and the reply must not be withheld (review of #2525)
+    meds = "|".join(re.escape(w) for w in sorted(_sa_data().get("verb_idiom_not_before", []), key=len, reverse=True)) or "(?!)"
+    not_med = rf"(?![\s-]+(?:[\w']+[\s-]+){{0,3}}(?:{meds})(?!\w))"
+    guard = (rf"(?!\s+on\s+(?:(?:my|his|her|their|the|some|all|that|this|those|these|a|an|so|way|too|much|many|lots|of)\s+)*"
+             rf"(?:{idiom_rx})(?!\w){not_med})")
     slots: dict = {}
     keys: dict = {}
     for key, forms in _sa_data().get("verb_conditions", {}).items():
@@ -484,7 +497,7 @@ def _sa_present_re() -> "re.Pattern":
                 words = r"\s+".join(re.escape(w) for w in tok.split())
                 rx += (r"\s+" if tok[0].isspace() else "") + words + (r"\s+" if tok[-1].isspace() and words else "")
         frames.append(rx)
-    return re.compile(r"(?<!\w)(?:" + "|".join(frames) + r")" + _SA_FICTION)
+    return re.compile(r"(?<!\w)(?:" + "|".join(frames) + r")" + _sa_fiction())
 
 
 #: the slots that name WHO the frame is about

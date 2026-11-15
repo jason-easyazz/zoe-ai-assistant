@@ -787,7 +787,7 @@ def test_control_the_prefix_matching_guard_swallowed_the_ordinary_tails():
     old = re.compile(r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play))")
     eaten = [t for t in ORDINARY_TAILS if not old.match(" " + t)]
     assert len(eaten) == 12 and eaten == ORDINARY_TAILS[:12]          # exactly the tails that start with a fiction word
-    new = re.compile(medical_safety._SA_FICTION)
+    new = re.compile(medical_safety._sa_fiction())
     assert all(new.match(" " + t) for t in ORDINARY_TAILS) and not any(new.match(" " + t) for t in FICTION_TAILS)
 
 
@@ -874,3 +874,53 @@ def test_control_binding_the_swim_phrases_to_the_whole_condition_silences_heat_s
         monkeypatch.undo()
         _clear_sa_caches()
     assert medical_safety.self_assessment("am i having a heat stroke in the pool").cls == "red_call"
+
+
+# -- review of #2525, the last two threads: an idiom or fiction word that is really the start of something physical ------------------
+MEDICINE_AFTER_IDIOM = ["am i overdosing on sugar-coated tablets?", "am i overdosing on sugar free cough syrup?",
+                        "have i overdosed on chocolate flavoured medicine", "did i just overdose on sugar free painkillers",
+                        "i think i overdosed on sweets and sleeping pills", "am i overdosing on cake shaped gummies"]
+
+
+@pytest.mark.parametrize("text", MEDICINE_AFTER_IDIOM)
+def test_an_idiom_object_never_hides_a_medicine_that_follows_it(text, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert medical_safety.self_assessment(text) == _expected("poison_human"), text
+    assert run(medical_safety.handle(text, "demo_bar_00000001")), text
+
+
+def test_every_idiom_object_followed_by_every_medicine_word_fires_and_the_bare_idiom_still_does_not():
+    d = _sa()
+    misses, fired = [], []
+    for idiom in d["verb_idiom_objects"]:
+        if medical_safety.self_assessment(f"am i overdosing on {idiom}").cls:
+            fired.append(idiom)
+        for med in d["verb_idiom_not_before"]:
+            for text in (f"am i overdosing on {idiom} {med}", f"am i overdosing on {idiom}-coated {med}",
+                         f"have i overdosed on {idiom} free cough {med}"):
+                if medical_safety.self_assessment(text) != _expected("poison_human"):
+                    misses.append(text)
+    assert not misses, misses[:8]
+    assert not fired, fired                      # "overdosing on chocolate" alone is still the idiom
+
+
+@pytest.mark.parametrize("text", ["am i having a heart attack in the game room?", "is this a stroke in the movie theatre",
+                                  "am i having a stroke in the book club", "is he having a heart attack in the play area",
+                                  "is this anaphylaxis in the show room", "am i having a heart attack in the game-room"])
+def test_a_physical_place_that_starts_with_a_fiction_word_fires(text, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert medical_safety.self_assessment(text).cls == "red_call", text
+    assert run(medical_safety.handle(text, "demo_bar_00000001")), text
+
+
+def test_every_fiction_word_with_every_place_continuation_fires_and_the_bare_fiction_frame_does_not():
+    places = _sa()["fiction_place_after"]
+    words = ["movie", "film", "show", "book", "game", "episode", "series", "story", "novel", "play"]
+    misses = []
+    for key, term in _condition_terms():
+        for w in words:
+            assert medical_safety.self_assessment(f"is this {term} in the {w}").cls == "", (term, w)       # real fiction: silent
+            for pl in places:
+                if medical_safety.self_assessment(f"is this {term} in the {w} {pl}") != _expected(key):
+                    misses.append((term, w, pl))
+    assert not misses, misses[:8]
