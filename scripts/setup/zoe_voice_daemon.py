@@ -3736,14 +3736,45 @@ _MEDIA_MAX_LIST_BYTES = 256 * 1024
 _MEDIA_BACKOFF_S = (1.0, 60.0)
 
 
-def _media_list_sink_inputs() -> "str | None":
-    """``pactl list sink-inputs`` in the C locale (so "Corked:" is never translated); None on any failure."""
+def _media_list_sink_inputs(timeout_s: float = 1.5) -> "str | None":
+    """``pactl list sink-inputs`` in the C locale (so "Corked:" is never translated); None on any failure. BOUNDED while it
+    is read: stdout is pulled in pieces and a listing longer than ``_MEDIA_MAX_LIST_BYTES`` is abandoned (the child is
+    killed) and reported UNKNOWN, never buffered whole and never cut short (a cut listing could hide a foreign stream)."""
+    import select
+
+    proc = None
     try:
-        res = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True, timeout=1.5,
-                             env={**os.environ, "LC_ALL": "C"})
-        return res.stdout if res.returncode == 0 else None
+        proc = subprocess.Popen(["pactl", "list", "sink-inputs"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+        deadline = time.monotonic() + float(timeout_s)
+        fd = proc.stdout.fileno()
+        buf = bytearray()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                return None                        # too slow: unknown
+            piece = os.read(fd, 65536)
+            if not piece:
+                break
+            buf += piece
+            if len(buf) > _MEDIA_MAX_LIST_BYTES:
+                return None                        # over the bound: unknown (never a truncated parse)
+        rc = proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+        return buf.decode("utf-8", "replace") if rc == 0 else None
     except Exception:
         return None
+    finally:
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+            except Exception:
+                pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
 
 
 def _media_spawn_subscribe():
@@ -3763,9 +3794,12 @@ def _proc_ppid(pid: int) -> "int | None":
 
 
 def _parse_sink_inputs(text: str) -> "list[tuple[bool, int | None]]":
-    """[(corked, pid or None)] per sink-input. A block with no Corked line counts as playing (uncorked)."""
+    """[(corked, pid or None)] per sink-input. A block with no Corked line counts as playing (uncorked). A listing over
+    ``_MEDIA_MAX_LIST_BYTES`` raises ValueError (the caller's unknown): parsing only its head could miss a foreign stream."""
+    if len(text) > _MEDIA_MAX_LIST_BYTES:
+        raise ValueError("sink-input listing over the bound")
     out: list = []
-    for line in text[:_MEDIA_MAX_LIST_BYTES].splitlines():
+    for line in text.splitlines():
         if re.match(r"\s*Sink Input #\d+", line):
             out.append([False, None])
             continue
@@ -3950,13 +3984,20 @@ def _media_at_close(now: float) -> "tuple[bool | None, int]":
 #     chunks=.. underrun_max_ms=.. underrun_sum_ms=.. obs_ms=.. win=<wake|followup|conversation|barge> quiet_ms=..
 #     fall=<clean|hesitating|none> muted_ms=.. first_end_ms=.. media=<1|0|-1> media_age_ms=<n|-1> spk=<1|0|-1>
 #     spk_ms=<n|-1>
-# skip= is the SHADOW reflex decision (see _shadow_reflex_skip): what decide() would have said; nothing ever plays.
+# skip= is the SHADOW reflex decision (see _shadow_reflex_skip), REFLEX_MODE shadow / on only (off: skip=-): what decide()
+# would have said; nothing ever plays.
 # The reflex fields are constants until a reflex exists, so a parser written now never changes. -1 = unknown.
 _turn_close: dict = {}
 try:  # the reflex's pure logic, used ONLY for the shadow decide() below (stdlib-only; shipped by deploy-pi-voice.sh)
     import zoe_voice_reflex as _reflex
 except Exception:  # noqa: BLE001  # not deployed: the shadow decision is simply not made (skip=-)
     _reflex = None
+# ONE switch, read at import: REFLEX_MODE = off (default; anything else is off) | shadow | on. With ``off`` NOTHING reflex-
+# related runs on a turn: no decide(), no pre-roll RMS, and ``skip=-`` on the line (pinned by
+# tests/unit/test_voice_daemon_shadow_reflex.py). ``shadow`` (and, until a player exists, ``on``) makes the post-hoc decision.
+REFLEX_MODE = (os.environ.get("REFLEX_MODE") or "off").strip().lower()
+if REFLEX_MODE not in ("off", "shadow", "on"):
+    REFLEX_MODE = "off"
 _CLOSE_RULES = ("deep", "quiet", "clean", "hesitation", "no_speech")
 _SERVER_KINDS = ("content", "filler", "tool_ack", "greeting", "canned")
 _OBS_MS = 1500               # the FIXED post-close observation window for the talk count (ms from the close)
@@ -4099,16 +4140,21 @@ class _FirstSound:
         self.gap_max = 0
         self.spk: "bool | None" = None       # the at-close speaker verdict (_spk_verdict), None = not scored
         self.spk_at: "float | None" = None   # when it was ready (monotonic)
+        self.spk_guest: "bool | None" = None  # who the speaker is (_spk_guest): False member, True guest, None unknown
+        self.spk_user: "str | None" = None   # the claimed member id: used ONLY to match REFLEX_SILENT_MEMBERS, never logged
         self.skip = "-"                       # the SHADOW reflex decision's skip (never acted on)
 
     def speaker(self, claim: object, at: "float | None") -> None:
         """The turn's speaker claim came back at ``at`` (None = the claim was not scored on this turn)."""
         self.spk = _spk_verdict(claim)
         self.spk_at = at if self.spk is not None else None
+        self.spk_guest = _spk_guest(claim)
+        self.spk_user = claim[0] if self.spk_guest is False and isinstance(claim[0], str) else None
 
     def shadow_reflex(self) -> None:
-        """Fill ``skip`` from a SHADOW decide() on this turn's real inputs. Log-only: plays nothing, loads no bank."""
-        self.skip = _shadow_reflex_skip(self)
+        """Fill ``skip`` from a SHADOW decide() on this turn's real inputs (REFLEX_MODE shadow / on). Log-only: plays
+        nothing, loads no bank. REFLEX_MODE off: nothing runs and ``skip`` stays ``-``."""
+        self.skip = "-" if REFLEX_MODE == "off" else _shadow_reflex_skip(self)
 
     def _take_close(self) -> None:
         c = dict(_turn_close)
@@ -4240,6 +4286,44 @@ def _spk_verdict(claim: object) -> "bool | None":
         return None
 
 
+def _spk_guest(claim: object) -> "bool | None":
+    """WHO is speaking, apart from whether the model accepted them (``_spk_verdict``): False = a household member's claim
+    scored by the trusted model (accepted OR under the bar: an under-bar member is ``low_confidence``, not a guest); True = a
+    guest (a named guest is closer, or the gate ran and matched nobody); None = not scored here (unknown = silent on the
+    guest guard). Never raises."""
+    try:
+        if claim is _CLAIM_UNSET or claim is None or not isinstance(claim, tuple):
+            return None
+        if not claim:
+            return True                           # SCORED_NO_MATCH: nobody in the household matched
+        if _rn34 is None or getattr(claim, "model_id", None) != _rn34.MODEL_ID or len(claim) != 2:
+            return None
+        score = float(claim[1])
+        if not math.isfinite(score):
+            return None
+        guest = getattr(claim, "guest", None)
+        if guest and float(guest[1]) > score:
+            return True                           # a named guest is closer than the member
+        return False
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _reflex_silent_members() -> "frozenset[str]":
+    """Members the reflex never plays for (``REFLEX_SILENT_MEMBERS``, comma-separated ids in the panel's .env.voice, e.g. the
+    children): treated as a guest, so silent - and the shadow counts them as ``guest``. The panel has no age or role for a
+    member; this is the owner's explicit list."""
+    raw = os.environ.get("REFLEX_SILENT_MEMBERS") or ""
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def _reflex_guest(fs: "_FirstSound") -> "bool | None":
+    """The reflex's ``guest`` input: a listed silent member is a guest; otherwise ``_spk_guest``."""
+    if fs.spk_user is not None and fs.spk_user in _reflex_silent_members():
+        return True
+    return fs.spk_guest
+
+
 def _rms_dbfs(frames: "list | None", n: int) -> "float | None":
     """RMS of the first ``n`` frames (the pre-roll / lookback before the recording proper) in dBFS; None when there are none."""
     try:
@@ -4283,7 +4367,7 @@ def _shadow_reflex_skip(fs: "_FirstSound") -> str:
             since_last_s=None, idle_h=(idle_s / 3600.0) if isinstance(idle_s, (int, float)) and idle_s >= 0 else 1000.0,
             prev_question=bool(c.get("prev_q")), chain_turns_since=None, bank_voice=None, current_voice=None, takes=(),
             committed=c.get("committed") is True, media_active=c.get("media"),
-            guest=False if fs.spk is True else True if fs.spk is False else None,
+            guest=_reflex_guest(fs),
             speaker_accept=fs.spk, speaker_model=_rn34.MODEL_ID if (fs.spk is not None and _rn34 is not None) else None,
             verdict_ms=(lambda v: v if v >= 0 else None)(fs.rel_ms(fs.spk_at)) if fs.spk is not None else None)
         d = _reflex.decide(ctx, None, s=dataclasses.replace(_reflex.settings(), enabled=True))

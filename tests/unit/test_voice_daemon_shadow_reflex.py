@@ -47,8 +47,9 @@ def daemon():
 def _fresh(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "_reflex", REFLEX)
     monkeypatch.setattr(daemon, "_rn34", RN34)
+    monkeypatch.setattr(daemon, "REFLEX_MODE", "shadow")   # the post-hoc shadow runs only in shadow / on (off: nothing)
     for k in ("ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT", "ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "REFLEX_ENABLED",
-              "ZOE_SPEAKER_RESNET34_TIER"):
+              "ZOE_SPEAKER_RESNET34_TIER", "REFLEX_SILENT_MEMBERS"):
         monkeypatch.delenv(k, raising=False)
     daemon._turn_close.clear()
     daemon._TALK.begin()
@@ -147,13 +148,57 @@ def test_a_member_turn_with_every_guard_clear_would_have_played(daemon, monkeypa
     (dict(busy=True), 0.40, "busy"),
     (dict(stop="max_duration"), 0.40, "not_committed"),
     (dict(hour=23), 0.40, "night"),
-    (dict(), 0.30, "guest"),                         # scored, under far01: not a member's voice for the reflex
+    (dict(), 0.30, "low_confidence"),                # a member's claim scored under far01: low confidence, not a guest
     (dict(claim_s=0.40), 0.40, "late"),              # verdict ready 500 ms after the close: over 250
 ])
 def test_each_real_input_moves_the_shadow_skip(daemon, monkeypatch, caplog, kw, claim, skip):
     claim_s = kw.pop("claim_s", 0.09)
     _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, claim), claim_s=claim_s, **kw)
     assert _f(line, "skip") == skip, line
+
+
+def test_spk_guest_separates_who_from_whether_accepted(daemon):
+    g = daemon._spk_guest
+    assert g(None) is None and g(daemon._CLAIM_UNSET) is None and g("member_a") is None     # not scored: unknown
+    assert g(daemon.SCORED_NO_MATCH) is True                       # nobody in the household matched: a guest
+    assert g(_claim(daemon, 0.40)) is False and g(_claim(daemon, 0.30)) is False   # a member's claim, accepted or not
+    assert g(_claim(daemon, 0.40, guest=("guest_b", 0.45))) is True                # a named guest is closer
+    assert g(_claim(daemon, 0.36, model="resemblyzer")) is None and g(_claim(daemon, float("nan"))) is None
+
+
+def test_an_under_bar_member_is_counted_low_confidence_and_a_closer_guest_is_a_guest(daemon, monkeypatch, caplog):
+    """The shadow must COUNT a low-confidence member as ``low_confidence`` (not hide it under ``guest``)."""
+    for score, seconds, guest, skip in ((0.30, 3.0, None, "low_confidence"), (0.300, 2.0, None, "low_confidence"),
+                                        (0.40, 3.0, ("guest_b", 0.45), "guest"), (0.40, 3.0, None, "no_bank")):
+        _, line, _, _ = _turn(daemon, monkeypatch, caplog,
+                              claim_fn=lambda: _claim(daemon, score, seconds=seconds, guest=guest))
+        assert _f(line, "skip") == skip, (score, guest, line)
+
+
+def test_a_listed_silent_member_is_silent_and_counted_as_guest(daemon, monkeypatch, caplog):
+    monkeypatch.setenv("REFLEX_SILENT_MEMBERS", "member_x, member_a")
+    _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))
+    assert _f(line, "skip") == "guest", line
+    assert "member_a" not in line                                  # the id is never logged
+    monkeypatch.setenv("REFLEX_SILENT_MEMBERS", "member_x")       # positive control: another member is not silenced
+    _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))
+    assert _f(line, "skip") == "no_bank", line
+
+
+def test_reflex_mode_off_runs_no_reflex_work_and_logs_a_dash(daemon, monkeypatch, caplog):
+    """The default (REFLEX_MODE absent or off): no decide(), no pre-roll RMS, ``skip=-``; the reply is byte-identical."""
+    calls = []
+    monkeypatch.setattr(daemon, "REFLEX_MODE", "off")
+    monkeypatch.setattr(REFLEX, "decide", lambda *a, **k: calls.append("decide") or pytest.fail("decide ran in off"))
+    monkeypatch.setattr(daemon, "_rms_dbfs", lambda *a, **k: calls.append("rms") or pytest.fail("rms ran in off"))
+    ok, line, writes, posts = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))
+    assert _f(line, "skip") == "-" and calls == [] and ok is True and len(writes) == 3
+
+
+def test_reflex_mode_is_read_once_and_defaults_off():
+    src = DAEMON.read_text(encoding="utf-8")
+    assert src.count('REFLEX_MODE = (os.environ.get("REFLEX_MODE") or "off").strip().lower()') == 1
+    assert re.search(r'if REFLEX_MODE not in \("off", "shadow", "on"\):\n\s+REFLEX_MODE = "off"', src)
 
 
 def test_shadow_mode_claim_is_unknown_and_silent(daemon, monkeypatch, caplog):

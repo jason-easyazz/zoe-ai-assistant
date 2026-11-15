@@ -1721,9 +1721,13 @@ per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks 
     scored no-match, a closer guest), `-1` not scored on this turn (speaker shadow mode, no claim, encoder missing, an
     unknown model, a claim carried in from a speculative stream). `spk_ms` = close -> the verdict ready (the inline
     score before the POST), `-1` with `spk=-1` or a carried claim. No id, no score.
-  - `skip=` is now the SHADOW reflex decision: `zoe_voice_reflex.decide()` over this turn's real close-time inputs
-    (committed close, rule, speech length, mute, another player, `media`, pre-roll level, hour, idle time, `spk` as
-    `speaker_accept` + `verdict_ms`), with the master switch forced on inside that one call. It runs at the turn's
+  - `skip=` is the SHADOW reflex decision, made ONLY when the panel's `REFLEX_MODE` is `shadow` (or `on`); with the
+    default `off` nothing reflex-related runs (no decide(), no pre-roll RMS) and the line says `skip=-`. In shadow it is
+    `zoe_voice_reflex.decide()` over this turn's real close-time inputs (committed close, rule, speech length, mute,
+    another player, `media`, pre-roll level, hour, idle time, the speaker as `guest` + `speaker_accept` +
+    `verdict_ms`: a member's claim under the bar is `low_confidence`, a scored no-match or a closer named guest is
+    `guest`, a member listed in `REFLEX_SILENT_MEMBERS` is `guest`), with the master switch forced on inside that one
+    call. It runs at the turn's
     end, after the stream; it creates no player, loads no bank and changes nothing. With no bank, a turn every guard
     clears reads `skip=no_bank` - that is "would have played". Unknown inputs map to the silent side (unknown speech
     -> `short`, unknown mute -> `muted`, unknown pre-roll -> `noisy`, unknown idle -> `idle_greeting`). `-` when
