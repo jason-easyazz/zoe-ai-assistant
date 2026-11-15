@@ -57,10 +57,32 @@ class Database:
             label = "sql_write" if self.db.in_transaction else "sql_autocommit_sync_inclusive"
         else:
             label = "sql_execute"
-        return self.meter.wrap(label, self.db.execute)(sql, *args)
+        return TimedCursor(self.meter.wrap(label, self.db.execute)(sql, *args), self.meter)
 
     def executemany(self, *args):
         return self.meter.wrap("sql_executemany", self.db.executemany)(*args)
+
+
+class TimedCursor:
+    """Include stepping/row materialization, which execute alone does not measure."""
+    def __init__(self, cursor, meter):
+        self.cursor, self.meter = cursor, meter
+
+    def __getattr__(self, name):
+        return getattr(self.cursor, name)
+
+    def fetchone(self):
+        return self.meter.wrap('sql_execute', self.cursor.fetchone)()
+
+    def fetchall(self):
+        return self.meter.wrap('sql_execute', self.cursor.fetchall)()
+
+    def __iter__(self):
+        while True:
+            row = self.fetchone()
+            if row is None:
+                return
+            yield row
 
 
 class Effects:
@@ -120,11 +142,13 @@ def child():
     os.umask(0o077)
     k = Kernel(cfg['db'], [Person(p) for p in MEMBERS])
     meter = Meter()
+    supervisor_loads = json.loads
     if cfg.get('profile'):
         k.spine._db = Database(k.spine._db, meter)
         # JSON decoding includes wire parsing AND database payload decoding, explicitly labelled.
         json.loads = meter.wrap('json_decode_all', json.loads)
         k.actions._authorize = meter.wrap('consent', k.actions._authorize)
+        k.enforcer.may_forget = meter.wrap('consent', k.enforcer.may_forget)
         k.actions._close_intent = meter.wrap('receipt_inclusive', k.actions._close_intent)
         k.spine._append = meter.wrap('append_inclusive', k.spine._append)
     armed = {'stage': None}
@@ -161,7 +185,7 @@ def child():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print(json.dumps({'credentials': credentials}), flush=True)
     for line in sys.stdin:
-        cmd = json.loads(line)
+        cmd = supervisor_loads(line)
         with k.spine._lock:
             if cmd['op'] == 'arm':
                 armed['stage'] = cmd['stage']
@@ -171,6 +195,8 @@ def child():
             elif cmd['op'] == 'clear_profile':
                 meter.values.clear()
                 out = {}
+            elif cmd['op'] == 'position':
+                out = k.spine.last_seq
             elif cmd['op'] == 'effects':
                 out = list(effects.memory) if effects.volatile else k.spine._db.execute(
                     'SELECT person, family, key FROM bench_effects ORDER BY person,family,key').fetchall()

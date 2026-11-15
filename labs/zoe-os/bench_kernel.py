@@ -81,8 +81,8 @@ class Work:
             return lambda: self.brain.act('not.granted', self.member, {}, caused_by=[cause])
         return lambda: self.brain.call('act', unexpected=True)
 
-    def run(self, verb):
-        call = self.prepare(verb)
+    def run(self, verb, *, call=None):
+        call = call or self.prepare(verb)
         start = time.perf_counter_ns()
         try:
             result = call()
@@ -102,15 +102,31 @@ class Work:
         return (time.perf_counter_ns() - start) / 1000
 
 
-def latency(root, n, *, profile=False):
+def latency(root, n, *, profile=False, history_n=0):
     with box_at(root, 'latency', profile=profile) as box:
         work = Work(box)
+        # Untimed real action history: events, links and completed intents all grow.
+        for _ in range((history_n + 1) // 2):
+            assert work.action().verified
+        history_at_start = box.sup('position')
         out = {verb: stats([work.run(verb) for _ in range(n)]) for verb in VERBS}
+        out['history_events_at_start'] = history_at_start
         if profile:
-            call = work.prepare('list.add')
-            box.sup('clear_profile')
-            assert call().verified
-            out['profile_one_list_add'] = box.sup('profile')
+            profiles = {}
+            for verb in VERBS:
+                call = work.prepare(verb)
+                box.sup('clear_profile')
+                total = work.run(verb, call=call)
+                counters = box.sup('profile')
+                phases = {'decode': ('json_decode_all',), 'consent': ('consent',),
+                          'SQL': ('sql_execute', 'sql_write', 'sql_executemany'),
+                          'commit': ('sql_commit_sync_inclusive', 'sql_autocommit_sync_inclusive'),
+                          'receipt': ('receipt_inclusive',)}
+                profiles[verb] = {'total_us': total, 'phases_us': {
+                    phase: sum(counters.get(label, [0, 0])[1] for label in labels)
+                    for phase, labels in phases.items()}, 'counters': counters}
+            out['profile'] = profiles
+            out['profile_one_list_add'] = profiles['list.add']['counters']
             out['profile_top_costs'] = sorted(
                 (name for name in out['profile_one_list_add'] if not name.endswith('_inclusive')
                  or name.startswith('sql_')),
@@ -190,17 +206,38 @@ def soak(root, n, seed, *, limit_s=290):
         start_rss, start_db = rss(box.proc.pid), db_bytes(box)
         start, samples, by_verb = time.perf_counter(), [], {v: [] for v in VERBS}
         wire_calls = 0
+        completed, timed_out = 0, False
+        quarters = [{v: [] for v in VERBS} for _ in range(4)]
+        positions = [{} for _ in range(4)]
         for i in range(n):
             if time.perf_counter() - start > limit_s:
-                raise TimeoutError('soak exceeded wall budget')
+                timed_out = True
+                break
             verb = rng.choice(VERBS)
+            quarter = min(3, i * 4 // n)
+            if not positions[quarter]:
+                positions[quarter]['start_seq'] = box.sup('position')
             value = work.run(verb)
             samples.append(value)
             by_verb[verb].append(value)
+            quarters[quarter][verb].append(value)
+            completed += 1
+            if i == n - 1 or min(3, (i + 1) * 4 // n) != quarter:
+                positions[quarter]['end_seq'] = box.sup('position')
             wire_calls += 1 + (2 if verb in ('list.remove', 'why', 'undo') else 0 if verb == 'malformed' else 1)
-        window = max(1, n // 10)
+        if not samples:
+            return {'failed': 'wall_budget', 'mixed_calls': 0, 'requested_calls': n}
+        window = max(1, completed // 10)
+        if 'end_seq' not in positions[quarter]:
+            positions[quarter]['end_seq'] = box.sup('position')
         first, last = stats(samples[:window]), stats(samples[-window:])
-        return {'mixed_calls': n, 'wire_calls_including_setup': wire_calls,
+        return {**({'failed': 'wall_budget'} if timed_out else {}),
+                'mixed_calls': completed, 'requested_calls': n, 'budget_s': limit_s,
+                'quarters': [{**position, 'n': sum(map(len, q.values())),
+                              'by_verb': {v: stats(s) for v, s in q.items() if s},
+                              'overall': stats([s for values in q.values() for s in values])
+                              if any(q.values()) else None} for q, position in zip(quarters, positions)],
+                'wire_calls_including_setup': wire_calls,
                 'seconds': round(time.perf_counter() - start, 3),
                 'rss_start_bytes': start_rss, 'rss_end_bytes': rss(box.proc.pid),
                 'db_start_bytes': start_db, 'db_end_bytes': db_bytes(box),
@@ -289,14 +326,20 @@ def main():
     parser.add_argument('--crashes', type=int, default=50)
     parser.add_argument('--cold-n', type=int, default=10)
     parser.add_argument('--seed', type=int, default=4721)
-    parser.add_argument('--profile', action='store_true')
+    parser.add_argument('--profile', action='store_true', help='one extra call per verb in latency/all modes')
+    parser.add_argument('--history-n', type=int, default=0,
+                        help='minimum untimed action-history events before latency measurements')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     if min(args.n, args.soak_n, args.crashes, args.cold_n) < 1:
         parser.error('counts must be positive')
+    if args.history_n < 0:
+        parser.error('history count must be nonnegative')
+    if args.profile and args.mode not in ('latency', 'all'):
+        parser.error('--profile requires --mode latency or all')
     result = {'claim': '[lab]', 'seed': args.seed, 'driver': 'durable_synthetic_sqlite',
               'timing': 'warm wire calls; setup excluded from latency; included in throughput wall time'}
-    modes = {'latency': lambda p: latency(p, args.n, profile=args.profile),
+    modes = {'latency': lambda p: latency(p, args.n, profile=args.profile, history_n=args.history_n),
              'concurrency': lambda p: concurrency(p, args.n),
              'soak': lambda p: soak(p, args.soak_n, args.seed),
              'crash': lambda p: crash(p, args.crashes, args.seed),
@@ -306,6 +349,8 @@ def main():
             if args.mode in ('all', mode):
                 try:
                     result[mode] = run(root)
+                    if mode == 'latency' and args.profile:
+                        result['profile'] = result[mode]['profile']
                     print(f'[lab] {mode:12} completed', flush=True)
                 except Exception as exc:
                     result[mode] = {'failed': type(exc).__name__}

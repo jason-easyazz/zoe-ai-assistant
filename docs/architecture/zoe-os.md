@@ -744,38 +744,74 @@ It uses the brain bridge's real authenticated Unix-socket wire. The driver fixtu
 is explicitly different from the brain's in-memory stores; success here would not
 prove those stores survive restart. Workload seed defaults to 4721.
 
-[lab] On 2026-11-15 the builder sandbox refused the kernel's Unix-socket `bind()`:
-`PermissionError: Operation not permitted`. The initial small test invocation collected
-9 tests, passed 2 pure checks and failed 7 wire checks at startup (exit 1). No measured
-latency, throughput, soak growth, crash survival or cold-start number can be reported.
+[lab, coordinator baseline, 2026-11-15, seed 7] Measurements on the real box,
+before the indexed-lookup changes below. All latencies are microseconds.
 
-| Mode | Requested evidence | Result [lab] |
-|---|---|---|
-| Latency | 100 sequential calls per verb, p50/p90/p99 | Unmeasured: socket bind denied |
-| Concurrency | 1, 4, 16 clients; throughput/tails; actual per-member effects | Unmeasured: socket bind denied |
-| Soak | 20,000 mixed operations; child RSS, DB/WAL/SHM growth, latency drift | Not reached |
-| Crash | 50 seeded SIGKILL points; receipt consistency, acknowledged effects, undo | Not reached |
-| Cold start | Process start to first authenticated answer | Unmeasured: socket bind denied |
-
-[code] The harness profiles one additional list-add call after its cause has been
-recorded: consent, JSON decoding (wire and database), SQL reads/writes, explicit and
-autocommit transactions, and receipt/append inclusive time. SQLite's native fsync time
-is **not separately observable by this instrumentation**. No measured top-cost ordering
-exists yet. Profile counters overlap and must not be summed.
-
-| Optimisation considered [code] | Before | After | Decision |
+| Verb | p50 | p90 | p99 |
 |---|---|---|---|
-| Connection reuse, WAL, receipt and intent-close batching | Already implemented | Unchanged | Kept existing behaviour; no new speed claim |
-| Replace undo's full receipt-history decode with a newest-row query | Unmeasured | Unmeasured | Deferred until wire baseline and crash gate can run |
-| Weaken durability settings or batch intent with effect/receipt | Not attempted | Not attempted | Rejected: write-ahead intent must land before an external effect |
+| list.add | 721 | not supplied | not supplied |
+| list.remove | 713 | not supplied | not supplied |
+| remind.set | 713 | not supplied | not supplied |
+| alarm.set | 716 | not supplied | not supplied |
+| why | 896 | not supplied | not supplied |
+| undo | 7,726 | 8,231 | not supplied |
+| forget | 12,261 | 38,555 | 49,851 |
+| denied | 348 | not supplied | not supplied |
+| malformed | 289 | not supplied | not supplied |
 
-[code] Fragile points found while reading: `Dispatcher.last_action` decodes up to
-one million candidate events per undo; `Explainer.last` and `_grant` also scan history.
-Grants and example driver effects are memory-only. Forget tombstoning, its ledger and
-its notice are separate transactions, so this action-crash harness does not establish
-crash-atomic forgetting. SQLite uses WAL with `synchronous=NORMAL`: this harness targets
-process kills, **not power interruption or faulty storage**. No kernel code or durability
-setting was changed to claim an unmeasured optimisation.
+Undo was previously 27,774 p50 before newest-first paging; forget was 3,995 before
+intent scrubbing and derived-event text hashing. These protections remain required.
+Concurrency: 1/4/16 clients achieved 1,533 / 1,772 / 1,677 wire calls/s; 16-client
+p99 was 17 ms, with cross-member isolation holding. Fifty SIGKILL trials across six
+stages passed integrity, no half receipt, acknowledged-write survival and undo after
+restart. Cold-start p50 was 129 ms. The 20,000-operation soak exceeded its 290 s budget;
+there are no completed soak growth/drift measurements. Profiling was reported null.
+
+[code] Root causes and changes:
+
+- Undo used `_newest`'s 200-event decode and a member-wide `people` subquery;
+  `_undone` scanned intents. `Dispatcher.last_action` now selects exactly one live
+  receipt by subject using a partial index; `intents.undoes` is indexed.
+- Scoped forget read every member event before intersecting `seqs`. Deletes by
+  `people.seq` / `causes.seq`, and the three intent references, lacked indexes.
+  Selection now includes the requested IDs in SQL; all these predicates are indexed.
+  Reads, closure, hashes, erasure, intent scrub, ledger and notice share one transaction.
+  Secure deletion, derived text/tuple shields, spent-yes/undo markers and the WAL
+  truncation checkpoint remain. No durability setting or claim rule was weakened.
+- `why` finds its grant through `_newest`; without a kind index this traversed
+  intervening event history. A partial live `(kind, seq)` index removes that work.
+
+[inferred] The nine baseline medians sum to 24.383 ms; their uniform mix costs
+about 54.2 s for 20,000 timed operations. Fixture setup adds roughly 20 s at the
+measured ordinary-call cost. Thus 290 s is already ample for steady costs (and is
+under five minutes); raising it would hide history drift. It remains 290 s. Soak
+now retains partial results on timeout, exits nonzero, and reports overall AND
+per-verb p50/p90/p99 in each requested-history quarter. Mix changes cannot masquerade
+as a slow verb when per-verb quarters are inspected.
+
+[code] A bounded isolated forget and undo no longer scan unrelated completed history.
+Broad person/entity/topic forget still visits candidate/erased events and descendants;
+open intent cause checks scale with pending intents, not completed history. Checkpoint
+I/O depends on WAL state and storage; indexed lookups do not bound physical I/O latency.
+Grants and example brain driver effects remain memory-only. SQLite remains WAL with
+`synchronous=NORMAL`: process-kill evidence is not power-loss evidence.
+
+[code] `--profile` writes top-level `profile[verb]` and `latency.profile[verb]` for
+one extra call of EVERY verb, with setup excluded. Each includes `phases_us` for
+decode, consent, SQL (including cursor stepping), commit and receipt, plus raw
+counters and total wire time. Zero means no work in that phase. Receipt is inclusive
+of SQL/commit; phases overlap and must not be summed. Decode includes wire and stored
+JSON; supervisor parsing is excluded. Autocommit timing includes the SQL statement
+and SQLite sync; native fsync is not separately observable. No measured attribution
+is claimed until the coordinator reruns it.
+
+| Coordinator rerun evidence | After (fill from result JSON) |
+|---|---|
+| Undo on a 20,000-event history, target p50 < 2,000 us | **PENDING COORDINATOR:** `latency.undo` with `--history-n 20000` |
+| Scoped forget on that history, target p50 < 5,000 us | **PENDING COORDINATOR:** `latency.forget` with `--history-n 20000` |
+| Completed soak | **PENDING COORDINATOR:** completed calls, seconds, RSS/DB growth, quarter timings |
+| Profile | **PENDING COORDINATOR:** per-verb phase timings from `profile` |
+| Regression checks | **PENDING COORDINATOR:** test counts/exits, concurrency, crash and cold results |
 
 [code] The small tests include deliberate wrong-member routing and a volatile effect
 store. The crash oracle checks actual effects as well as acknowledged receipts; the
@@ -785,8 +821,12 @@ inside an effect transaction and inside a receipt transaction. It never treats a
 unacknowledged interrupted write as known done. See the lab README for commands and
 measurement boundaries. Full runs and all existing tests green remain unproven.
 
-[lab] The UTC repeat also finished with **2 passed, 7 startup failures, exit 1**.
-`labs/zoe-os/bench-sandbox-result.json` records these attempts, explicitly distinguished
-from a completed benchmark run. The full harness CLI was not run: observed available
-memory remained below the brief's 1,500 MiB benchmark floor. No locked lane or existing
-suite was run, and neither integration negative control reached its assertion.
+[code] Socket-free complexity guards in `tests/test_history_cost.py` build 200 and
+5,000 events plus completed intents and links. SQLite progress callbacks count VM
+steps, including work hidden inside a single statement; fixed budgets cover full
+undo, absent-member lookup and isolated/receipt forget. Negative controls restore
+the old paged undo or issue an unindexed scan and must trip the same budget.
+Rollback, open-intent scrubbing and the 200,000-byte DB/WAL/SHM ceiling after two
+refusals are checked. Startup truncates schema-creation WAL page images; the seven
+additive indexes are installed idempotently on opening existing lab stores.
+The existing oversized-frame scenario and all socket tests still need the coordinator.

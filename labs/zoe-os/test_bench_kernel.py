@@ -32,6 +32,10 @@ def test_latency_and_profile(tmp_path):
     assert all(result[v]['n'] == 2 for v in VERBS)
     assert result['profile_one_list_add']['consent'][0] == 1
     assert result['profile_one_list_add']['sql_commit_sync_inclusive'][0] == 2
+    assert set(result['profile']) == set(VERBS)
+    for row in result['profile'].values():
+        assert set(row['phases_us']) == {'decode', 'consent', 'SQL', 'commit', 'receipt'}
+        assert row['phases_us']['decode'] > 0 and row['phases_us']['SQL'] > 0
     assert 'synthetic-' not in json.dumps(result)
 
 
@@ -61,6 +65,12 @@ def test_small_soak(tmp_path):
     assert result['mixed_calls'] == 90 and len(result['by_verb']) == len(VERBS)
     assert result['rss_end_bytes'] > 0 and result['db_end_bytes'] >= result['db_start_bytes']
     assert result['first_decile']['n'] == result['last_decile']['n'] == 9
+    assert sum(q['n'] for q in result['quarters']) == 90
+
+
+def test_soak_timeout_preserves_measurements(tmp_path):
+    result = soak(tmp_path, 90, 7, limit_s=0)
+    assert result['failed'] == 'wall_budget' and result['mixed_calls'] == 0
 
 
 def test_crash_recovery(tmp_path):

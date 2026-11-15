@@ -172,8 +172,9 @@ Scratch files stay inside this directory and are removed on exit.
 When the host's memory/probe rules allow, on a host permitting Unix socket bind:
 
 ```sh
-python3 -B labs/zoe-os/bench_kernel.py --mode all --n 100 --soak-n 20000 --crashes 50 --out labs/zoe-os/bench-results.json
-python3 -B labs/zoe-os/bench_kernel.py --mode latency --n 100 --profile --out labs/zoe-os/bench-profile.json
+python3 -B labs/zoe-os/bench_kernel.py --mode all --seed 7 --n 100 --soak-n 20000 --crashes 50 --out labs/zoe-os/bench-results.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --history-n 20000 --out labs/zoe-os/bench-history.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --profile --history-n 20000 --out labs/zoe-os/bench-profile.json
 python3 -B -m pytest -p no:cacheprovider -q labs/zoe-os/test_bench_kernel.py
 ```
 
@@ -181,12 +182,16 @@ Numbers and fixed statuses only leave the harness: never credentials or payloads
 A failure writes its exception CLASS, exits nonzero, and does not masquerade as a
 completed measurement. CLI modes run independently so all failures are recorded.
 Keep baseline/after JSON from identical parameters and a comparable host load.
-Do not compare profiled timings to unprofiled timings. The profile is one extra
-`list.add`, with its utterance recorded before counters reset. Counters are inclusive,
+Do not compare profiled timings to unprofiled timings. `--profile` writes a top-level
+`profile` object (also under `latency`), with one extra call per verb and `phases_us`
+for decode, consent, SQL, commit and receipt. Fixture setup precedes the counter reset.
+`--history-n` preloads at least that many action-history events through real calls,
+excluded from timing, so links and completed intents also grow. Counters are inclusive,
 not additive: `receipt_inclusive` contains append/SQL timings; JSON decoding includes
 wire parsing and DB payload decoding. SQL commit/autocommit include SQLite sync work;
-**fsync is not separately timed**. The two supervisor messages add small JSON decode
-costs; they are not socket calls. This is instrumentation, not an fsync attribution.
+**fsync is not separately timed**. Cursor stepping is included in SQL time;
+supervisor commands are excluded from JSON decode counters. This is instrumentation,
+not an fsync attribution. Zero is an unused phase; receipt overlaps SQL and commit.
 
 Crash trials shuffle all six semantic crash points once per block, deterministically
 for the seed. The supervisor waits for a hook INSIDE the selected phase before
@@ -205,11 +210,18 @@ operations separately from wire calls including fixture setup. RSS is the child 
 not the controller, and disk growth includes the SQLite database, WAL and SHM files.
 Cold start includes Python imports, schema, synthetic grants, authentication and describe.
 
-[lab] The builder sandbox denies AF_UNIX bind, so the wire modes have **no measured
-results yet**. See the architecture document's “Load, soak and crash results”. Neither
-negative-control integration test has been observed passing here. No kernel optimisation
-was applied without measurements or a passing crash gate.
+[lab, coordinator] Seed-7 baseline numbers and the failed 20,000-call soak are recorded
+in the architecture document's “Load, soak and crash results”. New indexed lookups are
+unmeasured until the coordinator reruns them. The 290 s cap remains: baseline medians
+plus fixture setup imply about 75 s at steady cost. Timeout now retains partial
+measurements with a failure status. Each requested-history quarter reports per-verb
+percentiles and sequence boundaries, including any partially completed quarter.
 
-`bench-sandbox-result.json` is the fixed-status record of the builder's failed startup
-attempts, **not a benchmark result**. The UTC repeat was also 2 passed / 7 startup failures
-(exit 1). The direct full benchmark was not started below the 1500 MiB memory floor.
+The builder sandbox cannot bind AF_UNIX; wire, concurrency, crash and the original
+oversized-frame scenario must be rerun by the coordinator. Socket-free complexity
+guards live in `tests/test_history_cost.py` (200/5,000 events, fixed SQLite VM-step
+budgets, deliberate scans as failing controls). VM steps measure SQL work, not storage
+latency. Scoped ID forget is bounded by affected rows; broad/entity/topic forget and
+pending-intent cause inspection still scale with their candidates. WAL truncation
+remains synchronous. Additive `CREATE INDEX IF NOT EXISTS` statements apply on opening
+an existing lab store; there is no production migration or new environment variable.
