@@ -239,12 +239,51 @@ def test_deploy_dead_health_is_nonfatal_and_unchanged_healthy_skips(world):
     assert (home / ".zoe/deploy/kernel-update-pending").exists()
 
 
-def test_kernel_backup_ages_out_inside_the_household_backup_policy():
-    """A dump cannot be rewritten by a forget, so it must age out within the documented bound, like the Postgres dumps."""
-    import re, sys
+def _archive(root: Path, name: str, age_days: float) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    f = root / f"zoe-os-{name}.db.gz"
+    f.write_bytes(b"synthetic archive")
+    when = time.time() - age_days * 86400
+    os.utime(f, (when, when))
+    return f
+
+
+def test_kernel_backup_bound_is_the_household_backup_policy():
+    """An archive cannot be rewritten by a forget, so it ages out within the documented bound, like the Postgres dumps."""
     sys.path.insert(0, str(ROOT / "services/zoe-data"))
     import forget_reach as fr
-    ops = (MAINT / "zoe_os_kernel_ops.py").read_text()
-    days = [int(n) for n in re.findall(r"> (\d+) \* 86400", ops)]
-    assert days and max(days) <= fr.BACKUP_MAX_AGE_DAYS
+    assert ops.MAX_AGE_DAYS <= fr.BACKUP_MAX_AGE_DAYS
     assert any(s.key == "backup_zoe_os_kernel" for s in fr.STORES)
+
+
+def test_an_aged_archive_goes_even_with_no_kernel_database(tmp_path):
+    """A removed or disabled kernel must not leave its archives forever: the age bound applies on every backup call,
+    and it removes the LAST archive too."""
+    root = tmp_path / "backups"
+    old, fresh = _archive(root, "old", ops.MAX_AGE_DAYS + 1), _archive(root, "fresh", 1)
+    ops.backup(tmp_path / "absent.db", root)
+    assert not old.exists() and fresh.exists()
+    os.utime(fresh, (time.time() - (ops.MAX_AGE_DAYS + 2) * 86400,) * 2)
+    ops.backup(tmp_path / "absent.db", root)
+    assert not list(root.glob("zoe-os-*.db.gz"))
+
+
+def test_a_failed_snapshot_prunes_by_age_only(tmp_path):
+    """A snapshot that fails still ages out old archives, and never rotates out an in-policy one by count."""
+    root = tmp_path / "backups"
+    old = _archive(root, "old", ops.MAX_AGE_DAYS + 1)
+    kept = [_archive(root, f"k{i}", 1 + i) for i in range(ops.KEEP + 2)]        # more than KEEP, all inside the bound
+    bad = tmp_path / "corrupt.db"
+    bad.write_bytes(b"not a database")
+    with pytest.raises(Exception):
+        ops.backup(bad, root)
+    assert not old.exists() and all(f.exists() for f in kept)
+    assert not list(root.glob(".kernel-*"))
+
+
+def test_control_prune_without_the_age_rule_keeps_the_aged_archive(tmp_path, monkeypatch):
+    root = tmp_path / "backups"
+    old = _archive(root, "old", ops.MAX_AGE_DAYS + 1)
+    monkeypatch.setattr(ops, "MAX_AGE_DAYS", 10**6)
+    ops.backup(tmp_path / "absent.db", root)
+    assert old.exists()

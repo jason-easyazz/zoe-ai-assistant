@@ -120,7 +120,11 @@ The backup drop-in adds a final step to the existing nightly job, preserving its
 schedule and earlier steps. No database means silent success and no new directory.
 A present database is online-snapshotted including committed WAL, integrity and
 kernel-marker checked, compressed and atomically published under
-`~/.zoe-backups/zoe-os/`; only then are older copies pruned (seven, maximum 35 days).
+`~/.zoe-backups/zoe-os/`; the archive is read back and checked before it is published.
+Every backup call, including one with no database or a failed snapshot, deletes any
+archive older than 35 days, even the last one (a forget cannot rewrite an archive, so
+the age bound outranks keeping a copy). The count limit (seven) is applied only after
+a new verified archive exists, so a failed run never rotates out an in-policy copy.
 The weekly drill restores to scratch and checks integrity/marker/freshness; missing
 kernel backups fail only when the default database exists. Existing archives remain
 checked even if the service was removed. Credentials/socket are never backed up.

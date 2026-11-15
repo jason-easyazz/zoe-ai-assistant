@@ -72,27 +72,54 @@ def snapshot(source: Path, destination: Path, progress=None) -> None:
     check_database(destination)
 
 
+MAX_AGE_DAYS = 35     # the household backup bound (forget_reach.BACKUP_MAX_AGE_DAYS): a forget cannot rewrite an archive, so it ages out
+KEEP = 7
+
+
+def prune(root: Path, now: float | None = None, *, keep: int | None = None) -> int:
+    """Delete every archive past the age bound, ALWAYS: also when the kernel database is gone or the snapshot failed, and
+    even if it is the last one (the privacy bound outranks keeping a backup). ``keep`` trims by count as well, and is passed
+    only after a NEW verified archive exists, so a failed run never rotates out an in-policy copy. Returns how many went."""
+    if not root.is_dir():
+        return 0
+    now = time.time() if now is None else now
+    gone = 0
+    copies = sorted(root.glob("zoe-os-*.db.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for i, old in enumerate(copies):
+        if now - old.stat().st_mtime > MAX_AGE_DAYS * 86400 or (keep is not None and i >= keep):
+            old.unlink()
+            gone += 1
+    return gone
+
+
 def backup(source: Path, root: Path) -> None:
     if not source.is_file():
+        prune(root)          # no kernel database: nothing to snapshot, but old archives still age out
         return
     os.umask(0o077)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root.chmod(0o700)
-    # Unique work dir, atomic publish; failures never rotate a last good copy.
-    with tempfile.TemporaryDirectory(prefix=".kernel-", dir=root) as tmp:
-        snap = Path(tmp) / "snapshot.db"
-        snapshot(source, snap)
-        packed = Path(tmp) / "snapshot.db.gz"
-        with snap.open("rb") as src, gzip.open(packed, "wb", compresslevel=9) as dst:
-            shutil.copyfileobj(src, dst)
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-        out = root / f"zoe-os-{stamp}-{time.time_ns()}.db.gz"
-        os.replace(packed, out)
-    copies = sorted(root.glob("zoe-os-*.db.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for i, old in enumerate(copies):
-        if i >= 7 or time.time() - old.stat().st_mtime > 35 * 86400:
-            old.unlink()
-    print("kernel backup: snapshot verified, compressed; keeping 7 copies, maximum age 35 days")
+    try:
+        # Unique work dir, atomic publish; failures never rotate a last good copy.
+        with tempfile.TemporaryDirectory(prefix=".kernel-", dir=root) as tmp:
+            snap = Path(tmp) / "snapshot.db"
+            snapshot(source, snap)
+            packed = Path(tmp) / "snapshot.db.gz"
+            with snap.open("rb") as src, gzip.open(packed, "wb", compresslevel=9) as dst:
+                shutil.copyfileobj(src, dst)
+            # Read the archive back before it is published: what is kept is what restores.
+            reread = Path(tmp) / "reread.db"
+            with gzip.open(packed, "rb") as src, reread.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            check_database(reread)
+            stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            out = root / f"zoe-os-{stamp}-{time.time_ns()}.db.gz"
+            os.replace(packed, out)
+    except BaseException:
+        prune(root)          # a failed snapshot: age bound only, in-policy archives stay
+        raise
+    prune(root, keep=KEEP)
+    print(f"kernel backup: snapshot verified, compressed; keeping {KEEP} copies, maximum age {MAX_AGE_DAYS} days")
 
 
 def drill(root: Path, scratch: Path, required: bool, now: float) -> tuple[list[str], list[str]]:

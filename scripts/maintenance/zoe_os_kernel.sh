@@ -34,7 +34,7 @@ case "${1:-}" in
     else echo 'kernel: database=absent'; fi
     ;;
   backup)
-    [ -f "$KERNEL_DB" ] || exit 0
+    # Always called, also with no database: the ops helper still ages out old archives (and is silent when there is nothing).
     exec timeout -k 5 120 python3 -B "$HERE/zoe_os_kernel_ops.py" backup "$KERNEL_DB" "${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
     ;;
   deploy)

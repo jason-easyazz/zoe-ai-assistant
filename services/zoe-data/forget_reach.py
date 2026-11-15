@@ -298,7 +298,7 @@ OTHER: tuple[Store, ...] = (
           "biometric table data is excluded from them. Restore => re-issue the forget.",
           markers=("postgres-nightly-backup.sh",)),
     Store("backup_zoe_os_kernel", "backup", WORDS, GAP, "Zoe OS kernel record snapshots (gzip, 7 kept, none older than BACKUP_MAX_AGE_DAYS; "
-          "the prune is by count AND age). Not rewritten by a forget: they age out. Restore => re-apply every forget made since "
+          "the age prune runs on EVERY backup call, also with the kernel gone or a failed snapshot). Not rewritten by a forget: they age out. Restore => re-apply every forget made since "
           "the archive BEFORE the kernel serves (docs/knowledge/zoe-os-kernel-service.md).",
           markers=("zoe_os_kernel_ops.py",)),
     Store("backup_palace_tar", "backup", WORDS, GAP, "Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by "
