@@ -147,7 +147,8 @@ def test_control_without_this_detector_these_reach_the_brain(monkeypatch):
 # ── the distress boundary and the other floors (the seam runs the hand-off first) ───────────────────────────────────────────
 def test_the_seam_runs_the_distress_hand_off_first():
     src = (Path(__file__).resolve().parents[1] / "zoe_flue_client.py").read_text(encoding="utf-8")
-    assert src.index("await distress_handoff.handle(") < src.index("await medical_safety.handle(")
+    # the pre-POST blocks are timed wrappers since #2486 (`await _pp.timed("<block>", <module>.handle(...))`), still in this order
+    assert src.index('distress_handoff.handle(') < src.index('medical_safety.handle(')
 
 
 def test_an_accidental_one_reaches_this_floor(monkeypatch):
