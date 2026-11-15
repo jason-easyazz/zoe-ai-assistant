@@ -166,19 +166,19 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 | Phase 5.5 | suggestions that respect each person's attention, with a yes that is recorded |
 | Phase 6 | fewer places a rule can be wrong; new skills plug into one set of rules instead of copying them |
 
-## 6. Owner decisions, recommendation first
+## 6. Owner decisions (all nine decided 2026-11-15)
 
-| # | Decision | Recommendation |
+| # | Decision | Outcome |
 |---|---|---|
-| D1 | The pass mark for a verb | the Phase 2 numbers, reached by synthetic day + corpus replay + real use, not by waiting 14 days |
-| D2 | Kernel as its own service, or inside the main service | its own service: a kernel fault must not take Zoe down, and it is the only way to a real trust boundary |
+| D1 | The pass mark for a verb | **Decided 2026-11-15 (owner accepted the recommendation):** the Phase 2 numbers, reached by synthetic day + corpus replay + real use, not by waiting 14 days |
+| D2 | Kernel as its own service, or inside the main service | **Decided 2026-11-15:** its own service: a kernel fault must not take Zoe down, and it is the only way to a real trust boundary |
 | D3 | Where the kernel's database lives | **Decided 2026-11-15 (owner: "option a"):** its own database file (never tables in the main database: only the kernel process opens it, which is what makes a receipt trustworthy), in a permanent location beside Zoe's other data rather than the experiment folder, and in the nightly backup. The exact path is settled when the service unit is written |
 | D4 | Back it up | **Decided with D3:** yes, in the nightly backup from the day shadow goes on; it holds reminder notes, which are words |
-| D5 | Who runs the retention sweep | the night window, after a daytime rehearsal |
-| D6 | How the kernel learns of members | the main service pushes add and remove; the kernel never reads the member table itself |
-| D7 | A child's permissions | a guardian grants on the child's behalf; until decided, kernel authority falls back to today's rule for children |
-| D8 | May "learn this again" lift a forget | blocked today (fail closed); recommendation: allow it only as a deliberate, recognised request from the same person, for phrases; never automatically |
-| D9 | Sold boxes | every phase must work with no GitHub and no cloud: the kernel, its tests and the harness run offline |
+| D5 | Who runs the retention sweep | **Decided 2026-11-15:** the night window, after a daytime rehearsal |
+| D6 | How the kernel learns of members | **Decided 2026-11-15:** the main service pushes add and remove; the kernel never reads the member table itself |
+| D7 | A child's permissions | **Decided 2026-11-15:** a guardian grants on the child's behalf; until decided, kernel authority falls back to today's rule for children |
+| D8 | May "learn this again" lift a forget | **Decided 2026-11-15:** blocked in the code today (fail closed) until built; allow it only as a deliberate, recognised request from the same person, for phrases; never automatically |
+| D9 | Sold boxes | **Decided 2026-11-15:** every phase must work with no GitHub and no cloud: the kernel, its tests and the harness run offline |
 
 ## 7. Risks, and what answers each
 
