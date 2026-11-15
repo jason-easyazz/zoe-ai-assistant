@@ -82,7 +82,10 @@ The comparison is made for each list add that really landed (`os_shadow.compare`
 
 Result codes (the closed set; one per add): `match`, `kernel_refused_live_did` (with `reason=` `no_grant|manifest|params|cause|forgotten|other`),
 `kernel_unverified_live_did`, `item_differs`, `list_differs`, `kernel_malformed`, `kernel_unavailable`, `timeout`,
-and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop`. `kernel_did_live_refused` exists in the comparator
+and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop` (`live=noop`), `worker_down`, `no_input` (no member
+or no item) and `shadow_error` (the shadow's OWN failure: `reason=hook` at the door, `worker` in the worker, `code` for a code outside the set).
+With the flag on, EVERY `note_add` call writes exactly one line, with the same eight fields, through the one emitter `_finish`; `RESULTS` in
+`os_shadow.py` is exactly the set that can be written (both pinned in `tests/test_os_shadow.py`). `kernel_did_live_refused` exists in the comparator
 and is tested, but **no call site feeds a live refusal yet** [code]: only landed adds are proposed, so the "kernel did it, live refused" row of
 the week's table will read zero by construction, not by evidence. `list_differs` is likewise **not measurable with the lab driver**: it is told
 the list, it does not resolve one, and its read-back is `{"item"}` only. Both become meaningful when a kernel driver owns list resolution.
@@ -101,7 +104,9 @@ The hook is a flag read and, with the flag on, one bounded `queue.put_nowait`. T
 0.005 ms; flag on p95 0.011 ms** per add, against a target of under 5 ms. This is the time added on the caller; it does not include the
 worker thread's GIL share while it talks to the socket [not measured] and was not measured under a real turn [not run].
 
-A slow kernel is cut off per operation (0.5 s) and per add (1.5 s); a full queue (64) drops and counts; nothing the worker does can raise
+A slow kernel is cut off by ONE budget per add (1.5 s from when the worker takes it): every connect, handshake, publish, act and read draws
+on what is left, each also capped at 0.5 s, so a stall at any stage ends the add as `timeout` within the budget
+(`test_one_deadline_per_add_covers_every_socket_stage`); a full queue (64) drops and counts; nothing the worker does can raise
 into a turn (`test_the_live_add_is_identical_with_the_shadow_off_dead_or_on`: the rows the live path writes and the outcome it returns are identical
 with the flag off, with the kernel dead, refusing, closing the connection mid-call, or answering garbage).
 
