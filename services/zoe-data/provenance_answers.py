@@ -1381,9 +1381,11 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         excerpt = str(meta.get("source_excerpt") or "").strip().lower()
         turn = str(meta.get("user_turn_id") or "")
         out = []
+        # THE TWIN RULE (the same fact written twice for the same member by parallel writers; predates the ids): saved-turn ids
+        # only ever SEPARATE - a candidate with its own saved turn is a twin only of that turn's row; every other pair (legacy,
+        # a non-turn kind, or mixed) is decided by the twin criteria below (excerpt / turn id / clock + content words), never
+        # by a store-wide words match
         kind, src = turn_forget.classify(meta)
-        if kind == turn_forget.KIND:
-            return []                                        # a row bound to a non-turn source: only that row goes, no twins
         src = src if kind == turn_forget.TURN else ""
         for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
@@ -1392,8 +1394,8 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
             r_turn = str(m.get("user_turn_id") or "")
             r_ex = str(m.get("source_excerpt") or "").strip().lower()
             r_kind, r_src = turn_forget.classify(m)
-            if r_kind == turn_forget.KIND or (r_kind == turn_forget.TURN and r_src != src):
-                continue                                     # PER ROW: a row with its own provenance is NEVER a twin by its text
+            if r_kind == turn_forget.TURN and r_src != src:
+                continue                                     # PER ROW: a row of ANOTHER saved turn is never a twin, however alike
             r_src = r_src if r_kind == turn_forget.TURN else ""
             by_id = bool(src) and r_src == src               # the same saved turn: no text needed to say so
             if not by_id:                                    # the candidate has no saved turn (legacy / non-turn): the words decide

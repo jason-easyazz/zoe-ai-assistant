@@ -556,17 +556,18 @@ def _run_path(path, svc, w):
     raise AssertionError(path)
 
 
-#: (path, kind) -> what must be GONE (True) or STAY (False). Unlisted keys are not asserted (a legacy twin by the fuzzy overlap rule,
-#: or a store the path does not own). ``transcript`` = the target turn's saved transcript flagged off the record.
+#: (path, kind) -> what must be GONE (True) or STAY (False). Unlisted keys are not asserted: the legacy bystander FACT is the same
+#: fact as the target (same excerpt, near-identical words), so on the fact paths it is a TWIN and goes by the twin rule
+#: (test_a_twin_of_a_non_turn_fact_goes_with_it_and_a_look_alike_stays pins that), or a store the path does not own. ``transcript`` = the target turn's saved transcript flagged off the record.
 _MATRIX = {
     ("forget_it_after_why", "turn"): dict(entry=True, transcript=True, fact=True, obs=True, old_entry=True, old_obs=True),
     ("forget_it_after_why", "kind"): dict(entry=True, transcript=False, fact=False, old_entry=False, old_fact=False, old_obs=False),
     ("forget_it_after_why", "legacy"): dict(entry=True, transcript=True, fact=True, obs=True),
     ("forget_it_fact", "turn"): dict(fact=True, transcript=True, entry=True, obs=True, old_entry=True),
-    ("forget_it_fact", "kind"): dict(fact=True, transcript=False, entry=False, old_entry=False, old_fact=False, old_obs=False),
+    ("forget_it_fact", "kind"): dict(fact=True, transcript=False, entry=False, old_entry=False, old_obs=False),
     ("forget_it_fact", "legacy"): dict(fact=True, transcript=True, entry=True, obs=True),
     ("memory_space", "turn"): dict(fact=True, transcript=True, entry=True, obs=True, old_entry=True),
-    ("memory_space", "kind"): dict(fact=True, transcript=False, entry=False, old_entry=False, old_fact=False, old_obs=False),
+    ("memory_space", "kind"): dict(fact=True, transcript=False, entry=False, old_entry=False, old_obs=False),
     ("memory_space", "legacy"): dict(fact=True, transcript=True, entry=True, obs=True),
     ("forget_last", "turn"): dict(fact=True, transcript=True, entry=True, obs=True, old_fact=True),
     ("forget_last", "kind"): dict(fact=False, transcript=True, entry=False, old_fact=True),
@@ -640,3 +641,23 @@ def test_the_topic_forget_treats_each_index_hit_by_its_kind(world, kind, flagged
     assert not (res.store_down or res.failed), res
     assert w["entry"] not in {k[1] for k in be.rows}
     assert chat.off(w["mid"]) is flagged
+
+
+@pytest.mark.parametrize("path", ["forget_it_fact", "memory_space"])
+def test_a_twin_of_a_non_turn_fact_goes_with_it_and_a_look_alike_stays(world, path):
+    """The twin rule (the same fact written twice for the same member - e.g. a capture's copy) still holds for a target bound to a
+    NON-TURN source: its true twin (same excerpt, near-identical words, no saved turn of its own) goes, or the forgotten fact comes
+    straight back. Not twins: a row of ANOTHER saved turn with the very same words (ids separate), and a legacy row that only
+    shares some words with another excerpt. The non-turn target still flags no saved transcript."""
+    svc, chat = world
+    w = _plant_kind(svc, chat, "kind")
+    look = run(svc.ingest("User's kayak is red and lives at the club", user_id=UID, source="turn_digest", status="approved",
+                          source_excerpt="My kayak is red and it lives at the club"))
+    for k in ("source_turn", "source_kind"):
+        svc._collection().rows[look.id][1].pop(k, None)
+    reply = _run_path(path, svc, w)
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert reply.startswith("Done"), reply
+    assert w["fact"] not in approved and w["old_fact"] not in approved            # the target and its true twin
+    assert w["other_fact"] in approved and look.id in approved                       # ids separate; a look-alike is no twin
+    assert chat.off(w["mid"]) is False                                               # still no transcript for a non-turn target
