@@ -1,0 +1,6 @@
+__pycache__/
+runs/
+# Root ignore patterns cover JSON and shell labs. These are public lab contracts.
+!surface.json
+!windows.json
+!run_window.sh

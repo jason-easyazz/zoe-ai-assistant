@@ -1,0 +1,12 @@
+# [code] USER template only; not installed by the lab.
+[Unit]
+Description=Speed loop guarded lab window
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant
+ExecStart=%h/assistant/labs/speed-loop/run_window.sh --env-source %h/assistant/services/zoe-data/.env
+TimeoutStartSec=4h
+KillMode=control-group
+Nice=10
+[Install]
+WantedBy=default.target

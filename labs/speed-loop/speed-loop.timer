@@ -1,0 +1,9 @@
+# [code] Mirrors windows.json: weekdays 10:00 local; runtime checks closing 14:00.
+[Unit]
+Description=Speed loop proposed weekday window
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10:00:00
+Persistent=false
+Unit=speed-loop.service
+[Install]
+WantedBy=timers.target

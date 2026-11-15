@@ -1,0 +1,21 @@
+{
+  "denylist": ["safety", "floor", "forget", "erase", "auth", "permission", "restraint", "medical", "distress", "model", "backend", "token", "secret"],
+  "knobs": [
+    {"name":"ZOE_FLUE_PREPOST_CONCURRENT","file":"services/zoe-data/zoe_flue_client.py","line":1948,"kind":"env","default":false,"values":[false,true],"stage":"prepost","risk":"Concurrent read snapshots; preserve precedence and deferred commits."},
+    {"name":"ZOE_BRAIN_VOLATILE_AFTER_USER","file":"services/zoe-data/zoe_flue_client.py","line":3246,"kind":"env","default":false,"values":[false,true],"stage":"brain","risk":"Prompt ordering can change answers and cache reuse."},
+    {"name":"ZOE_MEMORY_TICK_DEFER_S","file":"services/zoe-data/memory_service.py","line":429,"kind":"env","default":0.0,"values":[0,0.1,0.2,0.4,0.6,0.8,1,1.5,2,3,4,5,6,8,10],"stage":"memory","risk":"Access metadata is delayed; never alter erase synchronization."},
+    {"name":"ZOE_CONTINUITY_CEILING_S","file":"services/zoe-data/zoe_flue_client.py","line":1636,"kind":"env","default":3.0,"values":[0.2,0.3,0.4,0.5,0.6,0.8,1,1.2,1.5,2,2.5,3],"stage":"prepost","risk":"Late continuity context is omitted."},
+    {"name":"_HOUSEHOLD_FETCH_BUDGET_S","file":"services/zoe-data/zoe_flue_client.py","line":1179,"kind":"constant","default":0.4,"values":[0.1,0.12,0.15,0.18,0.2,0.22,0.25,0.28,0.3,0.32,0.35,0.4],"stage":"prepost","risk":"Late fallback context is omitted; no safety block may change."},
+    {"name":"_CONTINUITY_PORTRAIT_TIMEOUT_S","file":"services/zoe-data/zoe_flue_client.py","line":1628,"kind":"constant","default":1.0,"values":[0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1],"stage":"prepost","risk":"Optional portrait may be absent."},
+    {"name":"_PERSONA_REFRESH_BUDGET_S","file":"services/zoe-data/zoe_flue_client.py","line":509,"kind":"constant","default":0.5,"values":[0.1,0.12,0.15,0.18,0.2,0.22,0.25,0.28,0.3,0.35,0.4,0.5],"stage":"prepost","risk":"Snapshot may stay stale; persona policy is out of scope."},
+    {"name":"ZOE_VOICE_FAST_FIRST_AUDIO","file":"services/zoe-data/routers/voice_tts.py","line":1209,"kind":"env","default":true,"values":[true,false],"stage":"tts","risk":"First chunk cadence changes; listening check required."},
+    {"name":"_FIRST_UNIT_CLAUSE_MIN","file":"services/zoe-data/routers/voice_tts.py","line":1204,"kind":"constant","default":60,"values":[24,28,32,36,40,44,48,52,56,60],"stage":"tts","risk":"Short clauses can sound choppy."},
+    {"name":"_FIRST_UNIT_SOFT_CAP","file":"services/zoe-data/routers/voice_tts.py","line":1205,"kind":"constant","default":90,"values":[60,64,68,72,76,80,84,88,90],"stage":"tts","risk":"Word-boundary flush affects prosody."},
+    {"name":"ZOE_FIRST_SOUND_CLAUSE","file":"services/zoe-data/voice_first_sound.py","line":26,"kind":"env","default":false,"values":[false,true],"stage":"tts","risk":"Needs upstream clause release; alone may do nothing."},
+    {"name":"ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS","file":"services/zoe-data/voice_first_sound.py","line":63,"kind":"env","default":24,"values":[16,18,20,22,24,26,28,30,32],"stage":"tts","risk":"Must retain balanced punctuation and abbreviation guards."},
+    {"name":"ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS","file":"services/zoe-data/voice_first_sound.py","line":64,"kind":"env","default":4,"values":[3,4,5,6,7,8],"stage":"tts","risk":"Small chunks change prosody; minimum guard remains fixed."},
+    {"name":"ZOE_VAD_CLEAN_TAIL_MS","file":"scripts/setup/zoe_voice_daemon.py","line":233,"kind":"env","default":0,"values":[0,500,520,540,560,580,600,620,640,680,720,800],"stage":"endpoint","risk":"Mid-sentence clean pauses can be cut; 500ms safety floor is untouchable."},
+    {"name":"ZOE_VAD_CLEAN_FALL_CHUNKS","file":"scripts/setup/zoe_voice_daemon.py","line":234,"kind":"env","default":2,"values":[0,1,2,3,4,5,6,7,8],"stage":"endpoint","risk":"Ambiguous decay may be mistaken for an endpoint."},
+    {"name":"ZOE_VAD_HESITATION_TAIL_MS","file":"scripts/setup/zoe_voice_daemon.py","line":236,"kind":"env","default":0,"values":[0,800,850,900,950,1000,1050,1100,1200,1300,1400,1500],"stage":"endpoint","risk":"Hesitation may be cut; hard cap remains fixed."}
+  ]
+}
