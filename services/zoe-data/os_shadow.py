@@ -257,8 +257,10 @@ class _Conn:
 RESULTS = ("match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full")
-_REASONS = (("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
-            ("cited", "cause"), ("cites", "cause"), ("forgotten", "forgotten"))
+# "forgotten" is matched FIRST: the kernel's shield refusals mention arguments or causes too ("forgotten_action_arguments",
+# "derives from a forgotten event"), and a forgotten refusal must never be read as one of the kernel's own limits.
+_REASONS = (("forgotten", "forgotten"), ("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"),
+            ("cause", "cause"), ("cited", "cause"), ("cites", "cause"))
 
 
 def reason_code(reason: str) -> str:

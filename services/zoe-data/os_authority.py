@@ -39,10 +39,17 @@ CIRCUIT_S = 5.0
 HEALTH_TTL_S = 5.0
 ERASE_TIMEOUT_S = 8.0
 SCHEMA = 1
-#: the kernel refusal codes (``os_shadow.reason_code``) that are a person's decision and are honoured. Every other code falls back:
-#: ``manifest`` / ``params`` / ``cause`` / ``forgotten`` / ``other`` describe the kernel's own limits or a race, never consent.
-REAL_REFUSALS = frozenset({"no_grant"})
+#: the kernel refusal codes (``os_shadow.reason_code``) that are a person's decision and are honoured. ``forgotten`` is one: the
+#: kernel's shield says this text was forgotten, and falling back would let the old path write it straight back. Every other code
+#: falls back: ``manifest`` / ``params`` / ``cause`` / ``other`` describe the kernel's own limits or a race, never a person's wish.
+REAL_REFUSALS = frozenset({"no_grant", "forgotten"})
 REFUSAL_REPLY = "I can't add to your lists: that permission is switched off for me."
+FORGOTTEN_REPLY = "I was asked to forget that, so I haven't added it."
+
+
+def refusal_reply(code: str) -> str:
+    """The spoken line for an honoured refusal. No refused text is ever repeated."""
+    return FORGOTTEN_REPLY if code == "forgotten" else REFUSAL_REPLY
 
 
 class ListAddRefused(Exception):

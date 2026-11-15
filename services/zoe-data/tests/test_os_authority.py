@@ -90,7 +90,17 @@ async def test_a_verified_receipt_decides_and_health_is_read_once_per_window(ak)
 async def test_a_real_refusal_is_honoured(ak):
     ak.act_mode = "refuse"                                    # "no grant from that person": the member withdrew the grant
     assert await propose() == ("refused", "no_grant")
-    assert os_authority.REAL_REFUSALS == {"no_grant"}
+    assert os_authority.REAL_REFUSALS == {"no_grant", "forgotten"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["derives from a forgotten event", "forgotten_action_arguments", "carries forgotten content"])
+async def test_a_forgotten_refusal_is_honoured_and_never_falls_back(ak, reason):
+    """Falling back would let the old path write the forgotten text straight back (forgotten means forever)."""
+    ak.act_mode = "refuse:" + reason
+    assert await propose() == ("refused", "forgotten")
+    assert os_authority.refusal_reply("forgotten") == os_authority.FORGOTTEN_REPLY != os_authority.REFUSAL_REPLY
+    assert os_shadow.reason_code("forgotten_action_arguments") == "forgotten"      # not "params": "argument" is in the text
 
 
 @pytest.mark.asyncio
@@ -98,7 +108,6 @@ async def test_a_real_refusal_is_honoured(ak):
     ("refuse:wrong argument type", "refused_params"),         # the kernel's own limit (an item over 500 characters)
     ("refuse:asks for more than its manifest", "refused_manifest"),
     ("refuse:cites an event that does not exist", "refused_cause"),
-    ("refuse:derives from a forgotten event", "refused_forgotten"),
     ("refuse:something new", "refused_other"),
     ("unverified", "unverified"), ("uncertain", "unverified"), ("item_differs", "unverified"), ("wrong_shape", "unverified"),
     ("malformed", "protocol"), ("close", "unavailable"),
@@ -196,7 +205,7 @@ async def test_a_kernel_decided_add_writes_the_read_model_and_is_not_shadowed_ag
 def test_the_spoken_callers_speak_the_refusal():
     for name in ("intent_router.py", "mcp_server.py"):
         src = (SVC / name).read_text()
-        assert "except os_authority.ListAddRefused" in src and "os_authority.REFUSAL_REPLY" in src, name
+        assert "except os_authority.ListAddRefused" in src and "os_authority.refusal_reply(" in src, name
 
 
 # ---- erase reach --------------------------------------------------------------------------------------------------------------------
