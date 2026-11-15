@@ -70,6 +70,7 @@ exit 0
 
 FAKE_RSYNC = r"""#!/usr/bin/env bash
 printf '%s\n' "$@" > "$REC/rsync.args"
+{ printf '%s ' "$@"; printf '\n'; } >> "$REC/rsync.all"
 exit 0
 """
 
@@ -310,3 +311,36 @@ def test_an_unreadable_state_passes_only_when_the_config_proves_the_legacy_mode(
     assert r.returncode == 0, r.stdout + r.stderr
     assert "the daemon's state was unreadable" in r.stdout
     assert harness(FAKE_HELPER_FAIL=1, FAKE_SPEAKER_CFG="garbage", RESNET34_READY_TIMEOUT_S=1).returncode == 0   # unknown value = legacy, as the daemon reads it
+
+
+def _bank(tmp_path: Path) -> Path:
+    d = tmp_path / "bankroot" / "af_sky" / "3811a303"
+    d.mkdir(parents=True)
+    (d / "manifest.json").write_text("{}")
+    return tmp_path / "bankroot"
+
+
+def test_the_reflex_bank_ships_only_when_asked_and_never_deletes(harness, tmp_path):
+    r = harness()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len((harness.rec / "rsync.all").read_text().splitlines()) == 1           # no bank step by default
+    (harness.rec / "rsync.all").unlink()
+    r = harness(REFLEX_BANK_DIR=_bank(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = (harness.rec / "rsync.all").read_text().splitlines()
+    assert len(calls) == 2 and "zoe_voice_daemon.py" in calls[0] and "/.zoe-voice/reflex" not in calls[0]      # the daemon step is unchanged
+    assert "/.zoe-voice/reflex/" in calls[1] and "--checksum" in calls[1] and "--delete" not in calls[1]
+
+
+def test_a_directory_that_is_not_a_bank_is_refused_before_anything_ships(harness, tmp_path):
+    (tmp_path / "empty").mkdir()
+    r = harness(REFLEX_BANK_DIR=tmp_path / "empty")
+    assert r.returncode == 5 and not (harness.rec / "rsync.all").exists()
+    assert "manifest.json" in r.stderr
+    r = harness(REFLEX_BANK_DIR=tmp_path / "missing")
+    assert r.returncode == 5
+
+
+def test_dry_run_names_the_bank_step_and_ships_nothing(harness, tmp_path):
+    r = harness(REFLEX_BANK_DIR=_bank(tmp_path), DRY_RUN=1)
+    assert r.returncode == 0 and "reflex bank" in r.stdout and not (harness.rec / "rsync.all").exists()

@@ -1,144 +1,163 @@
 ---
 type: Reference
 title: The panel reflex - a soft "Mm." at the committed close, in Zoe's own voice
-description: What the panel's "I heard you" reflex is, its truthfulness rules (never before the commit, non-lexical only, silent at night at first, one voice), the handshake with the server's spacers, the ship bar (post-close talk <= 3 per 100 turns from the instrument first; the owner's blind ear test), deploy and rollback, and what is NOT built yet. Pi flag REFLEX_ENABLED (default off), server flag ZOE_VOICE_REFLEX_AWARE (default on, inert without a reflex block).
+description: What the panel's "I heard you" reflex is, which safety rules the code enforces and which it cannot, the single REFLEX_MODE switch (off, shadow, on; default off), the bank and how it is built, the exact switch-on steps (deploy, shadow week, numbers that must hold, on, rollback), and what is not built.
 tags: [voice-path, panel, first-sound, kokoro, flag-dark]
-timestamp: 2026-11-14T00:00:00+08:00
+timestamp: 2026-11-15T00:00:00+08:00
 ---
 
 # The panel reflex
 
+Labels: **[code]** read in the source, **[lab]** run on the lab, **[live]** read on the box, **[inferred]** reasoned, not measured.
+
 ## What it is
 
-Today the first sound comes about 2.7 s after a person stops talking, and only 8.5% of turns get any sound inside 1 s. The
-reflex is ONE soft, non-lexical take ("Mm.", "Mm-hm.") that the panel plays itself, from a pre-rendered bank in Zoe's own
-Kokoro voice, at the moment the daemon commits the close of the recording. It says "I heard sound that stopped", which is true
-at that moment, and nothing more. Lexical lines ("Checking your calendar.") stay with the server's spacers, which know what is
-true.
+First sound after a person stops speaking is p50 2.73 s, p90 4.47 s, 8.5% of turns under 1 s (felt scorecard, 47 turns, one
+week to 2026-11-14) [live]. The reflex is ONE soft, non-lexical take ("Mm." or "Mm...") that the PANEL plays itself, from a
+pre-rendered bank in Zoe's own Kokoro voice, the moment the daemon commits the close of a wake recording and its rules all
+pass. It says "I heard sound that stopped", true at that moment, and nothing more. It cannot reach under 0.6 s: the endpoint
+closes no sooner than its 640 ms floor [code]. Whether it lands under 1 s depends on the close rule (a 640 ms close leaves
+about 360 ms for the decision and the player, an 800 ms close about 200 ms) [inferred; `labs/voice-reflex-sim`].
 
-A close-triggered reflex lands about 0.8-1.1 s after true speech end (the recording closes 720-880 ms after speech on the live
-640/800 tail). It moves the share of turns under 1 s; it cannot reach under 0.6 s. That needs a shorter tail, not this.
+## The switch
 
-## Truthfulness rules (binding)
+ONE panel switch, read once at start: `REFLEX_MODE` in the panel's `.env.voice` = `off` (default; anything else is `off`),
+`shadow`, or `on`. The module's own `REFLEX_ENABLED` is ignored by the daemon (the mode forces it per call), so there is no
+second switch to flip by accident.
 
-- **Never before the commit.** The Jabra mutes its own mic while it plays: a sound during capture would delete the words of a
-  person still talking. The reflex fires only once the endpointer has closed the recording.
-- **Non-lexical only.** "Mm." / "Mm-hm.", low and falling. Never "Sure", "Of course", "Got it", "Okay" (dismissive after bad
-  news), "Let me check" (no tool known), laughter, sighs, breath (Kokoro cannot render breath; a recorded breath is another
-  voice), or "Hm?" (claims not understanding).
-- **Silent at night at first.** 22:00-07:00 is silent in S1 (`REFLEX_NIGHT`). A -6 dB night bank is a later owner decision.
-- **One voice.** The bank's manifest voice must equal the household's current voice; an unknown voice counts as a mismatch.
-  Any mismatch, tampered file or wrong format is no bank: silence, never the wrong voice.
-- **Silent when in doubt.** Each rule is one fixed skip reason, checked in this order (the first that applies is reported):
-  `disabled`; `error` (a numeric input that is not a finite real number, or any exception inside `decide`); `not_committed`
-  (the daemon must pass `committed=True`, exactly: the truthfulness rule in code); `not_wake` (S1
-  is wake turns only; a barge turn never); `capped` (hard cap / max_duration / unknown rule); `short` (no_speech, or under
-  480 ms of speech); `muted` (the Jabra ate audio); `busy` (another player, or unknown); `media` (music or video playing through the panel,
-  True OR unknown); `noisy` (pre-roll above the floor; provisional -40 dBFS until S0 data sets it); `night`; `idle_greeting`
-  (first turn after 4 h idle); `guest`; `low_confidence`; `prev_question` (windows only); `budget` (one per 30 s; the chain
-  rule for windows, flag-dark); `no_bank`; `voice_mismatch`.
-- **Unknown is silence.** `committed`, `guest`, `media_active` and `speaker_conf` default to unknown, and unknown is silence:
-  the daemon has to state the safe value. Every numeric input (`speech_ms`, `muted_ms`, `noise_dbfs`, `local_hour`, `idle_h`,
-  `since_last_s`, `chain_turns_since`) must be a finite real number (no bool, string, NaN or infinity; durations and counts
-  >= 0; `local_hour` a whole hour 0..23), else `error`. `decide` never raises.
-- **Guests (decided 2026-11-14, conservative).** The design called the reflex identity-neutral ("mm" is fine for a guest); the
-  review asked for an explicit guard. Rule: a guest OR an unknown speaker (`guest` not exactly False) is silent unless
-  `REFLEX_FOR_GUESTS=true` (default false). The daemon passes `guest=False` only when its local speaker claim names a household
-  member. `REFLEX_FOR_GUESTS=true` lifts this guard only; a guest still needs a speaker score (below). The claim gates only this
-  local sound, never what the server does.
-- **Speaker confidence.** A MISSING score (`speaker_conf=None`) is always `low_confidence`, and so is a score under
-  `REFLEX_MIN_SPEAKER_CONF` (0.70, the live claim threshold) or one that is not a finite number. There is no setting that
-  lets an unknown speaker through: until a pre-close speaker identity exists, the reflex stays silent.
-- **Not a tic.** 6-8 vetted takes; never the same take twice running; never one of the last two.
-- **Never registered as playback.** The reflex player is NOT `_register_tts_process`: a registered player would start the barge
-  monitor's 800 ms grace before the reply's onset and bring back self-interruption.
+| mode | what runs |
+|---|---|
+| `off` | nothing new. The line's `skip=` is the older post-hoc shadow (decide() at the turn's end, no bank, no still-talking rule) |
+| `shadow` | on every eligible turn the REAL decision is made, with the real bank, on a short thread, and logged as `REFLEX_DECISION`. No sound, no player, no extra write |
+| `on` | the same, and a "heard" decision plays one take through its own player |
+
+Also needed for `on` (each missing one is a named silent skip, never a guess): `SPEAKER_ID_SHADOW=0` and
+`ZOE_SPEAKER_MODEL=resnet34` (else `spk=-1`, skip `guest`), `MEDIA_WATCH_ENABLED=true` (else `media`), `BARGE_IN_ENABLED`
+(the post-close mic window; else `talking`), `REFLEX_VOICE=<voice id>` (else `no_bank`/`voice_mismatch`), a bank under
+`~/.zoe-voice/reflex/<voice>/<sha8>/`, and `zoe_voice_reflex.py` deployed. Optional: `REFLEX_SILENT_MEMBERS=<ids>` (comma
+separated; those members are treated as guests, so silent), `REFLEX_SCORE_DEADLINE_MS` (default 250).
+
+## Safety rules: what the code enforces and what it cannot
+
+| Rule | State | How |
+|---|---|---|
+| Never before the close is committed | **enforced** [code] | `committed` must be exactly True (the endpointer's own commit, not the max-duration path); skip `not_committed` |
+| Never talk over the person | **enforced, measured by the shadow** [code] | skip `talking`: the post-close mic window (the barge monitor's counters) must have covered 160 ms, be fresh, and hold NO speech chunk; speech, or nobody listening, is silence. Not proof: the monitor opens its mic after the close, so a person who resumes later is not yet visible. The ship bar below measures it (`still_talking` on turns where `reflex=heard`) |
+| Reply never clipped or delayed | **enforced** [code, lab] | no wait, ever. Reply first audio while the reflex plays: the reflex is CUT (terminate; `reflex_cut=1`). Reply first audio before the player starts: skip `reply_first`. The reply's first PCM write is identical with the reflex off, shadow and on (`test_the_replys_first_write_does_not_move`) |
+| Skippable late | **enforced** [code] | a decision slower than `REFLEX_SCORE_DEADLINE_MS` after the close is `late`; the player re-checks for a reply after spawning and kills itself unwritten |
+| Unverified speaker / guest | **enforced** [code] | skip `guest` / `low_confidence`: the speaker model's OWN accept at the stricter FAR 0.1 % bar (0.309 / 0.351), exactly True, for a known model id; a scored no-match, a closer named guest, shadow mode or no claim is silence |
+| A child speaking | **enforced only by an explicit list** [code] | the panel knows no age or role. An unenrolled child is a guest (silent). An ENROLLED child is a member and would be heard UNLESS the owner lists them in `REFLEX_SILENT_MEMBERS` |
+| Music / media playing | **enforced if the watcher runs** [code] | skip `media`: True OR unknown (watcher off, stale, dead) is silence; `busy` for another daemon player |
+| Never on a mute-eaten, capped, wake-only or very short turn | **enforced** [code] | `muted`, `capped`, `short` (under 480 ms of speech) |
+| Night, first turn after 4 h idle, one per 30 s, never the last two takes | **enforced** [code] | `night` (22-07), `idle_greeting`, `budget`, take rotation |
+| Never the wrong voice | **enforced** [code] | the bank's manifest voice must equal the household voice (`REFLEX_VOICE`, or a done frame's `voice` when the server sends one); unknown is `voice_mismatch` |
+| Never during a crisis or medical turn | **NOT ENFORCEABLE at the close** | the panel has no transcript until the server's first frame, about 0.4 s after the POST, which is later than the reflex would play. The only safe-by-construction lever is the sound itself: non-lexical, soft, no promise. The shadow week MEASURES the exposure (`labs/voice-reflex-sim --markers`): would-play turns with a `DISTRESS_HANDOFF`, `MEDICAL_SAFETY` or `CHILD_SAFETY_FLOOR` marker within 45 s. A server-pushed "hold the reflex for the next turn" is not built and could only cover the SECOND turn of a crisis |
+| Never before a command that will be refused | **NOT ENFORCEABLE at the close** | same reason. "Mm." makes no promise (no "sure", no "okay"), which is why the default bank has no "Mm-hm." |
+
+**Owner decision needed before `on`:** the two NOT ENFORCEABLE rows. The measurement above gives the number; the call is yours.
 
 ## Pieces
 
 | Piece | Where | State |
 |---|---|---|
-| Decision logic (gate, rotation, budget, handshake block, H3 ordering wait, bank loader, the daemon's trim rule) | `scripts/setup/zoe_voice_reflex.py` (stdlib only) | built, tested (`tests/unit/test_voice_reflex.py`), not imported by the daemon |
-| Server side of the handshake | `services/zoe-data/voice_spacer.py` (`SpacerTurn.reflex`, `note_reflex`, `parse_reflex_block`, veto rules) | built, tested (`services/zoe-data/tests/test_voice_spacer_reflex.py`), not wired into `routers/voice_tts.py` |
-| Bank renderer | `scripts/setup/render_reflex_bank.py` (run on the Orin by the owner) | built, tested on a synthetic voice (`tests/unit/test_voice_reflex_bank_render.py`); never run against the live sidecar |
+| Decision logic: gate (one named skip per rule), take rotation, bank loader, handshake block, the daemon's trim rule | `scripts/setup/zoe_voice_reflex.py` (stdlib only) | merged (#2470); model-aware speaker guard and `late` (#2571); `talking` here |
+| Media watch (`MEDIA_WATCH_ENABLED`) | `zoe_voice_daemon.py` `_MediaWatch` | draft #2572, log-only until this wiring reads it |
+| At-close speaker verdict, post-hoc shadow `skip=` | `zoe_voice_daemon.py` `_spk_verdict`, `_shadow_reflex_skip` | draft #2573 |
+| The wiring: `REFLEX_MODE`, `_ReflexTurn` (decide, then maybe play), `_TALK.peek`, the reply hooks, the bank load | `zoe_voice_daemon.py` | this PR |
+| Bank renderer (owner-run on the Orin) | `scripts/setup/render_reflex_bank.py` | this PR; run against a stub in tests, NOT yet against the live sidecar |
+| Bank deploy | `scripts/setup/deploy-pi-voice.sh` with `REFLEX_BANK_DIR=<root>` | this PR |
+| Projection lab and shadow-week reader | `labs/voice-reflex-sim/` | this PR |
+| Server side of the handshake (the server drops its own filler after a heard reflex) | `services/zoe-data/voice_spacer.py` | NOT merged (the unmerged `reflex-stack4` branch). The panel sends no `reflex` block; an old server is unaffected |
 
-### The handshake
+### Noise input (decided here, pending measurement)
 
-The daemon puts one block on the `/api/voice/turn_stream` payload: `{"kind": "heard", "take": "mm_03", "bank": "<sha8>",
-"voice": "<id>", "at_ms": <close to reflex write>, "dur_ms": <clip ms>}`, or `{"kind": "none", "skip": "<enum>"}`. Never text,
-never audio. The server parses it strictly (unknown keys dropped, enums checked, ints clamped) and, while
-`ZOE_VOICE_REFLEX_AWARE` holds, a heard reflex vetoes:
+`noise_dbfs` used to be the RMS of the whole pre-roll, which holds the wake word, so `noisy` would have fired on almost every
+wake turn. It is now the QUIETEST 80 ms chunk of the pre-roll (the pause around the wake word): steady music or TV keeps even
+that chunk high, a quiet room does not. The bar stays the provisional -40 dBFS. `REFLEX_DECISION noise_db=` logs the value so
+the shadow week sets the bar. Supersedes the "open decision" in [voice-reflex-noise-input.md](voice-reflex-noise-input.md).
 
-| Mechanism | After a heard reflex |
-|---|---|
-| timer filler | `already_spoken:reflex` until the wait reaches `REFLEX_FILLER_HOLD_S` (5.0 s); past it a truthful wait line is kinder than silence |
-| tool filler | `already_spoken:reflex` (a generic line after a receipt is noise) |
-| tool ack | allowed only when corroborated AND from the domain's own pool ("Checking your calendar."); else `already_spoken:reflex` |
-| processing-ack audio | suppressed (`processing_ack_audio_allowed()`); the text frame for the screen stays |
-| greeting | unchanged (content); the panel itself skips the reflex after 4 h idle |
+### Logs
 
-The reflex does not take the turn's one spacer claim (`spoken` is untouched). With no block, or `kind: none`, nothing changes.
+`REFLEX_DECISION mode=<shadow|on> kind=<heard|none> skip=<enum or -> take=<id or -> decided_ms=<n> talk_obs_ms=<n>
+noise_db=<n> spk=<1|0|-1> media=<1|0|-1> win=<enum> bank=<sha8 or ->` - one per eligible turn, written when the decision is
+made. In `shadow`, `kind=heard skip=-` means "would have played". `FIRST_SOUND` keeps its shape: `reflex=heard`,
+`reflex_at_ms`, `reflex_dur_ms`, `reflex_cut`, `gap_ms` are filled only when a take was really written; `skip=` is the
+controller's decision (or a runtime skip: `reply_first`, `player_failed`). `REFLEX_BANK result=<enum> voice= bank= takes=` once
+at start. Integers and fixed enums only; no id, score, text or audio.
 
-**Ordering (H3), holds even against an old server:** the stream loop waits `ordering_wait_ms` before its first server PCM write,
-so the reply starts at least `REFLEX_SEAM_MS` (120 ms) after the reflex ends. The clip counts for at most `REFLEX_MAX_MS`
-(600 ms), so the wait is at most 720 ms; on brain turns (first audio >= ~1.5 s after the close) it is 0.
+## The bank
 
-### The bank
+`~/.zoe-voice/reflex/<voice>/<bank_sha8>/{mm_NN.wav,manifest.json}`: 24 kHz mono S16 (the format of the server's chunks), each
+take trimmed with the daemon's own rule, faded 10 ms, RMS-matched to the reference reply speech minus 3 dB, peak at most
+-1 dBFS; the manifest holds voice, style row, speeds, render date and per-take sha256, duration and level. The panel loader
+refuses a tampered file, a wrong format, a take over 600 ms or fewer than 3 takes (fail silent, never the wrong voice).
 
-`~/.zoe-voice/reflex/<voice>/<bank_sha8>/{mm_01..}.wav` plus `manifest.json` (voice, style_len or null, speeds, kokoro and
-misaki versions when discoverable, sidecar code sha, render date, per-take sha256 / dur_ms / rms_db). 24 kHz mono S16, the
-format of the server's chunks. The sha8 covers the voice, the style row and every take's sha256 (not the date), so the same
-inputs give the same bank. Takes are trimmed with the daemon's own rule, faded 10 ms, RMS-matched to the reference reply speech
-minus 3 dB (`REFLEX_GAIN_DB`), peak at most -1 dBFS.
+**Words, proposed:** two neutral non-lexical texts, "Mm." and "Mm...", across three speeds and three style rows (18
+candidates; keep 6 to 8 by ear). Nothing that agrees or promises ("sure", "okay", "got it", and not "Mm-hm.", which reads as
+a yes, so it is only an opt-in through `--texts`). No breath: Kokoro cannot render one, and another voice breaks the one-voice
+rule. Whether "Mm." phonemises as a hum is UNHEARD: the renderer's `--texts` takes a phoneme-marked form if it does not.
 
-Render (owner, on the Orin, after the W1 sidecar `style_len` change if wanted):
-```
-python3 scripts/setup/render_reflex_bank.py --voice <voice id> --render-date <YYYY-MM-DD> --dry-run
-python3 scripts/setup/render_reflex_bank.py --voice <voice id> --render-date <YYYY-MM-DD> --out ~/reflex-candidates
-# listen, keep 6-8 takes, then re-render only those (Kokoro is deterministic, the audio is identical)
-python3 scripts/setup/render_reflex_bank.py --voice <voice id> --render-date <YYYY-MM-DD> --keep mm_02,mm_05,... --out ~/reflex-bank
-```
-Without sidecar `style_pin` support in `/health` the renderer omits `style_len`, writes `"style_pin": false` and
-`"style_len": null`, and says so.
+**Not committed.** `.gitignore` excludes `*.wav`, and the files are household-voice output of one box's sidecar build. They are
+built once by the owner on the Orin, listened to, shipped with `REFLEX_BANK_DIR`, and verified on the panel by the loader's
+sha256 check. The expected `bank` sha8 can be recorded in the landing note.
 
-## The ship bar
+## Switch-on steps (landing session and owner)
 
-1. **The instrument first (S0, log-only).** One week of `FIRST_SOUND` lines from the daemon; post-close talk (`still_talking`)
-   must be **<= 3 per 100 turns** before any sound ships, because a close-triggered reflex makes today's false closes audible.
-2. **The owner's blind ear test (15 min).** 20 scripted wake turns (a task, a chat, a sad sentence, a long pause mid-thought),
-   arm A silence vs arm B reflex, blind-ordered. Pass: >= 60% prefer B and **0 "talked over me"**.
-3. **Bank seam test (S2).** Per-take RMS within +-1 dB of target; reflex-then-reply, the owner cannot hear a voice change in
-   >= 16/20.
-4. Live after: first ANY sound p50 on eligible wake turns ~0.8-0.9 s; server first-audio p50 unchanged within 50 ms; false
-   starts <= 3 per 100 reflex turns.
+Preconditions: the four PRs are merged (#2571, #2572, #2573, this one). Nothing here changes the server. A panel deploy is
+the owner's step. Daytime only; none of it inside the night window.
 
-## Deploy and rollback
+1. **Panel deploy, dry.** From a clean worktree at the merged commit (never the live checkout):
+   `DRY_RUN=1 bash scripts/setup/deploy-pi-voice.sh`. Read the plan; it must list `zoe_voice_reflex.py`.
+2. **Read the panel's current state** (read-only): `ssh zoe-pi "grep -E '^(SPEAKER_ID_SHADOW|ZOE_SPEAKER_MODEL|BARGE_IN_ENABLED|MEDIA_WATCH_ENABLED|REFLEX)' /home/pi/.zoe-voice/.env.voice"`
+   (names and values of these switches only). Needed: `SPEAKER_ID_SHADOW=0`, `ZOE_SPEAKER_MODEL=resnet34`, barge-in on.
+3. **Render the bank on the Orin** (the sidecar is shared with the live voice: do it when no one is talking, under
+   `flock /tmp/zoe-voice-harness.lock`): `python3 scripts/setup/render_reflex_bank.py --voice <voice> --render-date <YYYY-MM-DD> --dry-run`,
+   then the same without `--dry-run`, with `--out ~/reflex-candidates`. Listen to all 18. Keep 6 to 8 that sound like a person
+   listening and not like a word: re-render only those with `--keep mm_02,mm_05,... --out ~/reflex-bank`. Record the printed
+   `bank <sha8>`.
+4. **Panel deploy with the bank:** `REFLEX_BANK_DIR=~/reflex-bank bash scripts/setup/deploy-pi-voice.sh` (rsync `--checksum`,
+   never `--delete`). Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
+5. **Shadow.** In the panel's `.env.voice` set `REFLEX_MODE=shadow`, `REFLEX_VOICE=<voice>`, `MEDIA_WATCH_ENABLED=true`
+   (and `REFLEX_SILENT_MEMBERS=` for the children); `systemctl --user restart zoe-voice`. Expect, within a minute,
+   `grep REFLEX_BANK` to say `result=ok ... takes=6..8`. Anything else: fix before going on.
+6. **Read the shadow for at least 7 days AND 100 turns** (whichever is longer):
+   `ssh zoe-pi "grep -E 'REFLEX_DECISION|FIRST_SOUND' /home/pi/.zoe-voice/voice.log" > decisions.txt`, then
+   `python3 labs/voice-reflex-sim/sim.py --decisions decisions.txt` (the per-rule distribution) and, with the server's
+   allowlisted marker extract, `--markers markers.txt`:
+   `grep -E 'DISTRESS_HANDOFF|MEDICAL_SAFETY |CHILD_SAFETY_FLOOR' ~/.zoe-logs/zoe-data.app.log | sed -E 's/^([0-9-]+ [0-9:]+).*(DISTRESS_HANDOFF|MEDICAL_SAFETY|CHILD_SAFETY_FLOOR).*/\1 \2/' > markers.txt`.
+7. **Numbers that must hold to go on** (any miss: stay in shadow, fix, repeat):
+   - `FIRST_SOUND` `server_first_ms` p50 within 50 ms of the same panel before shadow, and `post_ms` p50/p95 unchanged
+     (the controller is off the POST path; this proves it);
+   - `REFLEX_DECISION decided_ms` p95 at or under 250; `skip=late` under 10% of turns that passed every earlier rule;
+   - `skip=talking` not dominant: if most turns are `talking` the mic window never reports (barge-in off or mic opens too late),
+     and the reflex cannot be on;
+   - would-play share is reported per rule; `noise_db` shows where the floor really sits, set `REFLEX_NOISE_FLOOR_DBFS` from it
+     only after an owner look;
+   - would-play turns with a safety marker within 45 s: **0 is the bar for the owner's rule; any count is the owner's decision**
+     (see the NOT ENFORCEABLE rows);
+   - `spk=1` on the household's own wake turns most of the time; if `spk=-1` dominates, speaker shadow is still on.
+8. **Rehearsal, owner present, daytime, `REFLEX_MODE=on` for the session only.** Ten ordinary wake turns (a real play on most,
+   each inside 1 s of speech end by the owner's ear); music through the panel then five turns (silence all five, `media=1`); a
+   non-enrolled adult and a TV clip five turns each (silence, `spk` not 1); "stop"/"yes" style short commands (`short`); stop
+   the media watcher (`media=-1`, silence); a very fast canned reply (`reflex_cut=1` or `reply_first`, the reply never moved).
+   Pass: zero reflexes on turns that should be silent; `server_first_ms` within 50 ms.
+9. **On.** `REFLEX_MODE=on`, restart. Watch for a week: false starts (`reflex=heard` with `still_talking=1`) at most 3 per 100
+   reflex turns; the `reflex_cut=1` rate (each is an audible truncated "mm"; many means the gate admits fast replies);
+   `reflex=heard` with `server_first_ms=-1` (a play on a turn that ended in silence); and the owner's blind ear test
+   (20 scripted wake turns, silence vs reflex, blind order: pass at least 60% prefer the reflex and zero "talked over me").
+10. **Rollback, cheapest first:** `REFLEX_MODE=off` (or delete the line) in `.env.voice` and `systemctl --user restart zoe-voice`;
+    then delete the bank directory; then restore the daemon `.bak-<ts>` the deploy printed. Nothing server-side changed.
 
-The recipe is the existing one in [voice-pipeline.md](voice-pipeline.md) "Operator deploy": server first through the voice-path
-deploy gate, then from a clean worktree at the merged commit `DRY_RUN=1 bash scripts/setup/deploy-pi-voice.sh`, then the real
-run (rsync with `.bak-<ts>`, restart `zoe-voice`, verify active, `/health` and md5). The bank needs a separate DIR step (not
-built). Pi flags go in `/home/pi/.zoe-voice/.env.voice`. Mixed versions are safe both ways (additive keys).
+## What is not built or not proven
 
-Rollback, cheapest first:
-- `REFLEX_ENABLED=false` in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice` on the panel;
-- `ZOE_VOICE_REFLEX_AWARE=0` on the Jetson, restart zoe-data (the server stops honouring the block);
-- restore the `.bak-<ts>` daemon as the deploy script printed.
-
-## NOT built yet
-
-- **Daemon wiring** (`scripts/setup/zoe_voice_daemon.py`): decide at the close in `record_command`, an unregistered
-  `_ReflexPlayer`, the payload block, the H3 wait before the first `_feed_pcm_chunk`, caching the voice from the done frame,
-  and adding `zoe_voice_reflex.py` to `deploy-pi-voice.sh` `SHIPPED_FILES`. What it passes for the explicit inputs:
-  `committed=True` only on the branch where `endpointer.push(...)` returned True (stop reason `silence`), never on the
-  max-duration path; `guest=False` only when the local voice claim names a household member, `True` for a named guest, `None`
-  when no claim exists; `speaker_conf` = that claim's raw score, or `None`. CAUTION: today the claim is scored AFTER
-  `record_command` returns (`_speaker_claim_to_attach(wav)` in `_do_single_turn_stream`), and in shadow mode
-  (`SPEAKER_ID_SHADOW`, default on) it returns None at once. So at the close the identity is unknown, and with the defaults the
-  `guest` and `low_confidence` guards silence EVERY turn. The reflex cannot play until the claim is scored before the reflex
-  (costs its latency; not possible in shadow mode, so shadow mode must end first). `REFLEX_FOR_GUESTS` does not help: a
-  missing score is silence on its own; `media_active` from the panel's own media state (the AirPlay / shairport and Music Assistant player state, which the
-  daemon does not read today: until it does, pass `None`, which is silence).
-- **The two-line server wiring** in `services/zoe-data/routers/voice_tts.py`: `_spacer.note_reflex(payload.get("reflex"))`
-  after the `SpacerTurn` is built in `voice_turn_stream`, `waited_s=` on the timer filler's `timer_line`, and the
-  processing-ack audio check; plus the `reflex=` fields on VOICE TIMING and the done frame's `voice`.
-- **The DIR deploy step** for the bank (rsync of `reflex/<voice>/<sha8>/` plus a manifest md5 check, owner-run).
-- The S0 instrument, the class frame (S3), windows (S4), the night bank (S5).
+- Not heard: no bank has been rendered or listened to; whether "Mm." sounds like a hum, and the seam to the reply, are
+  unproven. The renderer has only run against a stub voice.
+- The post-close mic window opens after the close; its real open time, the decision latency on the panel Pi with the daemon
+  running, the player start latency and the media watcher's cost are all unmeasured. `labs/voice-reflex-sim` shows how the
+  first-sound projection moves with them.
+- No done-frame `voice`, so a server-side voice change is not noticed by the panel: re-render the bank and update
+  `REFLEX_VOICE` together.
+- The server handshake (dropping a redundant server filler after a heard reflex) is unmerged; stacking "Mm." with a generic
+  server filler is possible until it lands.
+- The rule for crisis and medical turns and for commands that will be refused cannot be enforced at the close (above).
+- Windows (follow-up / conversation turns) never get a reflex: wake turns only.

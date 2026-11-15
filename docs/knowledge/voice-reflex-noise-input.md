@@ -7,7 +7,7 @@ tags: [voice, reflex, panel, open-decision]
 
 # Voice reflex noise input (OPEN, 2026-11-14)
 
-**Status: open design decision. Nothing acts on it; the reflex is unwired and `REFLEX_ENABLED` is off.**
+**Status: superseded for the wiring (2026-11-15): the reflex controller measures the QUIETEST 80 ms chunk of the pre-roll, not its whole RMS (see [voice-reflex.md](voice-reflex.md), "Noise input"); the bar stays provisional until the shadow week's `noise_db` is read. The findings below describe why.**
 
 ## The finding
 

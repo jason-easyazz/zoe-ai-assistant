@@ -38,6 +38,9 @@
 # (RESNET34_READY_TIMEOUT_S) for /health's speaker_resnet34 to be ready and fails otherwise.
 #
 # Env: PI_HOST PI_USER PI_DAEMON_DIR PI_VENV VERIFY_TIMEOUT_S HEALTH_PORT RESNET34_READY_TIMEOUT_S
+#      REFLEX_BANK_DIR=<root of a rendered reflex bank: <voice>/<sha8>/{mm_NN.wav,manifest.json}>  ship it to
+#        ${PI_DAEMON_DIR}/reflex/ (rsync --checksum, never --delete: the panel loads the latest VALID bank and
+#        refuses a tampered one). Unset = no bank step. Render it with render_reflex_bank.py on the Orin.
 #      DRY_RUN=1  print the plan + rendered unit, touch nothing.
 # Exit codes: 0 ok | 2 usage | 3 unit install refused | 4 verification failed
 #             | 5 transfer/render failed
@@ -180,6 +183,14 @@ cleanup() {
   if [ -n "${RENDER_DIR}" ]; then rm -rf "${RENDER_DIR}"; fi
 }
 trap cleanup EXIT
+# The reflex bank (optional): refuse a directory that is not a rendered bank BEFORE anything is shipped.
+if [ -n "${REFLEX_BANK_DIR:-}" ]; then
+  if [ ! -d "${REFLEX_BANK_DIR}" ] || [ -z "$(find "${REFLEX_BANK_DIR}" -mindepth 3 -maxdepth 3 -name manifest.json 2>/dev/null)" ]; then
+    echo "ERROR: REFLEX_BANK_DIR=${REFLEX_BANK_DIR} holds no <voice>/<sha8>/manifest.json (render it with render_reflex_bank.py)" >&2
+    exit 5
+  fi
+fi
+
 if [ "$INSTALL_UNIT" = 1 ]; then
   RENDER_DIR="$(mktemp -d)"
   render_unit > "${RENDER_DIR}/zoe-voice.service"
@@ -191,6 +202,9 @@ if [ "$DRY_RUN" = 1 ]; then
   if [ "$INSTALL_UNIT" = 1 ]; then
     echo "==> DRY_RUN: would install this unit (refuses if one exists unless --force-unit):"
     cat "${RENDER_DIR}/zoe-voice.service"
+  fi
+  if [ -n "${REFLEX_BANK_DIR:-}" ]; then
+    echo "==> DRY_RUN: would rsync the reflex bank ${REFLEX_BANK_DIR}/ -> ${SSH_TARGET}:${PI_DAEMON_DIR}/reflex/ (checksum, no delete)"
   fi
   echo "==> DRY_RUN: would write ${PI_DAEMON_DIR}/BUILD.json: ${BUILD_JSON}"
   echo "==> DRY_RUN: would restart zoe-voice and verify active/health/build/md5"
@@ -226,6 +240,13 @@ for f in "${SHIPPED_FILES[@]}"; do src_files+=("${SRC_DIR}/${f}"); done
 rsync -avz --backup --suffix="${BAK_SUFFIX}" \
   "${src_files[@]}" \
   "${SSH_TARGET}:${PI_DAEMON_DIR}/" || { echo "ERROR: rsync failed" >&2; exit 5; }
+
+# --- 2a. The reflex bank (only when REFLEX_BANK_DIR is set) -------------------
+if [ -n "${REFLEX_BANK_DIR:-}" ]; then
+  echo "==> Syncing the reflex bank..."
+  rsync -avz --checksum "${REFLEX_BANK_DIR}/" "${SSH_TARGET}:${PI_DAEMON_DIR}/reflex/" \
+    || { echo "ERROR: reflex bank rsync failed" >&2; exit 5; }
+fi
 
 # --- 2b. BUILD.json: what /health will report after the restart ---------------
 rssh "printf '%s\\n' '${BUILD_JSON}' > ${PI_DAEMON_DIR}/BUILD.json.tmp && mv ${PI_DAEMON_DIR}/BUILD.json.tmp ${PI_DAEMON_DIR}/BUILD.json" \
