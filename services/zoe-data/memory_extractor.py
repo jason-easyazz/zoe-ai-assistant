@@ -1004,7 +1004,7 @@ async def _load_recent_user_messages(
     async with get_db_ctx() as db:
         rows = await (
             await db.execute(
-                "SELECT cm.content FROM chat_messages cm "
+                "SELECT cm.content, cm.created_at FROM chat_messages cm "
                 "JOIN chat_sessions cs ON cm.session_id = cs.id "
                 "WHERE cm.session_id = ? AND cm.role = 'user' "
                 f"AND {owner_expr} = ? AND {_off_record_sql('cm')} "
@@ -1012,6 +1012,10 @@ async def _load_recent_user_messages(
                 (session_id, user_id, limit),
             )
         ).fetchall()
+    # the pronoun anchor never comes from a turn at or before the member's erase watermark (erase_watermark; unreadable = no anchor)
+    import erase_watermark
+    rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r.get("created_at") if isinstance(r, dict) else r[1],
+                                            reader="prev_user_turn", strict=False)
     out: list[str] = []
     for r in rows:
         content = ((r[0] if not isinstance(r, dict) else r.get("content")) or "").strip()

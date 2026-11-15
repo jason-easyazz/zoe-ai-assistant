@@ -62,6 +62,7 @@ import memory_authority as _auth
 import memory_forgotten as _forgotten
 import own_words as _own_words
 import memory_temporal as _temporal
+import erase_watermark as _erase_watermark
 import user_erase_gate as _erase_gate
 from live_store_guard import (
     LiveStoreViolation,
@@ -1674,6 +1675,17 @@ class MemoryService:
             _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
         except Exception:  # noqa: BLE001
             _event = None
+        if _event is None and source in MEMORY_OPT_OUT_SOURCES:
+            # a present emergency the converter declined (a bystander, two people): as mined it reads as a STANDING condition
+            # ("... cannot get up" under Routines; QA round 10a), so an automatic writer does not file it (medical_safety.unfiled_emergency)
+            try:
+                _unfiled = _ms.unfiled_emergency(text, anchor_text if anchor_text is not None else source_excerpt)
+            except Exception:  # noqa: BLE001
+                _unfiled = False
+            if _unfiled:
+                self._bump("emergency_unfiled", source)
+                logger.info("MEDICAL_EVENT_UNFILED user=%s source=%s", user_id, source)
+                return None
         _mined = None
         if _event is not None:
             logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
@@ -2217,6 +2229,12 @@ class MemoryService:
         self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
+        # The durable erase WATERMARK before anything is erased (erase_watermark: memory_forgotten, no text): every transcript miner,
+        # in this process or another, skips the member's turns at or before it. Fail closed: no mark, nothing erased (caller retries).
+        try:
+            await _erase_watermark.record(user_id, actor=actor)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: erase watermark not recorded ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
@@ -2421,6 +2439,10 @@ class MemoryService:
                 logger.warning("PENDING_CORRECTION clear_failed reason=delete_user user=%s err=%s", user_id, type(exc).__name__)
         if pendant_failure is not None:   # the pendant erase fails CLOSED (reached only when nothing in the lock raised)
             raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
+        try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Fail closed: a
+            await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
         return len(ids)
 
     async def list_by_status(
@@ -3986,8 +4008,17 @@ class MemoryService:
     async def _recent_paraphrase(self, user_id: str, text: str) -> bool:
         """True when a row an automatic writer stored within ``_RECENT_AUTO_TTL_S`` says the same thing (and is still approved)."""
         now = time.monotonic()
+        try:   # a filed emergency event is the same record as another only by (person, kind, date), never by word overlap (QA round 10a)
+            import medical_safety as _ms
+
+            ev = _ms.event_key(text)
+        except Exception:  # noqa: BLE001
+            _ms, ev = None, None
         for ts, mem_id, stored in reversed(self._recent_auto.get(user_id, ())):
-            if now - ts > _RECENT_AUTO_TTL_S or not _is_paraphrase(text, stored):
+            if now - ts > _RECENT_AUTO_TTL_S:
+                continue
+            sk = _ms.event_key(stored) if ev is not None else None
+            if not ((ev == sk) if (ev is not None and sk is not None) else _is_paraphrase(text, stored)):
                 continue
             try:
                 row = await self._run_sync(self._get_sync, mem_id)
@@ -4017,7 +4048,7 @@ class MemoryService:
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
     _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup", GUEST_DROP,
-                                 "identity_drop"})
+                                 "identity_drop", "emergency_unfiled"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:

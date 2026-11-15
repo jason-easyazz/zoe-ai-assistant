@@ -109,13 +109,16 @@ def _exact_words_in_process_index():
     """The owner's verbatim-turn index (``exact_words``) is a Postgres table in production; no test has that pool. Since
     ``MemoryService.delete_user`` FAILS CLOSED when the verbatim erase fails, a test of the delete must not reach for a pool
     that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
+    import erase_watermark
     import exact_words
     import night_store
     import struggle_detector
+    erase_watermark.set_backend(erase_watermark.MemoryBackend())   # delete_user records the member's erase mark first (fail closed)
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     struggle_detector.set_backend(struggle_detector.MemoryBackend())   # struggle_events too (delete_user / forget fail closed)
     yield
+    erase_watermark.set_backend(None)
     exact_words.set_backend(None)
     night_store.set_backend(None)
     struggle_detector.reset()     # the worker task belongs to this test's loop
