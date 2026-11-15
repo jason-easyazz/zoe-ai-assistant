@@ -513,24 +513,44 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
     ids = [str(m) for m in dict.fromkeys(mids or ()) if m]
     legacy = not ids
     words = [w for w in dict.fromkeys(texts or ()) if w and w.strip()] if legacy else []
+    if legacy and not words:
+        return 0
     if legacy:
-        if not words:
-            return 0
         logger.info("TURN_FORGET code=legacy_text texts=%d", len(words))
-    n = 0
+    n, failure = 0, None
+
+    async def step(coro_fn, *args):
+        # fail closed AND erase everything reachable: a store that fails does not stop the erasers after it; the first
+        # failure is re-raised once all of them ran, so the caller still does not confirm
+        nonlocal n, failure
+        try:
+            n += int(await coro_fn(*args) or 0)
+        except Exception as exc:  # noqa: BLE001
+            failure = failure or exc
+            logger.warning("TURN_FORGET code=eraser_failed step=%s (%s)", getattr(coro_fn, "__name__", "?"), type(exc).__name__)
+
     if legacy:
         for w in words:
-            n += await exact_words.forget_transcript(user_id, w)                     # the transcript flag, from the one read
-            ids += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in ids]
+            await step(exact_words.forget_transcript, user_id, w)                  # the transcript flag, from the one read
+            try:
+                ids += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in ids]
+            except Exception as exc:  # noqa: BLE001
+                failure = failure or exc
+                logger.warning("TURN_FORGET code=eraser_failed step=legacy_transcript_ids (%s)", type(exc).__name__)
     else:
-        n += await exact_words.flag_transcript_turns(user_id, ids)
+        await step(exact_words.flag_transcript_turns, user_id, ids)
     for mid in ids:
-        n += await night_mind.erase_words(user_id, mid)
+        await step(night_mind.erase_words, user_id, mid)
     if legacy:
-        n += await night_mind.erase_words(user_id, "", *words)          # observations saved with no turn id
-    n += await exact_words.erase_turns(user_id, ids) if ids else 0
-    for w in words:
-        n += await exact_words.erase_text(user_id, w)                  # entries indexed before the ids
+        await step(night_mind.erase_words, user_id, "", *words)              # observations saved with no turn id
+    # the exact-words entries LAST, and only when everything before held: an entry left behind keeps the retry able to find them
+    if failure is None and ids:
+        await step(exact_words.erase_turns, user_id, ids)
+    if failure is None:
+        for w in words:
+            await step(exact_words.erase_text, user_id, w)                    # entries indexed before the ids
+    if failure is not None:
+        raise failure
     return n
 
 

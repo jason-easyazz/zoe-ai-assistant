@@ -774,7 +774,7 @@ def _forget_last(monkeypatch, text, rows=()):
             return object()
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
 
-    async def from_turn(svc, uid, t, ts):
+    async def from_turn(svc, uid, t, ts, **_kw):          # the real seam also takes the turn's saved-turn ids (mids=)
         return [Row(i) for i in rows]
 
     async def noop(*a, **k):
