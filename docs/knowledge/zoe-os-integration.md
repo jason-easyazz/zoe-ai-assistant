@@ -157,8 +157,7 @@ installed in place of the shadow unit (D2, D3); the reconcile at `kernel_only=0`
 
 **Rollback.** Remove the `ZOE_OS_LIST_ADD_AUTHORITY` line and restart zoe-data: the old path is the only path again.
 
-**Still open for (c).** D4 backup (the database now holds the authority's record: `labs/zoe-os/README.md` "Authority kernel" says what
-to copy and how); D5 retention (the rows are rebuilt from receipts, so a retention sweep would silently drop list rows: it must exempt
+**Still open for (c).** Applying the nightly-backup block and the one-time database move (D3/D4 decided; `labs/zoe-os/README.md`); D5 retention (the rows are rebuilt from receipts, so a retention sweep would silently drop list rows: it must exempt
 list receipts that back a live row, or write a checkpoint, before anything calls it); D6 the roster (a new member falls back until it
 is re-written); D7 children; the skybridge and REST adds; power loss (SQLite WAL with `synchronous=NORMAL`: a kill is survived, a power
 cut may lose the last acknowledged adds, which production still has).
@@ -177,8 +176,8 @@ Every item is open. None is done by any PR in this stack.
 |---|---|---|---|---|
 | 1 | **a service unit** | shadow: `scripts/setup/systemd/zoe-os-shadow-kernel.service`; authority: `labs/zoe-os/zoe-os-authority-kernel.service` (replaces it, `Conflicts=`): both TEMPLATES, never installed [code] | (b) / (c) | **D2**: a user unit beside zoe-data, or the kernel inside zoe-data's process |
 | 2 | **memory protection** | the authority template sets `MemoryHigh=64M`, `MemoryMax=96M`, `MemorySwapMax=0`, no `MemoryLow`, `Nice=5`, sized from a measured ~20 MB resident [code; lab] | (c), done in the template | none beyond D2 |
-| 3 | **its database location** | `~/.zoe/os-shadow/kernel/zoe-os.db`, SQLite, 0600, outside any checkout [code] | (b) | **D3**: keep it there, or move it beside the other stores under one Zoe data root |
-| 4 | **backup** | not in any backup job; `labs/zoe-os/README.md` "Authority kernel" says what to copy (`kernel/zoe-os.db`, consistently with SQLite's online backup) [code] | (c) | **D4**: include it in the nightly backup; a restore older than a forget must re-apply the forget (the forget-reach backup rule) |
+| 3 | **its database location** | DECIDED (owner, 2026-11-15): the kernel's OWN SQLite file, never tables in the main database, in a permanent home beside Zoe's other stores, proposed `~/.zoe/zoe-os/zoe-os.db`; ONE setting (`ZOE_OS_KERNEL_DB` in the unit template, passed as `--db` to either daemon; the same registered flag in zoe-data, which only names it); the daemon refuses to start if the old `~/.zoe/os-shadow/kernel/zoe-os.db` was not moved [code; lab] | (b) | owner step: the one-time move (`labs/zoe-os/README.md`); confirm the proposed path |
+| 4 | **backup** | DECIDED (owner, 2026-11-15): in the nightly backup from the day shadow is on. Proposed concrete addition to `scripts/maintenance/mempalace-nightly-backup.sh` (Python online-backup API from a read-only connection, integrity check, gzip, keep 7; restore check: integrity, `health`, reconcile `kernel_only=0`, re-apply later forgets), written out in `labs/zoe-os/README.md`, not applied [code] | (b) | owner: apply the block to the nightly script (a separate PR) |
 | 5 | **erase reach: member delete** | `MemoryService.delete_user` calls `os_shadow.forget_user` and, with the authority flag `kernel`, `os_authority.erase_member` (verified read-back, fail-closed) [code; lab] | (b) / (c), done in code | none; live-verify once after turn-on; re-join PR #2598's delete-everything structure when it lands |
 | 6 | **erase reach: forget** | entity forget (`memory_forget_cascade` step `os_shadow`) and topic forget (`forget_topic`) reach it; `forget_reach.py` lists the store [code] | (b), done in code | none; the store description must say it now holds reminder notes and alarm times too |
 | 7 | **retention** | nothing calls the sweep; the authority's list rows are REBUILT from receipts, so a sweep as written would drop live list rows [code] | (c) | **D5**: who calls the sweep, and it must exempt list receipts backing a live row (or checkpoint) first |
@@ -192,8 +191,8 @@ Every item is open. None is done by any PR in this stack.
 
 - **D1** the exit proof numbers for stage (b) (proposed above).
 - **D2** a user unit beside zoe-data, or the kernel inside zoe-data's process.
-- **D3** where the kernel's database lives.
-- **D4** whether the shadow record is backed up.
+- **D3** decided 2026-11-15: its own file in a permanent home (proposed `~/.zoe/zoe-os/zoe-os.db`); the move is an owner step.
+- **D4** decided 2026-11-15: nightly backup from the day shadow is on; the script change is proposed, not applied.
 - **D5** who runs the retention sweep.
 - **D6** how the kernel learns about a new or removed member.
 - **D7** the guardian model for a child's grant.

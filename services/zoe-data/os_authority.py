@@ -74,6 +74,23 @@ def mode() -> str:
         return "off"
 
 
+DB_FLAG = "ZOE_OS_KERNEL_DB"
+
+
+def kernel_db_path():
+    """Where the kernel keeps its OWN database (owner decision 2026-11-15: its own file, beside Zoe's other stores, in the nightly
+    backup). ONE setting, the same value the kernel unit passes as ``--db``; zoe-data only NAMES it (forget reach, the reconcile, the
+    owner's steps) and never opens it: the socket is the only seam."""
+    from pathlib import Path
+    try:
+        import typed_env
+
+        raw = str(typed_env.flag(DB_FLAG)).strip()
+    except Exception:  # noqa: BLE001
+        raw = ""
+    return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "zoe-os" / "zoe-os.db"
+
+
 def digest(item: str) -> str:
     """The kernel's ``authority.digest``: what a reconcile or an erase sends instead of the words."""
     return hashlib.sha256(item.strip().lower().encode()).hexdigest()[:16]
