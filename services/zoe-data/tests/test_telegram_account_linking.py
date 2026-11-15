@@ -485,6 +485,25 @@ def test_a_redemption_never_moves_a_members_link(monkeypatch, fixed_secret):
     assert _prefs(db, "member-a")["telegram_id"] == "55517"
 
 
+def test_a_token_that_expires_while_waiting_for_the_member_lock_is_refused(monkeypatch, fixed_secret):
+    """Expiry is checked inside the transaction, after the lock: a redemption that passed the caller's check and then waited
+    past the token's expiry links nothing and spends nothing."""
+    import time as _time
+
+    db = FakePrefsDB(seed={"member-a": {}})
+    token = fixed_secret.make_link_token("member-a")
+    real_lock, real_time = fixed_secret._member_lock, _time.time
+
+    async def slow_lock(conn, user_id):
+        await real_lock(conn, user_id)
+        monkeypatch.setattr(fixed_secret.time, "time", lambda: real_time() + 3600)      # the wait outlived the token
+
+    monkeypatch.setattr(fixed_secret, "_member_lock", slow_lock)
+    r = _redeem(db, monkeypatch, token, "55530")
+    assert r.status_code == 400, r.text
+    assert _holders_of(db, "55530") == [] and db.redemptions == {}
+
+
 def test_the_member_erase_removes_the_members_redemption_rows(monkeypatch, fixed_secret):
     import db_pool
 

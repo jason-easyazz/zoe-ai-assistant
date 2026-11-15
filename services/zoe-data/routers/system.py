@@ -2544,7 +2544,7 @@ async def consume_telegram_link_token(
 
     # One holder per account, one account per member, and a redemption never moves a link (telegram_link.link).
     outcome = await telegram_link.link(db, user_id, tid, body.telegram_username, token_id=token_id, expires_at=expires_at)
-    if outcome in (telegram_link.TOKEN_SPENT, telegram_link.MEMBER_GONE):
+    if outcome in (telegram_link.TOKEN_SPENT, telegram_link.MEMBER_GONE, telegram_link.TOKEN_EXPIRED):
         raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
     if outcome == telegram_link.HELD_BY_OTHER:
         raise HTTPException(status_code=409, detail="this Telegram account is already linked to another member")

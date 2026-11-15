@@ -47,7 +47,9 @@ logger = logging.getLogger(__name__)
 # (recommended) so tokens survive a zoe-data restart and rotate independently of
 # other credentials; otherwise a per-process random is used (tokens are short-
 # lived, so a restart just invalidates any in-flight ones — acceptable). Either
-# way single use is the database's, not this process's. We do NOT
+# way single use is the database's, not this process's. With MORE THAN ONE worker
+# process the secret is REQUIRED: without it each worker signs with its own random,
+# so a token minted by one fails on another (it fails closed, but linking breaks). We do NOT
 # reuse ZOE_INTERNAL_TOKEN here: mixing an internal-auth credential with a token-
 # signing key couples their rotation policies.
 _LINK_SECRET = (
@@ -169,6 +171,7 @@ KEY_PROOF = "telegram_link_proof"
 KEY_CHANGE = "telegram_link_change"
 LINKED, ALREADY_LINKED, HELD_BY_OTHER = "linked", "already_linked", "held_by_other"
 MEMBER_LINKED, TOKEN_SPENT, MEMBER_GONE = "member_linked", "token_spent", "member_gone"
+TOKEN_EXPIRED = "token_expired"
 
 
 def _now_iso() -> str:
@@ -238,6 +241,7 @@ async def link(db, user_id: str, tid: str, username: Optional[str] = None, *, to
     good), the holders are checked and the link is written. Returns ``LINKED`` / ``ALREADY_LINKED`` (committed), or a refusal with
     nothing kept, not even the redemption, so the member can scan again once the cause is cleared:
       * ``TOKEN_SPENT``   - this token was already redeemed;
+      * ``TOKEN_EXPIRED`` - the token expired, including while this call waited for the member lock;
       * ``HELD_BY_OTHER`` - another member holds ``tid`` (the one-holder index also refuses a concurrent second holder);
       * ``MEMBER_LINKED`` - ``user_id`` already holds a DIFFERENT account. A redemption never moves a link: the member (or an admin)
                             unlinks first, then links the new account;
@@ -250,10 +254,14 @@ async def link(db, user_id: str, tid: str, username: Optional[str] = None, *, to
     cleaned = (username or "").lstrip("@").strip()[:64]
     if cleaned:
         proof["username"] = cleaned
-    now = time.time()
     try:
         async with db.transaction():
             await _member_lock(db, user_id)
+            # The clock is read AFTER the lock: a redemption that waited on the member lock past its token's expiry is refused
+            # here, whatever the caller's earlier check said.
+            now = time.time()
+            if float(expires_at) <= now:
+                raise _Refused(TOKEN_EXPIRED)
             cursor = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
             if not await cursor.fetchone() or await _issued_before_erase(db, user_id, expires_at):
                 raise _Refused(MEMBER_GONE)
