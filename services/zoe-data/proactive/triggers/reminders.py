@@ -142,16 +142,12 @@ async def _member_erased_since_row(user_id: str, scheduled_id: str) -> bool:
     all (every live member): False without touching the row. RAISES when the mark cannot be read."""
     import erase_watermark
 
-    mark = await erase_watermark.watermark(user_id)
-    if mark is None:
+    if await erase_watermark.watermark(user_id) is None:
         return False
     async with _get_compat_db() as db:
         async with db.execute("SELECT created_at FROM proactive_scheduled WHERE id = ?", (scheduled_id,)) as cur:
             row = await cur.fetchone()
-    if row is None:
-        return True
-    made = erase_watermark.instant(row[0])
-    return made is None or made <= mark
+    return row is None or await erase_watermark.erased_since(user_id, row[0])
 
 
 async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:

@@ -25,7 +25,8 @@ pytestmark = pytest.mark.ci_safe
 B = "member-b"
 
 _DDL = """
-CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT 'New Chat');
+CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT 'New Chat', created_at TEXT,
+    updated_at TEXT);
 CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, role TEXT NOT NULL,
     content TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE chat_ag_ui_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, run_id TEXT, events TEXT);
@@ -39,7 +40,9 @@ CREATE TABLE journal_entries (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conten
     person_id TEXT REFERENCES people(id));
 CREATE TABLE transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT, visibility TEXT NOT NULL DEFAULT 'family');
 CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, visibility TEXT NOT NULL DEFAULT 'personal');
-CREATE TABLE proactive_pending (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL);
+CREATE TABLE proactive_pending (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL, trigger_type TEXT DEFAULT '',
+    item_id TEXT DEFAULT '', expires_at TEXT DEFAULT '2999-01-01T00:00:00Z', claimed INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE proactive_scheduled (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL, apscheduler_job_id TEXT,
     fired INTEGER DEFAULT 0, item_id TEXT DEFAULT '', claimed_at TEXT, schedule_generation INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0,
     last_error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -123,17 +126,17 @@ async def _seed(db):
     await x("INSERT INTO event_attendees (id, event_id, user_id, display_name) VALUES ('att-fam-a', 'ev-family', ?, 'A')", (A,))
     await x("INSERT INTO event_attendees (id, event_id, user_id, display_name) VALUES ('att-fam-b', 'ev-family', ?, 'B')", (B,))
     # chat: A's own session; a kiosk session only A spoke in; a session A owns that B also spoke in; B's session with an A turn
-    await x("INSERT INTO chat_sessions VALUES ('s-a', ?, 'about my plans')", (A,))
+    await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-a', ?, 'about my plans')", (A,))
     await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('m1', 's-a', 'user', 'my plans for the weekend')")
     await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('m2', 's-a', 'assistant', 'sounds lovely')")
     await x("INSERT INTO chat_ag_ui_runs VALUES ('run-a', 's-a', 'r', '[]')")
-    await x("INSERT INTO chat_sessions VALUES ('s-kiosk', 'guest', 'kiosk')")
+    await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-kiosk', 'guest', 'kiosk')")
     await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('m3', 's-kiosk', 'user', 'set a timer', ?)", (_meta(A),))
-    await x("INSERT INTO chat_sessions VALUES ('s-shared', ?, 'my private title')", (A,))
+    await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-shared', ?, 'my private title')", (A,))
     await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('m4', 's-shared', 'user', 'A speaks')")
     await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('m5', 's-shared', 'user', 'B speaks', ?)", (_meta(B),))
     await x("INSERT INTO chat_ag_ui_runs VALUES ('run-shared', 's-shared', 'r', '[]')")
-    await x("INSERT INTO chat_sessions VALUES ('s-b', ?, 'B chat')", (B,))
+    await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-b', ?, 'B chat')", (B,))
     await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('m6', 's-b', 'user', 'B again')")
     await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('m7', 's-b', 'user', 'A at B''s panel', ?)", (_meta(A),))
     await db.commit()
@@ -487,6 +490,8 @@ def test_a_fire_that_claimed_before_the_delete_delivers_nothing_for_the_deleted_
 
     async def fire_notification(**kw):
         delivered.append(kw["user_id"])
+        await store.execute("UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (kw["pending_id"],))
+        await store.commit()
     monkeypatch.setattr("proactive.engine.fire_notification", fire_notification)
     real_guard = reminders._member_erased_since_row
     gate = {}
@@ -503,9 +508,12 @@ def test_a_fire_that_claimed_before_the_delete_delivers_nothing_for_the_deleted_
         await asyncio.wait_for(gate["claimed"].wait(), 10)
         async with store.execute("SELECT claimed_at FROM proactive_scheduled WHERE id = ?", ("ps-" + A,)) as cur:
             assert (await cur.fetchone())[0], "the fire holds the claim"
-        await svc.delete_user(A, actor="test", reason="synthetic member delete")
-        gate["release"].set()
+        delete = asyncio.ensure_future(svc.delete_user(A, actor="test", reason="synthetic member delete"))
+        await asyncio.sleep(0.4)                  # the delete has written its mark and now waits for the in-flight claim
+        assert not delete.done(), "a delete cannot finish while a send of the member is mid-delivery"
+        gate["release"].set()                     # the fire's check now runs AFTER the mark
         await asyncio.wait_for(fire, 10)
+        await asyncio.wait_for(delete, 10)
 
     asyncio.run(go())
     assert delivered == ([] if guarded else [A])
@@ -574,3 +582,181 @@ def test_a_scheduler_cancel_error_fails_the_delete(env, store, monkeypatch):
     monkeypatch.setattr(sched, "cancel_job", absent)
     _delete(svc)
     assert _q(store, "SELECT user_id FROM proactive_scheduled") == [(B,)]
+
+
+# ── B1: the delete cannot finish between a fire's check and its delivery ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("wait", [True, False], ids=["delete-waits-for-the-claim", "control-no-wait"])
+def test_a_send_that_passed_its_check_is_delivered_before_the_delete_finishes_never_after(env, store, monkeypatch, wait):
+    """The fire claims its row and passes its erase check BEFORE the member delete starts; it is held between the check and the
+    delivery. The delete must not be able to finish in that window (it waits for the claim), so no send reaches the member after
+    delete_user returned. The control (no wait) finishes the delete in the window and the send lands after it - the old code."""
+    from proactive.triggers import reminders
+
+    svc, _col = env
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield store
+    monkeypatch.setattr(reminders, "_get_compat_db", ctx)
+    events, gate = [], {}
+
+    async def fire_notification(**kw):
+        gate["checked"].set()                     # past the check, about to deliver
+        await gate["release"].wait()
+        events.append("delivered")
+        await store.execute("UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (kw["pending_id"],))
+        await store.commit()
+    monkeypatch.setattr("proactive.engine.fire_notification", fire_notification)
+    if not wait:
+        async def no_wait(*_a, **_k):
+            return None
+        monkeypatch.setattr(mof, "_await_inflight_fires", no_wait)
+
+    async def go():
+        gate["checked"], gate["release"] = asyncio.Event(), asyncio.Event()
+        fire = asyncio.ensure_future(reminders._fire_reminder("ps-" + A, A, "take the bins out"))
+        await asyncio.wait_for(gate["checked"].wait(), 10)
+
+        async def delete():
+            await svc.delete_user(A, actor="test", reason="synthetic member delete")
+            events.append("delete_done")
+        d = asyncio.ensure_future(delete())
+        await asyncio.sleep(0.4)
+        gate["release"].set()
+        await asyncio.wait_for(fire, 10)
+        await asyncio.wait_for(d, 10)
+
+    asyncio.run(go())
+    assert events == (["delivered", "delete_done"] if wait else ["delete_done", "delivered"])
+
+
+def test_a_delete_that_waits_too_long_for_a_send_fails_closed(env, store, monkeypatch):
+    svc, _col = env
+    monkeypatch.setattr(mof, "INFLIGHT_WAIT_S", 0.3)
+
+    async def claim():
+        await store.execute("UPDATE proactive_scheduled SET claimed_at = ? WHERE id = ?",
+                            (__import__("proactive.triggers.reminders", fromlist=["x"])._utc_iso(
+                                __import__("datetime").datetime.now(__import__("datetime").timezone.utc)), "ps-" + A))
+        await store.commit()
+    asyncio.run(claim())
+    with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
+        _delete(svc)
+
+
+# ── B1: a queued notification claimed across the delete never seeds a session for the deleted member ───────────────────────
+
+class _TxDb:
+    """The compat connection's surface claim_pending uses, over the test store (``transaction`` commits on exit)."""
+
+    def __init__(self, db):
+        self._db = db
+
+    def execute(self, sql, params=()):
+        return self._db.execute(sql, params)
+
+    async def commit(self):
+        await self._db.commit()
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        yield
+        await self._db.commit()
+
+
+@pytest.mark.parametrize("post_check", [True, False], ids=["post-seed-check", "control-no-post-check"])
+def test_a_notification_claimed_before_the_delete_and_seeded_after_it_leaves_nothing(env, store, monkeypatch, post_check):
+    from proactive import session_utils
+
+    svc, _col = env
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _TxDb(store)
+    monkeypatch.setattr(session_utils, "_get_compat_db", ctx)
+    real, calls = session_utils._erased_member, {"n": 0}
+
+    async def erased(row, db, pid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            out = await real(row, db, pid)          # the claim is won and checked BEFORE the delete ...
+            await svc.delete_user(A, actor="test", reason="synthetic member delete")   # ... which then runs to the end
+            return out
+        return await real(row, db, pid) if post_check else False
+    monkeypatch.setattr(session_utils, "_erased_member", erased)
+    got = asyncio.run(session_utils.claim_pending("proactive_pending-" + A))
+    sessions = _q(store, "SELECT id FROM chat_sessions WHERE user_id = ? AND title = 'Proactive notification'", (A,))
+    if post_check:
+        assert got is None and sessions == [], "the seed that landed after the transcript step is undone"
+    else:
+        assert got is not None and len(sessions) == 1, "control: the deleted member gets a fresh session with Zoe's words"
+
+
+# ── B2: every member eraser in delete_user fails closed ──────────────────────────────────────────────────────────────────────
+
+_ERASERS = [("reply_ledger", "forget_user", "reply-ledger"), ("commitments", "forget_user", "commitment"),
+            ("restraint", "erase_user", "restraint"), ("proactive.outcome_edges", "erase_user", "outcome-edge"),
+            ("contacts_store", "forget_user", "contact-model"), ("forget_redact", "clear_turn_caches", "in-process turn caches"),
+            ("value_correction", "forget_user", "in-process turn caches"), ("memory_provenance", "reset", "reply provenance")]
+
+
+@pytest.mark.parametrize("mod,fn,label", _ERASERS, ids=[e[0] for e in _ERASERS])
+def test_an_eraser_that_fails_fails_the_member_delete(env, monkeypatch, mod, fn, label):
+    import importlib
+
+    svc, _col = env
+    target = importlib.import_module(mod)
+    is_async = asyncio.iscoroutinefunction(getattr(target, fn))
+
+    if is_async:
+        async def boom(*_a, **_k):
+            raise ConnectionError("store down")
+    else:
+        def boom(*_a, **_k):
+            raise ConnectionError("store down")
+    monkeypatch.setattr(target, fn, boom)
+    with pytest.raises(memory_service.MemoryServiceError, match=label):
+        _delete(svc)
+
+
+@pytest.mark.parametrize("mod,fn", [("reply_ledger", "forget_user"), ("commitments", "forget_user"), ("restraint", "erase_user"),
+                                    ("proactive.outcome_edges", "erase_user")])
+def test_an_eraser_with_no_store_to_clear_does_not_fail_the_delete(env, monkeypatch, mod, fn):
+    """Control: a process that never had a database pool (a lab / bare run) holds nothing to clear."""
+    import importlib
+
+    svc, _col = env
+
+    async def no_pool(*_a, **_k):
+        raise RuntimeError("db_pool not initialised — call init_pool() first")
+    monkeypatch.setattr(importlib.import_module(mod), fn, no_pool)
+    _delete(svc)
+
+
+def test_a_warm_speaker_memo_that_cannot_be_rewritten_fails_the_delete(env, monkeypatch):
+    import warm_speaker
+
+    svc, _col = env
+
+    def failed(_uid, **_k):
+        warm_speaker._save_failed = True
+        return 0
+    monkeypatch.setattr(warm_speaker, "forget_user", failed)
+    with pytest.raises(memory_service.MemoryServiceError, match="warm-speaker"):
+        _delete(svc)
+
+
+def test_the_reply_ledger_and_commitments_erasers_raise_instead_of_returning_zero(monkeypatch):
+    import db_compat
+    import reply_ledger
+    import commitments
+
+    @contextlib.asynccontextmanager
+    async def down():
+        raise ConnectionError("store down")
+        yield  # pragma: no cover
+    monkeypatch.setattr(db_compat, "get_compat_db", down)
+    for m in (reply_ledger, commitments):
+        with pytest.raises(ConnectionError):
+            asyncio.run(m.forget_user(A))

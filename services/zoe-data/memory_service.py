@@ -1495,6 +1495,21 @@ def _foreign_voice_reason(fact: str, evidence: Optional[str]) -> str:
     return ""
 
 
+def _eraser_no_store(exc: BaseException) -> bool:
+    """An eraser failure that means "there is nothing to clear": a table that was never migrated, or a process that NEVER had a database
+    pool (a lab / bare unit run). A pool that existed and was lost is NOT that: the rows may still be there, so the delete fails."""
+    s = str(exc)
+    if "no such table" in s.lower() or type(exc).__name__ == "UndefinedTableError" or ("does not exist" in s and "relation" in s):
+        return True
+    if isinstance(exc, RuntimeError) and re.match(r"(?:db[_ ])?pool not initialised", s):
+        try:
+            from db_pool import pool_ever_initialised
+            return not pool_ever_initialised()
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
 class MemoryServiceError(Exception):
     """Raised for operational failures."""
 
@@ -2304,23 +2319,28 @@ class MemoryService:
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: account / calendar erasure failed ({type(exc).__name__})") from exc
         async def _gate_erasers_after_lock():
-            """reply_ledger / commitments / omi_recordings, each on its own; returns the pendant erase's failure (never raises)."""
+            """reply_ledger / commitments / omi_recordings, each on its own (one failing never skips the next); returns the FIRST failure
+            as ``(label, exc)`` - every one of them fails the delete CLOSED (a store that was never there is nothing to clear)."""
+            failed = None
             try:
-                import reply_ledger     # ... the persisted per-reply rows (migration 0044)
+                import reply_ledger     # the persisted per-reply rows (migration 0044)
                 await reply_ledger.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: reply ledger not erased for a deleted user (%s)", type(exc).__name__)
+                if not _eraser_no_store(exc):
+                    failed = failed or ("reply-ledger", exc)
             try:
-                import commitments      # ... and the promises Zoe made to them
+                import commitments      # the promises Zoe made to them
                 await commitments.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: commitments not erased for a deleted user (%s)", type(exc).__name__)
-            try:   # ... and their pendant recordings (migration 0045) and learned voices: audio, transcript, times, biometrics. FAIL CLOSED:
-                import omi_recordings   # a pendant erase that left anything behind must not read as "forgotten" (the caller retries)
+                if not _eraser_no_store(exc):
+                    failed = failed or ("commitment", exc)
+            try:
+                import omi_recordings   # their pendant recordings (0045) and learned voices: audio, transcript, times, biometrics
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
-                return exc
-            return None
+                if not _eraser_no_store(exc):
+                    failed = failed or ("pendant", exc)
+            return failed
 
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
@@ -2361,38 +2381,39 @@ class MemoryService:
                     raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
                 # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
                 # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
-                try:
+                try:   # fail closed (a store that was never migrated / no pool is nothing to clear)
                     import restraint
                     await restraint.erase_user(user_id)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+                    if not _eraser_no_store(exc):
+                        raise MemoryServiceError(f"delete_user failed: restraint erasure failed ({type(exc).__name__})") from exc
                 # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0069): item ids + outcomes, no
                 # words, but nothing of the person stays. Erased whatever ZOE_OUTCOME_EDGES says; best-effort like restraint.
-                try:
+                try:   # fail closed, like restraint
                     import proactive.outcome_edges as outcome_edges
                     await outcome_edges.erase_user(user_id)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("memory_service: outcome edges not erased for a deleted user (%s)", type(exc).__name__)
+                    if not _eraser_no_store(exc):
+                        raise MemoryServiceError(f"delete_user failed: outcome-edge erasure failed ({type(exc).__name__})") from exc
                 # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
                 # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
-                try:
+                try:   # in-process words: a failure here is a bug, and it fails the delete rather than read as "forgotten"
                     import correction_marker
                     correction_marker.forget_user(user_id, reason="delete_user")   # pending-correction markers: ids only, never raises
                     import forget_redact
                     forget_redact.clear_turn_caches(user_id)
-                except Exception:  # noqa: BLE001
-                    logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
-                try:   # ... and the in-process correction memory (value_correction._REMEMBERED: names + values for 6 h). Never raises.
-                    import value_correction
+                    import value_correction   # ... and the in-process correction memory (names + values for 6 h)
                     value_correction.forget_user(user_id)
-                except Exception:  # noqa: BLE001
-                    logger.warning("memory_service: in-process correction memory not cleared for a deleted user")
+                except Exception as exc:  # noqa: BLE001
+                    raise MemoryServiceError(f"delete_user failed: in-process turn caches not cleared ({type(exc).__name__})") from exc
                 # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
-                try:
+                try:   # fail closed: forget_user never raises, so its failed file rewrite (_save_failed) is checked here
                     import warm_speaker
                     await asyncio.to_thread(warm_speaker.forget_user, user_id)
+                    if getattr(warm_speaker, "_save_failed", False):
+                        raise OSError("warm-speaker memo not rewritten")
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
+                    raise MemoryServiceError(f"delete_user failed: warm-speaker memo erasure failed ({type(exc).__name__})") from exc
                 needles: list[str] = []
                 try:
                     ids = await self._run_sync(self._list_ids_for_user, user_id)
@@ -2432,8 +2453,8 @@ class MemoryService:
                 try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
                     import memory_provenance
                     memory_provenance.reset(user_id)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    raise MemoryServiceError(f"delete_user failed: reply provenance not cleared ({type(exc).__name__})") from exc
                 try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
                     import alarms
                     await alarms.forget_user(user_id)
@@ -2444,11 +2465,12 @@ class MemoryService:
                     await member_register.forget_user(user_id)
                 except Exception as exc:
                     raise MemoryServiceError(f"delete_user failed: register erasure failed ({type(exc).__name__})") from exc
-                try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
-                    import contacts_store
+                try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints, named-guest
+                    import contacts_store   # turns. FAIL CLOSED: biometrics and words must not survive a delete that reports success
                     await contacts_store.forget_user(user_id)
-                except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    if not _eraser_no_store(exc):
+                        raise MemoryServiceError(f"delete_user failed: contact-model erasure failed ({type(exc).__name__})") from exc
         finally:
             # AFTER the memory lock is released (LOCK ORDER, see erase_rows): these three take the member's erase gate, so they
             # cannot run inside it. They run in a ``finally``: an in-lock step that raised (alarms, the register...) must not skip
@@ -2460,8 +2482,9 @@ class MemoryService:
                 correction_marker.forget_user(user_id, reason="delete_user")
             except Exception as exc:  # noqa: BLE001 - never replaces the delete's own result
                 logger.warning("PENDING_CORRECTION clear_failed reason=delete_user user=%s err=%s", user_id, type(exc).__name__)
-        if pendant_failure is not None:   # the pendant erase fails CLOSED (reached only when nothing in the lock raised)
-            raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
+        if pendant_failure is not None:   # every after-lock eraser fails CLOSED (reached only when nothing in the lock raised)
+            label, exc = pendant_failure
+            raise MemoryServiceError(f"delete_user failed: {label} erasure failed ({type(exc).__name__})") from exc
         try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Fail closed: a
             await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
         except Exception as exc:

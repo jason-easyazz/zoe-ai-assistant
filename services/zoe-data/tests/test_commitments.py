@@ -918,7 +918,8 @@ def test_write_failures_are_logged_at_warning(env, caplog):
     env["db"].conn.execute("DROP TABLE commitments")
     promise(env)
     sweep(DUE_5 + timedelta(hours=1))
-    run(cm.forget_user(MEMBER))
+    with pytest.raises(Exception):               # the member erase fails CLOSED (it is logged AND raised; delete_user reports it)
+        run(cm.forget_user(MEMBER))
     warned = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "commitments"]
     assert len(warned) >= 3, [r.getMessage() for r in caplog.records]
     assert all("dentist" not in r.getMessage().lower() for r in warned)

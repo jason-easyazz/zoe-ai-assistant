@@ -333,3 +333,13 @@ async def insert_or_update(db, exists: tuple, insert: tuple, update: tuple) -> b
     from db_pool import get_db_ctx  # type: ignore[import]
     async with get_db_ctx() as conn:
         return await go(conn)
+
+
+async def erased_since(user_id: str, made_at: Any) -> bool:
+    """True when ``user_id`` has an erase mark at or after ``made_at`` (a row's creation time; an unreadable time counts as erased).
+    No mark at all: False. RAISES ``Unavailable`` when the mark cannot be read (the caller does not act on a guess)."""
+    mark = await watermark(user_id)
+    if mark is None:
+        return False
+    made = instant(made_at)
+    return made is None or made <= mark

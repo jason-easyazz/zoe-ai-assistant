@@ -108,6 +108,12 @@ async def claim_pending(pending_id: str) -> dict | None:
         except Exception:
             pass
 
+        # A member delete may be running: a notification queued before the member's erase mark is never seeded (checked right after
+        # the claim, and again after the seed below - the delete writes its mark BEFORE it erases, so a seed that lands after its
+        # transcript step is seen and undone here). An unreadable mark: release and let the tap retry.
+        if await _erased_member(row, db, pending_id):
+            return None
+
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -137,8 +143,32 @@ async def claim_pending(pending_id: str) -> dict | None:
             await _release_claim(db, pending_id)
             return None
 
+        if await _erased_member(row, db, pending_id):     # the erase landed during the seed: exactly what this claim created goes
+            await db.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+            await db.commit()
+            return None
+
         log.info("Claimed pending %s → session %s", pending_id, session_id)
         return {"session_id": session_id, "message": row["message"]}
+
+
+async def _erased_member(row, db, pending_id: str) -> bool:
+    """True when the claimed row's member was deleted since it was queued (the row is then removed), or the mark cannot be read (the claim
+    is released for a retry). A member with no erase mark: False, no extra read."""
+    try:
+        import erase_watermark
+
+        uid = row["user_id"]
+        erased = await erase_watermark.watermark(uid) is not None and await erase_watermark.erased_since(uid, row["created_at"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("claim_pending: erase check failed for %s (%s); releasing claim", pending_id, type(exc).__name__)
+        await _release_claim(db, pending_id)
+        return True
+    if erased:
+        log.info("claim_pending: %s belongs to a deleted member; not seeded", pending_id)
+        await _delete_pending(db, pending_id)
+    return erased
 
 
 async def _release_claim(db, pending_id: str) -> None:

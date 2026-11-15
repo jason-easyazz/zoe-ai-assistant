@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 #: single-author tables: every row whose ``user_id`` is the member goes (children before parents where they reference each other)
 OWNED = ("chat_feedback", "background_tasks", "ui_actions", "notes", "journal_entries", "reminders", "transactions",
-         "proactive_pending", "voice_announcements", "openclaw_approvals", "openclaw_run_state", "memory_consolidation_state",
+         "voice_announcements", "openclaw_approvals", "openclaw_run_state", "memory_consolidation_state",
          "person_activities", "person_bucket_list", "person_gift_ideas", "person_important_dates", "person_relationships",
          "event_attendees")
 #: tables whose ``person_id`` is a plain ``REFERENCES people(id)`` (alembic 0006, no ON DELETE): another member's row pointing at one of the
@@ -117,9 +117,38 @@ def _id_patterns(user_id: str) -> tuple:
     return (f"%{user_id}%", f"%{escaped}%")
 
 
+#: how long a member delete waits for a send that is mid-delivery (claimed, not yet fired) before it fails closed (and is retried)
+INFLIGHT_WAIT_S = 30.0
+_POLL_S = 0.1
+
+
+async def _await_inflight_fires(r: _Run, user_id: str) -> None:
+    """Wait until none of the member's scheduled sends is mid-delivery. A fire CLAIMS its row (``claimed_at``) before its erase check and
+    holds the claim until it has delivered (``fired = 1``) or released it; the erase mark is already written, so any fire that checks
+    from now on refuses. Waiting here closes the last window: a fire that checked BEFORE the mark delivers before this delete can finish,
+    never after it. A claim older than the stuck timeout is a crashed fire, not one in flight. Times out FAIL CLOSED."""
+    import asyncio
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from proactive.triggers import reminders
+
+    deadline = time.monotonic() + INFLIGHT_WAIT_S
+    while True:
+        cutoff = reminders._utc_iso(datetime.now(timezone.utc) - timedelta(seconds=reminders._STUCK_CLAIM_SECONDS))
+        rows = await r.rows("SELECT COUNT(*) FROM proactive_scheduled WHERE user_id = ? AND fired = 0 AND claimed_at IS NOT NULL "
+                            "AND claimed_at >= ?", (user_id, cutoff))
+        if not rows or not rows[0][0]:
+            return
+        if time.monotonic() > deadline:
+            raise RuntimeError("member_owned_forget: a scheduled send is still mid-delivery")
+        await asyncio.sleep(_POLL_S)
+
+
 async def _scheduled_sends(r: _Run, user_id: str) -> None:
     """The member's scheduled reminder sends: consumed first (a job that fires finds no claimable row), jobs cancelled where this
     process runs the scheduler, then the rows deleted."""
+    await _await_inflight_fires(r, user_id)
     jobs = [str(x[0]) for x in await r.rows("SELECT apscheduler_job_id FROM proactive_scheduled WHERE user_id = ?", (user_id,)) if x[0]]
     await r.run("UPDATE proactive_scheduled SET fired = 1 WHERE user_id = ?", (user_id,))
     await r.db.commit()
@@ -281,6 +310,9 @@ async def forget_user(user_id: str) -> int:
             # CHILD BEFORE PARENT (the migrations' foreign keys; pinned by test_member_delete_everything's FK-order test): the
             # single-author rows first (a note / journal entry / attendee / per-person row may point at a contact or event deleted below)
             await _scheduled_sends(r, uid)
+            # the queued notifications BEFORE the transcript: one claimed right now seeds a chat session, and that seed is either
+            # removed by the transcript step below or undone by claim_pending's own post-check (session_utils)
+            await r.run("DELETE FROM proactive_pending WHERE user_id = ?", (uid,))
             await _transcript(r, uid)
             for table in OWNED:
                 await r.run(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
