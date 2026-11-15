@@ -81,3 +81,28 @@ Generated from the pack (`python3 services/zoe-data/anticipation_rules.py`; a te
 
 Tools: `alarm.create` = `alarms.create_alarm` (a one-off; adults only), `reminder.create` =
 `reminder_service.create_reminder_record` (personal), `list.create` = `list_service.create_list_record` (personal).
+
+## The offer lifecycle
+
+One store, phase 1's: rows of `pending_suggestions` with `session_id = action_type = 'anticipation'` (no migration).
+An engine offer is a row whose `list_type` is the rule id and whose `pre_filled_slots` holds `engine`, the sentence
+template, the tool, its exact arguments, the priority and the sources. Reader of the facts:
+`anticipation_facts.load` - events through the shared calendar reader (`calendar_read.events_in_window`, own + family +
+other members' busy blocks; a personal event of another member is never read), the member's alarms and reminders, their
+contacts' birthdays, their usual events a day.
+
+| step | where | rule |
+|---|---|---|
+| created | the night pass (`memory_digest` phase 1.65 -> `anticipation.generate_for_user`), after phase 1's own offers are committed | `shadow`: counts and rule ids are logged, nothing stored. `on`: stored once per dedupe key; phase 1's wake / leave / packing win over the pack's for the same event; a pack failure never costs phase 1 its offers |
+| surfaced | a chat turn the member starts (`pick_for_turn`): one "By the way - ..." line and a Yes / No card | best priority first; one a turn; at most 2 a day (`PER_DAY`); the same offer once a day and twice in all; not before `surface_from`; not in the household quiet hours; never while another offer is waiting on that conversation (never stacked); re-checked first - the pack must still make that key |
+| accepted | a short yes to the line just said, or the card | the stored tool runs with the stored arguments through the normal writer; the reply is composed from what it returned; the receipt is kept on the row (`alarm.create` with alarms off = an honest "nothing set") |
+| declined | a no, or the card's No | 24 hours with no anticipation offer; that offer is never made or said again (its key stays taken) |
+| expired / withdrawn | at the night pass, at surfacing, at the answer | past its moment = expired; the situation no longer holds = withdrawn; never said |
+
+Not built yet: the panel card and the phone as surfaces (an offer waits for a chat turn), voice turns, event attendees
+(so `clash_heads_up` cannot fire from live data).
+
+**Forget reach.** Offers are derived data. An entity forget deletes every anticipation row, in any state, whose event
+title, sentence or arguments name the entity (`anticipation.erase_entity`, the cascade's `anticipation_offers` step); a
+topic forget deletes the open ones and the answered ones (`pending_suggestions.withdraw_matching`). The learning loop's
+votes ARE the answered rows, so a forgotten offer's vote goes with it. Inventory: [forget-reach.md](forget-reach.md).

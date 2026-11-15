@@ -93,15 +93,6 @@ def _minus(hhmm: str, minutes: int) -> str:
     return S.fmt(max(0, (_p1._hhmm(hhmm) or 0) - minutes))
 
 
-def _nudge(now: datetime, before: datetime) -> Optional[tuple]:
-    """When to remind about something that needs sorting out before ``before``: this evening, else that morning, else two
-    hours ahead - the first that is at least 30 minutes away and leaves an hour to act. None = too late to be worth it."""
-    for cand in (_at(now.date().isoformat(), "18:00", now), _at(before.date().isoformat(), "08:00", now), before - timedelta(hours=2)):
-        if now + timedelta(minutes=30) <= cand <= before - timedelta(hours=1):
-            return cand.date().isoformat(), cand.strftime("%H:%M")
-    return None
-
-
 def _reminder(title: str, day: str, hhmm: str) -> dict:
     return {"title": title, "due_date": day, "due_time": hhmm}
 
@@ -153,14 +144,15 @@ def _checkin(s, v, now):
 
 
 def _sort_out(title: str, sentence: str):
+    """Something to sort out before it starts: the telling is the point; the reminder is two hours ahead of it."""
     def build(s, v, now):
-        at = _at(s.day, s.data.get("at") or s.data.get("start") or "00:00", now)
-        nudge = _nudge(now, at)
-        if nudge is None:
+        hhmm = s.data.get("at") or s.data.get("start") or "00:00"
+        due = _at(s.day, hhmm, now) - timedelta(hours=2)
+        if due < now + timedelta(minutes=30):
             return None
-        t = _c(s.data.get("at") or s.data.get("start"))
-        who = s.data.get("child_name") or "them"
-        return (sentence.format(t=t, who=who, n=_c(nudge[1])) + "?", _reminder(title.format(t=t, who=who), *nudge), _at(*nudge, now))
+        t, who = _c(hhmm), s.data.get("child_name") or "them"
+        nudge = (due.date().isoformat(), due.strftime("%H:%M"))
+        return (sentence.format(t=t, who=who, n=_c(nudge[1])) + "?", _reminder(title.format(t=t, who=who), *nudge), due)
     return build
 
 
