@@ -661,3 +661,82 @@ def test_a_twin_of_a_non_turn_fact_goes_with_it_and_a_look_alike_stays(world, pa
     assert w["fact"] not in approved and w["old_fact"] not in approved            # the target and its true twin
     assert w["other_fact"] in approved and look.id in approved                       # ids separate; a look-alike is no twin
     assert chat.off(w["mid"]) is False                                               # still no transcript for a non-turn target
+
+
+# ── a saved-turn id is recorded only once its row COMMITTED (review P1: the voice arrival insert failing transiently) ────────────
+
+RECOVER = "My climbing shoes are drying on the back porch"
+
+
+def test_a_failed_insert_never_names_the_turn_and_the_recovery_copy_does(world):
+    """The arrival insert fails (its id names no transcript row); the recovery save (count_turn=False) commits another id. The
+    turn's bookkeeping holds EXACTLY the committed id, the fact and the exact-words entry written in that turn carry it, and
+    forgetting the turn removes them and flags the committed transcript row. On bc5884042 the failed id was recorded first and
+    ``turn_ref`` took it, so the derived rows named a row that does not exist."""
+    from routers.chat import _save_chat_message
+
+    svc, chat = world
+    calls = {"n": 0}
+
+    def failing_ctx():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            @contextlib.asynccontextmanager
+            async def _down():
+                raise RuntimeError("transient insert failure")
+                yield  # pragma: no cover
+            return _down()
+        return chat.ctx()
+
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", failing_ctx)
+        assert run(_save_chat_message("s-1", "user", RECOVER, user_id=UID, message_id="m-arrival-failed")) is False
+        assert run(_save_chat_message("s-1", "user", RECOVER, user_id=UID, count_turn=False, message_id="m-recovered")) is True
+    assert "m-arrival-failed" not in chat.rows and "m-recovered" in chat.rows
+    turn = turn_forget.previous_turn(UID)
+    assert turn is not None and turn.mids == ("m-recovered",)
+
+    async def capture():
+        with turn_forget.capture_scope(UID, RECOVER):
+            assert await xw.index_turn(UID, RECOVER) is True
+            return await svc.ingest("User's climbing shoes are drying on the back porch", user_id=UID, source="turn_digest",
+                                    status="approved", source_excerpt=RECOVER)
+    fact = run(capture())
+    assert fact is not None and fact.id in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert run(svc.get(fact.id)).metadata.get("source_turn") == "m-recovered"
+    assert [xw.mid_of(k[1]) for k in xw.get_backend().rows] == ["m-recovered"]
+    reply = run(intent_router.execute_intent(intent_router.Intent("memory_forget_last", {}), UID))
+    assert reply.startswith("Done"), reply
+    assert fact.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert not xw.get_backend().rows and chat.off("m-recovered")
+
+
+# ── a LEGACY target's resolved saved turns come back to the caller: everything bound to them goes (review P1) ─────────────────
+
+UPGRADED = "My bike pump hangs on the hook inside the laundry"
+
+
+def test_a_legacy_entry_takes_the_upgraded_facts_bound_to_its_turn(world):
+    """A pre-upgrade exact-words entry (no id) is explained after the upgraded digest wrote a fact from the same transcript turn
+    WITH that turn's id. "forget it" resolves the legacy words to that saved turn FIRST and the bound fact goes too; a fact bound
+    to a different turn with similar words stays. On bc5884042 the resolved ids never left ``_erase_words``, so the bound fact
+    stayed approved behind a "Done"."""
+    from routers.chat import _save_chat_message
+
+    svc, chat = world
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", UPGRADED, user_id=UID)) is True
+    mid = next(m for m, (c, _meta) in chat.rows.items() if c == UPGRADED)
+    run(xw.get_backend().add(UID, "xw-pre-upgrade", time.time(), UPGRADED, xw.tokens_column(UPGRADED), "chat"))
+    bound = run(svc.ingest("User's bike pump hangs inside the laundry", user_id=UID, source="digest", status="approved",
+                           source_excerpt=UPGRADED, metadata={"source_turn": mid}))
+    other = run(svc.ingest("User's bike pump is kept in the garage", user_id=UID, source="digest", status="approved",
+                           source_excerpt="my bike pump is kept in the garage", metadata={"source_turn": "m-another-turn-bp"}))
+    assert {bound.id, other.id} <= {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=UPGRADED, quote=UPGRADED, turn_id="xw-pre-upgrade")
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert bound.id not in approved                     # bound to the resolved turn: gone
+    assert other.id in approved                         # another turn: by id only
+    assert chat.off(mid) and "xw-pre-upgrade" not in {k[1] for k in xw.get_backend().rows}
