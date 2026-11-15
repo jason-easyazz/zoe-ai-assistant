@@ -31,6 +31,7 @@ from llm_json import strip_code_fence
 import memory_authority
 import own_words
 import trait_challenge
+import erase_watermark as _erase_watermark
 import user_erase_gate as erase_gate
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
@@ -1360,6 +1361,7 @@ async def run_turn_digest(
 
 
 @erase_gate.scheduled_at_call("user_id")      # an on-demand run is scheduled when called; the nightly pass's earlier snapshot wins
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 
@@ -2487,6 +2489,7 @@ async def _implicit_conflict_pass(user_id: str) -> dict | None:
     return await memory_supersede.nightly_conflict_pass(get_memory_service(), user_id)
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_weekly_consolidation(user_id: str) -> dict:
     """Per-user Sunday pass: merge duplicates, resolve contradictions, soft-archive.
 
@@ -2731,6 +2734,18 @@ async def _extract_concept_tags(fact: str) -> list[str]:
     return []
 
 
+def _update_existing(col, ids: list, docs: list, metas: list) -> None:
+    """Rewrite rows that EXIST; an id that is gone stays gone (Chroma ``update`` skips unknown ids; ``upsert`` would re-create a row a
+    member erase in another process just removed). A store without ``update`` (a lab stand-in) gets an upsert of the ids still there."""
+    if callable(getattr(col, "update", None)):
+        col.update(ids=list(ids), documents=list(docs), metadatas=list(metas))
+        return
+    there = set(col.get(ids=list(ids), include=[]).get("ids") or [])
+    keep = [k for k, i in enumerate(ids) if i in there]
+    if keep:
+        col.upsert(ids=[ids[k] for k in keep], documents=[docs[k] for k in keep], metadatas=[metas[k] for k in keep])
+
+
 async def _rem_reinforce_pass(user_id: str) -> dict:
     """REM pass: for each new memory ingested tonight, strengthen related existing memories.
 
@@ -2792,34 +2807,44 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             # Exclude self
             neighbour_ids = [n.id for n in neighbours if n.id != mem_id][:5]
 
-            if neighbour_ids:
-                # Bump access on neighbours (reinforcement)
-                await svc.tick_access(user_id, neighbour_ids)
+            # the upserts write back rows READ before the awaits above: after a member erase (another process) they would recreate
+            # them, so they run through the night-write rule (checked right before and right after; what was written is undone)
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, neighbour_ids=neighbour_ids) -> list:
+                nonlocal linked
+                if neighbour_ids:
+                    # Bump access on neighbours (reinforcement)
+                    await svc.tick_access(user_id, neighbour_ids)
 
-                # Write related_ids on new memory
-                existing_related = set((meta.get("related_ids") or "").split(","))
-                existing_related.update(neighbour_ids)
-                meta["related_ids"] = ",".join(i for i in existing_related if i)
-                linked += 1
+                    # Write related_ids on new memory
+                    existing_related = set((meta.get("related_ids") or "").split(","))
+                    existing_related.update(neighbour_ids)
+                    meta["related_ids"] = ",".join(i for i in existing_related if i)
+                    linked += 1
 
-                # Write related_ids on neighbours (bidirectional)
-                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
-                nb_ids = nb_result.get("ids") or []
-                nb_docs = nb_result.get("documents") or []
-                nb_metas = nb_result.get("metadatas") or []
-                new_nb_metas = []
-                for nm in nb_metas:
-                    nm = dict(nm) if nm else {}
-                    nb_related = set((nm.get("related_ids") or "").split(","))
-                    nb_related.add(mem_id)
-                    nm["related_ids"] = ",".join(i for i in nb_related if i)
-                    new_nb_metas.append(nm)
-                if nb_ids:
-                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+                    # Write related_ids on neighbours (bidirectional)
+                    nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
+                    nb_ids = nb_result.get("ids") or []
+                    nb_docs = nb_result.get("documents") or []
+                    nb_metas = nb_result.get("metadatas") or []
+                    new_nb_metas = []
+                    for nm in nb_metas:
+                        nm = dict(nm) if nm else {}
+                        nb_related = set((nm.get("related_ids") or "").split(","))
+                        nb_related.add(mem_id)
+                        nm["related_ids"] = ",".join(i for i in nb_related if i)
+                        new_nb_metas.append(nm)
+                    if nb_ids:
+                        _update_existing(col, nb_ids, nb_docs, new_nb_metas)
 
-            # Mark as REM-processed
-            meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                # Mark as REM-processed
+                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+                _update_existing(col, [mem_id], [doc], [meta])
+                return []                    # MODIFIED existing rows only: nothing created, so nothing is ever undone
+
+            async def _undo(_created: list) -> None:
+                raise AssertionError("REM creates no row: it has nothing to undo")
+            if await _erase_watermark.guarded_write(user_id, "rem", _write, _undo) is None:
+                break
 
     except Exception as exc:
         logger.warning("REM reinforce pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
@@ -2910,16 +2935,27 @@ async def _deep_sleep_pass(user_id: str) -> dict:
 
             if meta.get("challenged_by_turn"):
                 continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
-
             if score >= 0.8 and uqc >= 3:
-                meta["status"] = "approved"
-                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
-                promoted += 1
+                new_status = "approved"
             elif added_at and added_at < cutoff:
-                meta["status"] = "archived"
+                new_status = "archived"
+            else:
+                continue
+
+            # an upsert of a row read before a member erase (another process) recreates it: the night-write rule
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, new_status=new_status) -> list:
+                meta["status"] = new_status
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                _update_existing(col, [mem_id], [doc], [meta])
+                return []                    # MODIFIED an existing row: nothing created, so nothing is ever undone
+
+            async def _undo(_created: list) -> None:
+                raise AssertionError("deep sleep creates no row: it has nothing to undo")
+            if await _erase_watermark.guarded_write(user_id, "deep_sleep", _write, _undo) is None:
+                break
+            if new_status == "approved":
+                promoted += 1
+            else:
                 archived += 1
 
     except Exception as exc:
@@ -3048,7 +3084,15 @@ async def _synthesis_pass(user_id: str) -> dict:
                         sm = dict((col_result["metadatas"] or [{}])[0])
                         sm["related_ids"] = ",".join(source_ids)
                         sm["concept_tags"] = tag
-                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+
+                        async def _link(rid=ref.id, sm=sm, text=synthesis_text) -> list:
+                            _update_existing(col, [rid], [text], [sm])     # the row ingest just kept: modified, never re-created
+                            return []
+
+                        async def _unlink(_created: list) -> None:
+                            raise AssertionError("the synthesis link creates no row: it has nothing to undo")
+                        if await _erase_watermark.guarded_write(user_id, "synthesis", _link, _unlink) is None:
+                            continue
                     synthesized += 1
             except Exception as exc:
                 logger.warning("synthesis failed for tag=%s user=%s: %s", _log_redaction.utterance_tag(tag), user_id, _log_redaction.exc_tag(exc))
@@ -3365,6 +3409,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     result["extracted"] = len(candidates)
     if not candidates:
         return _done("ok")
+    import erase_watermark
 
     try:
         async with _get_compat_db() as _db:
@@ -3375,19 +3420,33 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 (user_id,),
             ) as cur:
                 seen = [_content_tokens(r[0]) for r in await cur.fetchall()]
-            for text, hint, weight, days in candidates:
-                tokens = _content_tokens(text)
-                if _loop_is_dup(tokens, seen):
-                    result["skipped_dup"] += 1
-                    continue
-                await _db.execute(
-                    """INSERT INTO open_loops
-                       (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
-                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
-                    (user_id, text, hint, weight, days),
-                )
-                result["inserted"] += 1
-                seen.append(tokens)
+
+            async def write() -> list:
+                wrote = []
+                for text, hint, weight, days in candidates:
+                    tokens = _content_tokens(text)
+                    if _loop_is_dup(tokens, seen):
+                        result["skipped_dup"] += 1
+                        continue
+                    await _db.execute(
+                        """INSERT INTO open_loops
+                           (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
+                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
+                        (user_id, text, hint, weight, days),
+                    )
+                    result["inserted"] += 1
+                    seen.append(tokens)
+                    wrote.append(text)
+                return wrote
+
+            async def undo(texts: list) -> None:      # exactly the loops this pass inserted (an unresolved loop text is unique per member)
+                for text in texts:
+                    await _db.execute("DELETE FROM open_loops WHERE user_id = ? AND loop_text = ? AND resolved IS NOT TRUE", (user_id, text))
+                await _db.commit()
+                result["inserted"] = 0
+            # erased since the night pass began (its reads are stale): checked right before and right after the inserts
+            if await erase_watermark.guarded_write(user_id, "open_loops", write, undo) is None:
+                return _done("erased_since_cycle")
     except Exception as exc:
         # Class + constraint only: a driver message can echo a bound value.
         constraint = getattr(exc, "constraint_name", "") or "-"     # a schema identifier, never a bound value
@@ -3397,6 +3456,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     return _done("ok")
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool = True) -> dict:
     """Run the full dreaming cycle for a user.
 
@@ -3572,6 +3632,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
 # and genres by play/skip behaviour, and writes preference facts to MemPalace.
 # ═══════════════════════════════════════════════════════════════════════════
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_music_taste_digest(user_id: str) -> dict:
     """Consolidate 30 days of music events into MemPalace preference memories.
 

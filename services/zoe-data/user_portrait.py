@@ -20,6 +20,8 @@ import time
 
 import httpx
 
+import erase_watermark
+
 from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
@@ -220,6 +222,7 @@ async def build_portrait_prompt(
     return prompt
 
 
+@erase_watermark.night_cycle
 async def run_portrait_synthesis(user_id: str, db=None) -> dict:
     """Synthesize a fresh user portrait, then rebuild the user-model card.
 
@@ -365,18 +368,19 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
                    generated_from_memory_count = excluded.generated_from_memory_count,
                    last_generated = CURRENT_TIMESTAMP"""
     params = (user_id, portrait_text, memory_count)
+    update = ("UPDATE user_portraits SET portrait_text = ?, portrait_version = portrait_version + 1, generated_from_memory_count = ?, "
+              "last_generated = CURRENT_TIMESTAMP WHERE user_id = ?", (portrait_text, memory_count, user_id))
+
+    async def write() -> list:    # CREATED keys only: an existing portrait is UPDATEd (never re-created), and never undone
+        created = await erase_watermark.insert_or_update(
+            db, ("SELECT 1 FROM user_portraits WHERE user_id = ?", (user_id,)), (sql, params), update)
+        return [user_id] if created else []
+
+    async def undo(_created):
+        await erase_watermark.run_sql(db, "DELETE FROM user_portraits WHERE user_id = ?", (user_id,))
     try:
-        from db_pool import get_db_ctx  # type: ignore[import]
-        if db is not None:
-            await db.execute(sql, params)
-            await db.commit()
-        else:
-            # Short-lived pooled acquire for the write — the bare
-            # `async for db in get_db(): break` form leaves the generator
-            # suspended at the yield, closing the connection mid-write.
-            async with get_db_ctx() as _db:
-                await _db.execute(sql, params)
-                await _db.commit()
+        # a night pass read the rows before the member's erase: checked right before and right after the write (erase_watermark)
+        await erase_watermark.guarded_write(user_id, "portrait", write, undo)
     except Exception as exc:
         logger.error("portrait: save failed user=%s: %s", user_id, exc)
 
