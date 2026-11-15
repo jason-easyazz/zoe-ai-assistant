@@ -191,7 +191,44 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 | The plan outruns review | small stacked PRs; one cut-over in flight at a time |
 | The brain picks the wrong tool | the kernel refuses what is not permitted; quality tracked per verb in the report |
 
-## 8. What is in flight right now
+## 8. What else has to change around the kernel
+
+The kernel does not land in a vacuum. These existing tools and open changes need adjusting; each is tied to the phase that needs it.
+
+**Tools and pipelines**
+
+| Tool | What is wrong today | Needed by |
+|---|---|---|
+| CI (`validate`) | [code] The kernel's own tests are not run by CI: `pytest.ini` collects only `services/zoe-data/tests`, the lab tests carry no `ci_safe` marker, and no workflow job names `labs/zoe-os`. They run only when someone runs them by hand | before Phase 1 |
+| Where the kernel lives | It is under `labs/`, which the repo defines as isolated from the runtime. A process production depends on must move to `services/` (or be deployed from the lab by an explicit, reviewed step, as the brain app already is) | before Phase 3 |
+| Deploy | [code] `deploy.yml` restarts the main service only; it does not install, update or restart a kernel, so a kernel would keep running old code after a deploy | before Phase 1 |
+| Voice replay gate | The regression probe has no kernel. With the authority flag on it would only ever exercise the fallback. It needs a kernel in the probe's environment and a said-versus-did check for a kernel-decided add | before Phase 3 |
+| Ground truth script | [code] `zoe_ground_truth.sh` reports nothing about the kernel: unit state, shadow and authority flags, last agreement figures | Phase 1 |
+| Nightly backup and restore drill | The kernel's database is in no backup job (decided: add it) and no restore drill | Phase 1 |
+| Night window | The orchestrator does not know the kernel: whether it stops, when its retention sweep runs, and that neither collides with the brain window | Phase 4 |
+| Memory protection | The kernel unit needs a memory ceiling and must never pressure the voice stack | Phase 1 |
+| Forget and text inventories | The kernel's stores must be listed with their reach (the shadow PR lists its store; the authority and later stores must follow) | each phase |
+| Felt scorecard | No rows yet for agreement, fallbacks, receipts, undo and forget through the kernel | Phase 1 |
+| Self-heal and health checks | Nothing watches the kernel or knows how to restart it | Phase 3 |
+| Review cost controller | Kernel paths are not in the load-bearing path list that decides which changes get the whole-repo review | Phase 3 |
+| First-boot and sold-box setup | A new box must create the kernel's user, database, roster and unit, offline | before a box is sold |
+| De-root programme | The kernel's own system user belongs in the same programme as the other services' | Phase 4 |
+
+**Open changes that should be reshaped**
+
+| Change | Adjustment |
+|---|---|
+| Member delete everything (#2598) | must call the kernel's member erase, failing closed, beside the shadow forget |
+| Routines (#2522, #2523, #2614) | a new store of household actions built straight on tables: it should publish receipts to the kernel from day one, and its "done / skip / snooze" taps are natural kernel actions with undo |
+| Anticipation engine (#2588 to #2592) | still dark, so build its offers, answers and cooldown as kernel offers with the per-person attention budget rather than its own store |
+| Presence (#2593 onward) | publish presence to the kernel's person-and-presence service instead of a parallel record |
+| Notifications: web push (#2512) and phone delivery | "may Zoe speak or send now" should become one kernel gate, not a third copy of quiet hours |
+| Named guests; lists private until shared; the fridge rule | the kernel has no guest and no household-owned list yet, so these rules must be modelled in the kernel before lists leave fallback for those cases |
+| Recipe cards | "add the ingredients to the shopping list" goes through the kernel action; cards are views over receipts |
+| Web lookup (#2527 to #2530) | the one door out of the house is a capability: its grant belongs in the kernel's consent model |
+| Not affected | the reflex, the medical and distress floors, the speed loop, the scrubber |
+
+## 9. What is in flight right now
 
 - Final review of the lab PR (#2630); then the harness (#2634), the speed-up (#2635) and the forget decisions (#2633).
 - The shadow stack in review (#2622 to #2625, #2631, #2632).
