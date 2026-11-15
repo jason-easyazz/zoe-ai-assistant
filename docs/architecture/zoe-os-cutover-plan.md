@@ -191,6 +191,22 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 | How does the kernel learn who lives in the house | Automatically, from the accounts Zoe already has. The owner keeps no second list |
 | Where should the kernel live, and how much should go through it | Open: an architecture study is under way. The owner's expectation is that most things go through the kernel; the study must state the boundary and justify every exception |
 
+### Decisions taken from the prior-art review (2026-11-15; engineering decisions, not owner questions)
+
+Record: `docs/research/zoe-os-prior-art-2026-11-15.md`. These are adopted and become work before the first authority flag goes live.
+
+| Decision | Why | When |
+|---|---|---|
+| Two durability levels, stated: everyday actions survive a killed process; permissions, forgets and receipts for consequential actions are also synced to survive a power cut, after measuring the cost on this box | the database's normal sync level can lose a committed write on power loss; the one-line rule over-promised | before Phase 3 |
+| A small forget ledger kept OUTSIDE the kernel's database and replayed after any restore | a restored backup would otherwise bring forgotten data back | before Phase 1 (with the backup) |
+| Every proposal carries an idempotency key, and the fallback path carries the same key | after a timeout the old path writes; if the kernel then commits late, the same item could be written twice | before Phase 3 |
+| The kernel resolves names to ids and checks ownership itself; it never trusts the model's arguments or matches patterns over free text | the model's arguments can come from text it read | Phase 3 onward |
+| Permissions are small objects with a parent, an expiry and a narrowing; revoking a parent revokes its children; the last adult can never be locked out | guardians, guests and "just for tonight" need it | with the children and guests model |
+| Every driver declares whether it is safe to repeat, readable, or fire-and-forget; actions are absolute ("set to 21"), never relative | makes "uncertain" resolvable by reading back | Phase 4 |
+| Add a schema version and an origin field to stored events now | cheap now, expensive later | with the next kernel change |
+| Per-person encryption keys are prototyped in the lab as a safety net UNDER deletion, not instead of it | it makes content unreadable in every copy, but not metadata, and needs its own key backup | later, lab only |
+| No tamper-evidence chain over readable text | a hash chain over text would fight forget | noted |
+
 ## 7. Risks, and what answers each
 
 | Risk | Answer |
