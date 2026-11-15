@@ -62,6 +62,7 @@ import memory_authority as _auth
 import memory_forgotten as _forgotten
 import own_words as _own_words
 import memory_temporal as _temporal
+import erase_watermark as _erase_watermark
 import user_erase_gate as _erase_gate
 from live_store_guard import (
     LiveStoreViolation,
@@ -2228,6 +2229,12 @@ class MemoryService:
         self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
+        # The durable erase WATERMARK before anything is erased (erase_watermark: memory_forgotten, no text): every transcript miner,
+        # in this process or another, skips the member's turns at or before it. Fail closed: no mark, nothing erased (caller retries).
+        try:
+            await _erase_watermark.record(user_id, actor=actor)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: erase watermark not recorded ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
@@ -2346,6 +2353,8 @@ class MemoryService:
                 # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
                 # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
                 try:
+                    import correction_marker
+                    correction_marker.forget_user(user_id, reason="delete_user")   # pending-correction markers: ids only, never raises
                     import forget_redact
                     forget_redact.clear_turn_caches(user_id)
                 except Exception:  # noqa: BLE001
@@ -2423,8 +2432,17 @@ class MemoryService:
             # them - a member delete is the strongest forget and must not depend on the caller retrying. Each is guarded on its own;
             # the in-lock error (if any) still propagates afterwards, so the delete still reports failure.
             pendant_failure = await _gate_erasers_after_lock()
+            try:   # pending-correction markers again, AFTER every store went: one set while the delete ran must not outlive it
+                import correction_marker
+                correction_marker.forget_user(user_id, reason="delete_user")
+            except Exception as exc:  # noqa: BLE001 - never replaces the delete's own result
+                logger.warning("PENDING_CORRECTION clear_failed reason=delete_user user=%s err=%s", user_id, type(exc).__name__)
         if pendant_failure is not None:   # the pendant erase fails CLOSED (reached only when nothing in the lock raised)
             raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
+        try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Fail closed: a
+            await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
         return len(ids)
 
     async def list_by_status(
