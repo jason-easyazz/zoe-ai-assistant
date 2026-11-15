@@ -139,7 +139,7 @@ def _talk(daemon, *, chunks=0, first=99.9, last=100.3):
 
 
 def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True, claim=0.40, claim_s=0.09,
-          before="join", wire=None, hour=12, wake=True, on_allowed=None):
+          before="join", wire=None, hour=12, wake=True, on_allowed=None, safety_out=None):
     """One streamed wake turn. Returns (ok, FIRST_SOUND line, reply writes, reflex players, reply-start clock, registered).
     ``mode="on"`` exercises the GATED player: it sets ``_REFLEX_ON_ALLOWED`` on this test module's daemon copy (production is
     False, pinned below) unless ``on_allowed`` says otherwise."""
@@ -193,6 +193,8 @@ def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True
         ok = daemon._do_single_turn_stream(FS._FakePA(), b"RIFFwav", wake_turn=wake)
     (line,) = FS._msgs(caplog, "FIRST_SOUND")
     dec = FS._msgs(caplog, "REFLEX_DECISION")
+    if safety_out is not None:
+        safety_out.extend(FS._msgs(caplog, "REFLEX_SAFETY"))
     caplog.clear()
     return ok, line, writes, players, reply_first_at, registered, dec
 
@@ -260,6 +262,51 @@ def test_the_switch_on_record_says_on_is_not_allowed():
     assert "any count is the owner's decision" not in flat and "the call is yours" not in flat
     assert "`REFLEX_MODE=on` for the session only" not in flat and "**On.** `REFLEX_MODE=on`, restart" not in flat
     assert "_REFLEX_ON_ALLOWED = False" in flat
+    # where the safety count comes from, stated exactly: the daemon's line, today unavailable, and the lab join's limits
+    assert "REFLEX_SAFETY mode=<shadow|on> would_play=<0|1>" in flat
+    assert "Today's server sends no `safety` key" in flat and "UNAVAILABLE, not zero" in flat
+    assert "CANNOT see refused commands at all" in flat
+
+
+# ── the shadow's SAFETY COUNT (contract: shadow must COUNT crisis / medical / refusal turns it would have played on) ──────
+
+def _wire_with_safety(value):
+    items = list(FS._wire())
+    done = json.loads(items[-1][1])
+    if value is not None:
+        done["safety"] = value
+    items[-1] = (items[-1][0], json.dumps(done).encode())
+    return items
+
+
+@pytest.mark.parametrize("value,cls", [("distress", "distress"), ("medical", "medical"), ("refusal", "refusal"),
+                                       ("child_floor", "child_floor"), ("none", "none"),
+                                       (None, "unknown"), ("Help me please", "unknown"), (7, "unknown")])
+def test_shadow_counts_a_would_play_turn_by_the_servers_safety_class(daemon, monkeypatch, caplog, bank, value, cls):
+    """A would-play shadow turn logs ONE REFLEX_SAFETY line carrying the done frame's class (closed enum; anything else,
+    including free text, is ``unknown``). Today's server sends no ``safety`` key, so live lines say ``unknown``."""
+    out = []
+    _, line, _, players, _, _, dec = _turn(daemon, monkeypatch, caplog, mode="shadow", bank=bank,
+                                           wire=_wire_with_safety(value), safety_out=out)
+    assert players == [] and "kind=heard" in dec[0]
+    assert out == [f"REFLEX_SAFETY mode=shadow would_play=1 class={cls}"], out
+    assert "Help" not in " ".join(out)
+
+
+def test_the_safety_count_also_runs_when_on_is_blocked_and_never_plays(daemon, monkeypatch, caplog, bank):
+    out = []
+    _, _, _, players, _, _, _ = _turn(daemon, monkeypatch, caplog, mode="on", bank=bank, on_allowed=False,
+                                      wire=_wire_with_safety("distress"), safety_out=out)
+    assert players == [] and out == ["REFLEX_SAFETY mode=shadow would_play=1 class=distress"]
+
+
+def test_a_suppressed_turn_is_counted_with_would_play_0_and_off_logs_nothing(daemon, monkeypatch, caplog, bank):
+    out = []
+    _turn(daemon, monkeypatch, caplog, mode="shadow", bank=bank, hour=23, wire=_wire_with_safety("medical"), safety_out=out)
+    assert out == ["REFLEX_SAFETY mode=shadow would_play=0 class=medical"]
+    out2 = []
+    _turn(daemon, monkeypatch, caplog, mode="off", bank=bank, wire=_wire_with_safety("medical"), safety_out=out2)
+    assert out2 == []                                              # off: nothing reflex-related runs
 
 
 def test_an_unknown_mode_value_is_off(daemon):

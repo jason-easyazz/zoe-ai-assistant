@@ -4163,6 +4163,7 @@ class _FirstSound:
         self.spk_user: "str | None" = None   # the claimed member id: used ONLY to match REFLEX_SILENT_MEMBERS, never logged
         self.skip = "-"                       # the SHADOW reflex decision's skip (never acted on)
         self.reflex: "_ReflexTurn | None" = None   # the real-time reflex controller (REFLEX_MODE shadow / on), else None
+        self.safety: "str | None" = None     # the server's done-frame ``safety`` class (_REFLEX_SAFETY_CLASSES); None = not stated
 
     def speaker(self, claim: object, at: "float | None") -> None:
         """The turn's speaker claim came back at ``at`` (None = the claim was not scored on this turn)."""
@@ -4459,6 +4460,31 @@ def _reflex_current_voice() -> "str | None":
     return v or None
 
 
+# The shadow's SAFETY COUNT (the contract: shadow must COUNT the crisis / medical / refusal turns the reflex would have
+# played on). Nothing at the close can know a turn's class, so the count is made at the turn's END, from the server's own
+# classification: an ADDITIVE done-frame key ``safety`` in this closed enum. TODAY'S SERVER SENDS NO SUCH KEY, so every turn
+# logs ``class=unknown`` - the count is unavailable, never zero - until a server PR adds it (docs/knowledge/voice-reflex.md).
+_REFLEX_SAFETY_CLASSES = ("none", "distress", "medical", "child_floor", "refusal")
+
+
+def _reflex_note_safety(fs: "_FirstSound", v: object) -> None:
+    """Remember the done frame's ``safety`` class for this turn; anything outside the closed enum is not stated (None)."""
+    try:
+        fs.safety = v if isinstance(v, str) and v in _REFLEX_SAFETY_CLASSES else None
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _reflex_safety_line(fs: "_FirstSound") -> "str | None":
+    """``REFLEX_SAFETY mode=<shadow|on> would_play=<0|1> class=<enum|unknown>`` for a turn the controller decided, else
+    None. ``would_play=1`` with a class other than none/unknown is a turn the reflex would have played before a safety
+    reply: the number the contract asks the shadow to count. Enums and 0/1 only."""
+    ctl = fs.reflex
+    if ctl is None or not ctl._decided:
+        return None
+    return "REFLEX_SAFETY mode=%s would_play=%d class=%s" % (ctl.mode, 1 if ctl.would_play else 0, fs.safety or "unknown")
+
+
 def _reflex_note_voice(v: object) -> None:
     global _REFLEX_DONE_VOICE
     try:
@@ -4507,6 +4533,7 @@ class _ReflexTurn:
         self.cut = False
         self.started_at: "float | None" = None
         self._decided = False
+        self.would_play = False          # decide() said "heard" (in shadow: would have played); read by the safety count
         self._reply = threading.Event()  # the reply's first audio arrived
         self._over = threading.Event()   # the turn ended
         self._lock = threading.Lock()
@@ -4570,6 +4597,7 @@ class _ReflexTurn:
             d = _reflex.decide(_reflex_ctx(self.fs, talking=talking, verdict_ms=decided_ms, bank=self.bank, state=state),
                                state, s=s)
             self.skip, self.take = d.skip, d.take
+            self.would_play = d.kind == "heard"
             self._log(decided_ms, obs, d.kind)
             if d.kind == "heard" and self.mode == "on" and _REFLEX_ON_ALLOWED:   # on is BLOCKED: see _REFLEX_ON_ALLOWED
                 self._play(d)
@@ -4877,6 +4905,12 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             fs.shadow_reflex()  # after the stream: a shadow decide(), logged as skip=, never acted on
         except Exception:  # noqa: BLE001
             pass
+        try:
+            safety_line = _reflex_safety_line(fs)  # the shadow's safety count (the server's class, at the turn's end)
+            if safety_line:
+                log.info("%s", safety_line)
+        except Exception:  # noqa: BLE001
+            pass
         for make in (fs.pcm_line, lambda: fs.line(_TALK.take())):
             try:
                 log.info("%s", make())
@@ -5023,6 +5057,7 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
                 continue
             if obj.get("done"):
                 _reflex_note_voice(obj.get("voice"))
+                _reflex_note_safety(fs, obj.get("safety"))
                 reply = obj.get("reply", "") or reply
                 if obj.get("cancelled") and speculation is not None:
                     # The server dropped the speculative turn: nothing was and

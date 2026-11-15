@@ -183,10 +183,37 @@ cleanup() {
   if [ -n "${RENDER_DIR}" ]; then rm -rf "${RENDER_DIR}"; fi
 }
 trap cleanup EXIT
-# The reflex bank (optional): refuse a directory that is not a rendered bank BEFORE anything is shipped.
+# The reflex bank (optional): refuse a directory that is not a rendered bank BEFORE anything is shipped. The check is the
+# PANEL'S OWN loader (zoe_voice_reflex.load_bank_dir, stdlib-only, imported by path in isolated mode): every entry must be
+# <voice>/<sha8>/ with well-formed names, the manifest must parse, its bank id must equal manifest_sha8 and the directory
+# name, and every take it lists must be a regular file that hashes to its sha256 and decodes as the bank format. Any stray
+# entry, or no bank at all, refuses the whole directory (exit 5). Prints enums only.
 if [ -n "${REFLEX_BANK_DIR:-}" ]; then
-  if [ ! -d "${REFLEX_BANK_DIR}" ] || [ -z "$(find "${REFLEX_BANK_DIR}" -mindepth 3 -maxdepth 3 -name manifest.json 2>/dev/null)" ]; then
-    echo "ERROR: REFLEX_BANK_DIR=${REFLEX_BANK_DIR} holds no <voice>/<sha8>/manifest.json (render it with render_reflex_bank.py)" >&2
+  if [ ! -d "${REFLEX_BANK_DIR}" ] || ! bank_why="$(python3 -I - "${REFLEX_BANK_DIR}" "${SRC_DIR}/zoe_voice_reflex.py" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("zoe_voice_reflex_preflight", sys.argv[2])
+rx = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = rx
+spec.loader.exec_module(rx)
+root, banks = Path(sys.argv[1]), 0
+s = rx.Settings(enabled=True)
+for v in sorted(root.iterdir()):
+    if v.is_symlink() or not v.is_dir() or not rx.VOICE_RE.fullmatch(v.name):
+        print("bad_voice_dir"); sys.exit(1)
+    for b in sorted(v.iterdir()):
+        if b.is_symlink() or not b.is_dir() or not rx.BANK_SHA_RE.fullmatch(b.name):
+            print("bad_bank_dir"); sys.exit(1)
+        res = rx.load_bank_dir(b, v.name, s)
+        if res.bank is None:
+            print(res.reason); sys.exit(1)
+        banks += 1
+if not banks:
+    print("missing"); sys.exit(1)
+print("ok")
+PY
+)"; then
+    echo "ERROR: REFLEX_BANK_DIR=${REFLEX_BANK_DIR} is not a rendered, verified bank tree <voice>/<sha8>/{manifest.json,takes} (${bank_why:-missing}; render it with render_reflex_bank.py)" >&2
     exit 5
   fi
 fi
