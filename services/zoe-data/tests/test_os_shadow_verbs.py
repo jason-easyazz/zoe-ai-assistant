@@ -76,7 +76,7 @@ def test_each_verb_sends_the_kernels_action_and_args_and_matches(kernel, monkeyp
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
     caplog.set_level(logging.INFO, logger="os_shadow")
     remind(90)
-    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="weekdays")
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="once")
     os_shadow.note_list_remove(MEMBER, source="skybridge", list_type="shopping", list_name="Shopping", item="rice")
     settle(3)
     sent = {a["action"]: a["args"] for a in acts(kernel)}
@@ -88,7 +88,7 @@ def test_each_verb_sends_the_kernels_action_and_args_and_matches(kernel, monkeyp
     pubs = [a["payload"]["text"] for _, op, a in kernel.calls if op == "publish"]
     assert sorted(pubs) == ["shadow alarm create", "shadow list remove", "shadow reminder create"]   # fixed text, never the note
     text = " ".join(r.getMessage() for r in caplog.records)
-    assert "verb=alarm_create src=service cls=repeat" in text and "verb=reminder_create src=service cls=once" in text
+    assert "verb=alarm_create src=service cls=once" in text and "verb=reminder_create src=service cls=once" in text
     assert NOTE not in text and "quillon" not in text.lower() and "rice" not in text
 
 
@@ -113,8 +113,14 @@ def test_an_alarm_time_that_is_not_hh_mm_is_not_expressible(kernel, monkeypatch)
 
 
 # ---- THE NEGATIVE CONTROL: a kernel that disagrees on purpose reads as disagree in the report -------------------------------------
+#: what each verb's read-back must agree on: list add / remove -> item (and list when told), member; reminder -> note AND minutes,
+#: member; alarm -> time, member. "wrong_time" changes only the WHEN, "item_differs" only the WHAT (an alarm's WHAT is its time).
+WHEN = {"list_add": None, "list_remove": None, "reminder_create": "schedule_differs", "alarm_create": "schedule_differs"}
+
+
 @pytest.mark.parametrize("mode,result", [("item_differs", "item_differs"), ("refuse:no grant from that person", "kernel_refused_live_did"),
-                                         ("unverified", "kernel_unverified_live_did")])
+                                         ("unverified", "kernel_unverified_live_did"), ("wrong_time", "schedule_differs"),
+                                         ("wrong_member", "member_differs")])
 def test_a_kernel_that_disagrees_on_purpose_is_disagree_for_every_verb_in_the_report(kernel, monkeypatch, caplog, mode, result):
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
     caplog.set_level(logging.INFO, logger="os_shadow")
@@ -128,8 +134,16 @@ def test_a_kernel_that_disagrees_on_purpose_is_disagree_for_every_verb_in_the_re
     s = report.summarize(report.parse(r.getMessage() for r in caplog.records))
     assert set(s["verbs"]) == {"list_add", "list_remove", "reminder_create", "alarm_create"}
     for verb, v in s["verbs"].items():
+        want = result
+        if mode == "item_differs" and verb == "alarm_create":
+            want = "schedule_differs"                         # the alarm's only value IS its time
+        if mode == "wrong_time" and WHEN[verb] is None:
+            want = "match"                                    # a list item has no WHEN: the control does not touch it
+        if want == "match":
+            assert (v["seen"], v["agree"]) == (3, 3), verb
+            continue
         assert (v["seen"], v["agree"], v["disagree"], v["unavailable"], v["agree_rate"]) == (3, 0, 3, 0, 0.0), verb
-        assert v["disagree_by_result"] == {result: 3}, verb
+        assert v["disagree_by_result"] == {want: 3}, verb
 
 
 def test_the_same_run_with_an_agreeing_kernel_is_all_agree(kernel, monkeypatch, caplog):
@@ -354,3 +368,98 @@ def test_every_verb_runs_on_one_deadline(kernel, monkeypatch, caplog, verb):
     settle(1, timeout=3)
     (line,) = _act_lines(caplog, verb)
     assert " result=timeout " in line and float(line.split(" hop_ms=", 1)[1].split()[0]) < 350
+
+
+
+# ---- the WHEN is compared, not just the WHAT --------------------------------------------------------------------------------------
+@pytest.mark.parametrize("mode,result", [("wrong_time", "schedule_differs"), ("item_differs", "item_differs"),
+                                         ("no_schedule", "schedule_unproven"), ("ok", "match")])
+def test_a_reminder_the_kernel_schedules_at_the_wrong_time_is_never_a_match(kernel, monkeypatch, mode, result):
+    """THE pass-mark fault: the read-back was compared on the note alone. The time changes here, the note does not (and the reverse);
+    a kernel whose read-back does not say WHEN (the lab driver today) cannot read as a match either."""
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    kernel.act_mode = mode
+    remind(90)
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"reminder_create": {result: 1}}
+
+
+@pytest.mark.parametrize("mode,result", [("wrong_time", "schedule_differs"), ("ok", "match"), ("wrong_member", "member_differs")])
+def test_an_alarm_at_the_wrong_time_or_for_someone_else_is_never_a_match(kernel, monkeypatch, mode, result):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
+    kernel.act_mode = mode
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="once")
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"alarm_create": {result: 1}}
+
+
+def test_a_repeating_alarm_is_not_expressible_never_compared_as_one_time(kernel, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="weekdays")
+    settle(1)
+    assert acts(kernel) == [] and os_shadow.counters_by_verb() == {"alarm_create": {"not_expressible": 1}}
+    assert any("cls=repeat" in r.getMessage() and "reason=recurring" in r.getMessage() for r in caplog.records)
+
+
+# ---- with the feature off, nothing is built and nothing is read beyond the flags ---------------------------------------------------
+NOTE_CALLS = {
+    "note_add": lambda: os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="rice"),
+    "note_list_remove": lambda: os_shadow.note_list_remove(MEMBER, source="skybridge", list_type="shopping", list_name="Shopping",
+                                                           item="rice"),
+    "note_reminder_create": lambda: remind(90),
+    "note_alarm_create": lambda: os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="once"),
+    "note_act": lambda: os_shadow.note_act("list_add", MEMBER, source="spoken", raw={"item": "rice", "list": "Shopping"}),
+}
+
+
+@pytest.mark.parametrize("name", sorted(NOTE_CALLS))
+@pytest.mark.parametrize("off", ["switch", "verb"])
+def test_with_the_feature_off_no_note_function_builds_its_payload(kernel, monkeypatch, name, off):
+    boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("built with the feature off"))      # noqa: E731
+    monkeypatch.setattr(os_shadow, "_list_raw", boom)
+    monkeypatch.setattr(os_shadow, "_text", boom)
+    if off == "switch":
+        monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    else:
+        other = "list_add" if name == "note_alarm_create" else "alarm_create"
+        monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", other)              # the switch on, this verb not named
+    reads = []
+    real_flag = __import__("typed_env").flag
+    monkeypatch.setattr(__import__("typed_env"), "flag", lambda n, *a, **k: (reads.append(n), real_flag(n, *a, **k))[1])
+    NOTE_CALLS[name]()
+    assert os_shadow.counters() == {} and os_shadow._q.qsize() == 0
+    assert len(reads) == len(set(reads)) and set(reads) <= {os_shadow.FLAG, os_shadow.VERBS_FLAG}, reads   # each flag read once at most
+
+
+@pytest.mark.parametrize("name", ["note_add", "note_list_remove", "note_reminder_create"])
+def test_with_the_feature_on_a_builder_that_raises_is_one_counted_shadow_error_never_a_raise(kernel, monkeypatch, name):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))      # noqa: E731
+    monkeypatch.setattr(os_shadow, "_list_raw", boom)
+    monkeypatch.setattr(os_shadow, "_text", boom)
+    NOTE_CALLS[name]()
+    assert os_shadow.counters() == {"shadow_error": 1}
+
+
+def test_every_note_function_checks_the_flags_before_it_touches_an_argument():
+    """Structure: in every ``note_*`` function the arguments that carry the write (everything but who, the source code and the
+    verb) are used ONLY inside the lambda handed to ``_note``, and ``_door`` reads ``wants(verb)`` before it calls ``build()``."""
+    import ast
+
+    tree = ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
+    fns = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("note_")]
+    assert {f.name for f in fns} == set(NOTE_CALLS)
+    for fn in fns:
+        args = {a.arg for a in fn.args.args + fn.args.kwonlyargs} - {"user_id", "source", "verb", "landed"}
+        inside = {id(n) for lam in ast.walk(fn) if isinstance(lam, ast.Lambda) for n in ast.walk(lam)}
+        used = [n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id in args and id(n) not in inside]
+        assert not used, (fn.name, used)
+        (call,) = [c for c in fn.body if isinstance(c, ast.Expr) and isinstance(c.value, ast.Call)]
+        assert len(fn.body) <= 2, fn.name                               # a docstring and the one call: nothing runs before the flags
+        assert getattr(call.value.func, "id", "") == "_note", fn.name
+    door = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_door")
+    body = door.body[1:] if isinstance(door.body[0], ast.Expr) and isinstance(door.body[0].value, ast.Constant) else door.body
+    first = body[0]
+    assert isinstance(first, ast.If) and "wants" in ast.dump(first.test) and "build" not in ast.dump(first)

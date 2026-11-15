@@ -51,9 +51,15 @@ FLAG = "ZOE_OS_LIST_SHADOW"
 VERBS_FLAG = "ZOE_OS_SHADOW_VERBS"
 DIR_FLAG = "ZOE_OS_SHADOW_DIR"
 
-#: shadow verb -> (kernel action, the proof key the kernel's read-back returns, the argument it must equal)
-VERBS = {"list_add": ("list.add", "item", "item"), "list_remove": ("list.remove", "item", "item"),
-         "reminder_create": ("remind.set", "note", "note"), "alarm_create": ("alarm.set", "alarm", "time")}
+#: shadow verb -> (kernel action, the read-back CHECKS). Each check is (proof key, the sent arg it must equal, the code when it differs,
+#: the code when the proof lacks it; None = optional). Together they are every field that says WHAT is done and WHEN it fires; FOR WHOM
+#: is the receipt's ``on_behalf_of`` (``member_differs``), checked for every verb. A repeating alarm or reminder is never sent: the
+#: kernel's verbs are one-shot (``kernel_args``: ``not_expressible reason=recurring``), so repeat never needs comparing.
+VERBS = {"list_add": ("list.add", (("item", "item", "item_differs", "kernel_malformed"), ("list", "list", "list_differs", None))),
+         "list_remove": ("list.remove", (("item", "item", "item_differs", "kernel_malformed"), ("list", "list", "list_differs", None))),
+         "reminder_create": ("remind.set", (("note", "note", "item_differs", "kernel_malformed"),
+                                            ("in_minutes", "in_minutes", "schedule_differs", "schedule_unproven"))),
+         "alarm_create": ("alarm.set", (("alarm", "time", "schedule_differs", "kernel_malformed"),))}
 DEFAULT_VERBS = "list_add"
 REMIND_MAX_MIN = 10080         # the kernel's ``remind.set`` takes 1..10080 whole minutes from now
 
@@ -275,7 +281,7 @@ class _Conn:
 #: Not compared: the rest, of which ``no_input`` (no member or no value) and ``shadow_error`` (the shadow's OWN failure,
 #: ``reason=hook|worker|code``) are not the kernel's.
 RESULTS = ("worker_down", "match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused",
-           "item_differs", "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
+           "item_differs", "list_differs", "schedule_differs", "schedule_unproven", "member_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full", "live_noop", "no_input", "shadow_error")
 #: FIRST match wins, so "forgotten" comes first: the kernel's "forgotten_action_arguments" (an act citing words a forget shielded) also
 #: contains "argument", and a forgotten refusal must never be read as a fixable argument problem.
@@ -289,12 +295,13 @@ def reason_code(reason: str) -> str:
     return next((code for needle, code in _REASONS if needle in low), "other")
 
 
-def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add") -> tuple[str, str]:
+def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add", member: Optional[str] = None) -> tuple[str, str]:
     """``(result, kernel_state)``. ``live``: added | refused (added = the live write landed, whatever the verb). ``kernel``: the act
-    receipt (a dict), ``{"refused": reason}`` or None. ``sent``: the kernel args as proposed. ``item_differs`` means the kernel's
-    read-back names a different value than was sent (the item, the reminder note, the alarm time). The member is the connection's own
-    business: a receipt names the person it acted for, so a mismatch there is ``kernel_malformed``."""
-    _action, pkey, akey = VERBS[verb]
+    receipt (a dict), ``{"refused": reason}`` or None. ``sent``: the kernel args as proposed; ``member``: who it was for. A ``match`` needs
+    EVERY check of the verb (``VERBS``): the receipt is for ``member`` (else ``member_differs``), the read-back names the same WHAT
+    (``item_differs``: the item, the reminder note) and the same WHEN (``schedule_differs``: the reminder's minutes, the alarm time;
+    ``schedule_unproven`` when the kernel's read-back does not say when, so a reminder at the wrong time can never read as a match)."""
+    checks = VERBS[verb][1]
     if kernel is None:
         return "kernel_unavailable", "none"
     if "refused" in kernel:
@@ -305,13 +312,18 @@ def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add
         return ("kernel_did_live_refused" if state == "verified" else "match"), state
     if state != "verified":
         return "kernel_unverified_live_did", state
+    if member is not None and "on_behalf_of" in kernel and kernel["on_behalf_of"] != member:
+        return "member_differs", state
     proof = kernel.get("proof")
-    if not isinstance(proof, dict) or pkey not in proof:
+    if not isinstance(proof, dict):
         return "kernel_malformed", state
-    if proof[pkey] != sent[akey]:
-        return "item_differs", state
-    if "list" in proof and proof["list"] != sent.get("list"):
-        return "list_differs", state
+    for pkey, akey, differs, missing in checks:
+        if pkey not in proof:
+            if missing is not None:
+                return missing, state
+            continue
+        if proof[pkey] != sent.get(akey):
+            return differs, state
     return "match", state
 
 
@@ -544,7 +556,7 @@ def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict,
     hop_ms = (time.perf_counter() - started) * 1000
     kstate = "none"
     if not result:
-        result, kstate = compare(live, result_kernel, sent, verb)
+        result, kstate = compare(live, result_kernel, sent, verb, user_id)
     return {"result": result, "kernel_state": kstate, "reason": reason, "hop_ms": hop_ms}
 
 
@@ -554,6 +566,8 @@ def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], s
     if verb in ("list_add", "list_remove"):
         return {"item": raw["item"], "list": raw["list"]}, ""
     if verb == "alarm_create":
+        if (raw.get("repeat") or "once") != "once":
+            return None, "recurring"         # alarm.set is one time, once: a repeating alarm is something the kernel cannot say
         hhmm = str(raw.get("time") or "")
         if len(hhmm) != 5 or hhmm[2] != ":" or not (hhmm[:2] + hhmm[3:]).isdigit() or int(hhmm[:2]) > 23 or int(hhmm[3:]) > 59:
             return None, "time"
@@ -666,7 +680,7 @@ def note_reminder_create(user_id: Optional[str], *, source: str, note: Optional[
 def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optional[str], repeat: Optional[str]) -> None:
     """An alarm row committed (``alarms.create_alarm``). The kernel's alarm is one time per person: the repeat rule rides ``cls``."""
     _note("alarm_create", user_id, source, True, lambda: ("once" if (repeat or "once") == "once" else "repeat",
-                                                          {"time": str(time_hhmm or "")}))
+                                                          {"time": str(time_hhmm or ""), "repeat": repeat or "once"}))
 
 
 # ---- forget -------------------------------------------------------------------------------------------------------------------------

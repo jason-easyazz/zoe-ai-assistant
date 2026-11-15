@@ -143,22 +143,34 @@ class FakeKernel:
             raise ConnectionError
         if mode == "wrong_shape":
             return self._ok(conn, req, {"hello": 1})
-        # the read-back each lab driver returns (labs/zoe-os/zoe_os/brain/drivers.py): list -> item, reminder -> note, alarm -> time
+        # the read-back each lab driver returns (labs/zoe-os/zoe_os/brain/drivers.py): list -> item, reminder -> note, alarm -> time.
+        # A reminder's read-back here ALSO says when (in_minutes): the lab driver's does not yet ("no_schedule" mirrors it).
         pkey, akey = {"remind.set": ("note", "note"), "alarm.set": ("alarm", "time")}.get(a["action"], ("item", "item"))
         proof = {pkey: a["args"][akey]}
-        verified, outcome = True, "verified"
+        if a["action"] == "remind.set":
+            proof["in_minutes"] = a["args"]["in_minutes"]
+        verified, outcome, member = True, "verified", a["on_behalf_of"]
         if mode == "unverified":
             verified, outcome, proof = False, "unverified", None
         elif mode == "uncertain":
             verified, outcome, proof = False, "uncertain", None
         elif mode == "item_differs":
-            proof = {pkey: a["args"][akey] + " x"}
+            proof[pkey] = a["args"][akey] + " x"
+        elif mode == "wrong_time":                      # the WHEN differs, the WHAT is right
+            if a["action"] == "remind.set":
+                proof["in_minutes"] = a["args"]["in_minutes"] + 5
+            elif a["action"] == "alarm.set":
+                proof["alarm"] = "23:59" if a["args"]["time"] != "23:59" else "00:00"
+        elif mode == "no_schedule":
+            proof.pop("in_minutes", None)
+        elif mode == "wrong_member":
+            member = "someone-else"
         elif mode == "list_differs":
             proof["list"] = "somewhere else"
         elif mode == "no_proof_item":
             proof = {"other": 1}
         self._ok(conn, req, {"id": f"r{self._seq}", "seq": self._seq + 1, "action": a["action"], "skill": skill,
-                             "on_behalf_of": a["on_behalf_of"], "grant_id": "g1", "proof": proof, "verified": verified,
+                             "on_behalf_of": member, "grant_id": "g1", "proof": proof, "verified": verified,
                              "outcome": outcome, "reversible": True})
 
     def close(self):
@@ -494,7 +506,8 @@ def _sweep(kernel, monkeypatch):
 
     one("match", add)
     for mode, code in (("refuse", "kernel_refused_live_did"), ("unverified", "kernel_unverified_live_did"),
-                       ("item_differs", "item_differs"), ("list_differs", "list_differs"), ("malformed", "kernel_malformed")):
+                       ("item_differs", "item_differs"), ("list_differs", "list_differs"), ("malformed", "kernel_malformed"),
+                       ("wrong_member", "member_differs")):
         kernel.act_mode = mode
         one(code, add)
     kernel.act_mode = "ok"
@@ -548,7 +561,8 @@ def test_every_note_add_outcome_writes_exactly_one_line(kernel, caplog, monkeypa
         assert [kv.split("=", 1)[0] for kv in ln.split()[1:]] == FIELDS, ln
     errors = [ln for ln in lines if _result(ln) == "shadow_error"]
     assert sorted(ln.split(" reason=", 1)[1].split()[0] for ln in errors) == ["hook", "worker"]
-    assert set(want) == set(os_shadow.RESULTS), set(os_shadow.RESULTS) ^ set(want)   # every code is reachable; nothing outside it
+    when_only = {"schedule_differs", "schedule_unproven"}            # a list add has no WHEN: driven per verb in test_os_shadow_verbs.py
+    assert set(want) | when_only == set(os_shadow.RESULTS), set(os_shadow.RESULTS) ^ (set(want) | when_only)
 
 
 def test_the_flag_off_writes_no_line(kernel, caplog, monkeypatch):
@@ -645,3 +659,9 @@ def test_every_outcome_path_goes_through_the_one_emitter():
     for name in ("_door", "_act_outcome"):
         fn = _fn(tree, name)
         assert isinstance(fn.body[-1], ast.Return) and all(r.value is not None for r in ast.walk(fn) if isinstance(r, ast.Return)), name
+
+
+def test_every_code_a_verb_check_can_return_is_a_result():
+    for action, checks in os_shadow.VERBS.values():
+        for _pkey, _akey, differs, missing in checks:
+            assert differs in os_shadow.RESULTS and (missing is None or missing in os_shadow.RESULTS), action

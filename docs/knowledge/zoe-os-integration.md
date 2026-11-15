@@ -66,8 +66,25 @@ Where each verb is hooked (after the commit, never raises, one bounded queue put
 
 What the kernel's verbs cannot express is counted as a disagreement, never sent: a recurring reminder, a date-only reminder (live
 fires it at the household default time), a reminder more than 7 days out (`remind.set` takes 1..10080 minutes), an alarm time that is
-not `HH:MM` [code]. The kernel's alarm is one time per person with no repeat rule; the repeat rule rides the `cls` field
-(`once`/`repeat`) so the report can split them [code]. That is a known gap to close before (d), not a pass.
+not `HH:MM`, and a REPEATING alarm (`alarm.set` is one time, once: `not_expressible reason=recurring`) [code]. The kernel's alarm is
+one time per person with no repeat rule; that is a known gap to close before (d), not a pass.
+
+**What "agree" means, per verb** (`os_shadow.VERBS`, `compare`) [code]: a `match` needs the receipt to be for the member
+(`on_behalf_of`, else `member_differs`) AND every read-back field that says WHAT and WHEN to equal what was sent:
+
+| verb | WHAT | WHEN | a field the read-back lacks |
+|---|---|---|---|
+| `list_add`, `list_remove` | `item` (`item_differs`); `list` when the driver reports it (`list_differs`) | none: a list item does not fire | `item` missing = `kernel_malformed`; `list` optional |
+| `reminder_create` | `note` (`item_differs`) | `in_minutes` (`schedule_differs`) | `in_minutes` missing = `schedule_unproven` |
+| `alarm_create` | the time is the whole value | `alarm` == `time` (`schedule_differs`) | `kernel_malformed` |
+
+**The lab driver's `remind.set` read-back is `{"note"}` only** (`labs/zoe-os/zoe_os/brain/drivers.py` `Reminders.added`) [code], so
+against today's lab kernel every reminder reads `schedule_unproven` (a disagreement), never `match`: a reminder at the wrong time can
+no longer pass. The driver must report its schedule (`in_minutes`, or the due instant) before reminders can meet the pass mark.
+
+**The report judges each verb on its own** (`scripts/maintenance/os_shadow_report.py`): one row per verb (an unknown verb or code is
+its own counted row) and a `PASS` / `NOT YET (...)` line per verb from exactly the five numbers below, naming each one it fails; the
+list-add totals are over list-add lines only.
 
 **What the real run proved, and what it did not.** The 29-turn real run of 2026-11-15 drove list add (8/8), reminders (8/8) and
 alarms (6/6) through the kernel with the policy arm, refusals 3/3, zero false calls, hop about 1.4 ms p50 (brain-bridge record)
@@ -79,7 +96,8 @@ the shadow proves something different: that the kernel, given the live write, re
 ([zoe-os-list-shadow.md](zoe-os-list-shadow.md) section 7); `ZOE_OS_SHADOW_VERBS` is set to the verbs to watch.
 
 **Exit proof (to go to (c)) - owner decision D1.** Proposed: for list add, at least 14 days and at least 200 judged writes, agree
-rate at least 99.5%, every disagreement read and explained by its reason code, unavailable under 1% of seen, hop p90 under 10 ms,
+rate at least 99.5%, every disagreement read and explained by its reason code (the report checks the machine part: none with an
+unknown code or an `other` reason), unavailable under 1% of the writes the kernel was asked about, hop p90 under 10 ms,
 and one member erase and one entity forget during the window that reached the kernel (checked by the kernel's receipt count for the
 member going to zero). These numbers are a proposal, not a measurement.
 
