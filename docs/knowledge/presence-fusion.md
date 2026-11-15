@@ -167,6 +167,61 @@ adult-day: the BLE scanner on the Pi is a substitute for the HA tracker, not onl
 buys the most" is **BLE IRK** for leaving and rooms, and a **counting camera** for the privacy gate. The cheapest next step
 needs no hardware: map the household's HA phone trackers to members.
 
+## The first three consumers: wiring notes (not wired; no owned file was edited)
+
+Each consumer reads the process store through a small accessor added in its own PR, and each stays behind its own flag
+plus `ZOE_PRESENCE_FUSION=shadow`. The producers come first (a PR of `record()` calls, below), because a consumer of an
+empty store learns nothing.
+
+### Producers (one PR, voice-path, replay-gated)
+
+| signal | call site | the `Observation` |
+|---|---|---|
+| verified / unverified voice | `routers/voice_tts.py` right after `_speaker_verified` is set (`:3683`), beside `_day_review_raise.note_voice_turn` (`:3971`) | `voice_verified` with the accepted member, or `someone_voice`; `room` = `panels.room_id` for the turn's panel (the lookup `routers/rooms.py:188` already does) |
+| PIN | `routers/panel_auth.py:762` on success | `pin_unlock`, member, panel room |
+| member touch | `routers/ui_actions.py:72` `_note_owner_presence` (member rows only, never the kiosk guest) | `panel_touch_member` |
+| alarm | `routers/alarms.py:129` on dismiss | `alarm_dismissed`, the alarm's owner, no room |
+| phone tracker | `presence/ha_presence.py:110` after a good poll: re-assert each mapped entity every poll (the fusion needs the level, not only the change) | `phone_tracker`, `value` = `home` / `away`; needs an owner-set map from HA `person.*` to member |
+| pendant | omi-sync is a separate service: a sync-seen line on its existing health surface, read by zoe-data's poll; never the device id | `pendant_sync`, the paired member |
+
+`voice_tts.py` turn-start code is owned by another session: the voice producer lands through that owner.
+
+### 1. Routines: the leaving catch
+
+- Routines are not on `main` today (IDEAS.md, "Routines", order step 2 is this catch); wire into whatever the routines
+  work lands, not into a parallel scheduler.
+- **Reads:** `PresenceFusion.step()` events of kind `left` for the routine's own member (`events_for(member, member)`), from
+  the proactive slow loop (`proactive/engine.py`), never from a turn.
+- **Acts when:** a `left` with `confidence >= STRICTNESS[member.strictness]` AND the member's routine has an undone "take
+  with you" step AND the member opted into the leaving catch. Sends through `proactive/engine.py:80`
+  `fire_notification` to the member's own phone only ("I think you forgot the drill"), at most once per departure.
+- **Must not:** speak on a panel (the person has left); act on `unknown`; act on an event older than 15 min (the catch is
+  useless late); act for a member with tracking off (`step` gives none).
+- **Numbers:** leaving catches right and wrong per week, the false `left` rate, the delay from the real departure (the lab
+  states what to expect per sensor set).
+
+### 2. The panel privacy gate
+
+- **Reads:** `others_present(room, member, now)` for the panel's room, plus `sure_enough(member, room, now)`.
+- **Where:** the private-read decision in `voice_session.py` (`private_read_kind`, `:222`) and the day-review raise's
+  `day_review_raise.others_present` (`:242`), which today counts only voices heard on that panel in 10 minutes (and says
+  "crowded" for the process's first 10 min; fusion's `unknown` mirrors that). Fusion adds
+  "someone" evidence (and, with hardware, person-detect and occupancy) and other members believed in the room.
+- **Rule:** private content is spoken or shown only when `others_present` is `none_observed` AND `sure_enough` holds by the
+  member's own strictness; `yes` and `unknown` mean "it's private and someone else may be here: I've sent it to your
+  phone". Fusion can only make the gate STRICTER than today's voice-only check (an OR of both), never looser.
+- **Must not:** say who else is there; replace the voice session's identity (fusion is presence, not identity).
+
+### 3. Reflex / listen-pace: the "carried speaker"
+
+- The reflex and listen-pace need, at the close of a turn on the Pi, whether the previous verified speaker is still the one
+  talking (`voice-reflex-prereqs` design, "carried verified speaker": a boolean `verified` + `ttl_s` in the done frame).
+- **Fusion's part is the server's TTL and a veto, not the identity:** when the server builds that done-frame key, it may
+  shorten `ttl_s` to 0 when `others_present(panel room, member)` is `yes` (someone else is in the room, so the next voice
+  may not be the member), and carry `ttl_s` unchanged otherwise. It never sends a name or the room to the panel.
+- **Must not:** extend a carry beyond the voice session TTL; turn a `false` verdict into `true`; add latency (the read is
+  in memory, microseconds).
+
 ## Acceptance (owner words, true when done)
 
 1. "Zoe knows who is home" - for each member, home / away / not sure, and she says "not sure" rather than guess.
