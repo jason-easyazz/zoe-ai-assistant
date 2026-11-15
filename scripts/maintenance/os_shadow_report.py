@@ -24,18 +24,18 @@ LINE = re.compile(r"OS_SHADOW_LIST_ADD\s+(.*)")
 #: report never echoes a value it does not know, so a planted or corrupted field cannot print text.
 UNKNOWN = "unknown"
 ALLOWED = {
-    "src": frozenset({"spoken", "single", "skybridge", "rest"}),
+    "src": frozenset({"spoken", "single", "skybridge", "rest", "suggestion"}),
     "cls": frozenset({"shopping", "todo", "personal", "other"}),
     "live": frozenset({"added", "refused"}),
     "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
-    "result": frozenset({"match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
+    "result": frozenset({"worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
                          "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
                          "queue_full", "live_noop"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake"}),
 }
 NUMBERS = ("hop_ms", "q_ms")
-NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop"}
+NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop", "worker_down"}
 MISMATCH = ("kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs", "list_differs",
             "kernel_malformed", "kernel_unavailable", "timeout")
 

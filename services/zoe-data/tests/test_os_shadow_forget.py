@@ -47,7 +47,28 @@ async def test_a_scope_the_kernel_cannot_match_widens_to_the_whole_member(kernel
 
 @pytest.mark.asyncio
 async def test_a_member_the_kernel_never_knew_is_a_no_op_not_a_failure(kernel):
-    assert await os_shadow.forget_user("someone-else") == 0 and forgets(kernel) == []
+    kernel.known = {MEMBER}
+    assert await os_shadow.forget_user("someone-else") == 0                      # the KERNEL says it never knew them ...
+    assert forgets(kernel) == [("panel", {"subject": "someone-else", "actor": "someone-else"})]   # ... it was asked, by id
+
+
+@pytest.mark.asyncio
+async def test_a_member_taken_off_the_roster_is_still_forgotten_by_id(kernel):
+    """Review finding: the roster says who may be proposed NOW, not who has records. A member removed from people.json after the
+    kernel recorded them must still be forgotten."""
+    (kernel.state / "people.json").write_text(json.dumps({"people": ["member-b"]}))   # MEMBER is no longer in the roster
+    os_shadow._roster_cache = (0.0, None, frozenset())
+    assert MEMBER not in os_shadow.roster()
+    assert await os_shadow.forget_user(MEMBER) == 3
+    assert await os_shadow.erase_entity(MEMBER, "Dana") == 3
+    assert [a["subject"] for _, a in forgets(kernel)] == [MEMBER, MEMBER]
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_is_not_never_knew_them_still_fails_closed(kernel):
+    kernel.forget_mode = "refuse_all"
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await os_shadow.forget_user("member-z")
 
 
 @pytest.mark.asyncio
@@ -81,7 +102,7 @@ async def test_flag_off_with_no_kernel_ever_installed_touches_nothing(kernel, mo
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     (kernel.state / "creds.json").unlink()
     assert await os_shadow.forget_user(MEMBER) == 0
-    assert os_shadow._worker is None and kernel.connections == 0
+    assert kernel.connections == 0 and kernel.calls == []
 
 
 @pytest.mark.asyncio
@@ -96,10 +117,67 @@ async def test_flag_off_with_a_kernel_down_parks_the_forget_and_replays_it_befor
     os_shadow._reset_for_tests()
     (kernel.state / "creds.json").write_text(json.dumps({"socket": real_path, "creds": {s: c.hex() for s, c in kernel.creds.items()}}))
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    assert os_shadow.revive()                                                       # start-up
     add()
     settle(1)
     assert [op for _, op, _ in kernel.calls] == ["forget", "publish", "act"]        # the parked forget went first
     assert not (kernel.state / "pending-forgets.json").exists()
+
+
+# ---- the parked forgets: locked, atomic, durable, fail closed -------------------------------------------------------------------------
+def _pending(kernel):
+    return json.loads((kernel.state / "pending-forgets.json").read_text())
+
+
+def test_concurrent_parks_never_overwrite_each_other(kernel):
+    import threading
+
+    ids = [f"member-{i:02d}" for i in range(24)]
+    barrier = threading.Barrier(len(ids))
+    workers = [threading.Thread(target=lambda m=m: (barrier.wait(), os_shadow._pending_add(m))) for m in ids]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(5)
+    assert _pending(kernel) == sorted(ids)                    # an unlocked read-modify-write loses some of these
+
+
+def test_a_replay_keeps_a_forget_parked_while_it_ran(kernel, monkeypatch):
+    os_shadow._pending_add("member-a")
+    real = os_shadow._kernel_forget
+
+    def slow_forget(k, member, entity, topic):
+        os_shadow._pending_add("member-late")                 # another erase parks while the replay is talking to the kernel
+        return real(k, member, entity, topic)
+
+    monkeypatch.setattr(os_shadow, "_kernel_forget", slow_forget)
+    assert os_shadow._replay_pending(os_shadow._Kernel()) is False
+    assert _pending(kernel) == ["member-late"]                # the old replay rewrote the file with its own snapshot: lost
+
+
+@pytest.mark.asyncio
+async def test_a_park_that_cannot_be_made_durable_fails_the_erase_closed(kernel, monkeypatch):
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    (kernel.state / "creds.json").write_text(json.dumps({"socket": str(kernel.dir / "gone.sock"),
+                                                         "creds": {s: c.hex() for s, c in kernel.creds.items()}}))
+
+    def no_disk(member):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os_shadow, "_pending_add", no_disk)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):    # the old code swallowed this and the delete said "done"
+        await os_shadow.forget_user(MEMBER)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_park_file_is_never_overwritten_and_fails_closed(kernel, monkeypatch):
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    (kernel.state / "creds.json").write_text(json.dumps({"socket": str(kernel.dir / "gone.sock"),
+                                                         "creds": {s: c.hex() for s, c in kernel.creds.items()}}))
+    (kernel.state / "pending-forgets.json").write_text("not json")
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await os_shadow.forget_user(MEMBER)
+    assert (kernel.state / "pending-forgets.json").read_text() == "not json"
 
 
 # ---- the forget paths call it, and the inventory knows the store -----------------------------------------------------------------------
