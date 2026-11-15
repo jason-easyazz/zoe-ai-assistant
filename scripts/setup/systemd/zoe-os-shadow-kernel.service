@@ -20,6 +20,7 @@
 [Unit]
 Description=Zoe OS shadow kernel (lab) - records list adds beside the live path; never authoritative
 After=network.target
+Conflicts=zoe-os-authority-kernel.service
 
 [Service]
 Type=simple

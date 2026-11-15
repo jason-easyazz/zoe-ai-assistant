@@ -111,6 +111,19 @@ else
   bad "cannot read zoe-data process env (pid on :8000 not found or /proc unreadable)"
 fi
 
+# Optional kernel: no env file reads, no credentials or paths rendered.
+_kernel_report=$(bash "$(dirname "$0")/zoe_os_kernel.sh" report 2>/dev/null)
+printf '%s\n' "${_kernel_report:-kernel: report unavailable}"
+if [ "$_kernel_report" != 'kernel: not installed' ]; then
+  for f in ZOE_OS_LIST_SHADOW ZOE_OS_LIST_ADD_AUTHORITY; do
+    if [ -n "${zpid:-}" ] && [ -r "/proc/$zpid/environ" ]; then
+      if tr '\0' '\n' < "/proc/$zpid/environ" | grep -q "^$f="; then
+        dim "$f=set"
+      else dim "$f=unset"; fi
+    else dim "$f=unreadable"; fi
+  done
+fi
+
 # ── Scheduled jobs that ACTUALLY registered (the music_discovery class) ──────
 hdr "SCHEDULED JOBS (registered in apscheduler_jobs — not just coded)"
 [ "$DB_UP" = 1 ] && wait   # the prefetch fan-out; all DB reads are done after this
