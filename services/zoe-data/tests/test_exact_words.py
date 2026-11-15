@@ -813,14 +813,14 @@ def test_control_sibling_serve_guards_with_the_old_lenient_lookup_leak(svc, monk
     assert run(svc._names_forgotten(USER, "Dana rang about the kids")) is False
 
 
-def test_the_verbatim_index_redacts_a_contact(index):
+def test_the_verbatim_index_redacts_a_contact(index, ledger_env):
     """The owner's exact words are a derived copy: a phone number and a street address are redacted, the turn is kept."""
     assert say("I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St") is True
     (stored,) = [r["text"] for r in index.rows.values()]
     assert "[REDACTED]" in stored and "0400" not in stored and "Example St" not in stored and "plumber" in stored
 
 
-def test_forget_erases_an_indexed_turn_whose_contact_was_redacted(index):
+def test_forget_erases_an_indexed_turn_whose_contact_was_redacted(index, ledger_env):
     """The index stores the turn contact-redacted; the forget passes the turn AS SAID and must still erase it (and only it)."""
     said = "I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St"
     assert say(said) is True and say("I told my sister the cello recital moved to the Thursday evening") is True
@@ -832,3 +832,57 @@ def test_forget_erases_a_turn_indexed_before_the_contact_scrub(index):
     said = "I told the plumber to ring me back on 0400 000 000 about the leak"
     run(index.add(USER, "old-1", NOW, said, xw.tokens_column(said), "chat"))      # the old shape: the words as said
     assert run(xw.erase_text(USER, said)) == 1 and not index.rows
+
+
+# ── a contact-redacted turn keeps a non-lossy identity (review threads, PR #2574) ──────────────────────────────────────
+# The index stores a turn contact-redacted, so the stored words cannot say WHICH turn they were: two turns that differ only in
+# an address are one text, and a turn that is only an address is "[REDACTED]". The row carries a KEYED tag of the words as said
+# (``memory_forgotten.said_tag``) and the forget matches that, never the redacted text. Negative control: on f4192a206 the first
+# two tests fail (an all-contact turn stays behind a forget; forgetting one plumber turn erased both, or the second was never
+# indexed because its redacted id collided with the first).
+
+@pytest.mark.parametrize("said", ["12 Example Street", "0400 555 101", "call me on 0400 555 101"])
+def test_forget_leaves_nothing_of_a_turn_that_is_only_a_contact_detail(ledger_env, said):
+    """Whether or not such a turn is indexed, "forget that" must leave no row of it behind."""
+    say(said)
+    run(xw.erase_text(USER, said))
+    assert not ledger_env_rows()
+
+
+def ledger_env_rows():
+    return list(xw.get_backend().rows.values())
+
+
+@pytest.mark.parametrize("gap_days", [0.0, 3.0])
+def test_two_turns_that_differ_only_in_a_contact_detail_are_two_turns(ledger_env, gap_days):
+    first, second = "My plumber works from 1 Example Street", "My plumber works from 2 Example Street"
+    assert say(first, days_ago=gap_days) is True and say(second) is True, "each saying is its own row"
+    assert run(xw.erase_text(USER, second)) == 1
+    (left,) = ledger_env_rows()
+    assert left["said_at"] == pytest.approx(NOW - gap_days * DAY), "the OTHER turn's words must stay"
+    assert run(xw.erase_text(USER, first)) == 1 and not ledger_env_rows()
+
+
+def test_the_identity_is_keyed_never_a_bare_hash_of_the_contact(ledger_env):
+    """A plain hash of a sentence around a phone number is reversed by trying every number: the tag needs the ledger secret."""
+    import hashlib
+    said = "My plumber works from 1 Example Street"
+    assert say(said) is True
+    (tid,) = [r["turn_id"] for r in ledger_env_rows()]
+    for form in (said, said.lower(), xw._squash(said).lower()):
+        for algo in ("sha1", "sha256", "md5"):
+            assert hashlib.new(algo, form.encode()).hexdigest()[:16] not in tid
+
+
+def test_no_ledger_secret_means_a_redacted_turn_is_not_indexed(monkeypatch):
+    """Without the key there is no identity, and a row a forget could not find is never written; a plain turn still is."""
+    monkeypatch.delenv(mf.SALT_ENV, raising=False)
+    assert say("My plumber works from 1 Example Street") is False
+    assert say("I told my sister the cello recital moved to the Thursday evening") is True
+
+
+def test_a_rotated_secret_still_finds_the_turn(ledger_env, monkeypatch):
+    said = "My plumber works from 1 Example Street"
+    assert say(said) is True
+    monkeypatch.setenv(mf.SALT_ENV, "another-unit-test-ledger-secret-9876543210")
+    assert run(xw.erase_text(USER, said)) == 1 and not ledger_env_rows()

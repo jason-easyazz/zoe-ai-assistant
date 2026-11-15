@@ -289,6 +289,31 @@ def turn_key(user_id: str, text: str, said_at: float) -> str:
     return "xw-" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:20]
 
 
+_TAG_SEP = "~"            # an indexed turn's id: ``xw-<key>`` or, when its words were redacted, ``xw-<key>~<said tag>``
+_REDACT_WORD = "redacted"
+
+
+def _said_form(text: str) -> str:
+    return _squash(text or "").lower().strip(" .!?\"'")
+
+
+def _said_tag(user_id: str, text: str) -> str:
+    """The keyed tag of a turn's words AS SAID (``memory_forgotten.said_tag``); '' when the ledger secret is unset."""
+    try:
+        import memory_forgotten
+        return memory_forgotten.said_tag(user_id, _said_form(text))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _tag_current(user_id: str, tag: str) -> bool:
+    try:
+        import memory_forgotten
+        return memory_forgotten.said_tag_current(user_id, tag)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _is_a_question(text: str) -> bool:
     """A whole turn that is one question ("what's on tomorrow?"): the owner asked, they did not say anything about it."""
     t = _squash(text)
@@ -340,6 +365,13 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         scrubbed, reject = scrub_pii(owner_text)
         if reject or not scrubbed.strip():
             return False
+        tag = ""
+        if scrubbed != owner_text:
+            # the stored words no longer say WHICH turn they were (two addresses redact alike), so the row carries a keyed tag
+            # of the words as said; nothing left but the placeholder, or no secret to key it = not indexed (unforgettable)
+            tag = _said_tag(user_id, owner_text)
+            if not tag or not [t for t in content_tokens(scrubbed) if t != _REDACT_WORD]:
+                return False
         if await _shielded(user_id, scrubbed):
             return False
         when = float(said_at) if said_at is not None else time.time()
@@ -347,7 +379,8 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         cols = tokens_column(kept)
         if not cols:
             return False
-        return bool(await get_backend().add(user_id, turn_id or turn_key(user_id, kept, when), when, kept, cols, source))
+        tid = (turn_id or turn_key(user_id, kept, when)) + (_TAG_SEP + tag if tag else "")
+        return bool(await get_backend().add(user_id, tid, when, kept, cols, source))
     except Exception as exc:  # noqa: BLE001 - the index is an extra; a turn never fails on it
         logger.warning("exact_words: turn not indexed (%s)", type(exc).__name__)
         return False
@@ -539,28 +572,47 @@ async def erase_turn(user_id: str, turn_id: str) -> int:
 async def erase_text(user_id: str, text: str) -> int:
     """Delete this user's indexed turns whose words ARE ``text`` (case/space-blind) or contain it - "forget it" after "why did you
     say that?" removes the owner's turn that was just quoted back, not only the fact. Like ``erase_entity`` a store failure is
-    RAISED (a forget that could not erase the words must not be confirmed). 0 = nothing matched. The index holds the words
-    as ``index_turn`` stored them (``scrub_pii``: a phone / address redacted), so ``text`` is matched both as said (rows indexed
-    before the contact scrub) and in that stored form."""
-    key = _squash(text or "").lower().strip(" .!?\"'")
+    RAISED (a forget that could not erase the words must not be confirmed). 0 = nothing matched. A turn ``index_turn`` stored
+    redacted (``scrub_pii``: a phone / address) is found by its keyed tag of the words as said (``_said_tag``), never by the
+    redacted text: two turns that differ only in a contact detail redact alike. Only a row without a current tag (indexed before
+    the tags, or under a rotated secret) is matched by its redacted form."""
+    key = _said_form(text)
     if not (user_id or "").strip() or len(key) < 6:
         return 0
-    keys = {key}
+    forms = {text}
+    try:
+        import own_words
+        own = own_words.analyze(text or "")
+        if own.has_own and own.text.strip():
+            forms.add(own.text)
+    except Exception:  # noqa: BLE001 - the turn as said is still a form
+        pass
+    tags = {t for t in (_said_tag(user_id, f) for f in forms) if t}
     try:
         from memory_service import scrub_pii
-        stored = _squash(scrub_pii(text or "")[0] or "").lower().strip(" .!?\"'")
-        if len(stored) >= 6:
-            keys.add(stored)
+        stored = _said_form(scrub_pii(text or "")[0] or "")
     except Exception:  # noqa: BLE001 - the as-said key still erases what it always did
         stored = key
+
+    def _needle(form: str) -> str:
+        words = [w for w in re.findall(r"[a-z0-9']+", form) if w != _REDACT_WORD]
+        return max(words, key=len, default="") or (_REDACT_WORD if form != key else "")
+
+    def _hit(tid: str, t: str) -> bool:
+        low = _squash(t or "").lower()
+        if key in low:          # as said: a turn nothing was redacted from, or one indexed before the contact scrub
+            return True
+        _base, sep, tag = tid.partition(_TAG_SEP)
+        if sep and _tag_current(user_id, tag):
+            return tag in tags
+        return stored != key and len(stored) >= 6 and stored in low
+
     backend = get_backend()
-    # the needle must be in BOTH forms: a word the scrub kept (never a redacted value, never the placeholder)
-    words = [w for w in re.findall(r"[a-z0-9']+", stored) if w != "redacted"] or re.findall(r"[a-z0-9']+", key)
-    needle = max(words, key=len, default="")
-    if not needle:
-        return 0
-    ids = [tid for tid, t in await backend.rows_matching(user_id, needle)
-           if any(k in _squash(t or "").lower() for k in keys)]
+    found: dict[str, str] = {}
+    for needle in {_needle(key), _needle(stored)} - {""}:
+        for tid, t in await backend.rows_matching(user_id, needle):
+            found[tid] = t
+    ids = [tid for tid, t in found.items() if _hit(tid, t)]
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 

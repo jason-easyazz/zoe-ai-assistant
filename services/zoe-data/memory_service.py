@@ -1571,6 +1571,18 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     return scrubbed[:limit].rstrip() or None
 
 
+def _excerpt_said_tag(user_id: str, raw: Optional[str], stored: str) -> str:
+    """``turn_forget.said_tag`` of the excerpt as said, only when the boundary changed it; '' otherwise. Never raises."""
+    try:
+        import turn_forget
+
+        if not isinstance(raw, str) or turn_forget.norm(raw) == turn_forget.norm(stored):
+            return ""
+        return turn_forget.said_tag(user_id, raw)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _opt_out_writer(source: str, origin: Optional[str] = None) -> bool:
     """Is this write held by the member's memory opt-out? By the lane ``source`` OR the real writer ``origin`` (a provider
     writing under another lane label is still the provider)."""
@@ -3028,7 +3040,7 @@ class MemoryService:
                 "access_count", "embedding_model_version", "idempotency_key", "tags",
                 "concept_tags", "related_ids", "unique_query_count", "consolidation_count",
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
-                "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
+                "source_excerpt", "source_excerpt_said", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
                 # validity interval: the NEW row's own (written by _build_metadata)
                 *_temporal.KEYS,
@@ -3048,6 +3060,10 @@ class MemoryService:
                 if strip_affect and key in _AFFECT_CANDIDATE_KEYS:
                     continue
                 new_meta[key] = value
+            # the excerpt's keyed identity travels only with THAT excerpt (a new excerpt from another turn is not its words)
+            _said = current.metadata.get("source_excerpt_said")
+            if _said and not edit_excerpt and new_meta.get("source_excerpt") == current.metadata.get("source_excerpt"):
+                new_meta["source_excerpt_said"] = _said
             for k in _auth.SOURCE_REF_KEYS:   # from ``source_ref`` only (caller metadata cannot plant a pointer)
                 new_meta.pop(k, None)
             new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref, source_ref=source_ref))
@@ -4174,6 +4190,11 @@ class MemoryService:
         excerpt = scrub_source_excerpt(source_excerpt)
         if excerpt:
             md["source_excerpt"] = excerpt
+            # a redacted (or cut) excerpt no longer says WHICH turn it was - two turns that differ only in an address redact
+            # alike - so the row carries the keyed tag of the words as said, which is what "forget that" matches (turn_forget)
+            said = _excerpt_said_tag(user_id, source_excerpt, excerpt)
+            if said:
+                md["source_excerpt_said"] = said
         if event_scope:
             md["scope"] = str(event_scope)
         _promote_event_metadata(md, extra)

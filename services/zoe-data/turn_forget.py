@@ -20,9 +20,10 @@ The contract here:
   ``MemoryService.ingest`` and ``MemoryService.review(edit)`` consult it (an explicit re-teach by the owner is exempt, exactly
   like the forget ledger).
 * ``rows_from_turn`` finds the rows already written FROM that turn: its ``user_turn_id`` (the extractors' hash, or the
-  ask-to-remember id ``ask_to_remember.turn_ids_for``), or a source excerpt that is exactly the turn's words - as said, or as
-  the write boundary stores them (contacts redacted: ``stored_excerpt_key``) - never "contains" (a longer turn that merely
-  includes the words is another turn), and never a row written before the turn was said.
+  ask-to-remember id ``ask_to_remember.turn_ids_for``), or a source excerpt that is exactly the turn's words - as said, or,
+  for an excerpt the write boundary redacted, by its keyed tag of the words as said (``source_excerpt_said``; the redacted
+  copy only for an untagged row) - never "contains" (a longer turn that merely includes the words is another turn), and
+  never a row written before the turn was said.
 * ``mark_forgotten`` drops the turn's words from the notes, ONLY once every row was removed: until then the target stays, so
   "forget that" again retries the same turn (a store failure must never leave rows behind a "done").
 
@@ -356,12 +357,25 @@ def stored_excerpt_key(turn_text: str) -> str:
         return ""
 
 
+def said_tag(user_id: str, text: str) -> str:
+    """The keyed identity of an excerpt AS SAID (``memory_forgotten.said_tag`` over ``norm``): the write boundary stamps it
+    (``source_excerpt_said``) when it redacts the excerpt, and the forget recomputes it from the turn. '' when unconfigured."""
+    try:
+        import memory_forgotten
+
+        return memory_forgotten.said_tag(user_id, norm(text))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None, *,
-                     turn_ids: frozenset = frozenset(), stored_key: Optional[str] = None) -> bool:
+                     turn_ids: frozenset = frozenset(), stored_key: Optional[str] = None, user_id: str = "") -> bool:
     """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash or one of ``turn_ids`` (the
-    ask-to-remember id), or its source excerpt is exactly the turn's words: as said (a row written before the excerpt was
-    contact-scrubbed) or as the write boundary stores them (``stored_excerpt_key``). Never "one contains the other" (a
-    longer turn that includes the words is another turn), never by time alone, and never a row written before the turn."""
+    ask-to-remember id), or its source excerpt is exactly the turn's words: as said, or - for an excerpt the write boundary
+    redacted - its keyed tag of the words as said (``source_excerpt_said``), never the redacted copy (two turns that differ
+    only in a contact detail redact alike). Only a row without a current tag (written before the tags, or under a rotated
+    secret) is matched by the excerpt as the boundary stores it (``stored_excerpt_key``). Never "one contains the other",
+    never by time alone, and never a row written before the turn."""
     meta = meta or {}
     if turn_ts is not None:
         ts = _added_ts(meta)
@@ -373,7 +387,17 @@ def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None
     ex, key = norm(str(meta.get("source_excerpt") or "")), norm(turn_text)
     if not (ex and key):
         return False
-    return ex == key or ex == (stored_excerpt_key(turn_text) if stored_key is None else stored_key)
+    if ex == key:
+        return True
+    tag, uid = str(meta.get("source_excerpt_said") or ""), user_id or str(meta.get("user_id") or meta.get("wing") or "")
+    try:
+        import memory_forgotten
+
+        if tag and memory_forgotten.said_tag_current(uid, tag):
+            return tag == said_tag(uid, turn_text)
+    except Exception:  # noqa: BLE001 - no ledger module: the stored-form match below
+        pass
+    return ex == (stored_excerpt_key(turn_text) if stored_key is None else stored_key)
 
 
 async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Optional[float] = None) -> list:
@@ -394,7 +418,7 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
             m = r.metadata or {}
             if (m.get("user_id") or m.get("wing") or user_id) != user_id:
                 continue
-            if row_is_from_turn(m, turn_text, turn_ts, turn_ids=turn_ids, stored_key=stored_key):
+            if row_is_from_turn(m, turn_text, turn_ts, turn_ids=turn_ids, stored_key=stored_key, user_id=user_id):
                 seen.add(r.id)
                 out.append(r)
     return out
