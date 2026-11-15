@@ -181,7 +181,7 @@ export async function handleVoiceNote(
   const log = deps.log ?? ((line: string) => console.log(line));
   const userId = await deps.resolve(telegramId);
   if (!userId) {
-    await deps.reply(unlinkedMessage(telegramId));
+    await deps.reply(unlinkedMessage());
     return;
   }
   const refusal = refusalFor(note, opts);

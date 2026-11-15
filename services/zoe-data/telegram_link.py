@@ -17,8 +17,16 @@ session wants to link whatever Telegram account redeems it." The sender's numeri
 id is supplied by Telegram to the bot (not by the user), and the consume endpoint
 is internal-only — so a leaked token can at worst link the leaker's OWN Telegram
 account to the generating user, which is the same trust the deep link already
-implies. Tokens are single-use in practice (short TTL) and cannot be forged
-without the secret.
+implies. Tokens are single-use and short-lived, and cannot be forged without the
+secret.
+
+The link store (this module is its one writer; ``user_preferences.prefs``):
+  * ``telegram_id``          the linked account (read by the resolver and the outbound senders);
+  * ``telegram_link_proof``  how and when it was proven (``via``, ``at``, the Telegram username shown in Settings);
+  * ``telegram_link_change`` the last explicit unlink (``event``, ``at``, ``by``: "self" | "admin" | "forget").
+A link is written ONLY by ``link`` (a redeemed token), never displaces another member's link, and is removed only by
+``unlink`` (the member or an admin) or ``forget_user`` (the member erase). ``resolve`` answers only for an
+unambiguous link held by an active account.
 """
 
 import hashlib
@@ -27,6 +35,7 @@ import logging
 import os
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import auth_handoff
@@ -179,4 +188,106 @@ def make_qr_svg(data: str) -> Optional[str]:
         return buf.getvalue().decode("utf-8")
     except Exception:
         logger.warning("QR render failed for a telegram link", exc_info=True)
+        return None
+
+
+# ── The link store (see the module doc) ─────────────────────────────────────────
+
+KEY_ID = "telegram_id"
+KEY_PROOF = "telegram_link_proof"
+KEY_CHANGE = "telegram_link_change"
+LINKED, ALREADY_LINKED, HELD_BY_OTHER = "linked", "already_linked", "held_by_other"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+async def _holders(db, tid: str) -> list[str]:
+    cursor = await db.execute(
+        """SELECT user_id, prefs FROM user_preferences
+           WHERE prefs::jsonb ->> 'telegram_id' = ?
+           ORDER BY updated_at ASC""",
+        (tid,),
+    )
+    return [row["user_id"] for row in await cursor.fetchall()]
+
+
+async def link(db, user_id: str, tid: str, username: Optional[str] = None) -> str:
+    """Link ``tid`` to ``user_id`` after the caller has verified a redeemed token for ``user_id`` from ``tid`` itself.
+
+    Returns ``LINKED`` / ``ALREADY_LINKED``, or ``HELD_BY_OTHER`` (nothing written) when another member holds this account:
+    a link never displaces another member's link; that member or an admin unlinks it first."""
+    from user_prefs import set_prefs
+
+    holders = await _holders(db, tid)
+    if any(h != user_id for h in holders):
+        logger.warning("telegram link refused: the account is already linked to another member (requested for %s)", user_id)
+        return HELD_BY_OTHER
+    proof = {"via": "signed_link", "at": _now_iso()}
+    cleaned = (username or "").lstrip("@").strip()[:64]
+    if cleaned:
+        proof["username"] = cleaned
+    await set_prefs(user_id, {KEY_ID: tid, KEY_PROOF: proof}, db=db)
+    logger.info("telegram link proven for user %s", user_id)
+    return ALREADY_LINKED if holders else LINKED
+
+
+async def unlink(db, user_id: str, *, by: str) -> bool:
+    """Remove ``user_id``'s link and record who did it (``by``: "self" | "admin"). Returns whether one existed."""
+    from user_prefs import delete_prefs, read_prefs, set_prefs
+
+    had = bool((await read_prefs(db, user_id)).get(KEY_ID))
+    await delete_prefs(user_id, (KEY_ID, KEY_PROOF), db=db)
+    if had:
+        await set_prefs(user_id, {KEY_CHANGE: {"event": "unlinked", "at": _now_iso(), "by": by}}, db=db)
+        logger.warning("telegram link removed for user %s (by %s)", user_id, by)
+    return had
+
+
+async def forget_user(user_id: str) -> int:
+    """Member erase (``MemoryService.delete_user``): remove the link and its records. Returns 1 when a link existed. Raises on a
+    DB error (the caller fails closed)."""
+    from db_pool import get_db_ctx
+    from user_prefs import delete_prefs, read_prefs
+
+    uid = str(user_id or "").strip()
+    if not uid:
+        return 0
+    try:
+        async with get_db_ctx() as db:
+            had = bool((await read_prefs(db, uid)).get(KEY_ID))
+            await delete_prefs(uid, (KEY_ID, KEY_PROOF, KEY_CHANGE), db=db)
+    except Exception as exc:  # noqa: BLE001
+        from conversation_notes import _no_store       # the one "nothing stored to erase" rule (a lost pool still raises)
+
+        if _no_store(exc):
+            return 0
+        logger.error("telegram link forget failed (%s): link NOT erased", type(exc).__name__)
+        raise
+    return int(had)
+
+
+async def _account_active(db, user_id: str) -> bool:
+    """True only for a registered, active account (``auth_users``). Raises on a failed lookup (the caller refuses)."""
+    cursor = await db.execute("SELECT is_active FROM auth_users WHERE user_id = ? LIMIT 1", (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return False
+    active = row["is_active"]
+    return active is None or bool(int(active))
+
+
+async def resolve(db, tid: str) -> Optional[str]:
+    """The member ``tid`` is linked to, or None: no link, a link more than one member holds (ambiguous, refused), or a link
+    whose member is no longer an active account (deleted or deactivated). Fails closed on a lookup error."""
+    try:
+        holders = await _holders(db, tid)
+        if len(holders) != 1:
+            if holders:
+                logger.warning("telegram resolve refused: %d members hold one account", len(holders))
+            return None
+        return holders[0] if await _account_active(db, holders[0]) else None
+    except Exception as exc:  # noqa: BLE001 - not knowing who someone is means acting for nobody
+        logger.warning("telegram resolve failed closed: %s", type(exc).__name__)
         return None

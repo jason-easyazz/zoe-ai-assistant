@@ -80,7 +80,7 @@ GUEST_ADMITTING_BASELINE = {
     "routers/system.py": {"board_review", "post_display_brightness", "post_display_volume", "put_display_preferences", "trigger_agent_sync", "trigger_memory_consolidation", "trigger_memory_digest", "trigger_run_digest"},
     "routers/transactions.py": {"create_transaction", "delete_transaction", "toggle_transaction_status", "update_transaction"},
     "routers/ui_actions.py": {"ack_ui_action", "bind_panel", "close_action_form", "confirm_action_form", "create_ui_action", "open_action_form", "requeue_stale_actions", "retry_ui_action", "sync_ui_state"},
-    "routers/user_profile.py": {"analyze_profile", "create_telegram_link_token", "set_telegram_link"},
+    "routers/user_profile.py": {"analyze_profile"},
     "routers/voice_settings.py": {"preview_voice"},
     "routers/weather.py": {"update_preferences"},
 }

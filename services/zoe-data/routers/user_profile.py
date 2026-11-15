@@ -4,7 +4,7 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from auth import get_current_user
+from auth import get_current_user, is_admin_role
 from panel_principal import require_member
 from database import get_db
 from guest_policy import require_feature_access
@@ -104,75 +104,64 @@ async def analyze_profile(user: dict = Depends(get_current_user), db=Depends(get
 
 # ─── Telegram account linking ────────────────────────────────────────────────
 #
-# A user links their Telegram account by storing their numeric telegram_id in
-# their own profile (session-authed as themselves). The internal resolver
-# GET /api/system/resolve-telegram/{telegram_id} maps that id back to this
-# user so the Telegram bot can act as the real Zoe user (with their memory),
-# instead of everyone landing as guest.
+# A member links their Telegram account ONLY through a signed, short-lived,
+# single-use link token minted here for the signed-in member and redeemed from
+# that Telegram account (POST /telegram/link-token → the bot's /start → the
+# internal consume endpoint; telegram_link.py). Nothing a member types onto a
+# profile links an account. Unlinking is explicit (the member, or an admin) and
+# recorded on the member's profile.
 
 
 @router.get("/telegram")
 async def get_telegram_link(
     user: dict = Depends(get_current_user), db=Depends(get_db)
 ):
-    """Return the caller's linked telegram_id (or null)."""
+    """The caller's link: ``telegram_id`` (or null), the proven ``username`` and when, and the last unlink."""
     await require_feature_access(db, user, feature="user_profile", action="read")
     prefs = await _read_prefs(db, user["user_id"])
-    tid = prefs.get("telegram_id")
-    return {"telegram_id": tid if isinstance(tid, str) and tid else None}
+    tid = prefs.get(telegram_link.KEY_ID)
+    proof = prefs.get(telegram_link.KEY_PROOF)
+    change = prefs.get(telegram_link.KEY_CHANGE)
+    return {
+        "telegram_id": tid if isinstance(tid, str) and tid else None,
+        "proof": proof if isinstance(proof, dict) else None,
+        "last_change": change if isinstance(change, dict) else None,
+    }
 
 
 @router.put("/telegram")
 async def set_telegram_link(
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_member),
     db=Depends(get_db),
 ):
-    """Link (or unlink) the caller's Telegram account.
-
-    Body: {"telegram_id": "<numeric id>"} to link, or {"telegram_id": null} /
-    {"telegram_id": ""} to unlink. Session-authed: the caller can only set the
-    telegram_id on THEIR OWN profile — user_id comes from the session, never the
-    body, so this can't link someone else's account.
-
-    Uniqueness: a telegram_id maps to at most one Zoe user. Last-writer-wins —
-    if another profile already claimed this id, that prior link is cleared so the
-    new claimant owns it (a telegram account can only "be" one Zoe user at a time).
-    """
-    # Writing a link is a real-identity action; guests have no profile to link.
+    """Unlink only: ``{"telegram_id": null}`` (or "") clears the caller's own link.
+    Any other value is refused: a link is made only by the QR / link flow."""
     await require_feature_access(db, user, feature="user_profile", action="analyze")
-
     body = await request.json()
-    raw = body.get("telegram_id")
-    user_id = user["user_id"]
-
-    # Unlink path: null / empty clears the caller's own link.
+    raw = body.get("telegram_id") if isinstance(body, dict) else None
     if raw is None or (isinstance(raw, str) and not raw.strip()):
-        await delete_pref(user_id, "telegram_id", db=db)
+        await telegram_link.unlink(db, user["user_id"], by="self")
         return {"telegram_id": None, "linked": False}
-
-    tid = str(raw).strip()
-    if not _TELEGRAM_ID_RE.match(tid):
-        raise HTTPException(
-            status_code=400,
-            detail="telegram_id must be a positive numeric Telegram user id",
-        )
-
-    # Last-writer-wins uniqueness: clear this telegram_id from any OTHER profile
-    # that currently claims it, so at most one user maps to it.
-    cursor = await db.execute(
-        """SELECT user_id, prefs FROM user_preferences
-           WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
-        (tid, user_id),
+    raise HTTPException(
+        status_code=400,
+        detail="Connect Telegram with the QR code or link in Settings; an account id cannot be entered here.",
     )
-    # Atomic + conditional: the clear only lands while the other row STILL holds
-    # this id, and the set merges one key — neither can clobber a concurrent
-    # write to a different key (e.g. an opt-out PUT). See user_prefs.
-    for row in await cursor.fetchall():
-        await delete_pref(row["user_id"], "telegram_id", db=db, only_if=tid)
 
-    await set_pref(user_id, "telegram_id", tid, db=db)
-    return {"telegram_id": tid, "linked": True}
+
+@router.delete("/telegram")
+async def delete_telegram_link(
+    user_id: str | None = None,
+    user: dict = Depends(require_member),
+    db=Depends(get_db),
+):
+    """Unlink. No ``user_id`` (or the caller's own) = the caller's link; another member's needs an admin."""
+    target = user_id or user["user_id"]
+    if target != user["user_id"] and not is_admin_role(user.get("role")):
+        raise HTTPException(status_code=403, detail="Only an admin can disconnect another member's Telegram")
+    by = "self" if target == user["user_id"] else "admin"
+    removed = await telegram_link.unlink(db, target, by=by)
+    return {"user_id": target, "linked": False, "removed": removed}
 
 
 # ─── Reminders on my phone (reminder_delivery.py; docs/knowledge/reminder-phone-delivery.md) ───
@@ -215,7 +204,7 @@ async def set_reminder_delivery(request: Request, user: dict = Depends(require_m
 
 @router.post("/telegram/link-token")
 async def create_telegram_link_token(
-    user: dict = Depends(get_current_user), db=Depends(get_db)
+    user: dict = Depends(require_member), db=Depends(get_db)
 ):
     """Mint a short-lived link token for the caller and return a Telegram deep
     link + QR so they can link their account by scanning/tapping (no typing of

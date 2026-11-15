@@ -1,7 +1,9 @@
 """Tests for Telegram account linking (feat/telegram-account-linking).
 
 Covers three pieces:
-  1. Profile telegram_id set/get/unlink + uniqueness (routers/user_profile.py).
+  1. Linking by proof of control of both sides: a signed link token minted for the
+     signed-in member and redeemed from the Telegram account (routers/user_profile.py,
+     routers/system.py, telegram_link.py); explicit, recorded unlinking; the member erase.
   2. The internal resolver telegram_id → user_id (routers/system.py).
   3. The /api/chat TRUSTED forwarded-user override security boundary
      (auth.resolve_acting_user): internal caller may set X-Zoe-User-Id;
@@ -9,7 +11,8 @@ Covers three pieces:
 
 The user_preferences table is modelled by a tiny in-memory fake that understands
 exactly the SQL these routers issue (SELECT prefs by user_id, INSERT ... ON
-CONFLICT, and the `prefs::jsonb ->> 'telegram_id'` match).
+CONFLICT, key removal, the `prefs::jsonb ->> 'telegram_id'` match, and the
+account lookups on `users` / `auth_users`).
 """
 from __future__ import annotations
 
@@ -48,9 +51,11 @@ class _Cursor:
 class FakePrefsDB:
     """In-memory user_preferences store keyed by user_id → prefs dict."""
 
-    def __init__(self, seed: dict[str, dict] | None = None):
+    def __init__(self, seed: dict[str, dict] | None = None, accounts: dict[str, int] | None = None):
         # user_id → (prefs_json_str, updated_at_counter)
         self.store: dict[str, tuple[str, int]] = {}
+        # auth_users.is_active per registered account; every seeded member is an active account by default
+        self.accounts: dict[str, int] = dict(accounts) if accounts is not None else {uid: 1 for uid in (seed or {})}
         self._clock = 0
         for uid, prefs in (seed or {}).items():
             self._clock += 1
@@ -98,17 +103,26 @@ class FakePrefsDB:
             return _Cursor()
 
         if norm.startswith("UPDATE user_preferences SET prefs = (COALESCE(prefs, '{}')::jsonb -"):
-            # user_prefs.delete_pref: atomic key removal, optionally only when the
-            # key still holds the expected value (params: key, uid[, key, value]).
-            key, uid = p[0], p[1]
+            # user_prefs.delete_prefs: atomic removal of n keys, optionally only while the first key still holds
+            # the expected value (params: key1..keyn, uid[, key1, value]).
+            n = norm.count("- ?::text")
+            keys, uid, rest = p[:n], p[n], p[n + 1:]
             entry = self.store.get(uid)
             if entry is not None:
                 prefs = json.loads(entry[0])
-                if len(p) == 2 or prefs.get(p[2]) == p[3]:
-                    prefs.pop(key, None)
+                if not rest or prefs.get(rest[0]) == rest[1]:
+                    for key in keys:
+                        prefs.pop(key, None)
                     self._clock += 1
                     self.store[uid] = (json.dumps(prefs), self._clock)
             return _Cursor()
+
+        if norm.startswith("SELECT is_active FROM auth_users WHERE user_id ="):
+            uid = p[0]
+            return _Cursor([{"is_active": self.accounts[uid]}] if uid in self.accounts else [])
+
+        if norm.startswith("SELECT 1 FROM users WHERE id ="):
+            return _Cursor([{"1": 1}] if p[0] in self.accounts or p[0] in self.store else [])
 
         raise AssertionError(f"unexpected SQL: {norm}")
 
@@ -116,7 +130,7 @@ class FakePrefsDB:
         self.commits += 1
 
 
-def _profile_client(db: FakePrefsDB, *, role: str = "user", user_id: str = "jason") -> TestClient:
+def _profile_client(db: FakePrefsDB, *, role: str = "user", user_id: str = "member-a") -> TestClient:
     app = FastAPI()
     app.include_router(user_profile.router)
 
@@ -142,93 +156,148 @@ def _system_client(db: FakePrefsDB) -> TestClient:
     return TestClient(app)
 
 
-# ─── 1. Profile telegram_id set / get / unlink / uniqueness ──────────────────
+# ─── 1. Linking by proof of control of both sides ─────────────────────────────
 
 
-def test_profile_set_and_get_telegram_id():
-    db = FakePrefsDB()
-    client = _profile_client(db)
+def _prefs(db: FakePrefsDB, uid: str) -> dict:
+    return json.loads(db.store[uid][0]) if uid in db.store else {}
 
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "99999"})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"telegram_id": "99999", "linked": True}
 
-    r = client.get("/api/user/profile/telegram")
-    assert r.status_code == 200
-    assert r.json() == {"telegram_id": "99999"}
+def _redeem(db: FakePrefsDB, monkeypatch, token: str, tid: str, username: str | None = None):
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    body = {"token": token, "telegram_id": tid}
+    if username:
+        body["telegram_username"] = username
+    return _system_client(db).post("/api/system/telegram/consume-link-token", json=body, headers={"X-Internal-Token": "tok"})
 
 
 def test_profile_get_when_unlinked_is_null():
     db = FakePrefsDB()
-    client = _profile_client(db)
-    r = client.get("/api/user/profile/telegram")
+    r = _profile_client(db).get("/api/user/profile/telegram")
     assert r.status_code == 200
-    assert r.json() == {"telegram_id": None}
+    assert r.json() == {"telegram_id": None, "proof": None, "last_change": None}
 
 
-def test_profile_unlink_clears_id():
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999", "theme": "dark"}})
-    client = _profile_client(db)
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": None})
+def test_a_value_typed_onto_a_profile_never_links_an_account():
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "99999"}, "member-a": {"theme": "dark"}})
+    for value in ("99999", "12345", 12345, "not-a-number"):
+        r = _profile_client(db).put("/api/user/profile/telegram", json={"telegram_id": value})
+        assert r.status_code == 400, (value, r.text)
+    assert _prefs(db, "member-a") == {"theme": "dark"}
+    assert _prefs(db, "member-b") == {"telegram_id": "99999"}
+
+
+def test_a_redeemed_link_token_links_the_redeeming_account_with_its_proof(monkeypatch):
+    import telegram_link
+
+    db = FakePrefsDB(seed={"member-a": {"theme": "dark"}})
+    token = telegram_link.make_link_token("member-a")
+    r = _redeem(db, monkeypatch, token, "55501", "@synthetic_a")
+    assert r.status_code == 200, r.text
+    stored = _prefs(db, "member-a")
+    assert stored["telegram_id"] == "55501" and stored["theme"] == "dark"
+    assert stored["telegram_link_proof"]["via"] == "signed_link"
+    assert stored["telegram_link_proof"]["username"] == "synthetic_a"
+    got = _profile_client(db).get("/api/user/profile/telegram").json()
+    assert got["telegram_id"] == "55501" and got["proof"]["username"] == "synthetic_a"
+    # single use: the same token cannot be redeemed twice
+    assert _redeem(db, monkeypatch, token, "55501").status_code == 400
+
+
+def test_a_link_never_displaces_another_members_link(monkeypatch):
+    import telegram_link
+
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "55502"}, "member-a": {}})
+    token = telegram_link.make_link_token("member-a")
+    r = _redeem(db, monkeypatch, token, "55502")
+    assert r.status_code == 409, r.text
+    assert _prefs(db, "member-b") == {"telegram_id": "55502"}
+    assert "telegram_id" not in _prefs(db, "member-a")
+    # the refused token was released, not burned: after member-b unlinks, member-a can redeem it
+    _profile_client(db, user_id="member-b").delete("/api/user/profile/telegram")
+    assert _redeem(db, monkeypatch, token, "55502").status_code == 200
+    assert _prefs(db, "member-a")["telegram_id"] == "55502"
+
+
+def test_a_member_unlinks_their_own_link_and_the_unlink_is_recorded():
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55503", "telegram_link_proof": {"via": "signed_link"}, "theme": "dark"}})
+    r = _profile_client(db).put("/api/user/profile/telegram", json={"telegram_id": None})
     assert r.status_code == 200
     assert r.json() == {"telegram_id": None, "linked": False}
-    # Other prefs are preserved.
-    assert json.loads(db.store["jason"][0]) == {"theme": "dark"}
+    stored = _prefs(db, "member-a")
+    assert "telegram_id" not in stored and "telegram_link_proof" not in stored and stored["theme"] == "dark"
+    assert stored["telegram_link_change"]["event"] == "unlinked" and stored["telegram_link_change"]["by"] == "self"
 
 
-def test_profile_rejects_non_numeric_id():
-    db = FakePrefsDB()
-    client = _profile_client(db)
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "not-a-number"})
-    assert r.status_code == 400
+def test_only_an_admin_unlinks_another_members_link():
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "55504"}})
+    r = _profile_client(db, user_id="member-a").delete("/api/user/profile/telegram", params={"user_id": "member-b"})
+    assert r.status_code == 403
+    assert _prefs(db, "member-b")["telegram_id"] == "55504"
+    r = _profile_client(db, role="admin", user_id="admin-a").delete("/api/user/profile/telegram", params={"user_id": "member-b"})
+    assert r.status_code == 200 and r.json()["removed"] is True
+    assert "telegram_id" not in _prefs(db, "member-b")
+    assert _prefs(db, "member-b")["telegram_link_change"]["by"] == "admin"
 
 
-def test_profile_guest_cannot_link():
+def test_a_guest_can_neither_mint_a_link_token_nor_unlink():
     db = FakePrefsDB()
     client = _profile_client(db, role="guest", user_id="guest")
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "99999"})
-    assert r.status_code == 403
+    assert client.post("/api/user/profile/telegram/link-token").status_code == 403
+    assert client.delete("/api/user/profile/telegram").status_code == 403
+    assert client.put("/api/user/profile/telegram", json={"telegram_id": None}).status_code == 403
 
 
-def test_profile_uniqueness_last_writer_wins():
-    # jason already owns 99999; family-admin claims it → jason loses it.
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999"}})
-    client = _profile_client(db, user_id="family-admin")
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "99999"})
-    assert r.status_code == 200
-    assert r.json() == {"telegram_id": "99999", "linked": True}
-    assert json.loads(db.store["family-admin"][0])["telegram_id"] == "99999"
-    assert "telegram_id" not in json.loads(db.store["jason"][0])
+def test_the_member_erase_removes_the_link_and_its_records(monkeypatch):
+    import contextlib
 
+    import db_pool
+    import telegram_link
 
-def test_profile_set_preserves_other_prefs():
-    db = FakePrefsDB(seed={"jason": {"openclaw_auto_update": "notify"}})
-    client = _profile_client(db)
-    client.put("/api/user/profile/telegram", json={"telegram_id": "12345"})
-    stored = json.loads(db.store["jason"][0])
-    assert stored == {"openclaw_auto_update": "notify", "telegram_id": "12345"}
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55505", "telegram_link_proof": {"via": "signed_link"},
+                                        "telegram_link_change": {"event": "unlinked"}, "theme": "dark"}})
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    import asyncio
+
+    assert asyncio.run(telegram_link.forget_user("member-a")) == 1
+    assert _prefs(db, "member-a") == {"theme": "dark"}
 
 
 # ─── 2. Internal resolver telegram_id → user_id ──────────────────────────────
 
 
-def test_resolver_registered_returns_user_id(monkeypatch):
+def _resolve(db: FakePrefsDB, monkeypatch, tid: str):
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999"}})
-    client = _system_client(db)
-    # Loopback (TestClient) satisfies require_internal_token; token also works.
-    r = client.get("/api/system/resolve-telegram/99999", headers={"X-Internal-Token": "tok"})
+    r = _system_client(db).get(f"/api/system/resolve-telegram/{tid}", headers={"X-Internal-Token": "tok"})
     assert r.status_code == 200
-    assert r.json() == {"user_id": "jason"}
+    return r.json()["user_id"]
+
+
+def test_resolver_registered_returns_user_id(monkeypatch):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "99999"}})
+    assert _resolve(db, monkeypatch, "99999") == "member-a"
 
 
 def test_resolver_unregistered_returns_null(monkeypatch):
-    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999"}})
-    client = _system_client(db)
-    r = client.get("/api/system/resolve-telegram/77777", headers={"X-Internal-Token": "tok"})
-    assert r.status_code == 200
-    assert r.json() == {"user_id": None}
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "99999"}})
+    assert _resolve(db, monkeypatch, "77777") is None
+
+
+def test_resolver_acts_for_nobody_when_the_link_is_ambiguous(monkeypatch):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55506"}, "member-b": {"telegram_id": "55506"}})
+    assert _resolve(db, monkeypatch, "55506") is None
+
+
+def test_resolver_acts_for_nobody_once_the_member_account_is_inactive_or_gone(monkeypatch):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55507"}, "member-b": {"telegram_id": "55508"}},
+                     accounts={"member-a": 0})
+    assert _resolve(db, monkeypatch, "55507") is None   # deactivated
+    assert _resolve(db, monkeypatch, "55508") is None   # no account at all (deleted)
 
 
 def test_resolver_requires_internal_token_when_not_loopback(monkeypatch):

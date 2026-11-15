@@ -2291,6 +2291,11 @@ class MemoryService:
             await reminder_delivery.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: reminder delivery ledger erasure failed ({type(exc).__name__})") from exc
+        try:   # the messaging-account link and its records (telegram_link: user_preferences keys). Fail closed.
+            import telegram_link
+            await telegram_link.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: messaging link erasure failed ({type(exc).__name__})") from exc
         # The feed spine (migration 0078) and the calendar store (0052): connected accounts + their secrets and sync runs, the member's
         # own email addresses / phone numbers, their calendars and synced events. Fail closed; outside the lock (each takes the erase gate).
         try:

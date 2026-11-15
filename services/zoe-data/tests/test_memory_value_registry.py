@@ -930,7 +930,8 @@ def test_a_failing_in_lock_step_still_runs_the_gate_erasers_and_the_delete_still
 
     for mod, fn in (("omi_day_review", "forget_user"), ("conversation_notes", "forget_user"), ("memory_value_registry", "forget_user"),
                     ("notifications_store", "forget_user"), ("reminder_delivery", "forget_user"), ("connected_accounts", "forget_user"),
-                    ("member_identities", "forget_user"), ("calendar_forget", "forget_user"), ("exact_words", "delete_user"),
+                    ("member_identities", "forget_user"), ("calendar_forget", "forget_user"), ("telegram_link", "forget_user"),
+                    ("exact_words", "delete_user"),
                     ("night_mind", "delete_user"), ("now_card", "forget_user"), ("struggle_detector", "delete_user"),
                     ("restraint", "erase_user"), ("proactive.outcome_edges", "erase_user"), ("member_register", "forget_user"),
                     ("contacts_store", "forget_user")):
