@@ -251,6 +251,17 @@ def test_the_blocked_on_mode_says_so_at_start(daemon, monkeypatch, caplog):
     assert daemon._reflex_effective_mode("off") == "off" and daemon._reflex_effective_mode("loud") == "off"
 
 
+def test_the_switch_on_record_says_on_is_not_allowed():
+    """The record must not sanction ``on`` before the gate exists: it says so plainly, and the old owner-accepts-the-count
+    wording and an ``on`` switch-on step are gone."""
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "knowledge" / "voice-reflex.md").read_text(encoding="utf-8")
+    flat = " ".join(doc.split())
+    assert "`on` is not allowed before an at-close crisis / medical / refusal gate exists" in flat
+    assert "any count is the owner's decision" not in flat and "the call is yours" not in flat
+    assert "`REFLEX_MODE=on` for the session only" not in flat and "**On.** `REFLEX_MODE=on`, restart" not in flat
+    assert "_REFLEX_ON_ALLOWED = False" in flat
+
+
 def test_an_unknown_mode_value_is_off(daemon):
     src = DAEMON.read_text(encoding="utf-8")
     assert 'if REFLEX_MODE not in ("off", "shadow", "on"):' in src and 'REFLEX_MODE = "off"' in src
