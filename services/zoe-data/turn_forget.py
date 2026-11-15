@@ -602,8 +602,9 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
             failure = failure or exc
             logger.warning("TURN_FORGET code=eraser_failed step=turn_copies (%s)", type(exc).__name__)
     if resolve:
+        # the words resolve to saved turns through the TRANSCRIPT, so it is flagged LAST (below): a failure part-way leaves it
+        # readable, and the retry resolves the same turns again
         for w in words:
-            await step(exact_words.forget_transcript, user_id, w)                  # the transcript flag, from the one read
             try:
                 ids += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in ids]
             except Exception as exc:  # noqa: BLE001
@@ -621,6 +622,9 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
     if failure is None:
         for w in words:
             await step(exact_words.erase_text, user_id, w)                    # LEGACY entries (no id), by their words
+    if failure is None and resolve:
+        for w in words:
+            await step(exact_words.forget_transcript, user_id, w)             # the transcript flag, LAST for a legacy target
     if failure is not None:
         raise failure
     return n

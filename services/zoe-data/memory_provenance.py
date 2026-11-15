@@ -165,6 +165,9 @@ class Explained:
     awaiting_fix: bool = False    # Zoe asked "what's the right answer?" - the next turn is the answer
     turn_id: str = ""             # the answer quoted one of the owner's verbatim turns (exact_words) and named no row
     session_id: str = ""          # the conversation that named it: a "forget it" in another session means something else
+    # the saved-turn ids a forget of this target RESOLVED before it destroyed anything (a legacy entry's transcript turns): kept
+    # with the pending target so a retry erases by them even after the transcript was flagged and the entry deleted
+    mids: tuple = ()
 
 
 @dataclass
@@ -471,7 +474,7 @@ def previous_reply(user_id: str, *, now: Optional[float] = None, session_id: str
 
 
 def mark_explained(user_id: str, row_id: str, *, text: str = "", quote: str = "", awaiting_fix: bool = False,
-                   turn_id: str = "", now: Optional[float] = None) -> None:
+                   turn_id: str = "", now: Optional[float] = None, mids: tuple = ()) -> None:
     """An answer named this row (or, with ``turn_id``, quoted this verbatim turn of the owner's): the NEXT turn's "forget it" /
     "that's wrong, it's X" mean it."""
     try:
@@ -480,7 +483,8 @@ def mark_explained(user_id: str, row_id: str, *, text: str = "", quote: str = ""
         st = _state(user_id)
         if st is not None and (row_id or turn_id):
             st.explained = Explained(seq=st.seq, row_id=row_id, ts=_now(now), text=text, quote=quote,
-                                     awaiting_fix=awaiting_fix, turn_id=turn_id, session_id=st.last_note_session)
+                                     awaiting_fix=awaiting_fix, turn_id=turn_id, session_id=st.last_note_session,
+                                     mids=tuple(mids or ()))
     except Exception:  # noqa: BLE001
         return
 

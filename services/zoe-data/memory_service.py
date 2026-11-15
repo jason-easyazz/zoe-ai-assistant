@@ -1356,9 +1356,22 @@ _PEM_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _BANKING_CONTEXT_RE = re.compile(r"(?i)\b(iban|bank|account|swift|bic|transfer)\b")
+#: where another secret STARTS: a suffix (below) never takes a label word, nor a conjunction followed within four tokens by a
+#: label or a cue a later pattern needs (a code / key / number word, a contact cue, any digit): "... and secret is ...",
+#: "... and the key safe code is ...", "... and call me on ...", so one match never swallows what a later secret needs
+_LABEL_WORD = (r"(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo|key"
+               r"|number|no|phone|mobile|email|e-mail|address|call|ring|text|live|lives|at|on"
+               # the first word of every labelled account / identity number (``_ACCOUNT_LABELS``)
+               r"|account|acct|bank|bsb|sort|routing|member|membership|customer|client|policy|licence|license|passport|tax"
+               r"|medicare|card|iban|abn|tfn|ssn|social|national|driver|drivers|driver's|vehicle|rego|registration|student|employee"
+               r"|staff|patient|health|insurance|loyalty|frequent)\b")
+_NEXT_LABEL = (r"(?!(?:and|but|or|plus|then|also)\s{1,8}(?:[^\s,;.!?]+\s{1,8}){0,3}(?:" + _LABEL_WORD + r"|[^\s,;.!?]*\d)"
+               r"|(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo)\b)")
+#: up to six more words of the clause (an introducer's value), stopping before another label
+_SUFFIX = r"((?:\s{1,8}" + _NEXT_LABEL + r"[^\s,;.!?]+){0,6})"
 _LABELLED_SECRET_RE = re.compile(
-    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:is|was)\s*[:=]?|[:=])\s*)(\S+)"
-    r"((?:\s{1,8}[^\s,;.!?]+){0,6})",
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:is|was)\s*[:=]?|[:=])\s*)"
+    r"([^\s,;!?]+?)(?=[.,;!?]*(?:\s|$))" + _SUFFIX,   # the value stops before trailing punctuation (the clause stays readable)
 )
 #: after "<label> is / was" (NOT after = or :, which always introduce a value) the first word is kept only when it says what STATE
 #: the secret is in or WHERE it is, or negates: a closed, whole-word list. Deliberately tighter than ``_PASSWORD_NOT_VALUES``: no
@@ -1382,18 +1395,20 @@ _LABELLED_KEPT_VALUE_RE = re.compile(
 def _for_sub(m: "re.Match[str]") -> str:
     """``_FOR_PASSWORD_RE``'s replacement: never excused; an introducer takes the rest of the clause."""
     word = m.group(3).strip(".,;:!?\"'’").lower()
-    return m.group(1) + m.group(2) + _REDACT + ("" if word in _LABELLED_INTRODUCERS else m.group(4))
+    # the suffix kept is scrubbed again: ``re.sub`` never rescans inside a match, so a secret in it would otherwise survive
+    return m.group(1) + m.group(2) + _REDACT + ("" if word in _LABELLED_INTRODUCERS else _FOR_PASSWORD_RE.sub(_for_sub, m.group(4)))
 
 
 def _labelled_sub(m: "re.Match[str]") -> str:
     """``_LABELLED_SECRET_RE``'s replacement: the label and connector stay; the value goes - unless (is / was only) the first word
     is on ``_LABELLED_NOT_VALUES``; an introducer takes the next words of the clause with it (default redact)."""
     word = m.group(3).strip(".,;:!?\"'’").lower()
+    # a suffix that is KEPT is scrubbed again: ``re.sub`` never rescans inside a match, so a later secret in it would survive
     if m.group(2).strip().lower() in ("is", "was") and word in _LABELLED_NOT_VALUES:
-        return m.group(0)
+        return m.group(1) + m.group(2) + m.group(3) + _scrub_labelled(m.group(4))
     if word in _LABELLED_INTRODUCERS:
         return m.group(1) + m.group(2) + _REDACT
-    return m.group(1) + m.group(2) + _REDACT + m.group(4)
+    return m.group(1) + m.group(2) + _REDACT + _scrub_labelled(m.group(4))
 
 
 def _scrub_labelled(text: str) -> str:
@@ -1469,7 +1484,7 @@ _BARE_PASSWORD_RE = re.compile(
 #: (an introducer takes the rest of the clause, as in ``_labelled_sub``)
 _FOR_PASSWORD_RE = re.compile(
     r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30})"
-    rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})((?:\s{{1,8}}[^\s,;.!?]+){{0,6}})"
+    rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
 )
 _ACCOUNT_RE = re.compile(
     rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"

@@ -676,9 +676,15 @@ async def _set_transcript_metadata(row_id: str, metadata: str) -> None:
         await db.commit()
 
 
+#: how far apart two saved rows of ONE spoken turn can be (``_transcript_rows_by_id``): the voice lane's second save waits at most
+#: ``routers.voice_tts._ARRIVAL_SETTLE_TIMEOUT_S`` (10 s) for the arrival insert before writing the row itself, so the two commits
+#: are seconds apart; 120 s is that wait plus a generous margin for a slow commit. The same words further apart are two turns.
+COPY_WINDOW_S = 120.0
+
+
 async def _transcript_rows_by_id(user_id: str, mids: list) -> list[tuple]:
     """``(id, metadata)`` of the owner's saved USER turns with these ids AND every other committed copy of each (the same session,
-    role and words: the voice lane can commit one spoken turn twice - the arrival save, and the reply's save when the arrival
+    role and words, saved within ``COPY_WINDOW_S`` of it: the voice lane can commit one spoken turn twice - the arrival save, and the reply's save when the arrival
     outcome was not confirmed in time). The copies are the DURABLE link between one turn's rows (the in-process ``Turn.mids`` is
     lost on a restart), so a forget by any id of a turn reaches all of them. Postgres only; tests replace this seam."""
     from db_pool import get_db_ctx  # type: ignore[import]
@@ -687,9 +693,10 @@ async def _transcript_rows_by_id(user_id: str, mids: list) -> list[tuple]:
     sql = ("SELECT cm.id, cm.metadata FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
            "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND (cm.id IN (" + marks + ") OR EXISTS ("
            "SELECT 1 FROM chat_messages t WHERE t.id IN (" + marks + ") AND t.role = 'user' AND t.session_id = cm.session_id "
-           "AND t.content = cm.content))")
+           "AND t.content = cm.content "
+           "AND ABS(EXTRACT(EPOCH FROM (cm.created_at::timestamptz - t.created_at::timestamptz))) <= ?))")
     async with get_db_ctx() as db:
-        return [tuple(r) for r in await (await db.execute(sql, (user_id, *mids, *mids))).fetchall()]
+        return [tuple(r) for r in await (await db.execute(sql, (user_id, *mids, *mids, COPY_WINDOW_S))).fetchall()]
 
 
 async def turn_copies(user_id: str, mids: Iterable[str]) -> list[str]:
