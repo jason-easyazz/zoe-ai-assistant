@@ -390,7 +390,9 @@ def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
 SELF_ASSESS_ENV = "ZOE_MEDICAL_SELF_ASSESS"
 _SA_A = r"(?:a\s+|an\s+|the\s+)?(?:(?:big|massive|major|small|little|minor|mild|serious|bad)\s+)?"
 _SA_WHO = r"(?:i|you|he|she|they|we|it|this|that|my\s+[a-z]+|our\s+[a-z]+|your\s+[a-z]+|the\s+(?:baby|kid|child|man|woman)|(?!(?:a|an|the|what|which|how|there|here)(?!\w))[a-z]+)"
-_SA_FICTION = r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play))"
+# whole words only: without the trailing boundary "in the shower" (show), "on the playground" (play), "in the bookshop" (book) were
+# read as fiction and the emergency reply was withheld (fail-open; review of #2525)
+_SA_FICTION = r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play)(?!\w))"
 #: a "stroke" that is not the condition: "stroke of luck / genius", a stroke on the water / in the pool / of the game
 #: function words no exclusion may be on its own (a bare "on" / "of" after a condition dropped "a stroke on my left side")
 _FUNCTION_WORDS = frozenset("a an the of on in at to for with by from down up my his her their our your this that it is was".split())
