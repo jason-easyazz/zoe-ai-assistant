@@ -90,6 +90,12 @@ The kernel record holds list items (household words) in the spine, in receipts (
   before its first job, so a park survives a restart). While a member's forget is still parked (kernel down, refused, file unreadable)
   that member's adds are dropped as `dropped_erased reason=pending_forget`, never sent ahead of it. A replay ahead of an add respects the
   5 s circuit (no connect per add to a dead kernel); a forget job always tries.
+* **An add stamped before a forget never reaches the kernel after it.** Queued forgets need nothing extra: one FIFO worker sends
+  every add stamped (and queued) before the forget first, an add in flight finishes first, and the forget then removes them. A
+  whole-member erase also moves `user_erase_gate`'s generation (`erase_span`), which drops queued adds as before. The hole was the
+  PARKED forget (queue full): it is replayed before the next job, ahead of adds still queued that were stamped before it. Those are
+  now dropped as `dropped_erased reason=forgotten_before` (the park records when it happened; each add carries its door time). An
+  add made after the forget completed is shadowed as usual (`test_os_shadow_forget.py`).
 * **A forget never blocks the event loop**: the job goes on the queue with `put_nowait`; a full queue parks the forget durably instead
   (the park's `flock` + fsync run in an executor thread). Honest to the caller: flag `shadow` and not confirmed (parked or not) raises
   `ShadowForgetUnavailable`; flag off and parked returns 0 (deferred); not parkable raises.
@@ -110,7 +116,9 @@ The comparison is made for each list add that really landed (`os_shadow.compare`
 | outcome class | `added` | `verified` / `unverified` / `uncertain` / `refused` |
 
 Result codes (the closed set; one per add): `match`, `kernel_refused_live_did` (with `reason=` `no_grant|manifest|params|cause|forgotten|other`),
-`kernel_unverified_live_did`, `item_differs`, `list_differs`, `kernel_malformed`, `kernel_unavailable`, `timeout`,
+`kernel_unverified_live_did`, `item_differs`, `list_differs`, `member_differs` (a verified receipt for ANOTHER member) and `member_unproven` (a receipt
+that names no member), `kernel_malformed` (`reason=crossed` when the reply's `v` / `id` is not this request's: a stale or crossed reply is never the answer),
+`kernel_unavailable`, `timeout`,
 and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop` (`live=noop`), `worker_down`, `no_input` (no member
 or no item) and `shadow_error` (the shadow's OWN failure: `reason=hook` at the door, `worker` in the worker, `code` for a code outside the set).
 With the switch on and the verb listed, EVERY `note_*` call writes exactly one line, with the same nine fields, through the one emitter `_finish`; `RESULTS` in
@@ -123,10 +131,13 @@ The log line (INFO, logger `os_shadow`, in `~/.zoe-logs/zoe-data.*`) carries **n
 
     OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
 
-`src` is one of `spoken|single|skybridge|rest`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
+Every field is from a closed set (`os_shadow.SOURCES`, `CLASSES`, `LIVE`, `KERNEL_STATES`, `REASONS`, `RESULTS`) or a number; `_finish`
+maps anything else to `other` / `none`, so no caller argument can put text in the line or a counter key. `src` is one of
+`spoken|single|skybridge|rest|suggestion|service|other`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
 `q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table. It drops nothing: a result code it does not know is
-counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected`, and the totals always add up to the
-lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
+counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected` (a repeated key, no result, or a
+`hop_ms` / `q_ms` that is missing, empty, not a number, nan / inf, negative or over a day), an unknown KEY is counted by an 8-hex tag of
+its name (never the name: it is caller text in principle), and the totals always add up to the lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
 
 ## 6. Speed and safety of the hook [lab]
 

@@ -226,8 +226,51 @@ def _strings(node, consts: dict) -> list:
             if t is not None]
 
 
+def _refers(node, names) -> bool:
+    """``node`` names one of ``names``: ``h``, ``m.h``, ``getattr(m, "h")`` (a literal), ``partial(h, ...)`` /
+    ``functools.partial(h, ...)``."""
+    if isinstance(node, ast.Name):
+        return node.id in names
+    if isinstance(node, ast.Attribute):
+        return node.attr in names
+    if isinstance(node, ast.Call):
+        fname = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if fname == "getattr" and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            return node.args[1].value in names
+        if fname == "partial" and node.args:
+            return _refers(node.args[0], names)
+    return False
+
+
+def _bound(n, names) -> set:
+    """The names (or attribute names) ``n`` binds to something that refers to one of ``names``."""
+    pairs = []
+    if isinstance(n, ast.Assign):
+        for t in n.targets:
+            if isinstance(t, ast.Tuple) and isinstance(n.value, ast.Tuple):          # a, b = h, g
+                pairs += list(zip(t.elts, n.value.elts))
+            else:
+                pairs.append((t, n.value))
+    elif isinstance(n, (ast.AnnAssign, ast.NamedExpr)) and n.value is not None:      # w: Callable = h ; (w := h)
+        pairs.append((n.target, n.value))
+    elif isinstance(n, ast.arguments):                                                # def f(db, w=h)
+        pos = n.posonlyargs + n.args
+        pairs += list(zip(pos[len(pos) - len(n.defaults):], n.defaults))
+        pairs += [(a, d) for a, d in zip(n.kwonlyargs, n.kw_defaults) if d is not None]
+    out = set()
+    for target, value in pairs:
+        if _refers(value, names):
+            name = getattr(target, "id", None) or getattr(target, "attr", None) or getattr(target, "arg", None)   # x / self.x / arg
+            if name:
+                out.add(name)
+    return out
+
+
 def _aliases(tree, names: frozenset) -> frozenset:
-    """``names`` plus every alias of them: ``from m import h as x``, ``x = h``, ``x = m.h`` (any scope)."""
+    """``names`` plus every alias of them, any scope: ``from m import h as x``; ``x = h`` / ``x = m.h``; ``x: T = h``; ``(x := h)``;
+    ``self.x = h``; ``a, b = h, g``; a default argument ``def f(w=h)``; ``x = partial(h, ...)``; ``x = getattr(m, "h")``; and
+    chains of those (``y = x``). Out of scope, said: a name built at run time (``getattr(m, name)``), a container lookup
+    (``table["w"]()``), and a helper reached through another module's re-export under a new name."""
     got = set(names)
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom):
@@ -236,18 +279,22 @@ def _aliases(tree, names: frozenset) -> frozenset:
     while changed:                      # x = h; y = x
         changed = False
         for n in ast.walk(tree):
-            if isinstance(n, ast.Assign) and (getattr(n.value, "id", None) in got or getattr(n.value, "attr", None) in got):
-                new = {t.id for t in n.targets if isinstance(t, ast.Name)} - got
-                if new:
-                    got |= new
-                    changed = True
+            new = _bound(n, got) - got
+            if new:
+                got |= new
+                changed = True
     return frozenset(got)
 
 
 def _calls_to(node, names: frozenset) -> bool:
-    """``node``'s OWN body calls one of ``names`` (a call inside a nested unit belongs to that unit)."""
-    return any(isinstance(n, ast.Call) and (getattr(n.func, "id", None) in names or getattr(n.func, "attr", None) in names)
-               for n in _own_nodes(node))
+    """``node``'s OWN body calls one of ``names`` (a call inside a nested unit belongs to that unit), calls ``getattr(m, "h")(...)``
+    or ``partial(h, ...)(...)``, or HANDS one on as an argument (``retry(h, db)``, ``partial(h, db)``, ``run_in_executor(None, h)``)."""
+    for n in _own_nodes(node):
+        if not isinstance(n, ast.Call):
+            continue
+        if _refers(n.func, names) or any(_refers(a, names) for a in n.args) or any(_refers(k.value, names) for k in n.keywords):
+            return True
+    return False
 
 
 def _units(node, prefix: str):
@@ -451,3 +498,28 @@ def test_a_nested_writer_is_its_own_unit_and_a_hooked_parent_does_not_cover_it()
             "                await db.execute('INSERT INTO list_items (id)')\n            return deeper\n        return inner\n")
     assert unhooked(deep, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["C.m.inner.deeper"]
     assert callers_of(fired, "a.w") == {"a"}                       # what HOOKED_BY_CALLER pins for a nested writer named there
+
+
+
+@pytest.mark.parametrize("src", [
+    "async def f(db):\n    writer: Callable = create_item_record\n    await writer(db)",                          # annotated alias
+    "async def f(db):\n    if (w := create_item_record):\n        await w(db)",                                   # walrus
+    "class C:\n    def __init__(self):\n        self.w = create_item_record\n    async def f(self, db):\n        await self.w(db)",
+    "async def f(db):\n    a, b = create_item_record, print\n    await a(db)",                                    # tuple unpacking
+    "async def f(db, w=create_item_record):\n    await w(db)",                                                    # default argument
+    "async def f(db, *, w=create_item_record):\n    await w(db)",                                                 # keyword-only default
+    "import functools\nasync def f(db):\n    w = functools.partial(create_item_record, db)\n    await w()",        # partial alias
+    "from functools import partial\nasync def f(db):\n    await partial(create_item_record, db)()",                # partial called
+    "import list_service\nasync def f(db):\n    w = getattr(list_service, 'create_item_record')\n    await w(db)",  # getattr literal
+    "import list_service\nasync def f(db):\n    await getattr(list_service, 'create_item_record')(db)",
+    "async def f(db):\n    await retry(create_item_record, db)",                                                  # handed on
+    "import list_service as ls\nasync def f(db):\n    await ls.create_item_record(db)",                              # import-as module
+])
+def test_the_detector_reads_every_handled_alias_form(src):
+    sites = writer_sites(src, LIST_ADD_SQL, LIST_ADD_HELPERS)
+    assert sites and all(s.endswith("f") for s in sites), (src, sites)
+
+
+def test_out_of_scope_alias_forms_are_not_claimed():
+    assert writer_sites("import list_service\nasync def f(db, n):\n    await getattr(list_service, n)(db)", LIST_ADD_SQL,
+                        LIST_ADD_HELPERS) == []          # a name built at run time: unknowable statically, not claimed
