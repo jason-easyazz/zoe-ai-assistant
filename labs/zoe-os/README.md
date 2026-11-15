@@ -1,5 +1,12 @@
 # labs/zoe-os: the Zoe OS kernel prototype
 
+PR #2630 review regressions: `tests/test_privacy_review.py` covers text-free diagnostics, token-protected
+HTTP handlers without sockets, cross-owner request erasure, and suspended replay snapshot refresh.
+Diagnostic outputs retain IDs, closed codes and counts, never utterances, arguments, say strings or reasons.
+Request-derived stores must purge erased sequences across all owners; `purge_key` opts a driver into
+notice-bound deletion even after consent is revoked. Validation of this correction is pending: the builder
+observed less than 800 MiB available memory and could not run Python under the builder brief's memory gate.
+
 A lab-only prototype of the kernel described in
 [`docs/architecture/zoe-os.md`](../../docs/architecture/zoe-os.md): one event spine every part plugs into,
 with consent, forgetting and receipts as properties of the spine rather than of each feature.
@@ -253,7 +260,9 @@ reassertion and explicit entity release remain blocked pending the owner's decis
 on deliberate relearning. Trusted bootstrap can register idempotent store purges and
 independent read-back with the kernel; forget runs them before erasing consent.
 The reminder store is purged synchronously even if the skill ignores its notice.
-Purge is absent from Context and the wire/action catalog. The architecture document
+Store-purge registration is absent from Context and the wire/action catalog.
+Context's replay delete is restricted to driver-opted-in IDs from a live forget notice;
+it cannot erase arbitrary rows or supply a replacement grant. The architecture document
 records the failure/retry boundary and the outstanding owner question.
 
 Fresh scratch schemas use `WITHOUT ROWID` for cursors, metadata and retired counts,
@@ -261,7 +270,13 @@ eliminating three redundant primary-key B-trees. Person and cause links are sets
 with composite primary keys, replacing each link table's separate lookup B-tree.
 The named `people_seq` and `latest_receipt` indexes remain, as do the cause lookup
 and all intent indexes; repeated links are ignored rather than stored twice.
-The 200,000-byte oversized-frame ceiling and SQL complexity budgets stay unchanged.
+The oversized-frame oracle checks that no 4096-byte run of the 200,000-byte body
+is on disk and that DB/WAL/SHM total stays below twice its length, matching the
+boundary test. SQL complexity budgets stay unchanged.
 The socket-free disk oracle now includes the launcher's initial audit grant; the
 former empty-spine fixture understated WAL growth. Existing scratch tables retain
 their layout; these DDL changes compact fresh stores, without rewriting old ones.
+Review correction: authorised explainer and twin display results retain household content;
+tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
+also clears the owner's reduced twin facts through its watermark after source retention,
+while cross-owner cleanup matches explicit erased request sequences.

@@ -25,10 +25,12 @@ class Context:
         return self.kernel.clock()
 
     def forgotten_subject(self, notice: Event) -> str | None:
-        """Resolve an opaque notice against the already-known household roster."""
         return notice.payload.get('subject') or next(
             (p for p in self.kernel.grants.people
              if self.kernel.spine._owner(p).hex() == notice.payload.get('subject_hash')), None)
+
+    def purge(self, action: str, args: dict, notice: Event) -> None:
+        self.kernel.actions.purge(self.skill, action, args, notice)
 
     def publish(self, kind: Kind, *, subject: str | None, payload: dict,
                 caused_by: tuple[int, ...], visibility: Visibility = Visibility.PRIVATE) -> Event:
@@ -64,8 +66,9 @@ class Kernel:
     def register_store_purge(self, name: str, purge: Callable, empty: Callable) -> None:
         """Trusted bootstrap only: idempotent erasure and independent read-back.
 
-        Drivers receive (subject, erased events), or (subject, None) for a whole
-        member. Neither callbacks nor an invocation capability are handed to skills.
+        Drivers receive (subject, erased events) to match requests across owners.
+        Whole-member erasure additionally calls (subject, None) for orphaned rows.
+        Registration and these callbacks are never handed to skills.
         """
         if name in self._store_purges:
             raise ValueError("store purge already registered")
@@ -78,11 +81,17 @@ class Kernel:
         A failed purge/read-back aborts forget; retry is safe even after partial
         external erasure or a crash (external stores cannot share SQLite's commit).
         """
-        events = None if whole else tuple(e for seq in dead if (e := self.spine._get(seq)))
+        events = tuple(e for seq in dead if (e := self.spine._get(seq)))
         for purge, empty in self._store_purges.values():
+            # Explicit closure reaches derived rows under EVERY owner. A whole-person
+            # sweep additionally reaches retained store rows whose source log expired.
             purge(subject, events)
             if empty(subject, events) is not True:
                 raise Refused("external store purge unverified")
+            if whole:
+                purge(subject, None)
+                if empty(subject, None) is not True:
+                    raise Refused("external store purge unverified")
 
     def _grant_changed(self, change: str, g: Grant) -> None:
         record = self.spine._kernel_append(Event(
@@ -109,6 +118,7 @@ class Kernel:
                 progressed, handled = True, handled + 1
                 try:
                     skill.on_event(ev, ctx)
+                    sub.ack(ev.seq)   # only after handling: replay an interrupted purge on restart
                 except Refused:
                     pass            # already recorded on the spine as a REFUSAL event
             if not progressed:

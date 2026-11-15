@@ -21,7 +21,7 @@ class ReminderStore:
         reg("reminder.ack", self.ack, lambda p, a, r: {"acknowledged": True}
             if self.rows.get(a["id"], {}).get("acknowledged") else None)
         reg("reminder.delete", self.delete, lambda p, a, r: {"deleted": a["id"]}
-            if a["id"] not in self.rows else None, needs_accept=False)
+            if a["id"] not in self.rows else None, needs_accept=False, purge_key=('id', 'r'))
         return self
 
     def _purge_ids(self, person, events):
@@ -32,7 +32,7 @@ class ReminderStore:
         ids.update(args["id"] for ev in events
                    if ev.payload.get("skill") == SKILL
                    and (args := (ev.payload.get("undo") or {}).get("args", {})).get("id"))
-        return {rid for rid in ids if self.rows.get(rid, {}).get("owner") == person}
+        return ids & self.rows.keys()
 
     def purge(self, person, events):
         for rid in self._purge_ids(person, events):

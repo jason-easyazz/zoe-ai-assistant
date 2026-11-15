@@ -242,13 +242,13 @@ def test_purge_happens_while_grant_is_live_and_cannot_be_used_as_an_action(k):
         k.spine.forget(SAM, actor='reminders')
     assert rid in k.store.rows and seen == []
     k.spine.forget(SAM, actor=SAM)
-    assert seen == [True] and k.store.rows == {}
+    assert seen == [True, True] and k.store.rows == {}
     assert k.grants.of('reminders', SAM) is None
     # A normal delete cannot acquire the purge authority after consent is erased.
     fresh = emit(k, Kind.UTTERANCE, 'voice', SAM, text='synthetic new request')
     with pytest.raises(Refused, match='no grant from that person'):
         k.actions.act('reminders', 'reminder.delete', SAM, {'id': rid}, caused_by=(fresh.seq,))
-    assert seen == [True]
+    assert seen == [True, True]
 
 
 @pytest.mark.parametrize('failure', ['exception', 'unverified'])
@@ -275,10 +275,11 @@ def test_negative_control_without_kernel_cleanup_the_store_oracle_fails(k, monke
     ask(k, SAM, SENTINEL, NOW)
     monkeypatch.setattr(k.spine, '_before_forget', None)
     k.spine.forget(SAM, actor=SAM)
-    k.pump()
     with pytest.raises(AssertionError):
         assert k.store.rows == {}
     assert SENTINEL in str(k.store.rows)
+    k.pump()
+    assert k.store.rows == {}  # replay cleanup remains a second, independent safety path
 
 
 def test_retry_after_log_rollback_finishes_an_already_completed_external_purge(k, monkeypatch):
@@ -305,4 +306,4 @@ def test_a_day_with_reminders_replays_through_the_harness(k):
                  no_accept=["reminder.create", "reminder.delete"])      # asked for first-hand
     report = replay(day, [Reminders()])
     assert report.counts == {"offers": 1, "actions": 2, "refusals": 0, "claims": 1, "findings": 0}
-    assert '[card, accepted] "Reminder: water the plants"' in report.text
+    assert '[card, accepted]' in report.text and 'water the plants' not in report.text

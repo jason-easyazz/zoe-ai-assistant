@@ -493,7 +493,7 @@ def read_turn_stream(app_url: str, sid: str, text: str, timeout: float) -> dict:
                 chunk = json.loads(line)
                 if isinstance(chunk, dict):
                     if chunk.get("error"):
-                        error = str(chunk["error"])[:200]
+                        error = 'stream_error'
                     if chunk.get("done") or chunk.get("error"):
                         break
                     continue
@@ -504,12 +504,11 @@ def read_turn_stream(app_url: str, sid: str, text: str, timeout: float) -> dict:
 
 
 def reduce_frames(frames: list[str]) -> list[str]:
-    """The RECORDED fixture: tool frames verbatim (synthetic args, the kernel's own sentence); the
-    model's free text reduced to length plus a hash."""
+    """Diagnostic frame counts/lengths and text hashes; never raw tool calls or replies."""
     out, text = [], []
     for f in frames:
         if f.startswith("__TOOL__:"):
-            out.append(f)
+            out.append(json.dumps({'tool_frame_bytes': len(f)}))
         elif f.startswith("__THINKING__:"):
             out.append(json.dumps(f"__THINKING__:len={len(f) - 13}"))     # never kept
         else:
@@ -526,7 +525,8 @@ def tools_called(frames: list[str]) -> list[str]:
         if f.startswith("__TOOL__:"):
             p = json.loads(f[len("__TOOL__:"):])
             if p.get("phase") == "start" and p.get("name") not in seen:
-                seen.append(p["name"])
+                from zoe_os.diagnostics import code
+                seen.append(code(p["name"], TOOL_NAMES))
     return seen
 
 
@@ -545,8 +545,8 @@ def diagnose(frames: list[str], props: list[dict], expect: str | None) -> dict:
                                                   or any(t + "(" in low for t in TOOL_NAMES),
                     "asks_a_question": text.rstrip().endswith("?"), "names_a_tool_word": any(t in low for t in TOOL_NAMES)})
     for p in props:
-        if p["status"] in ("invalid", "refused") and p.get("reason"):
-            out.setdefault("rejections", []).append({"status": p["status"], "reason": p["reason"], "shape": p.get("shape")})
+        if p["status"] in ("invalid", "refused"):
+            out.setdefault("rejections", []).append({"status": p["status"]})
     return out
 
 
@@ -603,16 +603,17 @@ class Stack:
             raise RuntimeError(f"app port {port} is a live port or already in use")
         env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp), "PORT": str(port), "HOST": "127.0.0.1",
                "OSLAB_TOOLS_FILE": str(tools_file), "OSLAB_BRIDGE_URL": f"http://127.0.0.1:{self.server.port}",
+               "OSLAB_BRIDGE_TOKEN": self.server.app_token,
                "OSLAB_LLAMA": llama_url.rstrip("/") + "/v1", "OSLAB_MAX_TOKENS": str(self.args.max_tokens), "OSLAB_POLICY": self.args.policy}
         dist = HERE / "brain-lab-app" / "dist" / "server.mjs"
         if not dist.exists():
             raise RuntimeError("lab app not built: run labs/zoe-os/prep_real_turn.sh first (in daylight)")
         self.app = subprocess.Popen(["node", str(dist)], cwd=HERE / "brain-lab-app", env=env, start_new_session=True,
-                                    stdout=open(self.app_log, "w"), stderr=subprocess.STDOUT)
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         url = f"http://127.0.0.1:{port}"
         for _ in range(80):
             if self.app.poll() is not None:
-                raise RuntimeError(f"lab app exited early ({self.app.returncode}); see {self.app_log}")
+                raise RuntimeError(f"lab app exited early ({self.app.returncode})")
             try:
                 local_open(url + "/health", timeout=1).read()
                 return url
@@ -696,11 +697,11 @@ def run(args, probes: Probes) -> int:
             rows.append({"n": n, "tag": tag, "member": member, "expect": expect, "called": called,
                          "right_tool": called == ([expect] if expect else []),
                          "args_valid": bool(props) and all(p["status"] in ("done", "refused", "unconfirmed") and
-                                                           "not valid" not in p["say"] for p in props) if props else None,
+                                                           p['status'] != 'invalid' for p in props) if props else None,
                          "kernel": [p["status"] for p in props], "kernel_expected": kernel_expect,
                          "model_ms": round(got["total_ms"] - hop), "hop_ms": round(hop, 2),
                          "first_frame_ms": round(got["first_ms"] or 0), "error": got["error"], "diag": diag})
-            fixture.append({"turn": n, "text": text, "frames": reduce_frames(got["frames"]), "proposals": props})
+            fixture.append({"turn": n, "frames": reduce_frames(got["frames"]), "proposals": props})
         verify = verify_kernel(stack, rows, turns)
         after = cache_state(llama, probes)
         write_lab_text(out_dir / "recorded_turns.json", json.dumps(
@@ -733,7 +734,6 @@ def verify_kernel(stack: Stack, rows: list[dict], turns: list) -> dict:
     v["sam_written"] = any(bool(state[k].get("sam")) for k in ("lists", "reminders", "alarms"))
     try:
         why = panel.explain(person="alex", last="action")
-        v["why"] = why["sentence"]
         v["why_ok"] = "read-back confirmed" in why["sentence"]
     except Exception as exc:
         v["why_ok"] = False
@@ -758,27 +758,22 @@ def box_disk(box) -> bytes:
 
 
 def report(rows, verify, before, after, journal, args, out_dir) -> None:
-    print(f"\n{'DRY RUN (mock llama, no real model)' if args.dry_run else 'REAL RUN'}   out: {out_dir}\n")
-    print(f"{'#':<2} {'who':<5} {'expected':<11} {'called':<13} {'right':<6} {'args ok':<8} {'kernel':<12} {'model ms':>8} {'hop ms':>7}")
+    from zoe_os.diagnostics import code, identifier, STATUSES
+
+    def number(value):
+        return value if type(value) in (int, float) else None
+
+    print('dry_run' if args.dry_run else 'real_run')
     for r in rows:
-        if "skipped" in r:
-            print(f"{r['n']:<2} skipped: {r['skipped']}")
-            continue
-        print(f"{r['n']:<2} {r['member']:<5} {str(r['expect']):<11} {','.join(r['called']) or '-':<13} "
-              f"{str(r['right_tool']):<6} {str(r['args_valid']):<8} {','.join(r['kernel']) or '-':<12} "
-              f"{r['model_ms']:>8} {r['hop_ms']:>7}" + (f"  ERROR {r['error']}" if r["error"] else ""))
-    for r in rows:
-        if r.get("diag") and (r["diag"].get("rejections") or "reply_len" in r["diag"] and r["expect"]):
-            print(f"  diag turn {r['n']} ({r['tag']}): {json.dumps(r['diag'])}")
-    print("\nsummary:", json.dumps(summarize(rows), indent=1))
-    print("\nkernel checks:", json.dumps(verify, indent=1))
-    d = {k: (None if before.get(k) is None or after.get(k) is None else after[k] - before[k])
-         for k in ("prompt_tokens_total", "prompt_tokens_cached_total")}
-    print("\ncost to the household (numbers only):")
-    print(f"  slot held {before.get('slot_prompt_tokens')} prompt tokens before the run (the household's last prompt): "
-          "that is the MOST its next turn can need to re-prefill if the host cache cannot restore it [inferred upper bound]")
-    print(f"  this run processed {d['prompt_tokens_total']} prompt tokens and reused {d['prompt_tokens_cached_total']} (counter deltas)")
-    print(f"  llama journal over the run: {json.dumps(journal)}")
+        print(json.dumps({'n': number(r.get('n')), 'member_id': identifier(r.get('member')),
+                          'skipped': 'skipped' in r, 'error': bool(r.get('error')),
+                          'called': [code(t, TOOL_NAMES) for t in r.get('called', [])],
+                          'kernel': [code(s, STATUSES) for s in r.get('kernel', [])],
+                          'model_ms': number(r.get('model_ms')), 'hop_ms': number(r.get('hop_ms')),
+                          'right_tool': r.get('right_tool') is True, 'args_valid': r.get('args_valid') is True}))
+    print(json.dumps({'turns': len(rows), 'checks': len(verify), 'journal_counters': len(journal)}))
+    for key in ('slot_prompt_tokens', 'prompt_tokens_total', 'prompt_tokens_cached_total'):
+        print(json.dumps({'counter': key, 'before': number(before.get(key)), 'after': number(after.get(key))}))
 
 
 def main(argv=None, probes: Probes | None = None) -> int:

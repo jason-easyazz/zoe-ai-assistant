@@ -17,6 +17,14 @@ and not checked, **[vision]** means not built and not proven.
 
 ## 0. Answer first
 
+**Forget merge [code; coordinator verification pending]:** Named sequences use `people_seq`;
+snapshot copies use `snapshot_dependencies` and per-person `opaque_snapshots`. Selection,
+complete notice batches, snapshot scrubbing, erasure and bookkeeping commit together.
+Erasing an action receipt fingerprints its own arguments and content, excluding copied
+`undo.before` and `proof.restored` state: those copies belong to their source provenance.
+Otherwise erasing A would shield a surviving earlier row copied into A's before-state,
+and refuse a clean undo receipt restoring that row. Kernel append checks remain enabled.
+
 **What "an OS" means for a household.** Today each feature of Zoe carries its own copy of the hard rules: who
 may see this, whether she may speak now, how to forget, how to prove a thing was really done. The copies are
 good, and they are separate, so every new feature must remember all of them, and the price of one miss is a
@@ -213,13 +221,18 @@ hash, the store retains a permanent fail-closed marker: it refuses all named/str
 This deliberately over-blocks legacy stores rather than forgetting how to recognise an old forbidden name;
 new stores never need that fallback. Legacy global shields are an explicit exception to B's new freedom.
 
-**Scratch schema footprint [code; byte measurement pending].** Fresh stores use `WITHOUT ROWID` for
+**Scratch schema footprint [code; coordinator measurement].** Fresh stores use `WITHOUT ROWID` for
 cursors, metadata and retired counts, avoiding separate primary-key B-trees. Person links have primary
 key `(person, seq)` and cause links `(seq, cause)`; both are sets, inserted with `OR IGNORE`. Their primary
 keys replace `people_person` and `causes_seq`; `people_seq`, `causes_cause`, `latest_receipt` and every
-intent index remain. Existing stores keep their old table layout/indexes. The oversized-frame disk
-ceiling stays **200,000 bytes**, including DB/WAL/SHM. Its socket-free oracle now creates the launcher's
-initial audit grant before the two frame refusals. Complexity budgets and both `INDEXED BY` pins stay.
+intent index remain. Existing stores keep their old table layout/indexes. The coordinator measured
+**209,288 bytes including DB/WAL/SHM** after bootstrap and two refusals; this is not the DB schema
+alone. Relative to the branch's HEAD schema, the merge adds `snapshot_dependencies`,
+`snapshot_receipt`, `opaque_snapshots` and `opaque_receipt` (four additional B-trees).
+Relative to MERGE_HEAD it also adds `scoped_shield`, `scoped_entities`, `forget_subject` and
+`intent_person`, while WITHOUT ROWID layouts remove redundant primary-key trees. Per-object byte
+attribution is unmeasured. The oracle matches the boundary test: no 4096-byte run of the 200,000-byte
+body on disk, and DB/WAL/SHM total below twice its length. Complexity budgets and both index pins stay.
 
 **Conflicting prior guarantees [code; coordinator verification required].** First-hand reassertion does
 not lift a shield. Explicit `release` is also refused, even for the member: "forgotten means forever"
@@ -235,10 +248,11 @@ After validating the person's forget authority and computing the erased rows, th
 kernel under its lock and SQLite transaction, BEFORE tombstoning source/grant records. Whole-member
 cleanup purges every row owned by the member, even if the skill lost its cache or ignores the notice.
 Scoped cleanup receives the erased events while their request/receipt keys still exist and purges only
-the matching owned rows. The reminder fake-store adapter implements both paths; the skill's notice
-handler only drops local state. No ordinary action or receipt is emitted for cleanup, and no grant is
-resurrected. No purge operation, callback or reusable purge capability is exposed through Context or
-the closed wire operation table; a skill's ordinary actions still require live consent.
+matching request rows across all owners. The reminder fake-store adapter implements both paths; the
+skill's notice handler drops local state and replays idempotent notice-bound deletes. No ordinary
+action or receipt is emitted for registered cleanup, and no grant is resurrected. Context exposes only
+the reviewed ID-restricted replay delete, never registration or arbitrary store-purge callbacks.
+The closed wire operation table exposes no purge; ordinary actions still require live consent.
 
 A purge exception or failed read-back aborts forget and leaves consent/source records live for retry.
 External stores cannot commit atomically with SQLite: if a later step fails or the kernel crashes, an
@@ -246,6 +260,52 @@ external purge may already have happened while log erasure rolls back. Purges mu
 finishes erasure. A successful forget promises verified cleanup of registered stores. Unregistered stores,
 lying drivers and unsupported private process-memory copies remain outside this prototype's guarantee.
 No production store or live service is changed.
+
+**Forget scope and undo copies [code; regression runs pending].** Every notice carries `scope`
+(`person`, `seqs`, `entity`, or `topic`) and `seqs`, including an explicit empty array when nothing
+matched. It carries identifiers and counts, never the matched words. Selected sequences include the
+derived closure. They are sorted and split into batches of at most 256; all batches, the tombstones,
+snapshot scrubs, shields and ledger entry commit in one SQLite transaction before delivery. Each batch
+is independently idempotent. The kernel acknowledges a skill's cursor only after its handler returns;
+a restart resumes remaining batches, and an interrupted handler can receive its batch again. External
+stores must survive or be restored separately; this does not make arbitrary external writes transactional.
+Reminder request IDs derive from sequences, so notice replay can purge its surviving external table even
+when the restarted skill has lost its in-memory item cache, including after consent erasure.
+Whole-person notices apply through `upto`, so replay does not erase newer rows. Missing, unknown, or
+malformed legacy scopes purge that person's subscriber state: over-erasing a store is safer than retaining
+possibly forgotten content. Keeper, reminders, twin, leaving-catch and calendar-heads-up share this rule.
+
+List, reminder and alarm driver snapshots now declare versioned per-row request provenance (`asked`).
+Forget scrubs affected rows from surviving undo snapshots and from undo read-back proofs. Undo then
+restores only survivors; it does not depend causally on every old row (which would erase unrelated later
+actions). Entity/topic matching excludes these before-state copies and handles them through the same scrub.
+For older or opaque snapshots without complete provenance, a nonempty forget concerning the receipt's
+person removes the saved before-state and refuses undo explicitly. The surviving action's arguments
+remain available to reminder restoration. Empty selections invalidate nothing.
+Queued receipts refresh their bodies after forget, so they cannot deliver the pre-scrub snapshot.
+
+Forget-copy and bounded-list sweep (lab implementation, not production):
+
+| Store or bound | Verdict |
+|---|---|
+| Event payloads, derived events, people/causes links; intent bookkeeping | Reached by tombstone closure and intent scrub; retention skeletons retain links for person/sequence forget. |
+| Receipt undo before-state and undo `proof.restored` | Fixed here: provenance scrub; legacy undo invalidation and removal of restored proof. |
+| Subscription queues | Fixed here: surviving receipt bodies refresh as well as withdrawing erased events. |
+| Subscription/Context/client caches; malicious skill's supported cache | Reached: sequence-only views reread the authorized log; no stored body copy. |
+| Brain list/reminder/alarm stores, reminders skill `_items`/`_offered` and fake reminder table | Fixed scoped notice handling; purge by request/receipt sequence. External stores still require their handler and restore procedure. |
+| Twin days, room/step labels and computed baseline | Scoped handler fixed. Baselines recompute from surviving facts. Known limit: entity/topic matching after source content expiry cannot select reduced facts; person/sequence forget still reaches them. |
+| Leaving-catch item labels; calendar-heads-up pending proposals | Fixed here: select request sequence rather than clearing unrelated state. |
+| Attention preferences/budget counters; grants; consumed-receipt markers; shield hashes | Not content copies: settings, counts, consent or IDs/hashes only; not a free-text resurrection path. |
+| Replay recordings, generated days, rehearsal/brain driver fixtures and reports | Not runtime stores: synthetic input/output artifacts; arbitrary exported files are outside the kernel erase boundary. |
+| Notice 256-sequence bound | Fixed here: complete ordered batches; 260/1,000-event regressions plus old truncated-notice negative control. |
+| SQL fetch/newest limits, closure chunks, queue bound, client poll limit | Pagination/replay loops consume all pages; chunk sizes do not cap forget coverage. |
+| Topic 12-event and entity six-token bounds | Topic refuses before erasing. Forget/release now refuse oversized entities instead of silently matching a truncated prefix. |
+| Explanation ancestor `MAX_CHAIN=64`, pump round budget, twin window | Not erase selectors: bounded explanation, resumable pump and explicit retention; none limits the tombstone closure. |
+| Wire frame/reply/subscription limits; argument string limits; digest prefixes | Explicit transport/validation limits or hashes, not silently truncated erase lists. |
+
+Socket-free regression file: `labs/zoe-os/tests/test_forget_receipts_notices.py`. Run it with the
+existing forget, undo, reminders, twin-forget and review tests under the builder memory/quiet-box rules.
+No result is claimed until those runs, including old-code negative controls, have executed.
 
 **Exists [code].** The production forget is strong and hand-maintained: a ledger that cannot list what it
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
@@ -724,9 +784,8 @@ the twin keeps the label (a test pins this).
 | B. Reduced facts for 28 days | times, rooms and step counts for four weeks | 20 working days and 8 weekend days: both baselines, with some room | a reduced copy two weeks older than the kernel's presence events; the name-forget limit above applies to those two weeks |
 | C. Reduced facts for 56 days (the lab placeholder) | the same, eight weeks | a steadier baseline; a one-off odd day weighs less | six weeks beyond the kernel's copy; the same limit for longer |
 
-In every option: **generated days are never stored** (a seed regenerates them); a rehearsal report is text that
-quotes offers, so a report made from a real recording is a copy outside the kernel and should not outlive that
-recording; and a recording of real days written to a file is itself a copy no forget can reach. The lab's
+In every option: **generated days are never stored** (a seed regenerates them). Replay and rehearsal reports
+contain codes, IDs and counts, never offer text, arguments or reasons. A recording of real days written to a file is itself a copy no forget can reach. The lab's
 `record` writes such a file because its days are synthetic. For real days the replay should read the log
 directly. That is not built.
 
@@ -922,7 +981,75 @@ measurement boundaries. Full runs and all existing tests green remain unproven.
 steps, including work hidden inside a single statement; fixed budgets cover full
 undo, absent-member lookup and isolated/receipt forget. Negative controls restore
 the old paged undo or issue an unindexed scan and must trip the same budget.
-Rollback, open-intent scrubbing and the 200,000-byte DB/WAL/SHM ceiling after two
-refusals are checked. Startup truncates schema-creation WAL page images; the seven
+Rollback, open-intent scrubbing and body absence with a loose 400,000-byte DB/WAL/SHM
+bound after two refusals are checked. Startup truncates schema-creation WAL page images; the seven
 additive indexes are installed idempotently on opening existing lab stores.
 The existing oversized-frame scenario and all socket tests still need the coordinator.
+## Snapshot dependency index (lab)
+
+Receipt appends index both undo-before rows and restored read-back proofs in
+`snapshot_dependencies(source_seq, receipt_seq)`, a WITHOUT ROWID table whose
+primary key serves chunked source lookups. The receipt index supports deletion.
+Forget visits only dependent receipts, removes their old edges, and indexes the
+surviving rows again, in the erase transaction. Tombstones remove incoming and
+outgoing edges. Opaque snapshots containing text use a compact per-person
+fallback index; opaque numeric state contains no forgotten text.
+
+Existing stores get a one-time atomic backfill at open, with 256 receipt bodies
+per batch and a durable completion marker. This bounds memory, not total upgrade
+work: first open is proportional to existing receipts; subsequent forgets never
+scan receipt history. New stores use the indexed path immediately.
+
+The history-cost regression retains the 4000-step fixed budget; its 1/50-dependent
+case additionally allows 150 steps per payload rewrite. It includes a negative
+control that deliberately scans surviving receipts. Restart/privacy, rollback,
+remaining-edge and whole-member cleanup tests cover the index lifecycle.
+
+The benchmark's `--profile` now exposes `checkpoint` separately, timing the
+existing `PRAGMA wal_checkpoint(TRUNCATE)` call through its database wrapper.
+It measures synchronous checkpoint call latency, including SQLite/I/O work,
+without changing checkpoint policy. No checkpoint timing has been measured here.
+Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).
+
+## Combined forget transaction and store boundary (lab)
+
+[code] Under the spine lock and `BEGIN IMMEDIATE`, forget selects the complete
+causal closure, purges each registered store and independently reads back that
+its selected rows are absent, scrubs snapshots and intents and tombstones source
+rows, writes person-scoped shields, erases selected grant/refusal records, writes
+the opaque ledger and appends every ordered notice batch, then commits. Whole-person
+cleanup also removes that member's intents, cursor and legacy named bookkeeping.
+The append callback interface remains `then(seq)` with `before()` preparation;
+forget does its work in preparation so notices are inserted last.
+
+All SQLite erasure, dependency-index changes, shields, consent erasure, ledger
+and notices commit or roll back together. Failure reloads the in-memory legacy
+shield caches. External stores do not share that commit: their purge runs while
+consent is still live, and a failed callback/read-back aborts log erasure. Earlier
+external deletes can remain after rollback or a crash; callbacks must be idempotent
+and retry must complete them. There is no distributed atomicity or compensation
+that restores forgotten rows.
+
+Every notice has `scope` (`person`, `entity`, `topic`, `seqs`) and a complete,
+ordered sequence batch of at most 256 IDs, including an explicit empty batch.
+Whole-person notices retain an opaque `subject_hash`, resolved against the known
+roster only in memory; scoped notices also identify the subject. This preserves
+whole-person erasure of names without truncating the reviewed notice protocol.
+Explicit erased request IDs match every owner's stores and caches. Whole-person
+purge additionally sweeps orphaned owner rows; the twin clears reduced owner facts
+through the notice watermark even when source retention has removed their events.
+
+Trusted bootstrap registers synchronous purges for brain lists/reminders/alarms
+and the reminder fixture. The reminder skill retains the reviewed replay delete:
+`Context.purge` can invoke only an opted-in action for IDs derived from a live
+notice, with independent read-back. It conveys no general action permission and
+cannot replace an erased grant. Other skill caches remain cooperative in-process
+memory; notices are replayed after restart and acknowledged only after handling.
+First-hand text reassertion and explicit entity release do not lift shields.
+
+[code] Both index pins and SQL-step budgets in `test_history_cost.py` are unchanged.
+The arbitrary schema-size ceiling is replaced by the boundary test's content oracle and loose bound;
+its negative control plants the oversized body on disk. Snapshot controls disable scrubbing and
+either retain the shield (dirty receipt refused) or disable it (resurrection demonstrated).
+These changes and controls remain unrun by this builder: available memory was 662 MB, below 1200 MB.
+The coordinator must verify them in a test window. No live code or configuration changes.

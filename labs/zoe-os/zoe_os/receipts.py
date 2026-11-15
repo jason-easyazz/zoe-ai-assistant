@@ -38,13 +38,49 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .events import Event, Kind, Visibility
-from .spine import KERNEL, Spine
+from .spine import KERNEL, Spine, Refused
 
 Do = Callable[[str, dict], Any]                    # (person, args) -> result
 Verify = Callable[[str, dict, Any], "dict | None"]   # independent read-back, None = no proof
 Snapshot = Callable[[str, dict], "dict | None"]    # (person, args) -> the state this would change
 Undo = Callable[[str, dict, dict], Any]            # (person, args, before) -> put ``before`` back
 UNDO = "undo"
+
+
+def snapshot_sources(payload: dict) -> tuple[set[int], bool]:
+    """Provenance for saved state AND undo read-back; no copied text in the index."""
+    sources, opaque = set(), False
+    for holder, key in ((payload.get('undo'), 'before'), (payload.get('proof'), 'restored')):
+        if not holder or key not in holder:
+            continue
+        before = holder[key]
+        if scrub_snapshot(before, set()) is None:
+            # The bench's scalar slot has no text when numeric/empty. All other opaque
+            # shapes (including unknown dictionary keys) fail closed for that person.
+            numeric_slot = (isinstance(before, dict) and set(before) == {'value'}
+                            and (before['value'] is None or isinstance(before['value'], (int, float))))
+            opaque |= not numeric_slot
+        else:
+            rows = before.get('rows', [before.get('alarm')])
+            sources.update(row['asked'] for row in rows if row is not None)
+    return sources, opaque
+
+
+def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
+    """Only versioned row snapshots assert complete provenance; None means unknown."""
+    if not isinstance(before, dict) or before.get('provenance') != 1:
+        return None
+    if 'rows' in before:
+        rows = before['rows']
+        if not all(isinstance(r.get('asked'), int) for r in rows):
+            return None
+        return before | {'rows': [r for r in rows if r['asked'] not in dead]}
+    if 'alarm' in before:
+        row = before['alarm']
+        if row is not None and not isinstance(row.get('asked'), int):
+            return None
+        return before | {'alarm': None if row and row['asked'] in dead else row}
+    return None
 
 
 @dataclass(frozen=True)
@@ -94,10 +130,12 @@ class Dispatcher:
         self._actions: dict[str, tuple[Do, Verify, bool]] = {}
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
+        self._purges: dict[str, tuple[str, str]] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
-                 doc: str = "", params: dict | None = None) -> None:
+                 doc: str = "", params: dict | None = None,
+                 purge_key: tuple[str, str] | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -108,9 +146,37 @@ class Dispatcher:
         can describe the action to a caller. Without it nothing is checked and the action is
         not described (the behaviour every earlier action has)."""
         self._actions[action] = (do, verify, needs_accept)
+        if purge_key is not None:
+            self._purges[action] = purge_key
+        else:
+            self._purges.pop(action, None)
         self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
+
+    def purge(self, skill: str, action: str, args: dict, notice: Event) -> None:
+        """Trusted driver opt-in: delete ONLY IDs derived from a live erasure notice.
+
+        This kernel duty survives revoked grants and does not grant general action authority.
+        The configured key/prefix is the driver's globally unique request-ID contract.
+        """
+        with self.spine._lock:
+            live = self.spine._get(notice.seq)
+            manifest = self.enforcer.store.manifests.get(skill)
+            spec = self._purges.get(action)
+            if live is None or live.kind is not Kind.FORGET or spec is None or \
+                    manifest is None or action not in manifest.acts:
+                raise Refused('invalid purge')
+            key, prefix = spec
+            if set(args) != {key} or args[key] not in {f'{prefix}{s}' for s in live.payload.get('seqs', ())}:
+                raise Refused('invalid purge id')
+            do, verify, _ = self._actions[action]
+            person = live.payload.get('subject') or next(
+                (p for p in self.enforcer.store.people
+                 if self.spine._owner(p).hex() == live.payload.get('subject_hash')), None)
+            result = do(person, args)
+            if not verify(person, args, result):
+                raise Refused('purge unconfirmed')
 
     def act(self, skill: str, action: str, on_behalf_of: str, args: dict, *,
             caused_by: tuple[int, ...]) -> Receipt:
@@ -222,6 +288,8 @@ class Dispatcher:
 
     def _cannot_undo(self, last: Event) -> str:
         p = last.payload
+        if p.get('undo_refusal'):
+            return p['undo_refusal']
         if p.get("action") == UNDO:
             return "the last action was itself an undo"
         if self._undone(last.seq):

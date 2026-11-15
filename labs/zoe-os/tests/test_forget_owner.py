@@ -294,3 +294,38 @@ def test_shield_lookup_budget_is_independent_of_shield_history(spine, size):
     with vm_budget(spine._db):
         with pytest.raises(Refused, match='forgotten content'):
             spine.publish(proposal(A, cause, 'synthetic text 1'))
+
+
+@pytest.mark.parametrize('driver', ['lists', 'reminders', 'alarms'])
+def test_registered_brain_purge_is_synchronous_scoped_and_cross_owner(kernel, driver):
+    from zoe_os.brain.drivers import Lists, Reminders, Alarms
+
+    k = kernel
+    store = {'lists': Lists, 'reminders': lambda: Reminders(lambda: 0),
+             'alarms': Alarms}[driver]().register(k)
+    grant = k.grants.grant(A, 'skill')
+    hit = say(k.spine, A, 'synthetic selected request')
+    kept = say(k.spine, A, 'synthetic surviving request')
+    if driver == 'alarms':
+        store.at = {A: {'asked': kept.seq}, B: {'asked': hit.seq}}
+    else:
+        store.rows = {A: [{'asked': kept.seq}], B: [{'asked': hit.seq}]}
+    k.spine.forget(A, actor=A, seqs=[])
+    assert B in (store.at if driver == 'alarms' else store.rows)
+    k.spine.forget(A, actor=A, seqs=[hit.seq])
+    rows = store.at if driver == 'alarms' else store.rows
+    assert set(rows) == {A}  # before pump, across owners, without widening the scope
+    assert k.grants.of('skill', A) is grant
+
+
+def test_store_readback_failure_preserves_log_consent_and_notices(kernel):
+    k = kernel
+    grant = k.grants.grant(A, 'skill')
+    hit = say(k.spine, A, 'synthetic selected request')
+    k.register_store_purge('synthetic-failing-store', lambda *_: None, lambda *_: False)
+    with pytest.raises(Refused, match='external store purge unverified'):
+        k.spine.forget(A, actor=A)
+    assert k.spine._get(hit.seq) is not None
+    assert k.grants.of('skill', A) is grant
+    assert not list(k.spine._newest(frozenset({Kind.FORGET}), None))
+    assert not k.spine._db.execute('SELECT * FROM scoped_shield').fetchall()

@@ -21,6 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..provenance import erased_request
 
 SNOOZE_MINUTES = 10
 
@@ -112,19 +113,26 @@ class Reminders:
 
     # ---- forget ---------------------------------------------------------------------------------
     def _forget(self, notice: Event, ctx) -> None:
-        """Drop local state after kernel-driven store cleanup, without spending consent."""
-        gone = set(notice.payload.get("seqs", ()))
-        scoped = "scope" in notice.payload
-        person = ctx.forgotten_subject(notice)
-        if person is None:
-            self._items.clear()
-            self._offered.clear()
-            return
+        """Drop affected cache rows and replay idempotent, notice-bound store deletes.
+
+        Registered stores were purged and checked before erasure. Durable deletes also
+        reach a restarted store when this skill has lost its request cache.
+        """
+        deleted = set()
         for rid, item in sorted(self._items.items()):
-            if item["person"] != person:
+            if not any(erased_request(notice, s, item['person']) for s in (item['receipt'], item['asked'])):
                 continue
-            if scoped and not ({item["receipt"], item["asked"]} & gone):
-                continue
+            if rid in {f'r{s}' for s in notice.payload.get('seqs', ())}:
+                ctx.purge("reminder.delete", {"id": rid}, notice)
+            else:   # legacy notices without an explicit causal closure
+                ctx.act('reminder.delete', item['person'], {'id': rid}, caused_by=(notice.seq,))
             del self._items[rid]
+            deleted.add(rid)
+        # A restarted skill cannot relearn forgotten requests from the erased log. IDs are
+        # derived from globally unique request seqs, so replay can purge the external store
+        # even with an empty _items cache. Deleting a non-reminder seq's ID is a no-op.
+        if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
+            for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
+                ctx.purge('reminder.delete', {'id': rid}, notice)
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}
