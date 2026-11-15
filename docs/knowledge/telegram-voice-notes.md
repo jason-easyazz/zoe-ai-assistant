@@ -50,7 +50,7 @@ bot (its unit is `MemoryMax=1G`).
 | `ZOE_TELEGRAM_MEDIA` | zoe-data | off | mount the `telegram_media` router (off = 404) |
 | `ZOE_TELEGRAM_FFMPEG` | zoe-data | auto | ffmpeg path; auto = PATH → `~/.local/bin/ffmpeg` (the box's static libopus build; the unit's PATH does not include it) |
 | `ZOE_TELEGRAM_FFMPEG_TIMEOUT_S` | zoe-data | 20 | per ffmpeg run; a timeout kills it and answers 504 |
-| `ZOE_TELEGRAM_STT_CAPTURE_DIR` | zoe-data | unset | copy phone-mic clips + transcripts into a SEPARATE corpus. Never `~/.zoe-voice-samples` |
+| `ZOE_TELEGRAM_STT_CAPTURE_DIR` | zoe-data | unset | copy phone-mic clips + transcripts into a SEPARATE corpus. Must expand to an absolute, non-root directory without parent traversal or symlinks; relative paths are refused by writer and sweep. Never `~/.zoe-voice-samples` |
 
 The bot reads its flags from `labs/flue-zoe-telegram-2x/.env` (the unit's `EnvironmentFile`);
 zoe-data from its own env. Two processes, two files. The bot's token is `TELEGRAM_BOT_TOKEN` in

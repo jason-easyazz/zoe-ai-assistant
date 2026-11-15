@@ -293,6 +293,8 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 
 ## Work Guidance
 
+- STT audit rotation and append use `local_text_logs.append_line` under the eraser's thread lock and flock. Telegram capture paths resolve through `telegram_capture_dir`: absolute, non-root, no parent traversal; `capture_directory` opens components without following symlinks and callers operate relative to its descriptor. Both shared conftests pin every local erase root before collection and again per test.
+
 - Synthesis re-checks its source row ids after ingest: a missing or non-live source compensates only ids in ingest's `created_ids` receipt, through audited `erase_rows` outside the memory lock. An unreadable post-check logs `SYNTHESIS_SOURCE_UNKNOWN` and keeps the row; a returned pre-existing candidate is never erased.
 
 - Pi/Gemma intent governance is an ambiguous-miss fallback only; deterministic intents stay first, cloud providers are rejected when offline-only mode is active, and memory-write intents must not be created from ambiguous Pi classifications.

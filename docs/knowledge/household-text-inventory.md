@@ -56,7 +56,7 @@ Generated from `household_text.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: household_text.py -->
 
-89 stores: a per-subject forget reaches 45, delete-my-data reaches 41, both 34, neither 37.
+89 stores: a per-subject forget reaches 45, delete-my-data reaches 48, both 39, neither 35.
 
 | store | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner |
 |---|---|---|---|---|---|---|---|
@@ -82,10 +82,10 @@ Generated from `household_text.py`; do not edit by hand.
 | `source_contacts` | `pg:source_contacts` | synced contact cards | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py |
 | `contact_merge_reviews` | `pg:contact_merge_reviews` | contact merge proposals | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py |
 | `named_guest_turns` | `pg:named_guest_turns` | what a named guest said | `contacts_store.forget_voiceprints` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | named_guest_memory.py |
-| `user_portraits` | `pg:user_portraits` | the member portrait (derived prose) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | user_portrait.py |
-| `user_model_cards` | `pg:user_model_cards` | the user-model card (derived prose) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | user_model_card.py |
-| `open_loops` | `pg:open_loops` | unfinished things the member mentioned | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | memory_digest.py, omi_review_apply.py |
-| `proactive_candidates` | `pg:proactive_candidates` | things Zoe might raise (derived text) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | commitments.py, proactive/selector.py |
+| `user_portraits` | `pg:user_portraits` | the member portrait (derived prose) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | user_portrait.py |
+| `user_model_cards` | `pg:user_model_cards` | the user-model card (derived prose) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | user_model_card.py |
+| `open_loops` | `pg:open_loops` | unfinished things the member mentioned | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | memory_digest.py, omi_review_apply.py |
+| `proactive_candidates` | `pg:proactive_candidates` | things Zoe might raise (derived text) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | commitments.py, proactive/selector.py |
 | `people` | `pg:people` | people the household talks about (names, notes) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | contacts_store.py, pending_suggestions.py |
 | `person_relationships` | `pg:person_relationships` | who is related to whom | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | people_graph.py |
 | `event_attendees` | `pg:event_attendees` | attendee names and emails | `memory_forget_cascade._run` | `calendar_forget.forget_user` | gap | no age limit: kept until deleted | calendar_service.py |
@@ -94,7 +94,7 @@ Generated from `household_text.py`; do not edit by hand.
 | `chat_messages` | `pg:chat_messages` | the verbatim chat transcript (every channel) | `forget_redact.on_forget` | - | gap | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py |
 | `chat_feedback` | `pg:chat_feedback` | a corrected response | - | - | gap | no age limit: kept until deleted | conversation_feedback.py |
 | `background_tasks` | `pg:background_tasks` | a background task's text and result | - | - | gap | no age limit: kept until deleted | background_runner.py (read side; no live writer in zoe-data) |
-| `pending_suggestions` | `pg:pending_suggestions` | offer text (may name people) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | pending_suggestions.py, anticipation.py |
+| `pending_suggestions` | `pg:pending_suggestions` | offer text (may name people) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | pending_suggestions.py, anticipation.py |
 | `notes` | `pg:notes` | the member's notes | - | - | gap | no age limit: kept until deleted | intent_router.py, pending_suggestions.py |
 | `journal_entries` | `pg:journal_entries` | the member's journal | - | - | gap | no age limit: kept until deleted | intent_router.py, mcp_server.py |
 | `lists` | `pg:lists` | list names | - | - | gap | no age limit: kept until deleted | list_service.py |
@@ -109,9 +109,9 @@ Generated from `household_text.py`; do not edit by hand.
 | `calendars` | `pg:calendars` | calendar names and descriptions | - | `calendar_forget.forget_user` | reached | no age limit: kept until deleted | skybridge_service.py, calendar_forget.py |
 | `ambient_memory` | `pg:ambient_memory` | ambient captured text | - | - | gap | no age limit: kept until deleted | routers/voice_tts.py |
 | `notifications` | `pg:notifications` | notification text | - | `notifications_store.forget_user` | reached | no age limit: kept until deleted | notifications_store.py (distress_handoff.py, omi_recordings.py, ...) |
-| `proactive_deliveries` | `pg:proactive_deliveries` | delivery ledger (keys; text is in the candidate) | - | - | gap | no age limit: kept until deleted | proactive/ledger.py |
+| `proactive_deliveries` | `pg:proactive_deliveries` | delivery ledger (keys; text is in the candidate) | - | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | proactive/ledger.py |
 | `proactive_outcome_edges` | `pg:proactive_outcome_edges` | outcome edges (opaque ids) | - | `outcome_edges.erase_user` | reached | no age limit: kept until deleted | proactive/outcome_edges.py |
-| `proactive_ledger_lines` | `pg:proactive_ledger_lines` | the spoken proactive line | - | - | gap | no age limit: kept until deleted | proactive/lines.py |
+| `proactive_ledger_lines` | `pg:proactive_ledger_lines` | the spoken proactive line | - | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | proactive/lines.py |
 | `proactive_pending` | `pg:proactive_pending` | a queued proactive message | - | - | gap | no age limit: kept until deleted | proactive/session_utils.py |
 | `proactive_scheduled` | `pg:proactive_scheduled` | a scheduled proactive message | - | - | gap | no age limit: kept until deleted | proactive/triggers/reminders.py |
 | `voice_announcements` | `pg:voice_announcements` | an announcement message | - | - | gap | until expires_at (short-lived), then swept | voice_announce.py |

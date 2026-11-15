@@ -131,6 +131,20 @@ def test_every_mapped_site_names_a_registered_store():
     assert {k for k in ht.WRITE_SITES.values()} <= set(ht.BY_KEY)
 
 
+def test_inventory_names_stores_without_importing_runtime_readers():
+    """The Omi boundary scans allow this metadata module, not new runtime access."""
+    tree = ast.parse((SVC / "household_text.py").read_text())
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.add(node.module)
+    assert imports <= {"__future__", "fnmatch", "dataclasses", "pathlib", "typing", "forget_reach", "sys"}
+    assert not any(isinstance(n, ast.Name) and n.id in {"__import__", "eval", "exec", "get_db", "db_pool"}
+                   for n in ast.walk(tree))
+
+
 def test_the_detector_catches_a_new_text_sink():
     """Break-the-fix control: a new function that appends what someone said to a file is caught and is undeclared."""
     src = ('import json\n'

@@ -38,6 +38,11 @@ A store can be reached by one path and not the other; that asymmetry is what `st
 | intent-miss log | `~/training/data/intent-misses.jsonl` | **drops** the record | same |
 | voice STT log (flag-dark) | `$ZOE_VOICE_STT_LOG` (`~/.zoe-voice/voice_stt.jsonl` + `.1`) | **drops** the record (ISO `ts`) | same; only while `ZOE_FORGET_REACH_EXTRA=on` (default off), which also reaches the opt-in Telegram STT capture dir (`erase_capture`: a pair naming the entity, every pair on a member erase) |
 
+STT rotation and append share the eraser's thread lock and file lock, covering the whole segment pass.
+The capture writer and eraser share one resolver: `ZOE_TELEGRAM_STT_CAPTURE_DIR` must expand to an absolute, non-root path without
+parent traversal (relative settings are refused). Capture operations open directory components without following symlinks and
+use the resulting directory descriptor for file operations, including deletes; a renamed directory cannot redirect the sweep.
+
 - **Retention:** `ZOE_TEXT_LOG_RETENTION_DAYS`, default **30** (`keep` = no limit, `0` = keep none). The hourly `zoe-log-rotate` job applies it
   (`scripts/maintenance/rotate_service_logs.py`); `scripts/maintenance/redact_router_shadow.py` does the same once, with a backup and
   `--dry-run`, and `--all` for the whole corpus. The sweep takes `ZOE_TEXT_LOG_RETENTION_DAYS` / `ZOE_ROUTER_HEAD_LOG` from the zoe-data env
