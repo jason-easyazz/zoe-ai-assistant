@@ -6,6 +6,8 @@ Pytest suite for the production API: router contracts, agent harness behavior, c
 
 ## Local Contracts
 
+- `test_household_text_inventory.py` permits `household_text.py` in the pendant metadata allowlists only while its import closure remains stdlib plus `forget_reach`, import/render does no store I/O, and file I/O in the module stays confined to the explicit documentation CLI. Scan only repository source; prune data/model/cache directories before descent and never follow directory symlinks.
+
 - **Importing a local service module (`routers.*`, `zoe_agent`, `mcp_server`) does NOT by itself make a test Jetson-only.** What decides it is whether the *import chain* is green under the slim dep list — many routers lazy-import their heavy engines inside functions, so importing them needs only slim deps. Prove it (see the parent [tests/AGENTS.md](../../../tests/AGENTS.md): slim venv + no network + `TZ=UTC`) and mark `ci_safe`; if the chain drags in MemPalace/torch, a live service, or a live DB, leave it unmarked and it still runs on the Jetson.
 - Starting the full FastAPI lifespan (`TestClient(app)`) IS still Jetson-only.
 - CI-safe voice smoke (`test_voice_smoke_ci.py`) additionally MUST stay model/network/db free — fake STT (`_run_moonshine`) and every TTS provider, never load a model, never hit the network. Don't add `TestClient(app)` or heavy top-level imports to it.
@@ -25,7 +27,9 @@ Pytest suite for the production API: router contracts, agent harness behavior, c
 
 ## Work Guidance
 
-(empty)
+- `test_text_log_erase_safety.py` injects the actual STT rotation helper between inode verification and replacement, checks both writer locks, and plants capture symlinks and directory replacement races. `tests/unit/test_capture_erase_isolation.py` starts pytest with an inherited synthetic canary directory to check both shared conftests before imports and during a member erase.
+
+- `test_dreaming_passes_off_loop.py` injects source deletion/rejection between the synthesis pre-check and ingest, with unchanged, unreadable post-check and pre-existing-candidate controls. It also checks the real ingest creation receipt; deletion after the post-check is outside this race test.
 
 ## Verification
 

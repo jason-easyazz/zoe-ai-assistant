@@ -44,6 +44,7 @@ import fcntl
 import json
 import logging
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -156,7 +157,7 @@ _VOICE_STT_LOCK = threading.Lock()
 
 def _append_lock(log: Optional[TextLog] = None):
     """The log's in-process append lock: the router's own when this process has it loaded (zoe-data), this module's for the
-    intent-miss log and the voice STT log (whose writer takes none: ``rewrite``'s old-inode catch-up covers it); otherwise a no-op."""
+    intent-miss log and the voice STT log; otherwise a no-op."""
     if log is INTENT_MISSES:
         return _MISS_THREAD_LOCK
     if log is VOICE_STT:
@@ -204,11 +205,11 @@ def _bounded(lock: Any):
 
 @contextlib.contextmanager
 def locked(log: TextLog):
-    """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then (router log only) an exclusive
+    """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then an exclusive
     ``flock`` on ``<log>.lock`` - the SAME lock ``semantic_router._append_shadow_line`` takes around rotate + append, in the same order.
     So no append and no rotation can interleave with the rewrite, in this process or another. Fails closed: if the lock file cannot be opened it raises ``OSError``; if the flock cannot be
-    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). BOTH logs take
-    it: the intent-miss writer appends through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
+    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). All logs take
+    it: the intent-miss and STT writers append through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
     against a writer process still running the old, lock-less code."""
     with _bounded(_append_lock(log)):
         path = lock_path(log)
@@ -236,10 +237,11 @@ def locked(log: TextLog):
             fh.close()
 
 
-def append_line(log: TextLog, line: str, epoch: Optional[int] = None) -> bool:
+def append_line(log: TextLog, line: Optional[str], epoch: Optional[int] = None, *, max_bytes: int = 0) -> bool:
     """Append one JSON line to ``log`` under the SAME locks a rewrite pass holds (in-process lock + ``flock`` on ``<log>.lock``), so
     an append can never land in an inode a sweep/erase is about to replace. Never WAITS (it runs on a live voice turn): if a pass
     holds the lock the observation is skipped and False returned. I/O errors raise to the caller (which swallows them).
+    ``max_bytes``: rotate to ``.1`` under the same locks before appending; None as the line rotates only.
     ``epoch``: the ``erase_epoch()`` captured BEFORE the observation was computed; inside the lock the line is refused if an erase is
     in progress or the epoch moved (same rule as ``semantic_router._append_shadow_line``): it may carry words an erase just removed."""
     tlock = _append_lock(log)
@@ -260,8 +262,13 @@ def append_line(log: TextLog, line: str, epoch: Optional[int] = None) -> bool:
             except BlockingIOError:
                 return False
             try:
-                with open(path, "a") as out:
-                    out.write(line.rstrip("\n") + "\n")
+                # Rotation and append are ONE critical section, shared with
+                # the eraser's complete segment enumeration and rewrite pass.
+                if max_bytes > 0 and path.exists() and path.stat().st_size >= max_bytes:
+                    os.replace(path, path.with_name(path.name + ".1"))
+                if line is not None:
+                    with open(path, "a") as out:
+                        out.write(line.rstrip("\n") + "\n")
                 return True
             finally:
                 fcntl.flock(fh, fcntl.LOCK_UN)
@@ -488,7 +495,63 @@ def telegram_capture_dir() -> Optional[Path]:
     """The opt-in Telegram STT capture corpus (``routers/telegram_media.capture_dir``: ``ZOE_TELEGRAM_STT_CAPTURE_DIR``, unset = none).
     Each voice note is a pair ``tg-<stamp>-<pid>.wav`` + ``.txt`` (its transcript); no member id."""
     raw = str(_flag("ZOE_TELEGRAM_STT_CAPTURE_DIR") or "").strip()
-    return Path(raw).expanduser() if raw else None
+    if not raw:
+        return None
+    root = Path(raw).expanduser()
+    if not root.is_absolute() or root.anchor != "/" or len(root.parts) < 2 or ".." in root.parts:
+        raise ValueError("capture directory must be an absolute, non-root path without parent traversal")
+    return root
+
+
+@contextlib.contextmanager
+def capture_directory(*, create: bool = False):
+    """Resolve once and open each component without following links. All capture
+    reads, writes and deletes use this directory descriptor, so renaming a
+    parent or planting a symlink cannot redirect an operation outside the root.
+    None means capture is disabled (or the configured directory is absent).
+    """
+    root = telegram_capture_dir()
+    if root is None:
+        yield None
+        return
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            for part in root.parts[1:]:
+                if create:
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+        except FileNotFoundError:
+            if create:
+                raise
+            yield None
+            return
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _capture_stat(directory: int, name: str):
+    try:
+        result = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(result.st_mode):
+        raise OSError("capture entry is not a regular file")
+    return result
+
+
+def _capture_text(directory: int, name: str) -> str:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise OSError("capture transcript is not a regular file")
+        return stream.read()
 
 
 def erase_capture(*, match: Any = None, older_than: Optional[float] = None, everything: bool = False) -> int:
@@ -496,34 +559,41 @@ def erase_capture(*, match: Any = None, older_than: Optional[float] = None, ever
     (file mtime). Entity matching requires readable UTF-8 text: unreadable transcripts and orphaned WAVs are kept and reported
     as counts only. Full member erase deletes them unconditionally; retention still removes orphaned WAVs.
     Returns the number of files removed. RAISES on a failed delete (the cascade step / sweep then fails, never silently)."""
-    root = telegram_capture_dir()
-    if root is None or not root.is_dir():
-        return 0
     removed = unreadable = orphaned = 0
-    for wav_or_txt in sorted(root.glob("tg-*")):
-        if wav_or_txt.suffix not in (".wav", ".txt") or not wav_or_txt.exists():
-            continue
-        txt, wav = wav_or_txt.with_suffix(".txt"), wav_or_txt.with_suffix(".wav")
-        if wav_or_txt.suffix == ".wav" and txt.exists():
-            continue                                         # judged with its transcript
-        if match is not None and not everything:
-            if not txt.exists():
-                orphaned += 1
+    with capture_directory() as directory:
+        if directory is None:
+            return 0
+        gone: set[str] = set()  # the listing is a snapshot: a pair deleted below must not be re-read as an orphan
+        for name in sorted(os.listdir(directory)):
+            entry = Path(name)
+            if name in gone or not name.startswith("tg-") or entry.suffix not in (".wav", ".txt"):
                 continue
-            try:
-                doomed = bool(match.search(txt.read_text(encoding="utf-8")))
-            except (OSError, UnicodeError):
-                unreadable += 1
+            txt, wav = str(entry.with_suffix(".txt")), str(entry.with_suffix(".wav"))
+            text_stat = _capture_stat(directory, txt)
+            _capture_stat(directory, wav)
+            if entry.suffix == ".wav" and text_stat is not None:
                 continue
-        else:
-            doomed = everything or not txt.exists()
-        if not doomed and match is None and older_than is not None:
-            doomed = txt.stat().st_mtime < older_than
-        if doomed:
-            for f in (txt, wav):
-                if f.exists():
-                    f.unlink()
-                    removed += 1
+            if match is not None and not everything:
+                if text_stat is None:
+                    orphaned += 1
+                    continue
+                try:
+                    doomed = bool(match.search(_capture_text(directory, txt)))
+                except (OSError, UnicodeError):
+                    unreadable += 1
+                    continue
+            else:
+                doomed = everything or text_stat is None
+            if not doomed and match is None and older_than is not None:
+                doomed = text_stat.st_mtime < older_than
+            if doomed:
+                for filename in (txt, wav):
+                    try:
+                        os.unlink(filename, dir_fd=directory)
+                        removed += 1
+                        gone.add(filename)
+                    except FileNotFoundError:
+                        pass
     if unreadable or orphaned:
         logger.warning("local_text_logs: entity capture skipped unreadable=%d orphaned=%d", unreadable, orphaned)
     return removed

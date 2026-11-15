@@ -86,16 +86,14 @@ def test_entity_forget_keeps_unjudgeable_captures_and_counts_only(stores, monkey
     txt.write_bytes(b"\xff" if unreadable == "utf8" else SENTINEL.encode())
     wav.write_bytes(b"RIFF")
     if unreadable == "io":
-        from pathlib import Path
+        read_text = ltl._capture_text
 
-        read_text = Path.read_text
-
-        def fail_read(path, *args, **kwargs):
-            if path == txt:
+        def fail_read(directory, name):
+            if name == txt.name:
                 raise OSError("synthetic unreadable capture")
-            return read_text(path, *args, **kwargs)
+            return read_text(directory, name)
 
-        monkeypatch.setattr(Path, "read_text", fail_read)
+        monkeypatch.setattr(ltl, "_capture_text", fail_read)
     assert ltl.erase_entity(re.compile(SENTINEL)) == 4
     assert txt.exists() and wav.exists()
     assert (cap / "tg-orphan.wav").exists()

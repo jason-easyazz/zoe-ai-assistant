@@ -2707,10 +2707,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _voice_stt_log_path() -> Path:
-    configured = env_str("ZOE_VOICE_STT_LOG")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".zoe-voice" / "voice_stt.jsonl"
+    import local_text_logs
+
+    return local_text_logs.log_path(local_text_logs.VOICE_STT)
 
 
 def _wav_duration_seconds(wav_path: str) -> float | None:
@@ -2725,18 +2724,12 @@ def _wav_duration_seconds(wav_path: str) -> float | None:
 
 
 def _rotate_voice_stt_log(path: Path) -> None:
-    max_bytes = _env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000)
-    if max_bytes <= 0 or not path.exists():
-        return
-    try:
-        if path.stat().st_size < max_bytes:
-            return
-        rotated = path.with_name(path.name + ".1")
-        if rotated.exists():
-            rotated.unlink()
-        path.replace(rotated)
-    except OSError as exc:
-        logger.debug("voice STT audit rotation failed: %s", exc)
+    import local_text_logs
+
+    if path != local_text_logs.log_path(local_text_logs.VOICE_STT):
+        raise ValueError("STT rotation path differs from the erase path")
+    local_text_logs.append_line(local_text_logs.VOICE_STT, None,
+                               max_bytes=_env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000))
 
 
 def _log_voice_stt_sample(
@@ -2751,8 +2744,9 @@ def _log_voice_stt_sample(
     error: str | None = None,
 ) -> None:
     try:
-        path = _voice_stt_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        import local_text_logs
+
+        epoch = local_text_logs.erase_epoch()
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "route": route,
@@ -2771,9 +2765,8 @@ def _log_voice_stt_sample(
         }
         if error:
             record["error"] = error[:500]
-        _rotate_voice_stt_log(path)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        local_text_logs.append_line(local_text_logs.VOICE_STT, json.dumps(record, ensure_ascii=False), epoch,
+                                    max_bytes=_env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000))
     except Exception as exc:
         logger.debug("voice STT audit log failed: %s", exc)
 

@@ -100,8 +100,9 @@ def ffmpeg_binary() -> Optional[str]:
 
 def capture_dir() -> Optional[Path]:
     """``ZOE_TELEGRAM_STT_CAPTURE_DIR`` — unset (default) = capture nothing."""
-    raw = os.environ.get("ZOE_TELEGRAM_STT_CAPTURE_DIR", "").strip()
-    return Path(raw).expanduser() if raw else None
+    from local_text_logs import telegram_capture_dir
+
+    return telegram_capture_dir()
 
 
 def _error(status: int, code: str, **extra: Any) -> JSONResponse:
@@ -171,16 +172,23 @@ async def _synthesize_wav(text: str) -> Optional[bytes]:
 
 def _maybe_capture(wav_path: str, text: str) -> None:
     """Optional phone-mic capture into a SEPARATE corpus — never the panel one."""
-    target = capture_dir()
-    if target is None:
-        return
+    from local_text_logs import capture_directory
+
     try:
-        target.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        base = target / f"tg-{stamp}-{os.getpid()}"
-        shutil.copyfile(wav_path, f"{base}.wav")
-        Path(f"{base}.txt").write_text(text + "\n", encoding="utf-8")
-    except OSError as exc:
+        with capture_directory(create=True) as directory:
+            if directory is None:
+                return
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            base = f"tg-{stamp}-{os.getpid()}"
+
+            def opener(name, flags):
+                return os.open(name, flags | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+
+            with open(wav_path, "rb") as source, open(f"{base}.wav", "xb", opener=opener) as dest:
+                shutil.copyfileobj(source, dest)
+            with open(f"{base}.txt", "x", encoding="utf-8", opener=opener) as dest:
+                dest.write(text + "\n")
+    except (OSError, ValueError) as exc:
         logger.warning("telegram STT capture failed (non-fatal): %s", exc)
 
 
