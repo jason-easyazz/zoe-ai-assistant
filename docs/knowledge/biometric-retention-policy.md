@@ -76,6 +76,10 @@ capturing *more* biometrics, more often. Auto-expiry would degrade recognition a
 increase collection at the same time. The privacy control that actually matters
 here is deletion-on-demand plus consent (§3, §4), not a clock.
 
+**A member delete removes them** (owner decision 2026-11-15, "deleting a member should delete everything"): `MemoryService.delete_user`
+deletes every speaker and face row of the member, the member's labelled clips in the voice-sample corpus, and tells every panel to drop
+the voice copy; the face copy on a panel waits for its next sync ([forget-reach.md](forget-reach.md), "What a member delete removes").
+
 Two automatic deletions do exist, and both are correct:
 
 - **User deletion cascades.** Both tables declare

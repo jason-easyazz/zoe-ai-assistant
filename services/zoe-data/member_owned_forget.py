@@ -31,6 +31,9 @@ OWNED = ("chat_feedback", "background_tasks", "ui_actions", "notes", "journal_en
          "proactive_pending", "voice_announcements", "openclaw_approvals", "openclaw_run_state", "memory_consolidation_state",
          "person_activities", "person_bucket_list", "person_gift_ideas", "person_important_dates", "person_relationships",
          "event_attendees")
+#: tables whose ``person_id`` is a plain ``REFERENCES people(id)`` (alembic 0006, no ON DELETE): another member's row pointing at one of the
+#: member's private contacts keeps the row and loses the reference
+NULLED = ("notes", "journal_entries")
 _CHUNK = 200
 _GUESTS = ("guest", "kiosk", "unknown", "")
 
@@ -55,7 +58,7 @@ def _db():
 
 class _Run:
     def __init__(self, db):
-        self.db, self.removed = db, 0
+        self.db, self.removed, self.order = db, 0, []      # ``order``: the tables DELETEd from, in the order the statements ran
 
     async def rows(self, sql: str, params: tuple) -> list:
         try:
@@ -67,6 +70,9 @@ class _Run:
             raise
 
     async def run(self, sql: str, params: tuple) -> int:
+        m = re.match(r"\s*DELETE FROM (\w+)", sql)
+        if m:
+            self.order.append(m.group(1))
         try:
             cur = await self.db.execute(sql, params)
         except Exception as exc:  # noqa: BLE001
@@ -161,6 +167,12 @@ async def _people(r: _Run, user_id: str) -> None:
     loses only the member's own entries (the ``OWNED`` person_* rows and relationships, by ``user_id``)."""
     mine = [str(x[0]) for x in await r.rows("SELECT id FROM people WHERE user_id = ? AND COALESCE(visibility, 'family') <> 'family'",
                                             (user_id,))]
+    # ANOTHER member's note / journal entry pointing at one of these contacts (a plain REFERENCES people(id), no ON DELETE): the row is
+    # theirs, so only the reference goes. The member's own notes and journal are already deleted (OWNED runs first).
+    for t in NULLED:
+        for at in range(0, len(mine), _CHUNK):
+            part = mine[at:at + _CHUNK]
+            await r.run(f"UPDATE {t} SET person_id = NULL WHERE person_id IN ({', '.join('?' * len(part))})", tuple(part))
     for t in ("people_field_values", "person_activities", "person_bucket_list", "person_gift_ideas", "person_important_dates"):
         await r.by_ids(f"DELETE FROM {t} WHERE person_id", mine)
     await r.by_ids("DELETE FROM person_relationships WHERE person_a_id", mine)
@@ -190,6 +202,32 @@ async def _panel_voices(r: _Run, user_id: str) -> None:
     await r.by_ids("DELETE FROM panel_voice_clusters WHERE id", clusters)
 
 
+async def _biometrics(r: _Run, user_id: str) -> None:
+    """The member's voice and face embeddings (``speaker_profiles``, with any adapted vector on the same row; ``face_profiles``)."""
+    await r.run("DELETE FROM speaker_profiles WHERE user_id = ?", (user_id,))
+    await r.run("DELETE FROM face_profiles WHERE user_id = ?", (user_id,))
+
+
+async def _after_commit(user_id: str) -> None:
+    """After the rows are gone: the member's labelled clips in the voice-sample corpus (by the clip's own verdict sidecar, never by a
+    name pattern; RAISES on a clip that cannot be removed), and the panels told to drop the voice signature now (voice_enrollment: also
+    revokes any open voice session of the member; best effort - a panel that misses it drops the profile at its next hourly sync, and the
+    server refuses a stale claim anyway, ``_voice_claim_consented`` reads the store). Face copies on a panel wait for its next sync."""
+    import voice_clips
+
+    voice_clips.erase_member(user_id)
+    try:
+        import voice_enrollment
+
+        await voice_enrollment.push_forget_to_panels(user_id)
+    except Exception as exc:  # noqa: BLE001 - never raises by contract; guard the import
+        logger.warning("member_owned_forget: panel voice purge not queued (%s)", type(exc).__name__)
+
+
+#: the last run's DELETE order (tests read it to check it against the migrations' foreign keys)
+last_order: list = []
+
+
 async def forget_user(user_id: str) -> int:
     """Erase every member-owned row the other erasers do not reach. Returns rows changed. RAISES on any failure but a missing table /
     no pool."""
@@ -199,21 +237,26 @@ async def forget_user(user_id: str) -> int:
     try:
         async with _db() as db:
             r = _Run(db)
+            # CHILD BEFORE PARENT (the migrations' foreign keys; pinned by test_member_delete_everything's FK-order test): the
+            # single-author rows first (a note / journal entry / attendee / per-person row may point at a contact or event deleted below)
             await _scheduled_sends(r, uid)
             await _transcript(r, uid)
-            await _lists(r, uid)
-            await _people(r, uid)
-            await _events(r, uid)
-            await _ambient(r, uid)
-            await _panel_voices(r, uid)
             for table in OWNED:
                 await r.run(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
+            await _lists(r, uid)
+            await _events(r, uid)           # its attendee rows reference people (SET NULL): events before contacts
+            await _people(r, uid)
+            await _ambient(r, uid)          # reads the member's speaker profiles: before they go
+            await _panel_voices(r, uid)
+            await _biometrics(r, uid)
             await db.commit()
+            last_order[:] = r.order
     except Exception as exc:  # noqa: BLE001
         if _no_pool(exc):
             return 0
         logger.error("member_owned_forget: member-owned stores NOT erased (%s)", type(exc).__name__)
         raise
+    await _after_commit(uid)
     if r.removed:
         logger.info("member_owned_forget: removed or cleared %d row(s)", r.removed)
     return r.removed

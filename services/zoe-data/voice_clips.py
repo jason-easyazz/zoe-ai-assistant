@@ -175,6 +175,24 @@ def erase_guests(person_ids, directory: Optional[str] = None) -> int:
     return n
 
 
+def erase_member(member_id: str, directory: Optional[str] = None) -> int:
+    """A member delete: every saved clip whose verdict sidecar says it was THIS member (and the sidecar). Located by the label the server
+    wrote, never by a file name. RAISES when one cannot be removed (the member delete fails closed and is retried). Legacy clips with no
+    sidecar name nobody and stay. Counts only."""
+    ident = str(member_id or "")
+    if not ident:
+        return 0
+    n = 0
+    for side, wav, meta in _labelled(directory or sample_dir()):
+        if meta.get("kind") == "member" and str(meta.get("id")) == ident:
+            if not _remove(side, wav):
+                raise OSError("voice_clips: a member clip could not be removed")
+            n += 1
+    if n:
+        logger.info("VOICE_CLIPS member erase removed=%d", n)
+    return n
+
+
 def newest_unknown_clip(directory: Optional[str] = None, valid=None) -> Optional[tuple[str, str]]:
     """``(wav, cluster_id)`` of the newest saved clip filed under an unknown voice that still exists (``valid`` = the live cluster ids), else None."""
     best = None

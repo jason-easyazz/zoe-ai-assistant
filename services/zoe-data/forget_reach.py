@@ -165,10 +165,10 @@ TABLES: tuple[Store, ...] = (
     _t("proactive_responses", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("voice_announcements", WORDS, REACHED, member=_OWNED_M),  # announcements Zoe queued for the member
     # --- identity / biometric enrolment ---
-    _t("speaker_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
-       "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
-    _t("face_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
-       "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
+    _t("speaker_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows (and the adapted vector on them) and tells every panel to drop its copy; "
+       "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),   # voice embeddings (+ the adapted vector on the same row); panels told at once (voice_profile_forget)
+    _t("face_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows; a panel's copy drops at its next sync (<= 1 h) or a daemon restart; "
+       "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),      # face embeddings; a panel's copy drops at its next sync (<= 1 h) or a daemon restart
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("member_register", WORDS, REACHED, member="member_register.forget_user"),   # liked topics are the member's words
     _t("alarms", WORDS, REACHED, member="alarms.forget_user"),                 # the label is the member's words
@@ -221,7 +221,7 @@ OTHER: tuple[Store, ...] = (
     Store("flue_session_log", "file", WORDS, GAP, "No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
-    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
+    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: legacy clips only. A member delete removes every clip whose verdict sidecar names the member (voice_clips.erase_member, via member_owned_forget); a clip saved before ZOE_VOICE_CLIP_VERDICT names nobody and stays. ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
           "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
     Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "

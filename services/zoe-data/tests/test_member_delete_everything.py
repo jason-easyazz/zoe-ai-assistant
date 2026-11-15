@@ -26,15 +26,17 @@ B = "member-b"
 
 _DDL = """
 CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT 'New Chat');
-CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id), role TEXT NOT NULL,
+CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, role TEXT NOT NULL,
     content TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE chat_ag_ui_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id), run_id TEXT, events TEXT);
+CREATE TABLE chat_ag_ui_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, run_id TEXT, events TEXT);
 CREATE TABLE chat_feedback (id TEXT PRIMARY KEY, interaction_id TEXT, user_id TEXT, corrected_response TEXT);
 CREATE TABLE background_tasks (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, task TEXT NOT NULL, result TEXT);
 CREATE TABLE ui_actions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT);
 CREATE TABLE memory_consolidation_state (session_id TEXT PRIMARY KEY, user_id TEXT, last_consolidated_at TEXT, turns_consolidated INTEGER);
-CREATE TABLE notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT, visibility TEXT NOT NULL DEFAULT 'personal');
-CREATE TABLE journal_entries (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT, visibility TEXT NOT NULL DEFAULT 'personal');
+CREATE TABLE notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT, visibility TEXT NOT NULL DEFAULT 'personal',
+    person_id TEXT REFERENCES people(id));
+CREATE TABLE journal_entries (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT, visibility TEXT NOT NULL DEFAULT 'personal',
+    person_id TEXT REFERENCES people(id));
 CREATE TABLE transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT, visibility TEXT NOT NULL DEFAULT 'family');
 CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, visibility TEXT NOT NULL DEFAULT 'personal');
 CREATE TABLE proactive_pending (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL);
@@ -44,20 +46,23 @@ CREATE TABLE voice_announcements (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, me
 CREATE TABLE openclaw_approvals (id TEXT PRIMARY KEY, user_id TEXT, request_text TEXT);
 CREATE TABLE openclaw_run_state (id TEXT PRIMARY KEY, user_id TEXT, request_text TEXT);
 CREATE TABLE lists (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT, visibility TEXT NOT NULL DEFAULT 'family');
-CREATE TABLE list_items (id TEXT PRIMARY KEY, list_id TEXT NOT NULL REFERENCES lists(id), text TEXT, assigned_to TEXT);
+CREATE TABLE list_items (id TEXT PRIMARY KEY, list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE, text TEXT, assigned_to TEXT);
 CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT, visibility TEXT NOT NULL DEFAULT 'family');
-CREATE TABLE people_field_values (id TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id), value_json TEXT);
-CREATE TABLE person_activities (id TEXT PRIMARY KEY, person_id TEXT, user_id TEXT, description TEXT);
-CREATE TABLE person_bucket_list (id TEXT PRIMARY KEY, person_id TEXT, user_id TEXT, description TEXT);
-CREATE TABLE person_gift_ideas (id TEXT PRIMARY KEY, person_id TEXT, user_id TEXT, description TEXT);
-CREATE TABLE person_important_dates (id TEXT PRIMARY KEY, person_id TEXT, user_id TEXT, label TEXT);
-CREATE TABLE person_relationships (id TEXT PRIMARY KEY, user_id TEXT, person_a_id TEXT, person_b_id TEXT);
+CREATE TABLE people_field_values (id TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, value_json TEXT);
+CREATE TABLE person_activities (id TEXT PRIMARY KEY, person_id TEXT REFERENCES people(id) ON DELETE CASCADE, user_id TEXT, description TEXT);
+CREATE TABLE person_bucket_list (id TEXT PRIMARY KEY, person_id TEXT REFERENCES people(id) ON DELETE CASCADE, user_id TEXT, description TEXT);
+CREATE TABLE person_gift_ideas (id TEXT PRIMARY KEY, person_id TEXT REFERENCES people(id) ON DELETE CASCADE, user_id TEXT, description TEXT);
+CREATE TABLE person_important_dates (id TEXT PRIMARY KEY, person_id TEXT REFERENCES people(id) ON DELETE CASCADE, user_id TEXT, label TEXT);
+CREATE TABLE person_relationships (id TEXT PRIMARY KEY, user_id TEXT, person_a_id TEXT REFERENCES people(id) ON DELETE CASCADE,
+    person_b_id TEXT REFERENCES people(id) ON DELETE CASCADE);
 CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, visibility TEXT NOT NULL DEFAULT 'family');
-CREATE TABLE event_attendees (id TEXT PRIMARY KEY, event_id TEXT, user_id TEXT, display_name TEXT);
+CREATE TABLE event_attendees (id TEXT PRIMARY KEY, event_id TEXT REFERENCES events(id) ON DELETE CASCADE, user_id TEXT, display_name TEXT,
+    person_id TEXT REFERENCES people(id) ON DELETE SET NULL);
 CREATE TABLE ambient_memory (id INTEGER PRIMARY KEY, transcript TEXT NOT NULL, speaker_id TEXT, user_id TEXT);
-CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, embedding_blob BLOB, consent_at TEXT, model_id TEXT);
+CREATE TABLE face_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, embedding_blob BLOB, active INTEGER DEFAULT 1);
 CREATE TABLE panel_voice_clusters (id TEXT PRIMARY KEY, user_id TEXT);
-CREATE TABLE panel_voice_samples (id TEXT PRIMARY KEY, cluster_id TEXT);
+CREATE TABLE panel_voice_samples (id TEXT PRIMARY KEY, cluster_id TEXT REFERENCES panel_voice_clusters(id) ON DELETE CASCADE);
 """
 
 #: single-author tables: (table, column holding words)
@@ -73,6 +78,8 @@ def _meta(user):
 async def _seed(db):
     x = db.execute
     for u in (A, B):
+        await x("INSERT INTO people VALUES (?, ?, 'Private Contact', 'personal')", (f"pp-{u}", u))
+    for u in (A, B):
         for t, col in OWNED:
             if t == "background_tasks":
                 await x(f"INSERT INTO {t} (user_id, {col}) VALUES (?, 'synthetic words')", (u,))
@@ -82,18 +89,23 @@ async def _seed(db):
                 (f"ps-{u}", u, f"job-{u}"))
         await x("INSERT INTO memory_consolidation_state VALUES (?, ?, 'now', 1)", (f"state-{u}", u))
         await x("INSERT INTO ambient_memory (transcript, user_id) VALUES ('overheard words', ?)", (u,))
-        await x("INSERT INTO speaker_profiles VALUES (?, ?)", (f"spk-{u}", u))
+        await x("INSERT INTO speaker_profiles VALUES (?, ?, x'00', 'now', 'resemblyzer')", (f"spk-{u}", u))
+        await x("INSERT INTO face_profiles VALUES (?, ?, x'00', 1)", (f"face-{u}", u))
+        await x("INSERT INTO notes (id, user_id, content, person_id) VALUES (?, ?, 'about my contact', ?)", (f"note-p-{u}", u, f"pp-{u}"))
+        await x("INSERT INTO journal_entries (id, user_id, content, person_id) VALUES (?, ?, 'saw my contact', ?)",
+                (f"jr-p-{u}", u, f"pp-{u}"))
         await x("INSERT INTO ambient_memory (transcript, speaker_id) VALUES ('legacy words', ?)", (f"spk-{u}",))
         await x("INSERT INTO panel_voice_clusters VALUES (?, ?)", (f"pvc-{u}", u))
         await x("INSERT INTO panel_voice_samples VALUES (?, ?)", (f"pvs-{u}", f"pvc-{u}"))
         # private things of each member
         await x("INSERT INTO lists VALUES (?, ?, 'private list', 'personal')", (f"list-{u}", u))
         await x("INSERT INTO list_items VALUES (?, ?, 'private item', NULL)", (f"li-{u}", f"list-{u}"))
-        await x("INSERT INTO people VALUES (?, ?, 'Private Contact', 'personal')", (f"pp-{u}", u))
         await x("INSERT INTO people_field_values VALUES (?, ?, '1')", (f"pfv-{u}", f"pp-{u}"))
         await x("INSERT INTO person_gift_ideas VALUES (?, ?, ?, 'a kite')", (f"gift-priv-{u}", f"pp-{u}", u))
         await x("INSERT INTO events VALUES (?, ?, 'private appointment', 'personal')", (f"ev-{u}", u))
-        await x("INSERT INTO event_attendees VALUES (?, ?, ?, 'self')", (f"att-priv-{u}", f"ev-{u}", u))
+        await x("INSERT INTO event_attendees (id, event_id, user_id, display_name) VALUES (?, ?, ?, 'self')", (f"att-priv-{u}", f"ev-{u}", u))
+    # ANOTHER member's note pointing at A's private contact (alembic 0006: a plain REFERENCES, no ON DELETE)
+    await x("INSERT INTO notes (id, user_id, content, person_id) VALUES ('note-b-on-a', ?, 'B wrote this', ?)", (B, "pp-" + A))
     # household-SHARED objects created by A, with entries from both
     await x("INSERT INTO lists VALUES ('list-family', ?, 'household shopping', 'family')", (A,))
     await x("INSERT INTO list_items VALUES ('li-fam-1', 'list-family', 'milk', ?)", (A,))
@@ -105,8 +117,8 @@ async def _seed(db):
     await x("INSERT INTO person_relationships VALUES ('rel-a', ?, 'pp-family', 'pp-family')", (A,))
     await x("INSERT INTO person_relationships VALUES ('rel-b', ?, 'pp-family', 'pp-family')", (B,))
     await x("INSERT INTO events VALUES ('ev-family', ?, 'family picnic', 'family')", (A,))
-    await x("INSERT INTO event_attendees VALUES ('att-fam-a', 'ev-family', ?, 'A')", (A,))
-    await x("INSERT INTO event_attendees VALUES ('att-fam-b', 'ev-family', ?, 'B')", (B,))
+    await x("INSERT INTO event_attendees (id, event_id, user_id, display_name) VALUES ('att-fam-a', 'ev-family', ?, 'A')", (A,))
+    await x("INSERT INTO event_attendees (id, event_id, user_id, display_name) VALUES ('att-fam-b', 'ev-family', ?, 'B')", (B,))
     # chat: A's own session; a kiosk session only A spoke in; a session A owns that B also spoke in; B's session with an A turn
     await x("INSERT INTO chat_sessions VALUES ('s-a', ?, 'about my plans')", (A,))
     await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('m1', 's-a', 'user', 'my plans for the weekend')")
@@ -128,10 +140,19 @@ async def _seed(db):
 def store(monkeypatch, tmp_path):
     async def open_():
         db = await aiosqlite.connect(str(tmp_path / "zoe.db"))
+        await db.execute("PRAGMA foreign_keys = ON")           # Postgres enforces them: so does this store
         await db.executescript(_DDL)
         await _seed(db)
         return db
     db = asyncio.run(open_())
+    clips = tmp_path / "voice-samples"
+    clips.mkdir()
+    for u in (A, B):                                        # one labelled member clip each, plus a legacy clip with no label
+        (clips / f"turn-{u}.wav").write_bytes(b"RIFF")
+        (clips / f"turn-{u}.verdict.json").write_text(json.dumps({"v": 1, "kind": "member", "id": u, "cluster": "", "ts": 1}))
+    (clips / "legacy.wav").write_bytes(b"RIFF")
+    monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(clips))
+    db.clips = clips
 
     @contextlib.asynccontextmanager
     async def ctx():
@@ -272,3 +293,94 @@ def test_a_table_that_was_never_migrated_is_nothing_to_clear(env, monkeypatch, t
     _delete(svc)
     assert _q(db, "SELECT COUNT(*) FROM notes") == [(0,)]
     asyncio.run(db.close())
+
+
+# ── contacts with references from other rows (foreign keys enforced, as on Postgres) ─────────────────────────────────────────
+
+def test_a_private_contact_goes_after_the_rows_that_point_at_it_and_another_members_note_keeps_its_row(env, store):
+    svc, _col = env
+    _delete(svc)                                    # PRAGMA foreign_keys = ON: a parent-first order raises here
+    assert "pp-" + A not in _ids(store, "people")
+    assert _q(store, "SELECT user_id, person_id FROM notes WHERE id = 'note-b-on-a'") == [(B, None)], "B's note stays, unlinked"
+    assert _q(store, "SELECT person_id FROM notes WHERE id = ?", ("note-p-" + B,)) == [("pp-" + B,)], "B's own link is untouched"
+    assert not _q(store, "SELECT id FROM journal_entries WHERE user_id = ?", (A,))
+
+
+def _migration_fks():
+    """(child, column, parent) for every foreign key the migrations declare (CREATE TABLE bodies and ALTER TABLE ... REFERENCES)."""
+    import glob
+    import re
+    from pathlib import Path
+
+    out = set()
+    for f in sorted(glob.glob(str(Path(memory_service.__file__).parent / "alembic" / "versions" / "*.py"))):
+        t = Path(f).read_text(encoding="utf-8")
+        for m in re.finditer(r"CREATE TABLE(?: IF NOT EXISTS)?\s+(\w+)\s*\((.*?)\n\s*\)", t, re.S):
+            for line in m.group(2).split("\n"):
+                l = line.strip().rstrip(",")
+                fk = re.match(r"FOREIGN KEY\s*\((\w+)\)\s*REFERENCES\s+(\w+)", l, re.I) or re.match(r"(\w+)\s+\w+.*?REFERENCES\s+(\w+)", l, re.I)
+                if fk:
+                    out.add((m.group(1), fk.group(1), fk.group(2)))
+        for fk in re.finditer(r"ALTER TABLE (?:IF EXISTS )?(\w+)\s+ADD COLUMN (?:IF NOT EXISTS )?(\w+)[^\n;\"]*?REFERENCES\s+(\w+)", t, re.I):
+            out.add(fk.groups())
+    return out
+
+
+def test_the_erase_order_deletes_every_child_before_its_parent_per_the_migrations(env, store):
+    """Derived from the migration files, so a future table with a foreign key cannot reintroduce a parent-first delete."""
+    svc, _col = env
+    _delete(svc)
+    order = list(mof.last_order)
+    fks = _migration_fks()
+    assert ("notes", "person_id", "people") in fks and ("journal_entries", "person_id", "people") in fks, "the parser sees 0006"
+    bad = []
+    for child, col, parent in fks:
+        if child in order and parent in order and child != parent:
+            last_child = max(i for i, t in enumerate(order) if t == child)
+            first_parent = min(i for i, t in enumerate(order) if t == parent)
+            if last_child > first_parent:
+                bad.append(f"{child}.{col} -> {parent}")
+        elif parent in order and child not in order and parent == "people" and (child, col) not in {(t, "person_id") for t in mof.NULLED}:
+            # a table we never delete from that points at a contact we delete: it must cascade or set null in its migration
+            pass
+    assert not bad, f"parent deleted before child: {bad}"
+    plain = {(c, col) for c, col, p in fks if p == "people" and c in ("notes", "journal_entries")}
+    assert plain <= {(t, "person_id") for t in mof.NULLED}, "every plain reference to a contact from another member's row is nulled"
+
+
+# ── biometrics: rows, labelled clips, the panels, a stale claim ──────────────────────────────────────────────────────────────
+
+def test_the_members_biometrics_go_rows_and_files_and_another_members_stay(env, store):
+    svc, _col = env
+    _delete(svc)
+    assert _ids(store, "speaker_profiles") == {"spk-" + B} and _ids(store, "face_profiles") == {"face-" + B}
+    left = sorted(p.name for p in store.clips.iterdir())
+    assert left == ["legacy.wav", f"turn-{B}.verdict.json", f"turn-{B}.wav"], "A's labelled clip and label go; B's and a legacy clip stay"
+
+
+def test_a_clip_that_cannot_be_removed_fails_the_delete(env, store, monkeypatch):
+    import voice_clips
+
+    svc, _col = env
+    monkeypatch.setattr(voice_clips, "_remove", lambda *_a: False)
+    with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
+        _delete(svc)
+
+
+def test_a_stale_panel_claim_cannot_verify_the_deleted_member(env, store, monkeypatch):
+    """The panel's cached copy may still match A until it drops it; the server's claim gate reads the store, so the claim is refused."""
+    import db_compat
+    from routers import voice_tts
+
+    svc, _col = env
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield store
+    def claim(uid):
+        with monkeypatch.context() as m:              # the claim gate reads this store; the erase's other erasers keep theirs
+            m.setattr(db_compat, "get_compat_db", ctx)
+            return asyncio.run(voice_tts._voice_claim_consented(uid))
+    assert claim(A) is True, "control: A's consented profile verifies before the delete"
+    _delete(svc)
+    assert claim(A) is False and claim(B) is True
