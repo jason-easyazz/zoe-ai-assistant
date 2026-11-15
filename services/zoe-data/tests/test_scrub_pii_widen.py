@@ -572,8 +572,8 @@ def _timed(text: str) -> float:
 @pytest.mark.parametrize("pad", sorted(_TIMING_PADS))
 def test_every_label_form_stays_linear_on_a_long_padding_run(pad):
     """For EVERY label / connector form: the form + 16000 chars of the padding completes under a fixed bound, and doubling the
-    length (8000 -> 16000) does not more than ~2.5x the time (a ratio, so a quadratic shape is caught without flaking on a
-    loaded box; tiny times are not ratio-checked). ``password is`` + 16000 spaces took 4.6 s before the connector was made
+    length (8000 -> 16000) does not more than ~2.5x the time (a ratio read only above 80 ms and confirmed twice, so a
+    quadratic shape is caught without flaking on a loaded box). ``password is`` + 16000 spaces took 4.6 s before the connector was made
     unambiguous."""
     unit = _TIMING_PADS[pad]
     slow = []
@@ -583,6 +583,8 @@ def test_every_label_form_stays_linear_on_a_long_padding_run(pad):
         if t_long > _TIMING_BOUND_S:
             slow.append((form, "bound", round(t_long, 3)))
             continue
-        if t_long > 0.02 and t_long / max(_timed(short), 1e-4) > 2.5:
+        # a ratio on a few milliseconds is noise on a loaded box (it flaked at 34 ms): the ratio is read only where a
+        # quadratic shape would show (the old connector was 1.1 s -> 4.5 s here), and must hold on a second measurement
+        if t_long > 0.08 and all(_timed(long) / max(_timed(short), 1e-4) > 2.5 for _ in range(2)):
             slow.append((form, "ratio", round(t_long, 3)))
     assert not slow, slow
