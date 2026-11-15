@@ -205,7 +205,7 @@ eq(RP.putBody({ channels: [] }, 'other', true), null, 'an unknown control sends 
   ok(/id="tg-reminders-root"/.test(tg), 'mounted inside the Telegram section');
   ok(/ZoeReminderPhone\.mount\(document\.getElementById\('tg-reminders-root'\), \{ fetchJson: btFetch \}\)/.test(desk),
      'mounted with btFetch (which carries err.status for the 403)');
-  ok(/function renderTgStatus\(tid\) \{\n  loadReminderPhone\(\);/.test(desk), 're-read whenever the Telegram link status is drawn');
+  ok(/function renderTgStatus\(tid(?:, proof)?\) \{\n  loadReminderPhone\(\);/.test(desk), 're-read whenever the Telegram link status is drawn');
   ok(!/\/touch\//.test(src) && !/\/touch\//.test(tg), 'nothing routes into /touch/');
   const touchDir = path.join(DIST, 'touch');
   const touchRefs = fs.readdirSync(touchDir).filter(function (f) { return /\.html$/.test(f); })
