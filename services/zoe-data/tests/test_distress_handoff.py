@@ -1,5 +1,5 @@
 """The distress hand-off (``distress_handoff``): detector, per-tier precision/recall, language independence, the fixed reply, the notification.
-Synthetic phrases only (``fixtures/distress_labelled.json``, 208 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
+Synthetic phrases only (``fixtures/distress_labelled.json``, 490 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
 from __future__ import annotations
 
 import ast
@@ -16,9 +16,17 @@ import lexicons
 
 pytestmark = pytest.mark.ci_safe
 SETS = json.loads((Path(__file__).parent / "fixtures" / "distress_labelled.json").read_text(encoding="utf-8"))
-ROWS = [(lang, label, t) for s in ("dev", "held_out_1", "blind_2") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+SET_NAMES = ("dev", "held_out_1", "blind_2", "ideation_3", "ideation_3_probe")
+ROWS = [(lang, label, t) for s in SET_NAMES for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
 NEVER_WAKE = "I want to go to sleep and never wake up"
-KNOWN_MISSES = {NEVER_WAKE, "he is dying of cancer and I am scared"}      # the limits stated in docs/knowledge/distress-handoff.md
+IDEATION_MISSES = {"i keep thinking i should kill myself",                # no "should" desire (a bare "I should die" is common hyperbole)
+                   "been feeling suicidal since monday and i dont know why"}   # no subject: a bare form would also fire on "she has been feeling suicidal"
+KNOWN_MISSES = {NEVER_WAKE, "he is dying of cancer and I am scared"} | IDEATION_MISSES      # the limits stated in docs/knowledge/distress-handoff.md
+OVERDOSE = [(lang, label, t) for s in ("overdose_4", "overdose_4_probe", "overdose_4_relief", "overdose_4_voices") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+# Over-triggers that were ALREADY there before the intent cues (overdose_bare has no required subject; overdose_now takes "all my tablets"
+# and the inner "i" of "i think i took..."). Kept on purpose: the safe direction, and weakening the floor is an owner decision.
+OVERDOSE_PREEXISTING_HANDOFF = {"my friend took too many pills on purpose", "my brother overdosed last year", "i think i took too many painkillers, is that bad",
+                                "i overdosed on chocolate", "i took all my tablets to the pharmacy to get them checked", "i took all my tablets on time today"}
 
 
 def run(coro):
@@ -33,8 +41,8 @@ def _env(monkeypatch):
     dh._NOTIFIED.clear()
 
 
-def table(scope=None):
-    got = [(label, dh.detect(t).tier) for lang, label, t in ROWS if scope in (None, lang)]
+def table(scope=None, rows=None):
+    got = [(label, dh.detect(t).tier) for lang, label, t in (ROWS if rows is None else rows) if scope in (None, lang)]
     out = {}
     for tier in ("handoff", "gentle", "none"):
         tp, pred, lab = (sum(1 for a, b in got if a == b == tier), sum(1 for _a, b in got if b == tier), sum(1 for a, _b in got if a == tier))
@@ -51,6 +59,103 @@ def test_per_tier_precision_and_recall_on_the_labelled_set():
     assert len(ROWS) >= 200 and {r[0] for r in ROWS} == {"en", "es"}
     assert {t for _l, label, t in ROWS if dh.detect(t).tier != label} == KNOWN_MISSES                      # every miss is a stated limit
     assert [t for _l, label, t in ROWS if label == "handoff" and dh.detect(t).tier == "none"] == [NEVER_WAKE]
+
+
+IDEATION = [(lang, label, t) for s in ("ideation_3", "ideation_3_probe") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+
+
+def test_first_person_suicidal_ideation_is_a_handoff_and_every_must_not_stays_below_it():
+    """The live gap (2026-11-14): "im thinking about suicide" scored gentle (topic word), so the brain answered. A first-person ideation statement is a hand-off;
+    the same words negated, quoted, about a third party, topical, professional or resolved-past ("used to") stay gentle, and an idiom stays none."""
+    t = table(rows=IDEATION)
+    print("ideation", {k: (v["n"], round(v["precision"], 3), round(v["recall"], 3)) for k, v in t.items()})
+    fire = [x for _l, label, x in IDEATION if label == "handoff" and x not in IDEATION_MISSES]
+    assert len(fire) >= 30 and [x for x in fire if dh.detect(x).tier != "handoff"] == []
+    must_not = [(label, x) for _l, label, x in IDEATION if label != "handoff"]
+    assert len(must_not) >= 30 and [x for label, x in must_not if dh.detect(x).tier != label] == []
+    assert t["handoff"]["precision"] == 1.0 and all(dh.detect(x).tier == "gentle" for x in IDEATION_MISSES)     # a stated miss is gentle (logged), never none
+
+
+@pytest.mark.parametrize("text,tier,why", [
+    ("im thinking about suicide", "handoff", "cue"), ("I'm having suicidal thoughts", "handoff", "cue"), ("i feel suicidal", "handoff", "cue"),
+    ("im not thinking about suicide", "gentle", "negated"), ("i dont have suicidal thoughts", "gentle", "negated"), ("i am not suicidal", "gentle", "negated"),
+    ("i dont want to die", "gentle", "negated"),                                   # the new cues must not pull this into the hand-off
+    ("in the film he says he is thinking about suicide", "gentle", "cue"), ("in the film he says im thinking about suicide", "gentle", "quoted"),
+    ("my friend is thinking about suicide", "gentle", "cue"), ("she has suicidal thoughts", "gentle", "topic"),
+    ("we talked about suicide prevention at school", "gentle", "topic"), ("im thinking about suicide prevention training", "gentle", "topic"),
+    ("i work in suicide prevention", "gentle", "topic"), ("i used to think about suicide years ago", "gentle", "topic"),
+    ("i keep thinking about ending it with my boyfriend", "none", ""), ("no tengo pensamientos suicidas", "gentle", "topic"),
+    ("tengo pensamientos suicidas", "handoff", "cue"), ("pienso en el suicidio de mi tio", "gentle", "topic"),
+])
+def test_the_ideation_cues_respect_the_existing_guards(text, tier, why):
+    v = dh.detect(text)
+    assert (v.tier, v.why) == (tier, why), v
+
+
+@pytest.mark.parametrize("text,tier", [
+    ("I am suicidal", "handoff"), ("I have suicidal thoughts", "handoff"), ("I have suicidal thoughts about the future", "handoff"),
+    ("i have suicidal feelings", "handoff"), ("i had suicidal ideas last week", "handoff"), ("ive been suicidal for a while", "handoff"),
+    ("I have suicidal friends", "gentle"), ("I have suicidal patients", "gentle"), ("i have suicidal clients at work", "gentle"),
+    ("i get suicidal patients every week", "gentle"), ("i have suicidal content in my essay", "gentle"),
+    ("i work with suicidal teenagers", "gentle"), ("i had a suicidal brother", "gentle"),
+])
+def test_suicidal_is_the_speakers_own_state_never_a_person_they_name(text, tier):
+    """Review finding: "I have suicidal friends" handed off. Own state ("I am / I feel suicidal") or the noun ("suicidal thoughts") only; a person noun = third party."""
+    assert dh.detect(text).tier == tier
+
+
+@pytest.mark.parametrize("text", [
+    "I want to die. I am ending it with my boyfriend.", "I am ending it with my boyfriend. I want to die.",
+    "I'm dying to see it. I want to die.", "I want to die. I'm dying to see it.", "I'm dying to see it, I want to die",
+    "I'm dying to see it and I want to die",
+])
+def test_an_idiom_never_voids_a_cue_in_another_clause(text):
+    """Review finding (fail-open): an idiom within 15 characters voided a REAL cue across a sentence break."""
+    assert dh.detect(text).tier == "handoff"
+
+
+try:                                                   # the regex parser, to turn each lexicon idiom into one sentence it matches
+    from re import _parser as _sre                     # Python >= 3.11
+except ImportError:                                    # pragma: no cover
+    import sre_parse as _sre
+
+
+def _sample(pattern: str) -> str:
+    """One shortest string the pattern matches: first branch, first class member, minimum repeats."""
+    def gen(items) -> str:
+        out = []
+        for op, av in items:
+            name = str(op)
+            if name == "LITERAL":
+                out.append(chr(av))
+            elif name == "IN":
+                kind, val = av[0]
+                out.append(chr(val) if str(kind) == "LITERAL" else chr(val[0]) if str(kind) == "RANGE" else "a")
+            elif name == "BRANCH":
+                out.append(gen(av[1][0]))
+            elif name == "SUBPATTERN":
+                out.append(gen(av[-1]))
+            elif name in ("MAX_REPEAT", "MIN_REPEAT"):
+                out.append(gen(av[2]) * av[0])
+            elif name in ("ANY", "CATEGORY"):
+                out.append("a")
+        return "".join(out)
+    return gen(_sre.parse(pattern)).strip()
+
+
+IDIOMS = [i for lang in lexicons.LANGS for i in ((lexicons.load(lang).get("distress") or {}).get("idioms") or [])]
+IDIOM_SAMPLES = sorted({_sample(i) for i in IDIOMS})
+
+
+def test_every_idiom_alone_is_none_and_never_voids_a_handoff_in_the_next_or_previous_sentence():
+    """The CLASS behind the fail-open finding, generated from the data: every lexicon idiom x every hand-off row of the labelled set, both orders."""
+    assert len(IDIOMS) >= 35 and all(re.search(dh._strip(i), _sample(i)) for i in IDIOMS)      # the generator really produces each idiom
+    assert [i for i in IDIOM_SAMPLES if dh.detect(i).tier != "none"] == []
+    cues = sorted({t for _l, label, t in ROWS + OVERDOSE if label == "handoff" and dh.detect(t).tier == "handoff"})
+    assert len(cues) >= 150
+    bad = [(i, c) for i in IDIOM_SAMPLES for c in cues
+           if dh.detect(f"{i}. {c}.").tier != "handoff" or dh.detect(f"{c}. {i}.").tier != "handoff"]
+    assert bad == [], bad[:10]
 
 
 @pytest.mark.parametrize("text,tier", [
@@ -297,3 +402,31 @@ def test_no_gap_line_for_the_gentle_tier_a_dry_run_or_a_chosen_notify_off(monkey
         monkeypatch.setenv("ZOE_DISTRESS_NOTIFY", "off")              # the owner chose no notice
         run(dh.handle("I want to die", "member_1"))
     assert not [r for r in caplog.records if "DISTRESS_NO_CONTACT" in r.getMessage()]
+
+
+def test_an_intentional_overdose_is_a_handoff_and_accident_story_fiction_and_idiom_stay_below_it():
+    """The live gap (2026-11-14): "took too many on purpose" / "took them all to make it stop" scored NONE and reached the brain. Quantity + an intent
+    marker (or a strong intent with no quantity) in the speaker's own words hands off; an accident, someone else, the distant past, fiction,
+    general knowledge and idioms stay gentle or none. The rows that already handed off before these cues are pinned, never silently accepted."""
+    fire = [t for _l, label, t in OVERDOSE if label == "handoff"]
+    assert len(fire) >= 50 and [t for t in fire if dh.detect(t).tier != "handoff"] == []
+    must_not = [t for _l, label, t in OVERDOSE if label != "handoff"]
+    assert len(must_not) >= 50
+    assert {t for t in must_not if dh.detect(t).tier == "handoff"} == OVERDOSE_PREEXISTING_HANDOFF
+
+
+@pytest.mark.parametrize("text,tier", [
+    ("i took too many on purpose", "handoff"), ("i took them all to make it stop", "handoff"), ("i overdosed", "handoff"),
+    ("i took too many pills", "handoff"), ("i want to overdose", "handoff"), ("i took all my tablets", "handoff"),      # unchanged: no intent word needed
+    ("ive taken an overdose", "handoff"), ("im overdosing", "handoff"), ("i took them all, i want it to stop", "handoff"),
+    ("i took too many by accident", "none"), ("i think i took too many", "none"), ("did i take too many", "none"),        # the medical floor's, never grabbed here
+    ("i didnt take them all on purpose", "none"), ("i took my pills on purpose today", "none"), ("i took my pills to stop the pain", "none"),
+    ("i took 2 panadol to stop the pain", "none"), ("i took my medicine because i wanted to stop coughing", "none"),
+    ("i took my tablets so i could stop feeling sick", "none"), ("i took my tablets so i dont wake up in the night", "none"),
+    ("i took too many to stop the pain in my knee", "none"), ("i took my pills because i want it to stop", "handoff"),
+    ("i took the whole bottle to stop the pain", "handoff"), ("i took my meds to stop the voices", "none"),       # ordinary treatment
+    ("i took my tablets to stop the thoughts", "none"), ("i took all of them so the voices stop forever", "handoff"), ("i took too many to stop the voices", "handoff"), ("i took my pills so i wont wake up", "handoff"), ("i took too many photos on purpose", "none"), ("i ate too many cookies on purpose", "none"),
+    ("my friend took them all to end it", "gentle"), ("years ago i took too many on purpose", "gentle"), ("i took too many on purpose years ago", "gentle"),
+])
+def test_the_overdose_intent_cues_and_their_guards(text, tier):
+    assert dh.detect(text).tier == tier

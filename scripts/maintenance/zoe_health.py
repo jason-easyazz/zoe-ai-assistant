@@ -11,6 +11,10 @@ Probes, all bounded (2 s HTTP, 5 s docker/systemctl):
     the 4B llama-server :11434, the Flue 2.x brain :3579, Kokoro :10201, the FunctionGemma router :11436;
   * Postgres (``pg_isready`` in zoe-database), containers in ``(unhealthy)`` / ``Restarting``;
   * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable;
+  * the restore drill has passed in the last 10 days (``zoe_restore_drill.py --check-stale``): a failed unit clears
+    when the next run is merely refused or never fires, so staleness is its own check. ONE voice: while the drill is
+    running it is the voice for its own bad spells (``--check-stale`` exit 6: stale, but it recorded a run in the last 2
+    days), so this check stays ok (report-only); it alerts only when the drill has stopped running (a dead timer), exit 4.
   * the forget ledger: zoe-data's ``/health`` field ``forget_ledger`` (an enum; the secret itself is never read here).
     ``unconfigured`` is red (a forget is not permanent); unreadable is ``unknown``, never red on its own.
 While the night window is open (``~/.zoe/night-window/WINDOW_OPEN``) the spine is stopped ON PURPOSE: its probes
@@ -87,6 +91,17 @@ def _run(argv: list[str], timeout: float = 5.0) -> tuple[int, str]:
 
 
 NIGHT_TIMER = "zoe-night-window.timer"
+DRILL = REPO_ROOT / "scripts" / "maintenance" / "zoe_restore_drill.py"
+
+
+def restore_drill_check(run: Callable = _run) -> Check:
+    """A drill refused week after week, or a verify timer that stopped firing, never shows as a failed unit."""
+    rc, txt = run([sys.executable, str(DRILL), "--check-stale"], timeout=20.0)
+    line = (txt or "").strip().splitlines()[-1:] or [f"rc={rc}"]
+    # rc 6 = stale, but the drill is still running (a run recorded in the last 2 days): its own owner_alert cadence
+    # (transition, weekly reminder, "passed again") is the ONE voice, so this check stays ok (report-only; the line still
+    # says STALE in health.log). When the drill stops running (dead timer), rc becomes 4 and this check alerts instead.
+    return Check("restore drill", rc in (0, 6), line[0])
 
 
 def night_timer_check(run: Callable = _run) -> Check:
@@ -148,6 +163,7 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     failed = sorted(u for u in (ln.split()[0] for ln in txt.splitlines() if ln.strip()) if not _foreign_unit(u)) if rc == 0 else []
     out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none"))
     out.append(night_timer_check(run))
+    out.append(restore_drill_check(run))
     du = shutil.disk_usage("/")
     pct = round(100 * du.used / du.total)
     out.append(Check("disk /", pct < DISK_WARN_PCT, f"{pct}% used"))

@@ -62,6 +62,8 @@ import memory_authority as _auth
 import memory_forgotten as _forgotten
 import own_words as _own_words
 import memory_temporal as _temporal
+import erase_watermark as _erase_watermark
+import user_erase_gate as _erase_gate
 from live_store_guard import (
     LiveStoreViolation,
     assert_palace_open_allowed,
@@ -737,6 +739,11 @@ def compact_drawers_index_sync(
 # maintenance gate (collection ops drained, new openers blocked) because ``VACUUM`` needs the file to itself.
 _ERASE_MAX_NEEDLES = 24          # verification scans every file once per needle: bound the cost
 _ERASE_NEEDLE_BYTES = 40         # a head window of each forgotten text; >= 12 bytes or it is noise
+
+
+def _log_erase_drop(lane: str) -> None:
+    """The ONE line a write dropped by the erase gate leaves: the writer's lane and a fixed code - never the member, the text or an id."""
+    logger.info("ERASE_GATE_DROP lane=%s code=erased_since_scheduled", lane or "-")
 
 
 def physical_erase_enabled() -> bool:
@@ -1668,6 +1675,17 @@ class MemoryService:
             _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
         except Exception:  # noqa: BLE001
             _event = None
+        if _event is None and source in MEMORY_OPT_OUT_SOURCES:
+            # a present emergency the converter declined (a bystander, two people): as mined it reads as a STANDING condition
+            # ("... cannot get up" under Routines; QA round 10a), so an automatic writer does not file it (medical_safety.unfiled_emergency)
+            try:
+                _unfiled = _ms.unfiled_emergency(text, anchor_text if anchor_text is not None else source_excerpt)
+            except Exception:  # noqa: BLE001
+                _unfiled = False
+            if _unfiled:
+                self._bump("emergency_unfiled", source)
+                logger.info("MEDICAL_EVENT_UNFILED user=%s source=%s", user_id, source)
+                return None
         _mined = None
         if _event is not None:
             logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
@@ -1791,6 +1809,9 @@ class MemoryService:
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            if _erase_gate.erased_since_scheduled(user_id):      # background work scheduled before an erase of this member: dropped
+                _log_erase_drop(source)
+                return None
             if idem_key in self._seen_keys:
                 self._bump("dedup", source)
                 return None
@@ -1903,10 +1924,19 @@ class MemoryService:
                     self._remember_seen_key(user_id, idem_key)
                     return None
 
+            async def _write() -> list:   # CREATED ids only: an overwrite of an existing pending row is an update (never re-creates)
+                if existing is None:
+                    await self._run_sync(self._write_row, mem_id, scrubbed, metadata)
+                    return [mem_id]
+                await self._run_sync(self._update_row, mem_id, scrubbed, metadata)
+                return []
+
+            async def _undo(created):
+                await self._undo_night_write(user_id, created, source or "ingest")
             try:
-                await self._run_sync(
-                    self._write_row, mem_id, scrubbed, metadata
-                )
+                # a night pass (its own process) that began before the member's erase: checked right before and after the write
+                if await _erase_watermark.guarded_write(user_id, source or "ingest", _write, _undo) is None:
+                    return None
             except LiveStoreViolation:
                 raise
             except Exception as exc:
@@ -2190,6 +2220,9 @@ class MemoryService:
             frontier = nxt
         return rows, chain
 
+    # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
+    # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
+    @_erase_gate.whole_member_erase
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
@@ -2205,6 +2238,12 @@ class MemoryService:
         self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
+        # The durable erase WATERMARK before anything is erased (erase_watermark: memory_forgotten, no text): every transcript miner,
+        # in this process or another, skips the member's turns at or before it. Fail closed: no mark, nothing erased (caller retries).
+        try:
+            await _erase_watermark.record(user_id, actor=actor)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: erase watermark not recorded ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
@@ -2220,6 +2259,20 @@ class MemoryService:
             await conversation_notes.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
+        # What Zoe DERIVED about the member (portrait, user-model card, open loops, proactive candidates / deliveries / spoken lines,
+        # pending offers: member_derived_forget). Fail closed. What they AUTHORED or the household shares is an owner decision.
+        try:
+            import member_derived_forget
+            await member_derived_forget.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: derived-store erasure failed ({type(exc).__name__})") from exc
+        # The superseded-value registry (migration 0080): which values the member corrected away. Fail closed; outside the memory lock
+        # (it takes the member's erase gate, which a registry record holds through its commit).
+        try:
+            import memory_value_registry
+            await memory_value_registry.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: value-registry erasure failed ({type(exc).__name__})") from exc
         # Household notifications (notifications_store): titles / messages written for the member. Same rule: fail closed. Outside the
         # memory lock: it takes the member's erase gate, which a notification create holds through its commit.
         try:
@@ -2243,142 +2296,170 @@ class MemoryService:
             await calendar_forget.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: account / calendar erasure failed ({type(exc).__name__})") from exc
-        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
-        async with lock:
-            # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
-            # FIRST, and fail closed: if they cannot be erased nothing else is touched (no "done" audit row, no success), so the
-            # caller retries the whole delete - a store blip must never read as "forgotten" while the words stay readable.
+        async def _gate_erasers_after_lock():
+            """reply_ledger / commitments / omi_recordings, each on its own; returns the pendant erase's failure (never raises)."""
             try:
-                import exact_words
-                await exact_words.delete_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
-            # ... and the night mind's observations (quotes of the same words), threads and run counts - same rule, fail closed
-            try:
-                import night_mind
-                await night_mind.delete_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
-            # ... and the now card (quotes of the same words, by key) - same rule, fail closed
-            try:
-                import now_card
-                await now_card.forget_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
-            # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
-            try:
-                import struggle_detector
-                await struggle_detector.delete_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
-            # ... and the local utterance-text logs (router shadow log, intent misses). They carry no user id, so the TEXT layer of
-            # every record goes household-wide; hash-only rows hold no words and stay. Same rule: fail closed.
-            try:
-                import local_text_logs
-                await asyncio.to_thread(local_text_logs.erase_all_text)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
-            # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
-            # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
-            try:
-                import restraint
-                await restraint.erase_user(user_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
-            # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0069): item ids + outcomes, no
-            # words, but nothing of the person stays. Erased whatever ZOE_OUTCOME_EDGES says; best-effort like restraint.
-            try:
-                import proactive.outcome_edges as outcome_edges
-                await outcome_edges.erase_user(user_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: outcome edges not erased for a deleted user (%s)", type(exc).__name__)
-            # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
-            # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
-            try:
-                import forget_redact
-                forget_redact.clear_turn_caches(user_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
-            try:   # ... and the in-process correction memory (value_correction._REMEMBERED: names + values for 6 h). Never raises.
-                import value_correction
-                value_correction.forget_user(user_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("memory_service: in-process correction memory not cleared for a deleted user")
-            # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
-            try:
-                import warm_speaker
-                await asyncio.to_thread(warm_speaker.forget_user, user_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
-            needles: list[str] = []
-            try:
-                ids = await self._run_sync(self._list_ids_for_user, user_id)
-                if ids and physical_erase_enabled():
-                    # heads of the texts about to be erased, held in memory only, to PROVE them gone afterwards
-                    needles = _needles_for_texts(await self._run_sync(self._texts_for_ids_sync, ids))
-                if ids:
-                    tomb_id = _delete_tombstone_id(user_id, ids)
-                    await self._run_sync(
-                        self._append_audit_sync,
-                        tomb_id, user_id, actor, "delete_user",
-                        _delete_tombstone_body(ids), None,
-                        reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
-                    )
-                    await self._run_sync(self._delete_ids, ids)
-                    await self._run_sync(
-                        self._append_audit_sync,
-                        tomb_id, user_id, actor, "delete_user_done",
-                        {"rows_removed": len(ids)}, None, "",
-                    )
-                audit_removed = await self._run_sync(self._delete_audit_for_user_sync, user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: {exc}") from exc
-            # The API delete left the text on disk (free pages, FTS5 index, write-ahead log, orphan HNSW
-            # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
-            if ids or audit_removed:
-                self.last_erase_report = await self._physical_erase(needles)
-            # Purge this user's idempotency-cache entries so re-teaching a
-            # previously known fact after a forget isn't dropped as a
-            # duplicate for the rest of the process lifetime.
-            self._recent_auto.pop(user_id, None)
-            stale_keys = self._seen_keys_by_user.pop(user_id, None)
-            if stale_keys:
-                for key in stale_keys:
-                    self._seen_keys.discard(key)
-            _invalidate_agent_user_facts_cache(user_id)
-            try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
-                import memory_provenance
-                memory_provenance.reset(user_id)
-                import reply_ledger     # ... and so do the persisted per-reply rows (migration 0044)
+                import reply_ledger     # ... the persisted per-reply rows (migration 0044)
                 await reply_ledger.forget_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: reply ledger not erased for a deleted user (%s)", type(exc).__name__)
+            try:
                 import commitments      # ... and the promises Zoe made to them
                 await commitments.forget_user(user_id)
-            except Exception:  # noqa: BLE001
-                pass
-            pendant_failure = None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: commitments not erased for a deleted user (%s)", type(exc).__name__)
             try:   # ... and their pendant recordings (migration 0045) and learned voices: audio, transcript, times, biometrics. FAIL CLOSED:
                 import omi_recordings   # a pendant erase that left anything behind must not read as "forgotten" (the caller retries)
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
-                pendant_failure = exc
-            try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
-                import alarms
-                await alarms.forget_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
-            try:   # ... and their speaking register (migration 0066): liked topics are their words. Fail closed.
-                import member_register
-                await member_register.forget_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: register erasure failed ({type(exc).__name__})") from exc
-            try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
-                import contacts_store
-                await contacts_store.forget_user(user_id)
-            except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
-                pass
-            if pendant_failure is not None:
-                raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
-            return len(ids)
+                return exc
+            return None
+
+
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
+                # FIRST, and fail closed: if they cannot be erased nothing else is touched (no "done" audit row, no success), so the
+                # caller retries the whole delete - a store blip must never read as "forgotten" while the words stay readable.
+                try:
+                    import exact_words
+                    await exact_words.delete_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
+                # ... and the night mind's observations (quotes of the same words), threads and run counts - same rule, fail closed
+                try:
+                    import night_mind
+                    await night_mind.delete_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+                # ... and the now card (quotes of the same words, by key) - same rule, fail closed
+                try:
+                    import now_card
+                    await now_card.forget_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
+                # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
+                try:
+                    import struggle_detector
+                    await struggle_detector.delete_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
+                # ... and the local utterance-text logs (router shadow log, intent misses). They carry no user id, so the TEXT layer of
+                # every record goes household-wide; hash-only rows hold no words and stay. Same rule: fail closed.
+                try:
+                    import local_text_logs
+                    await asyncio.to_thread(local_text_logs.erase_all_text)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
+                # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
+                # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
+                try:
+                    import restraint
+                    await restraint.erase_user(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+                # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0069): item ids + outcomes, no
+                # words, but nothing of the person stays. Erased whatever ZOE_OUTCOME_EDGES says; best-effort like restraint.
+                try:
+                    import proactive.outcome_edges as outcome_edges
+                    await outcome_edges.erase_user(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: outcome edges not erased for a deleted user (%s)", type(exc).__name__)
+                # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
+                # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
+                try:
+                    import correction_marker
+                    correction_marker.forget_user(user_id, reason="delete_user")   # pending-correction markers: ids only, never raises
+                    import forget_redact
+                    forget_redact.clear_turn_caches(user_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
+                try:   # ... and the in-process correction memory (value_correction._REMEMBERED: names + values for 6 h). Never raises.
+                    import value_correction
+                    value_correction.forget_user(user_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("memory_service: in-process correction memory not cleared for a deleted user")
+                # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
+                try:
+                    import warm_speaker
+                    await asyncio.to_thread(warm_speaker.forget_user, user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
+                needles: list[str] = []
+                try:
+                    ids = await self._run_sync(self._list_ids_for_user, user_id)
+                    if ids and physical_erase_enabled():
+                        # heads of the texts about to be erased, held in memory only, to PROVE them gone afterwards
+                        needles = _needles_for_texts(await self._run_sync(self._texts_for_ids_sync, ids))
+                    if ids:
+                        tomb_id = _delete_tombstone_id(user_id, ids)
+                        await self._run_sync(
+                            self._append_audit_sync,
+                            tomb_id, user_id, actor, "delete_user",
+                            _delete_tombstone_body(ids), None,
+                            reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
+                        )
+                        await self._run_sync(self._delete_ids, ids)
+                        await self._run_sync(
+                            self._append_audit_sync,
+                            tomb_id, user_id, actor, "delete_user_done",
+                            {"rows_removed": len(ids)}, None, "",
+                        )
+                    audit_removed = await self._run_sync(self._delete_audit_for_user_sync, user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: {exc}") from exc
+                # The API delete left the text on disk (free pages, FTS5 index, write-ahead log, orphan HNSW
+                # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
+                if ids or audit_removed:
+                    self.last_erase_report = await self._physical_erase(needles)
+                # Purge this user's idempotency-cache entries so re-teaching a
+                # previously known fact after a forget isn't dropped as a
+                # duplicate for the rest of the process lifetime.
+                self._recent_auto.pop(user_id, None)
+                stale_keys = self._seen_keys_by_user.pop(user_id, None)
+                if stale_keys:
+                    for key in stale_keys:
+                        self._seen_keys.discard(key)
+                _invalidate_agent_user_facts_cache(user_id)
+                try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
+                    import memory_provenance
+                    memory_provenance.reset(user_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
+                    import alarms
+                    await alarms.forget_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
+                try:   # ... and their speaking register (migration 0066): liked topics are their words. Fail closed.
+                    import member_register
+                    await member_register.forget_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: register erasure failed ({type(exc).__name__})") from exc
+                try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
+                    import contacts_store
+                    await contacts_store.forget_user(user_id)
+                except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
+                    pass
+        finally:
+            # AFTER the memory lock is released (LOCK ORDER, see erase_rows): these three take the member's erase gate, so they
+            # cannot run inside it. They run in a ``finally``: an in-lock step that raised (alarms, the register...) must not skip
+            # them - a member delete is the strongest forget and must not depend on the caller retrying. Each is guarded on its own;
+            # the in-lock error (if any) still propagates afterwards, so the delete still reports failure.
+            pendant_failure = await _gate_erasers_after_lock()
+            try:   # pending-correction markers again, AFTER every store went: one set while the delete ran must not outlive it
+                import correction_marker
+                correction_marker.forget_user(user_id, reason="delete_user")
+            except Exception as exc:  # noqa: BLE001 - never replaces the delete's own result
+                logger.warning("PENDING_CORRECTION clear_failed reason=delete_user user=%s err=%s", user_id, type(exc).__name__)
+        if pendant_failure is not None:   # the pendant erase fails CLOSED (reached only when nothing in the lock raised)
+            raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
+        try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Fail closed: a
+            await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
+        return len(ids)
 
     async def list_by_status(
         self,
@@ -2658,6 +2739,15 @@ class MemoryService:
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            if _erase_gate.erased_since_scheduled(user_id):      # same rule as ingest: an erase since the work was scheduled wins
+                _log_erase_drop(origin or actor)
+                return None
+            if await self._run_sync(self._get_sync, mem_id) is None:
+                return None      # read before the lock, erased since (this process's erase holds this lock): never written back
+            phase = origin or actor or "review"
+
+            async def _undo(created):      # a night pass's write raced an erase in the API process: exactly what it CREATED goes
+                await self._undo_night_write(user_id, created, phase)
             if decision in {"approve", "reject", "archive"}:
                 new_status = {
                     "approve": "approved",
@@ -2699,9 +2789,11 @@ class MemoryService:
                     new_meta["edge_applied_id"] = new_edge
                     new_meta["supersedes_edge_id"] = disputed[len(_EDGE_REF):]
                     disputed = ""
-                await self._run_sync(
-                    self._write_row, mem_id, current.text, new_meta
-                )
+                async def _write_decision() -> list:      # MODIFIES an existing row (update: never re-creates); creates nothing
+                    await self._run_sync(self._update_row, mem_id, current.text, new_meta)
+                    return []
+                if await _erase_watermark.guarded_write(user_id, phase, _write_decision, _undo) is None:
+                    return None
                 await self._append_audit(
                     mem_id=mem_id,
                     user_id=user_id,
@@ -2827,21 +2919,28 @@ class MemoryService:
             # safe order expert_dispatch._maybe_supersede uses. "superseded" is in
             # _BLOCKED_READ_STATUSES (instantly invisible on read); marking the old
             # row first and then failing the new write would make the fact vanish.
-            await self._run_sync(
-                self._write_row, new_id, scrubbed, new_meta
-            )
-            # Guard new_id != mem_id: an edit whose text+durable identity hash to the
-            # same mem_id just overwrote the row in place, so there is no distinct old
-            # row to retire — superseding it would hide the only surviving copy.
-            if new_id != mem_id:
-                old_meta = dict(current.metadata)
-                old_meta["status"] = "superseded"
-                old_meta["superseded_by_id"] = new_id
-                old_meta.update(_temporal.retire_fields(
-                    old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
-                await self._run_sync(
-                    self._write_row, mem_id, current.text, old_meta
-                )
+            async def _write_edit() -> list:     # CREATES new_id (when it is a new row); only MODIFIES the superseded one
+                created = []
+                if new_id != mem_id and await self._run_sync(self._get_sync, new_id) is None:
+                    await self._run_sync(self._write_row, new_id, scrubbed, new_meta)
+                    created.append(new_id)
+                else:                        # an in-place rewrite (or an existing row): update, never re-create
+                    await self._run_sync(self._update_row, new_id, scrubbed, new_meta)
+                # Guard new_id != mem_id: an edit whose text+durable identity hash to the
+                # same mem_id just overwrote the row in place, so there is no distinct old
+                # row to retire — superseding it would hide the only surviving copy.
+                if new_id != mem_id:
+                    old_meta = dict(current.metadata)
+                    old_meta["status"] = "superseded"
+                    old_meta["superseded_by_id"] = new_id
+                    old_meta.update(_temporal.retire_fields(
+                        old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
+                    await self._run_sync(
+                        self._update_row, mem_id, current.text, old_meta
+                    )
+                return created
+            if await _erase_watermark.guarded_write(user_id, phase, _write_edit, _undo) is None:
+                return None
             await self._append_audit(
                 mem_id=new_id,
                 user_id=user_id,
@@ -3390,17 +3489,29 @@ class MemoryService:
                 return False
             lock = self._user_locks.setdefault(uid, asyncio.Lock())
             async with lock:
+                # the row was read OUTSIDE the lock: an erase that ran since (this process: under this lock) must not have it written
+                # back (the write is an upsert). A night pass's erase runs in ANOTHER process: guarded_write checks before and after.
+                if await self.get(mem_id) is None:
+                    return False
                 md = dict(cur.metadata)
                 md.update(status="archived", reviewed_by=actor,
                           reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
                           review_note=note[:1024], duplicate_of=keeper_id)
                 md.update(_temporal.archive_fields(
                     cur.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
-                await self._run_sync(self._write_row, mem_id, cur.text, md)
-                await self._append_audit(
-                    mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
-                    before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
-                    reason=note)
+
+                async def write() -> list:     # MODIFIES the existing row (update: never re-creates it); creates nothing
+                    await self._run_sync(self._update_row, mem_id, cur.text, md)
+                    await self._append_audit(
+                        mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
+                        before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
+                        reason=note)
+                    return []
+
+                async def undo(created):
+                    await self._undo_night_write(uid, created, "archive_duplicate")
+                if await _erase_watermark.guarded_write(uid, "archive_duplicate", write, undo) is None:
+                    return False
             _invalidate_agent_user_facts_cache(uid)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -3534,7 +3645,21 @@ class MemoryService:
             dup = await self._existing_candidate(user_id, scrubbed, contradicts)
             if dup is not None:
                 return dup.id
-            await self._run_sync(self._write_row, mem_id, scrubbed, md)
+            async def _write():
+                if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
+                    _log_erase_drop(writer)
+                    return None
+                if existing is None:
+                    await self._run_sync(self._write_row, mem_id, scrubbed, md)
+                    return [mem_id]                     # CREATED
+                await self._run_sync(self._update_row, mem_id, scrubbed, md)
+                return []                               # modified an existing pending row: never undone
+
+            async def _undo(created):
+                await self._undo_night_write(user_id, created, writer or "candidate")
+            # a night pass (its own process) that began before the member's erase: checked right before and after the write
+            if await _erase_watermark.guarded_write(user_id, writer or "candidate", _write, _undo) is None:
+                return None
             await self._append_audit(
                 mem_id=mem_id, user_id=user_id, actor=writer, action="authority_candidate",
                 before=None, after={"contradicts_id": contradicts, "kind": kind,
@@ -3691,8 +3816,14 @@ class MemoryService:
                 n += len(ids)
         return n
 
+    async def _undo_night_write(self, user_id: str, ids: Iterable[str], phase: str) -> None:
+        """A night write that raced a member erase (``erase_watermark.guarded_write``) is removed through the audited erase, under the
+        member's lock this caller already holds. RAISES when it cannot (the row must not quietly stay)."""
+        await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
+                              lock_held=True)
+
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
-                         reason: str = "forgotten by request") -> dict[str, Any]:
+                         reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
@@ -3704,7 +3835,26 @@ class MemoryService:
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
         if not want:
             return {"rows_removed": 0}
-        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        # LOCK ORDER (the same everywhere): the member's ERASE GATE (user_erase_gate) is never taken while this service's per-member
+        # memory lock (_user_locks) is held. The writers hold the gate and THEN take the memory lock (omi_review_apply.approve ->
+        # ingest), so the reverse order here deadlocked a pendant approval against a row forget. Every gate-taking eraser therefore
+        # runs before the memory lock is taken (or after it is released).
+        # ``lock_held``: the caller already holds this member's memory lock (a night write undoing itself inside ingest / review /
+        # the candidate write / archive_duplicate:
+        # erase_watermark.guarded_write). The lock is not re-entrant, and the registry step is SKIPPED: it takes the erase gate,
+        # which must never be taken under the memory lock, and the member erase that triggered the undo clears the member's
+        # whole registry itself (delete_user -> memory_value_registry.forget_user, fail closed).
+        if not lock_held:
+            try:
+                # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
+                # to these rows (migration 0080). Before the owned-rows check, so a retry whose rows already went still clears them.
+                # ``gate_held``: a caller INSIDE this member's erase gate (the pendant day review's person / name / recording forgets,
+                # via omi_review_apply.unwrite) says so - the gate is not reentrant, and taking it again here would hang that forget
+                import memory_value_registry
+                await memory_value_registry.erase_for_rows(user_id, want, gate_held=gate_held)
+            except Exception as exc:
+                raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+        lock = contextlib.nullcontext() if lock_held else self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
@@ -3924,8 +4074,17 @@ class MemoryService:
     async def _recent_paraphrase(self, user_id: str, text: str) -> bool:
         """True when a row an automatic writer stored within ``_RECENT_AUTO_TTL_S`` says the same thing (and is still approved)."""
         now = time.monotonic()
+        try:   # a filed emergency event is the same record as another only by (person, kind, date), never by word overlap (QA round 10a)
+            import medical_safety as _ms
+
+            ev = _ms.event_key(text)
+        except Exception:  # noqa: BLE001
+            _ms, ev = None, None
         for ts, mem_id, stored in reversed(self._recent_auto.get(user_id, ())):
-            if now - ts > _RECENT_AUTO_TTL_S or not _is_paraphrase(text, stored):
+            if now - ts > _RECENT_AUTO_TTL_S:
+                continue
+            sk = _ms.event_key(stored) if ev is not None else None
+            if not ((ev == sk) if (ev is not None and sk is not None) else _is_paraphrase(text, stored)):
                 continue
             try:
                 row = await self._run_sync(self._get_sync, mem_id)
@@ -3955,7 +4114,7 @@ class MemoryService:
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
     _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup", GUEST_DROP,
-                                 "identity_drop"})
+                                 "identity_drop", "emergency_unfiled"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:
@@ -4061,6 +4220,17 @@ class MemoryService:
 
     def _audit_collection(self):
         return _palace_client(self._data_dir).get_or_create_collection(_AUDIT_COLLECTION)
+
+    def _update_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
+        """Rewrite an EXISTING row; a row that is gone stays gone (Chroma ``update`` skips unknown ids, unlike ``upsert``). For a
+        modification a night pass made from a row it read earlier: an erase in another process may have removed it meanwhile."""
+        assert_write_allowed(
+            getattr(self, "_data_dir", _MEMPALACE_DATA), str(metadata.get("user_id") or metadata.get("wing") or ""), "row write")
+        col = self._collection()
+        if callable(getattr(col, "update", None)):
+            col.update(ids=[mem_id], documents=[text], metadatas=[metadata])
+        elif (col.get(ids=[mem_id], include=[]).get("ids") or []):      # a store without update (a lab stand-in): only an existing row
+            col.upsert(ids=[mem_id], documents=[text], metadatas=[metadata])
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
         assert_write_allowed(
