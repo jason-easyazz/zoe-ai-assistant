@@ -550,3 +550,9 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
+- `first-boot/` - **the first-boot simulator** (2026-11-14; design `docs/architecture/first-boot.md`): drives
+  `services/zoe-data/first_boot.py` (the ordered setup checklist), `first_boot_probe.py` (reads it from the real tables) and the
+  flow script (`lexicons_data/first_boot.json` + `first_boot_en.json`) against a throwaway SQLite store with scripted synthetic
+  people (silence, "later", mistakes, a child answering, walking away, power loss). `--today` makes every step whose mechanism is
+  `missing` fail, so it reports where a buyer stops. Hand-run under `flock /tmp/zoe-precheck.lock`; its own checks are
+  `test_sim.py` (plain asserts, not CI). No live database, model or network.
