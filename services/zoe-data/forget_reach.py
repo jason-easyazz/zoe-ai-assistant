@@ -259,6 +259,13 @@ OTHER: tuple[Store, ...] = (
           "naming it (cascade step night_extract); a member erase (struggle_detector.delete_user calls night_extract.delete_user) drops all of the member's facts and summary line; load_facts re-checks the ledger.",
           member="struggle_detector.delete_user", entity="night_extract.erase_entity",
           markers=(".night-extract.jsonl", ".night-extract-summary.json")),
+    Store("zoe_os_shadow_kernel", "db", WORDS, REACHED, "~/.zoe/os-shadow/ (ZOE_OS_SHADOW_DIR; ZOE_OS_LIST_SHADOW, default off): the Zoe OS kernel's spine "
+          "(kernel/zoe-os.db: an event and a receipt per list add, both holding the item), its in-memory list driver and a roster / credential / pending-forget "
+          "file set (ids only). os_shadow.forget_user forgets the whole member in the kernel (fail-closed while the flag is shadow; with the flag off a kernel that "
+          "was once installed is still tried and a miss is parked in pending-forgets.json and replayed); the entity forget runs the os_shadow cascade step "
+          "(os_shadow.erase_entity; its retry is a whole-member forget) and the topic forget os_shadow.erase_topic. With no kernel installed nothing is recorded "
+          "and no socket is touched.",
+          member="os_shadow.forget_user", entity="os_shadow.erase_entity", markers=("os-shadow", "pending-forgets.json")),
     Store("self_improver_candidates", "file", DERIVED, REACHED, "~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B "
           "invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, "
           "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "

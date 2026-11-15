@@ -359,6 +359,20 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
             pass
         res.store_down = True
         return res
+    try:     # the Zoe OS list shadow's kernel record of list items (os_shadow.py): fail closed while shadow is on, retried by the marker
+        import os_shadow
+
+        await os_shadow.erase_topic(user_id, topic)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: Zoe OS shadow erase failed (%s) - nothing else erased, retry recorded", type(exc).__name__)
+        try:
+            import memory_forget_cascade
+
+            await memory_forget_cascade._mark_pending(user_id, ["os_shadow"])
+        except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
+            pass
+        res.store_down = True
+        return res
     try:
         # the words before the rows, like every forget: the in-flight capture of those turns cannot land
         res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)

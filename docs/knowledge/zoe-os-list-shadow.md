@@ -65,9 +65,25 @@ without the lab stack and the contract test starts running the day both are pres
 | supervision | systemd only. There is no watchdog: a dead shadow is visible in the report (`kernel_unavailable` count), by design not an alarm |
 | roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json` and restart the unit |
 
-## 4. Privacy and forget
+## 4. Privacy and forget [code; lab for the kernel's own forget]
 
-(Lands with the forget-reach PR of this stack: `delete_user`, the entity cascade and the topic forget send the kernel a forget, fail-closed while shadow is on. Until then the flag must not be turned on.)
+The kernel record holds list items (household words) in the spine, in receipts (`proof.item`, the undo snapshot) and in the driver. So:
+
+* **`MemoryService.delete_user`** calls `os_shadow.forget_user` (a whole-member kernel forget through the `panel` surface) in its fail-closed
+  block: while the flag is `shadow`, a kernel that cannot confirm the forget raises `ShadowForgetUnavailable` and the member erase fails and is
+  retried, exactly like the other erasers.
+* **Entity forget ("forget Dana")**: the cascade has a new step `os_shadow` (`memory_forget_cascade._clear`) calling `os_shadow.erase_entity`
+  (kernel `forget(entity=...)`, which also shields the name). A failure lands in `CascadeResult.failed`, the forget is not confirmed, and the
+  durable retry marker re-runs it as a WHOLE-MEMBER kernel forget (the name is never stored: the safe over-forget of a measuring store).
+* **Topic forget** (`forget_topic._forget`): `os_shadow.erase_topic` (kernel `forget(topic=...)`), failure = `store_down` + the same marker.
+* A scope the kernel refuses to match falls back to a whole-member forget (a scope that matches nothing never widens, but this store may).
+* **Flag off but a kernel was once installed** (`creds.json` exists): forget still tries; if it cannot reach the kernel it records the member
+  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. **Flag off and no
+  `creds.json`**: nothing was ever recorded, no socket is touched.
+* Erase ordering: forget jobs and proposals share ONE FIFO queue and one worker, so a proposal queued before an erase is sent before the
+  forget and removed by it; one queued after is dropped (`user_erase_gate` generation moved / erase in progress: `dropped_erased`).
+* `forget_reach.py` lists the kernel store (`zoe_os_shadow_kernel`: reached, member + entity erasers); `docs/knowledge/forget-reach.md` is regenerated.
+* Not covered: **backups** of `~/.zoe/os-shadow/` (the existing backup policy ages them out; the directory is not in the nightly jobs, [inferred] verify before the owner turns this on), and the live `list_items` table, which is itself a ledgered GAP (member-owned data, `forget_reach.py` `list_items`).
 
 ## 5. What "the same" means [code]
 

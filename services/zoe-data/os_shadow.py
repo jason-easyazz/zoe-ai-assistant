@@ -21,6 +21,8 @@ Stdlib only (plus ``typed_env`` / ``user_erase_gate``).
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -334,6 +336,7 @@ class _Kernel:
 
 def _run() -> None:
     kernel = _Kernel()
+    replayed = False
     while True:
         job = _q.get()
         if job[0] == "stop":
@@ -341,9 +344,16 @@ def _run() -> None:
                 kernel.drop(skill)
             return
         try:
-            _do_add(kernel, *job[1:])
+            if not replayed:
+                replayed = _replay_pending(kernel)
+            if job[0] == "add":
+                _do_add(kernel, *job[1:])
+            else:
+                _do_forget(kernel, job[1], job[2], job[3], job[4])
         except Exception as exc:  # noqa: BLE001 - the worker never dies and never raises into a turn
             logger.warning("OS_SHADOW worker error=%s", type(exc).__name__)
+            if job[0] == "forget" and not job[4].done():
+                job[4].set_exception(exc)
 
 
 def _do_add(kernel: _Kernel, user_id: str, source: str, cls: str, live: str, item: str, list_name: str, gen: int,
@@ -418,6 +428,104 @@ def note_add(user_id: Optional[str], *, source: str, list_type: Optional[str], l
         _tally("queue_full")
     except Exception:  # noqa: BLE001 - shadow must never break the turn
         return
+
+
+# ---- forget -------------------------------------------------------------------------------------------------------------------------
+def _pending_path() -> Path:
+    return state_dir() / "pending-forgets.json"
+
+
+def _pending_read() -> list:
+    try:
+        raw = json.loads(_pending_path().read_text("utf-8"))
+        return [str(x) for x in raw] if isinstance(raw, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _pending_write(members: list) -> None:
+    path = _pending_path()
+    if not members:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(sorted(set(members)), fh)
+    os.replace(tmp, path)
+
+
+def _replay_pending(kernel: _Kernel) -> bool:
+    """Forgets that could not reach the kernel while the flag was off are re-sent (whole member: the safe over-forget) before the
+    first job after a restart. True once nothing is pending."""
+    left = []
+    kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
+    for member in _pending_read():
+        try:
+            _kernel_forget(kernel, member, None, None)
+        except Exception:  # noqa: BLE001
+            left.append(member)
+    _pending_write(left)
+    return not left
+
+
+def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optional[str]) -> int:
+    if member not in roster():
+        return 0                      # never proposed for them: nothing recorded, nothing to forget
+    scoped: dict = {"entity": entity} if entity is not None else ({"topic": topic} if topic is not None else {})
+    try:
+        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
+    except KernelRefused:
+        if not scoped:
+            raise
+        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # unmatchable scope: over-forget, the safe error
+    return int(out.get("count", 0)) if isinstance(out, dict) else 0
+
+
+def _do_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optional[str], fut: "concurrent.futures.Future") -> None:
+    kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
+    try:
+        fut.set_result(_kernel_forget(kernel, member, entity, topic))
+    except KernelRefused as exc:
+        fut.set_exception(ShadowForgetUnavailable(f"kernel refused ({reason_code(exc.reason)})"))
+    except Exception as exc:  # noqa: BLE001
+        fut.set_exception(ShadowForgetUnavailable(type(exc).__name__))
+
+
+async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> int:
+    if not provisioned():
+        return 0                      # no kernel was ever installed here: nothing recorded, no socket touched
+    strict = mode() == "shadow"
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+    try:
+        _ensure_worker()
+        _q.put(("forget", user_id, entity, topic, fut), timeout=2.0)
+        return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=FORGET_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001
+        if strict:
+            logger.error("OS_SHADOW forget NOT confirmed code=%s", type(exc).__name__)
+            raise ShadowForgetUnavailable(type(exc).__name__) from exc
+        try:                          # flag off: do not block the erase, but never lose it - replayed before the next shadow job
+            _pending_write(_pending_read() + [user_id])
+        except OSError:
+            pass
+        logger.warning("OS_SHADOW forget deferred (flag off) code=%s", type(exc).__name__)
+        return 0
+
+
+async def forget_user(user_id: str) -> int:
+    """Whole-member forget in the kernel (``MemoryService.delete_user``). Raises ``ShadowForgetUnavailable`` while shadow is on."""
+    return await _forget(user_id, None, None)
+
+
+async def erase_entity(user_id: str, name: str) -> int:
+    """'Forget Dana': the kernel erases the member's events naming the entity (and shields the name)."""
+    return await _forget(user_id, name, None)
+
+
+async def erase_topic(user_id: str, topic: str) -> int:
+    return await _forget(user_id, None, topic)
 
 
 # ---- the roster, for the owner's one-off export ----------------------------------------------------------------------------------------

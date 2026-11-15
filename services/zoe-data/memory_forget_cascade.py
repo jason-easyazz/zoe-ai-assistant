@@ -27,6 +27,8 @@ stored anywhere new):
                               member's layer (guests' included) whose text names the entity is deleted
   * ``value_registry``      - the superseded-value registry (alembic 0080, ``memory_value_registry.erase_entity``): the entries whose
                               subject is a person the name names (by person id, live or soft-deleted) are DELETED
+  * ``os_shadow``           - the Zoe OS list shadow's kernel record (``os_shadow.erase_entity``): the kernel erases the member's events
+                              naming the entity and shields the name; a no-op unless a kernel was installed; the retry forgets the whole member
   * ``night_extract``       - the shadow night pre-pass's proposed facts (``~/.zoe/night-extract/``, ``night_extract.erase_entity``): a fact of the
                               member that names the entity is dropped
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
@@ -77,7 +79,7 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
-              "self_review", "night_extract", "conversation_notes", "value_registry", "value_registry_topic")
+              "self_review", "night_extract", "conversation_notes", "value_registry", "value_registry_topic", "os_shadow")
 #: a TOPIC forget whose registry erase failed (``forget_topic``): the retracted turns' ids cannot be stored in the ledger (hashes of
 #: fixed labels only), so the retry over-forgets the member's whole superseded-value registry (a 7-day shadow cache: the safe error)
 VALUE_REGISTRY_TOPIC = "value_registry_topic"
@@ -176,7 +178,7 @@ async def _step(label: str, fn, res: Optional[CascadeResult] = None) -> int:
 
 
 async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: Optional[frozenset] = None,
-                 recover_ids: bool = False) -> None:
+                 recover_ids: bool = False, name: Optional[str] = None) -> None:
     """One pass over the derived stores (or just the labels in ``only``). ``rx`` is a ``re.Pattern`` for the name or a
     ``memory_forgotten.LedgerPattern`` (the retry: no name); ``mutes`` is the restraint-mutes eraser for the same."""
     def want(label: str) -> bool:
@@ -246,6 +248,13 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # the shadow night pre-pass's proposed facts (~/.zoe/night-extract/): a fact of the member naming the entity is dropped
         return await night_extract.erase_entity(user_id, rx, strict=True)
 
+    async def os_shadow_() -> int:
+        import os_shadow
+
+        # the Zoe OS list shadow's kernel record (os_shadow.py): the kernel erases the member's events naming the entity and shields the
+        # name. The retry has no name (none is ever stored): it forgets the whole member in the kernel, the safe over-forget.
+        return await (os_shadow.erase_entity(user_id, name) if name else os_shadow.forget_user(user_id))
+
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
@@ -262,6 +271,8 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("self_review", self_review_, res)
     if want("night_extract"):
         await _step("night_extract", night_extract_, res)
+    if want("os_shadow"):
+        await _step("os_shadow", os_shadow_, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
@@ -296,7 +307,7 @@ async def _cascade(user_id: str, name: str, rx, res: CascadeResult, db) -> Casca
 
         return await restraint.erase_entity(user_id, name, strict=True)
 
-    await _clear(user_id, rx, mutes, res, db=db)
+    await _clear(user_id, rx, mutes, res, db=db, name=name)
     if res.failed:
         logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=%s - the forget is not confirmed", user_id, ",".join(res.failed))
         await _mark_pending(user_id, res.failed)

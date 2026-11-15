@@ -2280,6 +2280,13 @@ class MemoryService:
             await notifications_store.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: notification erasure failed ({type(exc).__name__})") from exc
+        # The Zoe OS list shadow's kernel record (os_shadow.py): every list item proposed to it, in its events, receipts and driver. Fail
+        # closed while ZOE_OS_LIST_SHADOW is on; a no-op when no kernel was ever installed. Outside the lock (it queues behind adds in flight).
+        try:
+            import os_shadow
+            await os_shadow.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         try:   # reminder phone-delivery ledger (reminder_delivery.py: app_settings claim rows, ids only). Fail closed.
             import reminder_delivery
             await reminder_delivery.forget_user(user_id)
