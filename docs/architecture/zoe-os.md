@@ -831,8 +831,6 @@ forces a surface to call it.
 
 Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).
 
-## 13. Reminders in the kernel: what production can do, and what still does not map
-
 ## 13. Reminders and alarms in the kernel: what production can do, and what still does not map
 
 The kernel's reminder model (`labs/zoe-os/zoe_os/reminder_rows.py`, served by the authority daemon `authority.py`) was
