@@ -73,6 +73,10 @@ class KernelProtocol(Exception):
     """The kernel answered something that is not the v1 shape."""
 
 
+#: a reply whose ``v`` / ``id`` is not this request's: the add is ``kernel_malformed reason=crossed`` (never a match)
+CROSSED = "crossed"
+
+
 class ShadowForgetUnavailable(Exception):
     """A forget could not be confirmed by the kernel while the shadow flag is on: the caller must not say 'forgotten'.
     Deliberately NOT a RuntimeError: ``memory_forget_cascade._store_missing`` reads a RuntimeError in a process that never had a database
@@ -197,10 +201,15 @@ class _Conn:
             self.sock.settimeout(_op_timeout(until))
             self.sock.connect(path)
             hello = _read_frame(self.sock, until)
+            if hello.get("v") != WIRE_VERSION:
+                raise KernelProtocol("version")
             nonce = bytes.fromhex(str(hello["nonce"]))
             _write_frame(self.sock, {"v": WIRE_VERSION, "skill": skill,
                                      "proof": hmac.new(credential, nonce, hashlib.sha256).hexdigest()}, until)
-            if _read_frame(self.sock, until).get("ok") is not True:
+            welcome = _read_frame(self.sock, until)
+            if welcome.get("v") != WIRE_VERSION:
+                raise KernelProtocol("version")
+            if welcome.get("ok") is not True:
                 raise KernelUnavailable("auth")
         except (KeyError, ValueError, KernelProtocol) as exc:
             self.close()
@@ -223,6 +232,11 @@ class _Conn:
         except (OSError, KernelUnavailable, KernelProtocol):
             self.close()
             raise
+        if reply.get("v") != WIRE_VERSION or type(reply.get("id")) is not int or reply["id"] != self._id:
+            # a reply for ANOTHER request (a stale one left on the socket, a crossed id), no id, or another protocol version: never
+            # this request's answer, refusal included. Closed, so nothing later on this connection is read against it.
+            self.close()
+            raise KernelProtocol(CROSSED)
         if reply.get("ok") is True and "result" in reply:
             return reply["result"]
         err = reply.get("error")
@@ -241,7 +255,7 @@ class _Conn:
 #: ``no_input`` (no member or no item) and ``shadow_error`` (the shadow's OWN failure, ``reason=hook|worker|code``) are not the kernel's.
 RESULTS = ("worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
-           "queue_full", "live_noop", "no_input", "shadow_error")
+           "queue_full", "live_noop", "no_input", "shadow_error", "member_differs", "member_unproven")
 #: FIRST match wins, so "forgotten" comes first: the kernel's "forgotten_action_arguments" (an act citing words a forget shielded) also
 #: contains "argument", and a forgotten refusal must never be read as a fixable argument problem.
 _REASONS = (("forgotten", "forgotten"), ("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
@@ -254,16 +268,31 @@ def reason_code(reason: str) -> str:
     return next((code for needle, code in _REASONS if needle in low), "other")
 
 
-def compare(live: str, kernel: Optional[dict], sent: dict) -> tuple[str, str]:
+def for_whom(kernel: dict, member: Optional[str]) -> Optional[str]:
+    """None when the receipt is for ``member``; else the result code: ``member_differs`` (it names someone else) or
+    ``member_unproven`` (it names no one: a disagreement, never a match). The ONE member check, for every verb. Checked before anything else in a receipt: a match for the wrong person is the worst
+    disagreement there is. ``member`` None = the caller did not say (the comparator's own table tests)."""
+    if member is None:
+        return None
+    who = kernel.get("on_behalf_of")
+    if not isinstance(who, str):
+        return "member_unproven"
+    return None if who == member else "member_differs"
+
+
+def compare(live: str, kernel: Optional[dict], sent: dict, *, member: Optional[str] = None) -> tuple[str, str]:
     """``(result, kernel_state)``. ``live``: added | refused. ``kernel``: the act receipt (a dict), ``{"refused": reason}`` or None.
-    ``sent``: ``{"item", "list"}`` as proposed. The member is the connection's own business: a receipt names the person it acted for,
-    so a mismatch there is ``kernel_malformed``."""
+    ``sent``: ``{"item", "list"}`` as proposed; ``member``: who the add was for (``for_whom``: a receipt for anyone else is
+    ``member_differs``, never a match)."""
     if kernel is None:
         return "kernel_unavailable", "none"
     if "refused" in kernel:
         return ("match" if live == "refused" else "kernel_refused_live_did"), "refused"
     state = "verified" if kernel.get("verified") is True and kernel.get("outcome") == "verified" else (
         "uncertain" if kernel.get("outcome") == "uncertain" else "unverified")
+    wrong = for_whom(kernel, member)
+    if wrong:
+        return wrong, state
     if live == "refused":
         return ("kernel_did_live_refused" if state == "verified" else "match"), state
     if state != "verified":
@@ -283,6 +312,14 @@ _counts: Counter = Counter()
 _hops: list = []                 # kernel hop ms of compared adds (bounded)
 _lock = threading.Lock()
 LIST_CLASSES = ("shopping", "todo", "personal")
+#: EVERY value each field of the one line can take (``_finish`` maps anything else to ``other`` / ``none``): the line and the counter
+#: keys can never carry a caller's text (``test_marker_text_from_any_caller_argument_never_reaches_a_log_line_or_a_counter``).
+SOURCES = ("spoken", "single", "skybridge", "rest", "suggestion", "service")      # every call site's ``source=``, on every branch
+CLASSES = LIST_CLASSES + ("other",)
+LIVE = ("added", "refused", "noop")
+KERNEL_STATES = ("verified", "unverified", "uncertain", "refused", "none")
+REASONS = ("-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", CROSSED, "socket", "unavailable",
+           "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake", "hook", "worker", "code")
 
 
 def counters() -> dict:
@@ -301,7 +338,7 @@ def _tally(result: str, hop_ms: Optional[float] = None) -> None:
 def _log(source: str, cls: str, live: str, kernel_state: str, result: str, reason: str, hop_ms: float, q_ms: float) -> None:
     """ONE line per list add; codes and numbers only (tests/test_os_shadow.py plants words and checks none reach it)."""
     logger.info("OS_SHADOW_LIST_ADD src=%s cls=%s live=%s kernel=%s result=%s reason=%s hop_ms=%.1f q_ms=%.1f",
-                source, cls, live, kernel_state, result, reason or "-", hop_ms, q_ms)
+                source, cls, live, kernel_state, result, reason, hop_ms, q_ms)
 
 
 def _finish(result: str, *, source: str, cls: str, live: str, kernel_state: str = "none", reason: str = "", hop_ms: float = 0.0,
@@ -312,6 +349,12 @@ def _finish(result: str, *, source: str, cls: str, live: str, kernel_state: str 
     structure pins). A code outside ``RESULTS`` is itself a bug: written as ``shadow_error reason=code``, never as the stray code."""
     if result not in RESULTS:
         result, reason, kernel_state = "shadow_error", "code", "none"
+    source = source if source in SOURCES else "other"          # closed sets only: a caller's text can never reach the line
+    cls = cls if cls in CLASSES else "other"
+    live = live if live in LIVE else "added"
+    kernel_state = kernel_state if kernel_state in KERNEL_STATES else "none"
+    reason = (reason or "-") if (reason or "-") in REASONS else "other"
+    hop_ms, q_ms = float(hop_ms), float(q_ms)
     _log(source, cls, live, kernel_state, result, reason, hop_ms, q_ms)       # the line first: a counted add has always been written
     _tally(result, hop_ms if kernel_state != "none" else None)
 
@@ -483,14 +526,14 @@ def _add_outcome(kernel: _Kernel, user_id: str, live: str, item: str, list_name:
         result, reason = "timeout", "timeout"
     except KernelUnavailable as exc:
         result, reason = "kernel_unavailable", str(exc)[:24].replace(" ", "_") or "unavailable"
-    except KernelProtocol:
-        result, reason = "kernel_malformed", "protocol"
+    except KernelProtocol as exc:
+        result, reason = "kernel_malformed", (CROSSED if exc.args[:1] == (CROSSED,) else "protocol")
     except OSError as exc:
         result, reason = ("timeout", "timeout") if isinstance(exc, socket.timeout) else ("kernel_unavailable", "socket")
     hop_ms = (time.perf_counter() - started) * 1000
     kstate = "none"
     if not result:
-        result, kstate = compare(live, result_kernel, sent)
+        result, kstate = compare(live, result_kernel, sent, member=user_id)
     return {"result": result, "kernel_state": kstate, "reason": reason, "hop_ms": hop_ms}
 
 
