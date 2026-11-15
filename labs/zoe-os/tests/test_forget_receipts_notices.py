@@ -180,7 +180,6 @@ def test_control_without_snapshot_scrub_shield_refuses_dirty_receipt_or_row_resu
     add(k, rows, KEEP)
     monkeypatch.setattr(Spine, '_scrub_snapshots', lambda *_: None, raising=False)
     monkeypatch.setattr(k.actions, '_check_arguments', lambda *_: None)
-    monkeypatch.setattr(Spine, '_payload_refusal', lambda *_: False)   # and the kernel-write guard behind it
     k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
     k.pump()
     assert SECRET.encode() in disk(path)
@@ -188,6 +187,7 @@ def test_control_without_snapshot_scrub_shield_refuses_dirty_receipt_or_row_resu
         # Isolate the snapshot protection: the independent append shield would
         # otherwise refuse the dirty receipt AFTER the driver restored the row.
         monkeypatch.setattr(Spine, '_shielded', lambda *_: False)
+        monkeypatch.setattr(Spine, '_payload_refusal', lambda *_: False)   # and the kernel-write guard that calls it
         assert k.actions.undo(PERSON, actor=PERSON).verified
     else:
         with pytest.raises(Refused, match='forgotten_kernel_content'):

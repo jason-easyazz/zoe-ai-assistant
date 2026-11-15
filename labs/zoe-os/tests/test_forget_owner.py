@@ -95,7 +95,7 @@ def test_a_cannot_receive_forgotten_derived_text_via_any_publish_route(spine, ro
                       else Visibility.KERNEL)
     elif route == 'origin':
         ev = Event(Kind.UTTERANCE, 'voice', A, payload={'text': TEXT})
-    with pytest.raises(Refused, match='forgotten content'):
+    with pytest.raises(Refused, match='forgotten content|forgotten_kernel_content'):
         if route == 'kernel-service':
             spine._kernel_append(ev)
         elif route == 'batch':

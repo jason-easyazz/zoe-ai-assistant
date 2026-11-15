@@ -788,8 +788,11 @@ class Spine:
                         return True
         return False
 
-    def _shielded(self, ev: Event) -> bool:
-        """Does this payload carry, anywhere, a string a person asked to forget?"""
+    def _shielded(self, ev: Event | dict) -> bool:
+        """Does this payload carry, anywhere, a string a person asked to forget? A bare payload (no event, so no owner to scope
+        by) is checked against the household-wide shield only."""
+        if isinstance(ev, dict):
+            return any(self._fp(s) in self._shield for s in _keys_and_strings(ev))
         return any(self._fp(s) in self._shield for s in _keys_and_strings(ev.payload)) or \
             self._scoped_hit('scoped_shield', ev,
                              (self._fp(s) for s in _keys_and_strings(ev.payload)))
