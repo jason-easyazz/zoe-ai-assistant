@@ -84,6 +84,15 @@ The kernel record holds list items (household words) in the spine, in receipts (
   ran is kept; a park that cannot be made durable (disk, an unreadable file, which is never overwritten) FAILS the erase closed
   (`ShadowForgetUnavailable`) instead of letting it say done. **Flag off and no
   `creds.json`**: nothing was ever recorded, no socket is touched.
+* **A parked forget always reaches the kernel before any later add for that member** (`test_os_shadow_forget.py`, "forgotten means
+  forever"): the worker replays the park file before EVERY job while anything is parked (an in-memory copy of the parked ids is kept in
+  step with the file under its lock, so a known-empty park costs one global read per job and no file I/O; a new process reads the file
+  before its first job, so a park survives a restart). While a member's forget is still parked (kernel down, refused, file unreadable)
+  that member's adds are dropped as `dropped_erased reason=pending_forget`, never sent ahead of it. A replay ahead of an add respects the
+  5 s circuit (no connect per add to a dead kernel); a forget job always tries.
+* **A forget never blocks the event loop**: the job goes on the queue with `put_nowait`; a full queue parks the forget durably instead
+  (the park's `flock` + fsync run in an executor thread). Honest to the caller: flag `shadow` and not confirmed (parked or not) raises
+  `ShadowForgetUnavailable`; flag off and parked returns 0 (deferred); not parkable raises.
 * Erase ordering: forget jobs and proposals share ONE FIFO queue and one worker, so a proposal queued before an erase is sent before the
   forget and removed by it; one queued after is dropped (`user_erase_gate` generation moved / erase in progress: `dropped_erased`).
 * `forget_reach.py` lists the kernel store (`zoe_os_shadow_kernel`: reached, member + entity erasers); `docs/knowledge/forget-reach.md` is regenerated.
