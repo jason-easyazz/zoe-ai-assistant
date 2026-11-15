@@ -62,7 +62,13 @@ SECRET_CATCH: dict[str, list[tuple[str, str]]] = {
         ("type pin 4821 then hash", "4821"),
         ("my pin 4821 thanks", "4821"),
         ("pin 4821 thanks", "4821"),               # "thanks" is an s-word, not a plural count: a bare PIN stays a secret
-        ("my pin 400 notes", "400"),               # secret context wins over a following plural
+        ("my pin 400 notes", "400"),               # secret context wins over a following count noun
+        # DEFAULT IS REDACT: a verb, or any word not on the closed count-noun list, after the digits (cross-review #2657)
+        ("pin 4821 works", "4821"),
+        ("PIN 4821 expires tomorrow", "4821"),
+        ("pin 4821 opens the gate", "4821"),
+        ("pin 4821 unlocks the door", "4821"),
+        ("PIN 4821 fails", "4821"),
     ],
     "labelled_account": [
         ("my account number is 12345678", "12345678"),
@@ -115,7 +121,7 @@ CONTACT_CATCH: dict[str, list[tuple[str, str]]] = {
         ("she lives at 5 placeholder close, springfield", "5 placeholder close"),
         ("send it to PO Box 1234", "1234"),
         ("meet at 12 St Example Terrace", "12 St Example Terrace"),
-        # each ADDRESS CONTEXT form (2026-11-16): a locating lead-in, a suburb / postcode / comma tail, a unit prefix
+        # DEFAULT IS REDACT (2026-11-16, cross-review #2657); these carry address context as well
         ("the plumber works from 1 Example St.", "1 Example St"),
         ("I moved to 9 Sample Road last year", "9 Sample Road"),
         ("deliver it to 5 Example Way please", "5 Example Way"),
@@ -141,6 +147,21 @@ CONTACT_CATCH: dict[str, list[tuple[str, str]]] = {
         ("12 Example Street is where we live", "12 Example Street"),
         ("deliver to 5 Example Way and 7 Example Way", "7 Example Way"),   # the second address of a list
         ("at 5 Example Way, 7 Example Way", "7 Example Way"),
+        # no lead word and no title word after it: redacted by default
+        ("meet 12 Example Street", "12 Example Street"),
+        ("I work 12 Example Street", "12 Example Street"),
+        # MOVED from MUST_NOT (2026-11-16 first cut): no listed title word follows, so the default (redact) applies
+        ("we watched 21 Jump Street last night", "21 Jump Street"),
+        ("she starred in 21 Jump Street", "21 Jump Street"),
+        ("I watched 21 Jump Street. Then we slept", "21 Jump Street"),
+        ("we read 12 Main Street articles and then 21 Jump Street", "then 21 Jump Street"),
+        ("the 3 Little Pigs Lane mural", "3 Little Pigs Lane"),
+        ("play 21 Jump Street", "21 Jump Street"),
+        ("21 Jump Street was funny", "21 Jump Street"),
+        # a lead-in OVERRIDES the title exemption
+        ("I live at 12 Example Street articles", "12 Example Street"),
+        ("send it to 12 Example Street the movie set", "12 Example Street"),
+        ('my "12 Example Street"', "12 Example Street"),
     ],
 }
 
@@ -164,12 +185,12 @@ MUST_NOT: list[str] = [
     "she lives at the end of the street", "I live at home", "the road was closed", "my address is changing",
     "the IP address is 10.0.0.1", "account was hacked", "my bank account has 1200 in it", "my bank account is overdrawn",
     "it was a 5 minute walk", "look at the way she smiled",
-    # 2026-11-16: a number + Capitalised street phrase with NO address context is a title or a count, kept
-    "we watched 21 Jump Street last night", "I read 12 Main Street articles", "she starred in 21 Jump Street",
-    "I watched 21 Jump Street. Then we slept", "we read 12 Main Street articles and then 21 Jump Street",
-    "the 3 Little Pigs Lane mural", "play 21 Jump Street", "21 Jump Street was funny",
-    # 2026-11-16: "pin" the verb pinning a count is not a secret
-    "pin 123 photos to the board", "pin 400 notes to the board", "pin 3 of them", "please pin 250 of those",
+    # 2026-11-16: a number + street phrase that is PLAINLY a title (a listed title word after it, or quoted) is kept
+    "I read 12 Main Street articles", "I watched 21 Jump Street the movie", "the 21 Jump Street film",
+    "21 Jump Street Season 2 is out", "we binged 21 Jump Street episodes", "the 21 Jump Street reboot was fun",
+    'we watched "21 Jump Street" last night', "we watched “21 Jump Street” again",
+    # 2026-11-16: "pin" the verb + a listed count noun is not a secret
+    "pin 123 photos to the board", "pin 400 notes to the board", "pin 300 of them", "please pin 250 of those",
     "can you pin 120 more photos", "pin 100 recipes for me",
 ]
 
@@ -245,6 +266,39 @@ def test_the_night_quote_gate_refuses_the_new_classes(text):
     assert nm._unstorable(text) is True
 
 
+# ── fail-closed: the exemptions are CLOSED lists, so every word NOT on them leaves the value redacted ───────────────
+
+#: ordinary verbs, adverbs, function words and invented words; none is on an exemption list (asserted below)
+_NOT_EXEMPT = ["works", "worked", "expires", "opens", "unlocks", "fails", "changes", "matters", "lasts", "goes", "sticks",
+               "is", "was", "and", "or", "but", "please", "now", "today", "tomorrow", "again", "thanks", "yesterday",
+               "tonight", "last", "here", "there", "zorbles", "blicks", "flurbs", "always", "maybe", "every", "for",
+               "with", "at", "on", "by", "people", "words", "times", "places", "", ".", ",", "!", "?"]
+
+
+def test_the_probe_words_are_not_on_any_exemption_list():
+    import memory_service as ms
+
+    for w in _NOT_EXEMPT:
+        assert not ms._PIN_COUNT_RE.match(" " + w), w
+        assert not ms._ADDRESS_TITLE_RE.match(" " + w), w
+
+
+@pytest.mark.parametrize("word", _NOT_EXEMPT)
+def test_a_pin_followed_by_any_unlisted_word_stays_redacted(word):
+    for lead in ("", "please ", "can you ", "I said "):
+        text = f"{lead}pin 4821 {word}".rstrip()
+        out, reject = scrub_pii(text)
+        assert reject is None and "4821" not in out, (text, out)
+
+
+@pytest.mark.parametrize("word", _NOT_EXEMPT)
+def test_a_street_phrase_followed_by_any_unlisted_word_stays_redacted(word):
+    for lead in ("", "meet ", "I work ", "we watched ", "play ", "I love ", "the "):
+        text = f"{lead}12 Example Street {word}".rstrip()
+        out, reject = scrub_pii(text)
+        assert reject is None and "12 Example Street" not in out, (text, out)
+
+
 # ── performance: compiled regexes, no backtracking trap ─────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("blob", [
@@ -261,6 +315,9 @@ def test_the_night_quote_gate_refuses_the_new_classes(text):
     "I live at" + " " * 12000 + "1", "I live at 1" + " Aa" * 6000, "12" + " Aa" * 6000, "call" + " me" * 6000 + " on 1",
     # 2026-11-16 context checks run once per match: many bare matches, and many pin-verb matches
     "1 Aa St " * 2500, "watched 1 Aa St " * 1500, "pin 123 " * 2500, "pin 123 photos " * 1500,
+    # cross-review #2657: a long blank PREFIX before many candidates (a per-candidate rescan from the start is quadratic)
+    " " * 20000 + "1 Aa St " * 2500, "\n" * 20000 + "1 Aa St articles " * 1500, " " * 20000 + "pin 123 photos " * 1500,
+    " " * 20000 + "pin 123 " * 2500, '"' * 10000 + '1 Aa St" ' * 2000,
 ])
 def test_a_long_adversarial_string_is_fast(blob):
     """Linear, not catastrophic: measured relative to a benign sentence of the SAME length on the same box (so a loaded CI
