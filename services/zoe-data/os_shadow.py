@@ -419,9 +419,12 @@ def _run() -> None:
             for skill in list(kernel.conns):
                 kernel.drop(skill)
             return
-        try:
-            if not replayed:
+        if not replayed:
+            try:                      # its own try: a replay that fails must never cost the job behind it (an add keeps its one line)
                 replayed = _replay_pending(kernel)
+            except Exception as exc:  # noqa: BLE001 - kept pending, tried again before the next job
+                logger.warning("OS_SHADOW replay error=%s", type(exc).__name__)
+        try:
             if job[0] == "add":
                 _do_add(kernel, *job[1:])
             else:
