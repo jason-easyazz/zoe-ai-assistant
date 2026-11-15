@@ -121,6 +121,10 @@ for _var, _leaf in _ERASE_PATHS.items():
 def _local_erase_paths_are_per_test(monkeypatch, tmp_path):
     for name, leaf in _ERASE_PATHS.items():
         monkeypatch.setenv(name, str(tmp_path / "zoe-test-stores-local" / leaf))
+    # A sync test that runs a route helper directly holds a per-turn erase epoch in the main thread's context: the next test starts
+    # as a fresh request does, with none.
+    import local_text_logs
+    local_text_logs._TURN_EPOCH.set(None)
 
 
 @pytest.fixture(autouse=True)
