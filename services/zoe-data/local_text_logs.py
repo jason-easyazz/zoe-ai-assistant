@@ -493,31 +493,39 @@ def telegram_capture_dir() -> Optional[Path]:
 
 def erase_capture(*, match: Any = None, older_than: Optional[float] = None, everything: bool = False) -> int:
     """Delete capture pairs: every pair (``everything``), a pair whose transcript matches ``match``, or one older than ``older_than``
-    (file mtime). A ``.wav`` with no ``.txt`` beside it cannot be judged and is deleted (fail closed), as is a transcript that cannot
-    be read. Returns the number of files removed. RAISES on a failed delete (the cascade step / sweep then fails, never silently)."""
+    (file mtime). Entity matching requires readable UTF-8 text: unreadable transcripts and orphaned WAVs are kept and reported
+    as counts only. Full member erase deletes them unconditionally; retention still removes orphaned WAVs.
+    Returns the number of files removed. RAISES on a failed delete (the cascade step / sweep then fails, never silently)."""
     root = telegram_capture_dir()
     if root is None or not root.is_dir():
         return 0
-    removed = 0
+    removed = unreadable = orphaned = 0
     for wav_or_txt in sorted(root.glob("tg-*")):
         if wav_or_txt.suffix not in (".wav", ".txt") or not wav_or_txt.exists():
             continue
         txt, wav = wav_or_txt.with_suffix(".txt"), wav_or_txt.with_suffix(".wav")
         if wav_or_txt.suffix == ".wav" and txt.exists():
             continue                                         # judged with its transcript
-        doomed = everything or not txt.exists()
-        if not doomed and older_than is not None:
-            doomed = txt.stat().st_mtime < older_than
-        if not doomed and match is not None:
+        if match is not None and not everything:
+            if not txt.exists():
+                orphaned += 1
+                continue
             try:
-                doomed = bool(match.search(txt.read_text(encoding="utf-8", errors="replace")))
-            except OSError:
-                doomed = True
+                doomed = bool(match.search(txt.read_text(encoding="utf-8")))
+            except (OSError, UnicodeError):
+                unreadable += 1
+                continue
+        else:
+            doomed = everything or not txt.exists()
+        if not doomed and match is None and older_than is not None:
+            doomed = txt.stat().st_mtime < older_than
         if doomed:
             for f in (txt, wav):
                 if f.exists():
                     f.unlink()
                     removed += 1
+    if unreadable or orphaned:
+        logger.warning("local_text_logs: entity capture skipped unreadable=%d orphaned=%d", unreadable, orphaned)
     return removed
 
 

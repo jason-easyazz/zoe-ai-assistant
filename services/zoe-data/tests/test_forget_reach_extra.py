@@ -73,8 +73,39 @@ def test_entity_forget_drops_every_line_and_capture_naming_the_sentinel(stores, 
     text = _all_text(stt)
     assert SENTINEL not in text and "kitchen lights" in text and "weather" in text
     names = sorted(p.name for p in cap.iterdir())
-    assert names == ["tg-b.txt", "tg-b.wav", "tg-c.txt", "tg-c.wav"]          # the sentinel's pair and the orphan wav are gone
-    assert n == 2 + 3
+    assert names == ["tg-b.txt", "tg-b.wav", "tg-c.txt", "tg-c.wav", "tg-orphan.wav"]
+    assert n == 2 + 2
+
+
+@pytest.mark.parametrize("unreadable", ["io", "utf8"])
+def test_entity_forget_keeps_unjudgeable_captures_and_counts_only(stores, monkeypatch, caplog, unreadable):
+    _, cap = stores
+    monkeypatch.setenv("ZOE_FORGET_REACH_EXTRA", "on")
+    txt = cap / "tg-unreadable.txt"
+    wav = txt.with_suffix(".wav")
+    txt.write_bytes(b"\xff" if unreadable == "utf8" else SENTINEL.encode())
+    wav.write_bytes(b"RIFF")
+    if unreadable == "io":
+        from pathlib import Path
+
+        read_text = Path.read_text
+
+        def fail_read(path, *args, **kwargs):
+            if path == txt:
+                raise OSError("synthetic unreadable capture")
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fail_read)
+    assert ltl.erase_entity(re.compile(SENTINEL)) == 4
+    assert txt.exists() and wav.exists()
+    assert (cap / "tg-orphan.wav").exists()
+    assert "unreadable=1 orphaned=1" in caplog.text
+    assert SENTINEL not in caplog.text
+    assert "tg-" not in caplog.text and str(cap) not in caplog.text
+    assert "synthetic unreadable capture" not in caplog.text
+    # Member erase is unconditional, including the same unreadable/orphaned files.
+    ltl.erase_all_text()
+    assert list(cap.iterdir()) == []
 
 
 def test_member_erase_clears_both_stores(stores, monkeypatch):
