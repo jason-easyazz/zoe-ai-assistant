@@ -488,16 +488,41 @@ def _adapt_sql(sql: str) -> str:
     so a released rule's address can never be reused by a different rule and match a
     stale entry (review of PR 2469).
     """
-    return _adapt_sql_memo(sql, (
+    out = _adapt_sql_memo(sql, (
         _SQLITE_DATETIME_OFFSET_RE, _SQLITE_DATETIME_NOW_RE, _NOW_RE,
         _NOW_ARITH_AFTER_RE, _NOW_ARITH_BEFORE_RE, _copy_quoted_sql,
     ))
+    if _SQL_MEMO_SUMMARY is not None:
+        _SQL_MEMO_SUMMARY.tick()   # one monotonic read; a SQL_ADAPT_MEMO_SUMMARY line at most every 10 min
+    return out
 
 
 @functools.lru_cache(maxsize=2048)
 def _adapt_sql_memo(sql: str, _rules: tuple) -> str:
     """Bounded (2048 statements), thread-safe memo behind :func:`_adapt_sql`."""
     return _adapt_sql_uncached(sql)
+
+
+# SQL_ADAPT_MEMO_SUMMARY s= hits= misses= size= (gap audit 2026-11-14.6, A5's live number): the memo's OWN lru_cache counters,
+# as deltas since the previous line, read only when a line is written. Nothing is counted per call.
+_SQL_MEMO_BASE = [0, 0]
+
+
+def _sql_memo_fill(c: dict) -> None:
+    info = _adapt_sql_memo.cache_info()
+    if info.hits < _SQL_MEMO_BASE[0] or info.misses < _SQL_MEMO_BASE[1]:
+        _SQL_MEMO_BASE[:] = [0, 0]     # cache_clear() reset the counters
+    c["hits"], c["misses"], c["size"] = info.hits - _SQL_MEMO_BASE[0], info.misses - _SQL_MEMO_BASE[1], info.currsize
+    _SQL_MEMO_BASE[:] = [info.hits, info.misses]
+
+
+try:
+    import perf_summary as _perf_summary
+
+    _SQL_MEMO_SUMMARY = _perf_summary.Summary("SQL_ADAPT_MEMO", ("hits", "misses", "size"), fill=_sql_memo_fill,
+                                                log=logger)
+except Exception:  # noqa: BLE001 - no instrument, the rewrite is unchanged
+    _SQL_MEMO_SUMMARY = None
 
 
 def _adapt_sql_uncached(sql: str) -> str:

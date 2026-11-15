@@ -58,6 +58,7 @@ sys.path.insert(0, os.path.join(REPO, "services", "zoe-data"))
 sys.path.insert(0, os.path.join(REPO, "scripts", "maintenance"))
 
 from user_filters import GUEST_USERS, GUEST_PREFIX, SYNTHETIC_USER_RE  # noqa: E402  (stdlib-only module)
+import perf_summary  # noqa: E402  (stdlib-only module: the bucket edges of the *_SUMMARY instruments)
 
 LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
 
@@ -72,6 +73,7 @@ MARKERS = (
     "DISTRESS_NO_CONTACT", "PANEL_KV_MISS", "kv_miss_alert: alert not delivered",
     # INSTRUMENTS section (counted only; never member-joined, never printed): see inst_* below
     "EVENT_LOOP_BLOCK ms=", "FORGET_LEDGER state=", "FLUE_PREPOST ", "FORGET_CORRECTION_HELD ",
+    "SQL_ADAPT_MEMO_SUMMARY ", "MEMORY_SEARCH_EMBED_SUMMARY ", "PALACE_EMBED_SUMMARY ",
 )
 USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE", "VALUE_CORRECTION")
 SESSION_MARKERS = ("FLUE_TOOLS", "VOICE TIMING")
@@ -1215,6 +1217,111 @@ def inst_forget_held(logs: LogSet, since, until) -> dict:
                   data={"forgets": len(rows), "with_held": with_held, "held": held, "unknown": unknown, "by_path": by_path})
 
 
+# perf_summary.Summary lines (services/zoe-data/perf_summary.py): `<NAME>_SUMMARY s=<n> <counter>=<n>... [<hist>_le<e>=<n>...]`,
+# written at most once per 10 min by the call that finds the interval over, in WHATEVER traffic context that call ran: the
+# counts cover all traffic of the interval and cannot be split, so these rows do not drop harness-tagged lines.
+
+
+def _summary_re(name: str, counters: tuple, hists: tuple = ()) -> "re.Pattern[str]":
+    parts = [r"s=\d{1,12}"] + [rf"{c}=\d{{1,12}}" for c in counters]
+    for prefix, edges in hists:
+        parts += [rf"{b}=\d{{1,12}}" for b in perf_summary.bucket_names(prefix, edges)]
+    return re.compile(rf"\b{name}_SUMMARY " + " ".join(parts) + r"(?:\s|$)")
+
+
+_SQL_MEMO_RE = _summary_re("SQL_ADAPT_MEMO", ("hits", "misses", "size"))
+_SEARCH_EMBED_RE = _summary_re("MEMORY_SEARCH_EMBED", ("searches", "embeds", "reused"))
+_PALACE_EMBED_RE = _summary_re("PALACE_EMBED", ("calls", "texts", "ms_sum", "fallback"),
+                               (("ms", perf_summary.MS_BUCKETS), ("len", perf_summary.LEN_BUCKETS)))
+
+
+def _summary_sums(logs, since, until, key, title, name, rx, absent):
+    """(window text, n lines, summed fields) over every `<name>_SUMMARY` line, or an unmeasured row."""
+    got = _inst_lines(logs, since, until, key, title, f"{name}_SUMMARY ", absent, household_only=False)
+    if isinstance(got, dict):
+        return got
+    since, w, rows = got
+    if any(not rx.search(line) for _, line in rows):
+        return malformed_metric(key, title, sum(1 for _, x in rows if not rx.search(x)), since, until)
+    sums: dict[str, int] = {}
+    for _, line in rows:
+        body = line[line.index(f"{name}_SUMMARY ") + len(name) + 9:]
+        for k, v in re.findall(r"\b([a-z][a-z0-9_]*)=(\d+)", body):
+            sums[k] = sums.get(k, 0) + int(v)
+    return w, len(rows), sums
+
+
+def bucket_pct(counts: list, edges: tuple, q: float) -> str:
+    """The bucket holding the q-th percentile of a merged fixed-bucket histogram: '<=X' or '>last'."""
+    n = sum(counts)
+    if not n:
+        return "-"
+    cum = 0
+    for i, c in enumerate(counts):
+        cum += c
+        if cum >= q / 100.0 * n:
+            return f"<={edges[i]}" if i < len(edges) else f">{edges[-1]}"
+    return f">{edges[-1]}"
+
+
+def inst_sql_memo(logs: LogSet, since, until) -> dict:
+    """SQL_ADAPT_MEMO_SUMMARY (services/zoe-data/db_pool.py, A5 of #2469): the rewrite memo's own hit/miss counters."""
+    key, title = "inst_sql_memo", "SQL rewrite memo (A5) hit rate"
+    got = _summary_sums(logs, since, until, key, title, "SQL_ADAPT_MEMO", _SQL_MEMO_RE,
+                        "the instrument is not deployed, or no SQL ran for 10 min after a start")
+    if isinstance(got, dict):
+        return got
+    w, lines, s = got
+    hits, misses = s.get("hits", 0), s.get("misses", 0)
+    return metric(key, title, f"hits {frac(hits, hits + misses)}; misses {misses}", n=hits + misses, window=w,
+                  method=(f"zoe-data app log SQL_ADAPT_MEMO_SUMMARY hits= misses= summed over {lines} line(s) (one per 10 min "
+                          "of activity, deltas of the lru_cache counters); all traffic. Each miss is one character walk; each "
+                          "hit is a walk A5 saved"),
+                  label="[Performance]", data={"lines": lines, "hits": hits, "misses": misses})
+
+
+def inst_search_embed(logs: LogSet, since, until) -> dict:
+    """MEMORY_SEARCH_EMBED_SUMMARY (services/zoe-data/memory_service._semantic_search, A4 of #2469)."""
+    key, title = "inst_search_embed", "Query embeds per memory search (A4)"
+    got = _summary_sums(logs, since, until, key, title, "MEMORY_SEARCH_EMBED", _SEARCH_EMBED_RE,
+                        "the instrument is not deployed, or no semantic search ran")
+    if isinstance(got, dict):
+        return got
+    w, lines, s = got
+    n, embeds, reused = s.get("searches", 0), s.get("embeds", 0), s.get("reused", 0)
+    per = f"{embeds / n:.2f}" if n else "-"
+    return metric(key, title, f"embeds per search {per} ({embeds} embeds / {n} searches); vector reused on {frac(reused, n)}",
+                  n=n, window=w,
+                  method=(f"zoe-data app log MEMORY_SEARCH_EMBED_SUMMARY summed over {lines} line(s); embeds = 1 when the query "
+                          "vector was reused for both queries, else one per query_texts call (2 when the supplement ran); "
+                          "per search, not per turn (a turn may search more than once); all traffic"),
+                  label="[Performance]", data={"lines": lines, "searches": n, "embeds": embeds, "reused": reused})
+
+
+def inst_palace_embed(logs: LogSet, since, until) -> dict:
+    """PALACE_EMBED_SUMMARY (services/zoe-data/palace_embed.DynamicPadMixin._forward, #2460): every MiniLM embed call."""
+    key, title = "inst_palace_embed", "Palace embed call latency (#2460)"
+    got = _summary_sums(logs, since, until, key, title, "PALACE_EMBED", _PALACE_EMBED_RE,
+                        "the instrument is not deployed, or nothing was embedded")
+    if isinstance(got, dict):
+        return got
+    w, lines, s = got
+    calls = s.get("calls", 0)
+    ms_b = [s.get(b, 0) for b in perf_summary.bucket_names("ms", perf_summary.MS_BUCKETS)]
+    len_b = [s.get(b, 0) for b in perf_summary.bucket_names("len", perf_summary.LEN_BUCKETS)]
+    mean = s.get("ms_sum", 0) / calls if calls else 0.0
+    return metric(key, title,
+                  (f"ms p50 {bucket_pct(ms_b, perf_summary.MS_BUCKETS, 50)} / p90 {bucket_pct(ms_b, perf_summary.MS_BUCKETS, 90)}"
+                   f" (mean {mean:.1f}); texts per call p50 {bucket_pct(len_b, perf_summary.LEN_BUCKETS, 50)} / p90 "
+                   f"{bucket_pct(len_b, perf_summary.LEN_BUCKETS, 90)}; fallback to fixed pad {s.get('fallback', 0)}"),
+                  n=calls, window=w,
+                  method=(f"zoe-data app log PALACE_EMBED_SUMMARY summed over {lines} line(s): wall ms and texts of each "
+                          "embed call (writes and queries), fixed buckets, so percentiles are bucket bounds; all traffic"),
+                  label="[Performance]",
+                  data={"lines": lines, "calls": calls, "texts": s.get("texts", 0), "ms_buckets": ms_b, "len_buckets": len_b,
+                        "fallback": s.get("fallback", 0)})
+
+
 def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
     """The INSTRUMENTS rows (long window, narrowed to the retained logs like the ALERTS app-log rows)."""
     jobs = (
@@ -1224,6 +1331,9 @@ def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
         ("inst_flue_prepost", "Pre-POST chain cost", INSTRUMENTS, lambda: inst_flue_prepost(logs, long_since, until)),
         ("inst_forget_held", "Forgotten subjects still held in process", INSTRUMENTS,
          lambda: inst_forget_held(logs, long_since, until)),
+        ("inst_sql_memo", "SQL rewrite memo hit rate", INSTRUMENTS, lambda: inst_sql_memo(logs, long_since, until)),
+        ("inst_search_embed", "Query embeds per memory search", INSTRUMENTS, lambda: inst_search_embed(logs, long_since, until)),
+        ("inst_palace_embed", "Palace embed call latency", INSTRUMENTS, lambda: inst_palace_embed(logs, long_since, until)),
     )
     return _run_rows(jobs)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,36 @@ def embed_dynamic(ef: Any, documents: list, batch_size: int = 32) -> Any:
     return np.concatenate(out)
 
 
+try:   # PALACE_EMBED_SUMMARY (gap audit 2026-11-14.6: #2460's live number); None = no instrument, the embed is unchanged
+    import perf_summary as _perf_summary
+
+    #: one embed call = one observation: its wall ms and its text count, bucketed; fallback = calls that took chroma's forward
+    _EMBED_SUMMARY = _perf_summary.Summary("PALACE_EMBED", ("calls", "texts", "ms_sum", "fallback"),
+                                           {"ms": _perf_summary.MS_BUCKETS, "len": _perf_summary.LEN_BUCKETS}, log=logger)
+except Exception:  # noqa: BLE001
+    _EMBED_SUMMARY = None
+
+
+def _observe(t0: float, documents: Any, fell_back: bool) -> None:
+    """One embed call into the summary (wall ms, text count). Never raises; a line at most every 10 min."""
+    if _EMBED_SUMMARY is None:
+        return
+    try:
+        ms, n = (time.monotonic() - t0) * 1000.0, len(documents) if documents is not None else 0
+        _EMBED_SUMMARY.observe({"ms": ms, "len": n}, calls=1, texts=n, ms_sum=round(ms), fallback=fell_back)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class DynamicPadMixin:
     def _forward(self, documents: list, batch_size: int = 32) -> Any:  # type: ignore[override]
+        t0, fell_back = time.monotonic(), [False]
+        try:
+            return self._forward_inner(documents, batch_size, fell_back)
+        finally:
+            _observe(t0, documents, fell_back[0])
+
+    def _forward_inner(self, documents: list, batch_size: int, fell_back: list) -> Any:
         global _FALLBACK_LOGGED
         if documents:
             try:
@@ -69,4 +98,5 @@ class DynamicPadMixin:
                     _FALLBACK_LOGGED = True
                     logger.warning("palace_embed: dynamic-pad embed unavailable (%s, %d texts); using chroma's fixed-pad forward",
                                    type(exc).__name__, len(documents))
+                fell_back[0] = True
         return super()._forward(documents, batch_size)  # type: ignore[misc]
