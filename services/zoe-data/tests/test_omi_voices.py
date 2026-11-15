@@ -940,7 +940,9 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_clean
            # embedding, print or cluster; the voice routes are not touched
            "transcript_check.py",
            # the forget-reach inventory (A6) lists the voice tables as store keys; it imports and opens nothing
-           "forget_reach.py", "household_text.py",  # metadata inventory only; no learned-voice reads
+           "forget_reach.py",
+           # household_text only NAMES stores in metadata; its inventory test forbids runtime readers and store I/O.
+           "household_text.py",
            # the panel day review card lists / tags unknown voices ONLY by calling the owner-checked ``routers/omi_voices`` handlers
            # in-process (no SQL on a voice table); a learned print never authenticates anyone through it
            "panel_review_cards.py", "routers/panel_review_cards.py",
