@@ -121,7 +121,7 @@ def test_snapshot_lookup_cost_depends_on_hits(history, dependants):
 def test_negative_control_detects_snapshot_history_scan(history, monkeypatch):
     spine, _, rows = history
     if len(rows) < 5000:
-        return
+        pytest.skip('only the large history distinguishes a history scan from fixed work')
     real = spine._scrub_snapshots
     def scan(dead):
         spine._db.execute("SELECT seq, subject, payload FROM events "
@@ -148,7 +148,7 @@ def test_negative_control_detects_old_undo_lookup(history, monkeypatch):
 def test_negative_control_detects_old_forget_scan(history, monkeypatch):
     spine, _, rows = history
     if len(rows) < 5000:
-        return  # The large fixture distinguishes a history scan from fixed work.
+        pytest.skip('only the large history distinguishes a history scan from fixed work')
     real = spine._scrub_intents
 
     def old_scan(dead):
