@@ -1400,8 +1400,42 @@ _CODE_RE = re.compile(
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
     rf"{_CONNECT}({_TOKEN})"
 )
-#: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
+#: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays. "pin" is also a VERB, so the
+#: match is filtered by :func:`_pin_sub`: kept only when it reads as pinning a COUNT of things (below)
 _BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
+#: SECRET context for a bare "pin NNN". Any one makes it a secret whatever follows. CLOSED list, by how people say a PIN:
+#: a possessive / determiner (``my pin 4821``), what it opens (``card pin 4821``; the door / gate / alarm / safe labels are
+#: also caught by ``_CODE_RE``), or a verb of using one (``enter pin 4821``). "pin number" / "pin code" / "passcode" and a
+#: connector (``pin is`` / ``pin:`` / ``pin =`` / ``pin -``) are secret context in the match itself
+_PIN_LEADS = ("my", "the", "our", "your", "his", "her", "their", "a", "new", "old", "same", "default", "temporary", "temp",
+              "door", "front door", "back door", "gate", "alarm", "card", "bank", "bank card", "debit", "debit card",
+              "credit", "credit card", "atm", "eftpos", "phone", "sim", "sim card", "safe", "lock", "keypad", "security",
+              "account", "app", "login", "garage", "locker", "padlock",
+              "enter", "entering", "entered", "use", "using", "used", "type", "typing", "typed", "key", "key in", "punch",
+              "punch in", "input", "try", "tried", "change", "changed", "set", "reset", "remember", "forgot")
+_PIN_LEAD_RE = re.compile(rf"(?i)(?:^|[^\w'’])(?:{_alt(_PIN_LEADS)})\s{{1,8}}$")
+#: "pin" the VERB with a count: the digits are followed by a plural noun or a closed count word (``pin 123 photos``,
+#: ``pin 400 notes to the board``, ``pin 300 of them``). An s-word that is not a plural noun stays a secret (``pin 4821
+#: thanks``): the stop list is closed and fails toward redacting
+_PIN_COUNT_WORDS = ("of", "more", "extra", "other", "others", "new", "old", "different", "random", "separate", "each", "x",
+                    "items", "times", "copies", "pages")
+_PIN_NOT_PLURAL = ("thanks", "cheers", "yes", "this", "is", "was", "has", "us", "its", "it's", "plus", "always", "as",
+                   "sometimes", "please", "his", "hers", "ours", "yours", "theirs", "unless", "less", "across")
+_PIN_COUNT_RE = re.compile(rf"(?i)\s{{1,8}}(?:(?:{_alt(_PIN_COUNT_WORDS)})\b|(?P<plural>[a-z][a-z'’]{{1,40}}s)\b)")
+
+
+def _pin_sub(m: "re.Match[str]") -> str:
+    """Redact a bare-PIN match unless it is "pin" the verb pinning a count (no secret context, a count word after)."""
+    secret = m.group(1) + m.group(2) + _REDACT
+    label = m.group(1).lower()
+    if label.startswith("passcode") or " " in label or m.group(2).strip():
+        return secret                                    # passcode / pin number / pin code / pin is|:|=|-
+    if _PIN_LEAD_RE.search(m.string[max(0, m.start() - 40):m.start()]):
+        return secret                                    # my pin / card pin / enter pin ...
+    after = _PIN_COUNT_RE.match(m.string, m.end())
+    if after and (after.group("plural") is None or after.group("plural").lower() not in _PIN_NOT_PLURAL):
+        return m.group(0)                                # pin 123 photos / pin 400 of them: the verb
+    return secret
 _BARE_PASSWORD_RE = re.compile(rf"(?i)\b(password|passphrase)\b(\s{{0,8}}(?:(?:is|was|=|:|-)\s{{0,8}})?)({_TOKEN})")
 _ACCOUNT_RE = re.compile(
     rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
@@ -1420,12 +1454,58 @@ _PHONE_INTL_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[
 _PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,3}(?!\w|[.,/-]\d)")
 _PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
 _UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
-#: ``[unit] number Capitalised Name street-type [, Suburb] [STATE] [postcode]``; a lower-case street needs a label below
+#: ``[unit] number Capitalised Name street-type [, Suburb | Suburb] [STATE] [postcode]``; a lower-case street needs a label
+#: below. The SHAPE alone is also a film / show title or a count ("we watched 21 Jump Street", "I read 12 Main Street
+#: articles"), so a match is redacted only with ADDRESS CONTEXT (:func:`_address_sub`): a unit / flat / lot prefix or a
+#: ``4/27`` number (group ``unit`` / ``slash``), a following suburb, postcode or ", tail" (``tail`` / ``suburb``), a
+#: locating lead-in before the number (``_ADDRESS_LEADS``), a trailing "is my address", or the address standing alone
 _ADDRESS_RE = re.compile(
-    rf"(?<![\w/.-]){_UNIT},?\s{{1,8}}(?:[A-Z][A-Za-z'’-]{{0,40}}\s{{1,8}}){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
-    r"(?:(?:,\s{0,8}|\s{1,8})(?:[A-Z][\w'’-]{0,40}\s{1,8}){0,3}(?:[A-Z]{2,3}\s{1,8})?\d{4,5}\b"
-    r"|,\s{0,8}[A-Z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2})?"
+    r"(?<![\w/.-])(?P<unit>(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?"
+    r"\d{1,5}[A-Za-z]?(?:\s{0,8}(?P<slash>/)\s{0,8}\d{1,5}[A-Za-z]?|\s{0,8}-\s{0,8}\d{1,5}[A-Za-z]?)?"
+    rf",?\s{{1,8}}(?:[A-Z][A-Za-z'’-]{{0,40}}\s{{1,8}}){{1,3}}(?i:{_alt(_STREET_TYPES)})\b"
+    r"(?:\.?(?P<tail>(?:,\s{0,8}|\s{1,8})(?:[A-Z][\w'’-]{0,40}\s{1,8}){0,3}(?:[A-Z]{2,3}\s{1,8})?\d{4,5}\b"
+    r"|,\s{0,8}[A-Z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2}"
+    r"|,\s{0,8}(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\b)"   # ", unit 4"
+    r"|(?P<suburb>\s{1,8}[A-Z][a-z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2})"   # no full stop between: a suburb
+    r"|\.)?"
 )
+#: the words that, said right before the number, make a number + street phrase an ADDRESS. CLOSED list, from how people tell
+#: an assistant where something is: a place preposition (from / at / to / on / into / near ... , which also closes "live
+#: on", "moved to", "deliver to", "come to", "meet me at", "staying at"), a possessive (my / our / his / her / their /
+#: your), a living / visiting verb said straight before the number, the word "address", a lot / unit / flat word whose
+#: own number IS the street number ("Lot 12 Example Road"), and a copula (is / was, it's / that's / a name's). AMBIGUOUS AND REDACTED ON PURPOSE (privacy first): "we met at 21 Jump Street" and "the film is 21
+#: Jump Street" read exactly like an address, so they are redacted. NOT a lead, on purpose: "in" ("she starred in 21 Jump
+#: Street") and every other verb (watched / read / saw / play), so a title or a count with no other context is kept
+_ADDRESS_LEADS = ("from", "at", "to", "on", "into", "onto", "near", "outside", "opposite", "toward", "towards", "via",
+                  "past", "behind", "beside", "my", "our", "your", "his", "her", "their", "address", "addr", "live", "lives",
+                  "living", "lived", "stay", "stays", "staying", "stayed", "reside", "resides", "residing", "visit",
+                  "visiting", "visited", "is", "was", "are", "were",
+                  "lot", "unit", "flat", "apt", "apartment", "suite", "shop", "number")      # "Lot 12 Example Road"
+_ADDRESS_LEAD_RE = re.compile(
+    rf"(?i)(?:(?:^|[^\w'’])(?:{_alt(_ADDRESS_LEADS)})\s{{1,8}}"
+    r"|:\s{0,8}|[a-z]['’]s\s{1,8}"                                                     # "address: 12 ...", "it's 12 ..."
+    rf"|(?:\b(?:{_alt(_STREET_TYPES)})\.?|\[REDACTED\]|\d{{4,5}})\s{{0,8}}(?:,|,?\s{{1,8}}(?:and|or|then|&))\s{{1,8}})$"
+)                                                                                     # ^ the second address of a list
+_ADDRESS_TRAIL_RE = re.compile(
+    r"(?i)\s{0,8}(?:,\s{0,8})?(?:is|was|'s|’s)\s{1,8}(?:(?:my|our|his|her|their|your|the)\s{1,8}(?:(?:new|old|home|postal)\s{1,8})?"
+    r"(?:address|place|house|home|flat|unit)\b|where\s{1,8}(?:i|we|they|he|she)\b)"
+)
+
+#: anchored scans, no slice copies: a long text of many matches stays linear (pinned by the adversarial timing test)
+_LEADING_BLANK_RE = re.compile(r"\s*")
+_TRAILING_BLANK_RE = re.compile(r"[\s.!?]*\Z")
+
+
+def _address_sub(m: "re.Match[str]") -> str:
+    """Redact a number + street phrase only with address context (see ``_ADDRESS_RE``); a bare title or count is kept."""
+    s = m.string
+    if m.group("unit") or m.group("slash") or m.group("tail") or m.group("suburb"):
+        return _REDACT
+    if _ADDRESS_LEAD_RE.search(s[max(0, m.start() - 60):m.start()]) or _ADDRESS_TRAIL_RE.match(s, m.end()):
+        return _REDACT
+    if _LEADING_BLANK_RE.match(s).end() >= m.start() and _TRAILING_BLANK_RE.match(s, m.end()):
+        return _REDACT                                   # the whole text is the address (an answer to "what's the address?")
+    return m.group(0)
 #: every repeat below is bounded (a fixed-width prefix of at most four words): an unbounded "my my my ... address" prefix
 #: was re-scanned from every word, quadratic on a long input (review thread, PR #2574)
 _ADDRESS_LABEL_RE = re.compile(
@@ -1463,7 +1543,7 @@ def _scrub_secrets(text: str) -> str:
     if not any(c.isdigit() for c in text):
         return text
     text = _CODE_RE.sub(r"\1\2" + _REDACT, text)
-    text = _BARE_PIN_RE.sub(r"\1\2" + _REDACT, text)
+    text = _BARE_PIN_RE.sub(_pin_sub, text)
     text = _BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, text)
     return _ACCOUNT_RE.sub(_keep_label_if(4, 30), text)
 
@@ -1478,7 +1558,7 @@ def _scrub_contact(text: str) -> str:
         return text
     text = _ADDRESS_LABEL_RE.sub(r"\1" + _REDACT, text)
     text = _LIVE_AT_RE.sub(r"\1" + _REDACT, text)
-    text = _ADDRESS_RE.sub(_REDACT, text)
+    text = _ADDRESS_RE.sub(_address_sub, text)
     text = _PO_BOX_RE.sub(_REDACT, text)
     text = _PHONE_LABEL_RE.sub(_keep_label_if(8, 15), text)
     text = _PHONE_INTL_RE.sub(_whole_if(8, 15), text)
@@ -1508,11 +1588,12 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     REJECT (the whole text is refused): a Luhn-valid card, an SSN, a labelled TOTP, an AWS key, a PEM key, a JWT, an
     IBAN in a banking context. REDACT in place (value -> ``[REDACTED]``, the label kept): a labelled password / PIN /
     key / token / secret; a labelled door / alarm / gate / garage / safe / lock / wifi code (``_CODE_LABELS``); a PIN or
-    password said without "is" (``my pin 4821``); a labelled account / identity number (``_ACCOUNT_LABELS``).
+    password said without "is" (``my pin 4821``; never "pin" the verb with a count, ``pin 123 photos``); a labelled account / identity number (``_ACCOUNT_LABELS``).
 
     ``contact`` (default True) also redacts CONTACT details: email addresses (typed, or a labelled spoken "x at y dot
-    com"), street addresses (number + Capitalised name + ``_STREET_TYPES`` word, or after "my address is" / "I live
-    at"), PO boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
+    com"), street addresses (number + Capitalised name + ``_STREET_TYPES`` word WITH address context - a lead-in such as
+    "at" / "from" / "my", a suburb / postcode / unit, or standing alone - or after "my address is" / "I live at"), PO
+    boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
     a phone label). Every excerpt / verbatim path takes the default. ``contact=False`` is for the memory FACT text only
     (ingest, review edit, candidates, ask-to-remember): "the plumber's number is ..." and "my pickup is at 12 Main
     Street" are household facts the owner asked Zoe to keep, so the fact keeps them while the excerpt beside it does not.

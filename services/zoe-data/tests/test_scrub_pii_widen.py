@@ -44,6 +44,25 @@ SECRET_CATCH: dict[str, list[tuple[str, str]]] = {
         ("the passcode 77310 opens it", "77310"),
         ("password plum-ladder-9", "plum-ladder-9"),
         ("my old password was hunter22", "hunter22"),
+        # a PIN in each SECRET form (2026-11-16 context rule): connector, label words, possessive, what it opens, a verb
+        ("pin: 4821", "4821"),
+        ("pin = 4821", "4821"),
+        ("pin is 4821", "4821"),
+        ("the pin 4821 opens the side gate", "4821"),
+        ("our pin 4821", "4821"),
+        ("their pin 4821 works", "4821"),
+        ("PIN code 4821", "4821"),
+        ("pin number 4821", "4821"),
+        ("the card pin 4821", "4821"),
+        ("my phone pin 4821", "4821"),
+        ("the safe pin 4821", "4821"),
+        ("the alarm pin 4821", "4821"),
+        ("enter pin 4821 at the door", "4821"),
+        ("use pin 4821", "4821"),
+        ("type pin 4821 then hash", "4821"),
+        ("my pin 4821 thanks", "4821"),
+        ("pin 4821 thanks", "4821"),               # "thanks" is an s-word, not a plural count: a bare PIN stays a secret
+        ("my pin 400 notes", "400"),               # secret context wins over a following plural
     ],
     "labelled_account": [
         ("my account number is 12345678", "12345678"),
@@ -96,6 +115,32 @@ CONTACT_CATCH: dict[str, list[tuple[str, str]]] = {
         ("she lives at 5 placeholder close, springfield", "5 placeholder close"),
         ("send it to PO Box 1234", "1234"),
         ("meet at 12 St Example Terrace", "12 St Example Terrace"),
+        # each ADDRESS CONTEXT form (2026-11-16): a locating lead-in, a suburb / postcode / comma tail, a unit prefix
+        ("the plumber works from 1 Example St.", "1 Example St"),
+        ("I moved to 9 Sample Road last year", "9 Sample Road"),
+        ("deliver it to 5 Example Way please", "5 Example Way"),
+        ("come to 14 Sample Parade at six", "14 Sample Parade"),
+        ("meet me at 3 Placeholder Close", "3 Placeholder Close"),
+        ("we're staying at 40 Example Esplanade", "40 Example Esplanade"),
+        ("they live on 8 Sample Grove", "8 Sample Grove"),
+        ("my 12 Example Street place", "12 Example Street"),
+        ("send it to our 12 Example Street box", "12 Example Street"),
+        ("the address: 12 Example Street", "12 Example Street"),
+        ("Sam's 22 Sample Drive", "22 Sample Drive"),
+        ("we met at 21 Jump Street", "21 Jump Street"),         # "at" + a title reads exactly as an address: redacted
+        ("the film is 21 Jump Street", "21 Jump Street"),       # a copula is a lead-in too: ambiguous, redacted
+        ("12 Example Street Sampleton", "12 Example Street"),
+        ("12 Example Street, Sampleton", "12 Example Street"),
+        ("12 Example Street Sampleton 6000", "12 Example Street"),
+        ("I saw 12 Example Street, unit 4", "12 Example Street"),
+        ("Flat 2, 9 Sample Lane", "9 Sample Lane"),
+        ("Lot 12 Example Road", "12 Example Road"),
+        ("4/27 Example Road is the one", "27 Example Road"),
+        ("12 Example Street", "12 Example Street"),             # the whole text: the answer to "what's the address?"
+        ("12 Example Street is my address", "12 Example Street"),
+        ("12 Example Street is where we live", "12 Example Street"),
+        ("deliver to 5 Example Way and 7 Example Way", "7 Example Way"),   # the second address of a list
+        ("at 5 Example Way, 7 Example Way", "7 Example Way"),
     ],
 }
 
@@ -119,6 +164,13 @@ MUST_NOT: list[str] = [
     "she lives at the end of the street", "I live at home", "the road was closed", "my address is changing",
     "the IP address is 10.0.0.1", "account was hacked", "my bank account has 1200 in it", "my bank account is overdrawn",
     "it was a 5 minute walk", "look at the way she smiled",
+    # 2026-11-16: a number + Capitalised street phrase with NO address context is a title or a count, kept
+    "we watched 21 Jump Street last night", "I read 12 Main Street articles", "she starred in 21 Jump Street",
+    "I watched 21 Jump Street. Then we slept", "we read 12 Main Street articles and then 21 Jump Street",
+    "the 3 Little Pigs Lane mural", "play 21 Jump Street", "21 Jump Street was funny",
+    # 2026-11-16: "pin" the verb pinning a count is not a secret
+    "pin 123 photos to the board", "pin 400 notes to the board", "pin 3 of them", "please pin 250 of those",
+    "can you pin 120 more photos", "pin 100 recipes for me",
 ]
 
 
@@ -207,6 +259,8 @@ def test_the_night_quote_gate_refuses_the_new_classes(text):
     "account number" + " " * 12000 + "x1", "my number" + " " * 12000 + "x1", "email" + " " * 12000 + "x dot com 1",
     "door code" + " " * 12000 + "x1", "pin" + " " * 12000 + "x1", "password" + " " * 12000 + ", 1",
     "I live at" + " " * 12000 + "1", "I live at 1" + " Aa" * 6000, "12" + " Aa" * 6000, "call" + " me" * 6000 + " on 1",
+    # 2026-11-16 context checks run once per match: many bare matches, and many pin-verb matches
+    "1 Aa St " * 2500, "watched 1 Aa St " * 1500, "pin 123 " * 2500, "pin 123 photos " * 1500,
 ])
 def test_a_long_adversarial_string_is_fast(blob):
     """Linear, not catastrophic: measured relative to a benign sentence of the SAME length on the same box (so a loaded CI
