@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import calendar
 import importlib.util
+import re
 import sys
 import time
 from pathlib import Path
@@ -844,6 +845,29 @@ def test_w11_delivery_modules_are_voice_path():
                        "services/zoe-data/tts_waterfall.py"], touched
 
 
+def test_panel_programs_are_voice_path():
+    """Owner, 2026-11-15: "panel programs should be tested". Every file deploy-pi-voice.sh ships
+    to the panel, the reflex module and the panel unit and installers are voice scope, so a
+    panel-only PR lands through the voice lander, not the docs chain on CI alone. Other
+    scripts/setup files (a mac helper, an env example) stay out."""
+    from voice_gate_check import scope_verdict, touched_voice_files, voice_path_patterns
+    pats = voice_path_patterns()
+    panel = ["scripts/setup/zoe_voice_daemon.py", "scripts/setup/zoe_voice_announce.py",
+             "scripts/setup/zoe_voice_enroll_mode.py", "scripts/setup/zoe_voice_reflex.py",
+             "scripts/setup/zoe_enroll_flow.py", "scripts/setup/zoe-voice.service",
+             "scripts/setup/deploy-pi-voice.sh", "scripts/setup/pi_voice_daemon_install.sh",
+             "scripts/setup/pi-requirements.txt"]
+    assert touched_voice_files(panel + ["scripts/setup/mac_virtual_panel.sh",
+                                        "scripts/setup/zoe-voice.env.example"], pats) == panel
+    needs, hits, _ = scope_verdict(["scripts/setup/zoe_voice_daemon.py"], pats)
+    assert needs is True and hits == ["scripts/setup/zoe_voice_daemon.py"]
+    # every file the panel deploy ships is covered (the deploy script is the authority)
+    shipped = re.search(r"^SHIPPED_FILES=\(([^)]*)\)", (REPO / "scripts/setup/deploy-pi-voice.sh").read_text(),
+                        re.M).group(1).split()
+    code = [f"scripts/setup/{f}" for f in shipped if f.endswith((".py", ".txt"))]
+    assert touched_voice_files(code, pats) == code
+
+
 def test_zoe_data_requirements_is_voice_path():
     """The zoe-data dependency manifest pins the STT/TTS/router stack the voice path
     loads (moonshine-voice, edge-tts, fastembed, numpy). A dep bump — even a pin change
@@ -875,8 +899,9 @@ def test_zoe_data_py312_manifest_and_installer_are_voice_path():
     for f in changed[:2]:
         needs, hits, _ = scope_verdict([f], pats)
         assert needs is True and hits == [f]
-    # negative control: an unrelated setup script / manifest stays CLEAR
-    assert touched_voice_files(["scripts/setup/pi-requirements.txt",
+    # negative control: an unrelated setup manifest stays CLEAR (pi-requirements.txt is the
+    # panel's and is voice scope since 2026-11-15, test_panel_programs_are_voice_path)
+    assert touched_voice_files(["scripts/setup/mac-requirements-wakeword.txt",
                                 "services/zoe-auth/requirements.txt"], pats) == []
 
 

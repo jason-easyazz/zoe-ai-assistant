@@ -558,6 +558,18 @@ VOICE_PATH_WIDE_PATTERNS = (
     # zoe_core_client.py reads the persona file on every brain turn
     "tools/audit/flag_inventory.py",
     "services/zoe-core/SOUL.md",
+    # THE PANEL PROGRAMS (owner, 2026-11-15: "panel programs should be tested"). Before this, a
+    # change to the panel's own voice daemon was not voice scope, so the docs chain could merge it
+    # on CI alone (#2495 nearly shipped a barge-in NameError that way). They now land through the
+    # voice lander like the server side, and the panel deploy itself is DRY_RUN first
+    # (docs/knowledge/merge-and-deploy.md "Landing a panel-program PR"). The set is what
+    # scripts/setup/deploy-pi-voice.sh ships plus the reflex module and the panel unit/installers.
+    "scripts/setup/zoe_voice_*.py",
+    "scripts/setup/zoe_enroll_flow.py",
+    "scripts/setup/zoe-voice.service",
+    "scripts/setup/deploy-pi-voice.sh",
+    "scripts/setup/pi_voice_daemon_install.sh",
+    "scripts/setup/pi-requirements.txt",
 )
 VOICE_PATH_PATTERNS = VOICE_PATH_NARROW_PATTERNS + VOICE_PATH_WIDE_PATTERNS
 # What the WIDE `services/zoe-data/*` glob does NOT cover (fnmatch's `*` crosses `/`): the
