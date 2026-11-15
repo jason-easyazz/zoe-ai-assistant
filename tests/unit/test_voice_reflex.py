@@ -486,6 +486,29 @@ def test_manifest_sha8_ignores_only_its_own_key_and_refuses_nan():
         R.manifest_sha8({**m, "gain_db": float("nan")})
 
 
+def test_load_bank_reads_each_manifest_once_and_orders_by_the_verified_date(tmp_path, monkeypatch):
+    """The manifest is read ONCE (through the single-descriptor reader); load_bank never re-opens it by path to get the
+    render date. Any by-path read of a bank file (Path.read_text / read_bytes / open) fails the test."""
+    old, _ = make_bank(tmp_path)
+    man = json.loads((old / "manifest.json").read_text())
+    import shutil
+
+    newer = dict(man, render_date="2026-12-01")
+    newer.pop("bank")
+    sha_new = R.manifest_sha8(newer)
+    newer["bank"] = sha_new
+    shutil.copytree(old, old.parent / sha_new)
+    (old.parent / sha_new / "manifest.json").write_text(json.dumps(newer))
+    reads = []
+    real_reader = R._read_regular_file
+    monkeypatch.setattr(R, "_read_regular_file", lambda p, lim: (reads.append(Path(p).name), real_reader(p, lim))[1])
+    for name in ("read_text", "read_bytes", "open"):
+        monkeypatch.setattr(Path, name, lambda *a, **k: pytest.fail("a bank file was re-read by path"))
+    res = R.load_bank("af_sky", str(tmp_path), ON)
+    assert res.reason == "ok" and res.bank.sha8 == sha_new and res.bank.render_date == "2026-12-01"
+    assert reads.count("manifest.json") == 2                      # once per candidate directory, never twice
+
+
 def test_loader_refuses_a_tampered_file(tmp_path):
     d, _ = make_bank(tmp_path)
     raw = bytearray((d / "mm_02.wav").read_bytes())

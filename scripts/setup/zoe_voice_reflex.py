@@ -470,6 +470,7 @@ class Bank:
     sha8: str
     style_len: Optional[int]
     takes: "dict[str, Take]"
+    render_date: str = ""       # from the VERIFIED manifest bytes (covered by sha8); orders candidate banks, never re-read
 
     @property
     def take_ids(self) -> tuple:
@@ -574,12 +575,14 @@ def load_bank_dir(bank_dir, voice: str, s: Optional[Settings] = None) -> LoadRes
         return LoadResult(None, "bad_manifest")
     if d.name != sha8 or man.get("bank") != sha8:
         return LoadResult(None, "sha_mismatch")
-    return LoadResult(Bank(voice, sha8, style_len, takes), "ok")
+    rd = man.get("render_date")
+    return LoadResult(Bank(voice, sha8, style_len, takes, rd if isinstance(rd, str) else ""), "ok")
 
 
 def load_bank(voice: str, root: Optional[str] = None, s: Optional[Settings] = None) -> LoadResult:
     """The bank for ``voice`` under ``root`` (default ``REFLEX_DIR``): the valid ``<sha8>`` directory with the latest
-    manifest ``render_date`` (ties: the greatest sha8). No valid directory = no bank, with the first failure's reason."""
+    manifest ``render_date`` (ties: the greatest sha8), the date taken from the bytes ``load_bank_dir`` verified (each manifest is
+    read once, never re-opened by path). No valid directory = no bank, with the first failure's reason."""
     s = s or settings()
     if not (isinstance(voice, str) and VOICE_RE.fullmatch(voice)):
         return LoadResult(None, "voice_mismatch")
@@ -594,11 +597,7 @@ def load_bank(voice: str, root: Optional[str] = None, s: Optional[Settings] = No
         if res.bank is None:
             first_fail = first_fail or res.reason
             continue
-        try:
-            date = str(json.loads((c / "manifest.json").read_text(encoding="utf-8")).get("render_date") or "")
-        except (OSError, ValueError):
-            date = ""
-        key = (date, c.name)
+        key = (res.bank.render_date, c.name)   # the verified bytes' date: the manifest is NEVER opened a second time
         if best_key is None or key > best_key:
             best, best_key = res, key
     return best or LoadResult(None, first_fail or "missing")
