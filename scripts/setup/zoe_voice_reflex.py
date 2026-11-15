@@ -11,7 +11,7 @@ Truthfulness (design note W2 sections 0, 3; ``docs/knowledge/voice-reflex.md``):
 * non-lexical only: the bank holds "mm" takes, nothing that claims understanding or agreement;
 * one voice: the bank's manifest voice must equal the household's current voice, else silence (never the wrong voice);
 * silent when in doubt: every rule below that fails is ONE named skip reason from the fixed ``SKIPS`` enum, and the explicit
-  inputs ``committed``, ``guest``, ``media_active``, ``speaker_accept``, ``speaker_model`` and ``verdict_ms`` are silence
+  inputs ``committed``, ``guest``, ``media_active``, ``talking``, ``speaker_accept``, ``speaker_model`` and ``verdict_ms`` are silence
   unless the daemon states the safe value; a non-finite or non-numeric number, or any exception inside ``decide``, is
   silence with skip ``error``.
 * the speaker guard is MODEL-AWARE: the reflex never compares a raw score against a number of its own. The daemon passes the
@@ -67,8 +67,12 @@ KINDS = ("heard", "none")
 RULES = ("deep", "quiet", "clean", "hesitation", "no_speech", "max_duration")
 TURN_KINDS = ("wake", "followup", "conversation", "barge")
 #: in gate order (the first that applies is the one reported)
-SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
-         "idle_greeting", "guest", "low_confidence", "late", "prev_question", "budget", "no_bank", "voice_mismatch")
+SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "talking", "busy", "media", "noisy",
+         "night", "idle_greeting", "guest", "low_confidence", "late", "prev_question", "budget", "no_bank", "voice_mismatch")
+#: skips the DAEMON reports after ``decide()`` said "heard" (the world changed between the decision and the sound, or the
+#: player failed): never produced by ``decide``; accepted by the log and the handshake enums
+RUNTIME_SKIPS = ("reply_first", "player_failed")
+LOG_SKIPS = SKIPS + RUNTIME_SKIPS
 LOAD_RESULTS = ("ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format", "too_long", "too_few")
 NO_SKIP = "-"
 
@@ -234,6 +238,7 @@ class Ctx:
     bank_voice: Optional[str] = None    # the loaded bank's manifest voice (None = no bank)
     current_voice: Optional[str] = None  # the household's current voice (cached from the done frame; None = unknown)
     takes: tuple = ()                   # the loaded bank's take ids
+    talking: Optional[bool] = None      # a mic listened after the close and heard NO speech (False); speech (True); unknown (None)
     committed: Optional[bool] = None    # the endpointer COMMITTED the close (push() returned True); anything but True = silence
     guest: Optional[bool] = None        # the speaker is a guest / unknown (False only for a household member's local claim)
     speaker_accept: Optional[bool] = None  # the speaker model's OWN accept at the FAR 0.1 % bar (None = not scored)
@@ -313,6 +318,8 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
         return "short"  # G:short
     if ctx.muted_ms > 0:
         return "muted"  # G:muted
+    if ctx.talking is not False:
+        return "talking"  # G:talking (the person is still making sound after the close, or nobody listened: never talk over them)
     if ctx.other_player is not False:
         return "busy"  # G:busy (another player, or unknown)
     if ctx.media_active is not False:
@@ -416,7 +423,7 @@ def handshake_block(decision: Decision, at_ms, dur_ms, bank_sha: Optional[str], 
             return {"kind": "heard", "take": decision.take, "bank": bank_sha, "voice": voice,
                     "at_ms": _clamp_int(at_ms, 0, 10000), "dur_ms": _clamp_int(dur_ms, 0, 2000)}
         return {"kind": "none", "skip": "no_bank"}
-    skip = decision.skip if decision.skip in SKIPS else "disabled"
+    skip = decision.skip if decision.skip in LOG_SKIPS else "disabled"
     return {"kind": "none", "skip": skip}
 
 
