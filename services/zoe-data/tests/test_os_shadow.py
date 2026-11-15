@@ -446,3 +446,11 @@ def test_the_import_start_is_a_no_op_with_the_flag_off(kernel, monkeypatch):
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     os_shadow._start_at_import()
     assert os_shadow._worker is None
+
+
+def test_a_forgotten_refusal_is_classed_forgotten_even_when_it_names_arguments():
+    """The kernel's 'forgotten_action_arguments' also contains 'argument': first match must be 'forgotten' (final), never 'params'."""
+    assert os_shadow.reason_code("forgotten_action_arguments") == "forgotten"
+    assert os_shadow.reason_code("refused: forgotten_action_arguments") == "forgotten"
+    assert os_shadow.reason_code("wrong argument type") == "params"
+    assert os_shadow.reason_code("no grant from that person") == "no_grant"
