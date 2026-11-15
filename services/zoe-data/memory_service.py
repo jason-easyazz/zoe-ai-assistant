@@ -2266,6 +2266,13 @@ class MemoryService:
             await member_derived_forget.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: derived-store erasure failed ({type(exc).__name__})") from exc
+        # ... and EVERYTHING else the member owns (owner decision 2026-11-15): the transcript, what they wrote, their queued and scheduled
+        # sends, recordings, their own contacts / events and their entries on shared ones (member_owned_forget). Fail closed.
+        try:
+            import member_owned_forget
+            await member_owned_forget.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: member-owned store erasure failed ({type(exc).__name__})") from exc
         # The superseded-value registry (migration 0080): which values the member corrected away. Fail closed; outside the memory lock
         # (it takes the member's erase gate, which a registry record holds through its commit).
         try:

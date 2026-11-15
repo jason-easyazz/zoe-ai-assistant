@@ -62,6 +62,7 @@ _OMI_M = "omi_recordings.forget_user"
 _CONTACTS_M = "contacts_store.forget_user"
 _OWN = "Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user."
 _DERIVED_M = "member_derived_forget.forget_user"     # what Zoe derived about the member (portrait, card, loops, proactive rows, offers)
+_OWNED_M = "member_owned_forget.forget_user"     # everything else the member owns (owner decision 2026-11-15)
 _NOWORDS = "No words and no biometrics: ids, flags, times or counters only."
 
 TABLES: tuple[Store, ...] = (
@@ -103,12 +104,8 @@ TABLES: tuple[Store, ...] = (
     _t("learned_voiceprints", BIOMETRIC, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),
     _t("learned_voiceprint_segments", BIOMETRIC, REACHED, member=_OMI_M, entity="contacts_store.forget_voiceprints"),
     _t("named_guest_turns", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),   # via omi_voices.purge_people
-    _t("panel_voice_clusters", BIOMETRIC, GAP,
-       "Passive named guests (0073): unknown panel voices held for the household owner. Erased by expiry (14 days, hourly sweep), by "
-       "naming (the voice becomes a guest's print), and by the owner's DELETE /api/voice/unknown-voices; a member erase does not "
-       "reach them and they hold no name an entity forget could match. Never in the dumps (BIOMETRIC_TABLES)."),
-    _t("panel_voice_samples", BIOMETRIC, GAP,
-       "The embeddings behind panel_voice_clusters (never audio), erased with their voice. Never in the dumps (BIOMETRIC_TABLES)."),
+    _t("panel_voice_clusters", BIOMETRIC, REACHED, member=_OWNED_M),   # a member's held voices (user_id) go with their samples; expiry and naming as before
+    _t("panel_voice_samples", BIOMETRIC, REACHED, member=_OWNED_M),    # by cluster, with the member's clusters
     _t("learned_voiceprints_0071", METADATA, OUT_OF_SCOPE,
        "Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the "
        "same migration; it never exists on the Postgres box the dumps read."),
@@ -117,58 +114,56 @@ TABLES: tuple[Store, ...] = (
     _t("user_model_cards", DERIVED, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),
     _t("open_loops", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),          # the entity forget resolves the loop instead
     _t("proactive_candidates", DERIVED, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),
-    _t("people", WORDS, GAP, "Entity forget soft-deletes the person row (kept with deleted=1); delete_user does not touch people.",
-       entity="memory_forget_cascade._run"),
-    _t("person_relationships", DERIVED, GAP, "Entity forget closes the edges (valid_to); delete_user does not.",
-       entity="memory_forget_cascade._run"),
-    _t("event_attendees", WORDS, GAP, "Entity forget anonymises the attendee row; delete_user removes the attendees of the member's synced and "
-       "in-calendar events (calendar_forget.forget_user), not of their calendar-less local events (owner decision: household-visible items).",
-       member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
-    _t("events", WORDS, GAP, "delete_user removes the member's synced events and every event in their calendars (calendar_forget.forget_user); "
-       "their calendar-less local events (household-visible by default) stay until the owner decides delete vs keep for the household. "
-       "The entity forget scrubs only legacy metadata.attendees.", member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
+    _t("people", WORDS, REACHED, "delete_user removes the member's PRIVATE contacts (visibility not family) with every row about them; a family-visible "
+       "contact stays (other members know them) and loses only the member's own entries.", member=_OWNED_M, entity="memory_forget_cascade._run"),
+    _t("person_relationships", DERIVED, REACHED, member=_OWNED_M, entity="memory_forget_cascade._run"),   # the member's edges (user_id) and every edge of their private contacts
+    _t("event_attendees", WORDS, REACHED, member=_OWNED_M, entity="memory_forget_cascade._run"),   # the member's attendee rows anywhere + every attendee of their personal events (synced: calendar_forget)
+    _t("events", WORDS, REACHED, "delete_user removes the member's synced events (calendar_forget.forget_user) and their PERSONAL local events "
+       "(member_owned_forget); a FAMILY event stays (a household calendar entry), only the member's attendee rows go. The entity forget "
+       "scrubs only legacy metadata.attendees.", member=_OWNED_M, entity="memory_forget_cascade._run"),
     _t("memory_forgotten", METADATA, OUT_OF_SCOPE,
        "The forget LEDGER itself: salted hashes, no names, plus one erase WATERMARK per erased member (erase_watermark: an id and a "
        "time). It must survive a forget to keep the forget enforced."),
     # --- the verbatim transcript ---
-    _t("chat_sessions", WORDS, GAP, "Entity forget redacts titles in place (forget_redact.on_forget); delete_user does not delete sessions.",
-       entity="forget_redact.on_forget"),
-    _t("chat_messages", WORDS, GAP, "Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages "
-       "(owner decision pending), but every background transcript miner skips the member's turns at or before their erase watermark (erase_watermark.keep_after).",
-       entity="forget_redact.on_forget"),
-    _t("chat_feedback", WORDS, GAP, "Holds a corrected_response (words); neither path reaches it."),
-    _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
+    _t("chat_sessions", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # emptied sessions go; one still holding another member's turns loses its title
+    _t("chat_messages", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # every turn the member owns (per-turn owner, else the session owner)
+    _t("chat_feedback", WORDS, REACHED, member=_OWNED_M),
+    _t("background_tasks", WORDS, REACHED, member=_OWNED_M),
     _t("pending_suggestions", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),   # Zoe's offers; topic forget: forget_topic._withdraw_offers
     # --- member-owned product data: the member's own lists, notes, calendar, journal, money ---
-    _t("notes", WORDS, GAP, _OWN + " Holds free text."),
-    _t("journal_entries", WORDS, GAP, _OWN + " Holds free text."),
-    _t("lists", WORDS, GAP, _OWN + " List items name people and places."),
-    _t("list_items", WORDS, GAP, _OWN + " The items themselves; the household shopping list etc."),
-    _t("people_field_values", WORDS, GAP, "Per-person custom field values (routers/people.py); the entity cascade soft-deletes the person row only."),
-    _t("chat_ag_ui_runs", WORDS, GAP, "Persisted AG-UI event streams of a chat run (the reply text); neither path reaches them."),
-    _t("reminders", WORDS, GAP, _OWN),
-    _t("transactions", WORDS, GAP, _OWN + " Descriptions can name people."),
-    _t("person_activities", WORDS, GAP, "Per-person activity text; not reached by the entity cascade (only the people row is)."),
-    _t("person_bucket_list", WORDS, GAP, "Per-person text; not reached by the entity cascade."),
-    _t("person_gift_ideas", WORDS, GAP, "Per-person text; not reached by the entity cascade."),
-    _t("person_important_dates", METADATA, GAP, "Dates and labels for a person; not reached by the entity cascade."),
+    _t("notes", WORDS, REACHED, member=_OWNED_M),               # the member's own words: every note, whatever its visibility
+    _t("journal_entries", WORDS, REACHED, member=_OWNED_M),
+    _t("lists", WORDS, REACHED, "delete_user removes the member's PRIVATE lists with their items; a FAMILY list stays (a household object).",
+       member=_OWNED_M),
+    _t("list_items", WORDS, GAP, "Authorship gap: an item records no author (needs a created_by column), so the items on a FAMILY list stay; the "
+       "member's private lists go with all their items and their assignments (assigned_to) are cleared everywhere."),
+    _t("people_field_values", WORDS, GAP, "Authorship gap: a field value records no author (needs a created_by / user_id column), so the values on a "
+       "FAMILY contact stay; the member's private contacts go with all their values."),
+    _t("chat_ag_ui_runs", WORDS, GAP, "Authorship gap: a run records its session, not who spoke (needs a user_id column): the runs of every session "
+       "the member erase empties go (member_owned_forget); the runs of a session that still holds another member's turns stay."),
+    _t("reminders", WORDS, REACHED, member=_OWNED_M),           # and their queued / scheduled sends (proactive_pending / proactive_scheduled)
+    _t("transactions", WORDS, REACHED, member=_OWNED_M),        # the member's own records, whatever their visibility
+    _t("person_activities", WORDS, REACHED, member=_OWNED_M),   # by author (user_id) on any contact, and every row of their private contacts
+    _t("person_bucket_list", WORDS, REACHED, member=_OWNED_M),
+    _t("person_gift_ideas", WORDS, REACHED, member=_OWNED_M),
+    _t("person_important_dates", METADATA, REACHED, member=_OWNED_M),
     _t("calendars", WORDS, REACHED, member="calendar_forget.forget_user"),   # name, description, sync cursor, account reference
     # --- the feed spine (0078): connected accounts, their sync log, the member's own addresses and numbers ---
     _t("connected_accounts", METADATA, REACHED, member="connected_accounts.forget_user"),   # provider, label, subject hash, status
     _t("sync_runs", METADATA, REACHED, member="connected_accounts.forget_user"),            # counts, outcome class, opaque cursors
     _t("member_identities", METADATA, REACHED, member="member_identities.forget_user"),     # the member's own emails / phone numbers
     _t("event_alarms", METADATA, OUT_OF_SCOPE, _NOWORDS),
-    _t("ambient_memory", WORDS, GAP, "Ambient captured memory text; neither path reaches it."),
+    _t("ambient_memory", WORDS, REACHED, member=_OWNED_M),      # by user_id (every row since 0017) and legacy speaker_id -> the member's speaker profiles
     _t("notifications", WORDS, REACHED, member="notifications_store.forget_user"),   # every row of the member, any writer; no entity eraser
     _t("music_listening_events", METADATA, OUT_OF_SCOPE, "Listening history: titles/artists, no household words; the music journal has its own controls."),
     # --- proactive / voice delivery plumbing ---
     _t("proactive_deliveries", DERIVED, REACHED, member=_DERIVED_M),   # delivery ledger rows keyed by candidate (cue words)
     _t("proactive_outcome_edges", DERIVED, REACHED, member="outcome_edges.erase_user"),   # opaque item ids + outcomes only: no word for an entity forget to erase
     _t("proactive_ledger_lines", WORDS, REACHED, member=_DERIVED_M),   # the line Zoe spoke to the member
-    _t("proactive_pending", WORDS, GAP, "Holds the message text of a queued send (reminders the member set); owner decision with reminders."),
-    _t("proactive_scheduled", WORDS, GAP, "Holds the message text of a scheduled send (reminders the member set); owner decision with reminders."),
+    _t("proactive_pending", WORDS, REACHED, member=_OWNED_M),
+    _t("proactive_scheduled", WORDS, REACHED, member=_OWNED_M),  # consumed first (fired=1) so a job cannot fire, its job cancelled, then deleted
     _t("proactive_responses", METADATA, OUT_OF_SCOPE, _NOWORDS),
-    _t("voice_announcements", WORDS, GAP, "Holds the announcement message; short-lived (expires_at) but not erased on forget."),
+    _t("voice_announcements", WORDS, REACHED, member=_OWNED_M),  # announcements Zoe queued for the member
     # --- identity / biometric enrolment ---
     _t("speaker_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
        "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
@@ -185,7 +180,7 @@ TABLES: tuple[Store, ...] = (
     _t("dashboard_layouts", CONFIG, OUT_OF_SCOPE, "UI layout JSON."),
     _t("ui_layouts", CONFIG, OUT_OF_SCOPE, "UI layout trees."),
     _t("member_modes", CONFIG, OUT_OF_SCOPE, "A mode flag per member."),
-    _t("memory_consolidation_state", METADATA, OUT_OF_SCOPE, "A session id and a timestamp."),
+    _t("memory_consolidation_state", METADATA, REACHED, member=_OWNED_M),   # a session id and a time
     _t("panel_user_bindings", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("panel_auth_challenges", METADATA, OUT_OF_SCOPE, "Short-lived PIN hashes."),
     _t("ui_panel_sessions", METADATA, OUT_OF_SCOPE, "Which page a panel is on; ui_context can carry transient state, expires with the session."),
@@ -194,11 +189,11 @@ TABLES: tuple[Store, ...] = (
     _t("trust_audit", METADATA, OUT_OF_SCOPE, "Never-built trust-gate audit log; never written, dropped by alembic 0065."),
     _t("agent_cost_events", METADATA, OUT_OF_SCOPE, "Token counts and cost per call."),
     _t("llm_call_log", METADATA, OUT_OF_SCOPE, "Latency and token counts per call."),
-    _t("ui_actions", WORDS, GAP, "Action payloads (e.g. a typed list item) are kept; neither path reaches them."),
+    _t("ui_actions", WORDS, REACHED, member=_OWNED_M),
     _t("ui_action_ledger", METADATA, OUT_OF_SCOPE, "Event ledger for UI actions: type and ids."),
     _t("engineering_tasks", METADATA, OUT_OF_SCOPE, "The household's engineering pipeline (tickets about the code, owner-authored), not member memory."),
-    _t("openclaw_approvals", WORDS, GAP, "Dead since OpenClaw was retired but may hold old request text; goes with the table drop in the OpenClaw removal PR."),
-    _t("openclaw_run_state", WORDS, GAP, "Dead since OpenClaw was retired but may hold old request/response text; goes with the table drop in the OpenClaw removal PR."),
+    _t("openclaw_approvals", WORDS, REACHED, member=_OWNED_M),   # dead since OpenClaw was retired; the table drop is the OpenClaw removal PR
+    _t("openclaw_run_state", WORDS, REACHED, member=_OWNED_M),
 )
 
 # -- everything that is not a Postgres table -----------------------------------------------------------------------------------------
@@ -221,12 +216,12 @@ OTHER: tuple[Store, ...] = (
           member="local_text_logs.erase_all_text", entity="local_text_logs.erase_entity", markers=("trace.jsonl",)),
     Store("production_feedback_log", "file", WORDS, OUT_OF_SCOPE, "Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and "
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
-    Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
+    Store("voice_stt_log", "file", WORDS, GAP, "No member id: ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
           "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
-    Store("flue_session_log", "file", WORDS, GAP, "The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
+    Store("flue_session_log", "file", WORDS, GAP, "No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
-    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
+    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
           "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
     Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
@@ -281,7 +276,7 @@ OTHER: tuple[Store, ...] = (
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",
           markers=("bluetooth-audit.jsonl", "model-profile-audit.jsonl")),
-    Store("pi_intent_evidence", "file", WORDS, GAP, "~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated "
+    Store("pi_intent_evidence", "file", WORDS, GAP, "No member id: ~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated "
           "(ZOE_PI_INTENT_*), outside the cascade, no retention.",
           markers=("pi-intent-miss-evidence.jsonl", "pi-hybrid-production-evidence.jsonl", "pi-hybrid-production-labels.jsonl",
                    "pi-intent-shadow.jsonl", "pi-intent-shadow-labels.jsonl")),
@@ -289,15 +284,15 @@ OTHER: tuple[Store, ...] = (
           markers=("engineering_pipeline_runs.jsonl", "pipeline_runs.jsonl")),
     Store("sqlite_dev_db", "file", METADATA, OUT_OF_SCOPE, "database.py's zoe.db is the legacy SQLite fallback for dev; production is Postgres.",
           markers=("zoe.db",)),
-    Store("app_logs", "file", WORDS, GAP, "~/.zoe-logs/zoe-data.*: the service log. Utterances are logged as len + hash only since 2026-11-03 (intent_miss: len=N utt=<hash>); "
+    Store("app_logs", "file", WORDS, GAP, "No member id: ~/.zoe-logs/zoe-data.*: the service log. Utterances are logged as len + hash only since 2026-11-03 (intent_miss: len=N utt=<hash>); "
           "lines written before then hold text until the size rotation drops them; "
           "rotated by size (50 MB x4), not by age, outside the cascade.", markers=("intent_miss:",)),
-    Store("backup_postgres", "backup", WORDS, GAP, "Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within "
+    Store("backup_postgres", "backup", WORDS, GAP, "Backup: nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within "
           "BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing "
           "keeps its old dumps (an age alarm is the fix; a time prune must never delete the last good copy). Forget cannot rewrite a dump; "
           "biometric table data is excluded from them. Restore => re-issue the forget.",
           markers=("postgres-nightly-backup.sh",)),
-    Store("backup_palace_tar", "backup", WORDS, GAP, "Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by "
+    Store("backup_palace_tar", "backup", WORDS, GAP, "Backup: nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by "
           "count after a new tarball, so a failing job keeps its old ones). Not rewritten; the JSON exports beside it are redacted "
           "by the ledger (redact_backups.py).", markers=("mempalace-nightly-backup.sh",)),
     Store("backup_json_exports", "backup", WORDS, REACHED, "Palace JSON exports and compaction backups are redacted by the forget ledger "
