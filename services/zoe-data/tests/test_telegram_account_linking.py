@@ -207,16 +207,18 @@ def test_a_redeemed_link_token_links_the_redeeming_account_with_its_proof(monkey
 def test_a_link_never_displaces_another_members_link(monkeypatch):
     import telegram_link
 
-    db = FakePrefsDB(seed={"member-b": {"telegram_id": "55502"}, "member-a": {}})
-    token = telegram_link.make_link_token("member-a")
+    # its own member: a token is a pure function of (member, expiry second), so reusing another test's member could
+    # mint that test's already-spent token
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "55502"}, "member-c": {}})
+    token = telegram_link.make_link_token("member-c")
     r = _redeem(db, monkeypatch, token, "55502")
     assert r.status_code == 409, r.text
     assert _prefs(db, "member-b") == {"telegram_id": "55502"}
-    assert "telegram_id" not in _prefs(db, "member-a")
-    # the refused token was released, not burned: after member-b unlinks, member-a can redeem it
+    assert "telegram_id" not in _prefs(db, "member-c")
+    # the refused token was released, not burned: after member-b unlinks, member-c can redeem it
     _profile_client(db, user_id="member-b").delete("/api/user/profile/telegram")
     assert _redeem(db, monkeypatch, token, "55502").status_code == 200
-    assert _prefs(db, "member-a")["telegram_id"] == "55502"
+    assert _prefs(db, "member-c")["telegram_id"] == "55502"
 
 
 def test_a_member_unlinks_their_own_link_and_the_unlink_is_recorded():
