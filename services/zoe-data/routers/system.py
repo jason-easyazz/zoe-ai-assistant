@@ -2523,42 +2523,33 @@ async def consume_telegram_link_token(
     from routers.user_profile import _TELEGRAM_ID_RE
 
     token = (body.token or "").strip()
-    # verify_link_token validates AND atomically RESERVES the token (single-use).
-    # From here on, ANY exit path must either mark_token_consumed (success) or
-    # release_token (failure) — otherwise the reservation would strand the token.
-    user_id = telegram_link.verify_link_token(token)
-    if not user_id:
+    # Signature + expiry only. Single use is the database's: telegram_link.link records the redemption in the SAME transaction
+    # as the link write, so a refusal or a failure (a cancelled request included) rolls both back and the member can re-scan.
+    decoded = telegram_link.decode_link_token(token)
+    if not decoded:
         raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
+    user_id, token_id, expires_at = decoded
 
-    try:
-        tid = (body.telegram_id or "").strip()
-        if not _TELEGRAM_ID_RE.match(tid):
-            raise HTTPException(
-                status_code=400,
-                detail="telegram_id must be a positive numeric Telegram user id",
-            )
+    tid = (body.telegram_id or "").strip()
+    if not _TELEGRAM_ID_RE.match(tid):
+        raise HTTPException(
+            status_code=400,
+            detail="telegram_id must be a positive numeric Telegram user id",
+        )
 
-        # The token's user must still exist (a since-deleted user would otherwise
-        # 500 on the FK). Clean 400 instead, and the reservation is released below.
-        cur = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
-        if not await cur.fetchone():
-            raise HTTPException(status_code=400, detail="link target user no longer exists")
+    # The token's user must still exist (a since-deleted user would otherwise 500 on the FK).
+    cur = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
+    if not await cur.fetchone():
+        raise HTTPException(status_code=400, detail="link target user no longer exists")
 
-        # One member per account, and a link never displaces another member's (telegram_link.link).
-        outcome = await telegram_link.link(db, user_id, tid, body.telegram_username)
-        if outcome == telegram_link.HELD_BY_OTHER:
-            raise HTTPException(status_code=409, detail="this Telegram account is already linked to another member")
-    except BaseException:
-        # Failure before commit → free the reservation so the user can re-scan.
-        # BaseException (not Exception) so asyncio.CancelledError — raised when
-        # uvicorn cancels the handler on a client disconnect mid-await — ALSO
-        # releases, instead of stranding the token in _pending_sigs for the TTL.
-        # The bare `raise` re-raises CancelledError, preserving shutdown semantics.
-        telegram_link.release_token(token)
-        raise
-
-    # Link is durably written — now burn the token so a replay/second scan fails.
-    telegram_link.mark_token_consumed(token)
+    # One holder per account, one account per member, and a redemption never moves a link (telegram_link.link).
+    outcome = await telegram_link.link(db, user_id, tid, body.telegram_username, token_id=token_id, expires_at=expires_at)
+    if outcome in (telegram_link.TOKEN_SPENT, telegram_link.MEMBER_GONE):
+        raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
+    if outcome == telegram_link.HELD_BY_OTHER:
+        raise HTTPException(status_code=409, detail="this Telegram account is already linked to another member")
+    if outcome == telegram_link.MEMBER_LINKED:
+        raise HTTPException(status_code=409, detail="this member already has a linked Telegram account; disconnect it first")
     return {"ok": True, "user_id": user_id, "telegram_id": tid}
 
 

@@ -181,7 +181,7 @@ export async function consumeLinkToken(
     signal: AbortSignal.timeout(DATA_TIMEOUT_MS),
   });
   if (res.status === 400) return null; // invalid / expired token
-  if (res.status === 409) throw new LinkHeldError(); // another member holds this account: nothing changed
+  if (res.status === 409) throw new LinkHeldError(); // refused (held by another member, or the member already has another): nothing changed
   if (!res.ok) throw new Error(`consume-link-token ${res.status} ${await res.text().catch(() => '')}`);
   const data = (await res.json()) as { user_id?: string | null };
   return data.user_id ?? null;

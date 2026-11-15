@@ -182,6 +182,8 @@ TABLES: tuple[Store, ...] = (
     # --- config, ids and infrastructure ---
     _t("user_preferences", CONFIG, REACHED, "Preference flags; no household words. The member erase removes the messaging-account link "
        "and its records; the other flags stay.", member="telegram_link.forget_user"),
+    _t("telegram_link_redemptions", METADATA, REACHED, "Spent messaging-link token ids (a hash), the member id and epoch times; no "
+       "household words. Rows expire with the token; the member erase removes the member's rows.", member="telegram_link.forget_user"),
     _t("weather_preferences", CONFIG, OUT_OF_SCOPE, "A city and units."),
     _t("dashboard_layouts", CONFIG, OUT_OF_SCOPE, "UI layout JSON."),
     _t("ui_layouts", CONFIG, OUT_OF_SCOPE, "UI layout trees."),

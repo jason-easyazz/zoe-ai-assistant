@@ -145,17 +145,20 @@ test('handleStart: a rejected token replies "expired", links nobody', async () =
   assert.match(replies[0]!, /expired|invalid/i);
 });
 
-test('handleStart: an account linked to another member is refused with a plain reply, and nothing changes', async () => {
+test('handleStart: a refused link gets one plain reply and the redeemer is asked only once (no retry)', async () => {
   const replies: string[] = [];
+  let calls = 0;
   await handleStart(1, 'tok', undefined, {
     consume: async () => {
+      calls += 1;
       throw new LinkHeldError();
     },
     reply: async (t) => {
       replies.push(t);
     },
   });
-  assert.equal(replies[0], LINK_HELD_REPLY);
+  assert.equal(calls, 1);
+  assert.deepEqual(replies, [LINK_HELD_REPLY]);
   assert.doesNotMatch(replies[0]!, /Linked!/);
   assert.match(replies[0]!, /another Zoe account/);
 });

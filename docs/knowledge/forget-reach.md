@@ -132,7 +132,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-134 stores: 68 reached, 30 out of scope, 36 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+135 stores: 69 reached, 30 out of scope, 36 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -222,6 +222,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `alarms` | pg_table | words | reached | member: `alarms.forget_user` | - |
 | `phone_devices` | pg_table | metadata | out_of_scope | - | A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens. |
 | `user_preferences` | pg_table | config | reached | member: `telegram_link.forget_user` | Preference flags; no household words. The member erase removes the messaging-account link and its records; the other flags stay. |
+| `telegram_link_redemptions` | pg_table | metadata | reached | member: `telegram_link.forget_user` | Spent messaging-link token ids (a hash), the member id and epoch times; no household words. Rows expire with the token; the member erase removes the member's rows. |
 | `weather_preferences` | pg_table | config | out_of_scope | - | A city and units. |
 | `dashboard_layouts` | pg_table | config | out_of_scope | - | UI layout JSON. |
 | `ui_layouts` | pg_table | config | out_of_scope | - | UI layout trees. |

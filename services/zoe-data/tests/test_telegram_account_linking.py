@@ -12,7 +12,13 @@ Covers three pieces:
 The user_preferences table is modelled by a tiny in-memory fake that understands
 exactly the SQL these routers issue (SELECT prefs by user_id, INSERT ... ON
 CONFLICT, key removal, the `prefs::jsonb ->> 'telegram_id'` match, and the
-account lookups on `users` / `auth_users`).
+account lookups on `users` / `auth_users`), plus what alembic 0084 adds: the
+redemption rows, the one-holder unique index, the member link lock, the erase
+watermark read, and transactions that roll back. THE FAKE ENFORCES THE UNIQUE
+INDEX, THE PRIMARY KEY AND THE LOCK ITSELF: weaker evidence than a real
+PostgreSQL (it refuses a conflicting write at once, where PostgreSQL waits for
+the other transaction), so the race tests here prove the code's handling of a
+refusal, and the database guarantee is the migration's.
 """
 from __future__ import annotations
 
@@ -20,8 +26,13 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
+import asyncio
+import contextlib
+import contextvars
+import importlib
 import json
 import sys
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +48,9 @@ import auth
 from routers import system, user_profile
 
 
+_MISSING = object()
+
+
 class _Cursor:
     def __init__(self, rows: list[dict[str, Any]] | None = None):
         self._rows = rows or []
@@ -48,10 +62,24 @@ class _Cursor:
         return list(self._rows)
 
 
+class FakeUniqueViolation(Exception):
+    """What asyncpg raises for the one-holder index (sqlstate 23505)."""
+
+    sqlstate = "23505"
+    constraint_name = "uq_user_preferences_telegram_id"
+
+
+#: the open fake transaction of the current task: {"undo": [...], "locks": [...]}, or None (autocommit)
+_TXN: contextvars.ContextVar = contextvars.ContextVar("fake_txn", default=None)
+
+
 class FakePrefsDB:
     """In-memory user_preferences store keyed by user_id → prefs dict."""
 
     def __init__(self, seed: dict[str, dict] | None = None, accounts: dict[str, int] | None = None):
+        self.redemptions: dict[str, tuple[str, float]] = {}    # telegram_link_redemptions: token_id -> (user_id, expires_at)
+        self.watermarks: dict[str, str] = {}                    # memory_forgotten erase watermark: user_id -> forgotten_at
+        self._locks: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
         # user_id → (prefs_json_str, updated_at_counter)
         self.store: dict[str, tuple[str, int]] = {}
         # auth_users.is_active per registered account; every seeded member is an active account by default
@@ -62,9 +90,79 @@ class FakePrefsDB:
             self.store[uid] = (json.dumps(prefs), self._clock)
         self.commits = 0
 
+    # -- transactions (undo log, rolled back on an exception) and the member link lock --------------------------------
+    def _write(self, table: dict, key, value) -> None:
+        txn = _TXN.get()
+        if txn is not None:
+            txn["undo"].append((table, key, table.get(key, _MISSING)))
+        if value is _MISSING:
+            table.pop(key, None)
+        else:
+            table[key] = value
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        txn = {"undo": [], "locks": []}
+        token = _TXN.set(txn)
+        try:
+            yield
+        except BaseException:
+            for table, key, old in reversed(txn["undo"]):
+                if old is _MISSING:
+                    table.pop(key, None)
+                else:
+                    table[key] = old
+            raise
+        finally:
+            _TXN.reset(token)
+            for lock in txn["locks"]:
+                lock.release()
+
+    def _held_by_another(self, uid: str, tid) -> bool:
+        if not tid:
+            return False
+        for other, (prefs_str, _ts) in self.store.items():
+            if other != uid and json.loads(prefs_str).get("telegram_id") == tid:
+                return True
+        return False
+
     async def execute(self, sql: str, params=()):
+        await asyncio.sleep(0)      # every statement is a suspension point, as on a real connection
         p = list(params or [])
         norm = " ".join(sql.split())
+
+        if norm.startswith("SELECT pg_advisory_xact_lock("):
+            txn = _TXN.get()
+            assert txn is not None, "a transaction-scoped lock outside a transaction"
+            table = self._locks.setdefault(asyncio.get_running_loop(), {})
+            lock = table.setdefault(p[0], asyncio.Lock())
+            await lock.acquire()
+            txn["locks"].append(lock)
+            return _Cursor([{"pg_advisory_xact_lock": None}])
+
+        if norm.startswith("SELECT forgotten_at FROM memory_forgotten WHERE user_id ="):
+            at = self.watermarks.get(p[0])
+            return _Cursor([{"forgotten_at": at}] if at else [])
+
+        if norm.startswith("INSERT INTO memory_forgotten"):     # erase_watermark.SqlBackend.put: (user_id, key, scope, actor, at, never)
+            self._write(self.watermarks, p[0], max(p[4], self.watermarks.get(p[0], "")))
+            return _Cursor()
+
+        if norm.startswith("DELETE FROM telegram_link_redemptions WHERE expires_at <"):
+            for tok in [t for t, (_u, exp) in self.redemptions.items() if exp < p[0]]:
+                self._write(self.redemptions, tok, _MISSING)
+            return _Cursor()
+
+        if norm.startswith("DELETE FROM telegram_link_redemptions WHERE user_id ="):
+            for tok in [t for t, (u, _e) in self.redemptions.items() if u == p[0]]:
+                self._write(self.redemptions, tok, _MISSING)
+            return _Cursor()
+
+        if norm.startswith("INSERT INTO telegram_link_redemptions"):    # ON CONFLICT (token_id) DO NOTHING RETURNING token_id
+            if p[0] in self.redemptions:
+                return _Cursor([])
+            self._write(self.redemptions, p[0], (p[1], p[2]))
+            return _Cursor([{"token_id": p[0]}])
 
         if norm.startswith("SELECT prefs FROM user_preferences WHERE user_id ="):
             uid = p[0]
@@ -95,12 +193,16 @@ class FakePrefsDB:
             uid, prefs_json = p[0], p[1]
             self._clock += 1
             if "::jsonb ||" in norm and uid in self.store:
+                stored = json.loads(self.store[uid][0])
+                if "RETURNING user_id" in norm and stored.get(p[2]) not in (None, "", p[3]):
+                    return _Cursor([])          # user_prefs.set_prefs(unless_held=...): the conflict branch's WHERE refused
                 # user_prefs.set_pref: atomic single-key merge (jsonb ||).
-                merged = json.loads(self.store[uid][0])
-                merged.update(json.loads(prefs_json))
-                prefs_json = json.dumps(merged)
-            self.store[uid] = (prefs_json, self._clock)
-            return _Cursor()
+                stored.update(json.loads(prefs_json))
+                prefs_json = json.dumps(stored)
+            if self._held_by_another(uid, json.loads(prefs_json).get("telegram_id")):
+                raise FakeUniqueViolation("duplicate key value violates unique constraint")   # alembic 0084's index
+            self._write(self.store, uid, (prefs_json, self._clock))
+            return _Cursor([{"user_id": uid}] if "RETURNING user_id" in norm else [])
 
         if norm.startswith("UPDATE user_preferences SET prefs = (COALESCE(prefs, '{}')::jsonb -"):
             # user_prefs.delete_prefs: atomic removal of n keys, optionally only while the first key still holds
@@ -114,7 +216,7 @@ class FakePrefsDB:
                     for key in keys:
                         prefs.pop(key, None)
                     self._clock += 1
-                    self.store[uid] = (json.dumps(prefs), self._clock)
+                    self._write(self.store, uid, (json.dumps(prefs), self._clock))
             return _Cursor()
 
         if norm.startswith("SELECT is_active FROM auth_users WHERE user_id ="):
@@ -268,6 +370,166 @@ def test_the_member_erase_removes_the_link_and_its_records(monkeypatch):
 
     assert asyncio.run(telegram_link.forget_user("member-a")) == 1
     assert _prefs(db, "member-a") == {"theme": "dark"}
+
+
+# ─── 1b. Durable single use, one holder per account, no moved link, the member erase (alembic 0084) ─────────────
+
+
+def _system_app(db: FakePrefsDB) -> FastAPI:
+    app = FastAPI()
+    app.include_router(system.router)
+
+    async def fake_get_db():
+        yield db
+
+    app.dependency_overrides[system.get_db] = fake_get_db
+    return app
+
+
+async def _post_redeems(db: FakePrefsDB, bodies: list[dict]) -> list[int]:
+    """Redeem concurrently (asyncio.gather) through the real route; returns the status codes in order."""
+    import httpx
+
+    transport = httpx.ASGITransport(app=_system_app(db))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async def one(body):
+            r = await client.post("/api/system/telegram/consume-link-token", json=body, headers={"X-Internal-Token": "tok"})
+            return r.status_code
+        return list(await asyncio.gather(*(one(b) for b in bodies)))
+
+
+def _holders_of(db: FakePrefsDB, tid: str) -> list[str]:
+    return sorted(uid for uid in db.store if _prefs(db, uid).get("telegram_id") == tid)
+
+
+@pytest.fixture
+def fixed_secret(monkeypatch):
+    """A persistent signing secret (the recommended config). The module is reloaded IN PLACE, as a restart re-imports it."""
+    import telegram_link
+
+    monkeypatch.setenv("ZOE_TELEGRAM_LINK_SECRET", "synthetic-test-secret")
+    importlib.reload(telegram_link)
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    return telegram_link
+
+
+def test_single_use_survives_a_restart(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {}})
+    token = fixed_secret.make_link_token("member-a")
+    assert _redeem(db, monkeypatch, token, "55511").status_code == 200
+    importlib.reload(fixed_secret)          # a restart (or another worker): fresh module state, same secret, same database
+    assert fixed_secret.verify_link_token(token) == "member-a"      # still authentic and unexpired ...
+    for tid in ("55512", "55511"):
+        assert _redeem(db, monkeypatch, token, tid).status_code == 400   # ... but spent, durably
+    assert _prefs(db, "member-a")["telegram_id"] == "55511" and _holders_of(db, "55512") == []
+    assert len(db.redemptions) == 1
+
+
+def test_one_token_redeemed_twice_at_once_links_once(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {}})
+    token = fixed_secret.make_link_token("member-a")
+    codes = asyncio.run(_post_redeems(db, [{"token": token, "telegram_id": "55513"}, {"token": token, "telegram_id": "55514"}]))
+    assert sorted(codes) == [200, 400], codes
+    held = [t for t in ("55513", "55514") if _holders_of(db, t)]
+    assert len(held) == 1 and _holders_of(db, held[0]) == ["member-a"]
+
+
+def test_two_tokens_racing_for_one_account_leave_one_holder(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {}, "member-b": {}})
+    bodies = [{"token": fixed_secret.make_link_token(m), "telegram_id": "55515"} for m in ("member-a", "member-b")]
+    codes = asyncio.run(_post_redeems(db, bodies))
+    assert sorted(codes) == [200, 409], codes
+    assert len(_holders_of(db, "55515")) == 1
+    assert len(db.redemptions) == 1         # the refused redemption was rolled back with its link write
+
+
+def test_a_redemption_never_moves_a_members_link(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55516", "telegram_link_proof": {"via": "signed_link"}}})
+    token = fixed_secret.make_link_token("member-a")
+    r = _redeem(db, monkeypatch, token, "55517")
+    assert r.status_code == 409, r.text
+    assert _prefs(db, "member-a")["telegram_id"] == "55516" and _holders_of(db, "55517") == []
+    assert db.redemptions == {}             # refused: the token is not spent
+    # the explicit path: the member unlinks first, then the same token links the new account
+    _profile_client(db, user_id="member-a").delete("/api/user/profile/telegram")
+    assert _redeem(db, monkeypatch, token, "55517").status_code == 200
+    assert _prefs(db, "member-a")["telegram_id"] == "55517"
+
+
+def test_the_member_erase_removes_the_members_redemption_rows(monkeypatch, fixed_secret):
+    import db_pool
+
+    db = FakePrefsDB(seed={"member-a": {}, "member-b": {}})
+    assert _redeem(db, monkeypatch, fixed_secret.make_link_token("member-a"), "55518").status_code == 200
+    assert _redeem(db, monkeypatch, fixed_secret.make_link_token("member-b"), "55519").status_code == 200
+    assert sorted(u for u, _e in db.redemptions.values()) == ["member-a", "member-b"]
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    assert asyncio.run(fixed_secret.forget_user("member-a")) == 1
+    assert [u for u, _e in db.redemptions.values()] == ["member-b"]
+    assert "telegram_id" not in _prefs(db, "member-a") and _prefs(db, "member-b")["telegram_id"] == "55519"
+
+
+@pytest.mark.parametrize("erase_first", [False, True])
+def test_a_redemption_racing_the_member_erase_leaves_no_link(monkeypatch, fixed_secret, erase_first):
+    """The erase as ``MemoryService.delete_user`` orders it for this store: the durable erase watermark first, then
+    ``telegram_link.forget_user``. Both orders of the race; then a token issued before the erase is refused after it."""
+    import db_pool
+    import erase_watermark
+
+    db = FakePrefsDB(seed={"member-a": {}})
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    monkeypatch.setattr(erase_watermark, "_backend", erase_watermark.SqlBackend(ctx=ctx))
+    before = [fixed_secret.make_link_token("member-a"), fixed_secret.make_link_token("member-a", ttl=599)]
+
+    async def erase():
+        await erase_watermark.record("member-a", actor="test")
+        await fixed_secret.forget_user("member-a")
+        return "erased"
+
+    async def race():
+        redeem = _post_redeems(db, [{"token": before[0], "telegram_id": "55520"}])
+        return await asyncio.gather(*((erase(), redeem) if erase_first else (redeem, erase())))
+
+    asyncio.run(race())
+    assert "telegram_id" not in _prefs(db, "member-a")
+    assert _holders_of(db, "55520") == []
+    # a token issued before the erase is void after it, whichever account redeems it
+    assert asyncio.run(_post_redeems(db, [{"token": before[1], "telegram_id": "55521"}])) == [400]
+    assert "telegram_id" not in _prefs(db, "member-a")
+
+
+def test_migration_0084_holds_both_guarantees_and_keeps_one_head():
+    import importlib.util
+    import re
+
+    versions = ROOT / "alembic" / "versions"
+    spec = importlib.util.spec_from_file_location("mig_0084", versions / "0084_telegram_link_ledger.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sql = " ".join(" ".join(mod.statements()).split())
+    assert "CREATE TABLE IF NOT EXISTS telegram_link_redemptions ( token_id TEXT PRIMARY KEY" in sql
+    assert ("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_preferences_telegram_id ON user_preferences "
+            "((prefs::jsonb ->> 'telegram_id')) WHERE (prefs::jsonb ->> 'telegram_id') <> ''") in sql
+    # existing duplicate holders are cleared BEFORE the index is built, so the upgrade cannot fail on them
+    assert sql.index("HAVING COUNT(*) > 1") < sql.index("CREATE UNIQUE INDEX")
+    revs, downs = set(), set()
+    for f in versions.glob("*.py"):
+        src = f.read_text()
+        r = re.search(r'^revision = "(\w+)"', src, re.M)
+        d = re.search(r'^down_revision = "(\w+)"', src, re.M)
+        revs |= {r.group(1)} if r else set()
+        downs |= {d.group(1)} if d else set()
+    assert mod.down_revision in revs and len(revs - downs) == 1, sorted(revs - downs)
 
 
 # ─── 2. Internal resolver telegram_id → user_id ──────────────────────────────

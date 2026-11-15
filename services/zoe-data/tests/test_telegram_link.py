@@ -46,25 +46,18 @@ def test_expired_token_rejected(tl):
     assert tl.verify_link_token(tl.make_link_token("jason", ttl=-1)) is None
 
 
-def test_verify_reserves_release_and_consume(tl):
-    tok = tl.make_link_token("jason")
-    # verify atomically RESERVES → a concurrent second verify is blocked.
-    assert tl.verify_link_token(tok) == "jason"
-    assert tl.verify_link_token(tok) is None
-    # release (failure path) frees the reservation → the user can re-scan.
-    tl.release_token(tok)
-    assert tl.verify_link_token(tok) == "jason"
-    # mark_token_consumed (after a committed write) kills it permanently.
-    tl.mark_token_consumed(tok)
-    assert tl.verify_link_token(tok) is None
-    tl.release_token(tok)  # release after consume must NOT revive a dead token
-    assert tl.verify_link_token(tok) is None
+def test_decode_gives_a_stable_token_id_and_has_no_side_effect(tl):
+    tok = tl.make_link_token("member-a")
+    first = tl.decode_link_token(tok)
+    assert first is not None and first[0] == "member-a"
+    assert tl.decode_link_token(tok) == first           # verifying twice changes nothing: single use is link()'s, in the database
+    assert tok not in first[1] and len(first[1]) == 32  # the stored id is a hash, never the token
+    assert tl.decode_link_token(tl.make_link_token("member-b"))[1] != first[1]
 
 
-def test_release_and_mark_ignore_bad_tokens(tl):
+def test_decode_ignores_bad_tokens(tl):
     for bad in ("garbage", "", "a.b.c"):
-        tl.release_token(bad)       # must not raise
-        tl.mark_token_consumed(bad)  # must not raise
+        assert tl.decode_link_token(bad) is None
 
 
 def test_wrong_secret_cannot_verify(tl, monkeypatch):

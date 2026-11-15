@@ -41,7 +41,8 @@ export function unlinkedMessage(): string {
   );
 }
 
-/** Thrown by the redeemer when the account is already linked to another member; nothing was changed. */
+/** Thrown by the redeemer when a link was refused (HTTP 409): this account is linked to another member, or the member is
+ * already linked to a different account (a redemption never moves a link). Nothing was changed. */
 export class LinkHeldError extends Error {
   constructor() {
     super('telegram account already linked to another member');
@@ -49,10 +50,10 @@ export class LinkHeldError extends Error {
   }
 }
 
-/** Reply when a link was refused because this account belongs to another member's link. */
+/** Reply when a link was refused (see LinkHeldError): one message covers both causes. */
 export const LINK_HELD_REPLY =
-  'This Telegram is already connected to another Zoe account, so I did not change it. ' +
-  'That person can disconnect it in Zoe → Settings → Telegram, or an admin can.';
+  'This Telegram is already connected to another Zoe account, or your Zoe account already has a different Telegram, ' +
+  'so I did not change anything. Disconnect the old link in Zoe → Settings → Telegram first (an admin can too).';
 
 /**
  * Handle one text message. `telegramId` is the Telegram-verified sender id;
@@ -103,7 +104,7 @@ export function startReply(linkedUserId: string | null, hadToken: boolean): stri
 }
 
 export interface StartDeps {
-  /** Redeem a signed link token for the VERIFIED sender id; throws LinkHeldError when another member holds it. */
+  /** Redeem a signed link token for the VERIFIED sender id; throws LinkHeldError when the link is refused (409). */
   consume: (token: string, telegramId: number, username?: string) => Promise<string | null>;
   reply: (text: string) => Promise<unknown>;
 }
