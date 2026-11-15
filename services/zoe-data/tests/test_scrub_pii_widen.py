@@ -166,6 +166,11 @@ CONTACT_CATCH: dict[str, list[tuple[str, str]]] = {
         ("at 5 Example Way, 7 Example Way", "7 Example Way"),
         # no lead word and no title word after it: redacted by default
         ("meet 12 Example Street", "12 Example Street"),
+        # quotation marks alone are not a title: quoting an address does not exempt it (cross-review #2657, third pass)
+        ('"12 Example Street"', "12 Example Street"),
+        ('I wrote down "12 Example Street"', "12 Example Street"),
+        ('we watched "21 Jump Street" last night', "21 Jump Street"),
+        ("we watched “21 Jump Street” again", "21 Jump Street"),
         ("I work 12 Example Street", "12 Example Street"),
         # MOVED from MUST_NOT (2026-11-16 first cut): no listed title word follows, so the default (redact) applies
         ("we watched 21 Jump Street last night", "21 Jump Street"),
@@ -212,10 +217,9 @@ MUST_NOT: list[str] = [
     "she lives at the end of the street", "I live at home", "the road was closed", "my address is changing",
     "the IP address is 10.0.0.1", "account was hacked", "my bank account has 1200 in it", "my bank account is overdrawn",
     "it was a 5 minute walk", "look at the way she smiled",
-    # 2026-11-16: a number + street phrase that is PLAINLY a title (a listed title word after it, or quoted) is kept
+    # 2026-11-16: a number + street phrase that is PLAINLY a title (a listed title word after it) is kept
     "I read 12 Main Street articles", "I watched 21 Jump Street the movie", "the 21 Jump Street film",
     "21 Jump Street Season 2 is out", "we binged 21 Jump Street episodes", "the 21 Jump Street reboot was fun",
-    'we watched "21 Jump Street" last night', "we watched “21 Jump Street” again",
     "the real 21 Jump Street film",                                   # "the" is not address context
     "That is my plan. We watched 21 Jump Street the movie",           # the window stops at the full stop
     "Use the app. Then pin 300 photos to the board", "can you quickly pin 120 more photos",

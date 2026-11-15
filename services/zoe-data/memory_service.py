@@ -1508,7 +1508,8 @@ _PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\
 _UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
 #: ``[unit] number Capitalised Name street-type [, Suburb | Suburb] [STATE] [postcode]``; a lower-case street needs a label
 #: below. DEFAULT IS REDACT. The same shape is sometimes a title ("I read 12 Main Street articles"), so :func:`_address_sub`
-#: keeps it on ONE closed exemption: a listed title word right after the street word, or the phrase in quotation marks -
+#: keeps it on ONE closed exemption: a listed title word right after the street word (quotation marks alone are NOT one:
+#: quoting an address does not make it a title) -
 #: and only when NO address context applies (a unit / lot prefix or ``4/27`` number, a postcode or ", tail", a trailing
 #: "is my address", a locating lead-in). ``street_end`` marks where the street word ends, for the exemption check
 _ADDRESS_RE = re.compile(
@@ -1528,7 +1529,6 @@ _ADDRESS_TITLE_WORDS = ("articles", "article", "episodes", "episode", "show", "s
                         "season", "seasons", "series", "trailer", "trailers", "soundtrack", "reboot", "sequel", "sequels",
                         "remake", "cast", "reruns", "box set", "boxset", "dvd", "dvds")
 _ADDRESS_TITLE_RE = re.compile(rf"(?i)\s{{1,8}}(?:the\s{{1,8}})?(?:{_alt(_ADDRESS_TITLE_WORDS)})\b")
-_OPEN_QUOTES, _CLOSE_QUOTES = "\"“‘'«", "\"”’'»"
 #: an OVERRIDE, not a gate: ANYWHERE in the context window (:func:`_context_window`) any of these, or a word of
 #: ``_SHARED_CONTEXT_WORDS``, forces redaction even with a title word after it ("I live at 12 Example Street articles",
 #: "my actual 12 Example Street articles"). A place preposition, a possessive, a living / visiting verb, "address", a lot /
@@ -1564,8 +1564,6 @@ def _address_sub(m: "re.Match[str]") -> str:
         return _REDACT
     if _ADDRESS_TITLE_RE.match(s, end):
         return m.group(0)                                # "12 Main Street articles", "21 Jump Street Season 2"
-    if m.group("suburb") is None and m.start() > 0 and s[m.start() - 1] in _OPEN_QUOTES and s[end:end + 1] in _CLOSE_QUOTES:
-        return m.group(0)                                # '"21 Jump Street"': a quoted title
     return _REDACT
 
 
@@ -1655,7 +1653,7 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
 
     ``contact`` (default True) also redacts CONTACT details: email addresses (typed, or a labelled spoken "x at y dot
     com"), street addresses (number + Capitalised name + ``_STREET_TYPES`` word, unless plainly a title: a listed title
-    word after it or quotation marks, and no address context; or after "my address is" / "I live at"), PO boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
+    word after it, and no address context; or after "my address is" / "I live at"), PO boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
     a phone label). Every excerpt / verbatim path takes the default. ``contact=False`` is for the memory FACT text only
     (ingest, review edit, candidates, ask-to-remember): "the plumber's number is ..." and "my pickup is at 12 Main
     Street" are household facts the owner asked Zoe to keep, so the fact keeps them while the excerpt beside it does not.
