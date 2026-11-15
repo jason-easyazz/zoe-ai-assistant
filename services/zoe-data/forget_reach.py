@@ -125,7 +125,7 @@ TABLES: tuple[Store, ...] = (
        "The forget LEDGER itself: salted hashes, no names, plus one erase WATERMARK per erased member (erase_watermark: an id and a "
        "time). It must survive a forget to keep the forget enforced."),
     # --- the verbatim transcript ---
-    _t("chat_sessions", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # emptied sessions go; one still holding another member's turns loses its title
+    _t("chat_sessions", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # emptied sessions go; one still holding another member's turns loses its title and goes to a remaining participant
     _t("chat_messages", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # every turn the member owns (per-turn owner, else the session owner)
     _t("chat_feedback", WORDS, REACHED, member=_OWNED_M),
     _t("background_tasks", WORDS, REACHED, member=_OWNED_M),
@@ -139,8 +139,9 @@ TABLES: tuple[Store, ...] = (
        "member's private lists go with all their items and their assignments (assigned_to) are cleared everywhere."),
     _t("people_field_values", WORDS, GAP, "Authorship gap: a field value records no author (needs a created_by / user_id column), so the values on a "
        "FAMILY contact stay; the member's private contacts go with all their values."),
-    _t("chat_ag_ui_runs", WORDS, GAP, "Authorship gap: a run records its session, not who spoke (needs a user_id column): the runs of every session "
-       "the member erase empties go (member_owned_forget); the runs of a session that still holds another member's turns stay."),
+    _t("chat_ag_ui_runs", WORDS, REACHED, "A run records its session and run id, not a speaker: its starter is the openclaw_run_state row of the "
+       "same id. delete_user removes the runs of every session it empties, and in every surviving session the member owned or spoke in "
+       "every run not shown to be another member's (member_owned_forget).", member=_OWNED_M),
     _t("reminders", WORDS, REACHED, member=_OWNED_M),           # and their queued / scheduled sends (proactive_pending / proactive_scheduled)
     _t("transactions", WORDS, REACHED, member=_OWNED_M),        # the member's own records, whatever their visibility
     _t("person_activities", WORDS, REACHED, member=_OWNED_M),   # by author (user_id) on any contact, and every row of their private contacts

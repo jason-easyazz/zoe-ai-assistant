@@ -40,6 +40,25 @@ def _utc_iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: the scheduled rows THIS process is delivering right now (claimed, not yet returned from ``_fire_reminder``). A claim records only a
+#: time, never its owner, so this is what lets a member delete tell a live delivery from a dead claim (``claim_is_dead``).
+_IN_FLIGHT: set = set()
+
+
+def _fires_here() -> bool:
+    """True when this process runs the reminder scheduler (``engine.start`` -> ``start_scheduler``): the process that fires reminders."""
+    from proactive import scheduler
+    return scheduler._scheduler is not None
+
+
+def claim_is_dead(scheduled_id: str) -> bool:
+    """True only when a claim on ``scheduled_id`` is PROVEN dead: this process runs the scheduler (zoe-data is the one process that fires
+    reminders; a restart stops the old process before the new one starts) and is not delivering that row now. A claim made by an earlier
+    process, or left by a fire that already returned (a failed release, a failed quiet-hours reschedule), holds nobody's delivery. Any
+    other claim - this process runs no scheduler, or the fire is still running here however old its claim - is presumed LIVE."""
+    return _fires_here() and str(scheduled_id) not in _IN_FLIGHT
+
+
 async def _claim_scheduled_for_fire(scheduled_id: str):
     """Atomically claim an unfired reminder for delivery.
 
@@ -172,7 +191,19 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     (>_STUCK_CLAIM_SECONDS later). It is never lost. See module/PR notes.
     """
     from proactive.engine import fire_notification  # deferred import
+    import erase_watermark
 
+    # BEFORE the claim and the erase check: a member delete that lands after this instant is refused at the last step of the send
+    # (fire_notification's erase_since); one that landed before it is seen by the check below.
+    since = erase_watermark._now()
+    _IN_FLIGHT.add(str(pending_id))
+    try:
+        await _fire_claimed(pending_id, user_id, message, since, fire_notification)
+    finally:
+        _IN_FLIGHT.discard(str(pending_id))
+
+
+async def _fire_claimed(pending_id: str, user_id: str, message: str, since, fire_notification) -> None:
     claim = await _claim_scheduled_for_fire(pending_id)
     if claim is None:
         log.info("reminder %s already claimed/fired elsewhere — skipping duplicate", pending_id)
@@ -209,6 +240,7 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
             # job has item_id="" and loses the generation/supersede backstop,
             # letting it deliver after the reminder was snoozed/acked/deleted.
             item_id=item_id,
+            erase_since=since,
         )
     except Exception as exc:
         log.error("_fire_reminder failed for pending %s: %s", pending_id, exc)

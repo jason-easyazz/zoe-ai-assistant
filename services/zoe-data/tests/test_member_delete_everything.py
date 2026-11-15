@@ -41,7 +41,7 @@ CREATE TABLE journal_entries (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conten
 CREATE TABLE transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT, visibility TEXT NOT NULL DEFAULT 'family');
 CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, visibility TEXT NOT NULL DEFAULT 'personal');
 CREATE TABLE proactive_pending (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL, trigger_type TEXT DEFAULT '',
-    item_id TEXT DEFAULT '', expires_at TEXT DEFAULT '2999-01-01T00:00:00Z', claimed INTEGER DEFAULT 0,
+    item_id TEXT DEFAULT '', trigger_context TEXT, expires_at TEXT DEFAULT '2999-01-01T00:00:00Z', claimed INTEGER DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE proactive_scheduled (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL, apscheduler_job_id TEXT,
     fired INTEGER DEFAULT 0, item_id TEXT DEFAULT '', claimed_at TEXT, schedule_generation INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0,
@@ -207,8 +207,9 @@ def test_the_transcript_goes_with_no_orphans_and_shared_sessions_keep_the_other_
     _delete(svc)
     assert _ids(store, "chat_messages") == {"m5", "m6"}, "every turn A owned goes; B's turns stay, wherever they are"
     assert _ids(store, "chat_sessions") == {"s-shared", "s-b"}, "A's emptied session and the kiosk session A alone spoke in go"
-    assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-shared'") == [("New Chat",)], "the shared session loses A's title"
-    assert _ids(store, "chat_ag_ui_runs") == {"run-shared"}, "the runs of an emptied session go (a shared one's stay: authorship gap)"
+    assert _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-shared'") == [(B, "New Chat")], \
+        "the shared session loses A's title and is handed to B, who is still in it"
+    assert _ids(store, "chat_ag_ui_runs") == set(), "the runs of an emptied session go, and a shared one's that nobody else started"
     assert not _q(store, "SELECT m.id FROM chat_messages m LEFT JOIN chat_sessions s ON s.id = m.session_id WHERE s.id IS NULL")
     assert not _q(store, "SELECT s.id FROM chat_sessions s WHERE NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id)")
 
@@ -760,3 +761,217 @@ def test_the_reply_ledger_and_commitments_erasers_raise_instead_of_returning_zer
     for m in (reply_ledger, commitments):
         with pytest.raises(ConnectionError):
             asyncio.run(m.forget_user(A))
+
+
+# ── a shared session the member owned: no surviving row names them; the other member's turns and runs stay ──────────────────────
+
+def _names(db, uid, tables=("chat_sessions", "chat_messages", "chat_ag_ui_runs", "openclaw_run_state")) -> list:
+    """Every (table, row) of ``tables`` with ``uid`` in any column."""
+    out = []
+    for t in tables:
+        for row in _q(db, f"SELECT * FROM {t}"):
+            if any(uid in str(v) for v in row if v is not None):
+                out.append((t, row))
+    return out
+
+
+def test_a_shared_session_the_member_owned_names_them_nowhere_after_the_delete(env, store):
+    """Runs: one A started (``openclaw_run_state`` names A), one B started, one nobody can be shown to have started. A's turns and the
+    runs not shown to be B's go; B's turns and B's run stay; the session is B's. The old code kept A as the owner and every run."""
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        await x("INSERT INTO openclaw_run_state VALUES ('rs-a', ?, 'A asks')", (A,))
+        await x("INSERT INTO openclaw_run_state VALUES ('rs-b', ?, 'B asks')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES ('m4b', 's-shared', 'assistant', "
+                "'a reply to A', '2026-01-01 00:00:02')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sh-a', 's-shared', 'rs-a', '[\"a reply to A\"]')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sh-b', 's-shared', 'rs-b', '[\"a reply to B\"]')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-b-a', 's-b', 'rs-a', '[\"a reply to A at B''s panel\"]')")
+        await store.commit()
+    asyncio.run(seed())
+    assert _names(store, A), "control: A is named before the delete"
+    _delete(svc)
+    assert _names(store, A) == [], "no surviving chat row names A"
+    assert _q(store, "SELECT user_id FROM chat_sessions WHERE id = 's-shared'") == [(B,)]
+    assert {r[0] for r in _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-shared'")} == {"m5"}, "B's turn stays; A's go"
+    assert _ids(store, "chat_ag_ui_runs") == {"run-sh-b"}, "A's runs and the unattributable run go, in A's session and in B's"
+
+
+def test_a_shared_session_goes_to_the_first_household_member_who_spoke_and_with_nobody_left_it_goes(env, store):
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        await x("CREATE TABLE users (id TEXT PRIMARY KEY)")
+        for u in (A, B, "member-c", "guest"):
+            await x("INSERT INTO users VALUES (?)", (u,))
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-three', ?, 'A title')", (A,))
+        for mid, who, at in (("t1", "guest", "2026-01-01 00:00:01"), ("t2", "member-c", "2026-01-01 00:00:02"),
+                             ("t3", B, "2026-01-01 00:00:03"), ("t4", "member-c", "2026-01-01 00:00:04")):
+            await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES (?, 's-three', 'user', 'hi', ?, ?)",
+                    (mid, _meta(who), at))
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-gone', ?, 'A title')", (A,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('t5', 's-gone', 'user', 'hi', ?)",
+                (_meta("not-a-user"),))
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    assert _q(store, "SELECT user_id FROM chat_sessions WHERE id = 's-three'") == [("member-c",)], \
+        "the first household member who spoke (a guest who spoke earlier does not take it)"
+    assert not _q(store, "SELECT id FROM chat_sessions WHERE id = 's-gone'") and "t5" not in _ids(store, "chat_messages"), \
+        "no remaining participant is a user: the session goes with its turns"
+
+
+# ── a claim older than the stuck timeout is not presumed dead; the last step of a send re-checks the erase ─────────────────────
+
+class _FakeWebPush:
+    """``pywebpush`` stand-in: records what would have left the box."""
+
+    class WebPushException(Exception):
+        pass
+
+    def __init__(self):
+        self.sent = []
+
+    def webpush(self, subscription_info, data, **_k):
+        self.sent.append(subscription_info["endpoint"])
+
+
+@pytest.fixture
+def push_lane(store, monkeypatch):
+    """The real ``fire_notification`` -> ``send_push_to_user`` path over the test store, with a fake transport."""
+    import sys
+    from proactive import engine
+    from proactive.triggers import reminders
+    from routers import push
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield store
+
+    async def get_db():
+        yield store
+
+    async def seed():
+        await store.execute("CREATE TABLE push_subscriptions (user_id TEXT, endpoint TEXT, keys_p256dh TEXT, keys_auth TEXT)")
+        for u in (A, B):
+            await store.execute("INSERT INTO push_subscriptions VALUES (?, ?, 'k', 'a')", (u, "https://push.invalid/" + u))
+        await store.commit()
+    asyncio.run(seed())
+    fake = _FakeWebPush()
+    monkeypatch.setitem(sys.modules, "pywebpush", fake)
+    monkeypatch.setattr(push, "_get_vapid_keys", lambda: {"private_key": "k"})
+    monkeypatch.setattr(push, "get_db", get_db)
+    for mod in (reminders, engine):
+        monkeypatch.setattr(mod, "_get_compat_db", ctx)
+    monkeypatch.setattr(engine, "_is_in_quiet_hours", lambda *_a: False)
+    monkeypatch.setattr(engine, "_reminder_phone_mode", lambda: "off")
+    return fake
+
+
+@pytest.mark.parametrize("fires_here", [True, False], ids=["scheduler-process", "no-scheduler-here"])
+def test_a_live_delivery_older_than_the_stuck_timeout_holds_the_delete_and_sends_nothing_after_it(env, store, monkeypatch, push_lane,
+                                                                                                   fires_here):
+    """The fire passes its early erase check, then stalls (here: making its pending row) past the stuck-claim timeout. The delete must
+    not report success while that claim is unresolved, and the stalled delivery, reaching its send after the erase, sends nothing.
+    The old code presumed the old claim crashed: the delete finished first and the push went out after it."""
+    from proactive import engine
+    from proactive.triggers import reminders
+
+    svc, _col = env
+    monkeypatch.setattr(reminders, "_fires_here", lambda: fires_here)
+    real_pending, gate, events = engine.create_pending, {}, []
+
+    async def held_pending(**kw):
+        gate["held"].set()
+        await gate["release"].wait()
+        return await real_pending(**kw)
+    monkeypatch.setattr(engine, "create_pending", held_pending)
+    monkeypatch.setattr("proactive.session_utils._get_compat_db", lambda: _ctx(store))
+
+    async def go():
+        gate["held"], gate["release"] = asyncio.Event(), asyncio.Event()
+        fire = asyncio.ensure_future(reminders._fire_reminder("ps-" + A, A, "take the bins out"))
+        await asyncio.wait_for(gate["held"].wait(), 10)
+        await store.execute("UPDATE proactive_scheduled SET claimed_at = '2000-01-01T00:00:00Z' WHERE id = ?", ("ps-" + A,))
+        await store.commit()                      # the claim is now far older than the stuck-claim timeout
+
+        async def delete():
+            await svc.delete_user(A, actor="test", reason="synthetic member delete")
+            events.append("delete_done")
+        d = asyncio.ensure_future(delete())
+        await asyncio.sleep(0.4)
+        assert not d.done(), "the delete does not report success while the claim is unresolved"
+        gate["release"].set()
+        await asyncio.wait_for(fire, 10)
+        await asyncio.wait_for(d, 10)
+
+    asyncio.run(go())
+    assert events == ["delete_done"] and push_lane.sent == [], "nothing reached the deleted member"
+    assert not _q(store, "SELECT id FROM proactive_pending WHERE user_id = ?", (A,)), "the pending row made across the delete is withdrawn"
+
+
+def _ctx(db):
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+    return ctx()
+
+
+def test_a_dead_claim_is_proven_only_in_the_scheduler_process_and_does_not_block_there(env, store, monkeypatch):
+    from proactive.triggers import reminders
+
+    svc, _col = env
+    monkeypatch.setattr(mof, "INFLIGHT_WAIT_S", 0.3)
+
+    async def stale():
+        await store.execute("UPDATE proactive_scheduled SET claimed_at = '2000-01-01T00:00:00Z' WHERE id = ?", ("ps-" + A,))
+        await store.commit()
+    asyncio.run(stale())
+    monkeypatch.setattr(reminders, "_fires_here", lambda: False)
+    with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
+        _delete(svc)                              # no proof possible here: wait, then fail closed (the caller retries)
+    monkeypatch.setattr(reminders, "_fires_here", lambda: True)
+    _delete(svc)                                  # the process that fires reminders is not delivering it: a dead claim
+    assert _q(store, "SELECT user_id FROM proactive_scheduled") == [(B,)]
+
+
+def test_a_push_that_reaches_its_last_step_after_the_erase_sends_nothing(env, store, push_lane):
+    """``send_push_to_user`` re-checks right before each push leaves. A member deleted after the delivery began gets nothing; a live
+    member, and a call that carries no ``erase_since`` (the old behaviour), still send."""
+    import erase_watermark
+    from routers import push
+
+    async def go():
+        began = erase_watermark._now()
+        await asyncio.sleep(0.01)
+        await erase_watermark.record(A)
+        return (await push.send_push_to_user(A, "x", erase_since=began), await push.send_push_to_user(B, "x", erase_since=began))
+    assert asyncio.run(go()) == (0, 1)
+    assert push_lane.sent == ["https://push.invalid/" + B]
+
+
+def test_a_spoken_line_queued_across_the_delete_is_never_claimed_but_the_forget_command_is(tmp_path):
+    import erase_watermark
+    import voice_announce
+
+    async def go():
+        db = await aiosqlite.connect(str(tmp_path / "va.db"))
+        db.row_factory = aiosqlite.Row
+        await db.execute("CREATE TABLE voice_announcements (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, panel_id TEXT, message TEXT NOT NULL, "
+                         "trigger_type TEXT, created_at TEXT, expires_at TEXT, delivered_at TEXT, delivered_to TEXT, played_at TEXT, "
+                         "expired INTEGER DEFAULT 0)")
+        await voice_announce.enqueue_announcement(db, user_id=A, message="a line for A", panel_id="p1", trigger_type="reminder")
+        await voice_announce.enqueue_announcement(db, user_id=B, message="a line for B", panel_id="p1", trigger_type="reminder")
+        await erase_watermark.record(A)           # the delete's mark, at or after A's line was queued
+        await voice_announce.enqueue_command(db, user_id=A, panel_id="p1", trigger_type="voice_profile_forget", command={})
+        got = await voice_announce.claim_announcements(db, panel_id="p1")
+        async with db.execute("SELECT expired FROM voice_announcements WHERE message = 'a line for A'") as cur:
+            expired = (await cur.fetchone())[0]
+        await db.close()
+        return got, expired
+    got, expired = asyncio.run(go())
+    assert [g["text"] for g in got if g["text"]] == ["a line for B"] and expired == 1
+    assert [g["command"]["kind"] for g in got if g.get("command")] == ["voice_profile_forget"], "the delete's own command still reaches the panel"

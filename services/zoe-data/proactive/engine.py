@@ -84,7 +84,18 @@ async def fire_notification(
     pending_id: str | None = None,
     context: dict[str, Any] | None = None,
     item_id: str = "",
+    erase_since: datetime | None = None,
 ) -> None:
+    """Dispatch one notification (``_dispatch``) inside ``erase_watermark.delivery``: ``erase_since`` is when the delivery began (the
+    caller's instant, else now); every send step below re-checks the member's erase against it."""
+    import erase_watermark
+
+    with erase_watermark.delivery(erase_since or erase_watermark._now()):
+        await _dispatch(user_id, message, trigger_type, pending_id, context, item_id)
+
+
+async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: str | None, context: dict[str, Any] | None,
+                    item_id: str) -> None:
     """
     Core notification dispatch:
       1. Check quiet hours (skip if quiet, unless force_send in context).
@@ -92,9 +103,24 @@ async def fire_notification(
       3. Create a proactive_pending row (lazy session, claimed on tap).
       4. Send a push notification with the deep-link URL.
       5. Mark proactive_scheduled as fired (if pending_id given).
+
+    Member delete (the enclosing ``erase_watermark.delivery``: when it began): right before every step that sends or queues something
+    for the member - the quiet-hours follow-up, the pending row, the spoken lanes, the push, the phone lane, the in-app
+    fallback - ``erase_watermark.send_refused`` is asked again, after every await that can stall. A member deleted since then gets
+    NOTHING, and the scheduled row is consumed. An unreadable mark RAISES (``_fire_reminder`` releases the claim and retries).
     """
+    import erase_watermark
+
     ctx = context or {}
     force = ctx.get("force_send", False)
+    async def refused(lane: str) -> bool:
+        if not await erase_watermark.send_refused(user_id, None, lane):
+            return False
+        if pending_id:
+            async with _get_compat_db() as db:
+                await db.execute("UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,))
+                await db.commit()
+        return True
 
     if not force and _is_in_quiet_hours():
         log.info("Quiet hours active — deferring notification for user %s", user_id)
@@ -103,6 +129,8 @@ async def fire_notification(
         next_ok = now_local.replace(hour=_QUIET_END, minute=0, second=0, microsecond=0)
         if next_ok <= now_local:
             next_ok += timedelta(days=1)
+        if await refused("quiet_hours_follow_up"):
+            return
         try:
             from proactive.triggers.reminders import schedule_reminder
             await schedule_reminder(
@@ -143,6 +171,8 @@ async def fire_notification(
     # Always create a proactive_pending row — this is the id used by claim_pending()
     # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
     # is only used below to mark that row as fired; it must NOT be used as the URL id.
+    if await refused("pending"):
+        return
     pid = await create_pending(
         user_id=user_id,
         message=message,
@@ -158,6 +188,12 @@ async def fire_notification(
         user_id=user_id, message=message, trigger_type=trigger_type,
         guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
     )
+    # a pending row made just before a member delete removed the member's rows is the delete's; one made after it is withdrawn here
+    if await refused("push"):
+        async with _get_compat_db() as db:
+            await db.execute("DELETE FROM proactive_pending WHERE id = ?", (pid,))
+            await db.commit()
+        return
 
     deep_link = f"/chat.html?p={pid}"
     # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
@@ -174,7 +210,7 @@ async def fire_notification(
     # If no WebSocket subscribers received the push, fall back to an in-app
     # notification so the reminder appears in the notification centre when the
     # user next opens the app.
-    if subscribers_reached == 0 and trigger_type == "reminder":
+    if subscribers_reached == 0 and trigger_type == "reminder" and not await refused("in_app_fallback"):
         try:
             import uuid as _uuid
             import datetime as _dt
@@ -245,6 +281,19 @@ async def _speak_on_panel(
     transaction, so a queued brief is never left unlinked from its claim.
     """
     ann_id: str | None = None
+    import erase_watermark
+
+    async def refused(lane: str) -> bool:
+        # the last step before a lane sends (the toast is broadcast on enqueue): a member deleted since the enclosing delivery began
+        # (erase_watermark.delivery) hears nothing;
+        # an unreadable mark sends nothing on that lane (fail closed). The daemon queue is re-checked when the panel claims the row
+        # (voice_announce.claim_announcements), so a row queued across a delete is never spoken either.
+        try:
+            return await erase_watermark.send_refused(user_id, None, lane)
+        except erase_watermark.Unavailable:
+            return True
+    if await refused("panel_announce"):
+        return "refused:erased", "refused:erased", None
     # Lane 1: kiosk toast (panel_announce). Guarded separately so a
     # failure here never blocks the daemon queue below (or vice versa).
     panel_outcome = "enqueued"
@@ -264,6 +313,8 @@ async def _speak_on_panel(
     # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
     # connection so a failed lane-1 transaction can't poison this insert.
     daemon_outcome = "queued"
+    if await refused("daemon_queue"):
+        return panel_outcome, "refused:erased", None
     try:
         import voice_announce as _voice_announce
         async with _get_compat_db() as db:
@@ -396,10 +447,14 @@ async def _deliver_to_phone(user_id: str, message: str, item_id: str, dedupe_id:
 
 
 async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:
-    """Internal: import push router and call send_push_to_user. Returns subscriber count reached."""
+    """Internal: import push router and call send_push_to_user. Returns subscriber count reached. An unreadable erase mark RAISES (the
+    push sends nothing on a guess, and the caller does not fall back to another lane)."""
+    import erase_watermark
     try:
         from routers.push import send_push_to_user  # deferred to avoid circular imports
         return await send_push_to_user(user_id=user_id, message=message, extra=extra or {}) or 0
+    except erase_watermark.Unavailable:
+        raise
     except Exception as exc:
         log.error("_send_push failed for user %s: %s", user_id, exc)
         return 0
@@ -435,6 +490,8 @@ async def _slow_loop() -> None:
             # Step 1: short-lived conn — run every trigger.check(), then release
             # before any fire_notification() (LLM + push) work happens.
             pending: list[Any] = []
+            import erase_watermark
+            checked_at = erase_watermark._now()     # before the reads: a member deleted after them gets nothing (fire_notification)
             async with _get_compat_db() as db:
                 for trigger in _slow_triggers:
                     try:
@@ -452,6 +509,7 @@ async def _slow_loop() -> None:
                         trigger_type=r.trigger_type,
                         item_id=r.item_id,
                         context=r.context,
+                        erase_since=checked_at,
                     )
                 except Exception as exc:
                     log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",

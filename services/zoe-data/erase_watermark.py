@@ -22,6 +22,7 @@ reader, a code and counts: never an id, never text.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import logging
@@ -343,3 +344,33 @@ async def erased_since(user_id: str, made_at: Any) -> bool:
         return False
     made = instant(made_at)
     return made is None or made <= mark
+
+
+#: when the delivery in progress began (``delivery``), for the send steps deep in its path that take no ``since`` of their own
+_delivery: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_delivery", default=None)
+
+
+@contextlib.contextmanager
+def delivery(since: Any):
+    """Run one delivery (a notification fan-out) with ``since`` = when it began: ``send_refused(uid, None, ...)`` deeper in its path
+    (``routers.push.send_push_to_user``, the spoken lanes) uses it. Tasks the delivery starts inherit it (contextvars)."""
+    token = _delivery.set(since)
+    try:
+        yield
+    finally:
+        _delivery.reset(token)
+
+
+async def send_refused(user_id: Any, since: Any, lane: str) -> bool:
+    """The LAST-STEP send guard, called after every await that can stall and right before a send leaves the box (a push, a queued
+    spoken line, a phone message): True = send NOTHING, because ``user_id`` was deleted at or after ``since`` (when the delivery began,
+    or when the queued row was made; None = the enclosing ``delivery``'s). No member id, or no ``since`` at all: False. RAISES
+    ``Unavailable`` when the mark cannot be read (the caller does not send on a guess). Logs the lane only."""
+    uid = str(user_id or "").strip()
+    since = _delivery.get() if since is None else since
+    if not uid or since is None:
+        return False
+    if await erased_since(uid, since):
+        logger.info("ERASE_WATERMARK_SEND_REFUSED lane=%s", lane)
+        return True
+    return False

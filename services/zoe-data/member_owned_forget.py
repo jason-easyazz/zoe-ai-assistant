@@ -9,8 +9,9 @@ smaller per-member tables. The per-store rule, in plain words, is in docs/knowle
 THE SHARED-OBJECT RULE. A row the member wrote alone (a note, a reminder, a transaction, a journal entry) goes, whatever its
 visibility. A household-SHARED container (a family list, a family event, a family-visible contact) is NOT deleted: only the entries
 inside it that record the member as their author go, and the member's own rows elsewhere. Where a row does not record its author
-(``list_items``, ``people_field_values``, the AG-UI runs of a session someone else also spoke in) nothing is guessed: it stays, and
-forget-reach lists it as an authorship gap with the column that would be needed.
+(``list_items``, ``people_field_values``) nothing is guessed: it stays, and forget-reach lists it as an authorship gap with the column
+that would be needed. A shared chat session never keeps the member as its owner, and its AG-UI runs stay only when shown to be another
+member's (``_hand_over``, ``_shared_runs``).
 
 Fail closed like the other erasers: a store that cannot be cleared RAISES (the caller retries the whole delete); a table that is not
 migrated, or a process that never had a database pool, holds nothing. Scheduled sends are consumed BEFORE their rows go (a job whose row
@@ -125,23 +126,26 @@ _POLL_S = 0.1
 async def _await_inflight_fires(r: _Run, user_id: str) -> None:
     """Wait until none of the member's scheduled sends is mid-delivery. A fire CLAIMS its row (``claimed_at``) before its erase check and
     holds the claim until it has delivered (``fired = 1``) or released it; the erase mark is already written, so any fire that checks
-    from now on refuses. Waiting here closes the last window: a fire that checked BEFORE the mark delivers before this delete can finish,
-    never after it. A claim older than the stuck timeout is a crashed fire, not one in flight. Times out FAIL CLOSED."""
+    from now on refuses, and so does the last step of its send (``erase_watermark.send_refused``). Waiting here closes the last window: a
+    fire that checked BEFORE the mark delivers before this delete can finish, never after it.
+
+    A claim of ANY age counts as live (a slow delivery can outlast the stuck-claim timeout) unless it is PROVEN dead
+    (``reminders.claim_is_dead``: this process runs the scheduler and is not delivering that row - a claim records no owner, so only the
+    process that fires reminders can prove one dead). Unproven claims are waited for at most ``INFLIGHT_WAIT_S``, then the delete FAILS
+    closed and is retried; a crashed claim seen from a process without the scheduler keeps failing the delete until the stuck-claim
+    recovery re-fires its row (which then refuses at the erase check and consumes it)."""
     import asyncio
     import time
-    from datetime import datetime, timedelta, timezone
 
     from proactive.triggers import reminders
 
     deadline = time.monotonic() + INFLIGHT_WAIT_S
     while True:
-        cutoff = reminders._utc_iso(datetime.now(timezone.utc) - timedelta(seconds=reminders._STUCK_CLAIM_SECONDS))
-        rows = await r.rows("SELECT COUNT(*) FROM proactive_scheduled WHERE user_id = ? AND fired = 0 AND claimed_at IS NOT NULL "
-                            "AND claimed_at >= ?", (user_id, cutoff))
-        if not rows or not rows[0][0]:
+        rows = await r.rows("SELECT id FROM proactive_scheduled WHERE user_id = ? AND fired = 0 AND claimed_at IS NOT NULL", (user_id,))
+        if not [x for x in rows if not reminders.claim_is_dead(str(x[0]))]:
             return
         if time.monotonic() > deadline:
-            raise RuntimeError("member_owned_forget: a scheduled send is still mid-delivery")
+            raise RuntimeError("member_owned_forget: a scheduled send is still claimed and not proven dead")
         await asyncio.sleep(_POLL_S)
 
 
@@ -167,7 +171,9 @@ async def _scheduled_sends(r: _Run, user_id: str) -> None:
 
 async def _transcript(r: _Run, user_id: str) -> None:
     """The member's chat turns (any session, by the per-turn owner rule); then the sessions they own that are now empty (with their
-    AG-UI runs); a session they own that still holds someone else's turns keeps those turns and loses its title (the member's words)."""
+    AG-UI runs); a session they own that still holds someone else's turns keeps those turns, loses its title (the member's words) and
+    is handed to a remaining participant (``_hand_over``); and in every surviving session they owned or spoke in, the AG-UI runs not
+    shown to be another member's (``_shared_runs``). No surviving chat row names the member."""
     rows = await r.rows(TRANSCRIPT_SQL, (user_id, *_id_patterns(user_id)))
     mine = [str(x[0]) for x in rows if _turn_owner(x[2], x[3]) == user_id]
     touched = sorted({str(x[1]) for x in rows if _turn_owner(x[2], x[3]) == user_id and x[1]})
@@ -188,12 +194,68 @@ async def _transcript(r: _Run, user_id: str) -> None:
         for x in await r.rows(f"SELECT id, user_id FROM chat_sessions WHERE id IN ({', '.join('?' * len(part))})", tuple(part)):
             sess_owner[str(x[0])] = str(x[1] or "")
     gone = [s for s in empty if sess_owner.get(s, "") in (user_id, *_GUESTS) or s not in sess_owner]
-    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone)
-    await r.by_ids("DELETE FROM chat_sessions WHERE id", gone)
-    kept_owned = [s for s in shared if s in set(owned)]
-    for at in range(0, len(kept_owned), _CHUNK):
-        part = kept_owned[at:at + _CHUNK]
-        await r.run(f"UPDATE chat_sessions SET title = 'New Chat' WHERE id IN ({', '.join('?' * len(part))})", tuple(part))
+    # a shared session the member owned is handed to a remaining participant, or goes when none is left (``_hand_over``); then the runs
+    # of every surviving session they owned or spoke in; then the gone sessions (children before parents: the FK-order test)
+    orphans = [sid for sid in shared if sid in set(owned) and not await _hand_over(r, user_id, sid)]
+    await r.by_ids("DELETE FROM chat_messages WHERE session_id", orphans)
+    await _shared_runs(r, user_id, [sid for sid in shared if sid not in set(orphans)])
+    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans)
+    await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans)
+
+
+async def _hand_over(r: _Run, user_id: str, sid: str) -> bool:
+    """A session the member owned that still holds another member's turns must not keep the member as its owner. Every turn left names
+    its own owner (a turn without ``metadata.user_id`` was the session owner's, the member's, and is gone), so the session goes to the
+    participant who spoke FIRST among the turns that stay, a household member before a guest / kiosk id, and only an id that is a user
+    row (the ``chat_sessions.user_id`` foreign key). Its title (the member's words) is reset. False when no such participant is left:
+    the caller deletes the session with what it holds (those turns name nobody who is still a user)."""
+    turns = await r.rows("SELECT metadata, created_at, id FROM chat_messages WHERE session_id = ?", (sid,))
+    owners = {}
+    for meta, at, mid in turns:
+        o = _turn_owner(meta, "")
+        if o and o != user_id:
+            key = (o.lower() in _GUESTS, str(at or ""), str(mid))
+            owners[o] = min(owners.get(o, key), key)
+    users = await _existing_users(r, list(owners))
+    ranked = sorted((k, o) for o, k in owners.items() if users is None or o in users)
+    if not ranked:
+        return False
+    await r.run("UPDATE chat_sessions SET user_id = ?, title = 'New Chat' WHERE id = ?", (ranked[0][1], sid))
+    return True
+
+
+async def _existing_users(r: _Run, ids: list):
+    """The ids among ``ids`` that are rows of ``users``; None when there is no ``users`` table (a lab store: every id counts)."""
+    if not ids:
+        return set()
+    try:
+        cur = await r.db.execute(f"SELECT id FROM users WHERE id IN ({', '.join('?' * len(ids))})", tuple(ids))
+        return {str(x[0]) for x in await cur.fetchall()}
+    except Exception as exc:  # noqa: BLE001
+        if _missing_table(exc):
+            return None
+        raise
+
+
+async def _shared_runs(r: _Run, user_id: str, sessions: list) -> None:
+    """The AG-UI runs of every surviving session the member owned or spoke in. A run records its session and its run id, not a speaker;
+    the run's starter is the ``openclaw_run_state`` row of the same id (``chat._record_run_state``: written at the run's start with the
+    requesting member). A run is KEPT only when that row names ANOTHER member; a run the member started, or one nobody can be shown to
+    have started, goes (its events hold the reply text, derived from the turns it answered). The member's own ``openclaw_run_state``
+    rows go afterwards with the ``OWNED`` rows."""
+    for at in range(0, len(sessions), _CHUNK):
+        part = sessions[at:at + _CHUNK]
+        runs = await r.rows(f"SELECT id, run_id FROM chat_ag_ui_runs WHERE session_id IN ({', '.join('?' * len(part))})", tuple(part))
+        if not runs:
+            continue
+        run_ids = sorted({str(x[1]) for x in runs if x[1]})
+        starters = {}
+        for j in range(0, len(run_ids), _CHUNK):
+            chunk = run_ids[j:j + _CHUNK]
+            for x in await r.rows(f"SELECT id, user_id FROM openclaw_run_state WHERE id IN ({', '.join('?' * len(chunk))})", tuple(chunk)):
+                starters[str(x[0])] = str(x[1] or "").strip()
+        gone = [str(x[0]) for x in runs if starters.get(str(x[1] or ""), "") in ("", user_id)]
+        await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE id", gone)
 
 
 async def _lists(r: _Run, user_id: str) -> None:

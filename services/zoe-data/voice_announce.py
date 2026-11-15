@@ -272,7 +272,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     # 2) Candidate rows (oldest first, so briefs play in order).
     if _strict_panel():
         cursor = await db.execute(
-            """SELECT id, user_id, message, trigger_type, expires_at FROM voice_announcements
+            """SELECT id, user_id, message, trigger_type, expires_at, created_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
                  AND panel_id = ?
                ORDER BY created_at ASC LIMIT ?""",
@@ -281,7 +281,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     else:
         scoped = ", ".join("?" for _ in PANEL_SCOPED_TRIGGERS)
         cursor = await db.execute(
-            f"""SELECT id, user_id, message, trigger_type, expires_at FROM voice_announcements
+            f"""SELECT id, user_id, message, trigger_type, expires_at, created_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
                  AND (COALESCE(trigger_type, '') NOT IN ({scoped}) OR panel_id = ?)
                ORDER BY created_at ASC LIMIT ?""",
@@ -291,7 +291,19 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
 
     # 3) Atomic per-row claim — the poll-overlap guard.
     claimed: list[dict] = []
+    import erase_watermark
     for row in rows:
+        # The last step before a spoken line leaves for the panel: a line queued for a member who was deleted at or after it was queued
+        # is never spoken (marked expired), whoever queued it and however it raced the delete. An unreadable mark: not now (it stays
+        # pending). A panel COMMAND carries no content and is exempt: the delete itself queues voice_profile_forget after its mark.
+        if (row["trigger_type"] or "") not in COMMAND_TRIGGERS:
+            try:
+                gone = await erase_watermark.send_refused(row["user_id"], row["created_at"], "voice_announcement")
+            except erase_watermark.Unavailable:
+                continue
+            if gone:
+                await db.execute("UPDATE voice_announcements SET expired = 1 WHERE id = ? AND delivered_at IS NULL", (row["id"],))
+                continue
         # The 07:30 brief vs the first-turn brief (ZOE_BRIEF_ON_FIRST_TURN): never
         # play a brief the conversation already delivered, and hold it while a
         # conversational brief is mid-reply. A no-op with that flag off.
