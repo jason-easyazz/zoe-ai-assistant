@@ -276,7 +276,9 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     more, failed = await pa._reject_all(svc, user_id, [*twins, *bound], note="forget_memory_space")   # every one, then report
     gone = [ref.id, *more]
     physical = False
-    if hasattr(svc, "erase_rows"):
+    # the physical erase only once EVERY dependent reject held: erased now, the row a retry starts from would be gone ("gone") while
+    # a twin / bound fact still stands
+    if not failed and hasattr(svc, "erase_rows"):
         from memory_service import physical_erase_enabled
 
         if physical_erase_enabled():
@@ -341,7 +343,7 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
             gone.append(row.id)
         else:
             failed += 1
-    if hasattr(svc, "erase_rows"):
+    if not failed and hasattr(svc, "erase_rows"):   # only once every reject held (the retry starts from this row)
         from memory_service import physical_erase_enabled
 
         if physical_erase_enabled():

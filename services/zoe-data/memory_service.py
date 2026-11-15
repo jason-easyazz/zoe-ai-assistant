@@ -1371,8 +1371,11 @@ _NEXT_LABEL = (r"(?!(?:and|but|or|plus)\s{1,8}(?:[^\s,;.!?]+\s{1,8}){0,3}(?:" + 
 #: up to six more words of the clause (an introducer's value), stopping before another label
 _SUFFIX = r"((?:\s{1,8}" + _NEXT_LABEL + r"[^\s,;.!?]+){0,6})"
 _LABELLED_SECRET_RE = re.compile(
-    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:is|was)\s*[:=]?|[:=])\s*)"
-    r"([^\s,;!?]+?)(?=[.,;!?]*(?:\s|$))" + _SUFFIX,   # the value stops before trailing punctuation (the clause stays readable)
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:is|was)(?:\s*[:=])?|[:=])\s*)"
+    # the value stops before trailing punctuation (the clause stays readable). The connector is UNAMBIGUOUS: "is" / "was" takes an
+    # optional ":" / "=" only together with the spaces in front of it (``(?:\s*[:=])?``), so no two whitespace runs can split the
+    # same spaces - two adjacent runs around an optional ":" were quadratic on a long run of trailing whitespace (bot review)
+    r"([^\s,;!?]+?)(?=[.,;!?]*(?:\s|$))" + _SUFFIX,
 )
 #: after "<label> is / was" (NOT after = or :, which always introduce a value) the first word is kept only when it says what STATE
 #: the secret is in or WHERE it is, or negates: a closed, whole-word list. Deliberately tighter than ``_PASSWORD_NOT_VALUES``: no

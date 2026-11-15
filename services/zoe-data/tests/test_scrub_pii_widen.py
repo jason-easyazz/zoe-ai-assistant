@@ -545,3 +545,44 @@ def test_modifier_forms_that_carry_no_value_are_kept(text):
 def test_modifier_forms_with_a_value_lose_it(text, secret):
     out, _ = scrub_pii(text)
     assert secret not in out and R in out, out
+
+
+# ── LINEAR on every label / connector form (bot review, PR #2574): a long run after a label never goes quadratic ──────────────
+
+_TIMING_FORMS = [f"{label}{conn}" for label in ("password", "passcode", "passphrase", "pin", "api key", "token", "secret",
+                                                "auth token")
+                 for conn in (" is", " was", ":", " =", " is:", " was =")] + [
+    "my password", "the password for the wifi is", "the password is still", "the password is still on the fridge",
+    "the door code is", "door code", "my pin", "account number is", "bsb", "call me on", "my number is", "my email is",
+    "email:", "my address is", "I live at", "we live at 12", "send it to", "+61", "0400"]
+_TIMING_PADS = {"spaces": " ", "tabs": "\t", "mixed": " \t", "newlines": "\n", "is": "is ", "mods": "still ", "now": "now ",
+                "digits": "1-2 "}
+_TIMING_BOUND_S = 0.25
+
+
+def _timed(text: str) -> float:
+    best = 9.0
+    for _ in range(2):
+        t0 = time.perf_counter()
+        scrub_pii(text)
+        best = min(best, time.perf_counter() - t0)
+    return best
+
+
+@pytest.mark.parametrize("pad", sorted(_TIMING_PADS))
+def test_every_label_form_stays_linear_on_a_long_padding_run(pad):
+    """For EVERY label / connector form: the form + 16000 chars of the padding completes under a fixed bound, and doubling the
+    length (8000 -> 16000) does not more than ~2.5x the time (a ratio, so a quadratic shape is caught without flaking on a
+    loaded box; tiny times are not ratio-checked). ``password is`` + 16000 spaces took 4.6 s before the connector was made
+    unambiguous."""
+    unit = _TIMING_PADS[pad]
+    slow = []
+    for form in _TIMING_FORMS:
+        short, long = (form + unit * (n // len(unit)) for n in (8000, 16000))
+        t_long = _timed(long)
+        if t_long > _TIMING_BOUND_S:
+            slow.append((form, "bound", round(t_long, 3)))
+            continue
+        if t_long > 0.02 and t_long / max(_timed(short), 1e-4) > 2.5:
+            slow.append((form, "ratio", round(t_long, 3)))
+    assert not slow, slow
