@@ -78,7 +78,7 @@ def _client_literal(name):
 
 def test_the_allowlists_are_the_codes_the_client_writes():
     assert set(_client_literal("RESULTS")) == rep.ALLOWED["result"]                  # exactly: every code the client can write, no more
-    assert {"hook", "worker", "code"} <= rep.ALLOWED["reason"] and "noop" in rep.ALLOWED["live"]     # shadow_error reasons, live_noop
+    assert {"hook", "worker", "code", "pending_forget"} <= rep.ALLOWED["reason"] and "noop" in rep.ALLOWED["live"]     # shadow_error reasons, live_noop
     assert set(_client_literal("LIST_CLASSES")) | {"other"} == rep.ALLOWED["cls"]
     assert {code for _, code in _client_literal("_REASONS")} | {"other"} <= rep.ALLOWED["reason"]
     src = (ROOT / "services" / "zoe-data").rglob("*.py")

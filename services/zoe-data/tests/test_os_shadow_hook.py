@@ -207,9 +207,22 @@ def _fold(n, consts: dict):
     return None
 
 
+_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _own_nodes(fn):
+    """The nodes of ``fn``'s own body, not descending into a nested function, lambda or class (each of those is its own unit)."""
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        n = stack.pop()
+        yield n
+        if not isinstance(n, _DEFS + (ast.ClassDef,)):
+            stack.extend(ast.iter_child_nodes(n))
+
+
 def _strings(node, consts: dict) -> list:
-    """Every string a function could hand to SQL: each constant, each f-string, each ``+``-fold."""
-    return [t for t in (_fold(n, consts) for n in ast.walk(node) if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp)))
+    """Every string a unit could hand to SQL in its OWN body: each constant, each f-string, each ``+``-fold."""
+    return [t for t in (_fold(n, consts) for n in _own_nodes(node) if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp)))
             if t is not None]
 
 
@@ -232,45 +245,51 @@ def _aliases(tree, names: frozenset) -> frozenset:
 
 
 def _calls_to(node, names: frozenset) -> bool:
+    """``node``'s OWN body calls one of ``names`` (a call inside a nested unit belongs to that unit)."""
     return any(isinstance(n, ast.Call) and (getattr(n.func, "id", None) in names or getattr(n.func, "attr", None) in names)
-               for n in ast.walk(node))
+               for n in _own_nodes(node))
+
+
+def _units(node, prefix: str):
+    """Every function at every nesting level, each its own unit: ``f``, ``C.m``, ``f.inner``, ``f.<lambda:12>``, ``f.Local.m``."""
+    for n in _own_nodes(node):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = f"{prefix}{n.name}"
+        elif isinstance(n, ast.Lambda):
+            name = f"{prefix}<lambda:{n.lineno}>"
+        elif isinstance(n, ast.ClassDef):
+            yield from _units(n, f"{prefix}{n.name}.")
+            continue
+        else:
+            continue
+        yield name, n
+        yield from _units(n, name + ".")
 
 
 def _functions(tree):
-    """Top-level functions and class methods (a nested function belongs to the function it is in)."""
-    for n in tree.body:
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield n.name, n
-        elif isinstance(n, ast.ClassDef):
-            yield from ((f"{n.name}.{m.name}", m) for m in n.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    """Every unit of ``tree`` (see ``_units``) plus ``<module>``, the top-level statements. A write is attributed to the INNERMOST unit
+    whose own body holds it, never to the function that encloses it."""
+    yield from _units(tree, "")
     yield "<module>", ast.Module(body=[n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))],
                                  type_ignores=[])
 
 
 def writer_sites(src: str, sql: "re.Pattern", helpers: frozenset = frozenset()) -> list:
-    """The names of the functions in ``src`` that write: a string matching ``sql``, or a call to a writer helper (any alias)."""
+    """The units of ``src`` (every nesting level) whose OWN body writes: a string matching ``sql``, or a call to a writer helper (any
+    alias)."""
     tree = ast.parse(src)
     names, consts = _aliases(tree, helpers), _consts(tree)
     return [name for name, fn in _functions(tree)
             if any(sql.search(t) for t in _strings(fn, consts)) or (names and _calls_to(fn, names))]
 
 
-_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-
-
-def _own_nodes(fn):
-    """The nodes of ``fn``'s own body, not descending into a nested function or lambda."""
-    stack = list(ast.iter_child_nodes(fn))
-    while stack:
-        n = stack.pop()
-        yield n
-        if not isinstance(n, _DEFS):
-            stack.extend(ast.iter_child_nodes(n))
-
-
 def hooked(fn, hooks: frozenset) -> bool:
     """``fn`` calls ``os_shadow.<hook>`` in its own body, or in a nested function its body (transitively) USES by name (calls it or
-    hands it on); a nested function nothing refers to does not count."""
+    hands it on); a nested function nothing refers to does not count.
+
+    The rule looks DOWN only, never up: a nested WRITER is hooked by its own body (or what it uses), never because the function around
+    it holds a hook, since the scan cannot tell whether the parent runs it before, after or instead of the hooked path. A nested writer
+    whose hook really is its parent's names that parent in ``HOOKED_BY_CALLER`` (pinned: the parent is its only user and is hooked)."""
     nested = {n.name: n for n in ast.walk(fn) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn}
     todo, seen = [fn], set()
     while todo:
@@ -292,8 +311,17 @@ def unhooked(src: str, sql: "re.Pattern", helpers: frozenset, hooks: frozenset) 
 
 
 def callers_of(src: str, name: str) -> set:
-    """The top-level functions of ``src`` that call ``name`` (by bare name)."""
-    return {fname for fname, fn in _functions(ast.parse(src)) if fname != name and _calls_to(fn, frozenset({name}))}
+    """The units of ``src`` whose own body uses ``name`` (the last part of a qualified unit name): calls it, or for a nested unit, also
+    hands it on by name."""
+    short = name.rsplit(".", 1)[-1]
+    nested = "." in name
+    out = set()
+    for fname, fn in _functions(ast.parse(src)):
+        if fname == name:
+            continue
+        if _calls_to(fn, frozenset({short})) or (nested and any(isinstance(n, ast.Name) and n.id == short for n in _own_nodes(fn))):
+            out.add(fname)
+    return out
 
 
 LIST_ADD_SQL = re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+[\"`]?(?:\w+[\"`]?\.[\"`]?)?list_items\b")
@@ -305,8 +333,12 @@ NOT_SHADOWED = {
     "anticipation.py::_do": "OUT OF SCOPE: the packing list Zoe starts for a trip, many items from one offer; no member add to compare",
 }
 #: "file::writer" -> the ONE function in that file that calls it and holds the hook (the write runs inside the caller's transaction,
-#: so the hook belongs after the caller's commit). Pinned: the caller is the writer's only caller and reaches the hook.
-HOOKED_BY_CALLER = {"pending_suggestions.py::_execute_action": "execute_suggestion"}
+#: so the hook belongs after the caller's commit). Pinned: the caller is the writer's only caller and reaches the hook. A NESTED
+#: writer (``outer.inner``) whose hook is its parent's goes here too, with the parent as the caller, under the same pin.
+HOOKED_BY_CALLER = {"pending_suggestions.py::_execute_action": "execute_suggestion",
+                    # the new-list path: the parent runs it inside its transaction, then hooks after the commit (single add) or hands
+                    # the receipts to add_items_to_list, which hooks after ITS commit (that caller is scanned as a writer itself)
+                    "list_service.py::add_item_to_list._write_new_list_and_item": "add_item_to_list"}
 
 
 def _service_files():
@@ -397,3 +429,25 @@ def test_the_detector_reads_a_table_name_held_in_a_variable():
                 "async def f(db):\n    t = 'list_items'\n    await db.execute('INSERT INTO ' + t + ' (id) VALUES (1)')"):
         assert writer_sites(src, LIST_ADD_SQL) == ["f"], src
     assert writer_sites("async def f(db, t):\n    await db.execute(f'INSERT INTO {t} (id)')", LIST_ADD_SQL) == []   # unknowable: not claimed
+
+
+def test_a_nested_writer_is_its_own_unit_and_a_hooked_parent_does_not_cover_it():
+    """Every function at every nesting level is scanned on its own: a write is the innermost unit's, and the hook rule looks down
+    only, so a hooked parent does not make an unhooked nested writer (an inner coroutine fired off, a closure) hooked."""
+    hook = frozenset({"note_add"})
+    fired = ("async def a(db):\n    async def w():\n        await db.execute('INSERT INTO list_items (id)')\n"
+             "    asyncio.create_task(w())\n    await db.execute('INSERT INTO list_items (id)')\n    os_shadow.note_add('u', item='x')\n")
+    assert writer_sites(fired, LIST_ADD_SQL, LIST_ADD_HELPERS) == ["a", "a.w"]
+    assert unhooked(fired, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["a.w"]
+    closure = ("def a(db):\n    os_shadow.note_add('u', item='x')\n    def w():\n        create_item_record(db, list_id='x', text='y')\n"
+               "    return w\n")
+    assert unhooked(closure, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["a.w"]
+    own = ("async def a(db):\n    async def w():\n        await db.execute('INSERT INTO list_items (id)')\n"
+           "        os_shadow.note_add('u', item='x')\n    await w()\n")
+    assert writer_sites(own, LIST_ADD_SQL, LIST_ADD_HELPERS) == ["a.w"] and unhooked(own, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == []
+    in_lambda = "def a(db):\n    os_shadow.note_add('u', item='x')\n    f = lambda: db.execute('INSERT INTO list_items (id)')\n"
+    assert unhooked(in_lambda, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["a.<lambda:3>"]
+    deep = ("class C:\n    def m(self, db):\n        def inner():\n            async def deeper():\n"
+            "                await db.execute('INSERT INTO list_items (id)')\n            return deeper\n        return inner\n")
+    assert unhooked(deep, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["C.m.inner.deeper"]
+    assert callers_of(fired, "a.w") == {"a"}                       # what HOOKED_BY_CALLER pins for a nested writer named there
