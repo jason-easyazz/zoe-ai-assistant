@@ -67,24 +67,28 @@ def rig(monkeypatch):
     box.close()
 
 
-def kernel_trail(box):
-    audit = box.client("audit")
-    return [(e.kind.value, e.subject) for e in audit.drain(
-        audit.subscribe(kinds=["action_receipt", "refusal"], from_seq=0))]
+def refusals(box) -> list[str]:
+    """The kernel's refusal trail, read the sanctioned way (as test_brain_bridge.py does): the audit
+    client's manifest reads refusals, not receipts. Receipts are ruled out by the bridge spy."""
+    c = box.client("audit")
+    return [e.payload["reason"] for e in c.drain(c.subscribe(kinds=["refusal"], from_seq=0))]
 
 
 def test_a_late_call_from_an_earlier_turn_is_refused_and_writes_for_nobody(rig):
     box, server, open_turn, propose = rig
     alex_turn, alex_cause = open_turn(ALEX, f"add {WORD} to my list")
     sam_turn, _ = open_turn(SAM, "what time is it")           # the runner moved on: a different person
-    before = kernel_trail(box)
+    before = refusals(box)
+    sent, real = [], server.bridge.propose
+    server.bridge.propose = lambda *a: sent.append(a) or real(*a)   # every act goes through here
 
     code, out = propose(alex_turn, WORD)                     # turn N's operation, still running
 
     assert code == 200 and out["status"] == "refused" and out["receipt"] is None
     state = box.sup("state")
     assert not state["lists"].get(ALEX) and not state["lists"].get(SAM), "nothing written for either person"
-    assert kernel_trail(box) == before, "the call never reached the kernel: no receipt, no driver"
+    assert sent == [], "the call never reached the bridge: no act, so no receipt and no driver"
+    assert refusals(box) == before, "and the kernel recorded nothing for it"
     rec = server.log[-1]
     assert rec == {"turn": alex_cause, "turn_id": alex_turn, "tool": rec["tool"], "status": "refused",
                    "receipt": None, "hop_ms": 0.0, "code": "stale_turn"}
