@@ -29,6 +29,7 @@ import fast_tiers
 import memory_authority as ma
 import memory_service
 from memory_service import MemoryService
+from forgotten_support import ledger_env  # noqa: F401 - fixture
 from test_memory_authority import _Col
 
 pytestmark = pytest.mark.ci_safe
@@ -640,3 +641,42 @@ def test_forget_that_still_finds_a_row_written_before_the_contact_scrub(svc, sai
     doc, meta = svc._col.rows[rid]
     svc._col.rows[rid] = (doc, {**meta, "source_excerpt": said, "user_turn_id": "legacy-0"})
     assert _execute(svc, "memory_forget_last").startswith("Done — I forgot") and _gone(svc, "plumber")
+
+
+# ── look-alike asks are not twins (review thread, PR #2574) ────────────────────────────────────────────────────────────
+# Two asks that differ only in an address store the SAME redacted excerpt; the twin lookup ("forget that" also takes the
+# capture's copy of the same turn) must not treat the other turn's rows as twins. Two asks carry different ask ids, and a
+# capture row's keyed excerpt tag (``source_excerpt_said``) says whose words it holds. Negative control: on 6e7edfecf the
+# first two tests fail (the earlier turn's ask, and its capture copy, are retracted too).
+ASK_1 = "Remember that my plumber works from 1 Example Street"
+ASK_2 = "Remember that my plumber works from 2 Example Street"
+
+
+def _capture(svc, turn, fact):
+    run(svc.ingest(fact, user_id=UID, source="chat_regex", status="approved", source_excerpt=turn,
+                   user_turn_id="capture-writer"))
+
+
+@pytest.mark.parametrize("keyed", [True, False])
+def test_forget_that_takes_only_the_last_of_two_look_alike_asks(svc, request, keyed):
+    if keyed:
+        request.getfixturevalue("ledger_env")
+    assert say(svc, ASK_1) in atr._CONFIRM and say(svc, ASK_2) in atr._CONFIRM
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot")
+    assert [r.text for r in rows(svc)] == ["my plumber works from 1 Example Street"]
+
+
+def test_the_earlier_turns_capture_copy_is_not_a_twin(svc, ledger_env):
+    assert say(svc, ASK_1) in atr._CONFIRM
+    _capture(svc, ASK_1, "User's plumber works from 1 Example Street")
+    assert say(svc, ASK_2) in atr._CONFIRM
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot")
+    assert sorted(r.text for r in rows(svc)) == ["User's plumber works from 1 Example Street",
+                                                 "my plumber works from 1 Example Street"]
+
+
+@pytest.mark.parametrize("excerpt", [ASK_2 + ".", "my plumber works from 2 Example Street"])   # the capture's own cut
+def test_the_same_turns_capture_copy_still_goes_with_the_ask(svc, ledger_env, excerpt):            # control
+    assert say(svc, ASK_2) in atr._CONFIRM
+    _capture(svc, excerpt, "User's plumber works from 2 Example Street")
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot") and rows(svc) == []

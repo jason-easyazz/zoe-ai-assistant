@@ -31,6 +31,7 @@ import memory_provenance as mp
 import memory_service
 import provenance_answers as pa
 from memory_service import MemoryService
+from forgotten_support import ledger_env  # noqa: F401 - fixture
 from test_memory_authority import _Col
 
 pytestmark = pytest.mark.ci_safe
@@ -1265,3 +1266,20 @@ def test_a_shortened_quote_still_erases_the_indexed_turn(svc):
     assert run(xw.get_backend().count(UID)) == 0
     run(xw.get_backend().add(UID, "xw-long", NOW - 86400, long_turn, xw.tokens_column(long_turn), "chat"))
     assert run(xw.erase_text(UID, quote)) == 1                              # and the displayed prefix alone matches too
+
+
+def test_forget_it_after_a_redacted_quote_leaves_the_look_alike_turn(svc, ledger_env):
+    """Two turns that differ only in an address store the same redacted words (index and excerpt). "forget it" after the answer
+    quoted one of them erases THAT turn's words and rows only: the quote's keyed tag tells the look-alike apart (review, PR
+    #2574). Negative control: on 6e7edfecf the look-alike's row is retracted too."""
+    turns = ["My plumber works from 1 Example Street", "My plumber works from 2 Example Street"]
+    for i, t in enumerate(turns):
+        assert run(xw.index_turn(UID, t, said_at=NOW - (2 - i) * 3600)) is True
+        put(svc, f"User's plumber works from {i + 1} Example Street", excerpt=t)
+    (tid,) = [k[1] for k, r in xw.get_backend().rows.items() if r["said_at"] == NOW - 3600]
+    stored = xw.get_backend().rows[(UID, tid)]["text"]
+    exp = mp.Explained(seq=1, row_id="", ts=NOW, text=stored, quote=stored, turn_id=tid)
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert [r.text for r in run(svc.list_by_status(user_id=UID, status="approved"))] == [
+        "User's plumber works from 1 Example Street"]
+    assert [r["said_at"] for r in xw.get_backend().rows.values()] == [NOW - 7200]

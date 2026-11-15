@@ -301,7 +301,8 @@ def _said_tag(user_id: str, text: str) -> str:
     """The keyed tag of a turn's words AS SAID (``memory_forgotten.said_tag``); '' when the ledger secret is unset."""
     try:
         import memory_forgotten
-        return memory_forgotten.said_tag(user_id, _said_form(text))
+        import turn_forget
+        return memory_forgotten.said_tag(user_id, turn_forget.norm(text))   # the fact rows' normalisation: tags compare
     except Exception:  # noqa: BLE001
         return ""
 
@@ -599,12 +600,12 @@ async def erase_text(user_id: str, text: str) -> int:
         return max(words, key=len, default="") or (_REDACT_WORD if form != key else "")
 
     def _hit(tid: str, t: str) -> bool:
+        _base, sep, tag = tid.partition(_TAG_SEP)
+        if sep and _tag_current(user_id, tag):      # a redacted turn: ONLY its tag says which turn it was (its text is a
+            return tag in tags                      # look-alike's text too, and a redacted quote would match both)
         low = _squash(t or "").lower()
         if key in low:          # as said: a turn nothing was redacted from, or one indexed before the contact scrub
             return True
-        _base, sep, tag = tid.partition(_TAG_SEP)
-        if sep and _tag_current(user_id, tag):
-            return tag in tags
         return stored != key and len(stored) >= 6 and stored in low
 
     backend = get_backend()

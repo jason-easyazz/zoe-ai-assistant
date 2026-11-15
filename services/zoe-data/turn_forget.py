@@ -368,6 +368,21 @@ def said_tag(user_id: str, text: str) -> str:
         return ""
 
 
+def distinct_sayings(user_id: str, tag_a: Any, tag_b: Any) -> bool:
+    """Two rows whose STORED (redacted) words are equal but whose keyed tags of the words as said differ were said differently -
+    the difference sits inside a redacted contact detail - so they are two sayings, never twins of one turn. False when a tag is
+    missing or not made with the current secret: the caller's old match stands. Never raises."""
+    a, b = str(tag_a or ""), str(tag_b or "")
+    if not (a and b) or a == b:
+        return False
+    try:
+        import memory_forgotten
+
+        return memory_forgotten.said_tag_current(user_id, a) and memory_forgotten.said_tag_current(user_id, b)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None, *,
                      turn_ids: frozenset = frozenset(), stored_key: Optional[str] = None, user_id: str = "") -> bool:
     """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash or one of ``turn_ids`` (the

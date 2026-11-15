@@ -484,8 +484,11 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
     row the post-turn capture derived from the same turn (``ref`` is whichever the forget found first). Same owner,
     within ``SIBLING_WINDOW_S``, the same turn (equal source excerpts, then overlap >= ``SIBLING_MIN_OVERLAP``)
     or, with no excerpt on one side, one row's content words wholly inside the other's; when ``ref`` is the derived row only an
-    ask row counts. Never raises."""
+    ask row counts. Never another turn's look-alike: a second ask (its own ask id), or a row whose redacted excerpt equals this
+    one's but whose keyed tag of the words as said differs (``turn_forget.distinct_sayings``). Never raises."""
     try:
+        import turn_forget
+
         meta = ref.metadata or {}
         ts = _added_ts(meta)
         if ts <= 0:
@@ -504,6 +507,14 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             # the same TURN: when both rows carry the words they were written from, those words must agree (the
             # capture truncates, so one containing the other counts); a different turn is a different fact
             ex_a, ex_b = _norm(meta.get("source_excerpt")), _norm(m.get("source_excerpt"))
+            # look-alikes from ANOTHER turn: two asks are two asks (each has its own ask id), and equal redacted excerpts whose
+            # keyed tags of the words as said differ were two sayings (a different address, a different number)
+            ta, tb = str(meta.get("user_turn_id") or ""), str(m.get("user_turn_id") or "")
+            if ref_is_ask and is_ask_row(m) and ta and tb and ta != tb:
+                continue
+            if ex_a and ex_a == ex_b and turn_forget.distinct_sayings(
+                    user_id, meta.get("source_excerpt_said"), m.get("source_excerpt_said")):
+                continue
             same_turn = False
             if ex_a and ex_b:
                 if ex_a not in ex_b and ex_b not in ex_a:

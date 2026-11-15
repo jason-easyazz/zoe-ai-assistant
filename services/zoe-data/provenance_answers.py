@@ -1510,9 +1510,15 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
             return STORE_DOWN_REPLY
         gone = 0
         key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
+        # the quoted turn's keyed tag (a contact-redacted exact-words id ``xw-<key>~<tag>``): a row whose redacted excerpt equals
+        # the redacted quote but whose own tag differs is a look-alike from another turn (turn_forget.distinct_sayings)
+        xtag = (exp.turn_id or "").partition("~")[2]
+        import turn_forget
         if key:
             for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
                 ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
+                if ex == key and turn_forget.distinct_sayings(user_id, xtag, (r.metadata or {}).get("source_excerpt_said")):
+                    continue
                 if _owns(r.metadata or {}, user_id) and ex and (ex == key or key in ex):
                     if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:
                         gone += 1
