@@ -184,8 +184,11 @@ TABLES: tuple[Store, ...] = (
     _t("memory_consolidation_state", METADATA, REACHED, member=_OWNED_M),   # a session id and a time
     _t("panel_user_bindings", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("panel_auth_challenges", METADATA, OUT_OF_SCOPE, "Short-lived PIN hashes."),
-    _t("ui_panel_sessions", METADATA, OUT_OF_SCOPE, "Which page a panel is on; ui_context can carry transient state, expires with the session."),
-    _t("push_subscriptions", METADATA, OUT_OF_SCOPE, "A browser push endpoint and keys."),
+    _t("ui_panel_sessions", METADATA, REACHED, "One row per panel: who it is signed in / verified as (user_id; the voice path trusts it for 15 min), "
+       "the page, its chat session and ui_context. delete_user removes every row naming the member; a guest / kiosk row names no member.",
+       member=_OWNED_M),
+    _t("push_subscriptions", METADATA, REACHED, "The member's browsers' web-push endpoints and keys (user_id): a live delivery channel to their "
+       "devices. delete_user removes them, so a later send finds no endpoint.", member=_OWNED_M),
     _t("auth_handoffs", METADATA, OUT_OF_SCOPE, "Short-lived hand-off tokens."),
     _t("trust_audit", METADATA, OUT_OF_SCOPE, "Never-built trust-gate audit log; never written, dropped by alembic 0065."),
     _t("agent_cost_events", METADATA, OUT_OF_SCOPE, "Token counts and cost per call."),

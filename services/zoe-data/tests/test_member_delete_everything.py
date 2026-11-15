@@ -1050,3 +1050,27 @@ def test_a_voice_session_that_cannot_be_closed_fails_the_delete_and_a_retry_comp
         assert voice_session.member_panels(A) == []
     finally:
         voice_session.reset()
+
+
+# ── device links: the member's push endpoints and panel sign-ins go; a later push finds no endpoint ──────────────────────────
+
+def test_the_members_push_endpoints_and_panel_sign_ins_go_and_a_later_push_finds_nothing(env, store, push_lane):
+    from routers import push
+
+    svc, _col = env
+
+    async def seed():
+        await store.execute("CREATE TABLE ui_panel_sessions (panel_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, chat_session_id TEXT, "
+                            "page TEXT, ui_context TEXT, is_foreground INTEGER DEFAULT 1, last_seen_at TEXT)")
+        for pid, who in (("panel-kitchen", A), ("panel-hall", B), ("panel-kiosk", "guest")):
+            await store.execute("INSERT INTO ui_panel_sessions (panel_id, user_id, ui_context) VALUES (?, ?, '{}')", (pid, who))
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    assert {r[0] for r in _q(store, "SELECT user_id FROM push_subscriptions")} == {B}, "only B's endpoint stays"
+    assert _q(store, "SELECT panel_id, user_id FROM ui_panel_sessions ORDER BY panel_id") == [("panel-hall", B), ("panel-kiosk", "guest")]
+
+    async def later():
+        return await push.send_push_to_user(A, "x"), await push.send_push_to_user(B, "x")
+    assert asyncio.run(later()) == (0, 1)
+    assert push_lane.sent == ["https://push.invalid/" + B], "a push to the deleted member finds no endpoint; B's still sends"

@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 OWNED = ("chat_feedback", "background_tasks", "ui_actions", "notes", "journal_entries", "reminders", "transactions",
          "voice_announcements", "openclaw_approvals", "openclaw_run_state", "memory_consolidation_state",
          "person_activities", "person_bucket_list", "person_gift_ideas", "person_important_dates", "person_relationships",
-         "event_attendees")
+         "event_attendees",
+         # the member's DEVICE LINKS: their browsers' web-push endpoints (a later send finds no endpoint), and every panel row the
+         # member is bound to (ui_panel_sessions: one row per panel, user_id = who it is signed in / verified as; the voice path trusts
+         # it for 15 min, and its ui_context / chat_session_id are the member's). A guest / kiosk row names no member and stays.
+         "push_subscriptions", "ui_panel_sessions")
 #: tables whose ``person_id`` is a plain ``REFERENCES people(id)`` (alembic 0006, no ON DELETE): another member's row pointing at one of the
 #: member's private contacts keeps the row and loses the reference
 NULLED = ("notes", "journal_entries")

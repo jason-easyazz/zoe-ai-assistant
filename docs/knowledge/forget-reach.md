@@ -146,6 +146,7 @@ authorship gap below.
 | Notes, journal entries, transactions | all of the member's rows, whatever their visibility (the words are theirs alone) | - |
 | Reminders, queued and scheduled sends (`reminders`, `proactive_pending`, `proactive_scheduled`) | all of the member's rows; scheduled sends are marked fired FIRST, so a job that wakes finds nothing to claim, and their jobs are cancelled (a jobstore error fails the delete; only "this process runs no scheduler" is not an error); a fire that had ALREADY claimed its row either checks after the delete's erase mark and is refused, or checked before it - and then the delete WAITS for that claim to end (delivered or released; at most 30 s, else the delete fails and is retried), so no send reaches the member after the delete returns. A claim of any age counts as live (a slow delivery can outlast the stuck-claim timeout) unless it is proven dead: only the process that runs the reminder scheduler can prove that (it is not delivering that row now). Every send step of a delivery (the pending row, the push before each subscription, the spoken lanes, the in-app fallback, the quiet-hours follow-up) re-checks the erase mark right before it sends, and a panel never claims a spoken line queued for a member deleted at or after it was queued (`erase_watermark.send_refused`). A queued notification claimed across the delete is checked after its claim and again after it seeds the chat session; a seed that lands after the transcript step is undone | - |
 | Spoken announcements queued for the member | all of them | - |
+| Device links (`push_subscriptions`, `ui_panel_sessions`) | every web-push endpoint of the member's browsers (a later send finds no endpoint) and every panel row the member is signed in / verified as on (the panel trusts that row for 15 min) | a panel row of a guest / kiosk (it names no member) |
 | Lists | the member's PRIVATE lists with all their items; the member's assignment on any item | a FAMILY list and its items (**authorship gap**: an item records no author; needs `created_by`) |
 | Contacts (`people` and every per-person table) | the member's PRIVATE contacts with every row about them; the member's own activities, bucket-list items, gift ideas, dates and relationship edges on ANY contact | a FAMILY-visible contact (other members know them); its custom field values (**authorship gap**: no author column; needs `created_by`) |
 | Calendar | synced events and the member's calendars (as before), the member's PERSONAL local events with their attendees, the member's attendee rows on any event | a FAMILY event (a household calendar entry) |
@@ -177,7 +178,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-134 stores: 97 reached, 28 out of scope, 9 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+134 stores: 99 reached, 26 out of scope, 9 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -274,8 +275,8 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `memory_consolidation_state` | pg_table | metadata | reached | member: `member_owned_forget.forget_user` | - |
 | `panel_user_bindings` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `panel_auth_challenges` | pg_table | metadata | out_of_scope | - | Short-lived PIN hashes. |
-| `ui_panel_sessions` | pg_table | metadata | out_of_scope | - | Which page a panel is on; ui_context can carry transient state, expires with the session. |
-| `push_subscriptions` | pg_table | metadata | out_of_scope | - | A browser push endpoint and keys. |
+| `ui_panel_sessions` | pg_table | metadata | reached | member: `member_owned_forget.forget_user` | One row per panel: who it is signed in / verified as (user_id; the voice path trusts it for 15 min), the page, its chat session and ui_context. delete_user removes every row naming the member; a guest / kiosk row names no member. |
+| `push_subscriptions` | pg_table | metadata | reached | member: `member_owned_forget.forget_user` | The member's browsers' web-push endpoints and keys (user_id): a live delivery channel to their devices. delete_user removes them, so a later send finds no endpoint. |
 | `auth_handoffs` | pg_table | metadata | out_of_scope | - | Short-lived hand-off tokens. |
 | `trust_audit` | pg_table | metadata | out_of_scope | - | Never-built trust-gate audit log; never written, dropped by alembic 0065. |
 | `agent_cost_events` | pg_table | metadata | out_of_scope | - | Token counts and cost per call. |
