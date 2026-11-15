@@ -135,7 +135,7 @@ export function sessionFor(chatId: number): string {
 /**
  * Resolve a verified Telegram user id to a Zoe user_id via zoe-data's internal
  * resolver. Returns the user_id string if the sender has linked their account,
- * or null if not linked (they must set their telegram_id in Zoe settings).
+ * or null if not linked (they connect it from Zoe Settings; see handler.ts).
  */
 // Every call into zoe-data carries a deadline: a stalled zoe-data used to hang that chat's handler
 // forever (no signal on any fetch, 2026-11-02). The turn gets the long one; a slow brain turn is
