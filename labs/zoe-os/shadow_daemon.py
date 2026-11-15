@@ -9,7 +9,8 @@ receipt beside it, in its OWN store. Read ``docs/knowledge/zoe-os-list-shadow.md
 State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no ``ZOE_`` name), else ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
 
     people.json   {"people": [member ids]}   REQUIRED, written by the owner (``os_shadow.export_roster``); read at start
-    known-people.json  every id ever in people.json (never shrinks): who the kernel can still FORGET
+    known-people.json  the roster plus every id the kernel still holds a record for: who it can still FORGET. Derived from the
+                  kernel's own record at each start, and rewritten (atomic, mode kept) after a whole-person forget succeeds
     creds.json    {"socket": path, "creds": {"voice": hex, "brain": hex, "panel": hex}}   written here, 0600, on every start
     k.sock        the Unix socket (0600)
     kernel/       the kernel's SQLite spine (events, receipts, intents), 0600
@@ -21,8 +22,9 @@ The verbs it serves: ``list.add``, ``list.remove`` (registered HERE, over the sa
 What it grants itself, and why that is honest only in shadow: every roster member gets the ``brain`` skill's four acts at
 start, with no consent ceremony, because a shadow records what the household already did; it must never be reused as the consent
 model for an authoritative kernel (a child's grant needs a guardian: not modelled here, every member is an adult).
-Members are never removed from the roster by this process: a member the kernel recorded cannot be forgotten once it no longer
-knows them.
+A member taken off the roster stays known (forgettable, never granted) while the kernel holds a record for them, and no longer: once a
+whole-person forget of theirs succeeds their id leaves ``known-people.json`` and the kernel's people. A forget does not shield the
+PERSON: a member still on the roster who acts again is recorded afresh, and that record makes them forgettable again.
 
 Stdlib only. The list rows live in memory (the lab ``Lists`` driver); the durable record is the spine.
 """
@@ -32,6 +34,8 @@ import argparse
 import json
 import os
 import signal
+import sqlite3
+import stat
 import sys
 import threading
 import time
@@ -83,22 +87,92 @@ def state_dir(arg: str | None) -> Path:
     return Path(arg or os.environ.get("OSLAB_SHADOW_DIR") or Path.home() / ".zoe" / "os-shadow")
 
 
-def remember_people(state: Path, people: list) -> list:
-    """``known-people.json``: every id ever in the roster (never shrinks), written atomically, 0600, BEFORE the kernel serves."""
-    path = state / "known-people.json"
+KNOWN = "known-people.json"
+
+
+def recorded_people(db: Path) -> set:
+    """Every id the kernel still holds a record for: its ``people`` links, exactly what a whole-person forget seeds from. Any error
+    but "no database / no table yet" RAISES: the daemon refuses to start rather than lose who it can still forget."""
+    if not db.exists():
+        return set()
+    con = sqlite3.connect(str(db))
     try:
-        before = [str(p) for p in json.loads(path.read_text("utf-8"))["people"]]
+        return {r[0] for r in con.execute("SELECT DISTINCT person FROM people")}
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return set()
+        raise
+    finally:
+        con.close()
+
+
+def write_known(state: Path, ids) -> list:
+    """``known-people.json``, atomic and durable: a unique temp file in the same directory, fsync, rename, fsync of the directory.
+    The file keeps its mode (0600 when new); a failed write leaves the old file whole and no temp file behind."""
+    path = state / KNOWN
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
-        before = []
-    known = sorted(set(before) | set(people))
-    tmp = state / "known-people.json.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump({"people": known}, fh)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
+        mode = 0o600
+    known = sorted(set(ids))
+    tmp = state / f".{KNOWN}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "w") as fh:
+            os.fchmod(fh.fileno(), mode)                          # the umask must not change it
+            json.dump({"people": known}, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    dfd = os.open(state, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
     return known
+
+
+def remember_people(state: Path, people: list) -> list:
+    """The roster plus everyone the kernel still holds a record for, written BEFORE the kernel serves. Derived, never accumulated:
+    an id left in the file by a crash between a forget and its rewrite is dropped here. Temp files a killed writer left (they can
+    hold ids) are removed first."""
+    for stale in (*state.glob(f".{KNOWN}.*.tmp"), state / f"{KNOWN}.tmp"):
+        stale.unlink(missing_ok=True)
+    return write_known(state, set(people) | recorded_people(state / "kernel" / "zoe-os.db"))
+
+
+class ShadowServer(KernelServer):
+    """The kernel's server, plus the one copy of member ids the daemon keeps outside the kernel (``known-people.json``).
+
+    Order: the kernel's forget FIRST, then the copy. A refused or failed forget raises before anything here runs, so the id stays
+    for the retry (dropping it first would turn the retry into "never recorded" while the record still exists). If the rewrite
+    fails after the kernel forgot, the forget answers ``internal_error`` and the client retries it (a no-op in the kernel, the
+    rewrite again); a crash in between is repaired at the next start, which derives the file from the kernel's record."""
+
+    def __init__(self, kernel: Kernel, path: str, *, state: Path, roster) -> None:
+        super().__init__(kernel, path)
+        self.state, self.roster = state, frozenset(roster)
+
+    def _op_forget(self, conn, a: dict) -> dict:
+        out = super()._op_forget(conn, a)                         # under the kernel lock (KernelServer._answer)
+        # the Keeper erases the driver rows (in memory) NOW, before the reply: left to the next pump tick, an act in between would
+        # snapshot a forgotten row into its receipt (refused as forgotten arguments) and the rows would outlive a confirmed forget
+        self.kernel.pump()
+        if a.get("seqs") is None and a.get("entity") is None and a.get("topic") is None:
+            self.forgot(a["subject"])
+        return out
+
+    def forgot(self, subject: str) -> None:
+        """A whole-person forget of ``subject`` succeeded: they hold no record now. A member still on the roster stays (they are a
+        member, and people.json names them); one off the roster leaves the file, then the kernel's people (so a later forget is
+        the kernel's own "never knew them", and nothing new can be recorded about them)."""
+        people = self.kernel.grants.people
+        if subject in self.roster or subject not in people:
+            return
+        write_known(self.state, (p for p in people if p != subject))
+        people.pop(subject, None)
 
 
 def build(state: Path):
@@ -108,7 +182,7 @@ def build(state: Path):
         raise SystemExit("people.json has no members: the shadow kernel records nothing for a household it does not know")
     known = remember_people(state, people)
     (state / "kernel").mkdir(mode=0o700, exist_ok=True)
-    # EVERY id this kernel was ever started with stays a person it knows, so a member taken off people.json can still be forgotten
+    # Every id the kernel holds a record for stays a person it knows, so a member taken off people.json can still be forgotten
     # (zoe-data forgets by id and reads "only a person can ask to forget" as "never recorded": this is what makes that true).
     # Only the CURRENT roster is granted anything below: a removed member is forgettable, never proposable.
     k = Kernel(str(state / "kernel" / "zoe-os.db"), [Person(p) for p in known])
@@ -120,7 +194,7 @@ def build(state: Path):
     k.install(Keeper(lists, reminders, alarms))
     for person in people:
         k.grants.grant(person, "brain", acts=list(ACTS))       # the shadow records what already happened: see the module docstring
-    srv = KernelServer(k, str(state / "k.sock"))
+    srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people)
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
