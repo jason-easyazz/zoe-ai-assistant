@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
-from ..provenance import erased_request, still_live, unresolved_person
+from ..provenance import erased
 from ..retention import TWIN_WINDOW_DAYS
 
 MIN_DAYS = {"workday": 10, "weekend": 6}
@@ -87,24 +87,7 @@ class Twin:
     # ---- learning: one reduced fact per event -------------------------------------------------
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is Kind.FORGET:
-            from dataclasses import replace
-            person = ev.payload.get('subject')
-            if person is None and ctx is not None:
-                person = ctx.forgotten_subject(ev)
-            self._forget(replace(ev, payload={**ev.payload, 'subject': person}))
-            if unresolved_person(ev, ctx):
-                # Possibly anyone: the forgotten member's facts whose sources already left the
-                # log are in no list. Keep only facts whose source is still readable.
-                held = {v[1] for days in self.days.values() for facts in days.values()
-                        for v in facts.values()}
-                keep = still_live(ctx, self.manifest["reads"], held)
-                for person in list(self.days):
-                    for day, facts in list(self.days[person].items()):
-                        self.days[person][day] = {k: v for k, v in facts.items() if v[1] in keep}
-                        if not self.days[person][day]:
-                            del self.days[person][day]
-                    if not self.days[person]:
-                        del self.days[person]
+            self._forget(ev, ctx)
         elif ev.visibility.value == "private" and ev.subject:
             self._observe(ev)
 
@@ -135,21 +118,20 @@ class Twin:
                 del self.days[person]
         return gone
 
-    def _forget(self, notice: Event) -> None:
-        # Retention can remove source events before these reduced facts expire.
-        # The owner's whole-person watermark still reaches those older facts;
-        # other owners match only explicit erased request sequences.
-        for person in list(self.days):
-            for day, facts in list(self.days[person].items()):
-                self.days[person][day] = {k: v for k, v in facts.items() if not (
-                    erased_request(notice, v[1], person) or
-                    (notice.payload.get('scope') == 'person' and
-                     person == notice.payload.get('subject') and
-                     v[1] <= notice.payload.get('upto', float('inf'))))}
-                if not self.days[person][day]:
-                    del self.days[person][day]
-            if not self.days.get(person):
-                self.days.pop(person, None)
+    def _forget(self, notice: Event, ctx=None) -> None:
+        """Every fact the notice reaches (``provenance.erased``: the resolved member's facts up to
+        its watermark even after retention removed their sources; the listed requests for every
+        owner; when unresolvable, every fact whose source can no longer be read)."""
+        gone = erased(notice, ctx, ((key, person, (key[2][1],)) for person, days in self.days.items()
+                                    for day, facts in days.items() for key in
+                                    ((person, day, (name, v[1])) for name, v in facts.items())),
+                      kinds=self.manifest["reads"])
+        for person, day, (name, _seq) in gone:
+            self.days[person][day].pop(name, None)
+            if not self.days[person][day]:
+                del self.days[person][day]
+            if not self.days[person]:
+                del self.days[person]
 
     # ---- the baseline --------------------------------------------------------------------------
     def normal(self, person: str, kind: str = "workday", *, before: str | None = None) -> Normal:

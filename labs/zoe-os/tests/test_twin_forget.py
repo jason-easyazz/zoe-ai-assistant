@@ -45,7 +45,7 @@ def test_forgetting_a_person_removes_their_baseline_and_leaves_everyone_elses(tm
 
 
 def test_negative_control_a_twin_that_ignores_the_notice_still_knows_what_was_forgotten(tmp_path, monkeypatch):
-    monkeypatch.setattr(Twin, "_forget", lambda self, notice: None)
+    monkeypatch.setattr(Twin, "_forget", lambda self, notice, ctx=None: None)
     k, twin, _ = taught(tmp_path)
     k.spine.forget("kid", actor="alex")
     k.pump()

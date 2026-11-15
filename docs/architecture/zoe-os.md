@@ -1074,11 +1074,15 @@ whole-person erasure of names without truncating the reviewed notice protocol.
 Explicit erased request IDs match every owner's stores and caches. Whole-person
 purge additionally sweeps orphaned owner rows; the twin clears reduced owner facts
 through the notice watermark even when source retention has removed their events.
-A remote skill (`Client`) holds no key to resolve `subject_hash`, so an unresolved
-whole-person notice means "possibly any member", never "nobody": the twin, leaving
-catch, calendar heads-up and reminder caches keep only state whose source event the
-skill can still read (`provenance.still_live`, one replay of its own reads from its
-oldest held source) and drop the rest. Another member's state with a live source
+Every subscriber cache reads a notice through ONE helper, `provenance.erased`
+(`subject_of` is the only reader of a notice's subject; a structural test pins it).
+It resolves an anonymous notice through the context: in process the resolved
+member's state goes up to the watermark, including state whose source retention
+already retired. A remote skill (`Client`) holds no key to resolve `subject_hash`,
+so an unresolved whole-person notice means "possibly any member", never "nobody":
+only state whose source event the skill can still read is kept (`still_live`, one
+replay of its own reads from its oldest held source); the Keeper, which cannot
+vouch for any row from its reads, refuses and retries instead. Another member's state with a live source
 survives; their state whose source had also left the log is dropped and relearned.
 
 Whole-person selection also follows `nested_people`: a known member id that an

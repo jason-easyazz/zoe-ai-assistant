@@ -13,6 +13,7 @@ import time
 
 from . import wire
 from .events import Event, Kind
+from .provenance import subject_of
 from .receipts import Receipt
 from .spine import EventCache, Refused
 
@@ -24,7 +25,7 @@ class Client:
         resolve its hash. The consumer must then treat it as possibly ANY member and keep only
         state whose source it can still read (``provenance.unresolved_person`` and
         ``provenance.still_live``), never as a notice about nobody."""
-        return notice.payload.get('subject')
+        return subject_of(notice)
 
     def live_seqs(self, kinds, after: int) -> set[int]:
         """Sequence numbers of the live events of ``kinds`` after ``after`` this skill may read.

@@ -21,7 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..provenance import erased_request, still_live, unresolved_person
+from ..provenance import erased
 
 SNOOZE_MINUTES = 10
 
@@ -126,13 +126,20 @@ class Reminders:
         reach a restarted store when this skill has lost its request cache.
         """
         deleted = set()
+        seqs = set(notice.payload.get('seqs', ()))
+        listed = {f'r{s}' for s in seqs}
+        gone = erased(notice, ctx, ((rid, item['person'], (item['receipt'], item['asked']))
+                                    for rid, item in self._items.items()), kinds=self.manifest["reads"])
         for rid, item in sorted(self._items.items()):
-            if not any(erased_request(notice, s, item['person']) for s in (item['receipt'], item['asked'])):
+            if rid not in gone:
                 continue
-            if rid in {f'r{s}' for s in notice.payload.get('seqs', ())}:
+            if rid in listed:
                 ctx.purge("reminder.delete", {"id": rid}, notice)
-            else:   # legacy notices without an explicit causal closure
+            elif 'count' not in notice.payload or seqs & {item['receipt'], item['asked']}:
+                # legacy notices, or a listed receipt whose request id is not listed
                 ctx.act('reminder.delete', item['person'], {'id': rid}, caused_by=(notice.seq,))
+            # else: a whole-person reach beyond the list (its sources already retired, or the
+            # notice unresolved): the kernel's whole-member store sweep reached the external row.
             del self._items[rid]
             deleted.add(rid)
         # A restarted skill cannot relearn forgotten requests from the erased log. IDs are
@@ -141,14 +148,5 @@ class Reminders:
         if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
             for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
                 ctx.purge('reminder.delete', {'id': rid}, notice)
-        if unresolved_person(notice, ctx):
-            # Possibly anyone: an item whose request and receipt both left the log is in no
-            # list. Keep only items with a still-readable source (the restart path would
-            # relearn exactly those from receipts). The kernel's whole-member store sweep has
-            # already reached the external rows.
-            keep = still_live(ctx, self.manifest["reads"],
-                              {s for item in self._items.values() for s in (item['receipt'], item['asked'])})
-            self._items = {rid: item for rid, item in self._items.items()
-                           if {item['receipt'], item['asked']} & keep}
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}

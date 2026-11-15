@@ -12,7 +12,8 @@ Request sequences are global: erasure follows them across every owner's rows.
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..provenance import erased_request
+from ..provenance import erased, unresolved_person
+from ..spine import Refused
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
          "description": "the single authorised request (set by the kernel)"}
@@ -143,14 +144,20 @@ class Keeper:
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is not Kind.FORGET:
             return
+        if unresolved_person(ev, ctx):
+            # Its own reads cannot vouch for any row: never guess whose rows these are. Not
+            # acknowledged, so it is retried; registered stores were already swept by the kernel.
+            raise Refused('purge unresolved')
         for store in self.stores:
             if isinstance(store, Alarms):
-                for person, row in list(store.at.items()):
-                    if erased_request(ev, row["asked"], person):
-                        del store.at[person]
+                for person in erased(ev, ctx, ((p, p, (row["asked"],)) for p, row in store.at.items()),
+                                     kinds=self.manifest["reads"]):
+                    del store.at[person]
             else:
+                gone = erased(ev, ctx, (((p, i), p, (r["asked"],)) for p, rows in store.rows.items()
+                                        for i, r in enumerate(rows)), kinds=self.manifest["reads"])
                 for person, rows in list(store.rows.items()):
-                    keep = [r for r in rows if not erased_request(ev, r["asked"], person)]
+                    keep = [r for i, r in enumerate(rows) if (person, i) not in gone]
                     store.rows[person] = keep
                     if not keep:
                         store.rows.pop(person, None)

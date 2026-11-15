@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .events import Event, Kind, Visibility
+from .provenance import subject_of
 from .spine import KERNEL, Spine, Refused
 
 Do = Callable[[str, dict], Any]                    # (person, args) -> result
@@ -181,9 +182,7 @@ class Dispatcher:
             if set(args) != {key} or args[key] not in {f'{prefix}{s}' for s in live.payload.get('seqs', ())}:
                 raise Refused('invalid purge id')
             do, verify, _ = self._actions[action]
-            person = live.payload.get('subject') or next(
-                (p for p in self.enforcer.store.people
-                 if self.spine._owner(p).hex() == live.payload.get('subject_hash')), None)
+            person = subject_of(live, self.enforcer.store.people, self.spine._owner)
             if person is None:
                 # An anonymous notice whose subject hash names no known person: the driver is never run for nobody, and
                 # the purge is not confirmed (the caller keeps its target and retries).
@@ -268,7 +267,7 @@ class Dispatcher:
         for seq in caused_by:
             ev = self.spine._get(seq)
             if ev is not None and (ev.subject == person or (
-                    ev.kind is Kind.FORGET and ev.payload.get("subject") == person)):
+                    ev.kind is Kind.FORGET and subject_of(ev) == person)):
                 return True
         return False
 

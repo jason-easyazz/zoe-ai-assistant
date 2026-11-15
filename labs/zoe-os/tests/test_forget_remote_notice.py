@@ -14,9 +14,8 @@ import pytest
 from procs import Box
 from world import ALEX, SAM, household, presence
 
-from zoe_os.skills import leaving_catch
+from zoe_os import provenance
 from zoe_os.skills.leaving_catch import LeavingCatch
-from zoe_os.twin import baseline
 from zoe_os.twin.baseline import Twin
 
 
@@ -60,7 +59,7 @@ def test_remote_twin_holds_nothing_for_the_forgotten_member(box):
 
 
 def test_control_remote_twin_treating_the_notice_as_nobody_keeps_the_stale_fact(box, monkeypatch):
-    monkeypatch.setattr(baseline, "unresolved_person", lambda notice, ctx: False)
+    monkeypatch.setattr(provenance, "still_live", lambda ctx, kinds, held: set(held))   # "nobody"
     twin, client, live_b = remote_twin_scene(box)
     client.run(twin, from_seq=live_b.seq)
     assert ALEX in twin.days                               # the leak this rule closes
@@ -91,7 +90,7 @@ def test_remote_leaving_catch_holds_nothing_for_the_forgotten_member(box):
 
 
 def test_control_remote_leaving_catch_without_the_rule_keeps_the_stale_item(box, monkeypatch):
-    monkeypatch.setattr(leaving_catch, "unresolved_person", lambda notice, ctx: False)
+    monkeypatch.setattr(provenance, "still_live", lambda ctx, kinds, held: set(held))   # "nobody"
     catch, _ = remote_catch_scene(box)
     assert ALEX in catch._undone
 

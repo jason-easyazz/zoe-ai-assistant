@@ -9,6 +9,7 @@ from .attention import Attention
 from .capability import Enforcer, Grant, GrantStore, Person
 from .events import Event, Kind, Visibility
 from .explain import Explainer
+from .provenance import subject_of
 from .retention import POLICY, Retention
 from .receipts import ClaimAuditor, Dispatcher, Receipt
 from .spine import KERNEL, EventCache, Refused, Spine
@@ -25,9 +26,7 @@ class Context:
         return self.kernel.clock()
 
     def forgotten_subject(self, notice: Event) -> str | None:
-        return notice.payload.get('subject') or next(
-            (p for p in self.kernel.grants.people
-             if self.kernel.spine._owner(p).hex() == notice.payload.get('subject_hash')), None)
+        return subject_of(notice, self.kernel.grants.people, self.kernel.spine._owner)
 
     def live_seqs(self, kinds, after: int) -> set[int]:
         """The same answer ``Client.live_seqs`` gives a remote skill."""
