@@ -4088,7 +4088,10 @@ async def _execute_forget_last(user_id: str) -> str:
         # a turn noted with no committed id (its insert failed, no recovery yet): a LEGACY target - its words resolve to the saved
         # turns holding them FIRST, so every row bound to those turns goes too
         resolved = not turn.mids
-        mids = tuple(turn.mids) or await turn_forget.resolve_legacy_ids(user_id, (text,))
+        import exact_words as _xw_copies
+
+        mids = (tuple(await _xw_copies.turn_copies(user_id, turn.mids)) if turn.mids   # every committed copy of the turn
+                else await turn_forget.resolve_legacy_ids(user_id, (text,)))
         rows = await turn_forget.rows_from_turn(svc, user_id, text, ts, mids=mids)
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)

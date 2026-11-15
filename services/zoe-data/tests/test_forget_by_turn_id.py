@@ -82,7 +82,9 @@ class _Chat:
         return _ctx()
 
     async def by_id(self, user_id, mids):
-        return [(m, self.rows[m][1]) for m in mids if m in self.rows]
+        # the real seam also returns every committed COPY of each turn (same session, role and words; this fake has one session)
+        said = {self.rows[m][0] for m in mids if m in self.rows}
+        return [(m, meta) for m, (c, meta) in self.rows.items() if m in mids or c in said]
 
     async def candidates(self, user_id, needle):
         return [(m, c, meta) for m, (c, meta) in self.rows.items() if needle in c.lower() and not self.off(m)]
@@ -740,3 +742,74 @@ def test_a_legacy_entry_takes_the_upgraded_facts_bound_to_its_turn(world):
     assert bound.id not in approved                     # bound to the resolved turn: gone
     assert other.id in approved                         # another turn: by id only
     assert chat.off(mid) and "xw-pre-upgrade" not in {k[1] for k in xw.get_backend().rows}
+
+
+# ── one spoken turn committed TWICE (the arrival save, and the reply's save when the arrival outcome came too late) ─────────────
+
+TWICE = "My fishing rods lean against the wall of the carport"
+
+
+def _plant_twice(svc, chat):
+    """Two committed transcript rows of ONE turn (``Turn.mids`` holds both); the turn's capture stamps the first id; the nightly
+    catch-up indexing the SECOND row creates an entry with the second id; the digest binds a fact to the second id."""
+    from routers.chat import _save_chat_message
+
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", TWICE, user_id=UID, message_id="m-first")) is True
+        assert run(_save_chat_message("s-1", "user", TWICE, user_id=UID, count_turn=False, message_id="m-second")) is True
+    assert turn_forget.previous_turn(UID).mids == ("m-first", "m-second")
+
+    async def capture():
+        with turn_forget.capture_scope(UID, TWICE):
+            assert await xw.index_turn(UID, TWICE) is True
+            return await svc.ingest("User's fishing rods lean against the carport wall", user_id=UID, source="turn_digest",
+                                    status="approved", source_excerpt=TWICE)
+    fact = run(capture())
+    assert run(svc.get(fact.id)).metadata.get("source_turn") == "m-first"
+    assert run(xw.index_turn(UID, TWICE, said_at=time.time() - 3600, message_id="m-second")) is True   # the catch-up's copy
+    digest = run(svc.ingest("User keeps the fishing rods in the carport", user_id=UID, source="digest", status="approved",
+                            source_excerpt=TWICE, metadata={"source_turn": "m-second"}))
+    assert sorted(xw.mid_of(k[1]) for k in xw.get_backend().rows) == ["m-first", "m-second"]
+    return {"fact": fact.id, "digest": digest.id}
+
+
+def _forget_twice(path, svc, planted):
+    entry = next(k[1] for k in xw.get_backend().rows if xw.mid_of(k[1]) == "m-first")
+    if path == "forget_it_after_why":
+        stored = xw.get_backend().rows[(UID, entry)]["text"]
+        return run(pa._forget_turn(UID, mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=entry),
+                                   svc=svc))
+    if path == "forget_it_fact":
+        ref = run(svc.get(planted["fact"]))
+        return run(pa.forget_it(UID, mp.Explained(seq=1, row_id=ref.id, ts=time.time(), text=ref.text,
+                                                  quote=str(ref.metadata.get("source_excerpt") or ""), turn_id=""), svc=svc))
+    if path == "memory_space":
+        import memory_space
+        return "Done" if run(memory_space.forget_row(UID, planted["fact"], svc=svc)) == "forgotten" else "not done"
+    if path == "forget_topic":
+        res = run(forget_topic.forget(svc, UID, "my fishing rods"))
+        return "Done" if not (res.store_down or res.failed or res.too_many) else "not done"
+    return run(intent_router.execute_intent(intent_router.Intent("memory_forget_last", {}), UID))
+
+
+@pytest.mark.parametrize("path", ["forget_it_after_why", "forget_it_fact", "memory_space", "forget_topic", "forget_last"])
+def test_a_turn_committed_twice_is_forgotten_whole_from_any_one_id(world, path):
+    """A forget that starts from ONE item of the turn (an entry or a fact carrying the FIRST id) takes the whole committed set:
+    both transcript rows are flagged, no exact-words entry is left for either id, the fact bound to the SECOND id goes, and a
+    simulated nightly catch-up (``index_turn`` for every unflagged transcript row, as ``backfill_recent`` does) re-creates
+    nothing. The durable link is the transcript itself (same session + words: ``exact_words.turn_copies``), not the in-process
+    ``Turn.mids``. On f2a5d630f the entry / fact / memory-space paths flagged only the first row and left the second id's entry
+    and fact (forget-last and the topic forget were already whole: guards)."""
+    svc, chat = world
+    planted = _plant_twice(svc, chat)
+    reply = _forget_twice(path, svc, planted)
+    assert reply.startswith("Done"), reply
+    assert chat.off("m-first") and chat.off("m-second")
+    assert not xw.get_backend().rows
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert planted["fact"] not in approved and planted["digest"] not in approved
+    for mid in ("m-first", "m-second"):                                   # the nightly catch-up: unflagged rows only
+        if not chat.off(mid):
+            run(xw.index_turn(UID, TWICE, message_id=mid))
+    assert not xw.get_backend().rows

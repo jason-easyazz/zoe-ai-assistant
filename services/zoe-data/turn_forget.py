@@ -595,6 +595,12 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, res
             failure = failure or exc
             logger.warning("TURN_FORGET code=eraser_failed step=%s (%s)", getattr(coro_fn, "__name__", "?"), type(exc).__name__)
 
+    if ids and not resolve:
+        try:   # every committed copy of those turns (the durable link: same session + words): a forget by ANY id takes them all
+            ids = await exact_words.turn_copies(user_id, ids)
+        except Exception as exc:  # noqa: BLE001
+            failure = failure or exc
+            logger.warning("TURN_FORGET code=eraser_failed step=turn_copies (%s)", type(exc).__name__)
     if resolve:
         for w in words:
             await step(exact_words.forget_transcript, user_id, w)                  # the transcript flag, from the one read

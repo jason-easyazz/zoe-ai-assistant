@@ -1438,6 +1438,10 @@ async def _target_ids(user_id: str, exp: "mp.Explained", ref: Any = None, *extra
     resolved = not mids and not source_only
     if resolved:
         mids = await turn_forget.resolve_legacy_ids(user_id, (exp.quote, exp.text, *extra))
+    elif mids:
+        import exact_words
+
+        mids = await exact_words.turn_copies(user_id, mids)   # every committed copy of the turn: rows bound to ANY of them go
     return tuple(mids), source_only, resolved
 
 
