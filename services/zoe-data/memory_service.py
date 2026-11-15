@@ -1592,8 +1592,12 @@ class MemoryService:
         claim: Any = None,
         claim_siblings: Any = (),
         source_ref: Optional[Mapping[str, str]] = None,
+        created_ids: Optional[list[str]] = None,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``created_ids`` is an optional receipt for compensation: append only a row this call CREATED, never a pre-existing
+        candidate or pending row it returned or updated. Callers must not infer creation from the returned MemoryRef.
 
         ``source_ref`` (``memory_authority.external_source_ref``) is REQUIRED for an ``external_source`` writer (a fact a
         connected account's provider gave) and refused for any other: a provider's fact with no pointer is never stored
@@ -1936,6 +1940,8 @@ class MemoryService:
                                user_id, source, exc)
                 raise MemoryServiceError(f"write failed: {exc}") from exc
 
+            if created_ids is not None and existing is None:
+                created_ids.append(mem_id)
             self._remember_seen_key(user_id, idem_key)
             if source in MEMORY_OPT_OUT_SOURCES and write_status == "approved":
                 self._note_recent_auto(user_id, mem_id, scrubbed)

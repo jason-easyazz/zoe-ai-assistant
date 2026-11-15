@@ -3119,13 +3119,14 @@ async def _synthesis_pass(user_id: str) -> dict:
                     continue
 
                 # Every source must still be live right before a memory DERIVED from them is made (a forget since the scan
-                # wins). The re-check holds the owner lock; ingest takes the same lock itself, so it runs just after.
+                # wins). Ingest takes the owner lock itself: the post-check below closes the gap after this pre-check.
                 source_ids = [mid for mid, _ in sample]
                 live = await _under_owner_lock(
                     svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
                 if set(source_ids) - set(live or ()):
                     logger.info("synthesis: skipped, a source is no longer live user=%s n=%d", user_id, len(source_ids))
                     continue
+                created_ids: list[str] = []
                 ref = await svc.ingest(
                     synthesis_text,
                     user_id=user_id,
@@ -3134,8 +3135,24 @@ async def _synthesis_pass(user_id: str) -> dict:
                     confidence=0.85,
                     status="approved",
                     tags=[tag, "synthesis"],
+                    created_ids=created_ids,
                 )
                 if ref:
+                    # Like erase_watermark.guarded_write, compensate only on POSITIVE evidence, and only for rows this
+                    # call created. This checks SOURCE ids (including soft rejection), not the whole-member erase mark.
+                    try:
+                        live = await _under_owner_lock(
+                            svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                    except Exception as exc:
+                        logger.warning("SYNTHESIS_SOURCE_UNKNOWN code=%s", type(exc).__name__)
+                    else:
+                        if set(source_ids) - set(live or ()):
+                            if created_ids:
+                                # Outside the memory lock: erase_rows takes the erase gate before its memory lock.
+                                await svc.erase_rows(user_id, created_ids, actor="synthesis_undo",
+                                                     reason="synthesis source no longer live")
+                                logger.info("SYNTHESIS_SOURCE_COMPENSATED n=%d", len(created_ids))
+                            continue
                     # Link synthesized memory back to source cluster
                     col_result = await _store(col.get, ids=[ref.id], include=["metadatas", "documents"])
                     if col_result.get("ids"):

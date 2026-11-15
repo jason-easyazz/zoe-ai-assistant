@@ -25,7 +25,7 @@ Pytest suite for the production API: router contracts, agent harness behavior, c
 
 ## Work Guidance
 
-(empty)
+- `test_dreaming_passes_off_loop.py` injects source deletion/rejection between the synthesis pre-check and ingest, with unchanged, unreadable post-check and pre-existing-candidate controls. It also checks the real ingest creation receipt; deletion after the post-check is outside this race test.
 
 ## Verification
 

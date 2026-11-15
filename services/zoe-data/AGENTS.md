@@ -288,6 +288,8 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 
 ## Work Guidance
 
+- Synthesis re-checks its source row ids after ingest: a missing or non-live source compensates only ids in ingest's `created_ids` receipt, through audited `erase_rows` outside the memory lock. An unreadable post-check logs `SYNTHESIS_SOURCE_UNKNOWN` and keeps the row; a returned pre-existing candidate is never erased.
+
 - Pi/Gemma intent governance is an ambiguous-miss fallback only; deterministic intents stay first, cloud providers are rejected when offline-only mode is active, and memory-write intents must not be created from ambiguous Pi classifications.
 - Build the minimal working feature, then run a cleanup pass moving reusable mechanics into service-layer helpers; domain policy stays in routes/actions/intents.
 - Use async/await for I/O; no blocking operations on the main thread.

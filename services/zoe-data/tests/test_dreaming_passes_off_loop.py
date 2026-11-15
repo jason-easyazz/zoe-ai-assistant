@@ -72,7 +72,14 @@ class Svc:
 
     async def ingest(self, text, **kw):
         self.store.rows["syn-1"] = (text, {"user_id": UID, "status": "approved", "source": "synthesis"})
+        if kw.get("created_ids") is not None:
+            kw["created_ids"].append("syn-1")
         return type("R", (), {"id": "syn-1"})
+
+    async def erase_rows(self, user_id, ids, **kw):
+        assert not self._user_locks[user_id].locked()  # the erase gate must never be taken under the memory lock
+        for rid in ids:
+            self.store.rows.pop(rid, None)
 
 
 def _seed() -> dict:
@@ -356,3 +363,64 @@ async def test_the_write_takes_the_owners_lock_even_under_an_alias(store):
     lock.release()
     await write
     assert UID.upper() not in svc._user_locks
+
+
+@pytest.mark.parametrize("change", ["delete", "reject", "none", "unreadable", "pre-existing"])
+async def test_synthesis_source_changes_between_check_and_ingest(store, monkeypatch, caplog, change):
+    """Inject AFTER the pre-check, BEFORE the write. A deletion after the post-check is outside this contract."""
+    svc = ms.get_memory_service()
+    caplog.set_level("INFO", logger="memory_digest")
+    ingest = svc.ingest
+    checks = []
+    live_ids = md._live_ids
+
+    def check(col, uid, ids, prior):
+        checks.append(tuple(ids))
+        if change == "unreadable" and len(checks) == 2:
+            raise RuntimeError("synthetic read failure")
+        return live_ids(col, uid, ids, prior)
+
+    async def interleaved(text, **kw):
+        assert len(checks) == 1 and "m3" in checks[0]  # the precise old race window, no sleeps
+        async with svc._user_locks.setdefault(UID, asyncio.Lock()):
+            if change in {"delete", "pre-existing"}:
+                store.rows.pop("m3")
+            elif change == "reject":
+                doc, meta = store.rows["m3"]
+                store.rows["m3"] = (doc, {**meta, "status": "rejected"})
+        if change == "pre-existing":
+            # A deduplicated candidate returned by ingest is NOT a creation receipt.
+            return type("R", (), {"id": "syn-1"})
+        return await ingest(text, **kw)
+
+    if change == "pre-existing":
+        store.rows["syn-1"] = ("An existing candidate.", {"user_id": UID, "status": "pending", "source": "synthesis"})
+    monkeypatch.setattr(md, "_live_ids", check)
+    monkeypatch.setattr(svc, "ingest", interleaved)
+    result = await md._synthesis_pass(UID)
+    if change in {"delete", "reject"}:
+        assert "syn-1" not in store.rows and result["synthesized"] == 0
+        assert "SYNTHESIS_SOURCE_COMPENSATED" in caplog.text
+    else:
+        assert "syn-1" in store.rows
+        if change == "unreadable":
+            assert "SYNTHESIS_SOURCE_UNKNOWN code=RuntimeError" in caplog.text
+        elif change == "pre-existing":
+            assert store.rows["syn-1"][0] == "An existing candidate." and store.writes == []
+        else:
+            assert result["synthesized"] == 1
+
+
+async def test_ingest_creation_receipt_excludes_existing_pending_rows(monkeypatch):
+    from test_memory_implicit_supersede import _svc
+
+    svc, col = _svc(monkeypatch)
+    created = []
+    kw = dict(user_id=UID, source="explicit_teach", status="pending", created_ids=created)
+    ref = await svc.ingest("User enjoys synthetic tea blends.", **kw)
+    assert ref is not None and created == [ref.id] and ref.id in col.rows
+    for key in svc._seen_keys_by_user.pop(UID, ()):
+        svc._seen_keys.discard(key)
+    created.clear()
+    again = await svc.ingest("User enjoys synthetic tea blends.", **kw)
+    assert again is not None and again.id == ref.id and created == []
