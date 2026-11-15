@@ -52,6 +52,11 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "undo": {"person": ((str,), True), "actor": ((str,), True)},
     "describe": {},
     "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
+    # served by the AUTHORITY daemon only (``authority.py``, additive): a plain KernelServer answers them ``internal``
+    "health": {},
+    "erase_member": {"subject": ((str,), True)},
+    "erase_item": {"digest": ((str,), True)},
+    "list_digest": {},
 }
 
 # error codes (closed)

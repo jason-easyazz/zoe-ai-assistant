@@ -56,6 +56,10 @@ with its own README/RUNBOOK and is self-contained.
   stdlib process that records every real list add beside the live path in its OWN store under `~/.zoe/os-shadow/`; never authoritative, owner
   opt-in, never auto-installed or auto-enabled, and inert until `ZOE_OS_LIST_SHADOW=shadow` is also set for zoe-data. zoe-data reaches it ONLY over
   its Unix socket (`services/zoe-data/os_shadow.py`, no import from `labs/`); contract `docs/knowledge/zoe-os-list-shadow.md`).
+  `zoe-os/` -> `labs/zoe-os/zoe-os-authority-kernel.service` (the Zoe OS AUTHORITY kernel, `labs/zoe-os/authority.py`: the same state directory
+  and socket, `Conflicts=` the shadow unit; the template stays under the lab, never installed by any script; it decides a spoken list add only while
+  `ZOE_OS_LIST_ADD_AUTHORITY=kernel` is set for zoe-data, which falls back to its unchanged path whenever the kernel is down, slow or unhealthy,
+  `services/zoe-data/os_authority.py`; stage (c) of `docs/knowledge/zoe-os-integration.md`).
   No other lab may ship a unit without amending this contract.)
 - ⚠ **`labs/flue-zoe-brain-2x/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
   are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`

@@ -20,7 +20,7 @@ is invented.
 | `zoe_os/receipts.py` | the action dispatcher, read-back receipts, the write-ahead intent and crash recovery, the claim-without-receipt detector |
 | `zoe_os/attention.py` | per-person routing of offers: card by default, spoken only if that person turned it on |
 | `zoe_os/kernel.py` | the services wired together and the loop that feeds events to skills |
-| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of nine ops and their arguments |
+| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of ten ops and their arguments, plus the authority daemon's four (`health`, `erase_member`, `erase_item`, `list_digest`) |
 | `zoe_os/server.py` | the kernel behind a Unix socket: handshake, per-connection identity, size cap, frame deadline |
 | `zoe_os/client.py` | the skill's side of the socket, and `RemoteKernel` so an in-process skill runs unchanged |
 | `zoe_os/skills/` | three toy skills: leaving catch, calendar heads-up, and a deliberately malicious one |
@@ -41,6 +41,8 @@ is invented.
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
+| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` / `erase_item` / `health` / `list_digest` ops, revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `tests/authority_proc.py`, `tests/test_authority.py` | the authority daemon as its own process with one SIGKILL point or one control armed, and its tests |
 
 ## Run it
 
@@ -133,6 +135,28 @@ and nothing about a real household (record, section 12).
 
 In-process controls are monkeypatches in the tests. Controls for the kernel process are named patches in
 `tests/kernel_proc.py`, applied through the parent's pipe. Never switches in the kernel.
+
+## Authority kernel (`authority.py`)
+
+**Why the rows are rebuilt from the log.** A row exists exactly when a live, verified `list.add` receipt says so (less the verified
+`list.remove` / `undo` receipts after it). The receipt is already durable and committed in one transaction with its write-ahead
+intent, and every forget already reaches it, so there is ONE copy of the words to erase and nothing here changes the spine's or the
+dispatcher's transaction code. The cost is a scan of the receipts at start (measured below) and after each forget (one person's).
+
+**Kill points** (`tests/test_authority.py`, real SIGKILL): after the intent, after the driver ran but before the receipt (absent after
+the restart, an `uncertain` receipt), after the receipt but before the reply (present and verified). Controls: `no_rebuild` (an
+acknowledged add is lost and the test sees it), `no_member_forget` (the erase's read-back says `verified: false`).
+
+**Measured** (this box, one client, list.add over the socket = publish + act): see the PR for the numbers of the run that landed it.
+
+**Backup.** Copy `$ZOE_OS_SHADOW_DIR/kernel/zoe-os.db` with SQLite's online backup, never a plain `cp` of a live WAL database:
+`sqlite3 ~/.zoe/os-shadow/kernel/zoe-os.db ".backup '/path/to/zoe-os-$(date +%F).db'"` (consistent while the kernel runs; the `-wal`
+and `-shm` files are not needed in the copy). `creds.json` and `k.sock` are re-made at every start and are never backed up;
+`people.json` is re-written from `users`. A restore older than a forget must re-apply the forget (the repo-wide backup rule in
+`services/zoe-data/forget_reach.py`). Whether it joins the nightly backup is owner decision D4.
+
+**Not done here.** Retention (a sweep as written would drop list rows: their receipts must be exempt first, D5), power loss (WAL with
+`synchronous=NORMAL` survives a kill, not necessarily a power cut), the roster push (D6), the guardian model (D7).
 
 ## Limits (the same list as the record's section 8, short)
 

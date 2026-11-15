@@ -1,0 +1,47 @@
+# Zoe OS AUTHORITY kernel (lab) - the kernel zoe-data's ZOE_OS_LIST_ADD_AUTHORITY=kernel asks before a spoken list add
+# (docs/knowledge/zoe-os-integration.md, stage c). It REPLACES zoe-os-shadow-kernel.service (same state directory, same socket,
+# same credentials, same database): run one or the other, never both.
+#
+# A TEMPLATE. NOT INSTALLED, NOT ENABLED BY ANY PR OR SCRIPT; installing it is an explicit OWNER action, and it decides nothing until
+# ZOE_OS_LIST_ADD_AUTHORITY=kernel is also set for zoe-data. While it is down, slow or unhealthy zoe-data adds exactly as it does today
+# (a counted fallback), so stopping it is always safe.
+#
+# Owner install (after the roster exists, see zoe-os-shadow-kernel.service):
+#   systemctl --user disable --now zoe-os-shadow-kernel.service 2>/dev/null
+#   cp ~/assistant/labs/zoe-os/zoe-os-authority-kernel.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-os-authority-kernel.service
+# Roll back: systemctl --user disable --now zoe-os-authority-kernel.service (zoe-data falls back on the next add).
+#
+# Memory, sized from measurement (labs/zoe-os/README.md "Authority kernel"): resident about 20 MB idle and after 2,000 adds. It
+# must never pressure the voice stack: no MemoryLow (the voice units' protected ranges keep priority), a hard MemoryMax well over
+# the measured set (a leak becomes an OOM kill and a restart, which zoe-data rides out as fallback), MemorySwapMax=0 because a
+# swapped-out kernel would turn every add into a timeout fallback rather than a slow right answer, and its footprint is too small
+# to matter as swap pressure on anything else.
+[Unit]
+Description=Zoe OS authority kernel (lab) - decides spoken list adds when zoe-data asks; zoe-data falls back while it is down
+After=network.target
+Conflicts=zoe-os-shadow-kernel.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/labs/zoe-os
+# The private state directory: k.sock (0600), creds.json (0600), people.json, kernel/zoe-os.db (+ -wal, -shm). Never in a checkout.
+Environment=ZOE_OS_SHADOW_DIR=%h/.zoe/os-shadow
+ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/authority.py --dir ${ZOE_OS_SHADOW_DIR}
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+UMask=0077
+MemoryHigh=64M
+MemoryMax=96M
+MemorySwapMax=0
+Nice=5
+CPUWeight=50
+IOWeight=50
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
