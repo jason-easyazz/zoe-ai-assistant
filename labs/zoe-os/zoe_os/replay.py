@@ -36,6 +36,7 @@ if __name__ == "__main__":      # run as a script: make the package importable
 from zoe_os.capability import ADULT, CHILD, Manifest, Person  # noqa: E402
 from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
+from zoe_os.diagnostics import code, identifier  # noqa: E402
 
 FORMAT = 1
 PANEL = "replay.panel"          # the surface that records each person's answer to an offer
@@ -206,19 +207,19 @@ def _report(rec: Recording, skills: list, facts: list, label: str) -> Report:
         p = e.payload
         if e.kind is Kind.OFFER:
             add("offers", e.source, index, t,
-                f"{e.source} -> {e.subject or 'household'} [{channel.get(e.seq, 'unrouted')}, "
-                f"{answer.get(e.seq, 'unanswered')}] {json.dumps(p.get('text', ''))}")
+                f"{e.source} -> {e.subject or 'household'} [{code(channel.get(e.seq, 'unrouted'), {'spoken', 'card', 'digest', 'unrouted'})}, "
+                f"{code(answer.get(e.seq, 'unanswered'), {'accepted', 'declined', 'unanswered'})}]")
         elif e.kind is Kind.ACTION_RECEIPT:
             add("actions", p.get("skill", ""), index, t,
-                f"{p.get('skill')} {p.get('action')} for {e.subject} [{p.get('outcome')}]")
+                f"{e.source} receipt for {e.subject}")
         elif e.kind is Kind.REFUSAL:
-            add("refusals", p.get("who", ""), index, t, f"{p['who']}: {p['attempted']}: {p['reason']}")
+            add("refusals", p.get("who", ""), index, t, f"refused event={e.seq}")
         elif e.kind is Kind.CLAIM:
-            add("claims", e.source, index, t, f"{e.source} claims {p.get('action')} for {e.subject}")
+            add("claims", e.source, index, t, f"{e.source} claim for {e.subject}")
         elif e.kind is Kind.AUDIT_FINDING:
-            add("findings", p.get("who", ""), index, t, f"{p.get('who')}: {p.get('finding')} {p.get('action')}")
+            add("findings", p.get("who", ""), index, t, f"finding event={e.seq}")
     digest = hashlib.sha256(rec.dumps().encode()).hexdigest()[:16]
-    head = [f"# zoe-os replay report v{FORMAT}" + (f" ({label})" if label else ""),
+    head = [f"# zoe-os replay report v{FORMAT}" + (f" ({identifier(label)})" if label else ""),
             f"# recording {digest}: {len(rec.events)} events, {len(rec.people)} people",
             f"# skills: {', '.join(names)}"]
     tail = ["# totals: " + " ".join(f"{key}={counts[key]}" for key in counts)]

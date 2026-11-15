@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
+from ..provenance import erased_request
 
 EARLY_HOUR = 8
 LEAD = timedelta(minutes=45)
@@ -27,8 +28,8 @@ class CalendarHeadsUp:
 
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is Kind.FORGET:
-            gone = ev.payload.get("subject")
-            self._open = {k: v for k, v in self._open.items() if v[0] != gone}
+            self._open = {k: v for k, v in self._open.items()
+                          if not erased_request(ev, int(k.removeprefix('headsup-')), v[0])}
         elif ev.kind is Kind.CALENDAR_CHANGE and ev.payload["change"] == "created":
             self._maybe_offer(ev, ctx)
         elif ev.kind is Kind.OFFER_RESPONSE and ev.payload["offer_id"] in self._open:

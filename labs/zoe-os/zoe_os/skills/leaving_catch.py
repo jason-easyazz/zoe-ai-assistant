@@ -5,6 +5,7 @@ It only ever OFFERS. Its manifest declares no actions, so the kernel would refus
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..provenance import erased_request
 
 MIN_CONFIDENCE = 0.8
 
@@ -22,7 +23,10 @@ class LeavingCatch:
 
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is Kind.FORGET:
-            self._undone.pop(ev.payload.get("subject", ""), None)   # drop what we derived
+            for person, items in list(self._undone.items()):
+                self._undone[person] = {k: s for k, s in items.items() if not erased_request(ev, s, person)}
+                if not self._undone[person]:
+                    self._undone.pop(person, None)
         elif ev.kind is Kind.ROUTINE_STEP and ev.payload["routine"] == "take-with-you":
             items = self._undone.setdefault(ev.subject, {})
             if ev.payload["done"]:

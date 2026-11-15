@@ -9,6 +9,21 @@ related: zoe-os.md, zoe-flue-integration.md, ../CANONICAL.md
 
 # The brain proposes, the kernel disposes
 
+PR #2630 review correction [code; tests not yet run in the memory-constrained builder sandbox]: every HTTP
+route requires a constant-time token check. The runner token permits all routes; a derived forwarder token
+permits only `/tools` and `/propose`, preserving the runner's exclusive control of `/turn` and `/log`.
+The retained log has only opaque tool IDs, turn/receipt IDs, closed status codes and hop timing. Success
+sentences contain a receipt ID rather than echoed arguments; explanation nodes expose metadata and status
+only. Socket-free `tests/test_privacy_review.py` exercises the real handler with a fake server.
+
+Forget cleanup matches erased request IDs across every driver's owner partition and the reminder,
+leaving-catch, calendar and twin caches. Drivers may opt into a narrow `purge_key` contract for globally
+unique request-derived IDs: a live forget notice and the skill's declared action are required, and only an
+ID named in the notice may be deleted. Reminder cleanup therefore survives missing or revoked grants
+without allowing ordinary actions to bypass consent. Replay re-reads each pending event by indexed primary
+key immediately before delivery, so suspended iterators see erasures and scrubbed snapshots. The existing
+whole-person watermark behavior remains available for legacy notices; current chunked notices use exact IDs.
+
 Plain words first. Today Zoe's brain (the Pi agent that Flue runs, on the local model) has tools that write
 straight into the stores: add to a list, set a reminder. Nothing in between records why, can answer "why did you
 do that?", can undo it, or removes the effect when a person is forgotten. [`zoe-os.md`](zoe-os.md) describes a
@@ -171,12 +186,25 @@ voice-hold; speech active; no night job active; every llama slot idle; MemAvaila
 zoe-data's app log untouched for `--log-quiet-s` (60) seconds. On any exit the lab app's process group, bridge and
 kernel are stopped and the lock released.
 
-Output: a table per turn (expected tool, tool called, right tool, arguments valid, kernel outcome, model ms vs kernel
-hop ms), the kernel checks (receipt, why, undo, forget removes effects and bytes), and the cost to the household
-(the slot's held prompt size before, which is the upper bound its next turn may re-prefill, plus counter deltas and
-the llama journal's re-prefill and eviction counts). The recorded fixture (tool frames verbatim, model text reduced
-to length and hash) is written to `--out` (default `~/.zoe/agent-tools/real-turn-<time>/recorded_turns.json`).
+Output: per-turn IDs, closed tool/status codes, validity booleans and timings, check counts and numeric cache
+counters. The fixture contains frame lengths/hashes and proposal IDs/codes/timings; utterances, tool arguments,
+say strings and reasons are omitted. Node stdout/stderr are discarded. This diagnostic fixture cannot serve as
+a raw recorded-call replay input; hand-built synthetic call fixtures remain available in the socket tests.
+The fixture is written to `--out` (default `labs/zoe-os/.state/real-turn-<time>/recorded_turns.json`).
 Differences from the live sidecar, stated: stock pi-ai wire (no text-tool-call recovery, no prompt policy).
+
+Runner boundaries [code]: `--llama-url` accepts only an `http` loopback origin (`127.0.0.0/8`, `[::1]`,
+or `localhost`) with an explicit port. Userinfo, encoded hosts, alternate numeric encodings, paths, queries and
+fragments are refused before I/O. Python HTTP calls disable environment proxies and redirects; the lab Node
+process installs a loopback-only fetch wrapper forcing `redirect: error`, including the provider's calls.
+`--lock` and `--out` must resolve beneath `.state/` in the lab or the one private tools directory
+`~/.zoe/agent-tools/zoe-os/`; traversal and symlink escapes are refused. The lab lock defaults to
+`.state/real-turn.lock`. A real run also locks the fixed `/tmp/zoe-voice-harness.lock` read-only, without creating
+or writing it, and refuses if unavailable. An operator must provision that shared lock before a real run.
+The quiet-log scanner reads individual bytes, buffers at most a 160-byte timestamp/level/logger prefix,
+and discards each message byte without decoding or accumulating bodies. Process detection uses `comm` and,
+for Python only, argv[0]/argv[1] basenames; it never reads later credential arguments. Interpreter options or
+unreadable process identity are conservatively treated as busy rather than scanning deeper into argv.
 
 ### First real run (2026-11-15, owner-approved, five turns) and what it changed [live]
 
@@ -202,7 +230,7 @@ the lab app the live sidecar's tool-use doctrine (condensed from `doctrines.ts` 
 FIRST", "act proactively, don't ask first") and its text-tool-call recovery (`text-tool-calls.ts`, imported unchanged and
 read-only). Comparing the two arms tells apart "the model cannot do it" from "the lab setup lacks what the live brain has".
 Per turn the output adds classes and numbers only: for a miss, reply length and hash, `looks_like_text_tool_call`,
-`asks_a_question`, and the count of tool frames; for a rejection, the reason code and the argument NAMES present, missing,
-unknown and wrong-typed. The summary prints per-skill hit rate (right tool, valid arguments, kernel done), the refusal-path
+`asks_a_question`, and the count of tool frames; a rejection retains only the closed status code.
+The result file summary records per-skill hit rate (right tool, valid arguments, kernel done), the refusal-path
 rate, false tool calls on chat, and model and hop p50/p90. An injected "for sam" call can only add to the speaker's own
 list (the tool has no member argument); the check is that nothing is written for sam (`sam_written: false`).

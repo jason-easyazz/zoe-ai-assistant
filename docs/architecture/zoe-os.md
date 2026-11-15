@@ -157,7 +157,9 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
 3. erases the payloads in place (SQLite `secure_delete`, then a write-ahead-log truncate) and marks the rows;
 4. withdraws matching events from every live queue;
 5. tells every subscriber, whatever its filters, with a notice that carries no content, so a well-behaved skill
-   drops its own derived state;
+   drops its own derived state. The supported subscriber cache (`Subscription.cache`, `Context.cache`, and the
+   socket client's cache) stores sequence numbers only and reads bodies from the authorized live log. Forgotten
+   source and derived events disappear from that view immediately, without waiting for a notice or `pump()`;
 6. keeps a keyed hash of the forgotten free text, first-hand and derived alike (text that only ever lived in a
    skill's derived event is forgotten too). A skill that later tries to publish the same words, even nested
    inside another payload (a list, a tuple or a dictionary), is refused. A trusted adapter recording the
@@ -167,6 +169,84 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
 7. reaches the action bookkeeping: an intent row tied to an erased event keeps no person, skill, action,
    grant or cause. A still-live sequence number stays as a bare marker, so forgetting only a receipt does not
    make the person's yes usable again.
+
+**Forget scope and undo copies [code; regression runs pending].** Every notice carries `scope`
+(`person`, `seqs`, `entity`, or `topic`) and `seqs`, including an explicit empty array when nothing
+matched. It carries identifiers and counts, never the matched words. Selected sequences include the
+derived closure. They are sorted and split into batches of at most 256; all batches, the tombstones,
+snapshot scrubs, shields and ledger entry commit in one SQLite transaction before delivery. Each batch
+is independently idempotent. The kernel acknowledges a skill's cursor only after its handler returns;
+a restart resumes remaining batches, and an interrupted handler can receive its batch again. External
+stores must survive or be restored separately; this does not make arbitrary external writes transactional.
+Reminder request IDs derive from sequences, so notice replay can purge its surviving external table even
+when the restarted skill has lost its in-memory item cache (action grants must be restored before pumping).
+Whole-person notices apply through `upto`, so replay does not erase newer rows. Missing, unknown, or
+malformed legacy scopes purge that person's subscriber state: over-erasing a store is safer than retaining
+possibly forgotten content. Keeper, reminders, twin, leaving-catch and calendar-heads-up share this rule.
+
+List, reminder and alarm driver snapshots now declare versioned per-row request provenance (`asked`).
+The kernel sets provenance: after authorising the action and its cause, the dispatcher overwrites
+`asked` with the single validated `caused_by` sequence (and fills a declared `asked` if omitted).
+Actions using this scalar provenance refuse multiple causes before any driver write. Drivers use
+that value; reminder skills learn it from kernel receipts. A refusal never stores caller text:
+unknown or unauthorised actions use `unknown_action`, unverified identities use `unverified-peer`,
+and errors use fixed reasons. Audit findings cite source sequences rather than copying claim action
+text; kernel appends check both content and name shields, including argument keys, and derived
+records retain subject/cause links so forget reaches them. These changes are statically reviewed only;
+the new boundary regressions have not been run.
+
+Forget scrubs affected rows from surviving undo snapshots and from undo read-back proofs. Undo then
+restores only survivors; it does not depend causally on every old row (which would erase unrelated later
+actions). Entity/topic matching excludes these before-state copies and handles them through the same scrub.
+For older or opaque snapshots without complete provenance, a nonempty forget concerning the receipt's
+person removes the saved before-state and refuses undo explicitly. The surviving action's arguments
+remain available to reminder restoration. Empty selections invalidate nothing.
+Queued receipts refresh their bodies after forget, so they cannot deliver the pre-scrub snapshot.
+
+**Action argument shields [code; tests not run].** The dispatcher checks every action's arguments
+before writing an intent or running a driver, using the same `_payload_refusal` as publish:
+`_shielded` and `_names_forgotten` visit string values and dictionary keys through nested
+dictionaries, lists and tuples. Shield scope is unchanged (word hashes remain household-wide).
+Undo checks both saved arguments and the complete before-state before opening its intent or restoring
+rows, in addition to the provenance scrub above. Refusals carry only the fixed code
+`forgotten_action_arguments`, never argument text. Receipts for actions using `asked` also expose
+the kernel-bound sequence directly; driver proofs keep their existing shape.
+Socket-free regressions live in `tests/test_forget_action_arguments.py`; removing the argument guard
+makes the list resurrection regression fail (a planted negative control, execution pending).
+
+| Caller-text write path | Verdict |
+|---|---|
+| Action arguments to list/reminder/alarm drivers and receipts | Fixed here: shared publish shields before intent/driver. |
+| Undo arguments and restored snapshot rows | Fixed here: shared shields before intent/reverse; provenance scrub remains in place. |
+| Offers, offer responses and claims | Shielded through `Spine.publish` / `publish_many`; claims also require a matching unused receipt. |
+| Brain bridge proposals (including prevalidation disabled), socket `act`, skill `Context.act` | Fixed here through their common `Dispatcher.act` destination. |
+| Grant-change records | No free text: registered person/skill/action identifiers, grant IDs, visibility/kind enums and guardian IDs only. |
+| Stage-one production bridge events | No free text by contract: IDs and labels only; trusted origins record first-hand reality through publish. |
+| Purge driver calls | No free text: one exact request ID derived from a live forget notice, checked before driver invocation. |
+| Attention, recovery and audit records | No caller free-text fields: fixed reasons/outcomes, registered IDs and sequence numbers; driver read-back is trusted kernel output. |
+
+Forget-copy and bounded-list sweep (lab implementation, not production):
+
+| Store or bound | Verdict |
+|---|---|
+| Event payloads, derived events, people/causes links; intent bookkeeping | Reached by tombstone closure and intent scrub; retention skeletons retain links for person/sequence forget. |
+| Receipt undo before-state and undo `proof.restored` | Fixed here: provenance scrub; legacy undo invalidation and removal of restored proof. |
+| Subscription queues | Fixed here: surviving receipt bodies refresh as well as withdrawing erased events. |
+| Subscription/Context/client caches; malicious skill's supported cache | Reached: sequence-only views reread the authorized log; no stored body copy. |
+| Brain list/reminder/alarm stores, reminders skill `_items`/`_offered` and fake reminder table | Fixed scoped notice handling; purge by request/receipt sequence. External stores still require their handler and restore procedure. |
+| Twin days, room/step labels and computed baseline | Scoped handler fixed. Baselines recompute from surviving facts. Known limit: entity/topic matching after source content expiry cannot select reduced facts; person/sequence forget still reaches them. |
+| Leaving-catch item labels; calendar-heads-up pending proposals | Fixed here: select request sequence rather than clearing unrelated state. |
+| Attention preferences/budget counters; grants; consumed-receipt markers; shield hashes | Not content copies: settings, counts, consent or IDs/hashes only; not a free-text resurrection path. |
+| Replay recordings, generated days, rehearsal/brain driver fixtures and reports | Not runtime stores: synthetic input/output artifacts; arbitrary exported files are outside the kernel erase boundary. |
+| Notice 256-sequence bound | Fixed here: complete ordered batches; 260/1,000-event regressions plus old truncated-notice negative control. |
+| SQL fetch/newest limits, closure chunks, queue bound, client poll limit | Pagination/replay loops consume all pages; chunk sizes do not cap forget coverage. |
+| Topic 12-event and entity six-token bounds | Topic refuses before erasing. Forget/release now refuse oversized entities instead of silently matching a truncated prefix. |
+| Explanation ancestor `MAX_CHAIN=64`, pump round budget, twin window | Not erase selectors: bounded explanation, resumable pump and explicit retention; none limits the tombstone closure. |
+| Wire frame/reply/subscription limits; argument string limits; digest prefixes | Explicit transport/validation limits or hashes, not silently truncated erase lists. |
+
+Socket-free regression file: `labs/zoe-os/tests/test_forget_receipts_notices.py`. Run it with the
+existing forget, undo, reminders, twin-forget and review tests under the builder memory/quiet-box rules.
+No result is claimed until those runs, including old-code negative controls, have executed.
 
 **Exists [code].** The production forget is strong and hand-maintained: a ledger that cannot list what it
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
@@ -181,9 +261,11 @@ lifts nothing; only the person's explicit release does. A topic is its content w
 only when it holds every one; more than twelve matching events is refused whole. A scope with no words is
 refused and never widens to "everything".
 
-**Missing, and the honest limits of the lab version.** A skill that already copied the words into its own
-memory keeps them: the kernel can refuse to take them back and can tell the skill to forget, but cannot reach
-into another program. **Reworded content is not caught**: a paraphrase that avoids the name and the exact old
+**Missing, and the honest limits of the lab version.** The supported cache is kernel-owned; a private body copy
+outside that cache violates its contract. Python cannot prevent arbitrary copying in the same process or erase
+another program's memory. Separate derived stores still depend on their forget handlers (including the twin and
+reminder store); this cache change does not turn them into kernel-owned stores. **Reworded content is not caught**:
+a paraphrase that avoids the name and the exact old
 sentences, a near spelling, part of a name, a pronoun or a role ("my sister"). A test asserts that the first
 three get through, so the limit is pinned. Production has near-spelling probes and asks "did you also
 mean ...?" **[code]**; the lab does not.
@@ -200,10 +282,22 @@ once. After the action the driver reads back what it did. The receipt records wh
 which grant, with what proof. A claim ("I moved your alarm") must cite a verified receipt, and one receipt
 backs one claim.
 
-**Prototype [lab]** (`receipts.py`): the dispatcher, the read-back, and a detector that finds claims with no
-receipt, an unverified receipt, a receipt for a different action, or a receipt an earlier live claim already
-cited (read from the log, so a restart does not reset it). A driver that reports success and did
-nothing gets an unverified receipt, and the honest skill then makes no claim (tested).
+**Prototype [code]** (`spine.py`, `receipts.py`): public publishing refuses a claim before append or delivery
+unless it cites a verified receipt matching its skill, subject and action, unused by an earlier claim.
+That receipt must also be a causal parent, so forgetting the proof withdraws the derived claim.
+Batch publishing also refuses two claims spending the same receipt; one invalid claim rejects the whole batch.
+Consumption is an indexed pair of receipt/claim sequence IDs, committed with the claim. No person or content
+is stored there; forgetting or retiring the claim cannot make the receipt usable again. Forgetting the receipt
+still withdraws its derived claim. Startup backfills matching claims whose payloads still exist; consumption
+already erased before this bookkeeping was introduced cannot be reconstructed. These review fixes have
+regressions in `test_upper_review.py`; their execution is pending the builder memory floor **[code]**.
+Lock and result opens in `real_turn.py` walk directories through descriptors with `O_NOFOLLOW`, then open the
+leaf relative to the pinned directory. Temporary stack files still use path-based APIs: a hostile same-user
+directory rename remains outside the runner's isolation guarantee **[code]**.
+Reconstructing the auditor does not reset receipt use. This is a synchronous
+publish check; `pump()` need not race subscribers with an asynchronous audit. `ClaimAuditor.scan()` remains a
+diagnostic for legacy or corrupt rows that bypassed public publishing, not the enforcement mechanism.
+A driver that reports success and did nothing gets an unverified receipt and cannot back a published claim.
 
 **Exists [code].** This is the area closest to done in production. `write_receipts.py` and
 `write_claim_guard.py` are exactly this idea for five kinds of write, enforced where every brain turn ends
@@ -289,7 +383,7 @@ shows the attack working:
 
 | Attack from another process | Control that makes it succeed |
 |---|---|
-| the ten attempts of the malicious skill (read, act, resurrect) | the same four as in-process |
+| the malicious skill (read, act, resurrect); the kernel-owned cache loses forgotten text | the same four as in-process |
 | forged identity: another skill's name, a `source` field, a skill granting itself | no credential check |
 | replayed credential: a captured handshake, a credential that was re-issued | a predictable challenge |
 | oversized frame (refused before its body is read) | no size cap |
@@ -628,9 +722,8 @@ the twin keeps the label (a test pins this).
 | B. Reduced facts for 28 days | times, rooms and step counts for four weeks | 20 working days and 8 weekend days: both baselines, with some room | a reduced copy two weeks older than the kernel's presence events; the name-forget limit above applies to those two weeks |
 | C. Reduced facts for 56 days (the lab placeholder) | the same, eight weeks | a steadier baseline; a one-off odd day weighs less | six weeks beyond the kernel's copy; the same limit for longer |
 
-In every option: **generated days are never stored** (a seed regenerates them); a rehearsal report is text that
-quotes offers, so a report made from a real recording is a copy outside the kernel and should not outlive that
-recording; and a recording of real days written to a file is itself a copy no forget can reach. The lab's
+In every option: **generated days are never stored** (a seed regenerates them). Replay and rehearsal reports
+contain codes, IDs and counts, never offer text, arguments or reasons. A recording of real days written to a file is itself a copy no forget can reach. The lab's
 `record` writes such a file because its days are synthetic. For real days the replay should read the log
 directly. That is not built.
 
@@ -735,6 +828,8 @@ Still open and unbuilt: whether an older child's lines should stop going to a gu
 lines may be shared beyond their guardians at all (today they cannot be, by anyone). The choice is kept in
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
+
+Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).
 
 ## 13. Reminders in the kernel: what production can do, and what still does not map
 

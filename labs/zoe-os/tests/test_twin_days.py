@@ -75,7 +75,7 @@ def test_ordinary_working_days_follow_the_habits_within_their_spread():
 
 def test_the_forgotten_phone_day_is_caught_by_the_leaving_catch_skill():
     report = replay(day_with("forgotten_phone"), [LeavingCatch()])
-    assert report.counts["offers"] == 1 and '"You left without: phone"' in report.text
+    assert report.counts["offers"] == 1 and '"You left without: phone"' not in report.text
     assert replay(DAYS[0], [LeavingCatch()]).counts["offers"] == 0             # an ordinary day: silence
 
 
@@ -112,7 +112,7 @@ def test_a_weekly_event_lands_on_the_calendar_the_evening_before_and_gets_a_head
     (change,) = [e for e in thursday.events if e["kind"] == "calendar_change"]
     assert change["subject"] == "sam" and change["payload"]["title"] == "synthetic early class"
     report = replay(thursday, [CalendarHeadsUp()])
-    assert report.counts["offers"] == 1 and "Tomorrow starts at 06:30" in report.text
+    assert report.counts["offers"] == 1 and "Tomorrow starts at 06:30" not in report.text
 
 
 def test_every_generated_day_replays_cleanly_and_a_person_can_be_left_out():

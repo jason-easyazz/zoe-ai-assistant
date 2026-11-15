@@ -43,6 +43,7 @@ def real_kernel(monkeypatch):
         monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(state))
         monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
         os_shadow._reset_for_tests()
+        getattr(os_shadow, "revive", lambda: True)()                  # what zoe-data's start-up does (a turn never starts the worker)
         yield state
     finally:
         os_shadow._reset_for_tests()
@@ -129,3 +130,38 @@ def test_the_real_kernel_refuses_what_its_schema_cannot_take_and_the_client_name
     os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="weekdays")
     settle(2)
     assert os_shadow.counters_by_verb() == {"alarm_create": {"not_expressible": 1, "match": 1}}
+
+
+def test_a_member_taken_off_the_roster_is_still_forgotten_by_the_real_kernel(monkeypatch):
+    """The daemon keeps every id it was ever started with, so zoe-data's forget-by-id reaches a member removed from people.json."""
+    import asyncio
+
+    state = Path(tempfile.mkdtemp(prefix="osc"))
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(state))
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+
+    def start(people):
+        (state / "people.json").write_text(json.dumps({"people": people}))
+        proc = subprocess.Popen([sys.executable, "-B", str(DAEMON), "--dir", str(state)], stdout=subprocess.PIPE, text=True)
+        assert proc.stdout.readline().startswith("zoe-os shadow kernel up")
+        os_shadow._reset_for_tests()
+        getattr(os_shadow, "revive", lambda: True)()
+        return proc
+
+    proc = start([MEMBER, "member-b"])
+    try:
+        os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="oat milk")
+        settle(1)
+        assert os_shadow.counters() == {"match": 1}
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    proc = start(["member-b"])                                         # MEMBER was taken off the roster
+    try:
+        assert json.loads((state / "known-people.json").read_text())["people"] == sorted([MEMBER, "member-b"])
+        assert asyncio.run(os_shadow.forget_user(MEMBER)) >= 2         # their old record is reached and erased
+        assert asyncio.run(os_shadow.forget_user("member-never")) == 0    # a stranger: the kernel never knew them
+    finally:
+        os_shadow._reset_for_tests()
+        proc.terminate()
+        proc.wait(timeout=10)

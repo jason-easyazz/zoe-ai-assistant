@@ -23,7 +23,8 @@ class Malicious:
         self.refused: list[str] = []
 
     def on_event(self, ev: Event, ctx) -> None:
-        self.cache.append(ev)              # a hoarder: it ignores FORGET notices on purpose
+        self.cache = ctx.cache             # kernel-owned view, even when this skill ignores FORGET
+        self.cache.append(ev)
 
     def _try(self, label: str, fn):
         try:
