@@ -270,11 +270,8 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     if status == "approved":
         if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
             raise RuntimeError("memory store refused the forget")
-    gone = [ref.id]
-    for tw in [*twins, *bound]:
-        if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
-            raise RuntimeError("memory store refused a twin's forget")
-        gone.append(tw.id)
+    more, failed = await pa._reject_all(svc, user_id, [*twins, *bound], note="forget_memory_space")   # every one, then report
+    gone = [ref.id, *more]
     physical = False
     if hasattr(svc, "erase_rows"):
         from memory_service import physical_erase_enabled
@@ -284,6 +281,8 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
             await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
             physical = True
     erased = await pa._erase_words(user_id, exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)   # per row, resolved ids
+    if failed:   # everything reachable ran; a twin / bound row is still approved: the caller must not report "forgotten"
+        raise RuntimeError("memory store refused a twin's forget")
     logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
     if status == "rejected" and len(gone) == 1 and not erased and not physical:
         return "gone"          # already forgotten earlier and nothing was left to remove
@@ -324,20 +323,28 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
     _exp = _explained_for(rid, ref)
     mids, source_only, resolved = await pa._target_ids(owner, _exp, ref, ref.text or "")    # a legacy row's turns too, resolved FIRST
     bound = await pa._bound_rows(svc, owner, mids, skip=[ref.id, *(t.id for t in twins)])
-    gone = []
+    gone, failed = [], 0
     for row in (ref, *twins, *bound):
         if str((row.metadata or {}).get("status") or "").lower() == "rejected":
             gone.append(row.id)                  # this row's reject already landed (an earlier, unfinished attempt): go on to the rest
             continue
-        if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is None:
-            raise RuntimeError("memory store refused the guardian's forget")
-        gone.append(row.id)
+        try:   # every row is attempted; a refused one fails the guardian's forget AFTER the rest ran (fail closed, erase all reachable)
+            ok = await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is not None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_space: guardian reject failed (%s)", type(exc).__name__)
+            ok = False
+        if ok:
+            gone.append(row.id)
+        else:
+            failed += 1
     if hasattr(svc, "erase_rows"):
         from memory_service import physical_erase_enabled
 
         if physical_erase_enabled():
             await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
     await pa._erase_words(owner, _exp, ref.text or "", mids=mids, source_only=source_only, resolved=resolved)
+    if failed:
+        raise RuntimeError("memory store refused the guardian's forget")
     logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
     return "forgotten"
 
