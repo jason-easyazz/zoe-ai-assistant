@@ -211,15 +211,37 @@ async def _fetch_chat_texts() -> dict[str, str]:
             "Export POSTGRES_URL or run from a checkout with the runtime env file."
         )
 
+    from user_filters import message_owner_expr
+
     conn = await asyncpg.connect(url)
     try:
         rows = await conn.fetch(
-            "SELECT content FROM chat_messages WHERE role = 'user' "
-            "AND content IS NOT NULL AND content <> ''"
+            "SELECT cm.content, cm.created_at, " + message_owner_expr() + " AS owner FROM chat_messages cm "
+            "LEFT JOIN chat_sessions cs ON cm.session_id = cs.id WHERE cm.role = 'user' "
+            "AND cm.content IS NOT NULL AND cm.content <> ''"
         )
+        rows = await after_erase(rows, conn)
     finally:
         await conn.close()
     return {utt_hash(r["content"]): r["content"] for r in rows}
+
+
+async def after_erase(rows, conn) -> list:
+    """``rows`` without any member's turn said at or before their erase watermark: the transcript survives a member erase, and a
+    surviving hash-only shadow row would otherwise join back to the erased words (``erase_watermark``). Read over this script's own
+    connection; an unreadable watermark drops that member's turns (fail closed)."""
+    import contextlib
+
+    import erase_watermark
+    from db_pool import AsyncpgCompat
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield AsyncpgCompat(conn)
+
+    return await erase_watermark.keep_after(rows, owner=lambda r: r["owner"], at=lambda r: r["created_at"],
+                                            reader="router_selftrain", strict=False,
+                                            backend=erase_watermark.SqlBackend(ctx=ctx))
 
 
 def hash_to_text(shadow: list[dict], chat_texts: dict[str, str]) -> dict[str, str]:

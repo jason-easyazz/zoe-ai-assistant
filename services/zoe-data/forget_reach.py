@@ -131,11 +131,13 @@ TABLES: tuple[Store, ...] = (
        "their calendar-less local events (household-visible by default) stay until the owner decides delete vs keep for the household. "
        "The entity forget scrubs only legacy metadata.attendees.", member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
     _t("memory_forgotten", METADATA, OUT_OF_SCOPE,
-       "The forget LEDGER itself: salted hashes, no names. It must survive a forget to keep the forget enforced."),
+       "The forget LEDGER itself: salted hashes, no names, plus one erase WATERMARK per erased member (erase_watermark: an id and a "
+       "time). It must survive a forget to keep the forget enforced."),
     # --- the verbatim transcript ---
     _t("chat_sessions", WORDS, GAP, "Entity forget redacts titles in place (forget_redact.on_forget); delete_user does not delete sessions.",
        entity="forget_redact.on_forget"),
-    _t("chat_messages", WORDS, GAP, "Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages.",
+    _t("chat_messages", WORDS, GAP, "Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages "
+       "(owner decision pending), but every background transcript miner skips the member's turns at or before their erase watermark (erase_watermark.keep_after).",
        entity="forget_redact.on_forget"),
     _t("chat_feedback", WORDS, GAP, "Holds a corrected_response (words); neither path reaches it."),
     _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
