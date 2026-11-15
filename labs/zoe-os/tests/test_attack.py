@@ -97,6 +97,7 @@ def test_control_without_the_capability_check_private_events_are_read(scene, mon
 def test_control_without_the_capability_check_the_action_runs(scene, monkeypatch):
     k, bad = scene
     monkeypatch.setattr(Dispatcher, "_authorize", lambda self, s, a, p: Decision(True, "", "none"))
+    monkeypatch.setattr(Dispatcher, "_concerns", lambda self, person, caused_by: True)   # the cause rule is a second layer
     done = bad.act_without_grant(k, ALEX, of_kind(k, Kind.UTTERANCE)[-1].seq)
     assert k.lights.toggled == ["study"] and [r.action for r in done] == ["light.toggle"]
     assert k.alarms.at == {}          # the second layer still held: nobody said yes to an alarm

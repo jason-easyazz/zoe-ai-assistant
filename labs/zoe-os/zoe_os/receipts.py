@@ -121,6 +121,8 @@ class Dispatcher:
                 self.spine._refuse(skill, attempted, bad)
             reason = self.spine._cause_refusal(skill, caused_by) if caused_by else \
                 "an action must cite the event that asked for it"
+            if not reason and not self._concerns(on_behalf_of, caused_by):
+                reason = "the cited event is not about that person"
             accept = None
             if not reason and needs_accept:
                 accept, reason = self._find_accept(skill, on_behalf_of, caused_by)
@@ -157,6 +159,17 @@ class Dispatcher:
                 out.append({"action": name, "doc": doc, "params": params,
                             "needs_accept": self._actions[name][2], "reversible": name in self._reverse})
         return out
+
+    def _concerns(self, person: str, caused_by) -> bool:
+        """An action for a person must cite an event that is about THAT person (or the kernel's own
+        notice that it forgot them). Without this, a skill every household member has granted could
+        act for one person on the strength of another person's event: the confused deputy."""
+        for seq in caused_by:
+            ev = self.spine._get(seq)
+            if ev is not None and (ev.subject == person or (
+                    ev.kind is Kind.FORGET and ev.payload.get("subject") == person)):
+                return True
+        return False
 
     # ---- undo ---------------------------------------------------------------------------------
     def _may_undo(self, actor: str, person: str) -> bool:

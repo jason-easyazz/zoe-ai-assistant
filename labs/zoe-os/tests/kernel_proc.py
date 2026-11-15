@@ -36,7 +36,8 @@ def _set(obj, **attrs):
 CONTROLS = {     # name -> remove exactly one guarantee
     "no_read_check": lambda srv: _set(Enforcer, may_read=lambda s, r, e: Decision(True),
                                       may_subscribe=lambda s, r, k, p: Decision(True)),
-    "no_authorize": lambda srv: _set(Dispatcher, _authorize=lambda s, a, b, c: Decision(True, "", "none")),
+    "no_authorize": lambda srv: _set(Dispatcher, _authorize=lambda s, a, b, c: Decision(True, "", "none"),
+                                     _concerns=lambda s, person, caused_by: True),   # the cause rule is a second layer
     "no_tombstone": lambda srv: _set(Spine, _tombstone=lambda s, seqs: None),
     "no_shield": lambda srv: _set(Spine, _shielded=lambda s, payload: False),
     "no_verify": lambda srv: _set(KernelServer, _verify=lambda s, name, nonce, proof: True),

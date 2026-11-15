@@ -14,6 +14,7 @@ from world import ALEX, KID, NOW, SAM, emit, household, of_kind, refusal_reasons
 
 from zoe_os.attention import CARD, DIGEST, SPOKEN
 from zoe_os.events import Kind, Visibility
+from zoe_os.receipts import Dispatcher
 from zoe_os.replay import record, replay
 from zoe_os.skills.reminders import Reminders
 from zoe_os.spine import Refused
@@ -138,10 +139,11 @@ def test_one_persons_yes_cannot_move_another_persons_reminder(k):
     mine, theirs, offer = careless_scene(k)
     respond(k, offer)                                            # SAM says yes to SAM's reminder
     assert k.store.rows[mine]["due"] == NOW + 600 and k.store.rows[theirs]["due"] == NOW
-    assert refusal_reasons(k) == ["the person has not accepted an offer for this"]
+    assert refusal_reasons(k) == ["the cited event is not about that person"]   # the cause rule, first
 
 
-def test_control_without_the_kernels_yes_rule_the_dumb_store_moves_it(k):
+def test_control_without_the_kernels_yes_rule_the_dumb_store_moves_it(k, monkeypatch):
+    monkeypatch.setattr(Dispatcher, "_concerns", lambda self, person, caused_by: True)   # both layers off
     k.actions.register("reminder.snooze", k.store.snooze, k.store.snoozed, needs_accept=False)
     mine, theirs, offer = careless_scene(k)
     respond(k, offer)

@@ -128,6 +128,7 @@ def test_negative_control_without_the_capability_check_the_action_runs(world, mo
     spine, actions, _ = world
     yes = offer_and_answer(spine)
     monkeypatch.setattr(Dispatcher, "_authorize", lambda self, s, a, p: Decision(True, "", "none"))
+    monkeypatch.setattr(Dispatcher, "_concerns", lambda self, person, caused_by: True)   # the cause rule is a second layer
     assert actions.act("mover", "light.toggle", Q, {}, caused_by=(yes.seq,)).verified
 
 
