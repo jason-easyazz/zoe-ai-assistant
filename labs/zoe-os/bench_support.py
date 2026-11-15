@@ -51,7 +51,9 @@ class Database:
         return getattr(self.db, name)
 
     def execute(self, sql, *args):
-        if sql == "COMMIT":
+        if sql == "PRAGMA wal_checkpoint(TRUNCATE)":
+            label = "sql_checkpoint_truncate"
+        elif sql == "COMMIT":
             label = "sql_commit_sync_inclusive"
         elif sql.startswith(('INSERT', 'UPDATE', 'DELETE')):
             label = "sql_write" if self.db.in_transaction else "sql_autocommit_sync_inclusive"

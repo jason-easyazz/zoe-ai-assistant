@@ -122,6 +122,7 @@ def latency(root, n, *, profile=False, history_n=0):
                           'SQL': ('sql_execute', 'sql_write', 'sql_executemany'),
                           'commit': ('sql_commit_sync_inclusive', 'sql_autocommit_sync_inclusive'),
                           'receipt': ('receipt_inclusive',)}
+                phases['checkpoint'] = ('sql_checkpoint_truncate',)
                 profiles[verb] = {'total_us': total, 'phases_us': {
                     phase: sum(counters.get(label, [0, 0])[1] for label in labels)
                     for phase, labels in phases.items()}, 'counters': counters}

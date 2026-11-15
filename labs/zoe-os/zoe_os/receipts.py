@@ -47,6 +47,25 @@ Undo = Callable[[str, dict, dict], Any]            # (person, args, before) -> p
 UNDO = "undo"
 
 
+def snapshot_sources(payload: dict) -> tuple[set[int], bool]:
+    """Provenance for saved state AND undo read-back; no copied text in the index."""
+    sources, opaque = set(), False
+    for holder, key in ((payload.get('undo'), 'before'), (payload.get('proof'), 'restored')):
+        if not holder or key not in holder:
+            continue
+        before = holder[key]
+        if scrub_snapshot(before, set()) is None:
+            # The bench's scalar slot has no text when numeric/empty. All other opaque
+            # shapes (including unknown dictionary keys) fail closed for that person.
+            numeric_slot = (isinstance(before, dict) and set(before) == {'value'}
+                            and (before['value'] is None or isinstance(before['value'], (int, float))))
+            opaque |= not numeric_slot
+        else:
+            rows = before.get('rows', [before.get('alarm')])
+            sources.update(row['asked'] for row in rows if row is not None)
+    return sources, opaque
+
+
 def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
     """Only versioned row snapshots assert complete provenance; None means unknown."""
     if not isinstance(before, dict) or before.get('provenance') != 1:

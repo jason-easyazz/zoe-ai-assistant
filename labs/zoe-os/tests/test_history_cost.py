@@ -88,6 +88,53 @@ def test_negative_control_detects_one_statement_full_scan(history):
                               (PERSON,)).fetchall()
 
 
+@pytest.mark.parametrize('dependants', [1, 50])
+def test_snapshot_lookup_cost_depends_on_hits(history, dependants):
+    spine, _, _ = history
+    victim = spine.publish(Event(Kind.UTTERANCE, 'voice', subject=PERSON,
+                                 payload={'text': 'synthetic snapshot source'}))
+    payload = {'undo': {'args': {}, 'before': {'provenance': 1,
+               'rows': [{'asked': victim.seq, 'item': 'synthetic snapshot source'}]}}}
+    with spine._lock:
+        receipts = spine._append([Event(Kind.ACTION_RECEIPT, 'kernel', subject=PERSON,
+                                       payload=payload) for _ in range(dependants)])
+    # The unchanged 4000-step budget covers even 50 index hits, amidst 5000 receipts.
+    with vm_budget(spine._db):
+        hits = spine._db.execute('SELECT receipt_seq FROM snapshot_dependencies '
+                                 'WHERE source_seq IN (?)', (victim.seq,)).fetchall()
+    assert {r[0] for r in hits} == {r.seq for r in receipts}
+    # Fixed overhead remains 4000; allow 150 steps per actual payload rewrite.
+    # In particular, the 160k-step old scan cannot hide inside the 50-hit allowance.
+    real = spine._index_snapshot
+    visited = []
+    def measured(seq, person, p):
+        real(seq, person, p)
+        visited.append(seq)
+    spine._index_snapshot = measured
+    with vm_budget(spine._db, maximum=4000 + 150 * dependants):
+        spine.forget(PERSON, actor=PERSON, seqs=[victim.seq])
+    assert set(visited) == {r.seq for r in receipts}
+    assert not spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall()
+    assert all(spine._get(r.seq).payload['undo']['before']['rows'] == [] for r in receipts)
+
+
+def test_negative_control_detects_snapshot_history_scan(history, monkeypatch):
+    spine, _, rows = history
+    if len(rows) < 5000:
+        return
+    real = spine._scrub_snapshots
+    def scan(dead):
+        spine._db.execute("SELECT seq, subject, payload FROM events "
+                          "WHERE kind = 'action_receipt' AND tombstoned = 0").fetchall()
+        real(dead)
+    monkeypatch.setattr(spine, '_scrub_snapshots', scan)
+    victim = spine.publish(Event(Kind.UTTERANCE, 'voice', subject=PERSON,
+                                 payload={'text': 'synthetic scan control'}))
+    with pytest.raises(AssertionError, match='unbounded SQL work'):
+        with vm_budget(spine._db):
+            spine.forget(PERSON, actor=PERSON, seqs=[victim.seq])
+
+
 def test_negative_control_detects_old_undo_lookup(history, monkeypatch):
     spine, dispatcher, _ = history
     monkeypatch.setattr(dispatcher, 'last_action', lambda person: next(
@@ -152,5 +199,26 @@ def test_new_schema_stays_inside_oversized_frame_disk_ceiling(tmp_path):
                 spine._refuse('unverified-peer', 'send a frame', 'frame too large')
         # Include WAL and SHM while open, just like the wire test's oracle.
         assert sum(p.stat().st_size for p in tmp_path.glob('size.db*')) < 200_000
+    finally:
+        spine.close()
+
+
+def test_snapshot_source_lookup_chunks_and_expired_receipt_cleanup(tmp_path):
+    auth = AllowList(origins={'voice'}, readers={'all': {'*'}})
+    spine = Spine(str(tmp_path / 'chunks.db'), auth)
+    try:
+        sources = spine.publish_many([Event(Kind.UTTERANCE, 'voice', subject=PERSON,
+                                            payload={'text': 'synthetic source'}) for _ in range(550)])
+        payload = {'undo': {'before': {'provenance': 1, 'rows': [
+            {'asked': e.seq, 'item': 'synthetic source'} for e in sources]}}}
+        with spine._lock:
+            receipt = spine._append([Event(Kind.ACTION_RECEIPT, 'kernel', subject=PERSON,
+                                           payload=payload)])[0]
+        spine.forget(PERSON, actor=PERSON, seqs=[e.seq for e in sources[:-1]])
+        assert spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall() == [
+            (sources[-1].seq, receipt.seq)]
+        spine._expire([receipt.seq])
+        assert not spine._db.execute('SELECT * FROM snapshot_dependencies').fetchall()
+        spine.forget(PERSON, actor=PERSON, seqs=[sources[-1].seq])
     finally:
         spine.close()

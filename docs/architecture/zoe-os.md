@@ -900,3 +900,27 @@ Rollback, open-intent scrubbing and the 200,000-byte DB/WAL/SHM ceiling after tw
 refusals are checked. Startup truncates schema-creation WAL page images; the seven
 additive indexes are installed idempotently on opening existing lab stores.
 The existing oversized-frame scenario and all socket tests still need the coordinator.
+## Snapshot dependency index (lab)
+
+Receipt appends index both undo-before rows and restored read-back proofs in
+`snapshot_dependencies(source_seq, receipt_seq)`, a WITHOUT ROWID table whose
+primary key serves chunked source lookups. The receipt index supports deletion.
+Forget visits only dependent receipts, removes their old edges, and indexes the
+surviving rows again, in the erase transaction. Tombstones remove incoming and
+outgoing edges. Opaque snapshots containing text use a compact per-person
+fallback index; opaque numeric state contains no forgotten text.
+
+Existing stores get a one-time atomic backfill at open, with 256 receipt bodies
+per batch and a durable completion marker. This bounds memory, not total upgrade
+work: first open is proportional to existing receipts; subsequent forgets never
+scan receipt history. New stores use the indexed path immediately.
+
+The history-cost regression retains the 4000-step fixed budget; its 1/50-dependent
+case additionally allows 150 steps per payload rewrite. It includes a negative
+control that deliberately scans surviving receipts. Restart/privacy, rollback,
+remaining-edge and whole-member cleanup tests cover the index lifecycle.
+
+The benchmark's `--profile` now exposes `checkpoint` separately, timing the
+existing `PRAGMA wal_checkpoint(TRUNCATE)` call through its database wrapper.
+It measures synchronous checkpoint call latency, including SQLite/I/O work,
+without changing checkpoint policy. No checkpoint timing has been measured here.

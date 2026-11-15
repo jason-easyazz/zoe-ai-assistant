@@ -36,6 +36,21 @@ def test_database_meter_includes_cursor_steps():
         raw.close()
 
 
+def test_checkpoint_has_its_own_profile_counter(tmp_path):
+    raw, meter = sqlite3.connect(tmp_path / 'meter.db', isolation_level=None), Meter()
+    try:
+        raw.execute('PRAGMA journal_mode=WAL')
+        raw.execute('CREATE TABLE sample(n)')
+        raw.execute('INSERT INTO sample VALUES(1)')
+        db = Database(raw, meter)
+        assert db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone() == (0, 0, 0)
+        assert meter.values['sql_checkpoint_truncate'][0] == 1
+        assert meter.values['sql_checkpoint_truncate'][1] > 0
+        assert 'sql_commit_sync_inclusive' not in meter.values
+    finally:
+        raw.close()
+
+
 def fake_soak(monkeypatch):
     clock, position = [0], [0]
     box = SimpleNamespace(proc=SimpleNamespace(pid=0), sup=lambda op: position[0])

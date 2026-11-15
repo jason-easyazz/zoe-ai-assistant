@@ -54,6 +54,16 @@ CREATE INDEX IF NOT EXISTS causes_seq ON causes(seq);
 CREATE INDEX IF NOT EXISTS latest_receipt ON events(subject, seq DESC)
   WHERE kind = 'action_receipt' AND tombstoned = 0;
 CREATE INDEX IF NOT EXISTS live_kind ON events(kind, seq) WHERE tombstoned = 0;
+CREATE TABLE IF NOT EXISTS snapshot_dependencies (
+  source_seq INTEGER NOT NULL, receipt_seq INTEGER NOT NULL,
+  PRIMARY KEY (source_seq, receipt_seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS snapshot_receipt ON snapshot_dependencies(receipt_seq);
+CREATE TABLE IF NOT EXISTS opaque_snapshots (
+  person TEXT NOT NULL, receipt_seq INTEGER NOT NULL,
+  PRIMARY KEY (person, receipt_seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS opaque_receipt ON opaque_snapshots(receipt_seq);
 CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS consumed_receipts (
   receipt_seq INTEGER PRIMARY KEY, claim_seq INTEGER NOT NULL
@@ -225,6 +235,7 @@ class Spine:
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
+        self._backfill_snapshots()
         # Upgrade extant claims without retaining any person or payload in bookkeeping.
         self._db.execute("""
             INSERT OR IGNORE INTO consumed_receipts
@@ -343,6 +354,8 @@ class Spine:
                      json.dumps(ev.mentions) if ev.mentions else None,
                      json.dumps(ev.caused_by) if ev.caused_by else None))
                 seq = cur.lastrowid
+                if ev.kind is Kind.ACTION_RECEIPT:
+                    self._index_snapshot(seq, ev.subject, ev.payload)
                 if ev.kind is Kind.CLAIM:
                     from .receipts import ClaimAuditor
                     if ClaimAuditor(self, self.authorizer).backed(replace(ev, seq=seq)):
@@ -532,6 +545,9 @@ class Spine:
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
             self._scrub_intents(set(seqs))
             self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
             if not outer:
@@ -556,9 +572,17 @@ class Spine:
             marks = ','.join('?' * len(chunk))
             people.update(r[0] for r in self._db.execute(
                 f"SELECT person FROM people WHERE seq IN ({marks})", chunk))
-        for seq, person, raw in self._db.execute(
-                "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt'"
-                " AND tombstoned = 0").fetchall():
+        receipts = set()
+        for chunk in _chunks(sorted(dead)):
+            marks = ','.join('?' * len(chunk))
+            receipts.update(r[0] for r in self._db.execute(
+                f"SELECT receipt_seq FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk))
+        for person in people:
+            receipts.update(r[0] for r in self._db.execute(
+                'SELECT receipt_seq FROM opaque_snapshots WHERE person = ?', (person,)))
+        for seq in sorted(receipts - dead):
+            person, raw = self._db.execute(
+                'SELECT subject, payload FROM events WHERE seq = ? AND tombstoned = 0', (seq,)).fetchone()
             if seq in dead or not raw:
                 continue
             p = json.loads(raw)
@@ -591,6 +615,35 @@ class Spine:
             if changed:
                 self._db.execute('UPDATE events SET payload = ? WHERE seq = ?',
                                  (json.dumps(p, sort_keys=True), seq))
+                self._db.execute('DELETE FROM snapshot_dependencies WHERE receipt_seq = ?', (seq,))
+                self._db.execute('DELETE FROM opaque_snapshots WHERE receipt_seq = ?', (seq,))
+                self._index_snapshot(seq, person, p)
+
+    def _index_snapshot(self, seq: int, person: str | None, payload: dict) -> None:
+        """IDs only, in the receipt transaction; opaque text fails closed per person."""
+        from .receipts import snapshot_sources
+        sources, opaque = snapshot_sources(payload)
+        self._db.executemany('INSERT OR IGNORE INTO snapshot_dependencies VALUES (?, ?)',
+                             [(source, seq) for source in sources])
+        if opaque and person is not None:
+            self._db.execute('INSERT OR IGNORE INTO opaque_snapshots VALUES (?, ?)', (person, seq))
+
+    def _backfill_snapshots(self) -> None:
+        """One atomic upgrade, bounded to 256 receipt bodies in memory; never per forget."""
+        if self._db.execute("SELECT 1 FROM meta WHERE key = 'snapshot_index_v1'").fetchone():
+            return
+        self._db.execute('BEGIN IMMEDIATE')
+        try:
+            cursor = self._db.execute("SELECT seq, subject, payload FROM events"
+                                      " WHERE kind = 'action_receipt' AND tombstoned = 0")
+            while batch := cursor.fetchmany(256):
+                for seq, person, raw in batch:
+                    self._index_snapshot(seq, person, json.loads(raw or '{}'))
+            self._db.execute("INSERT INTO meta VALUES ('snapshot_index_v1', 1)")
+            self._db.execute('COMMIT')
+        except BaseException:
+            self._db.execute('ROLLBACK')
+            raise
 
     def _scrub_intents(self, dead: set[int]) -> None:
         """Forget reaches the action bookkeeping (``receipts.Dispatcher``): an intent tied to an
@@ -657,6 +710,8 @@ class Spine:
                     self._db.execute(
                         f"UPDATE events SET tombstoned = {EXPIRED}, payload = NULL, mentions = NULL,"
                         f" subject = NULL WHERE tombstoned = 0 AND seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -678,6 +733,8 @@ class Spine:
                         " GROUP BY 1, 2 ON CONFLICT(day, kind) DO UPDATE SET n = n + excluded.n", chunk)
                     for table in ("events", "people", "causes"):
                         self._db.execute(f"DELETE FROM {table} WHERE seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
