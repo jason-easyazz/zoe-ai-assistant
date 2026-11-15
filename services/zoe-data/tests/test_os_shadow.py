@@ -163,6 +163,7 @@ def kernel(monkeypatch):
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
     monkeypatch.setattr(os_shadow, "OP_TIMEOUT_S", 0.3)
     os_shadow._reset_for_tests()
+    assert os_shadow.revive()                                       # what start-up does: the worker is up before any turn
     user_erase_gate.reset()
     k.state = state
     yield k
@@ -194,7 +195,7 @@ def test_flag_off_constructs_nothing_and_touches_no_socket(kernel, monkeypatch):
     add()
     add(landed=False)
     time.sleep(0.1)
-    assert os_shadow._worker is None and kernel.connections == 0 and os_shadow.counters() == {}
+    assert kernel.connections == 0 and os_shadow.counters() == {} and os_shadow._q.qsize() == 0
 
 
 def test_an_unknown_mode_is_off(kernel, monkeypatch):
@@ -284,13 +285,14 @@ def test_a_slow_kernel_times_out_and_the_caller_is_not_held(kernel):
 
 
 def test_the_hook_never_raises_and_never_blocks(kernel, monkeypatch):
-    monkeypatch.setattr(os_shadow, "_ensure_worker", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(os_shadow, "_worker_alive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     add()                                             # swallowed, and nothing was queued
     assert os_shadow._q.qsize() == 0
 
 
 def test_a_full_queue_is_counted_and_never_blocks(kernel, monkeypatch):
-    monkeypatch.setattr(os_shadow, "_ensure_worker", lambda: None)       # no worker: nothing drains the queue
+    os_shadow._reset_for_tests()                                          # no worker: nothing drains the queue
+    monkeypatch.setattr(os_shadow, "_worker_alive", lambda: True)
     for _ in range(os_shadow.QUEUE_MAX + 5):
         add()
     assert os_shadow.counters() == {"queue_full": 5}
@@ -317,19 +319,19 @@ def test_a_member_erased_after_the_add_was_queued_is_dropped(kernel, monkeypatch
 def test_an_add_during_an_erase_is_dropped_at_the_door(kernel):
     with user_erase_gate.erase_span(MEMBER):
         add()
-    assert os_shadow.counters() == {"dropped_erased": 1} and os_shadow._worker is None
+    assert os_shadow.counters() == {"dropped_erased": 1} and os_shadow._q.qsize() == 0
     user_erase_gate.reset()
 
 
 def test_a_no_op_add_is_counted_and_never_proposed(kernel):
     add(landed=False)
-    assert os_shadow.counters() == {"live_noop": 1} and os_shadow._worker is None and kernel.calls == []
+    assert os_shadow.counters() == {"live_noop": 1} and os_shadow._q.qsize() == 0 and kernel.calls == []
 
 
 def test_empty_member_or_item_is_ignored(kernel):
     add(item="  ")
     add(user="")
-    assert os_shadow.counters() == {} and os_shadow._worker is None
+    assert os_shadow.counters() == {} and os_shadow._q.qsize() == 0
 
 
 def test_the_log_line_carries_no_words(kernel, caplog):
@@ -384,43 +386,54 @@ def test_the_worker_is_the_only_thread_and_it_is_a_daemon(kernel):
 
 
 # ---- the worker start never costs the turn ------------------------------------------------------------------------------------------
-def test_an_add_never_waits_on_a_contended_worker_start(kernel):
-    """Another caller holds the start guard (it is mid-start): the add must not wait on it. Its job is queued for that worker."""
-    assert os_shadow._worker is None
+def test_a_turn_with_a_dead_worker_starts_no_thread_returns_at_once_and_is_counted(kernel, caplog):
+    os_shadow._reset_for_tests()                     # the worker died (or the start-up start failed)
+    caplog.set_level(logging.WARNING, logger="os_shadow")
+    before = {t.ident for t in threading.enumerate()}
+    t0 = time.perf_counter()
+    add()
+    add(item="rice")
+    took = time.perf_counter() - t0
+    assert {t.ident for t in threading.enumerate()} == before, "a turn started a thread"
+    assert os_shadow._worker is None and took < 0.05
+    assert os_shadow.counters() == {"worker_down": 2} and os_shadow._q.qsize() == 0 and kernel.calls == []
+    assert sum("OS_SHADOW worker down" in r.getMessage() for r in caplog.records) == 1     # said once, not per add
+    assert os_shadow.revive()                        # off the turn: start-up or a forget brings it back
+    add()
+    settle(3)
+    assert os_shadow.counters() == {"worker_down": 2, "match": 1}
+
+
+def test_revive_never_waits_on_a_contended_start_and_many_revives_start_one_worker(kernel):
+    os_shadow._reset_for_tests()
     assert os_shadow._worker_guard.acquire(timeout=1)
     try:
-        done = threading.Event()
-        caller = threading.Thread(target=lambda: (add(), done.set()), daemon=True)
         t0 = time.perf_counter()
-        caller.start()
-        assert done.wait(0.5), "the add waited on the worker-start guard"
-        assert time.perf_counter() - t0 < 0.5
-        assert os_shadow._q.qsize() == 1                 # queued, not lost
+        assert os_shadow.revive() is False           # another caller holds the guard: no wait, no second start
+        assert time.perf_counter() - t0 < 0.05
     finally:
         os_shadow._worker_guard.release()
-    os_shadow._ensure_worker()                           # the holder's start: the queued add is drained
-    settle(1)
-    assert os_shadow.counters() == {"match": 1}
-
-
-def test_many_concurrent_first_adds_start_exactly_one_worker(kernel):
     barrier = threading.Barrier(16)
-
-    def go():
-        barrier.wait()
-        add()
-
-    callers = [threading.Thread(target=go, daemon=True) for _ in range(16)]
+    callers = [threading.Thread(target=lambda: (barrier.wait(), os_shadow.revive()), daemon=True) for _ in range(16)]
     for c in callers:
         c.start()
     for c in callers:
         c.join(2)
-    settle(16, timeout=8)
     assert [t.name for t in threading.enumerate()].count("os-shadow") == 1
-    assert os_shadow.counters() == {"match": 16}
+
+
+def test_no_turn_path_calls_the_worker_start():
+    """Structure pin: the hook functions never call _ensure_worker / revive / Thread (only start-up and the forget path may)."""
+    tree = ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
+    hooks = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name.startswith("note_")]
+    assert hooks
+    for fn in hooks:
+        called = {getattr(c.func, "id", getattr(c.func, "attr", "")) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+        assert not called & {"_ensure_worker", "revive", "Thread", "start"}, fn.name
 
 
 def test_the_worker_starts_at_import_while_shadow_so_no_turn_starts_it(kernel):
+    os_shadow._reset_for_tests()
     assert os_shadow._worker is None
     os_shadow._start_at_import()
     assert os_shadow._worker is not None and os_shadow._worker.is_alive()
@@ -429,6 +442,7 @@ def test_the_worker_starts_at_import_while_shadow_so_no_turn_starts_it(kernel):
 
 
 def test_the_import_start_is_a_no_op_with_the_flag_off(kernel, monkeypatch):
+    os_shadow._reset_for_tests()
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     os_shadow._start_at_import()
     assert os_shadow._worker is None
