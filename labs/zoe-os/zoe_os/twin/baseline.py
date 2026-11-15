@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
+from ..spine import forget_affects
 from ..retention import TWIN_WINDOW_DAYS
 
 MIN_DAYS = {"workday": 10, "weekend": 6}
@@ -118,15 +119,13 @@ class Twin:
         return gone
 
     def _forget(self, notice: Event) -> None:
-        person, seqs = notice.payload.get("subject"), notice.payload.get("seqs")
-        if seqs is None:
-            self.days.pop(person, None)                                # everything about them
-            return
-        gone = set(seqs)
+        person = notice.payload.get("subject")
         for day, facts in list(self.days.get(person, {}).items()):
-            self.days[person][day] = {k: v for k, v in facts.items() if v[1] not in gone}
+            self.days[person][day] = {k: v for k, v in facts.items() if not forget_affects(notice, v[1])}
             if not self.days[person][day]:
                 del self.days[person][day]
+        if not self.days.get(person):
+            self.days.pop(person, None)
 
     # ---- the baseline --------------------------------------------------------------------------
     def normal(self, person: str, kind: str = "workday", *, before: str | None = None) -> Normal:

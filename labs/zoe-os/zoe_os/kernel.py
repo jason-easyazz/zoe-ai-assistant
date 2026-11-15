@@ -76,6 +76,7 @@ class Kernel:
                 progressed, handled = True, handled + 1
                 try:
                     skill.on_event(ev, ctx)
+                    sub.ack(ev.seq)   # only after handling: replay an interrupted purge on restart
                 except Refused:
                     pass            # already recorded on the spine as a REFUSAL event
             if not progressed:
