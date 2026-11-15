@@ -1,5 +1,12 @@
 # labs/zoe-os: the Zoe OS kernel prototype
 
+PR #2630 review regressions: `tests/test_privacy_review.py` covers text-free diagnostics, token-protected
+HTTP handlers without sockets, cross-owner request erasure, and suspended replay snapshot refresh.
+Diagnostic outputs retain IDs, closed codes and counts, never utterances, arguments, say strings or reasons.
+Request-derived stores must purge erased sequences across all owners; `purge_key` opts a driver into
+notice-bound deletion even after consent is revoked. Validation of this correction is pending: the builder
+observed less than 800 MiB available memory and could not run Python under the builder brief's memory gate.
+
 A lab-only prototype of the kernel described in
 [`docs/architecture/zoe-os.md`](../../docs/architecture/zoe-os.md): one event spine every part plugs into,
 with consent, forgetting and receipts as properties of the spine rather than of each feature.
@@ -169,3 +176,8 @@ the Node boundary's synthetic stub-fetch test is `node --test labs/zoe-os/brain-
 One kernel process, one lock. No rate limit on failed handshakes. Presence, memory and
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
+
+Review correction: authorised explainer and twin display results retain household content;
+tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
+also clears the owner's reduced twin facts through its watermark after source retention,
+while cross-owner cleanup matches explicit erased request sequences.

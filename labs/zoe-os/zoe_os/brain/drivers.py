@@ -10,7 +10,7 @@ a scoped forget, and a wrong value can at worst mis-scope a delete of the SAME p
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..spine import forget_affects
+from ..provenance import erased_request
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
          "description": "the utterance this came from (filled by the adapter)"}
@@ -116,17 +116,17 @@ class Keeper:
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is not Kind.FORGET:
             return
-        person = ev.payload.get("subject")
         for store in self.stores:
             if isinstance(store, Alarms):
-                row = store.at.get(person)
-                if row and forget_affects(ev, row["asked"]):
-                    del store.at[person]
+                for person, row in list(store.at.items()):
+                    if erased_request(ev, row["asked"], person):
+                        del store.at[person]
             else:
-                keep = [r for r in store.rows.get(person, []) if not forget_affects(ev, r["asked"])]
-                store.rows[person] = keep
-                if not keep:
-                    store.rows.pop(person, None)
+                for person, rows in list(store.rows.items()):
+                    keep = [r for r in rows if not erased_request(ev, r["asked"], person)]
+                    store.rows[person] = keep
+                    if not keep:
+                        store.rows.pop(person, None)
 
 
 # the brain's manifest: the ceiling on what it may ask the kernel to do

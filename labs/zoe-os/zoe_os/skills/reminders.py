@@ -21,7 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..spine import forget_affects
+from ..provenance import erased_request
 
 SNOOZE_MINUTES = 10
 
@@ -118,11 +118,12 @@ class Reminders:
         create receipt is among the erased events."""
         deleted = set()
         for rid, item in sorted(self._items.items()):
-            if item["person"] != notice.payload.get("subject"):
+            if not any(erased_request(notice, s, item['person']) for s in (item['receipt'], item['asked'])):
                 continue
-            if not any(forget_affects(notice, s) for s in (item['receipt'], item['asked'])):
-                continue
-            ctx.act("reminder.delete", item["person"], {"id": rid}, caused_by=(notice.seq,))
+            if rid in {f'r{s}' for s in notice.payload.get('seqs', ())}:
+                ctx.purge("reminder.delete", {"id": rid}, notice)
+            else:   # legacy notices without an explicit causal closure
+                ctx.act('reminder.delete', item['person'], {'id': rid}, caused_by=(notice.seq,))
             del self._items[rid]
             deleted.add(rid)
         # A restarted skill cannot relearn forgotten requests from the erased log. IDs are
@@ -130,7 +131,6 @@ class Reminders:
         # even with an empty _items cache. Deleting a non-reminder seq's ID is a no-op.
         if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
             for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
-                ctx.act('reminder.delete', notice.payload['subject'], {'id': rid},
-                        caused_by=(notice.seq,))
+                ctx.purge('reminder.delete', {'id': rid}, notice)
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}
