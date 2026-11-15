@@ -152,7 +152,7 @@ authorship gap below.
 | Calendar | synced events and the member's calendars (as before), the member's PERSONAL local events with their attendees, the member's attendee rows on any event | a FAMILY event (a household calendar entry) |
 | Ambient recordings (`ambient_memory`) | every row scoped to the member (`user_id`: every row written since migration 0017); legacy rows whose `speaker_id` is one of the member's speaker profiles | a legacy row with neither (none expected: the table was empty when 0017 landed) |
 | Held panel voices (`panel_voice_clusters` / `_samples`) | the member's held voices and their samples | - |
-| Voice and face biometrics (`speaker_profiles`, with any adapted vector on the same row; `face_profiles`) | every row of the member, on the box; every panel is sent `voice_profile_forget` at once (the daemon drops the voice copy from memory and its 0600 disk file; if the command cannot be queued the delete FAILS and is retried), and any open voice session of the member is closed | a panel's FACE copy (`~/.zoe-voice/face_profiles.json`) until its next sync (at most 1 h; the server sends no face purge) - see the owner step below |
+| Voice and face biometrics (`speaker_profiles`, with any adapted vector on the same row; `face_profiles`) | every row of the member, on the box; every panel is sent `voice_profile_forget` and `face_profile_forget` at once (the daemon drops the voice copy from memory and its 0600 disk file, and the member's rows from the face cache file `~/.zoe-voice/face_profiles.json`; if either command cannot be queued the delete FAILS and is retried), and any open voice session of the member is closed | a panel copy while that panel stays offline (up to the commands' 24 h queue life), or on a panel whose daemon predates `face_profile_forget` - see the owner step below |
 | Saved voice clips (`~/.zoe-voice-samples`) | every clip whose verdict sidecar names the member, with the sidecar (found by the label the server wrote, never by a file name) | a clip with no verdict sidecar (saved before it existed, or while `ZOE_VOICE_CLIP_VERDICT` is off): it names nobody, so no forget can find it |
 | Another member's note or journal entry that points at one of the member's private contacts | the link only (`person_id` set to NULL: the row is the other member's) | the other member's note or journal entry itself |
 | Everything already erased before (palace, exact words, night mind, pendant, notifications, commitments, contacts model, derived stores ...) | as listed in the inventory below | - |
@@ -165,9 +165,10 @@ to a member and stay.
 **Panel copies (owner step).** The server cannot reach into a panel, and does not try. A VOICE copy is dropped at once by the queued
 `voice_profile_forget` command (a panel that is offline gets it when it reconnects, within 24 h, or drops the profile at its next hourly
 sync); until then the panel may still match the voice locally, but the server refuses the claim (`_voice_claim_consented` reads the store,
-so nothing opens for the deleted member). A FACE copy stays on the panel until its next sync (at most 1 h; a panel whose sync keeps failing
-keeps its last copy). A panel face match is read by the server in ONE place (speaker adaptation's corroboration, `speaker_adaptation._verify_corroboration`), and it now vouches only while the member still has an active face profile here, so a stale copy vouches for nothing. To drop both
-copies at once, restart the panel daemon on each panel: `ssh zoe-pi systemctl --user restart zoe-voice`.
+so nothing opens for the deleted member). A FACE copy is dropped by the queued `face_profile_forget` command, executed by the same voice daemon (it trims
+`~/.zoe-voice/face_profiles.json`; no running process holds faces in memory, and only an enrolment run re-syncs that file, so without the
+command the copy would stay). A daemon deployed before that command spends the row unhandled: the panel needs the daemon deploy. A panel face match is read by the server in ONE place (speaker adaptation's corroboration, `speaker_adaptation._verify_corroboration`), and it now vouches only while the member still has an active face profile here, so a stale copy vouches for nothing. A daemon restart
+re-syncs the voice copy only; it does not touch the face cache file.
 
 **Order.** Every delete runs child before parent, following the migrations' foreign keys (pinned by a test that reads them): the member's
 single-author rows first, then lists, events, contacts, recordings and biometrics.
@@ -262,7 +263,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `proactive_responses` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `voice_announcements` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
 | `speaker_profiles` | pg_table | biometric | reached | member: `member_owned_forget.forget_user` | delete_user removes the member's rows (and the adapted vector on them) and tells every panel to drop its copy; present in Postgres dumps (age out in <= 35 days). |
-| `face_profiles` | pg_table | biometric | reached | member: `member_owned_forget.forget_user` | delete_user removes the member's rows; a panel's copy drops at its next sync (<= 1 h) or a daemon restart; present in Postgres dumps (age out in <= 35 days). |
+| `face_profiles` | pg_table | biometric | reached | member: `member_owned_forget.forget_user` | delete_user removes the member's rows and tells every panel to drop its copy (face_profile_forget: the voice daemon trims ~/.zoe-voice/face_profiles.json, which only an enrolment run re-syncs; 24 h on the queue); present in Postgres dumps (age out in <= 35 days). |
 | `enrollment_offers` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `member_register` | pg_table | words | reached | member: `member_register.forget_user` | - |
 | `alarms` | pg_table | words | reached | member: `alarms.forget_user` | - |

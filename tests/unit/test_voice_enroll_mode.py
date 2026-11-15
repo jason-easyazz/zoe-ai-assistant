@@ -528,6 +528,27 @@ def test_a_forget_command_without_a_user_does_nothing(daemon, monkeypatch):
     assert daemon._handle_server_command({"command": {"kind": "voice_profile_forget", "user_id": " "}}) is False
 
 
+def test_a_face_forget_command_drops_that_members_faces_from_the_face_cache_file(daemon, monkeypatch, tmp_path):
+    """A member delete queues ``face_profile_forget``: the daemon removes the member's rows from the file ``zoe_face_id.py`` reads (no
+    process re-syncs it on its own), keeps everyone else's, 0600. No file is nothing held; an unreadable file is removed."""
+    cache_file = tmp_path / ".zoe-voice" / "face_profiles.json"
+    cache_file.parent.mkdir()
+    monkeypatch.setattr(daemon, "_FACE_CACHE_PATH", str(cache_file))
+    cache_file.write_text(json.dumps({"profiles": [{"user_id": "ann", "embedding_base64": "AA=="},
+                                                   {"user_id": "ann", "embedding_base64": "AB=="},
+                                                   {"user_id": "bob", "embedding_base64": "BB=="}]}))
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": "ann"}}) is True
+    on_disk = json.loads(cache_file.read_text())
+    assert [p["user_id"] for p in on_disk["profiles"]] == ["bob"]
+    assert "AA==" not in cache_file.read_text() and "AB==" not in cache_file.read_text()
+    assert oct(os.stat(cache_file).st_mode & 0o777) == "0o600"
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": " "}}) is False
+    cache_file.write_text("{not json")
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": "ann"}}) is True
+    assert not cache_file.exists(), "an unreadable cache is removed (the next enrolment run re-syncs it)"
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": "ann"}}) is True, "no file: nothing held"
+
+
 # ── the talk screen: the phrase is shown as well as spoken ────────────────────────────────────────────────────────────────
 
 def screen_rig(captures=None, **kw):

@@ -189,10 +189,15 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
         guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
     )
     # a pending row made just before a member delete removed the member's rows is the delete's; one made after it is withdrawn here
-    if await refused("push"):
+    async def withdrawn(lane: str) -> bool:
+        if not await refused(lane):
+            return False
         async with _get_compat_db() as db:
             await db.execute("DELETE FROM proactive_pending WHERE id = ?", (pid,))
             await db.commit()
+        return True
+
+    if await withdrawn("push"):
         return
 
     deep_link = f"/chat.html?p={pid}"
@@ -200,11 +205,15 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
     # "on" moves reminder web push into the seam (owner-only, opt-in, adults, quiet hours, neutral text) and adds Telegram.
     phone = _reminder_phone_mode() if trigger_type == "reminder" else "off"
     if phone == "on":
-        subscribers_reached = await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=False)
+        sensitive = await _reminder_sensitive(item_id)
+        # the LAST step before the phone lane: the sensitivity read above can stall (the seam re-checks again right before each send)
+        if await withdrawn("phone"):
+            return
+        subscribers_reached = await _deliver_to_phone(user_id, message, sensitive, pending_id or pid, deep_link, dry=False)
     else:
         subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
-        if phone == "shadow":
-            await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
+        if phone == "shadow":     # a dry run sends nothing
+            await _deliver_to_phone(user_id, message, await _reminder_sensitive(item_id), pending_id or pid, deep_link, dry=True)
     in_app_fallback_ok = False
 
     # If no WebSocket subscribers received the push, fall back to an in-app
@@ -230,9 +239,17 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
                     ),
                 )
                 await db.commit()
+            # the insert's connection and commit can stall: a member deleted since then keeps no row and is shown nothing
+            if await refused("in_app_broadcast"):
+                async with _get_compat_db() as db:
+                    await db.execute("DELETE FROM notifications WHERE id = ?", (_new_id,))
+                    await db.commit()
+                return
             await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
             in_app_fallback_ok = True
             log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
+        except erase_watermark.Unavailable:
+            raise                     # an unreadable mark: nothing shown on a guess (the claim is released and retried)
         except Exception as _fe:
             log.warning("reminder fallback: in-app insert failed: %s", _fe)
 
@@ -433,11 +450,19 @@ def _reminder_phone_mode() -> str:
         return "off"
 
 
-async def _deliver_to_phone(user_id: str, message: str, item_id: str, dedupe_id: str, url: str, *, dry: bool) -> int:
+async def _reminder_sensitive(item_id: str) -> bool:
+    """``reminder_delivery.reminder_sensitive`` (fail closed: a failed read is sensitive). Never raises."""
+    try:
+        import reminder_delivery
+        return await reminder_delivery.reminder_sensitive(item_id)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def _deliver_to_phone(user_id: str, message: str, sensitive: bool, dedupe_id: str, url: str, *, dry: bool) -> int:
     """The reminder's phone fan-out; returns the web-push count (the in-app fallback below reads it). Never raises."""
     try:
         import reminder_delivery
-        sensitive = await reminder_delivery.reminder_sensitive(item_id)
         res = await reminder_delivery.deliver(user_id, "reminder", message, "", dedupe_id=dedupe_id, sensitive=sensitive,
                                               url=url, dry_run=dry)
         return res.web_push_sent

@@ -5200,6 +5200,8 @@ def _handle_server_command(ann: dict) -> bool:
             return _queue_enrollment(cmd)
         if kind == "voice_profile_forget":
             return _purge_speaker_profile(str(cmd.get("user_id") or ""))
+        if kind == "face_profile_forget":
+            return _purge_face_profile(str(cmd.get("user_id") or ""))
         if kind == "voice_clip_play":
             return _play_clip_then_ask(cmd)
     except Exception as exc:  # noqa: BLE001
@@ -5285,6 +5287,49 @@ def _purge_speaker_profile(user_id: str) -> bool:
         _sync_speaker_profiles(force=True)      # the authoritative list (a failed sync keeps what we just trimmed)
     except Exception as exc:  # noqa: BLE001
         log.debug("post-purge sync failed: %s", exc)
+    return True
+
+
+#: the face-profile cache ``zoe_face_id.py`` reads and writes (its ``_CACHE_PATH``); no running process holds faces in memory - the
+#: enrolment flow loads this file when it runs, and only that run re-syncs it - so a deleted member's faces stay here until dropped
+_FACE_CACHE_PATH = os.path.expanduser("~/.zoe-voice/face_profiles.json")
+
+
+def _purge_face_profile(user_id: str) -> bool:
+    """Drop `user_id`'s face embeddings from the face-profile cache file (0600, rewritten atomically). No file: nothing held, True. A
+    file that cannot be read as a profile list is REMOVED (it is a cache: the next enrolment run re-syncs it). False only when the
+    member's rows could not be removed."""
+    uid = user_id.strip()
+    if not uid:
+        return False
+    try:
+        with open(_FACE_CACHE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        profiles = data.get("profiles") if isinstance(data, dict) else None
+        if not isinstance(profiles, list):
+            raise ValueError("not a profile list")
+    except FileNotFoundError:
+        log.info("face profile purge: no face cache on this panel")
+        return True
+    except (OSError, ValueError) as exc:
+        try:
+            os.unlink(_FACE_CACHE_PATH)
+        except OSError as exc2:
+            log.warning("face profile purge: unreadable cache could not be removed: %s", exc2)
+            return False
+        log.info("face profile purge: unreadable cache removed (%s)", type(exc).__name__)
+        return True
+    kept = [p for p in profiles if not (isinstance(p, dict) and str(p.get("user_id") or "") == uid)]
+    tmp = _FACE_CACHE_PATH + ".tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({**data, "profiles": kept}, f)
+        os.replace(tmp, _FACE_CACHE_PATH)
+    except OSError as exc:
+        log.warning("face profile purge: cache rewrite failed: %s", exc)
+        return False
+    log.info("face profile purge: removed %d cached face profile(s)", len(profiles) - len(kept))
     return True
 
 

@@ -61,7 +61,7 @@ _DEFAULT_TTL_S = 120
 # The intercom's rows (``intercom.py``: a member's announcement / ring addressed to ONE named panel) are panel-scoped for the same
 # reason - "tell the kitchen" must never be played by whichever daemon polls first. ``timer_done``
 # (``skybridge_service._ring_when_done``): a member's timer ending is said only by the panel that set it.
-PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll",
+PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "face_profile_forget", "voice_enroll",
                                           "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link",
                                           "timer_done")
 
@@ -75,15 +75,20 @@ PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_prof
 #                         would speak the member's name and enrol whoever stands there next
 #   voice_profile_forget  drop ``user_id``'s voice signature from the daemon's cache and disk NOW, then re-sync (one row per
 #                         panel, PANEL-SCOPED above: every speaker must hear it, and only that panel may claim its own row)
+#   face_profile_forget   drop ``user_id``'s face embeddings from the panel's face-profile cache file (``~/.zoe-voice/face_profiles.json``,
+#                         read by ``zoe_face_id.py``) NOW; queued with the voice forget by a member delete (``member_owned_forget``).
+#                         PANEL-SCOPED, one row per panel, like the voice forget. A daemon older than this command spends the row unhandled
 #   voice_clip_play       play a few seconds of a saved unknown-voice clip, then ask "who's this?" (named_guest_clips.py): PANEL-SCOPED;
 #                         the row carries a single-use token, never audio - the daemon redeems it at POST /api/voice/clip-playback
-COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget", "voice_clip_play")
+COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget", "face_profile_forget", "voice_clip_play")
 # A spoken row after which the daemon opens a listening window with no wake word: an OFFER asks a question, and "Hey Zoe, yes" is
 # not a natural way to answer one. Old daemons ignore the flag (the answer then needs the wake word; the pending offer waits 2 min).
 LISTEN_AFTER_TRIGGERS: tuple[str, ...] = ("voice_enroll_offer",)
-# A command nobody is there to receive is stale in seconds; the forget command is the exception (see ``enqueue_command``).
+# A command nobody is there to receive is stale in seconds; the forget commands are the exception (see ``enqueue_command``): a panel
+# that is offline gets them when it reconnects within the day.
 COMMAND_TTL_S = 180
 FORGET_TTL_S = 24 * 3600
+FORGET_TRIGGERS: tuple[str, ...] = ("voice_profile_forget", "face_profile_forget")
 
 # Hard cap per claim; the engine enqueues one row per spoken notification, so
 # anything larger than a handful means a backlog that should expire, not play.
@@ -207,7 +212,7 @@ async def enqueue_command(
     if trigger_type not in COMMAND_TRIGGERS:
         raise ValueError(f"not a command trigger: {trigger_type!r}")
     body = json.dumps({"kind": trigger_type, "user_id": user_id, **(command or {})}, ensure_ascii=False, separators=(",", ":"))
-    ttl = ttl_s if ttl_s else (FORGET_TTL_S if trigger_type == "voice_profile_forget" else COMMAND_TTL_S)
+    ttl = ttl_s if ttl_s else (FORGET_TTL_S if trigger_type in FORGET_TRIGGERS else COMMAND_TTL_S)
     return await enqueue_announcement(
         db, user_id=user_id, message=body, panel_id=panel_id, trigger_type=trigger_type, ttl_s=ttl, commit=commit,
     )
@@ -295,7 +300,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     for row in rows:
         # The last step before a spoken line leaves for the panel: a line queued for a member who was deleted at or after it was queued
         # is never spoken (marked expired), whoever queued it and however it raced the delete. An unreadable mark: not now (it stays
-        # pending). A panel COMMAND carries no content and is exempt: the delete itself queues voice_profile_forget after its mark.
+        # pending). A panel COMMAND carries no content and is exempt: the delete itself queues the voice / face forgets after its mark.
         if (row["trigger_type"] or "") not in COMMAND_TRIGGERS:
             try:
                 gone = await erase_watermark.send_refused(row["user_id"], row["created_at"], "voice_announcement")

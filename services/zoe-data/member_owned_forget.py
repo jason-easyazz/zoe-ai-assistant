@@ -403,7 +403,9 @@ async def _after_commit(user_id: str) -> None:
     name pattern; RAISES on a clip that cannot be removed), and the panels told to drop the voice signature now (voice_enrollment: also
     closes any open voice session of the member; FAIL CLOSED - a queue failure raises; a panel that is offline gets the command when it
     reconnects (24 h) or drops the profile at its next hourly sync, and the server refuses a stale claim anyway: ``_voice_claim_consented``
-    reads the store). Face copies on a panel wait for its next sync; the server refuses a stale face corroboration (speaker_adaptation)."""
+    reads the store). Each panel is also told to drop the member's face embeddings (``face_profile_forget``, same queue, same 24 h TTL, same
+fail-closed retry): the panel's face cache file is refreshed only when an enrolment flow runs there, so without the command it would keep
+them; the server also refuses a stale face corroboration (speaker_adaptation)."""
     import voice_clips
 
     failure = None
@@ -420,7 +422,7 @@ async def _after_commit(user_id: str) -> None:
 
 
 async def _push_forget_strict(user_id: str) -> int:
-    """Close the member's open voice sessions and queue ``voice_profile_forget`` for every panel holding a device token, both FAIL
+    """Close the member's open voice sessions and queue ``PANEL_PURGES`` (voice and face) for every panel holding a device token, both FAIL
     CLOSED: ``delete_user`` does not report success while the member's verified voice session still opens private reads, or a panel keeps
     the voice. Both steps are ATTEMPTED whatever the other did; then the first failure RAISES (the caller retries the whole delete; it is
     idempotent, and the retry re-queues). ``voice_session.revoke_member`` never raises, so its result is checked: a session of the member
@@ -445,6 +447,11 @@ async def _push_forget_strict(user_id: str) -> int:
     return queued
 
 
+#: what every paired panel is told to drop of a deleted member (voice_announce.COMMAND_TRIGGERS; the panel's voice daemon executes both:
+#: the voice signature from its speaker cache, the face embeddings from the face-profile cache file ``zoe_face_id.py`` reads)
+PANEL_PURGES = ("voice_profile_forget", "face_profile_forget")
+
+
 async def _queue_panel_forget(user_id: str) -> int:
     import voice_announce
     import voice_enrollment
@@ -458,8 +465,9 @@ async def _queue_panel_forget(user_id: str) -> int:
                 return 0                  # no device_tokens table: no panel was ever paired
             raise
         for panel in panels:
-            await voice_announce.enqueue_command(db, user_id=user_id, panel_id=panel, trigger_type="voice_profile_forget", command={})
-            queued += 1
+            for kind in PANEL_PURGES:
+                await voice_announce.enqueue_command(db, user_id=user_id, panel_id=panel, trigger_type=kind, command={})
+                queued += 1
         await db.commit()
     return queued
 

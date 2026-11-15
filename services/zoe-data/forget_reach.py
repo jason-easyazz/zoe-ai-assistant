@@ -168,8 +168,9 @@ TABLES: tuple[Store, ...] = (
     # --- identity / biometric enrolment ---
     _t("speaker_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows (and the adapted vector on them) and tells every panel to drop its copy; "
        "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),   # voice embeddings (+ the adapted vector on the same row); panels told at once (voice_profile_forget)
-    _t("face_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows; a panel's copy drops at its next sync (<= 1 h) or a daemon restart; "
-       "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),      # face embeddings; a panel's copy drops at its next sync (<= 1 h) or a daemon restart
+    _t("face_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows and tells every panel to drop its copy (face_profile_forget: the "
+       "voice daemon trims ~/.zoe-voice/face_profiles.json, which only an enrolment run re-syncs; 24 h on the queue); "
+       "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),      # face embeddings; panels told at once (face_profile_forget)
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("member_register", WORDS, REACHED, member="member_register.forget_user"),   # liked topics are the member's words
     _t("alarms", WORDS, REACHED, member="alarms.forget_user"),                 # the label is the member's words

@@ -471,8 +471,41 @@ def test_a_forget_command_is_queued_for_every_panel_and_a_queue_failure_fails_th
         _delete(svc)
     monkeypatch.setattr(voice_announce, "enqueue_command", real)
     _delete(svc)                                                     # the retry
-    rows = _q(store, "SELECT user_id, panel_id, trigger_type FROM voice_announcements WHERE trigger_type = 'voice_profile_forget'")
-    assert rows == [(A, "panel-1", "voice_profile_forget")]
+    rows = _q(store, "SELECT user_id, panel_id, trigger_type FROM voice_announcements WHERE trigger_type LIKE '%_profile_forget' "
+                     "ORDER BY trigger_type")
+    assert rows == [(A, "panel-1", "face_profile_forget"), (A, "panel-1", "voice_profile_forget")], "the panel drops the face too"
+
+
+def test_the_face_purge_is_queued_with_the_voice_one_and_a_face_queue_failure_fails_the_delete_until_a_retry_queues_both(
+        env, store, monkeypatch):
+    """Durable like the voice purge: 24 h on the queue (an offline panel claims it when it reconnects), and a failure to queue the FACE
+    purge fails the delete closed, so the retry queues both."""
+    import datetime as _dt
+
+    import voice_announce
+
+    svc, _col = env
+
+    async def panel():
+        await store.execute("INSERT INTO device_tokens VALUES ('t1', 'panel-1', 0)")
+        await store.commit()
+    asyncio.run(panel())
+    real = voice_announce.enqueue_command
+
+    async def face_down(db, **kw):
+        if kw["trigger_type"] == "face_profile_forget":
+            raise ConnectionError("queue down")
+        return await real(db, **kw)
+    monkeypatch.setattr(voice_announce, "enqueue_command", face_down)
+    with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
+        _delete(svc)
+    monkeypatch.setattr(voice_announce, "enqueue_command", real)
+    _delete(svc)                                                     # the retry
+    rows = _q(store, "SELECT trigger_type, created_at, expires_at FROM voice_announcements WHERE panel_id = 'panel-1'")
+    assert {r[0] for r in rows} == {"voice_profile_forget", "face_profile_forget"}
+    for kind, made, until in rows:
+        ttl = (_dt.datetime.fromisoformat(until.replace("Z", "+00:00")) - _dt.datetime.fromisoformat(made.replace("Z", "+00:00")))
+        assert ttl.total_seconds() >= 23 * 3600, f"{kind} waits a day for an offline panel"
 
 
 # ── blocker 2: a reminder fire that claimed its row before the delete delivers nothing ───────────────────────────────────────
@@ -967,6 +1000,7 @@ def test_a_spoken_line_queued_across_the_delete_is_never_claimed_but_the_forget_
         await voice_announce.enqueue_announcement(db, user_id=B, message="a line for B", panel_id="p1", trigger_type="reminder")
         await erase_watermark.record(A)           # the delete's mark, at or after A's line was queued
         await voice_announce.enqueue_command(db, user_id=A, panel_id="p1", trigger_type="voice_profile_forget", command={})
+        await voice_announce.enqueue_command(db, user_id=A, panel_id="p1", trigger_type="face_profile_forget", command={})
         got = await voice_announce.claim_announcements(db, panel_id="p1")
         async with db.execute("SELECT expired FROM voice_announcements WHERE message = 'a line for A'") as cur:
             expired = (await cur.fetchone())[0]
@@ -974,7 +1008,8 @@ def test_a_spoken_line_queued_across_the_delete_is_never_claimed_but_the_forget_
         return got, expired
     got, expired = asyncio.run(go())
     assert [g["text"] for g in got if g["text"]] == ["a line for B"] and expired == 1
-    assert [g["command"]["kind"] for g in got if g.get("command")] == ["voice_profile_forget"], "the delete's own command still reaches the panel"
+    assert sorted(g["command"]["kind"] for g in got if g.get("command")) == ["face_profile_forget", "voice_profile_forget"], \
+        "the delete's own commands still reach the panel"
 
 
 # ── a duplicate fire for the same row cannot clear the original's in-flight mark ─────────────────────────────────────────────
@@ -1045,6 +1080,8 @@ def test_a_voice_session_that_cannot_be_closed_fails_the_delete_and_a_retry_comp
         assert voice_session.member_panels(A) == ["panel-1"], "the session really is still open"
         assert _q(store, "SELECT panel_id FROM voice_announcements WHERE trigger_type = 'voice_profile_forget'") == [("panel-1",)], \
             "every reachable step still ran: the panel was told to drop the voice"
+        assert _q(store, "SELECT panel_id FROM voice_announcements WHERE trigger_type = 'face_profile_forget'") == [("panel-1",)], \
+            "and the face, on the same failure path (the panel's purge is idempotent)"
         monkeypatch.setattr(voice_session, "close_member", real_close)
         _delete(svc)                                   # the retry
         assert voice_session.member_panels(A) == []
