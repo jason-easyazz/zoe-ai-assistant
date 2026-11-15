@@ -394,20 +394,29 @@ async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: 
         async with (_gate_already_held() if gate_held else erase_gate.writing(owner, gen)) as live, _db() as db:
             if not live:
                 return None             # forgotten means forever: a note made from a pre-erase transcript is never written
+            import erase_watermark
             if partial_epoch(owner) != part:
                 return None             # a partial erase ran while the model was reading: its words may be the forgotten ones
             async with db.execute("SELECT id FROM conversation_notes WHERE user_id = ? AND people_id = ? AND episode_key = ?",
                                   (owner, people_id, convo.key)) as cur:
                 if await cur.fetchone():
                     return None
-            await db.execute(
-                "INSERT INTO conversation_notes (id, user_id, people_id, episode_key, source, status, with_name, started_at, ended_at, "
-                "turn_count, turn_ids, summary, topics, mood, open_threads, follow_up, sensitive, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (nid, owner, people_id, convo.key, source, status, clean(convo.with_name, 60), _iso(convo.started), _iso(convo.ended),
-                 int(convo.turns), json.dumps([str(i) for i in convo.turn_ids]), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
-                 1 if note.sensitive else 0, _iso(_now())))
-            await db.commit()
+            async def write():
+                await db.execute(
+                    "INSERT INTO conversation_notes (id, user_id, people_id, episode_key, source, status, with_name, started_at, ended_at, "
+                    "turn_count, turn_ids, summary, topics, mood, open_threads, follow_up, sensitive, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (nid, owner, people_id, convo.key, source, status, clean(convo.with_name, 60), _iso(convo.started), _iso(convo.ended),
+                     int(convo.turns), json.dumps([str(i) for i in convo.turn_ids]), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
+                     1 if note.sensitive else 0, _iso(_now())))
+                await db.commit()
+                return [nid]                # CREATED (the existence check above found no note for this episode)
+
+            async def undo(_created):
+                await erase_watermark.run_sql(db, "DELETE FROM conversation_notes WHERE id = ?", (nid,))
+            # the night process's view of the erase rule (its erase gate never moves): checked right before and right after the insert
+            if await erase_watermark.guarded_write(owner, "conversation_notes", write, undo) is None:
+                return None
             if partial_epoch(owner) != part:       # a partial erase started between the check and the insert: its sweep may have missed this row
                 await db.execute("DELETE FROM conversation_notes WHERE id = ?", (nid,))
                 await db.commit()
