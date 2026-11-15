@@ -24,7 +24,7 @@ scorecard (`labs/felt-scorecard/`). Nothing below has moved it yet.
 | 2 | Pre-POST timing and `PANEL_KV_MISS cause=`, #2484 | Nothing (measure-only) | none (always on) | Merged and **already live** [live: 14 `FLUE_PREPOST` lines, all harness traffic] | Pre-POST total p50 30 ms / p95 282 ms (14 harness turns); 0 household turns logged yet | None to run: read it. Wait for household turns and for a miss that carries `cause=` | 0 (done) |
 | 3 | First clause released early, #2466 | The first words arrive sooner, from a shorter first phrase | `ZOE_FIRST_SOUND_CLAUSE` (bool), `ZOE_FIRST_SOUND_POLISH_EARLY` (unset follows the clause flag), `ZOE_KOKORO_STYLE_PIN` (bool), `ZOE_KOKORO_STYLE_PIN_LEN` (1..510, 120) | **Draft** (flag-dark). The pin also needs a Kokoro sidecar restart | Lab: first audio, chat shape, median 2.93 s off vs 2.77 s on (10 pairs), first unit 78 vs 60 characters [lab] | `scripts/perf/measure_first_sound.py` arms `off` / `clause+polish` / `clause+polish+pin`, then the replay gate with the flags on, then an ear check | 2 |
 | 4 | Clean end-of-turn tail | She starts answering about 160 ms sooner on half the turns | `ZOE_VAD_CLEAN_TAIL_MS` (default dark, 560 is the candidate; panel environment) | Built in the daemon, dark. **Needs a panel deploy and the panel's env** | About 160 ms earlier on 124 of 246 corpus turns, 2% cut mid-sentence [documented in voice-pipeline.md] | Corpus replay for cut-offs, then the owner's ear | 3 |
-| 5 | Blocks after the user's words, #2485 (B3) | Fewer slow turns right after a memory-using turn (the long ones, about 1 to 2 s) | `ZOE_BRAIN_VOLATILE_AFTER_USER` (bool) | Merged dark | Panel turns that re-prefilled over 800 prompt tokens: 38 of 149 (25%), first-prompt-tokens p50 208 / p95 1695 [live, 2026-10-19 on] | Two-turn sessions (a memory turn then a plain turn), flag off vs on, compare the second turn's first-prompt tokens | 4 |
+| 5 | Blocks after the user's words, #2485 (B3) | Almost nothing: the offline A/B below finds the flag saves about 14 prompt tokens (0.02 s) on the second turn, not the 1 to 2 s the first reading hoped for | `ZOE_BRAIN_VOLATILE_AFTER_USER` (bool) | Merged dark | Panel turns that re-prefilled over 800 prompt tokens: 38 of 149 (25%), first-prompt-tokens p50 208 / p95 1695 [live, 2026-10-19 on] | `scripts/perf/measure_prompt_cache_ab.py`: scripted two- and three-turn conversations through the real seam, flag off vs on (ABAB), compare the second turn's first-prompt tokens; `--offline` is the safe no-model mode, `--live-slot` needs the slot to itself (see the script doc and the result block below) | 4 |
 | 6 | Continuity ceiling, #2485 (B6) | Almost nothing | `ZOE_CONTINUITY_CEILING_S` (float in (0,10], 3.0 default, 0.4 candidate) | Merged dark | Continuity block p50 1 ms / p95 1 ms on harness turns; matched on 0 of 19 member turns [live + scorecard] | Same A/B as 5; matters only when the database is slow | 6 |
 | 7 | Pre-POST blocks concurrent, #2486 | Nothing you can hear | `ZOE_FLUE_PREPOST_CONCURRENT` (bool) | Merged dark | The blocks it overlaps sum to 6 ms p50 / 19 ms p95 of a 30 ms / 282 ms pre-POST total [live, harness] | `FLUE_PREPOST total_ms`, 40 harness turns per arm, plus the byte-identical test | 7 |
 | 8 | Prompt-read access ticks coalesced, #2490 | Nothing you can hear (household memory block meets its 0.40 s budget) | `ZOE_MEMORY_TICK_DEFER_S` (float seconds, 0 = at once, 1.0 candidate) | Merged dark | 27 of 171 `SEAM_HOUSEHOLD` lines were `budget_exceeded`, all from synthetic harness users; none of 11 household fetches missed [live] | `SEAM_HOUSEHOLD ms=` before and after, harness burst of 3 concurrent fetches | 8 |
@@ -43,7 +43,7 @@ effect on a household turn is within a few tens of milliseconds.
    0.8 s the older audit hoped for (see below). Turn on the clause arm alone first; add the pin only after an ear check.
 3. **Clean tail (row 4).** About 160 ms on half the turns, which is a bigger and surer saving than the clause arm, at a 2%
    cut-off cost. It needs a panel deploy anyway, so it rides with row 1's.
-4. **Blocks after the user's words (row 5).** The only dark item aimed at the 1 to 2 s slow turns (a quarter of panel turns).
+4. **Blocks after the user's words (row 5).** Aimed at the 1 to 2 s slow turns (a quarter of panel turns), but the offline A/B (below) shows it saves only about 14 tokens; do not expect to hear it. Demote it unless a live-slot run says otherwise.
 5. **Listen pace (row 9)**, shadow only, once row 1 gives it a signal.
 6. Rows 6 to 8: a flip is cheap but worth tens of milliseconds; do them when the box is being flipped anyway.
 7. **Reflex (row 10)** last in time, but the only item that can move the "under 1 s" share at all. Everything else leaves a
@@ -89,11 +89,25 @@ traffic; it can only be confirmed or dropped once household turns appear in `FLU
 **Cache re-prefill, [live].** 48 `PANEL_KV_MISS` lines since 2026-10-18 (26 `first`, 22 `warm`); all predate #2484's
 `cause=`, so the cause of any miss is still unknown. That is the first thing to read after a day of household use.
 
+**Blocks after the user's words (#2485), [lab], offline, 2026-11-15.** `scripts/perf/measure_prompt_cache_ab.py --offline
+--tokenizer server --pairs 30`: the real seam's prompt building (synthetic turn rig, flag set in the lab process only, nothing
+sent, nothing written), the sidecar's stale-block elision, the llama-server's own `/tokenize` (tokenization only, no slot), 30
+scripted conversations per shape x 6 shapes x 2 arms (ABAB), three turns each. Second-turn **uncached tokens, median: 142 off vs
+128 on (plain), 140 vs 129 (recall then plain), 426 vs 408 (recall every turn), 369 vs 354 (after a write), 141 vs 126 (now-card
+change), 142 vs 128 (session start with bridge)**: the flag saves **12 to 15 tokens at the median, about 0.02 s at 1.478
+ms/token, in 30 of 30 pairs in every shape; the threshold is 300**. Share of second turns over 800 uncached tokens: 0% in both
+arms (p90 of the worst shape 551 off, 528 on). Reading: the flag keeps the user's own words cached, which is a dozen tokens;
+the recall block of the NEW turn is uncached in both arms, and the live 25% of turns over 800 must come from something else
+(tool-block growth, a session change, slot eviction: read `PANEL_KV_MISS cause=`). So this flag cannot fix the slow turns
+and is not worth a switch-on for feel. Limits: synthetic filler words, a guessed Gemma-style template, a synthetic 3.4k-token
+system and tool prefix (it fixes absolute size only), scripted replies (no said-versus-did signal: not assessed), no timings.
+Not measured: the live slot (`--live-slot` needs the slot to itself; see the script doc), sidecar tool-block behaviour.
+
 ## Where the numbers come from
 
 - Live logs: `~/.zoe-logs/zoe-data.app.log*` (`FLUE_PREPOST`, `PANEL_KV_MISS`, `SEAM_HOUSEHOLD`, `FLUE_PROMPT_CACHE`,
   `VOICE TIMING`); the felt scorecard `labs/felt-scorecard/scorecard.py`.
 - Lab: `scripts/perf/measure_first_sound.py` (first clause), `scripts/perf/measure_brain_prefix_cache.py` (prefix-cache
-  shapes), `tests/test_flue_prepost_concurrent.py` (the synthetic pre-POST rig).
+  shapes), `scripts/perf/measure_prompt_cache_ab.py` (flag A/B on consecutive turns), `tests/test_flue_prepost_concurrent.py` (the synthetic pre-POST rig).
 - Design notes behind the rows: [Voice pipeline](voice-pipeline.md); the panel reflex and the listen-pace design are
   recorded in the PRs named in the table.
