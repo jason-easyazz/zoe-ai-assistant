@@ -381,3 +381,54 @@ def test_the_worker_is_the_only_thread_and_it_is_a_daemon(kernel):
     settle(1)
     assert os_shadow._worker.daemon and os_shadow._worker.name == "os-shadow"
     assert isinstance(os_shadow._q, queue.Queue) and os_shadow._q.maxsize == os_shadow.QUEUE_MAX
+
+
+# ---- the worker start never costs the turn ------------------------------------------------------------------------------------------
+def test_an_add_never_waits_on_a_contended_worker_start(kernel):
+    """Another caller holds the start guard (it is mid-start): the add must not wait on it. Its job is queued for that worker."""
+    assert os_shadow._worker is None
+    assert os_shadow._worker_guard.acquire(timeout=1)
+    try:
+        done = threading.Event()
+        caller = threading.Thread(target=lambda: (add(), done.set()), daemon=True)
+        t0 = time.perf_counter()
+        caller.start()
+        assert done.wait(0.5), "the add waited on the worker-start guard"
+        assert time.perf_counter() - t0 < 0.5
+        assert os_shadow._q.qsize() == 1                 # queued, not lost
+    finally:
+        os_shadow._worker_guard.release()
+    os_shadow._ensure_worker()                           # the holder's start: the queued add is drained
+    settle(1)
+    assert os_shadow.counters() == {"match": 1}
+
+
+def test_many_concurrent_first_adds_start_exactly_one_worker(kernel):
+    barrier = threading.Barrier(16)
+
+    def go():
+        barrier.wait()
+        add()
+
+    callers = [threading.Thread(target=go, daemon=True) for _ in range(16)]
+    for c in callers:
+        c.start()
+    for c in callers:
+        c.join(2)
+    settle(16, timeout=8)
+    assert [t.name for t in threading.enumerate()].count("os-shadow") == 1
+    assert os_shadow.counters() == {"match": 16}
+
+
+def test_the_worker_starts_at_import_while_shadow_so_no_turn_starts_it(kernel):
+    assert os_shadow._worker is None
+    os_shadow._start_at_import()
+    assert os_shadow._worker is not None and os_shadow._worker.is_alive()
+    src = (SVC / "os_shadow.py").read_text("utf-8")
+    assert src.rstrip().endswith("_start_at_import()        # service start-up, never a turn (see _ensure_worker)")
+
+
+def test_the_import_start_is_a_no_op_with_the_flag_off(kernel, monkeypatch):
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    os_shadow._start_at_import()
+    assert os_shadow._worker is None
