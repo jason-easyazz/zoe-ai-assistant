@@ -247,7 +247,7 @@ def _forget_last(monkeypatch, text):
             return object()
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
 
-    async def from_turn(svc, uid, t, ts):
+    async def from_turn(svc, uid, t, ts, **_kw):          # (mids=: the turn's saved-turn ids)
         return []
 
     async def noop(*a, **k):

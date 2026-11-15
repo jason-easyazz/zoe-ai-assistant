@@ -4142,6 +4142,9 @@ async def _execute_forget_last(user_id: str) -> str:
     except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         failed += 1
+    # THE RULE: an eraser of STORED words (the rows above, the exact-words index, the transcript flag, the night mind, the notes,
+    # the registry) failing fails the forget - not confirmed, the turn kept for a retry; an IN-PROCESS cache clear (this one) failing
+    # never does: it holds nothing that outlives the process, and the stored erase already ran
     try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
         import value_correction
         value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])

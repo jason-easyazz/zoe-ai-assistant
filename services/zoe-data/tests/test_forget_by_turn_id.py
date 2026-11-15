@@ -1,26 +1,29 @@
-"""Every forget resolves to SAVED-TURN ids and erases by id (PR #2574, review rounds 3-6).
+"""Every forget resolves to SAVED-TURN ids and erases by id (PR #2574, review rounds 3-7).
 
 Two look-alike turns that differ only by a contact detail and a trailing word store the SAME redacted words wherever the write
 boundary scrubs (the exact-words index, a fact row's excerpt), and one redacted excerpt sits INSIDE the other. So no forget may
 compare redacted text: each derived row carries the saved turn (``chat_messages.id``) it came from, stamped at write time, and
-every forget path resolves to those ids first. For each path, forgetting one turn takes exactly that turn's exact-words entry,
-fact row, capture copy, transcript flag and night-mind observation, and nothing of the other turn.
+every forget path resolves to those ids first. A third turn about ANOTHER topic shares the first turn's redacted address.
 
-A rotated forget-ledger secret changes nothing: no forget reads the keyed tag. Synthetic placeholder words and invented addresses
-only. Negative control: on d6e876e0d the sweep fails (the fact path left the
-exact-words entry behind; the containment case took the other turn's fact; the stored rows carried no saved-turn id).
+The world is planted through the REAL writers on both the old and the new code (``routers.chat._save_chat_message`` over a fake
+``chat_messages``; the post-turn capture inside ``turn_forget.capture_scope``), and every seam the fixture patches exists in both,
+so on the old code the sweep fails BY ASSERTION, not at setup. A rotated forget-ledger secret changes nothing: no forget reads the
+keyed tag. Synthetic placeholder words and invented addresses only.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 
 import pytest
 
 import exact_words as xw
+import forget_topic
 import intent_router
 import memory_provenance as mp
 import memory_service
+import night_mind
 import night_store
 import provenance_answers as pa
 import turn_forget
@@ -31,37 +34,76 @@ from test_memory_authority import _Col
 pytestmark = pytest.mark.ci_safe
 
 UID = "demo_bar_0000id01"
-TURNS = {"m1": "My plumber works from 1 Example Street", "m2": "My plumber works from 2 Example Street on weekdays"}
-FACTS = {"m1": "User's plumber works from 1 Example Street", "m2": "User's plumber works from 2 Example Street on weekdays"}
-COPIES = {"m1": "User has a plumber at 1 Example Street", "m2": "User has a plumber at 2 Example Street"}
-KEPT = "My plumber works from"                     # the words the scrub leaves: identical in both turns' night observations
+SAID = {"a": "My plumber works from 1 Example Street", "b": "My plumber works from 2 Example Street on weekdays",
+        "c": "My dentist works from 1 Example Street"}          # c: another topic, the SAME redacted address as a
+FACTS = {k: v.replace("My ", "User's ", 1) for k, v in SAID.items()}
+COPIES = {"a": "User has a plumber at 1 Example Street", "b": "User has a plumber at 2 Example Street",
+          "c": "User has a dentist at 1 Example Street"}
+KEPT = {"a": "My plumber works from", "b": "My plumber works from", "c": "My dentist works from"}   # what the scrub leaves
 
 
 def run(coro):
     return asyncio.run(coro)
 
 
-class _Transcript:
-    """``chat_messages`` behind exact_words' transcript seams: by id, and (old callers) by a needle."""
+class _Chat:
+    """``chat_messages`` behind the real save path and exact_words' transcript seams (every seam exists in both versions)."""
 
     def __init__(self):
-        self.rows = {mid: [text, None] for mid, text in TURNS.items()}
+        self.rows: dict = {}                                     # id -> [content, metadata]
+
+    def ctx(self):
+        chat = self
+
+        class _Db:
+            async def execute(self, sql, params=()):
+                if sql.lstrip().upper().startswith("INSERT INTO CHAT_MESSAGES"):
+                    chat.rows.setdefault(params[0], [params[3], params[4]])
+                return self
+
+            rowcount = 0
+
+            async def execute_fetchall(self, *a, **k):
+                return []
+
+            async def fetchall(self):                            # any other table a forget path reads: empty
+                return []
+
+            async def fetchone(self):
+                return None
+
+            async def commit(self):
+                return None
+
+        @contextlib.asynccontextmanager
+        async def _ctx():
+            yield _Db()
+        return _ctx()
 
     async def by_id(self, user_id, mids):
         return [(m, self.rows[m][1]) for m in mids if m in self.rows]
 
     async def candidates(self, user_id, needle):
-        return [(m, c, meta) for m, (c, meta) in self.rows.items() if needle in c.lower()]
+        return [(m, c, meta) for m, (c, meta) in self.rows.items() if needle in c.lower() and not self.off(m)]
 
     async def setmeta(self, rid, meta):
         self.rows[rid][1] = meta
 
+    def off(self, mid):
+        return mp.OFF_RECORD_JSON_MARK in str(self.rows[mid][1] or "")
+
+    def mid(self, key):
+        return next(m for m, (c, _meta) in self.rows.items() if c == SAID[key])
+
 
 @pytest.fixture
-def world(monkeypatch):
+def world(monkeypatch, ledger_env):
+    import db_pool
+
     for k in ("ZOE_MEMORY_AUTHORITY", "ZOE_AFFECT_CONSENT_GATE", mp.ENV):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")
+    monkeypatch.setattr(memory_service, "_RECENT_AUTO_TTL_S", 0.0)   # the paraphrase dedup is not under test: every row lands
     svc = MemoryService(data_dir="/nonexistent/zoe-test-forget-by-turn-id")
     col = _Col()
     svc._collection = lambda: col
@@ -75,96 +117,177 @@ def world(monkeypatch):
     monkeypatch.setattr(memory_service, "_user_opted_out", opted_in)
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
     monkeypatch.setattr(pa, "_svc_default", lambda: svc)
-    t = _Transcript()
-    monkeypatch.setattr(xw, "_transcript_rows_by_id", t.by_id)
-    monkeypatch.setattr(xw, "_transcript_candidates", t.candidates)
-    monkeypatch.setattr(xw, "_set_transcript_metadata", t.setmeta)
+    chat = _Chat()
+    monkeypatch.setattr(db_pool, "get_db_ctx", chat.ctx)
+    monkeypatch.setattr(xw, "_transcript_rows_by_id", chat.by_id, raising=False)
+    monkeypatch.setattr(xw, "_transcript_candidates", chat.candidates)
+    monkeypatch.setattr(xw, "_set_transcript_metadata", chat.setmeta)
     monkeypatch.setattr(xw, "SqlBackend", type(xw.get_backend()))          # the lab index stands in for the SQL one
     turn_forget.reset()
     mp.reset()
-    yield svc, t
+    yield svc, chat
     turn_forget.reset()
     mp.reset()
 
 
-def _plant(svc, target: str) -> dict:
-    """Both turns saved and captured the way the live lanes do it, the TARGET last (so "forget that" binds to it)."""
-    ids: dict = {}
-    for mid in sorted(TURNS, key=lambda m: m == target):
-        said = TURNS[mid]
-        turn_forget.note_user_turn(UID, said, now=time.time(), mid=mid)          # routers.chat._save_chat_message
+def _plant(svc, chat, target: str) -> dict:
+    """The three turns saved and captured the way the live chat lane does it, the TARGET last ("forget that" binds to it)."""
+    from routers.chat import _save_chat_message
+
+    rows: dict = {}
+    for key in sorted(SAID, key=lambda k: k == target):
+        said = SAID[key]
+        assert run(_save_chat_message("s-1", "user", said, user_id=UID)) is True
 
         async def capture():
             with turn_forget.capture_scope(UID, said):                          # the post-turn capture of THAT turn
                 assert await xw.index_turn(UID, said) is True
-                fact = await svc.ingest(FACTS[mid], user_id=UID, source="turn_digest", status="approved", source_excerpt=said)
-                copy = await svc.ingest(COPIES[mid], user_id=UID, source="chat_regex", status="approved",
-                                        source_excerpt=said[:30])
+                fact = await svc.ingest(FACTS[key], user_id=UID, source="turn_digest", status="approved", source_excerpt=said)
+                copy = await svc.ingest(COPIES[key], user_id=UID, source="chat_regex", status="approved",
+                                        source_excerpt=said[:22])   # a writer's cut, before the address
                 return fact, copy
-        ids[mid] = run(capture())
+        rows[key] = run(capture())
+        assert rows[key][0] is not None and rows[key][1] is not None, "both derived rows landed"
         run(night_store.get_backend().put_observation(night_store.obs_row(
-            id=f"o-{mid}", user_id=UID, turn_id=mid, quote=KEPT, day="2026-10-08", said_at=time.time())))
-    return ids
+            id=f"o-{key}", user_id=UID, turn_id=chat.mid(key), quote=KEPT[key], day="2026-10-08", said_at=time.time())))
+    return rows
 
 
-def _xw_row(mid):
-    return next((k[1], r["text"]) for k, r in xw.get_backend().rows.items() if xw.mid_of(k[1]) == mid)
+def _xw_rows():
+    """{turn key: index id} of what the exact-words index still holds, keyed by which turn's words it stores."""
+    out = {}
+    for (_u, tid), r in xw.get_backend().rows.items():
+        out.setdefault("c" if "dentist" in r["text"] else ("b" if "weekdays" in r["text"] else "a"), tid)
+    return out
 
 
 def _approved(svc):
     return {r.text for r in run(svc.list_by_status(user_id=UID, status="approved"))}
 
 
-def _forget_last(svc, target, ids):
+def _night():
+    return sorted(o["id"][2:] for o in run(night_store.get_backend().observations(UID)))
+
+
+def _left(svc, chat) -> dict:
+    """Per turn: does anything of it remain in each store?"""
+    xr, ap, nt = _xw_rows(), _approved(svc), _night()
+    return {k: {"words": k in xr, "fact": FACTS[k] in ap, "copy": COPIES[k] in ap,
+                "transcript": not chat.off(chat.mid(k)), "night": k in nt} for k in SAID}
+
+
+# ── the seven forget paths: each forgets the TARGET turn (the topic forget: the target's TOPIC) ────────────────────────
+
+def _forget_last(svc, chat, target, rows):
     return run(intent_router.execute_intent(intent_router.Intent("memory_forget_last", {}), UID))
 
 
-def _forget_quoted_turn(svc, target, ids):
-    tid, stored = _xw_row(target)
+def _provenance_turn(svc, chat, target, rows):
+    tid = _xw_rows()[target]
+    stored = xw.get_backend().rows[(UID, tid)]["text"]
     assert "[REDACTED]" in stored                                              # the quote IS the redacted stored form
-    return run(pa._forget_turn(UID, mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=tid), svc=svc))
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=tid)
+    return run(pa._forget_turn(UID, exp, svc=svc))
 
 
-def _forget_explained_fact(svc, target, ids):
-    ref = run(svc.get(ids[target][0].id))
+def _provenance_fact(svc, chat, target, rows):
+    ref = run(svc.get(rows[target][0].id))
     quote = str(ref.metadata.get("source_excerpt") or "")
     assert "[REDACTED]" in quote
     return run(pa.forget_it(UID, mp.Explained(seq=1, row_id=ref.id, ts=time.time(), text=ref.text, quote=quote), svc=svc))
 
 
-PATHS = {"forget_last": _forget_last, "provenance_turn": _forget_quoted_turn, "provenance_fact": _forget_explained_fact}
+def _topic(svc, chat, target, rows):
+    res = run(forget_topic.forget(svc, UID, "my plumber"))
+    return "Done" if not (res.store_down or res.failed or res.too_many) else "not done"
+
+
+# The three ERASERS, each handed what the forget hands it: on the new code the saved-turn id; on the old code (no id API) what the
+# old forget passed - the turn's words as said, and the redacted stored quote.
+def _night_mind(svc, chat, target, rows):
+    quote = xw.get_backend().rows[(UID, _xw_rows()[target])]["text"]
+    run(night_mind.erase_words(UID, chat.mid(target), SAID[target], quote))
+    return "Done"
+
+
+def _exact_words(svc, chat, target, rows):
+    if hasattr(xw, "erase_turns"):
+        run(xw.erase_turns(UID, [chat.mid(target)]))
+    else:
+        run(xw.erase_text(UID, SAID[target]))
+    return "Done"
+
+
+def _transcript(svc, chat, target, rows):
+    if hasattr(xw, "flag_transcript_turns"):
+        run(xw.flag_transcript_turns(UID, [chat.mid(target)]))
+    else:
+        run(xw.forget_transcript(UID, xw.get_backend().rows[(UID, _xw_rows()[target])]["text"]))
+    return "Done"
+
+
+PATHS = {"forget_last": _forget_last, "provenance_turn": _provenance_turn, "provenance_fact": _provenance_fact,
+         "topic_index_hits": _topic, "night_mind": _night_mind, "exact_words": _exact_words, "transcript_flag": _transcript}
+#: the stores each path owns (an ERASER owns only its own store)
+OWNS = {"forget_last": {"words", "fact", "copy", "transcript", "night"},
+        "provenance_turn": {"words", "fact", "copy", "transcript", "night"},
+        "provenance_fact": {"words", "fact", "copy", "transcript", "night"},
+        "topic_index_hits": {"words", "fact", "copy", "transcript"},
+        "night_mind": {"night"}, "exact_words": {"words"}, "transcript_flag": {"transcript"}}
 
 
 @pytest.mark.parametrize("rotated", [False, True])
-@pytest.mark.parametrize("target", sorted(TURNS))
+@pytest.mark.parametrize("target", ["a", "b"])
 @pytest.mark.parametrize("path", sorted(PATHS))
-def test_every_forget_path_takes_exactly_one_look_alike_turn(world, ledger_env, monkeypatch, path, target, rotated):
-    """Also after the ledger secret ROTATES between the write and the forget: the saved-turn id is the key, the keyed tag only an
-    audit identity, so a stale tag can never strand a row."""
+def test_every_forget_path_takes_exactly_its_turn(world, monkeypatch, path, target, rotated):
+    """Forgetting one of two look-alike turns takes exactly that turn's data in every store the path owns, and nothing of the
+    other turn or of the third. The TOPIC forget takes every turn about its topic by design (both plumber turns), never the
+    dentist turn that shares the redacted address. Also after the ledger secret ROTATES between the write and the forget."""
     import memory_forgotten
 
-    svc, transcript = world
-    other = next(m for m in TURNS if m != target)
-    ids = _plant(svc, target)
-    assert all("~" in k[1] for k in xw.get_backend().rows)                    # redacted entries carry their (audit) tag
+    svc, chat = world
+    rows = _plant(svc, chat, target)
     if rotated:
         monkeypatch.setenv(memory_forgotten.SALT_ENV, "another-unit-test-ledger-secret-9876543210")
-    for mid in TURNS:                                                          # every derived row carries its saved turn
-        assert run(svc.get(ids[mid][0].id)).metadata.get("source_turn") == mid
-        assert run(svc.get(ids[mid][1].id)).metadata.get("source_turn") == mid
-    assert PATHS[path](svc, target, ids).startswith("Done")
-    assert {xw.mid_of(k[1]) for k in xw.get_backend().rows} == {other}          # exact words
-    assert _approved(svc) == {FACTS[other], COPIES[other]}                      # fact row + capture copy
-    assert mp.OFF_RECORD_JSON_MARK in (transcript.rows[target][1] or "")        # transcript flag
-    assert transcript.rows[other][1] is None
-    assert [o["turn_id"] for o in run(night_store.get_backend().observations(UID))] == [other]   # night mind
+    assert PATHS[path](svc, chat, target, rows).startswith("Done")
+    gone = {"a", "b"} if path == "topic_index_hits" else {target}
+    left = _left(svc, chat)
+    for key in SAID:
+        for store in sorted(OWNS[path]):
+            assert left[key][store] is (key not in gone), (key, store, left)
+
+
+def test_every_derived_row_carries_its_saved_turn(world):
+    svc, chat = world
+    rows = _plant(svc, chat, "b")
+    for key, (fact, copy) in rows.items():
+        for ref in (fact, copy):
+            assert run(svc.get(ref.id)).metadata.get("source_turn") == chat.mid(key)
+        assert xw.mid_of(_xw_rows()[key]) == chat.mid(key)
 
 
 def test_a_redacted_quote_with_no_saved_turn_id_is_refused_not_guessed(world):
     """An entry written before the ids: its redacted words name no turn, so the forget is not confirmed and nothing is touched."""
-    svc, transcript = world
+    svc, chat = world
     run(xw.get_backend().add(UID, "xw-old", time.time(), "My plumber works from [REDACTED]", " plumber work ", "chat"))
     exp = mp.Explained(seq=1, row_id="", ts=time.time(), text="My plumber works from [REDACTED]",
                        quote="My plumber works from [REDACTED]", turn_id="")
     assert not run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
-    assert all(meta is None for _c, meta in transcript.rows.values())
+    assert "xw-old" in {k[1] for k in xw.get_backend().rows}
+
+
+def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, monkeypatch):
+    """An eraser of STORED words failing fails the forget (not confirmed, the turn kept for the retry); an in-process cache clear
+    failing does not (test_value_correction_forget.py::test_a_failing_clear_never_breaks_forget_that)."""
+    svc, chat = world
+    _plant(svc, chat, "b")
+    real = xw.flag_transcript_turns
+
+    async def down(*_a, **_k):
+        raise RuntimeError("store down")
+    monkeypatch.setattr(xw, "flag_transcript_turns", down)
+    assert not _forget_last(svc, chat, "b", None).startswith("Done")
+    assert "b" in _xw_rows(), "the words entry stays until the transcript is flagged (nothing left unfindable)"
+    monkeypatch.setattr(xw, "flag_transcript_turns", real)
+    assert _forget_last(svc, chat, "b", None).startswith("Done")
+    assert chat.off(chat.mid("b")) and "b" not in _xw_rows() and not chat.off(chat.mid("a"))
