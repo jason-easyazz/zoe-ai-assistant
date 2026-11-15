@@ -62,7 +62,8 @@ class Backend(Protocol):
     # the whole night in ONE transaction: every observation, every thread row, then the run row - all or nothing
     async def commit_plan(self, observations: "list[dict]", threads: "list[dict]", run: "dict") -> None: ...
 
-    async def erase_matching(self, user_id: str, pattern: "re.Pattern[str]") -> int: ...
+    # ``only_ids``: erase just these observations (the ones a turn id named), never another turn's row that holds the same words
+    async def erase_matching(self, user_id: str, pattern: "re.Pattern[str]", *, only_ids: Optional[Iterable[str]] = None) -> int: ...
 
     async def delete_user(self, user_id: str) -> int: ...
 
@@ -117,13 +118,15 @@ class MemoryBackend:
         rows.sort(key=lambda r: r["created_at"], reverse=True)
         return rows[:limit]
 
-    async def erase_matching(self, user_id, pattern):
-        gone = [i for i, r in self.obs_rows.items() if r["user_id"] == user_id and pattern.search(r["quote"] or "")]
+    async def erase_matching(self, user_id, pattern, *, only_ids=None):
+        keep = None if only_ids is None else set(only_ids)
+        gone = [i for i, r in self.obs_rows.items() if r["user_id"] == user_id and pattern.search(r["quote"] or "")
+                and (keep is None or i in keep)]
         for i in gone:
             del self.obs_rows[i]
         alive = {r["thread_id"] for r in self.obs_rows.values() if r["user_id"] == user_id}
         orphan = [i for i, t in self.thread_rows.items()
-                  if t["user_id"] == user_id and (pattern.search(t["title"] or "") or (i not in alive and gone))]
+                  if t["user_id"] == user_id and ((keep is None and pattern.search(t["title"] or "")) or (i not in alive and gone))]
         for i in orphan:
             del self.thread_rows[i]
         return len(gone) + len(orphan)
@@ -210,9 +213,10 @@ class SqlBackend:
         return await self._rows(f"SELECT {', '.join(RUN_COLS)} FROM night_runs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                                 (user_id, int(limit)), RUN_COLS)
 
-    async def erase_matching(self, user_id, pattern):
+    async def erase_matching(self, user_id, pattern, *, only_ids=None):
         obs = await self.observations(user_id)
-        gone = [r["id"] for r in obs if pattern.search(r["quote"] or "")]
+        keep = None if only_ids is None else set(only_ids)
+        gone = [r["id"] for r in obs if pattern.search(r["quote"] or "") and (keep is None or r["id"] in keep)]
         n = 0
         async with self._ctx() as db:
             for i in gone:
@@ -220,7 +224,8 @@ class SqlBackend:
                 n += int(getattr(cur, "rowcount", 0) or 0)
             await db.commit()
         alive = {r["thread_id"] for r in obs if r["id"] not in set(gone)}
-        orphan = [t["id"] for t in await self.threads(user_id) if pattern.search(t["title"] or "") or (t["id"] not in alive and gone)]
+        orphan = [t["id"] for t in await self.threads(user_id)
+                  if (keep is None and pattern.search(t["title"] or "")) or (t["id"] not in alive and gone)]
         async with self._ctx() as db:
             for i in orphan:
                 cur = await db.execute("DELETE FROM night_threads WHERE user_id = ? AND id = ?", (user_id, i))

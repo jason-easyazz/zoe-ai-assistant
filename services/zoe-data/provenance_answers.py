@@ -1373,6 +1373,8 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
     the fact standing in a sibling. Never raises - unless ``strict`` (a write that must not go ahead blind: forget / correct), which
     lets a failed lookup propagate so the caller can stop BEFORE the write instead of leaving a twin behind an empty list."""
     try:
+        import turn_forget
+
         svc = svc or _svc_default()
         meta = ref.metadata or {}
         ep = _row_epoch(meta)
@@ -1390,6 +1392,9 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
                 continue                                     # two different saved turns: a different fact, however alike the words
             if excerpt and r_ex and excerpt not in r_ex and r_ex not in excerpt:
                 continue
+            if excerpt and excerpt == r_ex and turn_forget.distinct_sayings(user_id, meta.get("source_excerpt_said"),
+                                                                            m.get("source_excerpt_said")):
+                continue                                     # equal redacted excerpts, different words as said: a look-alike turn
             same_turn = bool(turn and r_turn == turn) or bool(excerpt and r_ex and (excerpt in r_ex or r_ex in excerpt))
             r_ep = _row_epoch(m)
             near = ep is not None and r_ep is not None and abs(r_ep - ep) <= _TWIN_WINDOW_S
@@ -1425,16 +1430,25 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str, said_tags
     ``exp.turn_id`` or the row's ``said_tags`` (``exact_words.forget_transcript``), and with none it RAISES."""
     import exact_words
 
+    import night_mind
+
     n = 0
     if exp.turn_id:
         n += await exact_words.erase_turn(user_id, exp.turn_id)
-    for words in {w for w in (exp.quote, exp.text, *extra) if w}:
+    texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
+    mids: list = []
+    for words in texts:
         n += await exact_words.erase_text(user_id, words)
+        mids += await exact_words.transcript_turns(user_id, words, turn_id=exp.turn_id, said_tags=said_tags)
+    # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that
+    # held. A redacted quote names no observation by its text: its saved turn's id does (found above by the keyed identity), and only
+    # while the turn is still on the record, so the night mind goes FIRST, the transcript flag after
+    for mid in dict.fromkeys(mids):
+        n += await night_mind.erase_words(user_id, mid)
+    plain = [w for w in texts if "[redacted]" not in w.lower()] if mids else texts
+    n += await night_mind.erase_words(user_id, exp.turn_id, *plain)
+    for words in texts:
         n += await exact_words.forget_transcript(user_id, words, turn_id=exp.turn_id, said_tags=said_tags)
-    # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that held
-    import night_mind
-
-    n += await night_mind.erase_words(user_id, exp.turn_id, exp.quote, exp.text, *extra)
     return n
 
 

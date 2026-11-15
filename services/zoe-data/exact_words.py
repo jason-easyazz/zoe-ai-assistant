@@ -656,19 +656,11 @@ def _turn_tags(user_id: str, content: str) -> set:
     return {t for t in (_said_tag(user_id, f) for f in forms) if t}
 
 
-async def forget_transcript(user_id: str, text: str, *, turn_id: str = "", said_tags: Iterable[str] = ()) -> int:
-    """Flag the owner's saved turns that contain ``text`` as ``off_record`` so the nightly readers (this module's catch-up, the
-    digest, idle consolidation) never rebuild a forgotten turn from the transcript: deleting the index row alone lets the catch-up
-    re-index the surviving turn overnight. The history itself stays. Like ``erase_text`` a store failure is RAISED (a forget that
-    could not hold must not be confirmed). Only with the SQL index (the lab and tests have no ``chat_messages``); 0 = nothing matched.
-
-    ``text`` holding the redaction placeholder is a STORED form (a quote of a contact-redacted turn) that no saved turn contains:
-    the turn is found by its keyed identity instead - the tag in an exact-words ``turn_id`` or a fact row's ``source_excerpt_said``
-    (``said_tags``) - recomputed from each candidate turn, never by the redacted text. No current identity: RAISES
-    ``UnboundRedactedForget`` (not confirmed, never a guess)."""
+async def _bound_transcript_rows(user_id: str, text: str, turn_id: str, said_tags: Iterable[str]) -> list[tuple]:
+    """``(id, metadata)`` of the owner's on-the-record saved turns ``text`` names (see ``forget_transcript``). RAISES like it."""
     key = _squash(text or "").lower().strip(" .!?\"'")
     if not (user_id or "").strip() or len(key) < 6 or not isinstance(get_backend(), SqlBackend):
-        return 0
+        return []
     redacted = "[" + _REDACT_WORD + "]" in key
     tags: set = set()
     if redacted:
@@ -681,10 +673,9 @@ async def forget_transcript(user_id: str, text: str, *, turn_id: str = "", said_
     if not needle:
         if redacted:
             raise UnboundRedactedForget("nothing but the placeholder to search by")
-        return 0
-    import json
+        return []
     from memory_provenance import OFF_RECORD_JSON_MARK
-    flagged = 0
+    out = []
     for row_id, content, metadata in await _transcript_candidates(user_id, needle):
         if OFF_RECORD_JSON_MARK in str(metadata or ""):
             continue
@@ -693,13 +684,36 @@ async def forget_transcript(user_id: str, text: str, *, turn_id: str = "", said_
                 continue
         elif key not in _squash(str(content or "")).lower():
             continue
+        out.append((str(row_id), metadata))
+    return out
+
+
+async def transcript_turns(user_id: str, text: str, *, turn_id: str = "", said_tags: Iterable[str] = ()) -> list[str]:
+    """The saved-turn (``chat_messages``) ids ``forget_transcript`` would flag, without flagging: the night mind's observations name
+    the turn by that id, so a redacted quote's turn is erased there BEFORE the flag hides it. RAISES like ``forget_transcript``."""
+    return [rid for rid, _m in await _bound_transcript_rows(user_id, text, turn_id, said_tags)]
+
+
+async def forget_transcript(user_id: str, text: str, *, turn_id: str = "", said_tags: Iterable[str] = ()) -> int:
+    """Flag the owner's saved turns that contain ``text`` as ``off_record`` so the nightly readers (this module's catch-up, the
+    digest, idle consolidation) never rebuild a forgotten turn from the transcript: deleting the index row alone lets the catch-up
+    re-index the surviving turn overnight. The history itself stays. Like ``erase_text`` a store failure is RAISED (a forget that
+    could not hold must not be confirmed). Only with the SQL index (the lab and tests have no ``chat_messages``); 0 = nothing matched.
+
+    ``text`` holding the redaction placeholder is a STORED form (a quote of a contact-redacted turn) that no saved turn contains:
+    the turn is found by its keyed identity instead - the tag in an exact-words ``turn_id`` or a fact row's ``source_excerpt_said``
+    (``said_tags``) - recomputed from each candidate turn, never by the redacted text. No current identity: RAISES
+    ``UnboundRedactedForget`` (not confirmed, never a guess)."""
+    import json
+    flagged = 0
+    for row_id, metadata in await _bound_transcript_rows(user_id, text, turn_id, said_tags):
         try:
             meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else {}
         except ValueError:
             meta = {}
         meta = dict(meta) if isinstance(meta, dict) else {}
         meta["off_record"] = True
-        await _set_transcript_metadata(str(row_id), json.dumps(meta))
+        await _set_transcript_metadata(row_id, json.dumps(meta))
         flagged += 1
     return flagged
 

@@ -1329,3 +1329,43 @@ def test_forget_it_after_a_redacted_quote_with_no_identity_is_not_confirmed(svc,
     exp = mp.Explained(seq=1, row_id="", ts=NOW, text=stored, quote=stored, turn_id=ids[1].partition("~")[0])
     assert not run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
     assert t.rows["p1"][1] is None                                                          # nothing guessed
+
+
+def test_forget_it_after_a_redacted_quote_reaches_every_eraser_for_its_own_turn_only(svc, ledger_env, monkeypatch):
+    """Every eraser handed the redacted quote on the "forget it" path - the exact-words index, the transcript flag, the night mind -
+    removes or flags THAT turn's row and nothing of the look-alike turn. The night mind's observations keep only words the scrub left
+    ("my plumber works from", identical in both turns), so the turn is named by its saved-turn id, never by the redacted text.
+    Negative control: on abbfd2dfb the look-alike's observation is erased too."""
+    import night_store
+
+    t, ids = _redacted_turns(svc, monkeypatch)
+    be = night_store.get_backend()
+    for mid in ("p1", "p2"):
+        run(be.put_observation(night_store.obs_row(id=f"o-{mid}", user_id=UID, turn_id=mid, quote="My plumber works from",
+                                                   day="2026-10-08", said_at=NOW - 7200)))
+    stored = xw.get_backend().rows[(UID, ids[1])]["text"]
+    exp = mp.Explained(seq=1, row_id="", ts=NOW, text=stored, quote=stored, turn_id=ids[1])
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert [r["said_at"] for r in xw.get_backend().rows.values()] == [NOW - 7200]                  # exact words: its own
+    assert mp.OFF_RECORD_JSON_MARK in (t.rows["p2"][1] or "") and t.rows["p1"][1] is None          # transcript: its own
+    assert [o["turn_id"] for o in run(be.observations(UID))] == ["p1"]                             # night mind: its own
+
+
+def test_night_mind_never_guesses_whose_observation_a_redacted_quote_is():
+    import night_mind
+    import night_store
+
+    be = night_store.get_backend()
+    for mid in ("p1", "p2"):
+        run(be.put_observation(night_store.obs_row(id=f"o-{mid}", user_id=UID, turn_id=mid, quote="My plumber works from",
+                                                   day="2026-10-08", said_at=NOW)))
+    with pytest.raises(night_mind.UnboundRedactedErase):
+        run(night_mind.erase_words(UID, "", "My plumber works from [REDACTED]"))
+    assert len(run(be.observations(UID))) == 2                                                     # nothing guessed
+    assert run(night_mind.erase_words(UID, "p2", "My plumber works from [REDACTED]")) >= 1
+    assert [o["turn_id"] for o in run(be.observations(UID))] == ["p1"]
+    # by the turn id alone (how _erase_words names a redacted quote's turn): still only that turn's observation
+    run(be.put_observation(night_store.obs_row(id="o-p2", user_id=UID, turn_id="p2", quote="My plumber works from",
+                                               day="2026-10-08", said_at=NOW)))
+    assert run(night_mind.erase_words(UID, "p2")) >= 1
+    assert [o["turn_id"] for o in run(be.observations(UID))] == ["p1"]

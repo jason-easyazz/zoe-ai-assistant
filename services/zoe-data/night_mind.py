@@ -1979,25 +1979,60 @@ def _flat(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+class UnboundRedactedErase(RuntimeError):
+    """``erase_words`` was handed REDACTED words (a stored form, ``[REDACTED]``) and no turn id that names what to erase, while
+    observations sharing the words the scrub kept exist: they may be the forgotten turn's or a look-alike's, so nothing is guessed
+    and the forget is not confirmed."""
+
+
+_PLACEHOLDER = "[redacted]"
+
+
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn: those saved from that turn id, and
     those whose quote sits inside - or contains - any of ``texts`` (the displayed quote, the row text). "Forget it" after an explained answer must
-    reach what the night pass saved from the same words, which ``erase_entity`` (name-based) does not. A store failure is RAISED."""
+    reach what the night pass saved from the same words, which ``erase_entity`` (name-based) does not. A store failure is RAISED.
+
+    A text holding the redaction placeholder is a STORED form, never matched: an observation never holds a placeholder (``_unstorable``),
+    and a span the scrub kept ("my plumber works from") sits inside two look-alike turns' quotes alike. The caller names the turn by its
+    saved-turn id instead (``turn_id``: the chat message id the observations carry), and ITS observations are erased by id, never by their
+    quote's text (a look-alike turn's observation can hold the same words). Redacted words with no id that matched anything, while
+    observations hold the words the scrub kept: RAISES ``UnboundRedactedErase`` (whose they are cannot be told)."""
     if not (user_id or "").strip():
         return 0
-    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    flat = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    wanted = [t for t in flat if _PLACEHOLDER not in t]
+    redacted = [t for t in flat if _PLACEHOLDER in t]
     tid = str(turn_id or "").strip()
-    if not wanted and not tid:
+    if not wanted and not tid and not redacted:
         return 0
     async with _user_lock(user_id):
         try:
             backend = night_store.get_backend()
-            hit = [o["quote"] for o in await backend.observations(user_id)
-                   if (tid and str(o["turn_id"]) == tid) or any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
-            hit = [q for q in hit if (q or "").strip()]
-            if not hit:
+            obs = await backend.observations(user_id)
+            by_id = [o for o in obs if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
+            ids = {o["id"] for o in by_id}
+            by_words = [o for o in obs if o["id"] not in ids and (o["quote"] or "").strip()
+                        and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+            if redacted and not by_id:
+                kept = [" ".join(p.split()) for t in redacted for p in t.split(_PLACEHOLDER) if len(p.split()) >= 2]
+                if any(_flat(o["quote"]) in k or k in _flat(o["quote"]) for o in obs for k in kept):
+                    raise UnboundRedactedErase("redacted words with no turn id")
+            if not (by_id or by_words):
                 return 0
-            n = int(await backend.erase_matching(user_id, re.compile("|".join(re.escape(q) for q in sorted(set(hit), key=len, reverse=True)))) or 0)
+
+            def _pattern(rows):
+                return re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in rows}, key=len, reverse=True)))
+            n = 0
+            # the turn's OWN observations, by id: another turn's observation can hold the very same words (a look-alike turn
+            # whose difference the scrub removed), and erasing by the quote's text would take it too
+            if by_id:
+                n += int(await backend.erase_matching(user_id, _pattern(by_id), only_ids=sorted(ids)) or 0)
+            # the words as said (never a redacted form): every observation keeping them goes, as before
+            if by_words:
+                n += int(await backend.erase_matching(user_id, _pattern(by_words)) or 0)
+        except UnboundRedactedErase:
+            raise
         except Exception as exc:  # noqa: BLE001
             if _no_table(exc):
                 return 0
