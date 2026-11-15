@@ -46,12 +46,12 @@ class Manifest:
         """Parse the declared format. Unknown keys, kinds or levels are errors, not warnings."""
         unknown = set(raw) - cls._KEYS
         if unknown:
-            raise ConsentError(f"unknown manifest keys {sorted(unknown)}")
+            raise ConsentError("unknown manifest keys")
         try:
             reads = {Kind(k): Visibility(v) for k, v in dict(raw.get("reads", {})).items()}
             emits = frozenset(Kind(k) for k in raw.get("emits", ()))
-        except ValueError as exc:
-            raise ConsentError(str(exc)) from None
+        except ValueError:
+            raise ConsentError("unknown manifest kind or visibility") from None
         if emits & KERNEL_ONLY:
             raise ConsentError("a skill cannot emit a kernel-only kind")
         if not raw.get("skill"):
@@ -111,7 +111,9 @@ class GrantStore:
                 raise ConsentError("a grant cannot exceed the manifest")
         if not acts <= m.acts:
             raise ConsentError("a grant cannot exceed the manifest")
-        g = Grant(f"g{next(self._ids)}", person, skill, reads, acts, guardian)
+        # Adults do not need a signer; do not persist an unchecked caller string.
+        g = Grant(f"g{next(self._ids)}", person, skill, reads, acts,
+                  guardian if who.role == CHILD else None)
         self._grants.setdefault(skill, {})[person] = g
         if self.on_change:
             self.on_change("granted", g)

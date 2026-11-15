@@ -133,7 +133,7 @@ def test_asking_for_more_than_the_manifest_is_refused_and_recorded(world):
     with pytest.raises(Refused, match="no manifest"):
         spine.subscribe("never-installed")
     refusals = [e.payload for e in spine.replay("audit") if e.kind is Kind.REFUSAL]
-    assert [r["who"] for r in refusals] == ["helper"] * 4 + ["never-installed"]
+    assert [r["who"] for r in refusals] == ["helper"] * 4 + ["unverified-peer"]
     assert all("fake" not in str(r) and "unasked" not in str(r) for r in refusals)
 
 

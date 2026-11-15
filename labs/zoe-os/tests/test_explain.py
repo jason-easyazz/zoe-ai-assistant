@@ -58,11 +58,13 @@ def test_why_an_action_the_chain_the_grant_and_one_sentence(k):
 
 
 def test_why_a_refusal(k):
+    # door.unlock is not a registered action here, so its name is caller text: the refusal records a fixed code
+    # (stronger guarantee: nothing a caller typed is written into a refusal).
     with pytest.raises(Refused):
         k.actions.act("leaving-catch", "door.unlock", SAM, {}, caused_by=(1,))
     refusal = of_kind(k, Kind.REFUSAL)[-1]
     why = k.explainer.why(refusal.seq, person=ALEX)
-    assert why["sentence"] == ("leaving-catch was refused when it tried to act door.unlock: "
+    assert why["sentence"] == ("leaving-catch was refused when it tried to act unknown_action: "
                                "asks for more than its manifest. Nothing led to it.")
     assert k.explainer.last(ALEX, "refusal") == refusal.seq
 
