@@ -116,6 +116,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   through the live Kokoro sidecar after deploying an augmented voices bin. Not
   wired anywhere; deployment (augmented voices bin + env flip) is a documented
   operator step gated on the voice replay harness — see its README.
+- `presence/` — the presence-fusion lab: synthetic multi-day household traces with ground truth (`household.py`,
+  placeholder people), a harness that runs `services/zoe-data/presence_fusion.py` over them and prints the numbers per
+  sensor set (`harness.py`; chunk with `--seed N --save f.jsonl`, then `--report f.jsonl`), and its own checks
+  (`test_lab.py`, hand-run). Stdlib only, reads nothing live. Results and the "which sensor buys the most" table:
+  `docs/knowledge/presence-fusion.md`.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-executor/` — Phase 1 of the Multica executor migration
