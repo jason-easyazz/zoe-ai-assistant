@@ -1064,6 +1064,9 @@ that restores forgotten rows.
 
 Every notice has `scope` (`person`, `entity`, `topic`, `seqs`) and a complete,
 ordered sequence batch of at most 256 IDs, including an explicit empty batch.
+A forget that erases an earlier notice (a scoped notice names its subject in
+clear) carries that notice's listed IDs into its own batches, so a subscriber
+that had not read it still receives the duty; `count` stays the rows erased.
 Whole-person notices retain an opaque `subject_hash`, resolved against the known
 roster only in memory. Every owner hash (notice subject, scoped shields, forget
 ledger, nested-index markers) is a keyed hash of the EXACT person id; name

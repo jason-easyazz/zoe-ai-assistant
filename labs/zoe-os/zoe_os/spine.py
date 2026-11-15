@@ -530,10 +530,15 @@ class Spine:
                     if groups and len(seed) > MAX_TOPIC_EVENTS:
                         raise Refused("too many events match: say which part")
                 dead.extend(sorted(self._closure(seed)))
+                # An earlier notice erased here (a scoped one names its subject in clear) may not
+                # have reached every subscriber yet: carry the ids it listed, so its duty is
+                # re-delivered. Its list already holds whatever it carried, so one level is
+                # transitive. Reads only the erased notices' own rows.
+                carried = self._carried(dead)
                 if self._before_forget is not None:
                     self._before_forget(subject, dead, whole)
                 erase(None)
-                batches = list(_chunks(dead, MAX_NOTICE_SEQS)) or [[]]
+                batches = list(_chunks(sorted(set(dead) | carried), MAX_NOTICE_SEQS)) or [[]]
                 identity = {'subject_hash': owner.hex()}
                 if not whole:
                     identity['subject'] = subject
@@ -581,6 +586,17 @@ class Spine:
             self._epoch += 1
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             return ForgetResult(len(dead), upto)
+
+    def _carried(self, dead: list[int]) -> set[int]:
+        """The ids listed by the forget notices among ``dead`` (primary-key reads of those rows)."""
+        carried: set[int] = set()
+        for chunk in _chunks(dead):
+            marks = ','.join('?' * len(chunk))
+            for (raw,) in self._db.execute(
+                    f"SELECT payload FROM events WHERE seq IN ({marks}) AND kind = 'forget'"
+                    " AND tombstoned = 0", chunk):
+                carried.update(s for s in json.loads(raw or '{}').get('seqs', ()) if type(s) is int)
+        return carried
 
     def _matching(self, seed: set[int], key: str, groups: list) -> set[int]:
         """The seed events whose payload names the entity / holds the whole topic."""
