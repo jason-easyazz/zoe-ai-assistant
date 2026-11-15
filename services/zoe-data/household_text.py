@@ -42,10 +42,17 @@ class TextStore:
     forget: str = ""                 # EXTRA only: the per-subject forget's reach, "-" when none
     delete_my_data: str = ""         # EXTRA only: the member erase's reach, "-" when none
     why: str = ""                    # EXTRA only: one line
+    store_class: str = "primary"      # copy = independent corpus, cache, backup, export or staging copy
+    evidence: str = ""                # source file:line, never a data file
 
 
 def _pg(key: str, text: str, owner: str, retention: str = KEPT) -> TextStore:
     return TextStore(key, f"pg:{key}", text, retention, owner)
+
+
+def _copy(key: str, location: str, text: str, retention: str, evidence: str) -> TextStore:
+    return TextStore(key, location, text, retention, evidence.split(":", 1)[0], fr.GAP, "-", "-",
+                     "Independent copy: neither forget path locates or rewrites it; expiry is not erasure.", "copy", evidence)
 
 
 # -- stores forget_reach already holds: location, text, retention, owner (reach and status come from forget_reach) -------------
@@ -144,14 +151,23 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     TextStore("pi_intent_evidence", "~/.zoe/data/ (pi-*.jsonl)", "intent-miss evidence and shadow labels (masked text)", KEPT,
               "pi_intent_evidence.py, pi_intent_shadow.py"),
     TextStore("backup_postgres", "~/.zoe-backups/postgres/*.sql.gz", "every Postgres row above, as a dump", "7 daily + 4 weekly (<= 35 days)",
-              "scripts/maintenance/postgres-nightly-backup.sh"),
-    TextStore("backup_palace_tar", "~/.zoe-backups/mempalace/*.tar.gz", "the palace, as a tarball", "7 daily", "scripts/maintenance/mempalace-nightly-backup.sh"),
+              "scripts/maintenance/postgres-nightly-backup.sh", store_class="copy",
+              evidence="scripts/maintenance/postgres-nightly-backup.sh:60"),
+    TextStore("backup_palace_tar", "~/.zoe-backups/mempalace/*.tar.gz", "the palace, as a tarball", "7 daily", "scripts/maintenance/mempalace-nightly-backup.sh",
+              store_class="copy", evidence="scripts/maintenance/mempalace-nightly-backup.sh:76"),
     TextStore("backup_json_exports", "~/.zoe/memory-exports/*.json, palace-backups/", "palace JSON exports", "redacted by the forget ledger",
-              "scripts/maintenance/export_memory_store.py"),
+              "scripts/maintenance/export_memory_store.py", store_class="copy",
+              evidence="scripts/maintenance/export_memory_store.py:161; scripts/maintenance/redact_backups.py:157"),
+    TextStore("backup_legacy_db", "data/*.backup.<stamp>.db + <db>.pre-panel-migration.<stamp>.db",
+              "legacy database snapshots before initialisation or panel migration (whole copies)", "kept: never aged out",
+              "setup and migration scripts", store_class="copy",
+              evidence="scripts/setup/init_databases.py:57; scripts/maintenance/migrate_panel_tables.sh:145"),
     TextStore("backup_adhoc", "~/.zoe/backups/<tool>-<ts>/", "one-off backups owner scripts make (raw text)", "14 days, enforced",
-              "owner scripts (redact_router_shadow.py, ...)"),
+              "owner scripts (redact_router_shadow.py, ...)", store_class="copy",
+              evidence="scripts/maintenance/redact_router_shadow.py:20; services/zoe-data/local_text_logs.py:434"),
     TextStore("voice_sample_corpus", "~/.zoe-voice-samples/*.wav", "recorded panel speech (audio of words)", "owner corpus: kept; guest clips 30 days",
-              "routers/voice_tts.py (ZOE_VOICE_SAVE_AUDIO), voice_clips.py"),
+              "routers/voice_tts.py (ZOE_VOICE_SAVE_AUDIO), voice_clips.py", store_class="copy",
+              evidence="services/zoe-data/routers/voice_tts.py:3121"),
     TextStore("omi_audio_files", "~/.zoe/omi-recordings/<user>/*", "pendant audio (audio of words)", "claim-time retention",
               "omi_recordings.py"),
 )
@@ -166,13 +182,42 @@ EXTRA: tuple[TextStore, ...] = (
               "none automatic; the owner's own files", "scripts/perf/*, scripts/maintenance/* operator tools, scripts/train/generate_gemma_training_data.py",
               fr.GAP, "-", "-", "Operator-run tools write where the owner points them; the forget cannot find them. Most refuse an "
               "in-repo path and write 0600 (each tool's own doc)."),
-    TextStore("offbox_stage", "~/.cache/zoe-offbox/stage/<tier>/<hmac>.age",
+    _copy("offbox_stage", "~/.cache/zoe-offbox/stage/<tier>/<hmac>.age",
               "age ciphertext of the household + secrets tiers (no plaintext; names are keyed HMACs)",
-              "mirrors the on-box sources: a file deleted there is deleted here on the next backup", "scripts/maintenance/zoe_offbox.py",
-              fr.REACHED, "via its sources (the next backup drops what they dropped)", "via its sources", ""),
-    TextStore("offbox_snapshots", "the backup target (restic repo: the411 rest-server or a local directory)",
-              "snapshots of the stage (ciphertext)", "household tier <= 35 days (RETENTION in zoe_offbox.py)", "scripts/maintenance/zoe_offbox.py",
-              fr.GAP, "-", "-", "A snapshot cannot be rewritten; it ages out within 35 days, as the on-box dumps do. Restore => re-issue the forget."),
+              "source-linked: erased sources refresh next backup; unerased corpora and unreadable sources persist",
+              "scripts/maintenance/zoe_offbox.py:265; scripts/maintenance/zoe_offbox.py:401"),
+    _copy("offbox_snapshots", "backup target (restic repo)", "snapshots of the stage (ciphertext)",
+              "household tier <= 35 days while backups/pruning succeed; restore => re-issue forget",
+              "scripts/maintenance/zoe_offbox.py:628"),
+    _copy("panel_voice_logs", "panel:~/.zoe-voice/voice.log", "older transcript log lines and reply excerpts",
+              "no age limit proved; current utterance lines use hashes",
+              "scripts/setup/zoe_voice_daemon.py:132; scripts/setup/zoe_voice_daemon.py:4452"),
+    _copy("panel_browser_transcripts", "browser:localStorage/orbChatMessages_<member>", "recent chat words on each browser/panel",
+              "up to 20 messages; logout clears the current member's key, not a server forget",
+              "services/zoe-ui/dist/js/orb-loader.js:98"),
+    _copy("host_backup_archives", "~/.zoe-backups/host/{host,ha-storage}-<stamp>.tar.gz(.age)",
+              "host data/logs, panel backups and HA storage exports", "7 archives while the snapshot job succeeds",
+              "scripts/maintenance/zoe_host_snapshot.py:122; scripts/maintenance/zoe_host_snapshot.py:237"),
+    _copy("restore_drill_staging", "temp:drill-dump-*/dump + throwaway restore database",
+              "decompressed dump and restored household rows", "temporary directory and sandbox cleanup; no forget hook",
+              "scripts/maintenance/zoe_restore_drill.py:204"),
+    _copy("chroma_rehearsal_copies", "~/.zoe/chroma-migration-rehearsal/** + --copy-to / --dst paths",
+              "palace snapshots, document exports, rebuilt stores and proof scratch copies", KEPT,
+              "scripts/maintenance/chroma_migrate_rehearsal.py:335; scripts/maintenance/chroma_migrate_rehearsal.py:1161"),
+    _copy("ownerless_remediation_backups", "<palace>.ownerless-remediation.<stamp>.bak/",
+              "full palace backup before an ownerless-row repair", KEPT,
+              "scripts/maintenance/remediate_ownerless_memories.py:238"),
+    _copy("custom_memory_exports", "--out-dir/*.json(.gz) outside the standard export directories",
+              "palace documents exported to an operator-selected destination", "--keep count pruning only",
+              "scripts/maintenance/export_memory_store.py:161; scripts/maintenance/redact_backups.py:37"),
+    _copy("compaction_salvage", "~/.zoe/compaction-salvage-<collection>.json",
+              "palace documents and metadata spilled before collection rebuild", KEPT,
+              "scripts/maintenance/check_memory_tombstones.py:197"),
+    _copy("precompact_archives", "~/.zoe/palace-backups/mempalace-pre-compact-*.tar",
+              "full palace rollback archive before compaction", "manual deletion; JSON redaction does not rewrite tarballs",
+              "services/zoe-data/memory_service.py:683; scripts/maintenance/redact_backups.py:161"),
+    _copy("night_job_logs", "$NIGHT_DIR/<job output log>", "private stdout/stderr of night jobs (may quote household words)",
+              "no forget hook or age bound proved", "scripts/night/night_window.py:608"),
     TextStore("evolution_proposals", "pg:evolution_proposals, pg:evolution_proposal_history (+ the Multica issue a proposal opens)",
               "intent-gap proposals quote missed utterances verbatim (title, description, evidence examples)", KEPT,
               "evolution_notice.py, evolution_queue.py", fr.GAP, "-", "-",
@@ -192,10 +237,16 @@ WRITE_SITES: dict[str, str] = {
     "services/zoe-data/routers/telegram_media.py::_maybe_capture": "telegram_stt_capture",
     "services/zoe-data/semantic_router.py::_append_shadow_line": "router_shadow_log",
     "services/zoe-data/zoe_agent.py::_log_feedback_triple": "production_feedback_log",
+    "services/zoe-data/routers/voice_tts.py::_log_voice_stt_sample": "voice_stt_log",
+    "services/zoe-data/self_review.py::_write_private": "self_review_records",
+    "services/zoe-data/night_extract.py::_write_private": "night_extract_facts",
+    "scripts/maintenance/router_struggle_retrain.py::_write_private": "router_retrain_texts",
+    "scripts/maintenance/speaker_fa_review.py::write_private": "operator_tool_outputs",
+    "scripts/maintenance/zoe-omi-transcript.py::amain": "operator_tool_outputs",
     "services/zoe-data/omi_repass.py::*": "omi_repass_work",
     "services/zoe-data/omi_repass_eval.py::*": "omi_repass_hyps",
     "scripts/night/jobs/omi_repass_worker.py::run": "omi_repass_work",
-    "scripts/maintenance/zoe_restore_drill.py::restore": "backup_postgres",   # a plaintext copy of the newest dump in the drill's temp dir, deleted with it
+    "scripts/maintenance/zoe_restore_drill.py::restore": "restore_drill_staging",
     "scripts/perf/*::*": "operator_tool_outputs",
     "scripts/maintenance/stt_accuracy_report.py::*": "operator_tool_outputs",
     "scripts/maintenance/struggle_replay_eval.py::*": "operator_tool_outputs",
@@ -205,7 +256,7 @@ WRITE_SITES: dict[str, str] = {
     "scripts/maintenance/voice_regression_probe.py::*": "operator_tool_outputs",
     "scripts/maintenance/zoe-night-mind.py::*": "operator_tool_outputs",
     "scripts/maintenance/zoe-omi-day-review.py::*": "operator_tool_outputs",
-    "scripts/maintenance/chroma_migrate_rehearsal.py::*": "operator_tool_outputs",
+    "scripts/maintenance/chroma_migrate_rehearsal.py::*": "chroma_rehearsal_copies",
     "scripts/maintenance/agent_spike_metrics.py::*": "operator_tool_outputs",
 }
 NOT_HOUSEHOLD: dict[str, str] = {
@@ -262,12 +313,12 @@ BEGIN, END = "<!-- BEGIN GENERATED: household_text.py -->", "<!-- END GENERATED 
 
 def render_markdown() -> str:
     c = counts()
-    head = ("| store | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner |\n"
-            "|---|---|---|---|---|---|---|---|")
+    head = ("| store | class | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner | evidence |\n"
+            "|---|---|---|---|---|---|---|---|---|---|")
     rows = []
     for s in STORES:
         st, fo, de = reach(s)
-        rows.append(f"| `{s.key}` | `{s.location}` | {s.text} | {fo} | {de} | {st} | {s.retention} | {s.owner} |".replace("\n", " "))
+        rows.append(f"| `{s.key}` | {s.store_class} | `{s.location}` | {s.text} | {fo} | {de} | {st} | {s.retention} | {s.owner} | {s.evidence or '-'} |".replace("\n", " "))
     summary = (f"{c['stores']} stores: a per-subject forget reaches {c['forget']}, delete-my-data reaches {c['delete_my_data']}, "
                f"both {c['both']}, neither {c['neither']}.")
     return "\n".join([BEGIN, "", summary, "", head, *rows, "", END])
