@@ -26,8 +26,10 @@ recorded in the cut-over plan.
    working unchanged.
 3. **No claim without a receipt.** An action is recorded with a verified receipt or it did not happen. One receipt backs one
    claim, and a spent receipt stays spent across forget, retention and restart.
-4. **Durable or not acknowledged.** An acknowledged write survives a kill at any point; an unacknowledged one is absent or
-   marked uncertain, never half there. Speed is never bought with durability.
+4. **Durable or not acknowledged, and honest about which kind.** An acknowledged write survives the kernel being killed at any
+   point; an unacknowledged one is absent or marked uncertain, never half there. Surviving a POWER CUT is a stronger promise
+   that depends on how the write is synced: it is given only for the writes that are declared to need it (permissions, forgets,
+   receipts for consequential actions), and the record says which. Speed is never bought by quietly weakening either.
 5. **Forgotten means forever.** A forget reaches every copy: events, derived text, undo snapshots, intents, grant and refusal
    records, subscriber and skill stores, and anything a later action or undo would write back. The shield is scoped to the
    person who forgot. The kernel orders a skill's store purge before the permission that would allow it is erased. When the
