@@ -482,48 +482,131 @@ def _pending_path() -> Path:
     return state_dir() / "pending-forgets.json"
 
 
+class PendingUnreadable(OSError):
+    """``pending-forgets.json`` exists but is not a list of ids: never overwritten (that would drop the forgets it holds)."""
+
+
+_pending_mutex = threading.Lock()
+
+
+class _pending_locked:
+    """The parked-forget file is read-modify-written only under BOTH a thread lock and an ``flock`` on a sibling lock file, so two
+    forgets (two threads, or zoe-data and a second process) never overwrite each other. Held only for one read or one write."""
+
+    def __enter__(self):
+        import fcntl
+
+        _pending_mutex.acquire()
+        try:
+            path = _pending_path()
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.fd = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except BaseException:
+            _pending_mutex.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            os.close(self.fd)             # closing drops the flock
+        finally:
+            _pending_mutex.release()
+        return False
+
+
 def _pending_read() -> list:
+    """The parked members. Missing file = none; a file that is there but unreadable RAISES ``PendingUnreadable`` (fail closed)."""
+    path = _pending_path()
     try:
-        raw = json.loads(_pending_path().read_text("utf-8"))
-        return [str(x) for x in raw] if isinstance(raw, list) else []
-    except (OSError, ValueError):
+        text = path.read_text("utf-8")
+    except FileNotFoundError:
         return []
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        raise PendingUnreadable("pending-forgets.json is not json") from exc
+    if not isinstance(raw, list):
+        raise PendingUnreadable("pending-forgets.json is not a list")
+    return [str(x) for x in raw]
 
 
 def _pending_write(members: list) -> None:
+    """Atomic and durable: a unique temp file, fsync, rename, fsync of the directory. Raises on any failure (never swallowed)."""
     path = _pending_path()
     if not members:
         path.unlink(missing_ok=True)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump(sorted(set(members)), fh)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(sorted(set(members)), fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    dfd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def _pending_add(member: str) -> None:
+    """Park a forget for a later replay. RAISES if it cannot be made durable: the caller then fails the erase closed."""
+    with _pending_locked():
+        _pending_write(_pending_read() + [member])
+
+
+def _pending_done(members: set) -> None:
+    """Drop the members a replay confirmed; re-read under the lock so a forget parked WHILE the replay ran is kept."""
+    with _pending_locked():
+        _pending_write([m for m in _pending_read() if m not in members])
 
 
 def _replay_pending(kernel: _Kernel) -> bool:
     """Forgets that could not reach the kernel while the flag was off are re-sent (whole member: the safe over-forget) before the
     first job after a restart. True once nothing is pending."""
-    left = []
     kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
-    for member in _pending_read():
+    try:
+        with _pending_locked():
+            todo = _pending_read()
+    except OSError:
+        return False                  # unreadable: kept as it is, tried again before the next job
+    done = set()
+    for member in todo:
         try:
             _kernel_forget(kernel, member, None, None)
+            done.add(member)
         except Exception:  # noqa: BLE001
-            left.append(member)
-    _pending_write(left)
-    return not left
+            pass
+    try:
+        if done:
+            _pending_done(done)
+        with _pending_locked():
+            return not _pending_read()
+    except OSError:
+        return False
+
+
+#: the kernel's own refusal when it has never known the subject (``capability.may_forget``). The shadow daemon never forgets a member
+#: it was started with (it keeps every id it ever had: ``shadow_daemon.py``), so this refusal means nothing was ever recorded for them.
+NEVER_KNOWN = "only a person can ask to forget"
 
 
 def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optional[str]) -> int:
-    if member not in roster():
-        return 0                      # never proposed for them: nothing recorded, nothing to forget
+    """Forget by the member's id, ALWAYS: the current roster says who may be PROPOSED now, not who has records (a member taken off
+    ``people.json`` may still have events from before). Only the kernel's own "never knew them" is read as nothing to forget."""
     scoped: dict = {"entity": entity} if entity is not None else ({"topic": topic} if topic is not None else {})
     try:
         out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
-    except KernelRefused:
+    except KernelRefused as exc:
+        if NEVER_KNOWN in (exc.reason or "").lower():
+            return 0
         if not scoped:
             raise
         out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # unmatchable scope: over-forget, the safe error
@@ -554,9 +637,10 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
             logger.error("OS_SHADOW forget NOT confirmed code=%s", type(exc).__name__)
             raise ShadowForgetUnavailable(type(exc).__name__) from exc
         try:                          # flag off: do not block the erase, but never lose it - replayed before the next shadow job
-            _pending_write(_pending_read() + [user_id])
-        except OSError:
-            pass
+            _pending_add(user_id)
+        except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
+            logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
+            raise ShadowForgetUnavailable(f"not parked ({type(park_exc).__name__})") from park_exc
         logger.warning("OS_SHADOW forget deferred (flag off) code=%s", type(exc).__name__)
         return 0
 

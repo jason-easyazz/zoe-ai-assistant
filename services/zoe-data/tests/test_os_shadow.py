@@ -63,6 +63,7 @@ class FakeKernel:
         self.connections = 0
         self.act_mode = "ok"
         self.forget_mode = "ok"
+        self.known = None                      # the members the kernel knows (None = everyone): a stranger's forget is refused
         self.delay = 0.0
         self._seq = 0
         self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -114,6 +115,8 @@ class FakeKernel:
             self._seq += 1
             return self._ok(conn, req, {"seq": self._seq, "kind": a["kind"], "subject": a.get("subject")})
         if op == "forget":
+            if self.known is not None and a.get("subject") not in self.known:
+                return self._refuse(conn, req, "only a person can ask to forget")     # the lab kernel's words for a stranger
             if self.forget_mode == "refuse_all":
                 return self._refuse(conn, req, "not theirs to forget")
             if self.forget_mode == "refuse_scoped" and ("entity" in a or "topic" in a):
