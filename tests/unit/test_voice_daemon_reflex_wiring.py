@@ -487,6 +487,9 @@ def test_the_floor_is_the_quietest_chunk_not_the_wake_word(daemon):
     steady = [loud] * 6
     assert daemon._rms_floor_dbfs(steady, 6) > -40.0            # steady music / TV keeps even the quietest chunk high
     assert daemon._rms_floor_dbfs([], 3) is None and daemon._rms_floor_dbfs(frames, 0) is None
+    muted = np.zeros(1280, dtype=np.int16).tobytes()                          # the Jabra's own mute is not a quiet room
+    assert daemon._rms_floor_dbfs([muted, loud, loud], 3) > -40.0              # NEGATIVE CONTROL: counting it would say -120
+    assert daemon._rms_floor_dbfs([muted, muted], 2) is None                   # all mute = no evidence = unknown = silent
 
 
 def test_the_reflex_player_is_never_registered_as_playback():
