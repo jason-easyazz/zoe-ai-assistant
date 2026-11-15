@@ -368,12 +368,15 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
                    generated_from_memory_count = excluded.generated_from_memory_count,
                    last_generated = CURRENT_TIMESTAMP"""
     params = (user_id, portrait_text, memory_count)
+    update = ("UPDATE user_portraits SET portrait_text = ?, portrait_version = portrait_version + 1, generated_from_memory_count = ?, "
+              "last_generated = CURRENT_TIMESTAMP WHERE user_id = ?", (portrait_text, memory_count, user_id))
 
-    async def write():
-        await erase_watermark.run_sql(db, sql, params)     # a short-lived pooled connection when db is None
-        return user_id
+    async def write() -> list:    # CREATED keys only: an existing portrait is UPDATEd (never re-created), and never undone
+        created = await erase_watermark.insert_or_update(
+            db, ("SELECT 1 FROM user_portraits WHERE user_id = ?", (user_id,)), (sql, params), update)
+        return [user_id] if created else []
 
-    async def undo(_written):
+    async def undo(_created):
         await erase_watermark.run_sql(db, "DELETE FROM user_portraits WHERE user_id = ?", (user_id,))
     try:
         # a night pass read the rows before the member's erase: checked right before and right after the write (erase_watermark)

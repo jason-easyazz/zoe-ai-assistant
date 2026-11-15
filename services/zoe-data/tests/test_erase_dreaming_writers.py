@@ -56,21 +56,48 @@ def api(env, monkeypatch):
 
 
 def _inject(monkeypatch, erase, phase, when):
-    """Run the API erase at ``when`` of the first ``guarded_write`` of ``phase`` for the member (call 1 = pre-check, 2 = post-check)."""
-    real = ew.erased_since_cycle
+    """Run the API erase at ``when`` of the first ``guarded_write`` of ``phase`` for the member (call 1 = pre-check, 2 = post-check).
+    ``post-check-unreadable``: no erase, and the post-check's watermark read fails (a database blip)."""
+    real = ew._erase_state
     calls = {"n": 0}
 
     async def wrapped(uid, ph):
         if uid != UID or ph != phase:
             return await real(uid, ph)
         calls["n"] += 1
+        if when == "post-check-unreadable" and calls["n"] == 2:
+            return ew.UNKNOWN, "ConnectionError"
         if when == "between-write-and-recheck" and calls["n"] == 2:
             await erase()
-        out = False if when == "control-no-check" else await real(uid, ph)
+        out = (ew.CLEAR, "") if when == "control-no-check" else await real(uid, ph)
         if when in ("between-check-and-write", "control-no-check") and calls["n"] == 1:
             await erase()                       # the check has already answered "not erased": the erase lands right after it
         return out
-    monkeypatch.setattr(ew, "erased_since_cycle", wrapped)
+    monkeypatch.setattr(ew, "_erase_state", wrapped)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def _chroma_like_update(monkeypatch):
+    """The fake collection's ``update`` as Chroma's: rewrites rows that exist, skips ids that do not (it never re-creates a row)."""
+    from test_erase_outruns_digest import _DelCol
+
+    def update(self, *, ids, metadatas=None, documents=None, **_kw):
+        for k, i in enumerate(ids):
+            if i in self.rows:
+                doc = documents[k] if documents is not None else self.rows[i][0]
+                self.rows[i] = (doc, dict(metadatas[k]) if metadatas is not None else self.rows[i][1])
+    monkeypatch.setattr(_DelCol, "update", update)
+
+
+def _spy_undo(monkeypatch, svc):
+    """The palace undo path (erase_rows from a night write): records each call's ids."""
+    calls, real = [], svc.erase_rows
+
+    async def erase_rows(user_id, ids, **kw):
+        calls.append(list(ids))
+        return await real(user_id, ids, **kw)
+    monkeypatch.setattr(svc, "erase_rows", erase_rows)
     return calls
 
 
@@ -104,24 +131,55 @@ def test_ingest(api, monkeypatch, when):
     _expect(when, len(_rows(col, UID)))
 
 
-@pytest.mark.parametrize("when", WHEN)
+MODIFY = ["between-check-and-write", "between-write-and-recheck", "post-check-unreadable"]
+_META = {"user_id": UID, "status": "approved", "source": "turn_digest", "memory_type": "fact"}
+
+
+def _modified(when, col, monkeypatch_calls, *, rows_before: dict):
+    """A MODIFYING night write: its undo never deletes (nothing was created). An erase (either side of the write) leaves 0 rows - the
+    erase removes them, the write cannot re-create them. A post-check that cannot be read keeps the write and touches nothing else."""
+    assert all(not ids for ids in monkeypatch_calls), f"the undo deleted rows it did not create: {monkeypatch_calls}"
+    left = {k: d for k, (d, m) in col.rows.items() if m.get("user_id") == UID}
+    if when == "post-check-unreadable":
+        assert {k: left.get(k) for k in rows_before} == rows_before, "a database blip destroys nothing: every row is intact"
+    else:
+        assert left == {}, when
+
+
+@pytest.mark.parametrize("when", MODIFY)
 def test_archive_duplicate(api, monkeypatch, when):
     svc, col, erase = api
-    meta = {"user_id": UID, "status": "approved", "source": "turn_digest", "memory_type": "fact"}
-    col.rows["dup"], col.rows["keep"] = ("User keeps bees", dict(meta)), ("User keeps bees", dict(meta))
+    col.rows["dup"], col.rows["keep"] = ("User keeps bees", dict(_META)), ("User keeps bees", dict(_META))
+    undo = _spy_undo(monkeypatch, svc)
     _inject(monkeypatch, erase, "archive_duplicate", when)
     _night(lambda: svc.archive_duplicate("dup", "keep", actor="weekly_consolidation"))
-    _expect(when, len(_rows(col, UID)))
+    _modified(when, col, undo, rows_before={"dup": "User keeps bees", "keep": "User keeps bees"})
 
 
-@pytest.mark.parametrize("when", WHEN)
+@pytest.mark.parametrize("when", MODIFY)
+def test_review_decision(api, monkeypatch, when):
+    svc, col, erase = api
+    col.rows["cand"] = ("User keeps three hens", dict(_META, status="pending"))
+    undo = _spy_undo(monkeypatch, svc)
+    _inject(monkeypatch, erase, "weekly_consolidation", when)
+    _night(lambda: svc.review("cand", decision="approve", actor="weekly_consolidation"))
+    _modified(when, col, undo, rows_before={"cand": "User keeps three hens"})
+
+
+@pytest.mark.parametrize("when", WHEN + ["post-check-unreadable"])
 def test_review_edit(api, monkeypatch, when):
+    """The weekly edit CREATES the new row and only MODIFIES the superseded one: a confirmed erase undoes the new id only."""
     svc, col, erase = api
     meta = {"user_id": UID, "status": "approved", "source": "synthesis", "memory_type": "fact",     # inferred: the weekly pass may edit it
             "authority": "inferred", "authority_class": "inferred"}
     col.rows["old"] = ("User keeps three hens", dict(meta))
+    undo = _spy_undo(monkeypatch, svc)
     _inject(monkeypatch, erase, "consolidation", when)
     _night(lambda: svc.review("old", decision="edit", edits="User keeps four hens", actor="consolidation"))
+    assert all("old" not in ids for ids in undo), "the superseded (pre-existing) row is never undone"
+    if when == "post-check-unreadable":
+        assert col.rows["old"][0] == "User keeps three hens" and len(_rows(col, UID)) == 2 and undo == []
+        return
     _expect(when, len(_rows(col, UID)))
 
 
@@ -457,7 +515,7 @@ def test_a_night_write_undone_under_the_lock_leaves_no_palace_and_no_registry_ro
     other = MemoryService(data_dir="/nonexistent/zoe-test-erase-dreaming-api")
     other._collection, other._audit_collection = svc._collection, svc._audit_collection
     other._append_audit, other.search = svc._append_audit, svc.search
-    real_check, calls, undo_calls, registry_calls = ew.erased_since_cycle, {"n": 0}, [], []
+    real_check, calls, undo_calls, registry_calls = ew._erase_state, {"n": 0}, [], []
 
     async def check(uid, ph):
         out = await real_check(uid, ph)
@@ -466,7 +524,7 @@ def test_a_night_write_undone_under_the_lock_leaves_no_palace_and_no_registry_ro
             if calls["n"] == 1:
                 await other.delete_user(member, actor="test", reason="synthetic erase")   # the API erase, right after the pre-check
         return out
-    monkeypatch.setattr(ew, "erased_since_cycle", check)
+    monkeypatch.setattr(ew, "_erase_state", check)
     real_erase_rows = svc.erase_rows
 
     async def erase_rows(user_id, ids, **kw):
@@ -485,3 +543,84 @@ def test_a_night_write_undone_under_the_lock_leaves_no_palace_and_no_registry_ro
     assert undo_calls == [True], "the racing write was undone through erase_rows(lock_held=True)"
     assert registry_calls == [], "the undo under the memory lock never takes the erase gate (no erase_for_rows)"
     assert _rows(col, member) == [] and rows() == 0, "no palace row and no registry row survive"
+
+
+# ── more MODIFYING night writers: REM reinforce, deep-sleep promotion, a pre-existing portrait / candidate ─────────────────────
+
+class _Drawers:
+    """The pass's direct collection reads over the fake (whose matcher has no $eq): the member's rows, by status when asked."""
+
+    def __init__(self, col, status=None):
+        self.col, self.status = col, status
+
+    def get(self, *, where=None, ids=None, **kw):
+        got = self.col.get(ids=ids, **kw) if ids is not None else self.col.get(**kw)
+        if where is None:
+            return got
+        keep = [i for i, m in enumerate(got["metadatas"]) if m.get("user_id") == UID and (self.status is None or m.get("status") == self.status)]
+        return {k: [got[k][i] for i in keep] for k in ("ids", "documents", "metadatas")}
+
+    def update(self, **kw):
+        self.col.update(**kw)
+
+    def upsert(self, **kw):
+        self.col.upsert(**kw)
+
+
+@pytest.mark.parametrize("when", MODIFY)
+def test_rem_reinforce(api, monkeypatch, when):
+    svc, col, erase = api
+    today = dt.datetime.utcnow().date().isoformat()
+    col.rows["rem"] = ("User grows tomatoes in the garden", dict(_META, added_at=today + "T01:00:00Z", consolidation_count=0,
+                                                                 concept_tags="garden"))
+    monkeypatch.setattr(memory_service, "leased_drawers", lambda _svc: _Drawers(col))
+    undo = _spy_undo(monkeypatch, svc)
+    _inject(monkeypatch, erase, "rem", when)
+    _night(lambda: memory_digest._rem_reinforce_pass(UID))
+    _modified(when, col, undo, rows_before={"rem": "User grows tomatoes in the garden"})
+    if when == "post-check-unreadable":
+        assert col.rows["rem"][1]["consolidation_count"] == 1, "the reinforcement itself was kept"
+
+
+@pytest.mark.parametrize("when", MODIFY)
+def test_deep_sleep_promotion(api, monkeypatch, when):
+    svc, col, erase = api
+    col.rows["pend"] = ("User keeps two cats", dict(_META, status="pending", unique_query_count=3))
+    monkeypatch.setattr(memory_service, "leased_drawers", lambda _svc: _Drawers(col, "pending"))
+    monkeypatch.setattr(memory_digest, "_promotion_score", lambda _m: 0.9)
+    undo = _spy_undo(monkeypatch, svc)
+    _inject(monkeypatch, erase, "deep_sleep", when)
+    _night(lambda: memory_digest._deep_sleep_pass(UID))
+    _modified(when, col, undo, rows_before={"pend": "User keeps two cats"})
+    if when == "post-check-unreadable":
+        assert col.rows["pend"][1]["status"] == "approved", "the promotion itself was kept"
+
+
+@pytest.mark.parametrize("when", MODIFY)
+def test_a_pre_existing_portrait_is_updated_never_undone(api, sqldb, monkeypatch, when):
+    _svc, _col, erase = api
+
+    async def seed():
+        await sqldb.execute("INSERT INTO user_portraits (user_id, portrait_text) VALUES (?, 'the old portrait')", (UID,))
+        await sqldb.commit()
+    asyncio.run(seed())
+    _inject(monkeypatch, erase, "portrait", when)
+    _night(lambda: user_portrait._save_portrait(UID, "A synthetic portrait", 3, db=sqldb))
+    if when == "post-check-unreadable":
+        async def text():
+            async with sqldb.execute("SELECT portrait_text FROM user_portraits WHERE user_id = ?", (UID,)) as cur:
+                return [r[0] for r in await cur.fetchall()]
+        assert asyncio.run(text()) == ["A synthetic portrait"], "the update is kept, nothing is deleted"
+    else:
+        assert _count(sqldb, "user_portraits") == 0, "the erase removed it and the UPDATE could not bring it back"
+
+
+def test_the_unknown_line_names_a_phase_and_an_error_type_only(api, monkeypatch, caplog):
+    svc, col, erase = api
+    caplog.set_level(logging.INFO)
+    _inject(monkeypatch, erase, "synthesis", "post-check-unreadable")
+    ref = _night(lambda: svc.ingest("User keeps a small vegetable garden behind the house", user_id=UID, source="synthesis",
+                                    memory_type="insight", confidence=0.85, status="approved"))
+    assert ref is not None and len(_rows(col, UID)) == 1, "a created row is kept when the post-check cannot be read"
+    [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("ERASE_WATERMARK_UNKNOWN")]
+    assert line == "ERASE_WATERMARK_UNKNOWN phase=synthesis code=ConnectionError"

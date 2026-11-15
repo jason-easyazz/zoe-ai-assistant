@@ -1913,12 +1913,15 @@ class MemoryService:
                     self._remember_seen_key(user_id, idem_key)
                     return None
 
-            async def _write():
-                await self._run_sync(self._write_row, mem_id, scrubbed, metadata)
-                return mem_id
+            async def _write() -> list:   # CREATED ids only: an overwrite of an existing pending row is an update (never re-creates)
+                if existing is None:
+                    await self._run_sync(self._write_row, mem_id, scrubbed, metadata)
+                    return [mem_id]
+                await self._run_sync(self._update_row, mem_id, scrubbed, metadata)
+                return []
 
-            async def _undo(mid):
-                await self._undo_night_write(user_id, [mid], source or "ingest")
+            async def _undo(created):
+                await self._undo_night_write(user_id, created, source or "ingest")
             try:
                 # a night pass (its own process) that began before the member's erase: checked right before and after the write
                 if await _erase_watermark.guarded_write(user_id, source or "ingest", _write, _undo) is None:
@@ -2732,8 +2735,8 @@ class MemoryService:
                 return None      # read before the lock, erased since (this process's erase holds this lock): never written back
             phase = origin or actor or "review"
 
-            async def _undo(ids):          # a night pass's write raced an erase in the API process: exactly what it wrote goes
-                await self._undo_night_write(user_id, ids, phase)
+            async def _undo(created):      # a night pass's write raced an erase in the API process: exactly what it CREATED goes
+                await self._undo_night_write(user_id, created, phase)
             if decision in {"approve", "reject", "archive"}:
                 new_status = {
                     "approve": "approved",
@@ -2775,9 +2778,9 @@ class MemoryService:
                     new_meta["edge_applied_id"] = new_edge
                     new_meta["supersedes_edge_id"] = disputed[len(_EDGE_REF):]
                     disputed = ""
-                async def _write_decision():
-                    await self._run_sync(self._write_row, mem_id, current.text, new_meta)
-                    return [mem_id]
+                async def _write_decision() -> list:      # MODIFIES an existing row (update: never re-creates); creates nothing
+                    await self._run_sync(self._update_row, mem_id, current.text, new_meta)
+                    return []
                 if await _erase_watermark.guarded_write(user_id, phase, _write_decision, _undo) is None:
                     return None
                 await self._append_audit(
@@ -2905,10 +2908,13 @@ class MemoryService:
             # safe order expert_dispatch._maybe_supersede uses. "superseded" is in
             # _BLOCKED_READ_STATUSES (instantly invisible on read); marking the old
             # row first and then failing the new write would make the fact vanish.
-            async def _write_edit():
-                await self._run_sync(
-                    self._write_row, new_id, scrubbed, new_meta
-                )
+            async def _write_edit() -> list:     # CREATES new_id (when it is a new row); only MODIFIES the superseded one
+                created = []
+                if new_id != mem_id and await self._run_sync(self._get_sync, new_id) is None:
+                    await self._run_sync(self._write_row, new_id, scrubbed, new_meta)
+                    created.append(new_id)
+                else:                        # an in-place rewrite (or an existing row): update, never re-create
+                    await self._run_sync(self._update_row, new_id, scrubbed, new_meta)
                 # Guard new_id != mem_id: an edit whose text+durable identity hash to the
                 # same mem_id just overwrote the row in place, so there is no distinct old
                 # row to retire — superseding it would hide the only surviving copy.
@@ -2919,9 +2925,9 @@ class MemoryService:
                     old_meta.update(_temporal.retire_fields(
                         old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
                     await self._run_sync(
-                        self._write_row, mem_id, current.text, old_meta
+                        self._update_row, mem_id, current.text, old_meta
                     )
-                return {new_id, mem_id}
+                return created
             if await _erase_watermark.guarded_write(user_id, phase, _write_edit, _undo) is None:
                 return None
             await self._append_audit(
@@ -3483,16 +3489,16 @@ class MemoryService:
                 md.update(_temporal.archive_fields(
                     cur.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
 
-                async def write():
-                    await self._run_sync(self._write_row, mem_id, cur.text, md)
+                async def write() -> list:     # MODIFIES the existing row (update: never re-creates it); creates nothing
+                    await self._run_sync(self._update_row, mem_id, cur.text, md)
                     await self._append_audit(
                         mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
                         before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
                         reason=note)
-                    return mem_id
+                    return []
 
-                async def undo(mid):
-                    await self._undo_night_write(uid, [mid], "archive_duplicate")
+                async def undo(created):
+                    await self._undo_night_write(uid, created, "archive_duplicate")
                 if await _erase_watermark.guarded_write(uid, "archive_duplicate", write, undo) is None:
                     return False
             _invalidate_agent_user_facts_cache(uid)
@@ -3632,11 +3638,14 @@ class MemoryService:
                 if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
                     _log_erase_drop(writer)
                     return None
-                await self._run_sync(self._write_row, mem_id, scrubbed, md)
-                return mem_id
+                if existing is None:
+                    await self._run_sync(self._write_row, mem_id, scrubbed, md)
+                    return [mem_id]                     # CREATED
+                await self._run_sync(self._update_row, mem_id, scrubbed, md)
+                return []                               # modified an existing pending row: never undone
 
-            async def _undo(mid):
-                await self._undo_night_write(user_id, [mid], writer or "candidate")
+            async def _undo(created):
+                await self._undo_night_write(user_id, created, writer or "candidate")
             # a night pass (its own process) that began before the member's erase: checked right before and after the write
             if await _erase_watermark.guarded_write(user_id, writer or "candidate", _write, _undo) is None:
                 return None
@@ -4191,6 +4200,17 @@ class MemoryService:
 
     def _audit_collection(self):
         return _palace_client(self._data_dir).get_or_create_collection(_AUDIT_COLLECTION)
+
+    def _update_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
+        """Rewrite an EXISTING row; a row that is gone stays gone (Chroma ``update`` skips unknown ids, unlike ``upsert``). For a
+        modification a night pass made from a row it read earlier: an erase in another process may have removed it meanwhile."""
+        assert_write_allowed(
+            getattr(self, "_data_dir", _MEMPALACE_DATA), str(metadata.get("user_id") or metadata.get("wing") or ""), "row write")
+        col = self._collection()
+        if callable(getattr(col, "update", None)):
+            col.update(ids=[mem_id], documents=[text], metadatas=[metadata])
+        elif (col.get(ids=[mem_id], include=[]).get("ids") or []):      # a store without update (a lab stand-in): only an existing row
+            col.upsert(ids=[mem_id], documents=[text], metadatas=[metadata])
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
         assert_write_allowed(

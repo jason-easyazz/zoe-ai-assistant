@@ -343,9 +343,14 @@ async def rebuild_user_model_card(user_id: str, db=None) -> dict[str, Any]:
             version = card_version(text)
             built = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
-            async def write():
-                await erase_watermark.run_sql(conn, _UPSERT, (uid, json.dumps(card, ensure_ascii=False), text, version, built, len(rows)))
-                return uid
+            async def write() -> list:    # CREATED keys only: an existing card is UPDATEd (never re-created), and never undone
+                body = json.dumps(card, ensure_ascii=False)
+                created = await erase_watermark.insert_or_update(
+                    conn, ("SELECT 1 FROM user_model_cards WHERE user_id = ?", (uid,)),
+                    (_UPSERT, (uid, body, text, version, built, len(rows))),
+                    ("UPDATE user_model_cards SET card_json = ?, card_text = ?, version = ?, built_at = ?, source_count = ? WHERE user_id = ?",
+                     (body, text, version, built, len(rows), uid)))
+                return [uid] if created else []
 
             async def undo(_uid):
                 await erase_watermark.run_sql(conn, "DELETE FROM user_model_cards WHERE user_id = ?", (uid,))

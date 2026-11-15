@@ -2734,6 +2734,18 @@ async def _extract_concept_tags(fact: str) -> list[str]:
     return []
 
 
+def _update_existing(col, ids: list, docs: list, metas: list) -> None:
+    """Rewrite rows that EXIST; an id that is gone stays gone (Chroma ``update`` skips unknown ids; ``upsert`` would re-create a row a
+    member erase in another process just removed). A store without ``update`` (a lab stand-in) gets an upsert of the ids still there."""
+    if callable(getattr(col, "update", None)):
+        col.update(ids=list(ids), documents=list(docs), metadatas=list(metas))
+        return
+    there = set(col.get(ids=list(ids), include=[]).get("ids") or [])
+    keep = [k for k, i in enumerate(ids) if i in there]
+    if keep:
+        col.upsert(ids=[ids[k] for k in keep], documents=[docs[k] for k in keep], metadatas=[metas[k] for k in keep])
+
+
 async def _rem_reinforce_pass(user_id: str) -> dict:
     """REM pass: for each new memory ingested tonight, strengthen related existing memories.
 
@@ -2799,7 +2811,6 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             # them, so they run through the night-write rule (checked right before and right after; what was written is undone)
             async def _write(mem_id=mem_id, doc=doc, meta=meta, neighbour_ids=neighbour_ids) -> list:
                 nonlocal linked
-                written = [mem_id]
                 if neighbour_ids:
                     # Bump access on neighbours (reinforcement)
                     await svc.tick_access(user_id, neighbour_ids)
@@ -2823,16 +2834,15 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
                         nm["related_ids"] = ",".join(i for i in nb_related if i)
                         new_nb_metas.append(nm)
                     if nb_ids:
-                        col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
-                        written += list(nb_ids)
+                        _update_existing(col, nb_ids, nb_docs, new_nb_metas)
 
                 # Mark as REM-processed
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
-                return written
+                _update_existing(col, [mem_id], [doc], [meta])
+                return []                    # MODIFIED existing rows only: nothing created, so nothing is ever undone
 
-            async def _undo(ids: list) -> None:      # through the audited erase (tombstone first), never a bare collection delete
-                await svc.erase_rows(user_id, ids, actor="night_undo", reason="night write raced a member erase")
+            async def _undo(_created: list) -> None:
+                raise AssertionError("REM creates no row: it has nothing to undo")
             if await _erase_watermark.guarded_write(user_id, "rem", _write, _undo) is None:
                 break
 
@@ -2936,11 +2946,11 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             async def _write(mem_id=mem_id, doc=doc, meta=meta, new_status=new_status) -> list:
                 meta["status"] = new_status
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
-                return [mem_id]
+                _update_existing(col, [mem_id], [doc], [meta])
+                return []                    # MODIFIED an existing row: nothing created, so nothing is ever undone
 
-            async def _undo(ids: list) -> None:      # through the audited erase (tombstone first), never a bare collection delete
-                await svc.erase_rows(user_id, ids, actor="night_undo", reason="night write raced a member erase")
+            async def _undo(_created: list) -> None:
+                raise AssertionError("deep sleep creates no row: it has nothing to undo")
             if await _erase_watermark.guarded_write(user_id, "deep_sleep", _write, _undo) is None:
                 break
             if new_status == "approved":
@@ -3076,11 +3086,11 @@ async def _synthesis_pass(user_id: str) -> dict:
                         sm["concept_tags"] = tag
 
                         async def _link(rid=ref.id, sm=sm, text=synthesis_text) -> list:
-                            col.upsert(ids=[rid], documents=[text], metadatas=[sm])
-                            return [rid]
+                            _update_existing(col, [rid], [text], [sm])     # the row ingest just kept: modified, never re-created
+                            return []
 
-                        async def _unlink(ids: list) -> None:
-                            await svc.erase_rows(user_id, ids, actor="night_undo", reason="night write raced a member erase")
+                        async def _unlink(_created: list) -> None:
+                            raise AssertionError("the synthesis link creates no row: it has nothing to undo")
                         if await _erase_watermark.guarded_write(user_id, "synthesis", _link, _unlink) is None:
                             continue
                     synthesized += 1
