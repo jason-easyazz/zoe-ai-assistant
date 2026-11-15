@@ -107,7 +107,8 @@ def test_every_subscriber_is_told_to_forget_and_the_notice_carries_no_content(sp
     spine.publish(say(A, SENTINEL))
     spine.forget(A, actor=A)
     (notice,) = drain(sub)
-    assert notice.kind is Kind.FORGET and notice.payload == {"subject": A, "upto": 1, "count": 1}
+    assert notice.kind is Kind.FORGET and notice.payload == {
+        "subject": A, "upto": 1, "count": 1, "scope": "person", "seqs": [1]}
 
 
 def test_events_that_mention_the_person_go_too(spine):

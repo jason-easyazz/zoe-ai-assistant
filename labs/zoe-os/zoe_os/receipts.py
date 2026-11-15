@@ -47,6 +47,23 @@ Undo = Callable[[str, dict, dict], Any]            # (person, args, before) -> p
 UNDO = "undo"
 
 
+def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
+    """Only versioned row snapshots assert complete provenance; None means unknown."""
+    if not isinstance(before, dict) or before.get('provenance') != 1:
+        return None
+    if 'rows' in before:
+        rows = before['rows']
+        if not all(isinstance(r.get('asked'), int) for r in rows):
+            return None
+        return before | {'rows': [r for r in rows if r['asked'] not in dead]}
+    if 'alarm' in before:
+        row = before['alarm']
+        if row is not None and not isinstance(row.get('asked'), int):
+            return None
+        return before | {'alarm': None if row and row['asked'] in dead else row}
+    return None
+
+
 @dataclass(frozen=True)
 class Receipt:
     id: str
@@ -222,6 +239,8 @@ class Dispatcher:
 
     def _cannot_undo(self, last: Event) -> str:
         p = last.payload
+        if p.get('undo_refusal'):
+            return p['undo_refusal']
         if p.get("action") == UNDO:
             return "the last action was itself an undo"
         if self._undone(last.seq):

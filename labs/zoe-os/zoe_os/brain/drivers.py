@@ -10,6 +10,7 @@ a scoped forget, and a wrong value can at worst mis-scope a delete of the SAME p
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..spine import forget_affects
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
          "description": "the utterance this came from (filled by the adapter)"}
@@ -38,7 +39,7 @@ class Lists:
         return {"item": args["item"]} if want in self.rows.get(person, []) else None
 
     def snapshot(self, person, args):
-        return {"rows": [dict(r) for r in self.rows.get(person, [])]}
+        return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, [])]}
 
     def put_back(self, person, args, before):
         self.rows[person] = [dict(r) for r in before["rows"]]
@@ -68,7 +69,7 @@ class Reminders:
             r["asked"] == args["asked"] and r["note"] == args["note"] for r in self.rows.get(person, [])) else None
 
     def snapshot(self, person, args):
-        return {"rows": [dict(r) for r in self.rows.get(person, [])]}
+        return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, [])]}
 
     def put_back(self, person, args, before):
         self.rows[person] = [dict(r) for r in before["rows"]]
@@ -94,7 +95,7 @@ class Alarms:
         return {"alarm": args["time"]} if self.at.get(person, {}).get("time") == args["time"] else None
 
     def snapshot(self, person, args):
-        return {"alarm": self.at.get(person)}
+        return {"provenance": 1, "alarm": self.at.get(person)}
 
     def put_back(self, person, args, before):
         if before["alarm"] is None:
@@ -115,15 +116,14 @@ class Keeper:
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is not Kind.FORGET:
             return
-        person, gone = ev.payload.get("subject"), set(ev.payload.get("seqs", ()))
-        scoped = "scope" in ev.payload
+        person = ev.payload.get("subject")
         for store in self.stores:
             if isinstance(store, Alarms):
                 row = store.at.get(person)
-                if row and (not scoped or row["asked"] in gone):
+                if row and forget_affects(ev, row["asked"]):
                     del store.at[person]
             else:
-                keep = [r for r in store.rows.get(person, []) if scoped and r["asked"] not in gone]
+                keep = [r for r in store.rows.get(person, []) if not forget_affects(ev, r["asked"])]
                 store.rows[person] = keep
                 if not keep:
                     store.rows.pop(person, None)

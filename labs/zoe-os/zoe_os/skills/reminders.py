@@ -21,6 +21,7 @@ Inputs it reads (all private to their subject):
 from __future__ import annotations
 
 from ..events import Event, Kind
+from ..spine import forget_affects
 
 SNOOZE_MINUTES = 10
 
@@ -115,14 +116,21 @@ class Reminders:
         """The kernel erased the events. The store is outside the kernel, so the skill erases
         there: everything of the person's, or (a scoped forget) the reminders whose request or
         create receipt is among the erased events."""
-        gone = set(notice.payload.get("seqs", ()))
-        scoped = "scope" in notice.payload
+        deleted = set()
         for rid, item in sorted(self._items.items()):
             if item["person"] != notice.payload.get("subject"):
                 continue
-            if scoped and not ({item["receipt"], item["asked"]} & gone):
+            if not any(forget_affects(notice, s) for s in (item['receipt'], item['asked'])):
                 continue
             ctx.act("reminder.delete", item["person"], {"id": rid}, caused_by=(notice.seq,))
             del self._items[rid]
+            deleted.add(rid)
+        # A restarted skill cannot relearn forgotten requests from the erased log. IDs are
+        # derived from globally unique request seqs, so replay can purge the external store
+        # even with an empty _items cache. Deleting a non-reminder seq's ID is a no-op.
+        if notice.payload.get('scope') in {'person', 'seqs', 'entity', 'topic'}:
+            for rid in sorted({f'r{s}' for s in notice.payload.get('seqs', ())} - deleted):
+                ctx.act('reminder.delete', notice.payload['subject'], {'id': rid},
+                        caused_by=(notice.seq,))
         self._offered = {o: g for o, g in self._offered.items()
                          if o.rsplit("-", 1)[0].removeprefix("reminder-") in self._items}

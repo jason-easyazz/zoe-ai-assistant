@@ -17,6 +17,14 @@ and not checked, **[vision]** means not built and not proven.
 
 ## 0. Answer first
 
+**Forget merge limitation [code, inferred]:** `labs/zoe-os/zoe_os/spine.py` selects named
+sequences in chunks through `people_seq` and commits selection, complete scoped notice batches,
+snapshot scrubbing, erasure and bookkeeping in one transaction. However, `_scrub_snapshots`
+reads every surviving action receipt, including opaque legacy snapshots. This conflicts with
+`test_history_cost.py`'s fixed SQL-work budget as receipt history grows; indexed seed selection
+alone does not make the whole forget bounded. Preserving snapshot safety takes precedence in
+this merge. An indexed snapshot-dependency design would need separate implementation and proof.
+
 **What "an OS" means for a household.** Today each feature of Zoe carries its own copy of the hard rules: who
 may see this, whether she may speak now, how to forget, how to prove a thing was really done. The copies are
 good, and they are separate, so every new feature must remember all of them, and the price of one miss is a
@@ -169,6 +177,52 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
 7. reaches the action bookkeeping: an intent row tied to an erased event keeps no person, skill, action,
    grant or cause. A still-live sequence number stays as a bare marker, so forgetting only a receipt does not
    make the person's yes usable again.
+
+**Forget scope and undo copies [code; regression runs pending].** Every notice carries `scope`
+(`person`, `seqs`, `entity`, or `topic`) and `seqs`, including an explicit empty array when nothing
+matched. It carries identifiers and counts, never the matched words. Selected sequences include the
+derived closure. They are sorted and split into batches of at most 256; all batches, the tombstones,
+snapshot scrubs, shields and ledger entry commit in one SQLite transaction before delivery. Each batch
+is independently idempotent. The kernel acknowledges a skill's cursor only after its handler returns;
+a restart resumes remaining batches, and an interrupted handler can receive its batch again. External
+stores must survive or be restored separately; this does not make arbitrary external writes transactional.
+Reminder request IDs derive from sequences, so notice replay can purge its surviving external table even
+when the restarted skill has lost its in-memory item cache (action grants must be restored before pumping).
+Whole-person notices apply through `upto`, so replay does not erase newer rows. Missing, unknown, or
+malformed legacy scopes purge that person's subscriber state: over-erasing a store is safer than retaining
+possibly forgotten content. Keeper, reminders, twin, leaving-catch and calendar-heads-up share this rule.
+
+List, reminder and alarm driver snapshots now declare versioned per-row request provenance (`asked`).
+Forget scrubs affected rows from surviving undo snapshots and from undo read-back proofs. Undo then
+restores only survivors; it does not depend causally on every old row (which would erase unrelated later
+actions). Entity/topic matching excludes these before-state copies and handles them through the same scrub.
+For older or opaque snapshots without complete provenance, a nonempty forget concerning the receipt's
+person removes the saved before-state and refuses undo explicitly. The surviving action's arguments
+remain available to reminder restoration. Empty selections invalidate nothing.
+Queued receipts refresh their bodies after forget, so they cannot deliver the pre-scrub snapshot.
+
+Forget-copy and bounded-list sweep (lab implementation, not production):
+
+| Store or bound | Verdict |
+|---|---|
+| Event payloads, derived events, people/causes links; intent bookkeeping | Reached by tombstone closure and intent scrub; retention skeletons retain links for person/sequence forget. |
+| Receipt undo before-state and undo `proof.restored` | Fixed here: provenance scrub; legacy undo invalidation and removal of restored proof. |
+| Subscription queues | Fixed here: surviving receipt bodies refresh as well as withdrawing erased events. |
+| Subscription/Context/client caches; malicious skill's supported cache | Reached: sequence-only views reread the authorized log; no stored body copy. |
+| Brain list/reminder/alarm stores, reminders skill `_items`/`_offered` and fake reminder table | Fixed scoped notice handling; purge by request/receipt sequence. External stores still require their handler and restore procedure. |
+| Twin days, room/step labels and computed baseline | Scoped handler fixed. Baselines recompute from surviving facts. Known limit: entity/topic matching after source content expiry cannot select reduced facts; person/sequence forget still reaches them. |
+| Leaving-catch item labels; calendar-heads-up pending proposals | Fixed here: select request sequence rather than clearing unrelated state. |
+| Attention preferences/budget counters; grants; consumed-receipt markers; shield hashes | Not content copies: settings, counts, consent or IDs/hashes only; not a free-text resurrection path. |
+| Replay recordings, generated days, rehearsal/brain driver fixtures and reports | Not runtime stores: synthetic input/output artifacts; arbitrary exported files are outside the kernel erase boundary. |
+| Notice 256-sequence bound | Fixed here: complete ordered batches; 260/1,000-event regressions plus old truncated-notice negative control. |
+| SQL fetch/newest limits, closure chunks, queue bound, client poll limit | Pagination/replay loops consume all pages; chunk sizes do not cap forget coverage. |
+| Topic 12-event and entity six-token bounds | Topic refuses before erasing. Forget/release now refuse oversized entities instead of silently matching a truncated prefix. |
+| Explanation ancestor `MAX_CHAIN=64`, pump round budget, twin window | Not erase selectors: bounded explanation, resumable pump and explicit retention; none limits the tombstone closure. |
+| Wire frame/reply/subscription limits; argument string limits; digest prefixes | Explicit transport/validation limits or hashes, not silently truncated erase lists. |
+
+Socket-free regression file: `labs/zoe-os/tests/test_forget_receipts_notices.py`. Run it with the
+existing forget, undo, reminders, twin-forget and review tests under the builder memory/quiet-box rules.
+No result is claimed until those runs, including old-code negative controls, have executed.
 
 **Exists [code].** The production forget is strong and hand-maintained: a ledger that cannot list what it
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
