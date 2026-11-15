@@ -307,7 +307,10 @@ OTHER: tuple[Store, ...] = (
     Store("backup_json_exports", "backup", WORDS, REACHED, "Palace JSON exports and compaction backups are redacted by the forget ledger "
           "(forget_redact.redact_export, scripts/maintenance/redact_backups.py).", entity="forget_redact.redact_export",
           markers=("memory-exports", "palace-backups")),
-    Store("backup_adhoc", "backup", WORDS, OUT_OF_SCOPE, "One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, "
+    Store("backup_legacy_db", "backup", WORDS, GAP, "Neither forget path reaches the legacy SQLite snapshots a setup or migration script leaves beside "
+          "the old databases (data/*.backup.<stamp>.db, <db>.pre-panel-migration.<stamp>.db): whole copies, never rewritten and never aged out. "
+          "Listed by household_text.py as a kept copy; removing them is an owner cleanup.", markers=("pre-panel-migration",)),
+    Store("backup_adhoc", "backup", WORDS, GAP, "Neither forget path reaches one-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, "
           "the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep "
           "(local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup.",
           markers=("migrate-hermes-env-", "router-shadow-", "dead-units-")),

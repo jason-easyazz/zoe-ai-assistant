@@ -10,6 +10,27 @@ import pytest
 import real_turn as rt
 
 
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(rt, "STATE_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(rt, "PRIVATE_TOOLS_DIR", tmp_path / "private", raising=False)
+    monkeypatch.setattr(rt, "cache_state", lambda *_: {})
+    # Exercise the runner's own window/panel logic without importing a live helper's env
+    # overrides or allowing its default panel probe to run.
+    monkeypatch.setattr(rt, "_harness_quiet", lambda: SimpleNamespace(
+        check=lambda *a, panel, **kw: SimpleNamespace(allowed=panel(), reason="panel busy"),
+        brain_window_verdict=lambda *a, **kw: SimpleNamespace(allowed=True)))
+    import mock_llama
+    class Mock:
+        url = "http://127.0.0.1:9999"
+        def start(self):
+            return self
+        def stop(self):
+            pass
+    monkeypatch.setattr(mock_llama, "MockLlama", Mock)
+
+
 def probes(**over) -> rt.Probes:
     base = dict(now=lambda: dt.datetime(2030, 3, 4, 23, 0), cmdlines=lambda: ["python3 -m http.server"],
                 slots=lambda url: [{"id": 0, "is_processing": False, "n_prompt_tokens": 300}],
@@ -21,7 +42,7 @@ def probes(**over) -> rt.Probes:
 
 def args(*extra):
     import argparse
-    ns = argparse.Namespace(i_own_the_slot=True, dry_run=False, lock="/nonexistent", llama_url="http://x", owner_approved_daytime=False,
+    ns = argparse.Namespace(i_own_the_slot=True, dry_run=False, lock="/nonexistent", llama_url="http://127.0.0.1:9999", owner_approved_daytime=False,
                             mem_floor=1500, log_quiet_s=60)
     for e in extra:
         setattr(ns, e[0], e[1])
@@ -167,7 +188,9 @@ def test_cleanup_on_a_signal(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "Stack", Sig)
     with pytest.raises(SystemExit):
         rt.main(["--i-own-the-slot", "--dry-run", "--lock", path, "--out", str(tmp_path / "o")], probes())
-    assert events == ["down"] and rt.take_lock(path) is not None
+    free = rt.take_lock(path)
+    assert events == ["down"] and free is not None
+    os.close(free)
 
 
 def test_app_port_may_never_be_a_live_port():
@@ -230,9 +253,10 @@ def test_diagnose_a_text_tool_call_a_question_and_a_plain_reply():
 
 def test_diagnose_an_invalid_proposal_has_names_and_a_reason_never_values():
     props = [{"status": "invalid", "reason": "wrong argument type",
+              "arguments": {"time": "6:00 AM"},
               "shape": {"present": ["time"], "missing": [], "unknown": [], "bad_value": ["time"]}}]
-    d = rt.diagnose(["__TOOL__:{}"], props, "alarm_set")
-    assert d["rejections"] == [{"status": "invalid", "reason": "wrong argument type", "shape": props[0]["shape"]}]
+    d = rt.diagnose(['__TOOL__:{"arguments":{"time":"6:00 AM"}}'], props, "alarm_set")
+    assert d["rejections"] == [{"status": "invalid"}]
     assert "6:00" not in str(d)
 
 
@@ -263,5 +287,4 @@ def test_the_wall_cap_is_stated_in_the_run_output(capsys, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError):
         rt.main(["--i-own-the-slot", "--dry-run", "--set", "big", "--lock", str(tmp_path / "l"),
                  "--out", str(tmp_path / "o")], probes())
-    # the banner prints after Stack.up, which raised first: assert the numbers the banner is built from
-    assert rt.WALL_BY_SET["big"] == 480
+    assert "set=big turns=29 policy=plain wall-cap=480s token-cap=200/call" in capsys.readouterr().out

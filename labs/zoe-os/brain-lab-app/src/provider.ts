@@ -7,6 +7,7 @@
  * A hard output cap per model call (OSLAB_MAX_TOKENS, default 200) and a low temperature are
  * applied by wrapping the stream calls, so a runaway reply cannot hold the household's one slot.
  */
+import { labFetch, localOrigin } from './local-network.mjs';
 import { createProvider } from '@earendil-works/pi-ai';
 import {
   stream as streamOpenAI,
@@ -29,12 +30,14 @@ export function maxTokens(): number {
 }
 
 export function labModel(): Model<'openai-completions'> {
+  const baseUrl = process.env.OSLAB_LLAMA ?? 'http://127.0.0.1:11434/v1';
+  localOrigin(baseUrl);
   return {
     id: 'local',
     name: 'Zoe OS lab (local llama-server)',
     api: 'openai-completions',
     provider: LAB_PROVIDER_ID,
-    baseUrl: process.env.OSLAB_LLAMA ?? 'http://127.0.0.1:11434/v1',
+    baseUrl,
     reasoning: false,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -45,7 +48,8 @@ export function labModel(): Model<'openai-completions'> {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const capped = (fn: any) => (model: any, context: any, options?: any) => {
-  const inner = fn(model, context, { ...options, temperature: 0.1, maxTokens: maxTokens() });
+  // pi-ai 0.83.0 forwards options.fetch into OpenAI's client (dist/api/openai-completions.js).
+  const inner = fn(model, context, { ...options, fetch: labFetch, temperature: 0.1, maxTokens: maxTokens() });
   return sidecarPolicy() ? recoverTextToolCalls(inner, context.tools) : inner;
 };
 

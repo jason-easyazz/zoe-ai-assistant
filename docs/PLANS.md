@@ -17,6 +17,8 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ## 🔨 Active
 
+- **Household-text inventory (A5-A7, PR #2513 review fixes):** code now distinguishes independent copies and records source evidence, fixes positional/aliased file-write discovery, and constrains the pendant metadata exceptions. Verification status and remaining erasure gaps are recorded in [household-text-inventory](knowledge/household-text-inventory.md); these changes add no erasers.
+
 ### Live flag state (read from the running zoe-data process AND `services/zoe-data/.env`, re-read 2026-11-13; `ZOE_CHANGE_NOTICES=on`, `ZOE_MUSIC_DISCOVERY=on` and `ZOE_GRAPH_RECALL_BOOST` are ON live; `ZOE_ROUTER_SHADOW_TEXT=0`)
 What is ON is not what the rest of this page may still call "flag-dark". Re-read it with `scripts/maintenance/zoe_ground_truth.sh` (brain lane) before trusting any line below about a flag.
 - **ON live:** `ZOE_COMPOSE_UI=1`, `ZOE_FACE_ID_ENABLED=true`, `ZOE_ENROLL_OFFER=on`, `ZOE_ENROLL_OFFER_KIDS=true`, `ZOE_OMI_SYNC_ENABLED=1`, `ZOE_SPEAKER_MODEL=resnet34` (was `dual` on 2026-10-18; re-read from the running process 2026-10-29), `ZOE_SEAM_RECALL_INJECT=true`, `ZOE_MEMBER_REGISTER=on`, `ZOE_MANNER_BLOCK=on`, `ZOE_OUTCOME_EDGES=on`, `ZOE_EMOTIONAL_TURN_GUARD=on`; `shadow`: `ZOE_OMI_DAY_REVIEW` (owner-set 2026-10-18), `ZOE_OMI_NIGHT_REPASS`, `ZOE_PROBLEM_LOOP`, `ZOE_RECALL_EVERY_TURN`, `ZOE_ANTICIPATION`, `ZOE_DORMANT_THREADS`, `ZOE_SELF_REVIEW`.

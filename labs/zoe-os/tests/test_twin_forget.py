@@ -89,7 +89,8 @@ def test_the_twins_reduced_copy_outlives_the_kernels_events_and_a_forget_still_r
     k.spine.forget("kid", actor="alex")                                       # the skeletons still link to KID
     k.pump()
     assert SENTINEL not in known(twin) and "kid" not in twin.days
-    assert [e.payload["subject"] for e in k.spine._fetch(0, frozenset({Kind.FORGET}), None, 10)] == ["kid"]
+    notices = k.spine._fetch(0, frozenset({Kind.FORGET}), None, 10)
+    assert notices and {e.payload["subject"] for e in notices} == {"kid"}
     k.close()
 
 

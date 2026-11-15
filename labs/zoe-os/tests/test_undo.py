@@ -92,8 +92,9 @@ def test_an_undo_that_did_nothing_is_not_called_done(k):
     k.actions._reverse["alarm.move"] = (k.alarms.snapshot, lambda person, args, before: None)
     back = k.actions.undo(SAM, actor=SAM)
     assert k.alarms.at[SAM] == "05:45" and not back.verified and back.outcome == "unverified"
-    claim = emit(k, Kind.CLAIM, "mover", SAM, cause=(back.seq,), action="undo", receipt_seq=back.seq)
-    assert [c.seq for c in ClaimAuditor(k.spine, k.enforcer).scan()] == [claim.seq]
+    with pytest.raises(Refused, match="receipt"):
+        emit(k, Kind.CLAIM, "mover", SAM, cause=(back.seq,), action="undo", receipt_seq=back.seq)
+    assert ClaimAuditor(k.spine, k.enforcer).scan() == []
 
 
 # ---- rule 2: only the person whose action it was, or a guardian for a child ---------------------
