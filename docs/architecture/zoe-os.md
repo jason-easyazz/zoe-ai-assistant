@@ -736,7 +736,7 @@ lines may be shared beyond their guardians at all (today they cannot be, by anyo
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
 
-## 13. Reminders in the kernel: what production can do, and what still does not map
+## 13. Reminders and alarms in the kernel: what production can do, and what still does not map
 
 The kernel's reminder model (`labs/zoe-os/zoe_os/reminder_rows.py`, served by the authority daemon `authority.py`) was
 written from production's code (`services/zoe-data/reminder_service.py`, `routers/reminders.py`,
@@ -792,3 +792,36 @@ the shadow-widen branch): `recurring` (send the stored RRULE as `repeat` with `d
 alone: the default time is the kernel's setting), and `range` (send `date` and `time`: no 7-day limit). It must convert a
 12-hour stored time to `HH:MM` first (`reminder_scan._parse_due_time`). The authority daemon must be started with the
 household's `--tz` and `--default-time` for the comparison to mean anything.
+
+### 13.1 Alarms
+
+The alarm model (`labs/zoe-os/zoe_os/alarm_rows.py`, the same durable rows) was written from
+`services/zoe-data/alarms.py`, `routers/alarms.py` and `alarm_voice.py`. **[code]**
+
+**The row.** `owner`, `label` (60 characters), `time` (HH:MM), `repeat` (production's: once | daily | weekdays |
+weekends | `days:1,3,5`, Monday 1), `date` (a one-off's day; none given = the next such time, today if still ahead),
+`snooze_minutes` (1..30, default 9), `enabled`, and the ring bookkeeping. Several per person (30 at most, as production).
+Whether one is ringing NOW is a pure function, `schedule.alarm_state`, where production's ring engine writes a `state`
+column: an occurrence rings for 10 minutes and then stops by itself (one found later is skipped, production's
+`MISSED_GRACE_S`); a snooze rings again when it ends; a one-off that has rung is off.
+
+**Actions**, each read back and undoable: `alarm.set` (today's `{time}` still works, but now ADDS an alarm, as production
+does, where the lab driver kept one per person and replaced it), `alarm.edit` (a changed time re-picks a one-off's day; a
+spent one-off turned back on rings at the next such time; any edit stops a ring), `alarm.toggle`, `alarm.delete`,
+`alarm.snooze` (only while ringing, 8 per occurrence, production's numbers), `alarm.dismiss` (this occurrence; an idle
+alarm is left alone).
+
+**Who may.** A member's own alarms only: production's `can_see` and `can_edit` for a personal alarm.
+
+**What does not map, precisely.**
+- HOUSEHOLD alarms (owner `__household__`, set at the wall panel by whoever is there) and the panel's right to SILENCE
+  any ringing alarm (`can_silence`): the kernel acts only for a person, and a guest at the panel is nobody. They need a
+  household principal in the consent model; until then they stay production's.
+- One-day exceptions (`alarm_overrides`: "an hour earlier next Friday", or skip a day): not modelled.
+- Sound (tone or music), the volume ramp and the panel's masked view: not modelled (they decide nothing the kernel owns).
+- Timers are a separate, in-memory store in production (`skybridge_service._TimerStore`, "set a timer", pause, resume,
+  adjust): not modelled; a follow-up.
+
+**What the shadow hook can now send.** `alarm_create` with its repeat rule (`cls` "repeat" today) can send `repeat` and
+`label`; the proof still carries `alarm` (the time) for `compare`. Two alarms set in a row are now two rows in the kernel,
+as in production.

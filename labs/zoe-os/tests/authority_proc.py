@@ -3,7 +3,7 @@
     python3 authority_proc.py --dir STATE  [OS_LAB_DIE_AT=after_intent|after_do|after_commit]  [OS_LAB_CONTROL=name]
 
 ``OS_LAB_DIE_AT`` SIGKILLs the whole kernel at one exact point of a ``list.add`` whose item is ``die``, a reminder write whose note is
-``die``, or a reminder snooze of 13 minutes:
+``die``, an alarm write whose label is ``die``, or a snooze of 13 minutes:
   after_intent  the write-ahead intent is durable; the driver has not run
   after_do      the driver changed its rows; the receipt is not stored
   after_commit  the verified receipt is stored; the reply has not been sent
@@ -25,7 +25,7 @@ DIE = os.environ.get("OS_LAB_DIE_AT", "")
 
 
 def _die(when: str, args) -> None:
-    if DIE == when and (args.get("item") == "die" or args.get("note") == "die" or args.get("minutes") == 13):
+    if DIE == when and ("die" in (args.get("item"), args.get("note"), args.get("label")) or args.get("minutes") == 13):
         os.kill(os.getpid(), signal.SIGKILL)
 
 

@@ -15,6 +15,8 @@ The shadow daemon (``shadow_daemon.py``) plus three things an authority needs an
   ("forget that" on one list item). Surface credentials only (a person's decision), idempotent, each answers with a receipt that
   is ``verified`` only when the read-back finds nothing left;
 * ``health``: alive, schema version, whether the last write went through: what zoe-data reads to decide whether to fall back.
+* durable REMINDER and ALARM rows by the same rule (``zoe_os/rows.py``; models ``reminder_rows.py`` / ``alarm_rows.py``), read in the
+  household zone and default time given as ``--tz`` / ``--default-time``, and two surface-only reads, ``reminders`` and ``alarms``.
 
 A revoke is remembered: at start every roster member is granted the brain's acts EXCEPT one whose newest ``brain`` grant change in
 the log is a revoke (the shadow re-granted everyone on every start, which an authority must not do).
@@ -35,7 +37,8 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
 from shadow_daemon import ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds  # noqa: E402
-from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists  # noqa: E402
+from zoe_os.alarm_rows import DurableAlarms  # noqa: E402
+from zoe_os.brain.drivers import ASKED, Keeper, Lists  # noqa: E402
 from zoe_os.capability import CHILD, Person  # noqa: E402
 from zoe_os.events import Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
@@ -45,8 +48,9 @@ from zoe_os.spine import Refused  # noqa: E402
 
 SCHEMA = 1          # the authority's own record shape (the rebuild rule below); bumped when it changes meaning
 _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0"
-#: the brain's ceiling as the authority serves it: the shadow's acts plus the durable reminder verbs (``remind.set`` already in it)
-AUTHORITY_BRAIN = {**SHADOW_BRAIN, "acts": [*SHADOW_BRAIN["acts"], *(a for a in DurableReminders.actions if a not in SHADOW_BRAIN["acts"])]}
+#: the brain's ceiling as the authority serves it: the shadow's acts plus the durable reminder and alarm verbs (the two ``.set`` already in it)
+AUTHORITY_BRAIN = {**SHADOW_BRAIN, "acts": [*SHADOW_BRAIN["acts"], *(a for a in (*DurableReminders.actions, *DurableAlarms.actions)
+                                                                     if a not in SHADOW_BRAIN["acts"])]}
 AUTH_ACTS = tuple(AUTHORITY_BRAIN["acts"])
 
 
@@ -225,8 +229,6 @@ class AuthorityServer(KernelServer):
         notice = self.kernel.spine.last_seq                                  # the FORGET event: the erase's durable receipt
         self.kernel.grants.revoke(subject, SHADOW_BRAIN["skill"])
         self.lists.rebuild(subject)
-        for store in self.others:                                            # the lab in-memory alarm store
-            (store.at if isinstance(store, Alarms) else store.rows).pop(subject, None)
         for store in self.durable:
             store.rebuild()
         left = len(self.lists.rows.get(subject, [])) + self._live_events(subject) + sum(
@@ -257,9 +259,18 @@ class AuthorityServer(KernelServer):
         self._person_op(conn, "read reminders")
         return {"reminders": self.reminders.visible_to(a["person"])}
 
+    def _op_alarms(self, conn, a: dict) -> dict:
+        """The alarms ``person`` may see (their own), each with whether it is ringing now and when it rings next."""
+        self._person_op(conn, "read alarms")
+        return {"alarms": self.alarms.visible_to(a["person"])}
+
     @property
     def reminders(self) -> DurableReminders:
         return next(s for s in self.durable if isinstance(s, DurableReminders))
+
+    @property
+    def alarms(self) -> DurableAlarms:
+        return next(s for s in self.durable if isinstance(s, DurableAlarms))
 
 
 def revoked(k: Kernel, skill: str) -> set[str]:
@@ -314,16 +325,17 @@ def build(state: Path, db: str | None = None, *, tz: str = "UTC", default_time: 
     lists.rebuild()
     reminders = DurableReminders(k.spine, lambda: k.clock(), k.grants, tz=tz, default_time=default_time).register(k)
     reminders.rebuild()
-    alarms = Alarms().register(k)
+    alarms = DurableAlarms(k.spine, lambda: k.clock(), tz=tz).register(k)
+    alarms.rebuild()
     for manifest in (*ADAPTERS, AUTHORITY_BRAIN):
         k.grants.install(manifest)
-    k.install(DurableKeeper(lists, alarms, durable=(reminders,)))
+    k.install(DurableKeeper(lists, durable=(reminders, alarms)))
     no = revoked(k, SHADOW_BRAIN["skill"])
     for p in members:
         if p.id not in no:
             k.grants.grant(p.id, SHADOW_BRAIN["skill"], acts=list(AUTH_ACTS),
                            guardian=p.guardians[0] if p.role == CHILD and p.guardians else None)
-    srv = AuthorityServer(k, str(state / "k.sock"), lists, (alarms,), (reminders,))
+    srv = AuthorityServer(k, str(state / "k.sock"), lists, (), (reminders, alarms))
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 

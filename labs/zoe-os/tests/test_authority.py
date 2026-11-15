@@ -47,6 +47,13 @@ class Daemon:
         said = self.voice.publish("utterance", subject=person, payload={"text": "synthetic reminder"})
         return self.brain.call("act", action=action, on_behalf_of=person, args={**args, "asked": said.seq}, caused_by=[said.seq])
 
+    def alarm(self, person: str, action: str = "alarm.set", **args) -> dict:
+        said = self.voice.publish("utterance", subject=person, payload={"text": "synthetic alarm"})
+        return self.brain.call("act", action=action, on_behalf_of=person, args={**args, "asked": said.seq}, caused_by=[said.seq])
+
+    def labels(self, person: str) -> set:
+        return {r["label"] for r in self.panel.call("alarms", person=person)["alarms"]}
+
     def notes(self, person: str) -> dict:
         return {r["note"]: r for r in self.panel.call("reminders", person=person)["reminders"]}
 
@@ -284,3 +291,31 @@ def test_an_entity_forget_through_the_old_op_also_reaches_the_reminder_rows(stat
     d.panel.call("forget", subject=A, actor=A, entity="Dana")
     d.kill()
     assert set(start(state).notes(A)) == {"eggs"}
+
+
+# ---- the durable alarm rows: the same guarantees ---------------------------------------------------------------------------------
+@pytest.mark.parametrize("die,present,uncertain", [("after_intent", False, 1), ("after_do", False, 1), ("after_commit", True, 0)])
+def test_an_acknowledged_alarm_survives_a_kill_and_an_unacknowledged_one_is_absent_or_uncertain(state, die, present, uncertain):
+    d = start(state, die=die)
+    assert d.alarm(A, time="07:00", repeat="weekdays", label="kept")["proof"]["alarm"] == "07:00"
+    with pytest.raises((ConnectionError, OSError, wire.WireError)):
+        d.alarm(A, time="06:00", repeat="daily", label="die")
+    assert d.proc.wait(timeout=10) == -9
+    again = start(state)
+    assert again.labels(A) == ({"kept", "die"} if present else {"kept"})
+    assert again.brain.call("health")["recovered"] == uncertain
+
+
+def test_an_alarm_delete_undone_after_a_restart_stays_back_and_erase_member_takes_them(state):
+    d = start(state)
+    rid = d.alarm(A, time="07:00", repeat="daily", label="gym")["proof"]["id"]
+    d.alarm(A, "alarm.delete", id=rid)
+    d.alarm(B, time="06:00", label="early")
+    d.kill()
+    again = start(state)
+    assert again.labels(A) == set()
+    assert again.panel.call("undo", person=A, actor=A)["verified"] is True and again.labels(A) == {"gym"}
+    assert again.panel.call("erase_member", subject=A)["verified"] is True and again.labels(A) == set()
+    again.kill()
+    final = start(state)
+    assert final.labels(A) == set() and final.labels(B) == {"early"}

@@ -1,4 +1,5 @@
-"""When a reminder fires next: ONE pure function (``reminder_next_fire``) and the recurrence maths under it. No clock, no I/O.
+"""When a reminder fires next: ONE pure function (``reminder_next_fire``) and the recurrence maths under it; and when an alarm rings
+(``alarm_occurrence``) and whether it is ringing now (``alarm_state``). No clock, no I/O.
 
 The recurrence half is production's ``services/zoe-data/reminder_recurrence.py`` MIRRORED (read, never imported: the lab is
 stdlib-only and must not reach into zoe-data). ``tests/test_schedule.py`` runs both on the same grid whenever the production file
@@ -234,3 +235,66 @@ def reminder_next_fire(row: dict, after: float, tz: tzinfo, default_hm: tuple[in
         t = local_at(today, *clock, tz)
         return t if t > floor else local_at(today + timedelta(days=1), *clock, tz)
     return None
+
+
+# ---- the alarm (production: services/zoe-data/alarms.py, schedule maths and the ring lifecycle) ------------------------------------
+RING_MAX_S = 600                 # alarms.RING_MAX_S: a ring nobody answers stops by itself; MISSED_GRACE_S is the same 600
+_ALARM_DAYS = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+
+
+def alarm_repeat(value) -> str | None:
+    """once | daily | weekdays | weekends | days:<ISO weekdays ascending, Monday = 1>, or None (alarms.normalise_repeat)."""
+    s = str(value or "once").strip().lower()
+    if s in ("once", "daily", "weekdays", "weekends"):
+        return s
+    if s.startswith("days:"):
+        try:
+            days = sorted({_ALARM_DAYS.get(p) or int(p) for p in s[5:].replace(" ", "").split(",") if p})
+        except ValueError:
+            return None
+        if days and all(1 <= d <= 7 for d in days):
+            return "days:" + ",".join(map(str, days)) if len(days) < 7 else "daily"
+    return None
+
+
+def alarm_days(rule: str) -> frozenset[int]:
+    return {"daily": frozenset(range(1, 8)), "weekdays": frozenset(range(1, 6)), "weekends": frozenset((6, 7))}.get(
+        rule, frozenset(int(p) for p in rule[5:].split(",") if p) if rule.startswith("days:") else frozenset())
+
+
+def alarm_occurrence(hhmm: str, rule: str, once_date: str | None, after: float, tz: tzinfo) -> float | None:
+    """The first ring strictly after ``after`` (alarms.next_occurrence, without one-day overrides), or None."""
+    h, m = hm(hhmm)
+    if rule == "once":
+        t = local_at(once_date, h, m, tz) if once_date else None
+        return t if t is not None and t > after else None
+    days, start = alarm_days(rule), datetime.fromtimestamp(after, tz).date()
+    for i in range(9):
+        d = start + timedelta(days=i)
+        if d.isoweekday() in days and local_at(d, h, m, tz) > after:
+            return local_at(d, h, m, tz)
+    return None
+
+
+def next_once_date(hhmm: str, now: float, tz: tzinfo) -> str:
+    """"Wake me at 7" with no date: today if 7:00 is still ahead in the household's day, else tomorrow (alarms.next_once_date)."""
+    today = datetime.fromtimestamp(now, tz).date()
+    return (today if local_at(today, *hm(hhmm), tz) > now else today + timedelta(days=1)).isoformat()
+
+
+def alarm_state(row: dict, now: float, tz: tzinfo) -> tuple[str, float | None, float | None]:
+    """``(state, the occurrence it is about, the next ring after now)``: the ring lifecycle as a PURE function of the row and the
+    clock, where production's ring engine writes it (alarms.tick). idle -> ringing (for RING_MAX_S from an occurrence, then it stops
+    by itself; one found later is skipped) -> snoozed -> ringing ... ; ``after`` is the last occurrence a snooze, dismiss or edit
+    already dealt with. ``off`` when disabled."""
+    until = row.get("snoozed_until")
+    if until is not None and now < until + RING_MAX_S:
+        if now < until:
+            return "snoozed", row["snooze_of"], until
+        return "ringing", row["snooze_of"], alarm_occurrence(row["time"], row["repeat"], row["date"], until, tz)
+    if not row["enabled"]:
+        return "off", None, None
+    occ = alarm_occurrence(row["time"], row["repeat"], row["date"], max(row["after"], now - RING_MAX_S), tz)
+    if occ is not None and occ <= now:
+        return "ringing", occ, alarm_occurrence(row["time"], row["repeat"], row["date"], occ, tz)
+    return "idle", None, occ
