@@ -28,6 +28,8 @@ import logging
 import re
 from typing import NamedTuple, Optional
 
+import memory_authority as _auth
+
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 3            # the twin rows one utterance leaves behind; more than that is not one fact
@@ -1355,6 +1357,17 @@ def _plain_subjects(texts: list, subject: str) -> int:
     return max(len(rels), len(surnames), len(ages), 1)
 
 
+async def _speaker_adult(user_id: str) -> bool:
+    """Is the speaker POSITIVELY an adult? ``manner_block.is_adult`` - the ONE answer (the manner block and the intercom read it too):
+    a child role / minor mode, a guest, an unknown account and a failed or slow lookup are all False (not an adult)."""
+    try:
+        import manner_block
+
+        return bool(await manner_block.is_adult(user_id))
+    except Exception:  # noqa: BLE001 - not knowing is not "adult"
+        return False
+
+
 async def apply(user_message: str, user_id: str, session_id: Optional[str], *, svc=None,
                 speaker_verified: Optional[bool] = None) -> int:
     """Supersede the member's stored rows the correction in ``user_message`` is about. Returns the rows rewritten (0 = nothing
@@ -1462,7 +1475,16 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         excerpt = " ".join(user_message.split())
         done = 0
         tied = [r.id for r, _t in hits]
+        speaker_adult = await _speaker_adult(user_id) if any(_auth.adult_authored(r.metadata, r.text) for r, _t in hits) else None
         for r, new_text in hits:
+            if not _auth.may_correct(speaker_adult, _auth.author_class(r.metadata, r.text)):
+                # an ADULT's fact is not changed by a child's correction (owner, 2026-11-15; a speaker who is not positively an adult
+                # counts as one): the row stands, the words are kept as a held note for an adult to review. Independent of the
+                # ZOE_MEMORY_AUTHORITY wall, and no word of the adult's fact is spoken back (apply returns a count, never a reply).
+                await svc.hold_correction_note(r, new_text, user_id=user_id, writer=SOURCE, session_id=session_id)
+                logger.info("VALUE_CORRECTION_ADULT_FACT_HELD user=%s", user_id)
+                tied.remove(r.id)
+                continue
             ref = await svc.review(
                 r.id, decision="edit", edits=new_text, actor=SOURCE, note="spoken value correction (durable supersede)",
                 source_excerpt=excerpt, anchor_text=excerpt, session_id=session_id,

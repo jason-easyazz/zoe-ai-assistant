@@ -78,6 +78,9 @@ class Row:
     #: the stored row's authority CLASS (``memory_authority.row_class``). No default that means "may be replaced": a row
     #: whose class is missing or unknown is never superseded (D.17)
     authority: Optional[str] = None
+    #: who AUTHORED the row (``memory_authority.author_class``: adult | child | None = not recorded). An adult's fact is corrected
+    #: only by an adult (D.17); a curated row counts as an adult's even when this is None
+    author: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +141,9 @@ class Context:
     #: D.17: the POWER of the speaker's own statement (a ``memory_authority.RANK`` value, as ``resolve_write(...).power``
     #: gives it). None = unknown: nothing is superseded
     speaker_rank: Optional[int] = None
+    #: D.17: is the speaker POSITIVELY an adult (``manner_block.is_adult``, the one answer)? None = unknown, False = a child / guest:
+    #: neither may change a fact an adult authored
+    speaker_adult: Optional[bool] = None
     identified: bool = True
     opted_out: bool = False
     retracted: bool = False                          # D.18: a turn of this session was retracted (turn_forget.blocks_write)
@@ -219,9 +225,13 @@ def rule_17_may_supersede(row: Row, ctx: Context) -> None:
     """A stored row is superseded only when ``memory_authority.may_override`` lets a statement of the speaker's power
     replace a row of that class - the one ordering every other writer uses (a later direct statement replaces a stated or
     confirmed row; an operator's or a curator's row is not replaced by speech). An unknown row class or an unknown speaker
-    power is never "allowed"."""
+    power is never "allowed". A row an ADULT authored is replaced only by a speaker who is positively an adult (owner, 2026-11-15)."""
     known = row.authority in auth.RANK and isinstance(ctx.speaker_rank, int) and not isinstance(ctx.speaker_rank, bool)
     _need(known and auth.may_override(ctx.speaker_rank, row.authority), 17)
+    author = row.author or (auth.AUTHOR_ADULT if row.authority == auth.CURATED else None)
+    # an adult's fact: only an adult corrects it - a child's or an unknown speaker abstains. A curator / operator power (rank >= curated)
+    # is an adult by construction (``memory_curation.require_curator``), so it needs no class lookup.
+    _need(ctx.speaker_rank >= auth.RANK[auth.CURATED] or auth.may_correct(ctx.speaker_adult, author), 17)
 
 
 @_rule(18)
