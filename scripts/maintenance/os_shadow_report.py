@@ -20,24 +20,56 @@ import sys
 from collections import Counter
 
 LINE = re.compile(r"OS_SHADOW_LIST_ADD\s+(.*)")
+#: every field the report reads, with its CLOSED set of values (os_shadow.py writes only these). Anything else becomes ``unknown``: the
+#: report never echoes a value it does not know, so a planted or corrupted field cannot print text.
+UNKNOWN = "unknown"
+ALLOWED = {
+    "src": frozenset({"spoken", "single", "skybridge", "rest"}),
+    "cls": frozenset({"shopping", "todo", "personal", "other"}),
+    "live": frozenset({"added", "refused"}),
+    "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),
+    "result": frozenset({"match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
+                         "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
+                         "queue_full", "live_noop"}),
+    "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
+                         "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake"}),
+}
+NUMBERS = ("hop_ms", "q_ms")
 NOT_COMPARED = {"member_not_in_roster", "dropped_erased", "queue_full", "live_noop"}
 MISMATCH = ("kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs", "list_differs",
             "kernel_malformed", "kernel_unavailable", "timeout")
+
+
+def clean(fields: list) -> "dict | None":
+    """One line's ``key=value`` pairs as a record of KNOWN keys with CLOSED values, or None (the line is rejected): a key given twice
+    (a later copy must never override the writer's), no ``result``, or a ``hop_ms`` that is not a number. Unknown keys are dropped;
+    an unknown value becomes ``unknown``."""
+    seen: dict = {}
+    for kv in fields:
+        if "=" not in kv:
+            continue
+        key, value = kv.split("=", 1)
+        if key in seen:
+            return None
+        seen[key] = value
+    if "result" not in seen:
+        return None
+    rec = {k: (seen[k] if seen[k] in ALLOWED[k] else UNKNOWN) for k in ALLOWED if k in seen}
+    try:
+        rec["hop_ms"] = float(seen.get("hop_ms", "nan"))
+    except ValueError:
+        return None
+    return rec
 
 
 def parse(lines) -> list[dict]:
     out = []
     for raw in lines:
         m = LINE.search(raw)
-        if not m:
-            continue
-        rec = dict(kv.split("=", 1) for kv in m.group(1).split() if "=" in kv)
-        try:
-            rec["hop_ms"] = float(rec.get("hop_ms", "nan"))
-        except ValueError:
-            continue
-        if "result" in rec:
-            out.append(rec)
+        if m:
+            rec = clean(m.group(1).split())
+            if rec is not None:
+                out.append(rec)
     return out
 
 

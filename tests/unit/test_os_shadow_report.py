@@ -1,6 +1,7 @@
 """The week-of-shadow reader turns OS_SHADOW_LIST_ADD lines into the comparison table (scripts/maintenance/os_shadow_report.py)."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -41,9 +42,41 @@ def test_an_empty_week_does_not_divide_by_zero(tmp_path, capsys):
     assert rep.main(["--json", str(f)]) == 0
 
 
-def test_the_reader_never_echoes_a_line(tmp_path, capsys):
+PLANT = "Quillon-tangerines"
+
+
+@pytest.mark.parametrize("field", ["src", "cls", "live", "kernel", "result", "reason"])
+def test_text_planted_in_any_rendered_field_never_reaches_the_output(tmp_path, capsys, field):
+    good = line(result="kernel_refused_live_did", kernel="refused", reason="no_grant")
+    planted = re.sub(rf"\b{field}=\S+", f"{field}={PLANT}", good)
+    assert PLANT in planted
     f = tmp_path / "log"
-    f.write_text(line() + " item=Quillon-tangerines\n")
-    rep.main(["--json", str(f)])
-    assert "Quillon" not in capsys.readouterr().out
-    assert json.dumps(rep.summarize(rep.parse([line()])))
+    f.write_text(planted + "\n" + good + f" item={PLANT}\n")
+    for args in (["--json", str(f)], [str(f)]):
+        assert rep.main(args) == 0
+        out = capsys.readouterr().out
+        assert PLANT not in out and "quillon" not in out.lower()
+    s = rep.summarize(rep.parse([planted]))
+    assert s["adds_logged"] == 1 and PLANT not in json.dumps(s)
+
+
+def test_a_duplicate_key_rejects_the_line_rather_than_letting_the_last_copy_win(capsys):
+    dup = line() + f" reason={PLANT}"
+    assert rep.parse([dup]) == []
+    assert rep.parse([line() + " src=rest"]) == []                 # even a duplicate with an allowed value: the writer never repeats a key
+    assert len(rep.parse([line()])) == 1
+
+
+def _client_literal(name):
+    """A literal from os_shadow.py, read with ast (this lane never imports zoe-data)."""
+    import ast
+    tree = ast.parse((ROOT / "services" / "zoe-data" / "os_shadow.py").read_text("utf-8"))
+    node = next(n.value for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign))
+                and name in [getattr(t, "id", None) for t in (n.targets if isinstance(n, ast.Assign) else [n.target])])
+    return ast.literal_eval(node)
+
+
+def test_the_allowlists_are_the_codes_the_client_writes():
+    assert set(_client_literal("RESULTS")) | {"live_noop"} == rep.ALLOWED["result"]
+    assert set(_client_literal("LIST_CLASSES")) | {"other"} == rep.ALLOWED["cls"]
+    assert {code for _, code in _client_literal("_REASONS")} | {"other"} <= rep.ALLOWED["reason"]
