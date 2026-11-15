@@ -179,6 +179,7 @@ class Dispatcher:
                 accept, reason = self._find_accept(skill, on_behalf_of, caused_by)
             if reason:
                 self.spine._refuse(skill, attempted, reason)
+            self._check_arguments(skill, attempted, on_behalf_of, args)
             intent = self._open_intent(skill, action, on_behalf_of, verdict.grant_id, accept, caused_by)
             proof, error, before = None, "", None
             try:
@@ -223,6 +224,12 @@ class Dispatcher:
         return False
 
     # ---- undo ---------------------------------------------------------------------------------
+    def _check_arguments(self, who: str, attempted: str, person: str, payload: dict) -> None:
+        """Check under the spine lock, before any intent or driver write. Never echo arguments."""
+        if self.spine._payload_refusal(Event(Kind.ACTION_RECEIPT, KERNEL, subject=person,
+                                            payload=payload)):
+            self.spine._refuse(who, attempted, "forgotten_action_arguments")
+
     def _may_undo(self, actor: str, person: str) -> bool:
         """The person whose action it was, or a guardian of that child. Nobody else, no skill."""
         return self.enforcer.may_forget(actor, person).allowed
@@ -244,6 +251,7 @@ class Dispatcher:
             if why:
                 self.spine._refuse(actor, UNDO, why)
             action, saved = last.payload["action"], last.payload["undo"]
+            self._check_arguments(actor, UNDO, person, saved)
             snapshot, reverse = self._reverse[action]
             intent = self._open_intent(KERNEL, UNDO, person, None, None, (last.seq,), undoes=last.seq)
             proof, error = None, ""

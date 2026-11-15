@@ -115,6 +115,7 @@ def test_control_without_snapshot_scrub_undo_resurrects_forgotten_row(tmp_path, 
     first, _ = add(k, rows, SECRET)
     add(k, rows, KEEP)
     monkeypatch.setattr(Spine, '_scrub_snapshots', lambda *_: None, raising=False)
+    monkeypatch.setattr(k.actions, '_check_arguments', lambda *_: None)
     k.spine.forget(PERSON, actor=PERSON, seqs=[first.seq])
     k.pump()
     assert SECRET.encode() in disk(path)

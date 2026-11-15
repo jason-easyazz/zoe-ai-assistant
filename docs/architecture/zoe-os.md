@@ -193,6 +193,27 @@ person removes the saved before-state and refuses undo explicitly. The surviving
 remain available to reminder restoration. Empty selections invalidate nothing.
 Queued receipts refresh their bodies after forget, so they cannot deliver the pre-scrub snapshot.
 
+**Action argument shields [code; tests not run].** The dispatcher checks every action's arguments
+before writing an intent or running a driver, using the same `_payload_refusal` as publish:
+`_shielded` visits string values through nested dictionaries, lists and tuples; `_names_forgotten`
+also visits dictionary keys. Shield scope is unchanged (word hashes remain household-wide).
+Undo checks both saved arguments and the complete before-state before opening its intent or restoring
+rows, in addition to the provenance scrub above. Refusals carry only the fixed code
+`forgotten_action_arguments`, never argument text. Allowed receipts and proofs keep their existing shape.
+Socket-free regressions live in `tests/test_forget_action_arguments.py`; removing the argument guard
+makes the list resurrection regression fail (a planted negative control, execution pending).
+
+| Caller-text write path | Verdict |
+|---|---|
+| Action arguments to list/reminder/alarm drivers and receipts | Fixed here: shared publish shields before intent/driver. |
+| Undo arguments and restored snapshot rows | Fixed here: shared shields before intent/reverse; provenance scrub remains in place. |
+| Offers, offer responses and claims | Shielded through `Spine.publish` / `publish_many`; claims also require a matching unused receipt. |
+| Brain bridge proposals (including prevalidation disabled), socket `act`, skill `Context.act` | Fixed here through their common `Dispatcher.act` destination. |
+| Grant-change records | No free text: registered person/skill/action identifiers, grant IDs, visibility/kind enums and guardian IDs only. |
+| Stage-one production bridge events | No free text by contract: IDs and labels only; trusted origins record first-hand reality through publish. |
+| Purge driver calls | No free text: one exact request ID derived from a live forget notice, checked before driver invocation. |
+| Attention, recovery and audit records | No caller free-text fields: fixed reasons/outcomes, registered IDs and sequence numbers; driver read-back is trusted kernel output. |
+
 Forget-copy and bounded-list sweep (lab implementation, not production):
 
 | Store or bound | Verdict |

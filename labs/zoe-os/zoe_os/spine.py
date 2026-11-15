@@ -288,11 +288,16 @@ class Spine:
             return "a skill must say which events its event derives from"
         reason = self._cause_refusal(ev.source, ev.caused_by)
         if not reason and not self.authorizer.is_origin(ev.source):
-            if self._shielded(ev.payload):
-                reason = "carries forgotten content"
-            elif self._names_forgotten(ev):
-                reason = "names a forgotten entity"
+            reason = self._payload_refusal(ev)
         return reason
+
+    def _payload_refusal(self, ev: Event) -> str:
+        """Shared publish/action shield semantics, including nested arrays and dictionary keys."""
+        if self._shielded(ev.payload):
+            return "carries forgotten content"
+        if self._names_forgotten(ev):
+            return "names a forgotten entity"
+        return ""
 
     def _cause_refusal(self, source: str, caused_by: tuple[int, ...]) -> str:
         """A cause must exist, be live, and be something the publisher may itself read."""
@@ -496,10 +501,19 @@ class Spine:
             self._scrub_snapshots(set(seqs))
             for chunk in _chunks(seqs):
                 marks = ",".join("?" * len(chunk))
-                for (payload,) in self._db.execute(
-                        f"SELECT payload FROM events WHERE seq IN ({marks})", chunk):
+                for kind, payload in self._db.execute(
+                        f"SELECT kind, payload FROM events WHERE seq IN ({marks})", chunk):
                     if payload:
-                        fps.update(self._fp(text) for text in _content(json.loads(payload)))
+                        body = json.loads(payload)
+                        if kind == Kind.ACTION_RECEIPT.value:
+                            # Copies belong to their provenance, not this action: a receipt's
+                            # before-state may hold OTHER, surviving rows, which must not be
+                            # shielded. The transactional snapshot scrub erases dead sources.
+                            if isinstance(body.get('undo'), dict):
+                                body['undo'] = {'args': body['undo'].get('args', {})}
+                            if isinstance(body.get('proof'), dict):
+                                body['proof'].pop('restored', None)
+                        fps.update(self._fp(text) for text in _content(body))
                 self._db.execute(
                     "UPDATE events SET tombstoned = 1, payload = NULL, mentions = NULL, subject = NULL,"
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
