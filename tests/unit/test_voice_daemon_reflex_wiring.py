@@ -262,6 +262,10 @@ def test_the_switch_on_record_says_on_is_not_allowed():
     assert "any count is the owner's decision" not in flat and "the call is yours" not in flat
     assert "`REFLEX_MODE=on` for the session only" not in flat and "**On.** `REFLEX_MODE=on`, restart" not in flat
     assert "_REFLEX_ON_ALLOWED = False" in flat
+    # where the safety count comes from, stated exactly: the daemon's line, today unavailable, and the lab join's limits
+    assert "REFLEX_SAFETY mode=<shadow|on> would_play=<0|1>" in flat
+    assert "Today's server sends no `safety` key" in flat and "UNAVAILABLE, not zero" in flat
+    assert "CANNOT see refused commands at all" in flat
 
 
 # ── the shadow's SAFETY COUNT (contract: shadow must COUNT crisis / medical / refusal turns it would have played on) ──────

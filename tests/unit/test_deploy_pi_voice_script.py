@@ -313,11 +313,84 @@ def test_an_unreadable_state_passes_only_when_the_config_proves_the_legacy_mode(
     assert harness(FAKE_HELPER_FAIL=1, FAKE_SPEAKER_CFG="garbage", RESNET34_READY_TIMEOUT_S=1).returncode == 0   # unknown value = legacy, as the daemon reads it
 
 
-def _bank(tmp_path: Path) -> Path:
-    d = tmp_path / "bankroot" / "af_sky" / "3811a303"
+def _reflex():
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("zoe_voice_reflex_for_deploy_test", SETUP / "zoe_voice_reflex.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _take_wav(ms: int, step: int) -> bytes:
+    import io
+    import struct
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"".join(struct.pack("<h", ((i * step) % 4000) - 2000) for i in range(24 * ms)))
+    return buf.getvalue()
+
+
+def _bank(tmp_path: Path, voice: str = "af_sky") -> Path:
+    """A REAL rendered-bank tree (synthetic takes): three takes and a manifest whose id is manifest_sha8."""
+    import hashlib
+    import json
+
+    rx = _reflex()
+    files = {f"mm_0{i}": _take_wav(300 + 10 * i, 7 + i) for i in (1, 2, 3)}
+    man = {"voice": voice, "style_len": None, "render_date": "2026-11-15",
+           "takes": [{"id": k, "sha256": hashlib.sha256(v).hexdigest()} for k, v in files.items()]}
+    man["bank"] = rx.manifest_sha8(man)
+    d = tmp_path / "bankroot" / voice / man["bank"]
     d.mkdir(parents=True)
-    (d / "manifest.json").write_text("{}")
+    for k, v in files.items():
+        (d / f"{k}.wav").write_bytes(v)
+    (d / "manifest.json").write_text(json.dumps(man))
     return tmp_path / "bankroot"
+
+
+def _the_bank_dir(root: Path) -> Path:
+    (v,) = list(root.iterdir())
+    (b,) = list(v.iterdir())
+    return b
+
+
+def _bad_banks(tmp_path: Path):
+    """name -> a bank tree with exactly one defect the panel loader would refuse (or a stray entry)."""
+    import json
+    import os
+
+    out = {}
+
+    def fresh(name):
+        return _bank(tmp_path / name)
+
+    r = fresh("empty_manifest"); (_the_bank_dir(r) / "manifest.json").write_text("{}"); out["empty_manifest"] = r
+    r = fresh("bad_json"); (_the_bank_dir(r) / "manifest.json").write_text("{not json"); out["bad_json"] = r
+    r = fresh("edited_manifest"); b = _the_bank_dir(r); m = json.loads((b / "manifest.json").read_text())
+    m["render_date"] = "2099-01-01"; (b / "manifest.json").write_text(json.dumps(m)); out["edited_manifest"] = r
+    r = fresh("missing_take"); (_the_bank_dir(r) / "mm_02.wav").unlink(); out["missing_take"] = r
+    r = fresh("take_is_a_dir"); b = _the_bank_dir(r); (b / "mm_02.wav").unlink(); (b / "mm_02.wav").mkdir()
+    out["take_is_a_dir"] = r
+    r = fresh("take_is_a_symlink"); b = _the_bank_dir(r); raw = (b / "mm_02.wav").read_bytes(); (b / "mm_02.wav").unlink()
+    (tmp_path / "elsewhere.wav").write_bytes(raw); os.symlink(tmp_path / "elsewhere.wav", b / "mm_02.wav")
+    out["take_is_a_symlink"] = r
+    r = fresh("tampered_take"); b = _the_bank_dir(r); raw = bytearray((b / "mm_01.wav").read_bytes()); raw[-1] ^= 1
+    (b / "mm_01.wav").write_bytes(bytes(raw)); out["tampered_take"] = r
+    r = fresh("bad_sha8_name"); b = _the_bank_dir(r); b.rename(b.parent / "NOTASHA8"); out["bad_sha8_name"] = r
+    r = fresh("wrong_dir_name"); b = _the_bank_dir(r); b.rename(b.parent / "deadbeef"); out["wrong_dir_name"] = r
+    r = fresh("bad_voice_name"); (r / "af_sky").rename(r / "Bad Voice"); out["bad_voice_name"] = r
+    r = fresh("stray_file"); (r / "README").write_text("x"); out["stray_file"] = r
+    r = tmp_path / "manifest_only" / "af_sky" / "3811a303"; r.mkdir(parents=True); (r / "manifest.json").write_text("{}")
+    out["manifest_only"] = tmp_path / "manifest_only"
+    return out
 
 
 def test_the_reflex_bank_ships_only_when_asked_and_never_deletes(harness, tmp_path):
@@ -336,9 +409,23 @@ def test_a_directory_that_is_not_a_bank_is_refused_before_anything_ships(harness
     (tmp_path / "empty").mkdir()
     r = harness(REFLEX_BANK_DIR=tmp_path / "empty")
     assert r.returncode == 5 and not (harness.rec / "rsync.all").exists()
-    assert "manifest.json" in r.stderr
+    assert "manifest.json" in r.stderr and "missing" in r.stderr
     r = harness(REFLEX_BANK_DIR=tmp_path / "missing")
     assert r.returncode == 5
+
+
+def test_a_bank_tree_the_panel_loader_would_refuse_is_refused_before_anything_ships(harness, tmp_path):
+    """Each defect alone (a manifest that does not parse or whose id is wrong, a missing / non-regular / tampered take, a
+    bad directory name, a stray entry, a manifest with no takes) is refused with exit 5 and NOTHING is rsynced."""
+    bad = _bad_banks(tmp_path / "bad")
+    assert len(bad) == 12
+    for name, root in bad.items():
+        r = harness(REFLEX_BANK_DIR=root)
+        assert r.returncode == 5, (name, r.stdout + r.stderr)
+        assert not (harness.rec / "rsync.all").exists(), name
+        assert "not a rendered, verified bank tree" in r.stderr, name
+    r = harness(REFLEX_BANK_DIR=_bank(tmp_path / "good"))         # positive control: the clean tree ships
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_dry_run_names_the_bank_step_and_ships_nothing(harness, tmp_path):

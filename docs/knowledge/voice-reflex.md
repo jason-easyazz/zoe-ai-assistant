@@ -60,8 +60,18 @@ There is no guest switch: a guest or an unknown speaker is always silent (`REFLE
 | Never during a crisis or medical turn | **NOT ENFORCEABLE at the close, so `on` is BLOCKED in code** [code] | the panel has no transcript until the server's first frame, about 0.4 s after the POST, which is later than the reflex would play. The only safe-by-construction lever is the sound itself: non-lexical, soft, no promise. The shadow week MEASURES the exposure (`labs/voice-reflex-sim --markers`): would-play turns with a `DISTRESS_HANDOFF`, `MEDICAL_SAFETY` or `CHILD_SAFETY_FLOOR` marker within 45 s. A server-pushed "hold the reflex for the next turn" is not built and could only cover the SECOND turn of a crisis |
 | Never before a command that will be refused | **NOT ENFORCEABLE at the close, so `on` is BLOCKED in code** [code] | same reason. "Mm." makes no promise (no "sure", no "okay"), which is why the default bank has no "Mm-hm." |
 
-**These two rows are why `on` is blocked.** The shadow week COUNTS the exposure (would-play turns near a safety marker); a
-count of zero does not make `on` allowed, because the rule is that the reflex must not be ABLE to play on such a turn, and a
+**These two rows are why `on` is blocked.**
+
+**Where the shadow's safety count comes from (exactly).** The contract asks the shadow to COUNT the crisis / medical /
+refusal turns the reflex would have played on. The daemon itself counts them: at each decided turn's END it logs
+`REFLEX_SAFETY mode=<shadow|on> would_play=<0|1> class=<none|distress|medical|child_floor|refusal|unknown>`, the class read
+from an ADDITIVE done-frame key `safety` the server would send (anything outside that enum, free text included, is
+`unknown`). **Today's server sends no `safety` key, so every live line says `class=unknown`: the in-daemon count is
+UNAVAILABLE, not zero.** It becomes real only when a server PR adds `safety` to the `/turn_stream` done frame (from the
+turn's own `DISTRESS_HANDOFF` / `MEDICAL_SAFETY` / `CHILD_SAFETY_FLOOR` decisions and a refusal outcome). Until then the only
+measure is the LAB join (`labs/voice-reflex-sim --markers`): would-play `REFLEX_DECISION` lines with a server
+`DISTRESS_HANDOFF` / `MEDICAL_SAFETY` / `CHILD_SAFETY_FLOOR` log marker within 45 s after them. That join is a correlation by
+time, not a per-turn link, and it CANNOT see refused commands at all (the server logs no refusal marker). A count of zero does not make `on` allowed, because the rule is that the reflex must not be ABLE to play on such a turn, and a
 quiet week proves nothing about the next one. What would close it (none is built; each is an owner decision): play only after
 the server's first frame states the turn is ordinary (costs the reflex most of its lead); a server-pushed hold (covers only
 the second turn of a crisis); or a panel-side classifier on the close-time audio (none exists).
@@ -93,7 +103,8 @@ noise_db=<n> spk=<1|0|-1> media=<1|0|-1> win=<enum> bank=<sha8 or ->` - one per 
 made. In `shadow`, `kind=heard skip=-` means "would have played". `FIRST_SOUND` keeps its shape: `reflex=heard`,
 `reflex_at_ms`, `reflex_dur_ms`, `reflex_cut`, `gap_ms` are filled only when a take was really written; `skip=` is the
 controller's decision (or a runtime skip: `reply_first`, `player_failed`). `REFLEX_BANK result=<enum> voice= bank= takes=` once
-at start. Integers and fixed enums only; no id, score, text or audio.
+at start. `REFLEX_SAFETY mode= would_play=<0|1> class=<enum|unknown>` once per decided turn, at its end (the safety count
+above). Integers and fixed enums only; no id, score, text or audio.
 
 ## The bank
 
@@ -130,12 +141,14 @@ one of them: it is blocked in code (above), and setting `REFLEX_MODE=on` only pr
    listening and not like a word: re-render only those with `--keep mm_02,mm_05,... --out ~/reflex-bank`. Record the printed
    `bank <sha8>`.
 4. **Panel deploy with the bank:** `REFLEX_BANK_DIR=~/reflex-bank bash scripts/setup/deploy-pi-voice.sh` (rsync `--checksum`,
-   never `--delete`). Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
+   never `--delete`). Before anything ships, the script runs the PANEL'S OWN loader over the tree: every entry must be
+   `<voice>/<sha8>/` with valid names, each manifest must parse and match `manifest_sha8` and its directory name, and every
+   take it lists must be a regular file with the right sha256 and format; anything else (or no bank) exits 5. Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
 5. **Shadow.** In the panel's `.env.voice` set `REFLEX_MODE=shadow`, `REFLEX_VOICE=<voice>`, `MEDIA_WATCH_ENABLED=true`
    (and `REFLEX_SILENT_MEMBERS=` for the children); `systemctl --user restart zoe-voice`. Expect, within a minute,
    `grep REFLEX_BANK` to say `result=ok ... takes=6..8`. Anything else: fix before going on.
 6. **Read the shadow for at least 7 days AND 100 turns** (whichever is longer):
-   `ssh zoe-pi "grep -E 'REFLEX_DECISION|FIRST_SOUND' /home/pi/.zoe-voice/voice.log" > decisions.txt`, then
+   `ssh zoe-pi "grep -E 'REFLEX_DECISION|REFLEX_SAFETY|FIRST_SOUND' /home/pi/.zoe-voice/voice.log" > decisions.txt`, then
    `python3 labs/voice-reflex-sim/sim.py --decisions decisions.txt` (the per-rule distribution) and, with the server's
    allowlisted marker extract, `--markers markers.txt`:
    `grep -E 'DISTRESS_HANDOFF|MEDICAL_SAFETY |CHILD_SAFETY_FLOOR' ~/.zoe-logs/zoe-data.app.log | sed -E 's/^([0-9-]+ [0-9:]+).*(DISTRESS_HANDOFF|MEDICAL_SAFETY|CHILD_SAFETY_FLOOR).*/\1 \2/' > markers.txt`.
@@ -147,8 +160,9 @@ one of them: it is blocked in code (above), and setting `REFLEX_MODE=on` only pr
      and the reflex cannot be on;
    - would-play share is reported per rule; `noise_db` shows where the floor really sits, set `REFLEX_NOISE_FLOOR_DBFS` from it
      only after an owner look;
-   - would-play turns with a safety marker within 45 s: REPORTED, the size of the exposure a future gate must close. It is
-     not a pass bar: a zero here does not make `on` allowed (see the NOT ENFORCEABLE rows);
+   - the safety count, REPORTED (never a pass bar; a zero does not make `on` allowed): `REFLEX_SAFETY would_play=1` per
+     class (the lab prints it, and says "unavailable" while every line is `class=unknown`, i.e. today), and the lab's
+     would-play turns with a server marker within 45 s (a time correlation; blind to refusals);
    - `spk=1` on the household's own wake turns most of the time; if `spk=-1` dominates, speaker shadow is still on.
 8. **Not now: `on`.** Blocked until a reviewed PR adds an at-close crisis / medical / refusal gate and flips
    `_REFLEX_ON_ALLOWED`. When that PR exists, its own record must carry the rehearsal (owner present, daytime: ordinary wake
