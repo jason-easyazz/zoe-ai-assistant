@@ -17,6 +17,7 @@ import logging
 import re
 import sys
 import threading
+import time
 import types
 import wave
 from pathlib import Path
@@ -139,7 +140,7 @@ def _talk(daemon, *, chunks=0, first=99.9, last=100.3):
 
 
 def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True, claim=0.40, claim_s=0.09,
-          before="join", wire=None, hour=12, wake=True, on_allowed=None, safety_out=None):
+          before="join", wire=None, hour=12, wake=True, on_allowed=None, safety_out=None, stamps=None):
     """One streamed wake turn. Returns (ok, FIRST_SOUND line, reply writes, reflex players, reply-start clock, registered).
     ``mode="on"`` exercises the GATED player: it sets ``_REFLEX_ON_ALLOWED`` on this test module's daemon copy (production is
     False, pinned below) unless ``on_allowed`` says otherwise."""
@@ -157,9 +158,25 @@ def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True
             players.append(p)
             return p
         reply_first_at.append(clock.t)
-        return FS._FakeProc(writes)
+        proc = FS._FakeProc(writes)
+        if stamps is not None:                  # REAL time of the reply's first PCM write (not the scripted clock)
+            sink = proc.stdin.write
+
+            def _write(b):
+                stamps.setdefault("first_write", time.perf_counter())
+                return sink(b)
+            proc.stdin = types.SimpleNamespace(write=_write, flush=lambda: None, close=lambda: None)
+        return proc
 
     monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=start))
+    if stamps is not None:                      # REAL time the reply path entered its first chunk
+        real_feed = daemon._feed_pcm_chunk
+
+        def _feed(aplay, wav_bytes):
+            if aplay is None:
+                stamps.setdefault("feed", time.perf_counter())
+            return real_feed(aplay, wav_bytes)
+        monkeypatch.setattr(daemon, "_feed_pcm_chunk", _feed)
     registered = []
     real_register = daemon._register_tts_process
     monkeypatch.setattr(daemon, "_register_tts_process", lambda p: (registered.append(p.pid), real_register(p)))
@@ -375,6 +392,69 @@ def test_the_replys_first_write_does_not_move(daemon, monkeypatch, caplog, bank)
     assert out["off"] == out["shadow"] == out["on"]
     ctl_wait = REFLEX.ordering_wait_ms(100.0, TAKE_MS, 100.0 + 0.19)
     assert ctl_wait > 0       # control: had the daemon applied the H3 wait the reply would have been held this long
+
+
+def _first_write_delay_s(daemon, monkeypatch, caplog, bank, mode, *, plant=None):
+    """REAL seconds from the reply path entering its first chunk to the reply's first PCM write. ``plant`` wraps the
+    controller's note_reply (the negative controls)."""
+    stamps = {}
+    with monkeypatch.context() as m:
+        if plant is not None:
+            real = daemon._ReflexTurn.note_reply
+            m.setattr(daemon._ReflexTurn, "note_reply", lambda self: plant(lambda: real(self)))
+        _turn(daemon, m, caplog, mode=mode, bank=bank, stamps=stamps)
+    return stamps["first_write"] - stamps["feed"]
+
+
+def test_the_reply_path_never_waits_on_the_reflex_up_to_its_first_pcm_write(daemon, monkeypatch, caplog, bank):
+    """Measured to the reply's FIRST PCM WRITE in real time, for off, shadow and on: under 50 ms each (it is pure
+    in-memory work here). NEGATIVE CONTROLS, run in the same test: a 300 ms sleep planted in note_reply, and note_reply
+    taking a lock another thread holds for 300 ms (what the old lock-taking note_reply could do), are both CAUGHT."""
+    for mode in ("off", "shadow", "on"):
+        assert _first_write_delay_s(daemon, monkeypatch, caplog, bank, mode) < 0.05, mode
+    slept = _first_write_delay_s(daemon, monkeypatch, caplog, bank, "shadow",
+                                 plant=lambda real: (time.sleep(0.3), real()))
+    assert slept >= 0.25, slept                                   # control 1: a planted sleep is visible
+    held = threading.Lock()
+
+    def locked(real):
+        with held:
+            real()
+
+    held.acquire()
+    threading.Timer(0.3, held.release).start()
+    blocked = _first_write_delay_s(daemon, monkeypatch, caplog, bank, "shadow", plant=locked)
+    assert blocked >= 0.25, blocked                               # control 2: a held lock in note_reply is visible
+
+
+def test_note_reply_only_sets_an_event_no_lock_no_subprocess(daemon, monkeypatch, bank):
+    """The reply path's ONLY reflex action is Event.set: it never touches the player (poll / terminate / wait) or a lock."""
+    fs, ctl = _controller(daemon, monkeypatch, bank)
+
+    class _Boom:
+        def __getattr__(self, name):
+            pytest.fail(f"the reply path touched the reflex player: {name}")
+
+    ctl._proc = _Boom()
+    ctl.note_reply()
+    assert ctl._reply.is_set() and not ctl.cut
+    import inspect
+    body = inspect.getsource(daemon._ReflexTurn.note_reply)
+    for banned in ("_lock", "poll(", "terminate(", "kill(", "wait(", "_proc"):
+        assert banned not in body.split('"""')[-1], banned
+
+
+def test_off_does_no_reflex_work_on_the_first_audio_path(daemon, monkeypatch, caplog, bank):
+    """REFLEX_MODE off: the first-audio path never calls into the reflex (not even the no-op hook)."""
+    monkeypatch.setattr(daemon, "_reflex_note_reply", lambda: pytest.fail("reflex hook ran with REFLEX_MODE off"))
+    ok, _, writes, players, _, _, dec = _turn(daemon, monkeypatch, caplog, mode="off", bank=bank)
+    assert ok and len(writes) == 3 and players == [] and dec == []
+    src = DAEMON.read_text(encoding="utf-8")
+    calls = [ln for ln in src.splitlines() if ln.strip().startswith("_reflex_note_reply()")]
+    assert len(calls) == 2
+    for i, ln in enumerate(src.splitlines()):
+        if ln.strip().startswith("_reflex_note_reply()"):
+            assert 'if REFLEX_MODE != "off":' in src.splitlines()[i - 1], i
 
 
 def test_a_reply_during_the_take_cuts_the_reflex_and_is_never_delayed(daemon, monkeypatch, caplog, bank):
