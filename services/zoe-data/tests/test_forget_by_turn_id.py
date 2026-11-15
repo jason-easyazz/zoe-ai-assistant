@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 
 import pytest
@@ -118,7 +119,8 @@ def world(monkeypatch, ledger_env):
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
     monkeypatch.setattr(pa, "_svc_default", lambda: svc)
     chat = _Chat()
-    monkeypatch.setattr(db_pool, "get_db_ctx", chat.ctx)
+    chat.patch = monkeypatch
+    chat.db_pool = db_pool
     monkeypatch.setattr(xw, "_transcript_rows_by_id", chat.by_id, raising=False)
     monkeypatch.setattr(xw, "_transcript_candidates", chat.candidates)
     monkeypatch.setattr(xw, "_set_transcript_metadata", chat.setmeta)
@@ -137,7 +139,11 @@ def _plant(svc, chat, target: str) -> dict:
     rows: dict = {}
     for key in sorted(SAID, key=lambda k: k == target):
         said = SAID[key]
-        assert run(_save_chat_message("s-1", "user", said, user_id=UID)) is True
+        # the fake chat_messages answers ONLY the save: every other store a forget reaches (the value registry, the notes) sees
+        # exactly the database every other forget test sees, so a fake answering empty can never read as a store failure
+        with chat.patch.context() as scoped:
+            scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+            assert run(_save_chat_message("s-1", "user", said, user_id=UID)) is True
 
         async def capture():
             with turn_forget.capture_scope(UID, said):                          # the post-turn capture of THAT turn
@@ -174,6 +180,14 @@ def _left(svc, chat) -> dict:
     xr, ap, nt = _xw_rows(), _approved(svc), _night()
     return {k: {"words": k in xr, "fact": FACTS[k] in ap, "copy": COPIES[k] in ap,
                 "transcript": not chat.off(chat.mid(k)), "night": k in nt} for k in SAID}
+
+
+def _diagnosis(path, reply, before, after, caplog) -> str:
+    """The per-store before/after table, the path's reply and every eraser warning it logged: a failure names its cause."""
+    rows = [f"{k} {s:<10} {int(before[k][s])} -> {int(after[k][s])}" for k in SAID for s in ("words", "fact", "copy", "transcript", "night")]
+    logs = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO and any(
+        m in r.getMessage() for m in ("failed", "unavailable", "unbound", "skipped", "forget_"))]
+    return f"\npath={path} reply={reply!r}\n" + "\n".join(rows) + "\nlogs:\n" + "\n".join(logs)
 
 
 # ── the seven forget paths: each forgets the TARGET turn (the topic forget: the target's TOPIC) ────────────────────────
@@ -239,7 +253,7 @@ OWNS = {"forget_last": {"words", "fact", "copy", "transcript", "night"},
 @pytest.mark.parametrize("rotated", [False, True])
 @pytest.mark.parametrize("target", ["a", "b"])
 @pytest.mark.parametrize("path", sorted(PATHS))
-def test_every_forget_path_takes_exactly_its_turn(world, monkeypatch, path, target, rotated):
+def test_every_forget_path_takes_exactly_its_turn(world, monkeypatch, caplog, path, target, rotated):
     """Forgetting one of two look-alike turns takes exactly that turn's data in every store the path owns, and nothing of the
     other turn or of the third. The TOPIC forget takes every turn about its topic by design (both plumber turns), never the
     dentist turn that shares the redacted address. Also after the ledger secret ROTATES between the write and the forget."""
@@ -249,12 +263,16 @@ def test_every_forget_path_takes_exactly_its_turn(world, monkeypatch, path, targ
     rows = _plant(svc, chat, target)
     if rotated:
         monkeypatch.setenv(memory_forgotten.SALT_ENV, "another-unit-test-ledger-secret-9876543210")
-    assert PATHS[path](svc, chat, target, rows).startswith("Done")
-    gone = {"a", "b"} if path == "topic_index_hits" else {target}
+    before = _left(svc, chat)
+    caplog.set_level(logging.INFO)
+    reply = PATHS[path](svc, chat, target, rows)
     left = _left(svc, chat)
+    why = _diagnosis(path, reply, before, left, caplog)
+    assert reply.startswith("Done"), why
+    gone = {"a", "b"} if path == "topic_index_hits" else {target}
     for key in SAID:
         for store in sorted(OWNS[path]):
-            assert left[key][store] is (key not in gone), (key, store, left)
+            assert left[key][store] is (key not in gone), (key, store, why)
 
 
 def test_every_derived_row_carries_its_saved_turn(world):
@@ -276,7 +294,7 @@ def test_a_redacted_quote_with_no_saved_turn_id_is_refused_not_guessed(world):
     assert "xw-old" in {k[1] for k in xw.get_backend().rows}
 
 
-def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, monkeypatch):
+def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, monkeypatch, caplog):
     """An eraser of STORED words failing fails the forget (not confirmed, the turn kept for the retry); an in-process cache clear
     failing does not (test_value_correction_forget.py::test_a_failing_clear_never_breaks_forget_that)."""
     svc, chat = world
@@ -286,8 +304,12 @@ def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, 
     async def down(*_a, **_k):
         raise RuntimeError("store down")
     monkeypatch.setattr(xw, "flag_transcript_turns", down)
-    assert not _forget_last(svc, chat, "b", None).startswith("Done")
+    caplog.set_level(logging.INFO)
+    first = _forget_last(svc, chat, "b", None)
+    assert not first.startswith("Done"), first
     assert "b" in _xw_rows(), "the words entry stays until the transcript is flagged (nothing left unfindable)"
     monkeypatch.setattr(xw, "flag_transcript_turns", real)
-    assert _forget_last(svc, chat, "b", None).startswith("Done")
+    before = _left(svc, chat)
+    second = _forget_last(svc, chat, "b", None)
+    assert second.startswith("Done"), _diagnosis("forget_last retry", second, before, _left(svc, chat), caplog)
     assert chat.off(chat.mid("b")) and "b" not in _xw_rows() and not chat.off(chat.mid("a"))

@@ -1985,8 +1985,8 @@ _PLACEHOLDER = "[redacted]"
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn: those saved from that
     saved turn (``turn_id``: the chat message id every observation carries), erased BY ID - another turn's observation can hold the
-    very same words (a look-alike turn whose difference the scrub removed) - and, for an old caller with no id, those whose quote sits
-    inside - or contains - any of ``texts`` AS SAID. A text holding the redaction placeholder is never compared (it names no turn).
+    very same words (a look-alike turn whose difference the scrub removed), and then ``texts`` are NOT consulted; only when the id
+    names no observation (an old caller) those whose quote sits inside - or contains - any of ``texts`` AS SAID. A text holding the redaction placeholder is never compared (it names no turn).
     "Forget it" after an explained answer must reach what the night pass saved from the same words, which ``erase_entity`` (name-based)
     does not. A store failure is RAISED."""
     if not (user_id or "").strip():
@@ -2001,8 +2001,10 @@ async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
             obs = await backend.observations(user_id)
             by_id = [o for o in obs if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
             ids = {o["id"] for o in by_id}
-            by_words = [o for o in obs if o["id"] not in ids and (o["quote"] or "").strip()
-                        and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+            # a turn the id resolved is erased BY ID ONLY: its words, even as said, also sit inside a look-alike turn's (the span
+            # the scrub left is the same in both), so once the turn is known no text is compared at all
+            by_words = [] if by_id else [o for o in obs if (o["quote"] or "").strip()
+                                         and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
             if not (by_id or by_words):
                 return 0
 
