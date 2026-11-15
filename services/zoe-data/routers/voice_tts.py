@@ -2707,10 +2707,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _voice_stt_log_path() -> Path:
-    configured = env_str("ZOE_VOICE_STT_LOG")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".zoe-voice" / "voice_stt.jsonl"
+    import local_text_logs
+
+    return local_text_logs.log_path(local_text_logs.VOICE_STT)
 
 
 def _wav_duration_seconds(wav_path: str) -> float | None:
@@ -2725,18 +2724,24 @@ def _wav_duration_seconds(wav_path: str) -> float | None:
 
 
 def _rotate_voice_stt_log(path: Path) -> None:
-    max_bytes = _env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000)
-    if max_bytes <= 0 or not path.exists():
-        return
+    import local_text_logs
+
+    if path != local_text_logs.log_path(local_text_logs.VOICE_STT):
+        raise ValueError("STT rotation path differs from the erase path")
+    local_text_logs.append_line(local_text_logs.VOICE_STT, None,
+                               max_bytes=_env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000))
+
+
+def _stt_erase_epoch() -> int | None:
+    """The forget erase generation, read BEFORE a clip is handed to STT and carried to ``_log_voice_stt_sample``: an erase that
+    lands while the clip is transcribed then drops the line (its words may name what was just forgotten). Costs one module-global
+    int read (no disk, no env, no lock); the STT call itself is untouched. None only if the module cannot load (append fails too)."""
     try:
-        if path.stat().st_size < max_bytes:
-            return
-        rotated = path.with_name(path.name + ".1")
-        if rotated.exists():
-            rotated.unlink()
-        path.replace(rotated)
-    except OSError as exc:
-        logger.debug("voice STT audit rotation failed: %s", exc)
+        import local_text_logs
+
+        return local_text_logs.erase_epoch()
+    except Exception:  # noqa: BLE001 - an audit-log helper must never break a turn
+        return None
 
 
 def _log_voice_stt_sample(
@@ -2749,10 +2754,13 @@ def _log_voice_stt_sample(
     duration_seconds: float | None = None,
     stt_seconds: float | None = None,
     error: str | None = None,
+    epoch: int | None = None,
 ) -> None:
     try:
-        path = _voice_stt_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        import local_text_logs
+
+        if epoch is None:   # a caller with no pre-STT capture: the line is guarded from here on only
+            epoch = local_text_logs.erase_epoch()
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "route": route,
@@ -2771,9 +2779,8 @@ def _log_voice_stt_sample(
         }
         if error:
             record["error"] = error[:500]
-        _rotate_voice_stt_log(path)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        local_text_logs.append_line(local_text_logs.VOICE_STT, json.dumps(record, ensure_ascii=False), epoch,
+                                    max_bytes=_env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000))
     except Exception as exc:
         logger.debug("voice STT audit log failed: %s", exc)
 
@@ -3231,6 +3238,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     duration_s: float | None = None
     stt_s: float | None = None
     t_stt_start: float | None = None
+    stt_epoch = _stt_erase_epoch()   # BEFORE the clip reaches STT
     try:
         text = ""
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -3256,6 +3264,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         stripped = text.strip()
         stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3290,6 +3299,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if t_stt_start is not None:
             stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3304,6 +3314,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if t_stt_start is not None:
             stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3318,6 +3329,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if t_stt_start is not None:
             stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -6167,6 +6179,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # ── Phase 1: STT ──
     t_stt_start = time.monotonic()
     duration_s: float | None = None
+    stt_epoch = _stt_erase_epoch()   # BEFORE the clip reaches STT
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
@@ -6182,6 +6195,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     except Exception as exc:
         t_stt = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="turn",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -6212,6 +6226,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
 
     transcript = transcript.strip()
     _log_voice_stt_sample(
+        epoch=stt_epoch,
         route="turn",
         panel_id=panel_id,
         audio_bytes=len(raw),
@@ -6356,6 +6371,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # ── STT (Moonshine, same waterfall as /turn) ──
     t_stt_start = time.monotonic()
     duration_s: float | None = None
+    stt_epoch = _stt_erase_epoch()   # BEFORE the stream result is taken and before batch STT
     # ZOE_STT_STREAM_UNDER_SPEECH (default OFF): the daemon fed this turn's audio to a Moonshine stream while the user
     # spoke; take its finished transcript if (and only if) it provably covers this exact clip. Else batch STT below.
     _pre_text = await _take_stt_stream_text(payload, raw, suffix)
@@ -6388,6 +6404,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         pass
     transcript = (transcript or "").strip()
     _log_voice_stt_sample(
+        epoch=stt_epoch,
         route="turn_stream",
         panel_id=panel_id,
         audio_bytes=len(raw),

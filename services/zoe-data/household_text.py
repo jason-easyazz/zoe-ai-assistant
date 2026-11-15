@@ -129,7 +129,7 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     TextStore("production_feedback_log", "~/training/data/production-feedback.jsonl", "message + reply verbatim (opt-in only)",
               "none (not written unless ZOE_TRAINING_FEEDBACK_LOG=1)", "zoe_agent.py"),
     TextStore("voice_stt_log", "$ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl, .1)", "the Moonshine transcript of every utterance",
-              "size rotation only (ZOE_VOICE_STT_LOG_MAX_BYTES, one .1 segment)", "routers/voice_tts.py"),
+              "size rotation (ZOE_VOICE_STT_LOG_MAX_BYTES, one .1 segment); + ZOE_TEXT_LOG_RETENTION_DAYS when ZOE_FORGET_REACH_EXTRA=on", "routers/voice_tts.py"),
     TextStore("flue_session_log", "labs/flue-zoe-brain-2x/data/zoe-brain.db", "the Flue brain's own session event log", KEPT,
               "the Flue brain sidecar (TypeScript, outside this scan)"),
     TextStore("flue_session_store", "labs/flue-zoe-brain-2x/data/zoe-brain.db", "the Flue brain's session store (replies, STT text)",
@@ -175,8 +175,9 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
 # -- stores forget_reach does not hold (no member key, not a *.jsonl sink) ---------------------------------------------------------
 EXTRA: tuple[TextStore, ...] = (
     TextStore("telegram_stt_capture", "$ZOE_TELEGRAM_STT_CAPTURE_DIR/tg-<stamp>-<pid>.{wav,txt}",
-              "a Telegram voice note's audio and its transcript (opt-in; unset = nothing written)", "none", "routers/telegram_media.py",
-              fr.GAP, "-", "-", "Opt-in phone-mic capture corpus; no member id, no retention, outside the cascade."),
+              "a Telegram voice note's audio and its transcript (opt-in; unset = nothing written)", "none (ZOE_TEXT_LOG_RETENTION_DAYS when ZOE_FORGET_REACH_EXTRA=on)", "routers/telegram_media.py",
+              fr.GAP, "-", "-", "Opt-in phone-mic capture corpus; no member id. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs.erase_capture "
+              "deletes a pair naming a forgotten entity, every pair on a member erase, and pairs past the text-log retention."),
     TextStore("operator_tool_outputs", "scratch dirs, ~/.zoe/voice-gate/, ~/.zoe/struggle-eval/, --out paths",
               "reports, labelling sheets and replays the owner's tools write (may quote transcripts and replies)",
               "none automatic; the owner's own files", "scripts/perf/*, scripts/maintenance/* operator tools, scripts/train/generate_gemma_training_data.py",
@@ -234,10 +235,9 @@ BY_KEY = {s.key: s for s in STORES}
 
 # -- the detector's allowlist: reviewed write sites (``relpath::function``, fnmatch) -> a store key or a NOT_HOUSEHOLD reason ------
 WRITE_SITES: dict[str, str] = {
-    "services/zoe-data/routers/telegram_media.py::_maybe_capture": "telegram_stt_capture",
+    "services/zoe-data/local_text_logs.py::write_capture_pair": "telegram_stt_capture",
     "services/zoe-data/semantic_router.py::_append_shadow_line": "router_shadow_log",
     "services/zoe-data/zoe_agent.py::_log_feedback_triple": "production_feedback_log",
-    "services/zoe-data/routers/voice_tts.py::_log_voice_stt_sample": "voice_stt_log",
     "services/zoe-data/self_review.py::_write_private": "self_review_records",
     "services/zoe-data/night_extract.py::_write_private": "night_extract_facts",
     "scripts/maintenance/router_struggle_retrain.py::_write_private": "router_retrain_texts",

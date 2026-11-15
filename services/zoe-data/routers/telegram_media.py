@@ -100,8 +100,9 @@ def ffmpeg_binary() -> Optional[str]:
 
 def capture_dir() -> Optional[Path]:
     """``ZOE_TELEGRAM_STT_CAPTURE_DIR`` — unset (default) = capture nothing."""
-    raw = os.environ.get("ZOE_TELEGRAM_STT_CAPTURE_DIR", "").strip()
-    return Path(raw).expanduser() if raw else None
+    from local_text_logs import telegram_capture_dir
+
+    return telegram_capture_dir()
 
 
 def _error(status: int, code: str, **extra: Any) -> JSONResponse:
@@ -169,18 +170,17 @@ async def _synthesize_wav(text: str) -> Optional[bytes]:
     return await _synthesize_kokoro_sidecar(text)
 
 
-def _maybe_capture(wav_path: str, text: str) -> None:
-    """Optional phone-mic capture into a SEPARATE corpus — never the panel one."""
-    target = capture_dir()
-    if target is None:
-        return
+def _maybe_capture(wav_path: str, text: str, epoch: Optional[int] = None) -> None:
+    """Optional phone-mic capture into a SEPARATE corpus — never the panel one.
+
+    ``epoch``: the forget erase generation read BEFORE the audio was transcribed;
+    the pair is written all-or-nothing under the eraser's lock and dropped if an
+    erase ran since (``local_text_logs.write_capture_pair``)."""
+    from local_text_logs import write_capture_pair
+
     try:
-        target.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        base = target / f"tg-{stamp}-{os.getpid()}"
-        shutil.copyfile(wav_path, f"{base}.wav")
-        Path(f"{base}.txt").write_text(text + "\n", encoding="utf-8")
-    except OSError as exc:
+        write_capture_pair(wav_path, text, epoch)
+    except (OSError, ValueError) as exc:
         logger.warning("telegram STT capture failed (non-fatal): %s", exc)
 
 
@@ -204,6 +204,9 @@ async def telegram_transcribe(request: Request, _: None = Depends(require_intern
     if not binary:
         return _error(503, "ffmpeg unavailable")
 
+    from local_text_logs import erase_epoch
+
+    capture_epoch = erase_epoch()   # BEFORE decode + STT: an erase that lands meanwhile drops this note's capture
     max_s = max_seconds()
     timings: dict[str, int] = {}
     with tempfile.TemporaryDirectory(prefix="zoe-tg-") as tmp:
@@ -235,7 +238,7 @@ async def telegram_transcribe(request: Request, _: None = Depends(require_intern
             logger.warning("telegram transcribe: STT failed: %s", exc)
             return _error(502, "stt failed")
         timings["stt_ms"] = int((time.monotonic() - t1) * 1000)
-        _maybe_capture(dst, text)
+        _maybe_capture(dst, text, capture_epoch)
 
     logger.info(
         "TELEGRAM_STT duration=%.1fs decode_ms=%s stt_ms=%s chars=%d",

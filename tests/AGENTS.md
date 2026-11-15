@@ -46,6 +46,8 @@ Repository-level test suites: unit, integration, performance, e2e, intent-system
 
 ## Work Guidance
 
+- Both shared conftests must pin the router, intent-miss and STT logs, Telegram capture directory, recall-gate trace and ad-hoc backup root before collection and per test. `unit/test_capture_erase_isolation.py` checks inherited synthetic capture canaries in subprocess pytest sessions using each conftest.
+
 - No loose `test_*.py` files in the `tests/` root — the pre-suite diary scripts were removed; add new tests to the matching subfolder.
 - `results/` is gitignored: local run artifacts (model bake-offs, reports) live there untracked and are never committed.
 
