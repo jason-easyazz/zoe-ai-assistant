@@ -294,7 +294,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 
 ## Work Guidance
 
-- STT audit rotation and append use `local_text_logs.append_line` under the eraser's thread lock and flock. Telegram capture paths resolve through `telegram_capture_dir`: absolute, non-root, no parent traversal; `capture_directory` opens components without following symlinks and callers operate relative to its descriptor. Both shared conftests pin every local erase root before collection and again per test.
+- STT audit rotation and append use `local_text_logs.append_line` under the eraser's thread lock and flock; each STT route reads the erase epoch (`voice_tts._stt_erase_epoch`) BEFORE the clip reaches STT and passes it as `epoch=`, so an erase landing mid-STT drops the line. Telegram capture pairs are written only by `local_text_logs.write_capture_pair` (epoch read before decode/STT): under an exclusive flock on the capture directory descriptor, the same one `erase_capture` holds, all-or-nothing (a refusal after the WAV removes it). Telegram capture paths resolve through `telegram_capture_dir`: absolute, non-root, no parent traversal; `capture_directory` opens components without following symlinks and callers operate relative to its descriptor. Both shared conftests pin every local erase root before collection and again per test.
 
 - Synthesis re-checks its source row ids after ingest: a missing or non-live source compensates only ids in ingest's `created_ids` receipt, through audited `erase_rows` outside the memory lock. An unreadable post-check logs `SYNTHESIS_SOURCE_UNKNOWN` and keeps the row; a returned pre-existing candidate is never erased.
 

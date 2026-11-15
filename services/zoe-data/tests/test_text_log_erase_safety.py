@@ -19,7 +19,7 @@ SVC = Path(__file__).resolve().parents[1]
 def _voice_helpers():
     """Execute the committed writer helpers without importing models/the router."""
     tree = ast.parse((SVC / "routers/voice_tts.py").read_text())
-    names = {"_rotate_voice_stt_log", "_log_voice_stt_sample", "_voice_stt_log_path"}
+    names = {"_rotate_voice_stt_log", "_log_voice_stt_sample", "_voice_stt_log_path", "_stt_erase_epoch"}
     tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     from datetime import datetime, timezone
     from types import SimpleNamespace
@@ -185,3 +185,107 @@ def test_standalone_sweep_loads_extra_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_FORGET_REACH_EXTRA", "off")
     apply()
     assert not ltl.extra_reach_on()  # process environment still wins
+
+
+def _quiet_erase(monkeypatch):
+    """Only the extra stores are in play: the base logs and the recall-gate trace are kept out of the erase."""
+    import recall_gate_trace
+
+    monkeypatch.setattr(ltl, "LOGS", ())
+    monkeypatch.setattr(recall_gate_trace, "erase_entity", lambda rx: 0)
+    monkeypatch.setattr(recall_gate_trace, "erase_all", lambda: 0)
+
+
+def test_stt_line_dropped_when_erase_lands_during_transcription(monkeypatch, tmp_path):
+    path = tmp_path / "voice.jsonl"
+    monkeypatch.setenv("ZOE_VOICE_STT_LOG", str(path))
+    monkeypatch.setenv("ZOE_FORGET_REACH_EXTRA", "on")
+    _quiet_erase(monkeypatch)
+    helpers = _voice_helpers()
+    args = dict(route="ci", panel_id="synthetic", audio_bytes=4, suffix="wav", transcript="synthetic sentinel words")
+    epoch = helpers["_stt_erase_epoch"]()                 # the route reads it before the clip reaches STT
+    ltl.erase_entity(re.compile("synthetic sentinel"))    # ... and the erase lands while the clip is transcribed
+    helpers["_log_voice_stt_sample"](epoch=epoch, **args)
+    assert not path.exists() or "synthetic sentinel" not in path.read_text()
+    helpers["_log_voice_stt_sample"](epoch=helpers["_stt_erase_epoch"](), **args)   # no erase since: written
+    assert "synthetic sentinel" in path.read_text()
+
+
+def _calls(fn, name):
+    return [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == name]
+
+
+@pytest.mark.parametrize("route", ["voice_transcribe", "voice_turn", "voice_turn_stream"])
+def test_voice_routes_read_erase_epoch_before_stt_and_carry_it(route):
+    """Class rule for every STT-log writer route: the erase epoch is read BEFORE the clip reaches STT (batch or the stream
+    result) and every audit line carries it. Reading it inside the logger (after STT) let an erase that landed mid-STT pass."""
+    tree = ast.parse((SVC / "routers/voice_tts.py").read_text())
+    fn = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == route)
+    captures = [c.lineno for c in _calls(fn, "_stt_erase_epoch")]
+    stt = [c.lineno for c in _calls(fn, "_transcribe_audio") + _calls(fn, "_take_stt_stream_text")]
+    logs = _calls(fn, "_log_voice_stt_sample")
+    assert captures and stt and logs
+    assert min(captures) < min(stt)
+    assert all(any(k.arg == "epoch" for k in c.keywords) for c in logs)
+
+
+def _capture_root(monkeypatch, tmp_path):
+    root = tmp_path / "capture"
+    monkeypatch.setenv("ZOE_TELEGRAM_STT_CAPTURE_DIR", str(root))
+    monkeypatch.setenv("ZOE_VOICE_STT_LOG", str(tmp_path / "voice.jsonl"))
+    monkeypatch.setenv("ZOE_FORGET_REACH_EXTRA", "on")
+    _quiet_erase(monkeypatch)
+    wav = tmp_path / "in.wav"
+    wav.write_bytes(b"RIFF" + b"\x00" * 64)
+    return root, wav
+
+
+def test_capture_pair_all_or_nothing_when_erase_lands_between_audio_and_transcript(monkeypatch, tmp_path):
+    import shutil
+    import threading
+
+    root, wav = _capture_root(monkeypatch, tmp_path)
+    copy = shutil.copyfileobj
+    erased: list = []
+    eraser: list = []
+
+    def copy_then_erase(src, dst, *a, **kw):
+        copy(src, dst, *a, **kw)
+        # the audio is written, the transcript is not: a member erase starts now (another thread, as on the cascade executor)
+        t = threading.Thread(target=lambda: erased.append(ltl.erase_all_text()))
+        t.start()
+        eraser.append(t)
+        t.join(timeout=1.0)     # the old, lock-less writer: the erase finishes here, before the transcript is written
+
+    monkeypatch.setattr(shutil, "copyfileobj", copy_then_erase)
+    epoch = ltl.erase_epoch()                               # read before the (synthetic) transcription
+    written = ltl.write_capture_pair(str(wav), "synthetic sentinel note", epoch)
+    eraser[0].join(timeout=40)
+    assert not eraser[0].is_alive() and len(erased) == 1    # the erase completed and reported success
+    assert written is False
+    assert not [p.name for p in root.iterdir() if p.name.startswith("tg-")]   # neither file of the pair
+
+
+def test_capture_pair_dropped_when_erase_lands_during_transcription(monkeypatch, tmp_path):
+    root, wav = _capture_root(monkeypatch, tmp_path)
+    epoch = ltl.erase_epoch()
+    ltl.erase_entity(re.compile("synthetic sentinel"))
+    assert ltl.write_capture_pair(str(wav), "synthetic sentinel note", epoch) is False
+    assert not root.exists() or not list(root.iterdir())
+    # unaffected case: no erase since the epoch was read -> both members written
+    assert ltl.write_capture_pair(str(wav), "synthetic sentinel note", ltl.erase_epoch()) is True
+    names = sorted(p.suffix for p in root.iterdir())
+    assert names == [".txt", ".wav"]
+
+
+def test_capture_writer_skips_while_eraser_holds_the_directory_lock(monkeypatch, tmp_path):
+    root, wav = _capture_root(monkeypatch, tmp_path)
+    root.mkdir()
+    with ltl.capture_directory() as directory:
+        assert ltl._flock_capture(directory, wait=False)
+        try:
+            assert ltl.write_capture_pair(str(wav), "synthetic note", ltl.erase_epoch()) is False
+        finally:
+            import fcntl
+            fcntl.flock(directory, fcntl.LOCK_UN)
+    assert list(root.iterdir()) == []

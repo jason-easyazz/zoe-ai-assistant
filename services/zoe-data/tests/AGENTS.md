@@ -27,7 +27,7 @@ Pytest suite for the production API: router contracts, agent harness behavior, c
 
 ## Work Guidance
 
-- `test_text_log_erase_safety.py` injects the actual STT rotation helper between inode verification and replacement, checks both writer locks, and plants capture symlinks and directory replacement races. `tests/unit/test_capture_erase_isolation.py` starts pytest with an inherited synthetic canary directory to check both shared conftests before imports and during a member erase.
+- `test_text_log_erase_safety.py` injects the actual STT rotation helper between inode verification and replacement, checks both writer locks, drives an erase landing mid-STT and between the capture WAV and TXT writes (also end-to-end in `test_telegram_media.py`), and plants capture symlinks and directory replacement races. `tests/unit/test_capture_erase_isolation.py` starts pytest with an inherited synthetic canary directory to check both shared conftests before imports and during a member erase.
 
 - `test_dreaming_passes_off_loop.py` injects source deletion/rejection between the synthesis pre-check and ingest, with unchanged, unreadable post-check and pre-existing-candidate controls. It also checks the real ingest creation receipt; deletion after the post-check is outside this race test.
 
