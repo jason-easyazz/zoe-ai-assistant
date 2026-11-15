@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
-from ..spine import forget_affects
+from ..provenance import erased_request
 from ..retention import TWIN_WINDOW_DAYS
 
 MIN_DAYS = {"workday": 10, "weekend": 6}
@@ -119,13 +119,20 @@ class Twin:
         return gone
 
     def _forget(self, notice: Event) -> None:
-        person = notice.payload.get("subject")
-        for day, facts in list(self.days.get(person, {}).items()):
-            self.days[person][day] = {k: v for k, v in facts.items() if not forget_affects(notice, v[1])}
-            if not self.days[person][day]:
-                del self.days[person][day]
-        if not self.days.get(person):
-            self.days.pop(person, None)
+        # Retention can remove source events before these reduced facts expire.
+        # The owner's whole-person watermark still reaches those older facts;
+        # other owners match only explicit erased request sequences.
+        for person in list(self.days):
+            for day, facts in list(self.days[person].items()):
+                self.days[person][day] = {k: v for k, v in facts.items() if not (
+                    erased_request(notice, v[1], person) or
+                    (notice.payload.get('scope') == 'person' and
+                     person == notice.payload.get('subject') and
+                     v[1] <= notice.payload.get('upto', float('inf'))))}
+                if not self.days[person][day]:
+                    del self.days[person][day]
+            if not self.days.get(person):
+                self.days.pop(person, None)
 
     # ---- the baseline --------------------------------------------------------------------------
     def normal(self, person: str, kind: str = "workday", *, before: str | None = None) -> Normal:

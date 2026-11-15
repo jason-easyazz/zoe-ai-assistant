@@ -690,9 +690,8 @@ the twin keeps the label (a test pins this).
 | B. Reduced facts for 28 days | times, rooms and step counts for four weeks | 20 working days and 8 weekend days: both baselines, with some room | a reduced copy two weeks older than the kernel's presence events; the name-forget limit above applies to those two weeks |
 | C. Reduced facts for 56 days (the lab placeholder) | the same, eight weeks | a steadier baseline; a one-off odd day weighs less | six weeks beyond the kernel's copy; the same limit for longer |
 
-In every option: **generated days are never stored** (a seed regenerates them); a rehearsal report is text that
-quotes offers, so a report made from a real recording is a copy outside the kernel and should not outlive that
-recording; and a recording of real days written to a file is itself a copy no forget can reach. The lab's
+In every option: **generated days are never stored** (a seed regenerates them). Replay and rehearsal reports
+contain codes, IDs and counts, never offer text, arguments or reasons. A recording of real days written to a file is itself a copy no forget can reach. The lab's
 `record` writes such a file because its days are synthetic. For real days the replay should read the log
 directly. That is not built.
 
@@ -797,3 +796,5 @@ Still open and unbuilt: whether an older child's lines should stop going to a gu
 lines may be shared beyond their guardians at all (today they cannot be, by anyone). The choice is kept in
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
+
+Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).

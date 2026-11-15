@@ -47,11 +47,11 @@ GOLDEN = """\
 # zoe-os replay report v1
 # recording {digest}: 9 events, 3 people
 # skills: calendar-heads-up, leaving-catch
-2030-03-04 18:05:00 @5     OFFER    leaving-catch -> sam [card, unanswered] "You left without: gym bag"
-2030-03-04 18:30:00 @8     OFFER    calendar-heads-up -> sam [card, accepted] "Tomorrow starts at 06:30. Move your alarm to 05:45?"
-2030-03-04 18:30:00 @8     ACTION   calendar-heads-up alarm.move for sam [verified]
-2030-03-04 18:30:00 @8     CLAIM    calendar-heads-up claims alarm.move for sam
-2030-03-04 18:31:00 @9     OFFER    calendar-heads-up -> alex [card, declined] "Tomorrow starts at 06:30. Move your alarm to 05:45?"
+2030-03-04 18:05:00 @5     OFFER    leaving-catch -> sam [card, unanswered]
+2030-03-04 18:30:00 @8     OFFER    calendar-heads-up -> sam [card, accepted]
+2030-03-04 18:30:00 @8     ACTION   kernel receipt for sam
+2030-03-04 18:30:00 @8     CLAIM    calendar-heads-up claim for sam
+2030-03-04 18:31:00 @9     OFFER    calendar-heads-up -> alex [card, declined]
 # totals: offers=3 actions=1 refusals=0 claims=1 findings=0
 # calendar-heads-up: offers=2 actions=1 refusals=0
 # leaving-catch: offers=1 actions=0 refusals=0
@@ -94,7 +94,7 @@ def test_two_versions_of_a_skill_print_exactly_what_changed(tmp_path):
 --- current
 +++ changed
 @@ -3,0 +4 @@
-+2030-03-04 18:12:00 @7     OFFER    leaving-catch -> alex [card, declined] "You left without: laptop"
++2030-03-04 18:12:00 @7     OFFER    leaving-catch -> alex [card, declined]
 @@ -8 +9 @@
 -# totals: offers=3 actions=1 refusals=0 claims=1 findings=0
 +# totals: offers=4 actions=1 refusals=0 claims=1 findings=0
@@ -109,7 +109,7 @@ def test_a_change_that_tries_to_act_without_a_yes_shows_up_as_refusals(tmp_path)
     changed = replay(rec, [LeavingCatch(), PushyHeadsUp()])
     assert changed.counts["refusals"] == 2 and changed.counts["actions"] == 1     # the kernel held
     refused = [line for line in changed.lines if " REFUSAL " in line]
-    assert refused[0].endswith("calendar-heads-up: act alarm.move: the person has not accepted an offer for this")
+    assert 'refused event=' in refused[0]
     out = diff(replay(rec, [LeavingCatch(), CalendarHeadsUp()]), changed)
     assert out.count("\n+2030") == 2 and "REFUSAL" in out
 

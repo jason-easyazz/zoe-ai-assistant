@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .events import Event, Kind, Visibility
-from .spine import KERNEL, Spine
+from .spine import KERNEL, Spine, Refused
 
 Do = Callable[[str, dict], Any]                    # (person, args) -> result
 Verify = Callable[[str, dict, Any], "dict | None"]   # independent read-back, None = no proof
@@ -111,10 +111,12 @@ class Dispatcher:
         self._actions: dict[str, tuple[Do, Verify, bool]] = {}
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
+        self._purges: dict[str, tuple[str, str]] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
-                 doc: str = "", params: dict | None = None) -> None:
+                 doc: str = "", params: dict | None = None,
+                 purge_key: tuple[str, str] | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -125,9 +127,34 @@ class Dispatcher:
         can describe the action to a caller. Without it nothing is checked and the action is
         not described (the behaviour every earlier action has)."""
         self._actions[action] = (do, verify, needs_accept)
+        if purge_key is not None:
+            self._purges[action] = purge_key
+        else:
+            self._purges.pop(action, None)
         self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
+
+    def purge(self, skill: str, action: str, args: dict, notice: Event) -> None:
+        """Trusted driver opt-in: delete ONLY IDs derived from a live erasure notice.
+
+        This kernel duty survives revoked grants and does not grant general action authority.
+        The configured key/prefix is the driver's globally unique request-ID contract.
+        """
+        with self.spine._lock:
+            live = self.spine._get(notice.seq)
+            manifest = self.enforcer.store.manifests.get(skill)
+            spec = self._purges.get(action)
+            if live is None or live.kind is not Kind.FORGET or spec is None or \
+                    manifest is None or action not in manifest.acts:
+                raise Refused('invalid purge')
+            key, prefix = spec
+            if set(args) != {key} or args[key] not in {f'{prefix}{s}' for s in live.payload.get('seqs', ())}:
+                raise Refused('invalid purge id')
+            do, verify, _ = self._actions[action]
+            result = do(live.payload['subject'], args)
+            if not verify(live.payload['subject'], args, result):
+                raise Refused('purge unconfirmed')
 
     def act(self, skill: str, action: str, on_behalf_of: str, args: dict, *,
             caused_by: tuple[int, ...]) -> Receipt:
