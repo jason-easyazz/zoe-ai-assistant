@@ -1403,15 +1403,45 @@ _CODE_RE = re.compile(
 #: a PIN said without "is" (``my pin 4821``): at least three digits. "pin" is also a VERB ("pin 123 photos to the board"),
 #: so :func:`_pin_sub` filters the match - and DEFAULT IS REDACT: the number is kept only on the one closed exemption below
 _BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
-#: SECRET context before "pin": any one forces redaction even when a count noun follows (``my pin 400 notes``). CLOSED: a
-#: possessive / determiner, what it opens (door / gate / alarm / safe are also caught by ``_CODE_RE``), a verb of using one
+#: SECRET context before "pin": any one ANYWHERE in the context window (:func:`_context_window`) forces redaction even when
+#: a count noun follows (``my pin 400 notes``, ``my secret pin 400 notes``). CLOSED: a possessive / determiner (so "the"
+#: counts for a pin: "the pin" is a secret form), what it opens (door / gate / alarm / safe are also caught by
+#: ``_CODE_RE``), a verb of using one; plus ``_SHARED_CONTEXT_WORDS``
 _PIN_LEADS = ("my", "the", "our", "your", "his", "her", "their", "a", "new", "old", "same", "default", "temporary", "temp",
               "door", "front door", "back door", "gate", "alarm", "card", "bank", "bank card", "debit", "debit card",
               "credit", "credit card", "atm", "eftpos", "phone", "sim", "sim card", "safe", "lock", "keypad", "security",
               "account", "app", "login", "garage", "locker", "padlock",
               "enter", "entering", "entered", "use", "using", "used", "type", "typing", "typed", "key", "key in", "punch",
               "punch in", "input", "try", "tried", "change", "changed", "set", "reset", "remember", "forgot")
-_PIN_LEAD_RE = re.compile(rf"(?i)(?:^|[^\w'’])(?:{_alt(_PIN_LEADS)})\s{{1,8}}$")
+#: words that are secret / address context for BOTH rules, wherever they sit in the window
+_SHARED_CONTEXT_WORDS = ("my", "our", "your", "his", "her", "their", "address", "secret", "code", "password", "passcode",
+                         "[redacted]")
+#: every single word of the PIN lead phrases ("front door" -> front, door; "key in" -> key: "in" alone is not a lead)
+_PIN_CONTEXT = frozenset(w for p in _PIN_LEADS for w in p.split() if w != "in") | frozenset(_SHARED_CONTEXT_WORDS)
+_WINDOW_CHARS = 80
+_WINDOW_TOKENS = 6
+_CLAUSE_END_RE = re.compile(r"[.;!?\n]")
+_WINDOW_TOKEN_RE = re.compile(r"\[REDACTED\]|[A-Za-z]+(?:['’][A-Za-z]+)?")
+
+
+def _context_window(s: str, start: int) -> list[str]:
+    """The last ``_WINDOW_TOKENS`` lower-cased words before ``start``, within ``_WINDOW_CHARS`` characters and the same
+    sentence: the window stops at . ; ! ? or a line break, NOT at a comma, "and" or "but" (a list such as "my keys, pin
+    300 photos" stays one window: redaction preferred). One bounded slice per candidate, never a rescan from the start."""
+    lo = max(0, start - _WINDOW_CHARS)
+    w = s[lo:start]
+    ends = [mm.end() for mm in _CLAUSE_END_RE.finditer(w)]
+    if ends:
+        w = w[ends[-1]:]
+    elif lo > 0 and not s[lo - 1].isspace() and w and not w[0].isspace():
+        w = w.split(None, 1)[1] if len(w.split(None, 1)) > 1 else ""      # drop a word the slice cut in half
+    return [t.lower() for t in _WINDOW_TOKEN_RE.findall(w)][-_WINDOW_TOKENS:]
+
+
+def _has_context(tokens: list[str], words: "frozenset[str]") -> bool:
+    """A listed word, an "'s" word (``Sam's``, ``it's``; not "let's"), or a "pin is" / "pin was" pair in the window."""
+    return any(t in words or (t.endswith(("'s", "’s")) and t not in ("let's", "let’s")) for t in tokens) or any(
+        a == "pin" and b in ("is", "was") for a, b in zip(tokens, tokens[1:]))
 #: THE exemption: "pin" the verb pinning a COUNT of things, the digits DIRECTLY followed by one of these nouns (optionally
 #: after more / extra / other / new) or by "of them / those / these". CLOSED and fail-closed: any other word ("pin 4821
 #: works", "pin 4821 expires tomorrow"), punctuation or the end of the text keeps the number a secret. Grow it from real
@@ -1428,7 +1458,7 @@ def _pin_sub(m: "re.Match[str]") -> str:
     """Redact a bare-PIN match; keep it ONLY as "pin" the verb + a listed count noun with no secret context before it."""
     label = m.group(1).lower()
     if (label == "pin" and not m.group(2).strip()
-            and not _PIN_LEAD_RE.search(m.string[max(0, m.start() - 40):m.start()])
+            and not _has_context(_context_window(m.string, m.start()), _PIN_CONTEXT)
             and _PIN_COUNT_RE.match(m.string, m.end())):
         return m.group(0)                                # pin 123 photos / pin 300 of them: the verb
     return m.group(1) + m.group(2) + _REDACT             # everything else, passcode / pin number / pin is|:|= included
@@ -1475,14 +1505,17 @@ _ADDRESS_TITLE_WORDS = ("articles", "article", "episodes", "episode", "show", "s
                         "remake", "cast", "reruns", "box set", "boxset", "dvd", "dvds")
 _ADDRESS_TITLE_RE = re.compile(rf"(?i)\s{{1,8}}(?:the\s{{1,8}})?(?:{_alt(_ADDRESS_TITLE_WORDS)})\b")
 _OPEN_QUOTES, _CLOSE_QUOTES = "\"“‘'«", "\"”’'»"
-#: an OVERRIDE, not a gate: said right before the number, any of these forces redaction even with a title word after it
-#: ("I live at 12 Example Street articles" stays redacted). A place preposition, a possessive, a living / visiting verb,
-#: "address", a lot / unit word, a copula, an "'s" word, a colon, or the second address of a list
+#: an OVERRIDE, not a gate: ANYWHERE in the context window (:func:`_context_window`) any of these, or a word of
+#: ``_SHARED_CONTEXT_WORDS``, forces redaction even with a title word after it ("I live at 12 Example Street articles",
+#: "my actual 12 Example Street articles"). A place preposition, a possessive, a living / visiting verb, "address", a lot /
+#: unit word, a copula, an "'s" word. "the" is NOT on it ("the 21 Jump Street film" is kept). ``_ADDRESS_LEAD_RE`` keeps
+#: the forms that are punctuation, right before the number: a colon, or the second address of a list
 _ADDRESS_LEADS = ("from", "at", "to", "on", "into", "onto", "near", "outside", "opposite", "toward", "towards", "via",
                   "past", "behind", "beside", "my", "our", "your", "his", "her", "their", "address", "addr", "live", "lives",
                   "living", "lived", "stay", "stays", "staying", "stayed", "reside", "resides", "residing", "visit",
                   "visiting", "visited", "is", "was", "are", "were",
                   "lot", "unit", "flat", "apt", "apartment", "suite", "shop", "number")
+_ADDRESS_CONTEXT = frozenset(_ADDRESS_LEADS) | frozenset(_SHARED_CONTEXT_WORDS)
 _ADDRESS_LEAD_RE = re.compile(
     rf"(?i)(?:(?:^|[^\w'’])(?:{_alt(_ADDRESS_LEADS)})\s{{1,8}}"
     r"|:\s{0,8}|[a-z]['’]s\s{1,8}"                                                     # "address: 12 ...", "it's 12 ..."
@@ -1498,11 +1531,12 @@ _ADDRESS_TRAIL_RE = re.compile(
 def _address_sub(m: "re.Match[str]") -> str:
     """Redact a number + street phrase; keep it ONLY as a plainly-marked title with no address context (``_ADDRESS_RE``).
 
-    Every check is anchored at the match or reads a fixed 60-character window, so a long text stays linear."""
+    Every check is anchored at the match or reads a fixed window before it, so a long text stays linear."""
     s, end = m.string, m.end("street_end")
     if m.group("unit") or m.group("slash") or m.group("tail") or _ADDRESS_TRAIL_RE.match(s, m.end()):
         return _REDACT
-    if _ADDRESS_LEAD_RE.search(s[max(0, m.start() - 60):m.start()]):
+    if (_ADDRESS_LEAD_RE.search(s[max(0, m.start() - 60):m.start()])
+            or _has_context(_context_window(s, m.start()), _ADDRESS_CONTEXT)):
         return _REDACT
     if _ADDRESS_TITLE_RE.match(s, end):
         return m.group(0)                                # "12 Main Street articles", "21 Jump Street Season 2"

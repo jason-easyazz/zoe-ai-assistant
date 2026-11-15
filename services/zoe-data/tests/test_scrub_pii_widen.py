@@ -69,6 +69,12 @@ SECRET_CATCH: dict[str, list[tuple[str, str]]] = {
         ("pin 4821 opens the gate", "4821"),
         ("pin 4821 unlocks the door", "4821"),
         ("PIN 4821 fails", "4821"),
+        # secret context ANYWHERE in the window, not only adjacent (cross-review #2657, second pass)
+        ("my secret pin 4821 photos", "4821"),
+        ("my important pin 4821 photos", "4821"),
+        ("the actual pin 4821 notes", "4821"),
+        ("Sam's actual pin 4821 photos", "4821"),
+        ("my keys, pin 300 photos", "300"),        # a comma does not end the window: redaction preferred
     ],
     "labelled_account": [
         ("my account number is 12345678", "12345678"),
@@ -162,6 +168,11 @@ CONTACT_CATCH: dict[str, list[tuple[str, str]]] = {
         ("I live at 12 Example Street articles", "12 Example Street"),
         ("send it to 12 Example Street the movie set", "12 Example Street"),
         ('my "12 Example Street"', "12 Example Street"),
+        # address context ANYWHERE in the window, not only adjacent (cross-review #2657, second pass)
+        ("the delivery address is actually 12 Example Street articles", "12 Example Street"),
+        ("my actual 12 Example Street articles", "12 Example Street"),
+        ("our current 12 Example Street movie", "12 Example Street"),
+        ("we went to see the 21 Jump Street film", "21 Jump Street"),     # "to" is a lead word, in the window
     ],
 }
 
@@ -189,6 +200,9 @@ MUST_NOT: list[str] = [
     "I read 12 Main Street articles", "I watched 21 Jump Street the movie", "the 21 Jump Street film",
     "21 Jump Street Season 2 is out", "we binged 21 Jump Street episodes", "the 21 Jump Street reboot was fun",
     'we watched "21 Jump Street" last night', "we watched “21 Jump Street” again",
+    "the real 21 Jump Street film",                                   # "the" is not address context
+    "That is my plan. We watched 21 Jump Street the movie",           # the window stops at the full stop
+    "Use the app. Then pin 300 photos to the board", "can you quickly pin 120 more photos",
     # 2026-11-16: "pin" the verb + a listed count noun is not a secret
     "pin 123 photos to the board", "pin 400 notes to the board", "pin 300 of them", "please pin 250 of those",
     "can you pin 120 more photos", "pin 100 recipes for me",
@@ -299,6 +313,36 @@ def test_a_street_phrase_followed_by_any_unlisted_word_stays_redacted(word):
         assert reject is None and "12 Example Street" not in out, (text, out)
 
 
+# ── the context window: a lead word still counts with filler words between it and the candidate ────────────────────
+
+_FILLERS = ["actual", "important", "current", "new", "old", "secret", "real", "usual", "main", "other", "florbish"]
+#: every run of 1, 2 and 3 consecutive fillers (wrapping): 33 runs
+_FILLER_RUNS = [" ".join((_FILLERS * 2)[i:i + k]) for k in (1, 2, 3) for i in range(len(_FILLERS))]
+
+
+def _leads(words) -> list[str]:
+    return sorted(set(words) | {"my", "our", "your", "his", "her", "their", "Sam's"})
+
+
+def test_a_pin_lead_with_fillers_before_a_count_noun_stays_redacted():
+    import memory_service as ms
+
+    combos = [f"{lead} {run} pin 4821 photos" for lead in _leads(ms._PIN_LEADS) for run in _FILLER_RUNS]
+    assert len(combos) > 2000
+    leaked = [t for t in combos if "4821" in scrub_pii(t)[0]]
+    assert not leaked, leaked[:5]
+
+
+def test_an_address_lead_with_fillers_before_a_title_word_stays_redacted():
+    import memory_service as ms
+
+    combos = [f"{lead} {run} 12 Example Street {title}" for lead in _leads(ms._ADDRESS_LEADS) + ["address", "secret"]
+              for run in _FILLER_RUNS for title in ("articles", "movie", "the film")]
+    assert len(combos) > 5000
+    leaked = [t for t in combos if "12 Example Street" in scrub_pii(t)[0]]
+    assert not leaked, leaked[:5]
+
+
 # ── performance: compiled regexes, no backtracking trap ─────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("blob", [
@@ -318,6 +362,9 @@ def test_a_street_phrase_followed_by_any_unlisted_word_stays_redacted(word):
     # cross-review #2657: a long blank PREFIX before many candidates (a per-candidate rescan from the start is quadratic)
     " " * 20000 + "1 Aa St " * 2500, "\n" * 20000 + "1 Aa St articles " * 1500, " " * 20000 + "pin 123 photos " * 1500,
     " " * 20000 + "pin 123 " * 2500, '"' * 10000 + '1 Aa St" ' * 2000,
+    # second pass: every candidate preceded by a long run of filler words (the context window is one bounded slice)
+    ("actual " * 30 + "pin 123 photos ") * 300, ("actual " * 30 + "1 Aa St articles ") * 300,
+    ("x" * 500 + " pin 123 photos ") * 200, ("my, " * 40 + "1 Aa St movie ") * 300,
 ])
 def test_a_long_adversarial_string_is_fast(blob):
     """Linear, not catastrophic: measured relative to a benign sentence of the SAME length on the same box (so a loaded CI
