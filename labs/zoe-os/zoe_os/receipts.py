@@ -315,9 +315,11 @@ class ClaimAuditor:
             (self.READER, seq))
 
     def backed(self, claim: Event) -> bool:
-        """A matching verified receipt that no EARLIER live claim of the same skill, person and
-        action already cited: one action, one claim. Read from the log itself, so a restart (or
-        re-judging after a crash) gives the same answer."""
+        """One action, one claim, even after forget, retention or restart.
+
+        Consumption stores IDs only; the original claim can still be re-audited.
+        Startup backfills surviving legacy claims into the same register.
+        """
         seq = claim.payload.get("receipt_seq")
         receipt = self.spine._get(seq) if isinstance(seq, int) else None
         if not (
@@ -327,12 +329,9 @@ class ClaimAuditor:
             and receipt.subject == claim.subject
             and receipt.payload.get("skill") == claim.source):
             return False
-        earlier = self.spine._db.execute(
-            "SELECT 1 FROM events WHERE kind = 'claim' AND tombstoned = 0 AND seq > ? AND seq < ?"
-            " AND source = ? AND subject IS ? AND json_extract(payload, '$.receipt_seq') = ?"
-            " AND json_extract(payload, '$.action') IS ? LIMIT 1",
-            (seq, claim.seq, claim.source, claim.subject, seq, claim.payload.get("action")))
-        return earlier.fetchone() is None
+        spent = self.spine._db.execute(
+            "SELECT claim_seq FROM consumed_receipts WHERE receipt_seq = ?", (seq,)).fetchone()
+        return spent is None or spent[0] == claim.seq
 
     def scan(self) -> list[Event]:
         """Check every claim since the last scan. Returns the unbacked ones."""

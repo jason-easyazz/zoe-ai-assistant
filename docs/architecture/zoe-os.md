@@ -205,10 +205,18 @@ which grant, with what proof. A claim ("I moved your alarm") must cite a verifie
 backs one claim.
 
 **Prototype [code]** (`spine.py`, `receipts.py`): public publishing refuses a claim before append or delivery
-unless it cites a verified receipt matching its skill, subject and action, unused by an earlier live claim.
+unless it cites a verified receipt matching its skill, subject and action, unused by an earlier claim.
 That receipt must also be a causal parent, so forgetting the proof withdraws the derived claim.
 Batch publishing also refuses two claims spending the same receipt; one invalid claim rejects the whole batch.
-The check reads the durable log, so reconstructing the auditor does not reset receipt use. This is a synchronous
+Consumption is an indexed pair of receipt/claim sequence IDs, committed with the claim. No person or content
+is stored there; forgetting or retiring the claim cannot make the receipt usable again. Forgetting the receipt
+still withdraws its derived claim. Startup backfills matching claims whose payloads still exist; consumption
+already erased before this bookkeeping was introduced cannot be reconstructed. These review fixes have
+regressions in `test_upper_review.py`; their execution is pending the builder memory floor **[code]**.
+Lock and result opens in `real_turn.py` walk directories through descriptors with `O_NOFOLLOW`, then open the
+leaf relative to the pinned directory. Temporary stack files still use path-based APIs: a hostile same-user
+directory rename remains outside the runner's isolation guarantee **[code]**.
+Reconstructing the auditor does not reset receipt use. This is a synchronous
 publish check; `pump()` need not race subscribers with an asynchronous audit. `ClaimAuditor.scan()` remains a
 diagnostic for legacy or corrupt rows that bypassed public publishing, not the enforcement mechanism.
 A driver that reports success and did nothing gets an unverified receipt and cannot back a published claim.

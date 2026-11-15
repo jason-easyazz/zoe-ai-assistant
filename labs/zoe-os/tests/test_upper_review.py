@@ -121,7 +121,7 @@ def test_unbacked_claim_refused_before_delivery(spine, receipt):
     with pytest.raises(Refused, match='receipt'):
         spine.publish(claim(cause.seq, receipt))
     assert sub.poll() is None
-    assert not list(spine.replay('all', kinds={Kind.CLAIM}))
+    assert not [e for e in spine.replay('all', kinds={Kind.CLAIM}) if e.kind is Kind.CLAIM]
 
 
 @pytest.mark.parametrize('change', [{'verified': False}, {'action': 'other'}, {'skill': 'other'}])
@@ -146,7 +146,7 @@ def test_batch_cannot_spend_one_receipt_twice(spine):
         payload={'action': 'test', 'skill': 'skill', 'verified': True}))
     with pytest.raises(Refused, match='receipt'):
         spine.publish_many([claim(receipt.seq, receipt.seq)] * 2)
-    assert not list(spine.replay('all', kinds={Kind.CLAIM}))
+    assert not [e for e in spine.replay('all', kinds={Kind.CLAIM}) if e.kind is Kind.CLAIM]
     good = spine.publish(claim(receipt.seq, receipt.seq))
     assert good.seq > receipt.seq
     with pytest.raises(Refused, match='receipt'):
@@ -168,3 +168,79 @@ def test_control_disabling_claim_check_allows_unbacked_claim(spine, monkeypatch)
     cause = spine.publish(Event(Kind.UTTERANCE, 'voice', 'person-a', payload={'text': 'synthetic'}))
     monkeypatch.setattr(Spine, '_claim_refusal', lambda *_: '')
     assert spine.publish(claim(cause.seq)).kind is Kind.CLAIM
+
+
+@pytest.mark.parametrize('removal', ['forget', 'restart', 'retention'])
+@pytest.mark.parametrize('batch', [False, True])
+def test_consumed_receipt_survives_claim_removal(spine, tmp_path, removal, batch):
+    from zoe_os.retention import OPTIONS, Retention, Rule, DAY
+    receipt = spine._kernel_append(Event(Kind.ACTION_RECEIPT, 'kernel', 'person-a',
+        payload={'action': 'test', 'skill': 'skill', 'verified': True}))
+    first = spine.publish(claim(receipt.seq, receipt.seq))
+    if removal == 'retention':
+        keeper = Retention(spine, OPTIONS['balanced'] | {Kind.CLAIM: Rule(0, 0)})
+        keeper.sweep(now=first.ts + DAY)
+        assert keeper.stage(first.seq) == 'gone'
+    else:
+        spine.forget('person-a', actor='person-a', seqs=[first.seq])
+    assert spine._get(first.seq) is None
+    assert spine._get(receipt.seq) is not None
+    if removal == 'restart':
+        auth = spine.authorizer
+        spine.close()
+        spine.__init__(str(tmp_path / 's.db'), auth)
+    with pytest.raises(Refused, match='receipt'):
+        if batch:
+            spine.publish_many([claim(receipt.seq, receipt.seq)])
+        else:
+            spine.publish(claim(receipt.seq, receipt.seq))
+    assert not [e for e in spine.replay('all', kinds={Kind.CLAIM}) if e.kind is Kind.CLAIM]
+
+
+def test_consumption_is_atomic_and_contains_only_ids(spine):
+    receipt = spine._kernel_append(Event(Kind.ACTION_RECEIPT, 'kernel', 'person-a',
+        payload={'action': 'test', 'skill': 'skill', 'verified': True}))
+    # Abort after the claim insert: neither the claim nor its consumption may land.
+    spine._db.execute("CREATE TEMP TRIGGER abort_claim BEFORE INSERT ON consumed_receipts "
+                      "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError, match='synthetic failure'):
+        spine.publish(claim(receipt.seq, receipt.seq))
+    assert not [e for e in spine.replay('all', kinds={Kind.CLAIM}) if e.kind is Kind.CLAIM]
+    assert spine._db.execute('SELECT * FROM consumed_receipts').fetchall() == []
+    spine._db.execute('DROP TRIGGER abort_claim')
+    first = spine.publish_many([claim(receipt.seq, receipt.seq)])[0]
+    spine.forget('person-a', actor='person-a', seqs=[receipt.seq])
+    assert spine._get(first.seq) is None
+    assert spine._db.execute('SELECT * FROM consumed_receipts').fetchall() == [(receipt.seq, first.seq)]
+    assert all(row[0] != 'person-a' for row in spine._db.execute('SELECT person FROM intents'))
+
+
+@pytest.mark.parametrize('operation', ['lock', 'result'])
+def test_directory_swap_cannot_redirect_lab_opens(tmp_path, monkeypatch, operation):
+    base, outside = tmp_path / 'state', tmp_path / 'outside'
+    parent = base / 'run'
+    parent.mkdir(parents=True)
+    outside.mkdir()
+    monkeypatch.setattr(rt, 'STATE_DIR', base)
+    monkeypatch.setattr(rt, 'PRIVATE_TOOLS_DIR', tmp_path / 'private')
+    real_open = rt.os.open
+    swapped = False
+
+    def swap(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            parent.rename(base / 'original')
+            parent.symlink_to(outside, target_is_directory=True)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(rt.os, 'open', swap)
+    with pytest.raises((OSError, ValueError)):
+        if operation == 'lock':
+            fd = rt.take_lock(str(parent / 'lock'))
+            if fd is not None:
+                rt.os.close(fd)
+        else:
+            rt.write_lab_text(parent / 'result.json', 'synthetic')
+    assert list(outside.iterdir()) == []

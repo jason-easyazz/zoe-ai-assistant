@@ -50,6 +50,9 @@ CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
 CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
 CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS consumed_receipts (
+  receipt_seq INTEGER PRIMARY KEY, claim_seq INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS forget_ledger (
   id INTEGER PRIMARY KEY, subject TEXT NOT NULL, upto INTEGER NOT NULL, ts REAL NOT NULL,
   count INTEGER NOT NULL
@@ -204,6 +207,17 @@ class Spine:
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
+        # Upgrade extant claims without retaining any person or payload in bookkeeping.
+        self._db.execute("""
+            INSERT OR IGNORE INTO consumed_receipts
+            SELECT r.seq, MIN(c.seq) FROM events c JOIN events r
+              ON r.seq = json_extract(c.payload, '$.receipt_seq')
+            WHERE c.kind = 'claim' AND r.kind = 'action_receipt' AND r.seq < c.seq
+              AND json_extract(r.payload, '$.verified') = 1
+              AND json_extract(r.payload, '$.skill') = c.source AND r.subject IS c.subject
+              AND json_extract(r.payload, '$.action') IS json_extract(c.payload, '$.action')
+            GROUP BY r.seq
+        """)
         self._subs: list[Subscription] = []
         self._epoch = 0     # bumped by every forget; a subscription re-checks its queue on a change
         key = self._db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()
@@ -305,6 +319,11 @@ class Spine:
                      json.dumps(ev.mentions) if ev.mentions else None,
                      json.dumps(ev.caused_by) if ev.caused_by else None))
                 seq = cur.lastrowid
+                if ev.kind is Kind.CLAIM:
+                    from .receipts import ClaimAuditor
+                    if ClaimAuditor(self, self.authorizer).backed(replace(ev, seq=seq)):
+                        self._db.execute("INSERT INTO consumed_receipts VALUES (?, ?)",
+                                         (ev.payload['receipt_seq'], seq))
                 if ev.people:
                     self._db.executemany("INSERT INTO people VALUES (?,?)",
                                          [(seq, p) for p in ev.people])
