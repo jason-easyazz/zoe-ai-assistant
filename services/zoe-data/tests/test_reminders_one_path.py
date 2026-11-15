@@ -143,21 +143,113 @@ async def test_cancel_own_only_is_stricter(quiet):
 
 
 # ── bug 2: an accepted reminder suggestion ────────────────────────────────────────────────────────────────────────────────
+class _PgConn:
+    """A fake asyncpg connection (the one ``AsyncpgCompat`` wraps) with REAL transaction semantics: ``transaction()`` snapshots the
+    state and puts it back on an exception, and every statement is recorded with the transaction depth it ran at. A bare
+    ``commit`` does nothing (as on Postgres), so a write made OUTSIDE ``transaction()`` is durable at once and cannot be undone."""
+
+    def __init__(self, fail_resolve=False):
+        self.reminders, self.notifications, self.resolved, self.fail_resolve = {}, [], 0, fail_resolve
+        self.depth, self.log = 0, []
+
+    def transaction(self):
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self):
+                conn.depth += 1
+                self.snap = (dict(conn.reminders), list(conn.notifications), conn.resolved)
+
+            async def __aexit__(self, exc_type, *_):
+                conn.depth -= 1
+                if exc_type is not None:
+                    conn.reminders, conn.notifications, conn.resolved = self.snap
+        return _Tx()
+
+    async def fetch(self, sql, *args):
+        self.log.append((sql.split()[0], self.depth))
+        if "FROM users" in sql:
+            return [{"id": args[0], "role": "user", "name": "Member"}]
+        if "FROM reminders" in sql:
+            return [dict(self.reminders[args[0]])] if args[0] in self.reminders else []
+        return []
+
+    async def fetchrow(self, sql, *args):
+        self.log.append(("fetchrow", self.depth))
+        if "FROM pending_suggestions" in sql and not self.resolved:
+            return {"action_type": "reminder_create",
+                    "pre_filled_slots": '{"title": "book the vet", "date": "2099-06-16", "time": "15:00"}'}
+        return None
+
+    async def execute(self, sql, *args):
+        self.log.append((" ".join(sql.split()[:3]), self.depth))
+        if "INSERT INTO reminders" in sql:
+            self.reminders[args[0]] = {"id": args[0], "user_id": args[1], "title": args[2], "due_date": args[7],
+                                       "due_time": args[8], "is_active": 1, "acknowledged": 0, "deleted": 0}
+        elif "INSERT INTO notifications" in sql:
+            self.notifications.append(args)
+        elif "UPDATE pending_suggestions" in sql:
+            if self.fail_resolve:
+                raise RuntimeError("connection lost")
+            self.resolved = 1
+        return "OK 1"
+
+
+class _PgPool:
+    def __init__(self, conn):
+        self.conn, self.acquired = conn, 0
+
+    def acquire(self):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                pool.acquired += 1
+                return pool.conn
+
+            async def __aexit__(self, *_):
+                pass
+        return _Ctx()
+
+
 @pytest.mark.asyncio
-async def test_accepted_suggestion_goes_through_the_one_writer(monkeypatch):
-    made = []
+async def test_accepted_suggestion_is_one_transaction_on_one_connection(monkeypatch):
+    conn = _PgConn(fail_resolve=True)
+    pool, scheduled, announced = _PgPool(conn), [], []
 
-    async def create(payload, *, user, db, **_k):
-        made.append((payload.title, payload.due_date, payload.due_time, user["user_id"]))
-        return {"id": "rem-9", "due_date": "2099-06-16", "due_time": "15:00"}
+    async def allow(*_a, **_k):
+        return None
 
-    monkeypatch.setattr("reminder_service.create_reminder_record", create)
-    monkeypatch.setattr(pending_suggestions, "get_db_ctx", _ctx(_Store()))
-    act, no_raw = pending_suggestions._execute_action, object()  # the raw conn has no execute: a raw INSERT would raise
-    out = await act(no_raw, "reminder_create", {"title": "book the vet", "date": "2099-06-16", "time": "3pm"}, A)
-    assert out["reminder_id"] == "rem-9" and made == [("book the vet", "2099-06-16", "3pm", A)]
-    with pytest.raises(ValueError, match="reminder_needs_time"):  # nothing to fire at: refused, the offer stays open
-        await act(no_raw, "reminder_create", {"title": "book the vet"}, A)
+    async def schedule(_db, row, **_k):
+        scheduled.append(row["id"])
+
+    async def announce(*a, **k):
+        announced.append(a)
+
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: pool)
+    monkeypatch.setattr("reminder_service.require_feature_access", allow)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", announce)
+    monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", schedule)
+    monkeypatch.setattr("anticipation.mode", lambda: "off")
+
+    out = await pending_suggestions.execute_suggestion("sug-1", A)       # the suggestion's own update fails AFTER the insert
+    assert out["ok"] is False and "connection lost" in out["error"]
+    assert conn.reminders == {} and conn.notifications == [] and conn.resolved == 0     # rolled back together
+    assert scheduled == [] and announced == []                           # no job and no panel news for a reminder that never was
+
+    conn.fail_resolve = False                                            # the retry
+    out = await pending_suggestions.execute_suggestion("sug-1", A)
+    assert out["ok"] is True and len(conn.reminders) == 1 and conn.resolved == 1       # exactly one reminder
+    assert scheduled == list(conn.reminders) and len(announced) == 1     # job and broadcast only after the commit
+    assert pool.acquired == 2 and {depth for _, depth in conn.log} == {1}   # one connection per attempt; EVERY statement in the transaction
+
+
+@pytest.mark.asyncio
+async def test_a_reminder_offer_without_a_time_stays_open():
+    conn = _PgConn()
+    with pytest.raises(ValueError, match="reminder_needs_time"):
+        await pending_suggestions._execute_action(conn, "reminder_create", {"title": "book the vet"}, A)
+    assert conn.reminders == {} and conn.log == []
     assert pending_suggestions._suggested_when("book the vet", {"when_hint": "friday"}) == ("friday", None)
 
 
@@ -230,6 +322,89 @@ async def test_the_keyword_path_says_the_refusal(monkeypatch):
     monkeypatch.setattr("database.get_db_ctx", _ctx(_Store()))
     reply = await execute_intent(Intent("reminder_create", {"title": "call the plumber", "date": "2001-01-01"}), A)
     assert reply == rs.SPOKEN["past_day"]
+
+
+# ── the MCP tools go through the store (they used to write the table with their own SQL) ───────────────────────────────────
+async def _tool(db, name, uid=A, **args):
+    import mcp_server
+
+    return await mcp_server._execute_tool(db, name, {"reminder_id": "rem-1", **args}, {"user_id": uid, "source": "transport"})
+
+
+def _fixed_clock(monkeypatch, moment=datetime(2026, 6, 10, 23, 50, tzinfo=timezone.utc)):
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+    monkeypatch.setattr(rs, "datetime", _Clock)
+    monkeypatch.setattr("proactive.triggers.reminder_scan.datetime", _Clock)   # the household clock the date check reads
+    return moment
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_to_a_past_time_is_refused_and_writes_nothing(quiet, monkeypatch):
+    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+    _fixed_clock(monkeypatch, FROZEN)
+    db = _Store()
+    out = await _tool(db, "reminder_update", due_date="2026-06-10", due_time="09:00")
+    assert out == {"error": rs.SPOKEN["past_time"], "status": "refused"} and db.updates() == [] and quiet["jobs"] == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_that_leaves_the_time_alone_works_on_a_past_reminder(quiet, monkeypatch):
+    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+    _fixed_clock(monkeypatch, FROZEN)
+    db = _Store(due_date="2026-06-10", due_time="09:00")
+    out = await _tool(db, "reminder_update", title="take pills with food", due_time="9am")  # the time re-sent is no move
+    assert out == {"id": "rem-1", "status": "updated"}
+    (sql, _), = db.updates()
+    assert "title = ?" in sql and "due_time" not in sql
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_that_moves_the_time_goes_the_rest_route_and_reschedules(quiet, monkeypatch):
+    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+    _fixed_clock(monkeypatch, FROZEN)
+    db = _Store(due_date="2026-06-10", due_time="13:00")
+    out = await _tool(db, "reminder_update", due_time="14:30")
+    assert out == {"id": "rem-1", "status": "updated"}
+    (sql, params), = db.updates()
+    assert "schedule_generation" in sql and "14:30" in params           # normalised, generation bumped (voids a claimed job)
+    assert quiet["jobs"] == [{"rescheduled": "rem-1"}] and quiet["seam"] == ["edit"]   # as the REST edit asserts above
+    assert await _tool(db, "reminder_update") == {"error": "No fields to update"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_snooze_uses_the_store_and_keeps_the_due_fields(quiet, monkeypatch):
+    _fixed_clock(monkeypatch)                      # 23:50 UTC: already tomorrow in a +08:00 household, still today in UTC
+    db = _Store()
+    out = await _tool(db, "reminder_snooze", minutes=30)
+    assert set(out) == {"id", "snoozed_until", "status"} and out["id"] == "rem-1" and out["status"] == "snoozed"
+    (sql, params), = db.updates()
+    assert "due_date" not in sql and "due_time" not in sql and params[0] == "2026-06-11T00:20:00Z"   # a UTC instant, no offset
+    assert quiet["seam"] == ["snooze"] and quiet["jobs"][0]["item_id"] == "rem-1"
+    assert quiet["jobs"][0]["send_at"] == datetime(2026, 6, 11, 0, 20, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_mcp_delete_goes_through_the_store(quiet):
+    db = _Store()
+    assert await _tool(db, "reminder_delete") == {"id": "rem-1", "status": "deleted"}
+    assert db.row["deleted"] == 1 and quiet["seam"] == ["cancel"]
+
+
+@pytest.mark.parametrize("visibility", ["personal", "family"])
+@pytest.mark.parametrize("tool,args", [("reminder_update", {"title": "x"}), ("reminder_snooze", {"minutes": 5}),
+                                       ("reminder_delete", {})])
+@pytest.mark.asyncio
+async def test_mcp_another_member_cannot_change_a_reminder(quiet, visibility, tool, args):
+    db = _Store(visibility=visibility)             # A's reminder; B asks
+    out = await _tool(db, tool, uid=B, **args)
+    assert "error" in out and out.get("status") in (None, "refused")
+    assert db.updates() == [] and db.row["deleted"] == 0 and quiet["seam"] == []
+    if visibility == "personal":
+        assert out == {"error": "Reminder rem-1 not found"}         # not even a hint that it exists
 
 
 # ── bug 3: the spoken "cancel that" ───────────────────────────────────────────────────────────────────────────────────────

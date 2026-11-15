@@ -264,9 +264,15 @@ async def _create_notification(db, *, user_id: str, notif_type: str, title: str,
 
 
 async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, object], db,
-                                 now_utc: datetime | None = None, schedule: bool = True) -> dict:
+                                 now_utc: datetime | None = None, schedule: bool = True,
+                                 after_commit: "list | None" = None) -> dict:
     """Create a reminder with the same policy, notification, and broadcast behavior as the API route. ``now_utc`` (a background caller
-    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock. ``schedule=False`` is for a caller that registers its OWN job for the row (commitments, +45 s): one scheduling path per reminder, never two."""
+    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock. ``schedule=False`` is for a caller that registers its OWN job for the row (commitments, +45 s): one scheduling path per reminder, never two.
+
+    ``after_commit``: a caller that owns an OUTER transaction passes a list; the receipt, the scheduled job and the broadcast are
+    then NOT run here but appended to it as zero-argument coroutine functions, for the caller to run once its transaction has
+    committed (a rolled-back reminder is never scheduled, announced or vouched for). ``db.commit()`` here is a no-op on Postgres,
+    so only the caller's real transaction makes the row durable."""
     await require_feature_access(db, user, feature="reminders", action="create")
     user_id = str(user["user_id"])
     reminder_id = str(uuid.uuid4())
@@ -310,25 +316,32 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
               **({"recurring_pattern": recurring_pattern} if recurring_pattern else {})},
     )
     await db.commit()
-    # The receipt the write-claim guard checks a reply against (write_receipts.py): the row is committed.
-    write_receipts.record(user_id, "reminder", reminder_id, "create_reminder_record")
-
+    # Read the row back inside the caller's transaction (a deferred caller has not committed yet).
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
     reminder = row_to_dict(row) or {}
-    # Schedule NOW rather than waiting for the slow-loop scan: that loop does nothing in quiet
-    # hours (22:00-07:00) and at 07:00 treats an explicit time earlier that night as past-due, so
-    # "remind me at 22:30" said at 22:15 was never scheduled. schedule_due_reminder is the same
-    # idempotent entry the scan uses (skips when an unfired job exists), so nothing double-books.
-    # The FIRE is still deferred out of quiet hours by fire_notification. Best-effort: the row is
-    # already committed and the scan retries, so a scheduler failure must not fail the create.
-    if schedule and reminder.get("id"):
-        try:
-            from proactive.triggers.reminder_scan import schedule_due_reminder
-            await schedule_due_reminder(db, reminder, now_utc=now_utc)
-        except Exception:
-            logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
-    await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
+
+    async def _after() -> None:
+        # The receipt the write-claim guard checks a reply against (write_receipts.py): the row is committed.
+        write_receipts.record(user_id, "reminder", reminder_id, "create_reminder_record")
+        # Schedule NOW rather than waiting for the slow-loop scan: that loop does nothing in quiet
+        # hours (22:00-07:00) and at 07:00 treats an explicit time earlier that night as past-due, so
+        # "remind me at 22:30" said at 22:15 was never scheduled. schedule_due_reminder is the same
+        # idempotent entry the scan uses (skips when an unfired job exists), so nothing double-books.
+        # The FIRE is still deferred out of quiet hours by fire_notification. Best-effort: the row is
+        # already committed and the scan retries, so a scheduler failure must not fail the create.
+        if schedule and reminder.get("id"):
+            try:
+                from proactive.triggers.reminder_scan import schedule_due_reminder
+                await schedule_due_reminder(db, reminder, now_utc=now_utc)
+            except Exception:
+                logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
+        await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
+
+    if after_commit is not None:
+        after_commit.append(_after)
+    else:
+        await _after()
     return reminder
 
 

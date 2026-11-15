@@ -871,9 +871,15 @@ def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
     return due_date, due_time
 
 
-async def _create_suggested_reminder(slots: dict, user_id: str) -> dict:
+async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_commit: list | None = None) -> dict:
     """An accepted reminder offer goes through the one writer (it was a raw INSERT with no date or time, which never fires).
-    An offer with no day or time is refused and stays open, never stored as a reminder that cannot fire."""
+    An offer with no day or time is refused and stays open, never stored as a reminder that cannot fire.
+
+    It runs on the SAME connection, inside the SAME transaction, as the update that resolves the suggestion (``conn`` is the
+    transaction's own connection; ``AsyncpgCompat.commit`` is a no-op, so a second connection or a bare commit is not atomic):
+    both land or neither does, and a retry after a failure finds the offer still open and the reminder not made. The job, receipt
+    and broadcast are handed back in ``after_commit`` for the caller to run once the transaction has committed."""
+    from db_pool import AsyncpgCompat
     from intent_router import _load_direct_execution_user
     from models import ReminderCreate
     from reminder_service import create_reminder_record
@@ -882,17 +888,18 @@ async def _create_suggested_reminder(slots: dict, user_id: str) -> dict:
     due_date, due_time = _suggested_when(title, slots)
     if not (due_date or due_time):
         raise ValueError("reminder_needs_time")
-    async with get_db_ctx() as db:  # a connection of its own: the suggestion row's transaction stays as it was
-        user = await _load_direct_execution_user(db, user_id)
-        if not user:
-            raise ValueError("unknown_user")
-        reminder = await create_reminder_record(
-            ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db)
+    db = conn if hasattr(conn, "commit") else AsyncpgCompat(conn)
+    user = await _load_direct_execution_user(db, user_id)
+    if not user:
+        raise ValueError("unknown_user")
+    reminder = await create_reminder_record(
+        ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db,
+        after_commit=after_commit if after_commit is not None else [])
     return {"reminder_id": reminder.get("id"), "title": title,
             "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time")}
 
 
-async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
+async def _execute_action(conn, action: str, slots: dict, user_id: str, after_commit: list | None = None) -> dict:
     if action == "list_add":
         lt = slots.get("list_type", "shopping")
         text = slots.get("item") or slots.get("description", "")
@@ -928,7 +935,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
         return {"item_id": item_id, "list_id": list_id, "text": text}
 
     if action == "reminder_create":
-        return await _create_suggested_reminder(slots, user_id)
+        return await _create_suggested_reminder(conn, slots, user_id, after_commit)
 
     if action == "calendar_create":
         eid = str(uuid.uuid4())
@@ -1090,6 +1097,7 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         mine = await anticipation.execute_if_ours(suggestion_id, user_id)
         if mine is not None:
             return mine
+    after_commit: list = []  # a reminder's job / receipt / broadcast: run only once the transaction below has committed
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
@@ -1104,7 +1112,7 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                     return {"ok": False, "error": "not_found"}
                 action = row["action_type"]
                 slots = json.loads(row["pre_filled_slots"] or "{}")
-                result = await _execute_action(conn, action, slots, user_id)
+                result = await _execute_action(conn, action, slots, user_id, after_commit)
                 await conn.execute(
                     "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1 AND user_id = $2",
                     suggestion_id,
@@ -1112,6 +1120,11 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                 )
                 if action == "forget_alias":
                     await _scrub_forget_alias(suggestion_id, conn)
+            for later in after_commit:  # committed: the reminder is real now (best-effort, the scan retries a job)
+                try:
+                    await later()
+                except Exception:  # noqa: BLE001
+                    logger.exception("pending_suggestions: post-commit step failed after %s", action)
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
