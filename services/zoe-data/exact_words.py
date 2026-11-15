@@ -637,22 +637,61 @@ async def _set_transcript_metadata(row_id: str, metadata: str) -> None:
         await db.commit()
 
 
-async def forget_transcript(user_id: str, text: str) -> int:
+class UnboundRedactedForget(RuntimeError):
+    """``forget_transcript`` was handed REDACTED words (a stored form, ``[REDACTED]``) with no keyed identity to find the turn by:
+    no saved turn contains a placeholder, so nothing would be flagged and the catch-up would re-index the turn. Raised so the forget
+    is not confirmed."""
+
+
+def _turn_tags(user_id: str, content: str) -> set:
+    """The keyed tags ``index_turn`` (the turn's own words) and the write boundary (the whole turn) would give this saved turn."""
+    forms = {content}
+    try:
+        import own_words
+        own = own_words.analyze(content)
+        if own.has_own and own.text.strip():
+            forms.add(_squash(own.text))
+    except Exception:  # noqa: BLE001 - the turn as saved is still a form
+        pass
+    return {t for t in (_said_tag(user_id, f) for f in forms) if t}
+
+
+async def forget_transcript(user_id: str, text: str, *, turn_id: str = "", said_tags: Iterable[str] = ()) -> int:
     """Flag the owner's saved turns that contain ``text`` as ``off_record`` so the nightly readers (this module's catch-up, the
     digest, idle consolidation) never rebuild a forgotten turn from the transcript: deleting the index row alone lets the catch-up
     re-index the surviving turn overnight. The history itself stays. Like ``erase_text`` a store failure is RAISED (a forget that
-    could not hold must not be confirmed). Only with the SQL index (the lab and tests have no ``chat_messages``); 0 = nothing matched."""
+    could not hold must not be confirmed). Only with the SQL index (the lab and tests have no ``chat_messages``); 0 = nothing matched.
+
+    ``text`` holding the redaction placeholder is a STORED form (a quote of a contact-redacted turn) that no saved turn contains:
+    the turn is found by its keyed identity instead - the tag in an exact-words ``turn_id`` or a fact row's ``source_excerpt_said``
+    (``said_tags``) - recomputed from each candidate turn, never by the redacted text. No current identity: RAISES
+    ``UnboundRedactedForget`` (not confirmed, never a guess)."""
     key = _squash(text or "").lower().strip(" .!?\"'")
     if not (user_id or "").strip() or len(key) < 6 or not isinstance(get_backend(), SqlBackend):
         return 0
-    needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+    redacted = "[" + _REDACT_WORD + "]" in key
+    tags: set = set()
+    if redacted:
+        cands = [*(said_tags or ()), (turn_id or "").partition(_TAG_SEP)[2]]
+        tags = {t for t in cands if t and _tag_current(user_id, str(t))}
+        if not tags:
+            raise UnboundRedactedForget("redacted words with no keyed identity")
+    words = [w for w in re.findall(r"[a-z0-9']+", key) if not (redacted and w == _REDACT_WORD)]
+    needle = max(words, key=len, default="")
     if not needle:
+        if redacted:
+            raise UnboundRedactedForget("nothing but the placeholder to search by")
         return 0
     import json
     from memory_provenance import OFF_RECORD_JSON_MARK
     flagged = 0
     for row_id, content, metadata in await _transcript_candidates(user_id, needle):
-        if key not in _squash(str(content or "")).lower() or OFF_RECORD_JSON_MARK in str(metadata or ""):
+        if OFF_RECORD_JSON_MARK in str(metadata or ""):
+            continue
+        if redacted:
+            if not (tags & _turn_tags(user_id, str(content or ""))):
+                continue
+        elif key not in _squash(str(content or "")).lower():
             continue
         try:
             meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else {}

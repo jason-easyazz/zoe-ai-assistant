@@ -213,9 +213,9 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
     hits = await _index_hits(user_id, groups)
     if hits:
         erased = int(await backend.delete(user_id, list(hits)) or 0)
-        for text in hits.values():
-            try:
-                await exact_words.forget_transcript(user_id, text)
+        for tid, text in hits.items():
+            try:   # a contact-redacted index row's text is its stored form: its id carries the keyed identity of the turn
+                await exact_words.forget_transcript(user_id, text, turn_id=tid)
             except Exception as exc:  # noqa: BLE001 - the index row is gone; the transcript flag is the second line
                 logger.warning("forget_topic: transcript flag failed (%s)", type(exc).__name__)
     return retracted, erased

@@ -1417,11 +1417,12 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         return []
 
 
-async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
+async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str, said_tags: tuple = ()) -> int:
     """Erase the owner's words behind an explained answer: the quoted ``exact_words`` turn (by id when known - a displayed quote can
     be shortened), every indexed turn holding those words, and flag the saved transcript turn ``off_record`` so the nightly catch-up
     cannot index it again. RAISES on a store failure (the caller must not confirm a forget that did not hold). Returns what it removed
-    or flagged."""
+    or flagged. A quote of a contact-redacted turn is its stored form: the transcript turn is found by the keyed identity in
+    ``exp.turn_id`` or the row's ``said_tags`` (``exact_words.forget_transcript``), and with none it RAISES."""
     import exact_words
 
     n = 0
@@ -1429,12 +1430,18 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
         n += await exact_words.erase_turn(user_id, exp.turn_id)
     for words in {w for w in (exp.quote, exp.text, *extra) if w}:
         n += await exact_words.erase_text(user_id, words)
-        n += await exact_words.forget_transcript(user_id, words)
+        n += await exact_words.forget_transcript(user_id, words, turn_id=exp.turn_id, said_tags=said_tags)
     # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that held
     import night_mind
 
     n += await night_mind.erase_words(user_id, exp.turn_id, exp.quote, exp.text, *extra)
     return n
+
+
+def _said_tags(ref: Any) -> tuple:
+    """The row's keyed identity of its excerpt as said (``source_excerpt_said``), when the write boundary redacted it."""
+    tag = str((getattr(ref, "metadata", None) or {}).get("source_excerpt_said") or "")
+    return (tag,) if tag else ()
 
 
 def _rearm(user_id: str, exp: "mp.Explained") -> None:
@@ -1458,7 +1465,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
             # the row was rejected already - possibly by an earlier "forget it" whose word erase failed: finish that job (idempotent)
             try:
-                left = await _erase_words(user_id, exp, ref.text or "")
+                left = await _erase_words(user_id, exp, ref.text or "", said_tags=_said_tags(ref))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
                 _rearm(user_id, exp)
@@ -1483,7 +1490,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
         try:
-            await _erase_words(user_id, exp, ref.text or "")
+            await _erase_words(user_id, exp, ref.text or "", said_tags=_said_tags(ref))
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)

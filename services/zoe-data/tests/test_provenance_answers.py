@@ -1283,3 +1283,49 @@ def test_forget_it_after_a_redacted_quote_leaves_the_look_alike_turn(svc, ledger
     assert [r.text for r in run(svc.list_by_status(user_id=UID, status="approved"))] == [
         "User's plumber works from 1 Example Street"]
     assert [r["said_at"] for r in xw.get_backend().rows.values()] == [NOW - 7200]
+
+
+# ── a redacted quote still flags ITS transcript turn (review thread, PR #2574) ─────────────────────────────────────────────
+# The quote of a contact-bearing turn is its REDACTED stored form, which no saved chat_messages row contains: the transcript turn
+# is found by the quote's keyed identity (the tag in its exact-words id) recomputed from each candidate turn, never by the
+# redacted text; with no identity the forget is not confirmed. Negative control: on a7e282618 the turn is not flagged, the
+# catch-up re-indexes it, and the forget is confirmed anyway.
+PLUMB = ["My plumber works from 1 Example Street", "My plumber works from 2 Example Street"]
+
+
+def _redacted_turns(svc, monkeypatch):
+    t = _Transcript([("p1", PLUMB[0], None), ("p2", PLUMB[1], None)])
+    monkeypatch.setattr(xw, "_transcript_candidates", t.candidates)
+    monkeypatch.setattr(xw, "_set_transcript_metadata", t.setmeta)
+    monkeypatch.setattr(xw, "SqlBackend", type(xw.get_backend()))
+    ids = []
+    for i, said in enumerate(PLUMB):
+        assert run(xw.index_turn(UID, said, said_at=NOW - (2 - i) * 3600)) is True
+        ids.append(next(k[1] for k, r in xw.get_backend().rows.items() if r["said_at"] == NOW - (2 - i) * 3600))
+    return t, ids
+
+
+def test_forget_it_after_a_redacted_quote_flags_its_transcript_turn_and_the_catch_up_skips_it(svc, ledger_env, monkeypatch):
+    t, ids = _redacted_turns(svc, monkeypatch)
+    stored = xw.get_backend().rows[(UID, ids[1])]["text"]
+    assert "[REDACTED]" in stored and "2 Example" not in stored
+    exp = mp.Explained(seq=1, row_id="", ts=NOW, text=stored, quote=stored, turn_id=ids[1])
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert mp.OFF_RECORD_JSON_MARK in (t.rows["p2"][1] or "") and t.rows["p1"][1] is None    # its turn, not the look-alike
+    # the nightly catch-up reads only on-the-record turns (off_record_sql): the forgotten turn never comes back
+    on_record = [(rid, c, NOW - (2 - i) * 3600, m, f"2026-10-09T0{i}:00:00")
+                 for i, (rid, (c, m)) in enumerate(t.rows.items()) if mp.OFF_RECORD_JSON_MARK not in (m or "")]
+
+    async def page(user_id, hours, cursor, limit):
+        return [] if cursor else on_record
+    monkeypatch.setattr(xw, "_backfill_page", page)
+    run(xw.backfill_recent(UID, hours=24))
+    assert sorted(r["said_at"] for r in xw.get_backend().rows.values()) == [NOW - 7200]
+
+
+def test_forget_it_after_a_redacted_quote_with_no_identity_is_not_confirmed(svc, ledger_env, monkeypatch):
+    t, ids = _redacted_turns(svc, monkeypatch)
+    stored = xw.get_backend().rows[(UID, ids[1])]["text"]
+    exp = mp.Explained(seq=1, row_id="", ts=NOW, text=stored, quote=stored, turn_id=ids[1].partition("~")[0])
+    assert not run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert t.rows["p1"][1] is None                                                          # nothing guessed
