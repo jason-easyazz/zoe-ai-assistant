@@ -709,6 +709,7 @@ _ENTRIES = (
     _f('ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S', 'int', 1800),
     _f('ZOE_OMNIGENT_URL', 'str', 'http://127.0.0.1:6767', doc='docs/guides/MODULE_SYSTEM.md'),
     _f('ZOE_ORT_CPU_ARENA', 'bool', False, doc='docs/knowledge/ram-audit-nonvoice-2026-11.md'),
+    _f('ZOE_OS_LIST_ADD_AUTHORITY', 'str', 'off', allowed=('off', 'kernel'), doc='docs/knowledge/zoe-os-integration.md', note='stage (c): kernel = a spoken list add by a roster member is decided by the Zoe OS kernel receipt before production writes the row; any kernel failure is a counted fallback to the old path; off = today'),
     _f('ZOE_OS_LIST_SHADOW', 'str', 'off', allowed=('off', 'shadow'), doc='docs/knowledge/zoe-os-list-shadow.md', note='the ONE Zoe OS shadow switch: every real write of a verb in ZOE_OS_SHADOW_VERBS (default list add) is ALSO proposed to a Zoe OS kernel over its socket; the live write stays authoritative; there is no on'),
     _f('ZOE_OS_SHADOW_VERBS', 'list', ('list_add',), doc='docs/knowledge/zoe-os-integration.md', note='comma list of the verbs ZOE_OS_LIST_SHADOW=shadow proposes to the kernel: list_add, list_remove, reminder_create, alarm_create; unknown names ignored'),
     _f('ZOE_OS_SHADOW_DIR', 'str', '', doc='docs/knowledge/zoe-os-list-shadow.md', note='blank = ~/.zoe/os-shadow (kernel credentials, roster, pending forgets)'),

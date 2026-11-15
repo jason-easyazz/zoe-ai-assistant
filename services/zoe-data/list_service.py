@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 import uuid
 from typing import Optional
 
+import os_authority
 import os_shadow
 import panel_principal
 import write_receipts
@@ -544,8 +545,12 @@ async def add_item_to_list(
     dedup_window_s: int = 0,
     receipts: Optional[list] = None,
     list_id: Optional[str] = None,
+    authority: bool = False,
 ) -> dict:
     """Resolve-or-create a list and add one item — the shared voice/MCP add.
+
+    ``authority`` True (the spoken add, :func:`add_items_to_list`): with ``ZOE_OS_LIST_ADD_AUTHORITY=kernel`` the Zoe OS kernel decides
+    a NEW row before it is inserted (:func:`_kernel_decides`); the outcome then carries ``"kernel": True``.
 
     ``list_id`` (optional) is a list the CALLER already resolved and checked is visible to the user (a list the user named);
     it is used as-is and never created.
@@ -593,11 +598,12 @@ async def add_item_to_list(
                     outcome = {"list_id": list_id, "item_id": have["id"], "created_list": False, "deduped": True, "already": True,
                                "text": normalize_item_text(have["text"])}
                 else:
+                    by_kernel = await _kernel_decides(authority, user_id, list_type, list_name, text)
                     item = await create_item_record(
                         db, list_id=list_id, text=text, quantity=quantity, category=category
                     )
                     pending.append((item["id"], "add_item_to_list"))
-                    outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
+                    outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False, "kernel": by_kernel}
         # Receipts land only once the write has committed (a rolled-back add must not read as done).
         for rid, why in pending:
             if receipts is not None:
@@ -606,7 +612,8 @@ async def add_item_to_list(
                 write_receipts.record(user_id, "list", rid, why)
                 if why == "add_item_to_list":
                     note_recent_add(user_id, list_id, rid)
-                os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text,
+                if not outcome.get("kernel"):     # a kernel-decided add is already in the kernel's record: never proposed twice
+                    os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text,
                                    landed=why == "add_item_to_list")
         return outcome
 
@@ -618,6 +625,7 @@ async def add_item_to_list(
             raced = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
             if raced is not None:
                 return {"_raced": True}
+        by_kernel = await _kernel_decides(authority, user_id, list_type, list_name, text)
         new_list = await create_list_record(
             db,
             # A guest has no users row to own a list; the household does. A guest-created list is always family-visible.
@@ -634,6 +642,7 @@ async def add_item_to_list(
             "item_id": item["id"],
             "created_list": True,
             "deduped": False,
+            "kernel": by_kernel,
         }
 
     txn = getattr(db, "transaction", None)
@@ -646,14 +655,28 @@ async def add_item_to_list(
     if outcome.get("_raced"):
         return await add_item_to_list(
             db, user_id=user_id, list_type=list_type, list_name=list_name, text=text, quantity=quantity,
-            category=category, new_list_visibility=new_list_visibility, dedup_window_s=dedup_window_s, receipts=receipts)
+            category=category, new_list_visibility=new_list_visibility, dedup_window_s=dedup_window_s, receipts=receipts,
+            authority=authority)
     if receipts is not None:
         receipts.append((user_id, outcome["item_id"], "add_item_to_list:new_list"))
     else:
         write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
         note_recent_add(user_id, outcome["list_id"], outcome["item_id"])
-        os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text)
+        if not outcome.get("kernel"):
+            os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text)
     return outcome
+
+
+async def _kernel_decides(authority: bool, user_id: str, list_type: str, list_name: str, text: str) -> bool:
+    """The Zoe OS authority (os_authority.py), inside the add's transaction, before the row: True = the kernel's verified receipt
+    decided it. A REAL refusal raises ``os_authority.ListAddRefused`` (the transaction rolls back: nothing is written); every other
+    kernel answer, or none within its budget, is a counted fallback and the add goes ahead exactly as before."""
+    if not authority:
+        return False
+    d = await os_authority.propose_add(user_id, list_type=list_type, list_name=list_name, item=text)
+    if d.verdict == "refused":
+        raise os_authority.ListAddRefused(d.code)
+    return d.verdict == "kernel"
 
 
 @asynccontextmanager
@@ -677,7 +700,7 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
     # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits.
     async with _outer_add_txn(db):
         for part in parts:
-            out = await add_item_to_list(db, text=part, receipts=receipts, **kwargs)
+            out = await add_item_to_list(db, text=part, receipts=receipts, authority=True, **kwargs)
             outcomes.append(out)
             ids.append(out["item_id"])
             shown = out.get("text") or normalize_item_text(part)
@@ -685,7 +708,7 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
             (already if out.get("already") else added).append(shown)
     for uid, rid, why in receipts:
         write_receipts.record(uid, "list", rid, why)
-    for out in outcomes:      # the Zoe OS shadow (os_shadow.py): after the commit, never raises, a no-op with the flag off
+    for out in [o for o in outcomes if not o.get("kernel")]:   # the Zoe OS shadow: after the commit, never raises, off = a no-op
         os_shadow.note_add(kwargs.get("user_id"), source="spoken", list_type=kwargs.get("list_type"), list_name=kwargs.get("list_name"),
                            item=out.get("_text"), landed=not out.get("deduped"))
     fresh = [o for o in outcomes if not o.get("deduped")]
