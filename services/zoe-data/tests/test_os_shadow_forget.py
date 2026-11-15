@@ -354,3 +354,67 @@ def test_no_forget_coroutine_makes_a_blocking_queue_or_park_call():
             if isinstance(c, ast.Call):
                 name = getattr(c.func, "attr", getattr(c.func, "id", ""))
                 assert name not in ("put", "get", "_pending_add", "_pending_done", "_pending_write", "join", "sleep"), (fn.name, name)
+
+
+# ---- an add stamped BEFORE a forget never reaches the kernel AFTER it ----------------------------------------------------------------
+def _acts(kernel):
+    return [(op, a.get("args", {}).get("item")) for _, op, a in kernel.calls if op in ("act", "forget")]
+
+
+@pytest.mark.asyncio
+async def test_adds_stamped_before_and_queued_ahead_of_a_forget_go_first_and_the_forget_removes_them(kernel):
+    """The queued path (the claim checked): one FIFO worker. Adds stamped before the forget are queued AHEAD of it, so the kernel
+    gets them first and the forget removes them; an add in flight when the forget is enqueued finishes before the worker takes it."""
+    import asyncio
+
+    kernel.delay = 0.1                                       # the first add is in flight (mid-socket) when the forget is enqueued
+    add(item="in flight")
+    await asyncio.sleep(0.02)
+    add(item="queued")
+    assert await os_shadow.forget_user(MEMBER) == 3
+    assert _acts(kernel) == [("act", "in flight"), ("act", "queued"), ("forget", None)]
+
+
+@pytest.mark.asyncio
+async def test_adds_stamped_before_a_parked_forget_are_dropped_not_sent_after_it(kernel, monkeypatch):
+    """The real hole (the park path): the queue is full of the member's adds, so the forget is PARKED; the worker replays it before
+    the next job, and the adds still queued ahead were stamped before it: sent now, they would re-create the member. Dropped."""
+    import queue
+
+    os_shadow._reset_for_tests()
+    monkeypatch.setattr(os_shadow, "_q", queue.Queue(maxsize=2))
+    kernel.delay = 0.15
+    assert os_shadow.revive()
+    add(item="first")                                        # the worker takes it and is busy on the socket
+    time.sleep(0.05)
+    add(item="b")
+    add(item="c")                                            # the queue (2) is full
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):   # the flag is shadow: not confirmed, parked
+        await os_shadow.forget_user(MEMBER)
+    settle(3, timeout=5)
+    assert _acts(kernel) == [("act", "first"), ("forget", None)]
+    assert os_shadow.counters() == {"match": 1, "dropped_erased": 2}
+    add(item="after")                                        # made after the forget completed: still a member, still shadowed
+    settle(4, timeout=5)
+    assert _acts(kernel)[-1] == ("act", "after") and os_shadow.counters()["match"] == 2
+
+
+@pytest.mark.asyncio
+async def test_an_add_made_after_a_forget_completed_is_shadowed(kernel):
+    assert await os_shadow.erase_entity(MEMBER, "Dana") == 3      # a scoped forget: the member still acts afterwards
+    add()
+    settle(1)
+    assert os_shadow.counters() == {"match": 1} and _acts(kernel)[-1] == ("act", "oat milk")
+
+
+@pytest.mark.parametrize("field", ["entity", "topic"])
+@pytest.mark.asyncio
+async def test_marker_text_in_a_forget_never_reaches_a_log_line_or_a_counter(kernel, caplog, monkeypatch, field):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    mark = "Zq7Marker"
+    kernel.forget_mode = "refuse_all"                        # the failure path logs too
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await (os_shadow.erase_entity(MEMBER, mark) if field == "entity" else os_shadow.erase_topic(MEMBER, mark))
+    assert mark not in " ".join(r.getMessage() for r in caplog.records) and not any(mark in str(k) for k in os_shadow.counters())

@@ -319,7 +319,8 @@ CLASSES = LIST_CLASSES + ("other",)
 LIVE = ("added", "refused", "noop")
 KERNEL_STATES = ("verified", "unverified", "uncertain", "refused", "none")
 REASONS = ("-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", CROSSED, "socket", "unavailable",
-           "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake", "hook", "worker", "code")
+           "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake", "hook", "worker", "code", "pending_forget",
+           "forgotten_before")
 
 
 def counters() -> dict:
@@ -486,7 +487,7 @@ def _do_add(kernel: _Kernel, user_id: str, source: str, cls: str, live: str, ite
     started = time.perf_counter()
     out: dict = {"result": "shadow_error", "reason": "worker"}
     try:
-        out = _add_outcome(kernel, user_id, live, item, list_name, gen, started)
+        out = _add_outcome(kernel, user_id, live, item, list_name, gen, started, queued_at)
     except Exception as exc:  # noqa: BLE001 - counted and written below; the worker never dies
         logger.warning("OS_SHADOW worker error=%s", type(exc).__name__)
     finally:
@@ -494,7 +495,8 @@ def _do_add(kernel: _Kernel, user_id: str, source: str, cls: str, live: str, ite
                 reason=out.get("reason", ""), hop_ms=out.get("hop_ms", 0.0), q_ms=(started - queued_at) * 1000)
 
 
-def _add_outcome(kernel: _Kernel, user_id: str, live: str, item: str, list_name: str, gen: int, started: float) -> dict:
+def _add_outcome(kernel: _Kernel, user_id: str, live: str, item: str, list_name: str, gen: int, started: float,
+                 queued_at: float = 0.0) -> dict:
     """What the kernel made of one add, as ``{"result", "kernel_state", "reason", "hop_ms"}``; every return names a result. The
     whole add runs on ONE budget (``JOB_DEADLINE_S`` from now) that every socket operation draws on: a stall anywhere ends it as
     ``timeout`` within the budget."""
@@ -506,6 +508,11 @@ def _add_outcome(kernel: _Kernel, user_id: str, live: str, item: str, list_name:
         # a forget for this member is parked and has not reached the kernel (the replay just before this job failed): an add must
         # never reach the kernel ahead of the member's forget. None = the park file could not be read: fail closed for everyone.
         return {"result": "dropped_erased", "reason": "pending_forget"}
+    if queued_at < _forgotten_at.get(user_id, float("-inf")):
+        # stamped at the door BEFORE a forget of this member that skipped the queue (parked: the queue was full) and so reached the
+        # kernel AHEAD of it: sending it now would re-create what the forget removed. A forget that went through the queue needs no
+        # such check: one FIFO worker sends every add stamped before it first, and the forget then removes them.
+        return {"result": "dropped_erased", "reason": "forgotten_before"}
     until = time.monotonic() + JOB_DEADLINE_S
     sent = {"item": item, "list": list_name}
     result_kernel: Optional[dict] = None
@@ -604,6 +611,9 @@ _pending_mutex = threading.Lock()
 #: ``_replay_pending``): None = not read yet in this process / unreadable, so the worker reads the file before its next job. A park
 #: written by ANOTHER process is seen at this worker's next start (zoe-data is the only writer in production).
 _pending_members: Optional[frozenset] = None
+#: member -> ``time.perf_counter()`` when a forget of theirs was PARKED instead of queued: every add stamped (``queued_at``) before it is
+#: dropped (``forgotten_before``), because it may still sit in the queue ahead of the replay. In memory only: a restart empties the queue.
+_forgotten_at: dict = {}
 
 
 class _pending_locked:
@@ -780,6 +790,7 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
                 logger.error("OS_SHADOW forget NOT confirmed code=%s", code)
                 raise ShadowForgetUnavailable(code) from exc
     try:                              # not confirmed: never lose it - replayed before the next job
+        _forgotten_at[user_id] = time.perf_counter()     # on the loop, before the park: every add stamped before it is now stale
         await asyncio.get_running_loop().run_in_executor(None, _pending_add, user_id)
     except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
         logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
@@ -835,6 +846,7 @@ def _reset_for_tests() -> None:
     global _roster_cache, _worker, _down_logged, _pending_members
     _down_logged = False
     _pending_members = None           # a restart: the next worker reads the park file before its first job
+    _forgotten_at.clear()
     if _worker is not None and _worker.is_alive():
         _q.put(("stop",))
         _worker.join(timeout=5)

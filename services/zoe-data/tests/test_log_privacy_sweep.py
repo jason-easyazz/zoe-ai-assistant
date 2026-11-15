@@ -431,7 +431,8 @@ def test_kind_refusal_tag_is_a_safe_reducer():
 
 #: os_shadow.py: an ALLOWLIST, not a denylist. Every argument of every logger call there is one of these names, each mapped onto a
 #: closed set (or a number) by ``os_shadow._finish`` before the line is written, or ``type(exc).__name__`` (a program identifier).
-OS_SHADOW_LOG_FIELDS = {"source", "cls", "live", "kernel_state", "result", "reason", "hop_ms", "q_ms"}
+OS_SHADOW_LOG_FIELDS = {"source", "cls", "live", "kernel_state", "result", "reason", "hop_ms", "q_ms",
+                        "code"}     # the forget path: ``type(exc).__name__`` or ``"queue_full"`` (pinned below)
 
 
 def _os_shadow_log_args(src: str) -> list:
@@ -465,3 +466,13 @@ def test_os_shadow_maps_every_logged_field_onto_its_closed_set():
                          ("reason", "REASONS")):
         assert f"{name} if {name} in {closed}" in src or f"in {closed} else" in src, name
         assert isinstance(getattr(os_shadow, closed), tuple)
+
+
+def test_os_shadow_forget_code_is_a_class_name_or_queue_full():
+    tree = ast.parse((ROOT / "os_shadow.py").read_text("utf-8"))
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "code" for t in n.targets):
+            v = n.value
+            ok = (_closed(v) or (isinstance(v, ast.Constant) and v.value in ("", "queue_full"))
+                  or (isinstance(v, ast.IfExp) and isinstance(v.body, ast.Constant) and _closed(v.orelse)))
+            assert ok, n.lineno

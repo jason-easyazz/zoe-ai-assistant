@@ -90,6 +90,12 @@ The kernel record holds list items (household words) in the spine, in receipts (
   before its first job, so a park survives a restart). While a member's forget is still parked (kernel down, refused, file unreadable)
   that member's adds are dropped as `dropped_erased reason=pending_forget`, never sent ahead of it. A replay ahead of an add respects the
   5 s circuit (no connect per add to a dead kernel); a forget job always tries.
+* **An add stamped before a forget never reaches the kernel after it.** Queued forgets need nothing extra: one FIFO worker sends
+  every add stamped (and queued) before the forget first, an add in flight finishes first, and the forget then removes them. A
+  whole-member erase also moves `user_erase_gate`'s generation (`erase_span`), which drops queued adds as before. The hole was the
+  PARKED forget (queue full): it is replayed before the next job, ahead of adds still queued that were stamped before it. Those are
+  now dropped as `dropped_erased reason=forgotten_before` (the park records when it happened; each add carries its door time). An
+  add made after the forget completed is shadowed as usual (`test_os_shadow_forget.py`).
 * **A forget never blocks the event loop**: the job goes on the queue with `put_nowait`; a full queue parks the forget durably instead
   (the park's `flock` + fsync run in an executor thread). Honest to the caller: flag `shadow` and not confirmed (parked or not) raises
   `ShadowForgetUnavailable`; flag off and parked returns 0 (deferred); not parkable raises.
