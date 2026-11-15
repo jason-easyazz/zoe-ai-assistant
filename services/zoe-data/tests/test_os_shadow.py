@@ -65,6 +65,7 @@ class FakeKernel:
         self.act_mode = "ok"
         self.forget_mode = "ok"
         self.known = None                      # the members the kernel knows (None = everyone): a stranger's forget is refused
+        self.reply_mode = "ok"
         self.delay = 0.0
         self.stall: dict = {}                  # (stage, connection number) -> seconds the kernel sits on that stage
         self._seq = 0
@@ -112,11 +113,22 @@ class FakeKernel:
         finally:
             conn.close()
 
+    def _frame(self, req, body):
+        """The reply envelope; ``reply_mode`` corrupts the ACT reply's: the previous request's id, no id, another version."""
+        out = {"v": 1, "id": req["id"], **body}
+        if req["op"] == "act" and self.reply_mode == "stale_id":
+            out["id"] = req["id"] - 1
+        elif req["op"] == "act" and self.reply_mode == "no_id":
+            del out["id"]
+        elif req["op"] == "act" and self.reply_mode == "wrong_v":
+            out["v"] = 2
+        return out
+
     def _ok(self, conn, req, result):
-        _send(conn, {"v": 1, "id": req["id"], "ok": True, "result": result})
+        _send(conn, self._frame(req, {"ok": True, "result": result}))
 
     def _refuse(self, conn, req, reason):
-        _send(conn, {"v": 1, "id": req["id"], "ok": False, "error": {"code": "refused", "reason": reason}})
+        _send(conn, self._frame(req, {"ok": False, "error": {"code": "refused", "reason": reason}}))
 
     def _answer(self, conn, skill, req):
         op, a = req["op"], req["args"]
@@ -141,22 +153,28 @@ class FakeKernel:
             return
         if mode == "close":
             raise ConnectionError
+        if mode == "error_code":                         # an error envelope whose code is free text from the kernel
+            return _send(conn, self._frame(req, {"ok": False, "error": {"code": self.error_code, "reason": self.error_code}}))
         if mode == "wrong_shape":
             return self._ok(conn, req, {"hello": 1})
         proof = {"item": a["args"]["item"]}
-        verified, outcome = True, "verified"
+        verified, outcome, member = True, "verified", a["on_behalf_of"]
         if mode == "unverified":
             verified, outcome, proof = False, "unverified", None
         elif mode == "uncertain":
             verified, outcome, proof = False, "uncertain", None
         elif mode == "item_differs":
             proof = {"item": a["args"]["item"] + " x"}
+        elif mode == "wrong_member":
+            member = "someone-else"                    # a receipt that acted for another member
+        elif mode == "no_member":
+            member = None
         elif mode == "list_differs":
             proof["list"] = "somewhere else"
         elif mode == "no_proof_item":
             proof = {"other": 1}
         self._ok(conn, req, {"id": f"r{self._seq}", "seq": self._seq + 1, "action": a["action"], "skill": skill,
-                             "on_behalf_of": a["on_behalf_of"], "grant_id": "g1", "proof": proof, "verified": verified,
+                             "on_behalf_of": member, "grant_id": "g1", "proof": proof, "verified": verified,
                              "outcome": outcome, "reversible": True})
 
     def close(self):
@@ -491,7 +509,8 @@ def _sweep(kernel, monkeypatch):
 
     one("match", add)
     for mode, code in (("refuse", "kernel_refused_live_did"), ("unverified", "kernel_unverified_live_did"),
-                       ("item_differs", "item_differs"), ("list_differs", "list_differs"), ("malformed", "kernel_malformed")):
+                       ("item_differs", "item_differs"), ("list_differs", "list_differs"), ("malformed", "kernel_malformed"),
+                       ("wrong_member", "member_differs"), ("no_member", "member_unproven")):
         kernel.act_mode = mode
         one(code, add)
     kernel.act_mode = "ok"
@@ -636,3 +655,59 @@ def test_every_outcome_path_goes_through_the_one_emitter():
     for name in ("_door", "_add_outcome"):
         fn = _fn(tree, name)
         assert isinstance(fn.body[-1], ast.Return) and all(r.value is not None for r in ast.walk(fn) if isinstance(r, ast.Return)), name
+
+
+# ---- for whom, and whose reply ----------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("mode,result", [("wrong_member", "member_differs"), ("no_member", "member_unproven"), ("ok", "match")])
+def test_a_verified_receipt_for_another_member_is_never_a_match(kernel, mode, result):
+    kernel.act_mode = mode
+    add()
+    settle(1)
+    assert os_shadow.counters() == {result: 1}
+
+
+@pytest.mark.parametrize("reply_mode", ["stale_id", "no_id", "wrong_v"])
+@pytest.mark.parametrize("act_mode", ["ok", "refuse"])
+def test_a_reply_for_another_request_or_version_is_never_the_answer(kernel, caplog, reply_mode, act_mode):
+    """The act reply carries the previous request's id, no id, or another wire version: never read as this request's answer (a
+    match, or a refusal), always ``kernel_malformed reason=crossed``."""
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    kernel.reply_mode, kernel.act_mode = reply_mode, act_mode
+    add()
+    settle(1)
+    assert os_shadow.counters() == {"kernel_malformed": 1}
+    (line,) = _lines(caplog)
+    assert " result=kernel_malformed reason=crossed " in line
+
+
+def test_compare_checks_the_member_only_when_told():
+    done = {"verified": True, "outcome": "verified", "proof": {"item": "a"}, "on_behalf_of": "m1"}
+    sent = {"item": "a", "list": "L"}
+    assert os_shadow.compare("added", done, sent, member="m1") == ("match", "verified")
+    assert os_shadow.compare("added", done, sent, member="m2") == ("member_differs", "verified")
+    assert os_shadow.for_whom({"verified": True}, "m1") == "member_unproven"
+
+
+# ---- nothing a caller hands the hook reaches a log line or a counter ------------------------------------------------------------
+MARK = "Zq7Marker"
+
+
+@pytest.mark.parametrize("field", ["source", "item", "list_name", "list_type", "kernel_reason", "kernel_error_code"])
+def test_marker_text_from_any_caller_argument_never_reaches_a_log_line_or_a_counter(kernel, caplog, field):
+    caplog.set_level(logging.DEBUG)
+    kw = {"source": "spoken", "list_type": "shopping", "list_name": "Shopping", "item": "rice"}
+    if field in kw:
+        kw[field] = f"{MARK} x=1 result=match"                  # text, and a forged key=value pair, through the argument
+    elif field == "kernel_reason":
+        kernel.act_mode = f"refuse:{MARK} reason=match"
+    else:
+        kernel.act_mode = "error_code"
+        kernel.error_code = MARK
+    os_shadow.note_add(MEMBER, landed=True, **kw)
+    settle(1)
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert MARK not in text and not any(MARK in str(k) for k in os_shadow.counters())
+    (line,) = _lines(caplog)
+    assert line.count("result=") == 1 and line.count("reason=") == 1
+    if field == "source":
+        assert " src=other " in line
