@@ -77,7 +77,8 @@ def _client_literal(name):
 
 
 def test_the_allowlists_are_the_codes_the_client_writes():
-    assert set(_client_literal("RESULTS")) | {"live_noop"} == rep.ALLOWED["result"]
+    assert set(_client_literal("RESULTS")) == rep.ALLOWED["result"]                  # exactly: every code the client can write, no more
+    assert {"hook", "worker", "code"} <= rep.ALLOWED["reason"] and "noop" in rep.ALLOWED["live"]     # shadow_error reasons, live_noop
     assert set(_client_literal("LIST_CLASSES")) | {"other", "once", "repeat", "-"} == rep.ALLOWED["cls"]   # reminder/alarm: once|repeat
     assert {code for _, code in _client_literal("_REASONS")} | {"other"} <= rep.ALLOWED["reason"]
     src = (ROOT / "services" / "zoe-data").rglob("*.py")
@@ -138,3 +139,26 @@ def test_the_verb_and_not_expressible_allowlists_are_the_clients():
     why = {e.elts[1].value for e in ast.walk(fn) if isinstance(e, ast.Tuple) and len(e.elts) == 2
            and isinstance(e.elts[0], ast.Constant) and e.elts[0].value is None}
     assert why == {"recurring", "no_time", "range", "time"} and why | {"parse"} <= rep.ALLOWED["reason"]
+
+
+def test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted(tmp_path, capsys):
+    lines = [line(), line("something_new", "verified"), line("live_noop", "none").replace("live=added", "live=noop"),
+             line("shadow_error", "none", "worker", 0.0), line("no_input", "none"), line(src="brand_new_src"),
+             act("alarm_create", "another_new_code"), act("alarm_create", "shadow_error", "none", "hook", 0.0),
+             line() + " src=rest",                                   # a repeated key: rejected, and counted
+             "OS_SHADOW_ACT verb=list_add src=spoken hop_ms=1.0"]    # no result: rejected, and counted
+    recs, rejected = rep.parse_counted(lines)
+    s = rep.summarize(recs, rejected)
+    assert s["adds_logged"] == 8 and s["rejected"] == 2 and s["adds_logged"] + s["rejected"] == len(lines)
+    assert s["unknown"] == 2 and s["unknown_fields"] == 1 and s["shadow_errors"] == 2
+    la, al = s["verbs"]["list_add"], s["verbs"]["alarm_create"]
+    assert (la["seen"], la["agree"], la["disagree"], la["not_compared"], la["unknown"]) == (6, 2, 1, 3, 1)
+    assert (al["seen"], al["disagree"], al["not_compared"], al["unknown"], al["shadow_errors"]) == (2, 1, 1, 1, 1)
+    for v in s["verbs"].values():
+        assert v["agree"] + v["disagree"] + v["unavailable"] + v["not_compared"] == v["seen"]
+    assert la["disagree_by_result"] == {"unknown": 1}                # shown by its own name, never folded away
+    f = tmp_path / "log"
+    f.write_text("\n".join(lines) + "\n")
+    assert rep.main([str(f)]) == 0
+    out = capsys.readouterr().out
+    assert "rejected lines 2" in out and "unknown result 2" in out and "something_new" not in out and "another_new" not in out

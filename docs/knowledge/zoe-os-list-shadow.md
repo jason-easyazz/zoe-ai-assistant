@@ -102,7 +102,10 @@ The comparison is made for each list add that really landed (`os_shadow.compare`
 
 Result codes (the closed set; one per add): `match`, `kernel_refused_live_did` (with `reason=` `no_grant|manifest|params|cause|forgotten|other`),
 `kernel_unverified_live_did`, `item_differs`, `list_differs`, `kernel_malformed`, `kernel_unavailable`, `timeout`,
-and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop`. `kernel_did_live_refused` exists in the comparator
+and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop` (`live=noop`), `worker_down`, `no_input` (no member
+or no item) and `shadow_error` (the shadow's OWN failure: `reason=hook` at the door, `worker` in the worker, `code` for a code outside the set).
+With the switch on and the verb listed, EVERY `note_*` call writes exactly one line, with the same nine fields, through the one emitter `_finish`; `RESULTS` in
+`os_shadow.py` is exactly the set that can be written (both pinned in `tests/test_os_shadow.py`). `kernel_did_live_refused` exists in the comparator
 and is tested, but **no call site feeds a live refusal yet** [code]: only landed adds are proposed, so the "kernel did it, live refused" row of
 the week's table will read zero by construction, not by evidence. `list_differs` is likewise **not measurable with the lab driver**: it is told
 the list, it does not resolve one, and its read-back is `{"item"}` only. Both become meaningful when a kernel driver owns list resolution.
@@ -112,7 +115,9 @@ The log line (INFO, logger `os_shadow`, in `~/.zoe-logs/zoe-data.*`) carries **n
     OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
 
 `src` is one of `spoken|single|skybridge|rest`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
-`q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table.
+`q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table. It drops nothing: a result code it does not know is
+counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected`, and the totals always add up to the
+lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
 
 ## 6. Speed and safety of the hook [lab]
 
@@ -123,7 +128,9 @@ worker thread's GIL share while it talks to the socket [not measured] and was no
 
 With the REAL lab kernel (`labs/zoe-os/shadow_daemon.py`, one process, 200 adds paced 10 ms apart, system python 3.10, box under normal builder load; a one-off scratch script, not committed) [lab, 2026-11-15, before the worker moved to import time]: the hook cost on the caller was **p50 0.06 ms, p95 0.14 ms** (max 7 ms: the very first add started the worker thread; the worker now starts at import while the switch is `shadow`, not re-measured), and the kernel round trip (publish + act, on the worker thread) was **p50 1.6 ms, p95 2.2 ms, max 11 ms**, all 200 `match`. The hop is paid by the worker, never by the turn. A burst of 300 adds in a tight loop overflowed the 64-slot queue (236 `queue_full`, nothing blocked).
 
-A slow kernel is cut off per operation (0.5 s) and per add (1.5 s); a full queue (64) drops and counts; nothing the worker does can raise
+A slow kernel is cut off by ONE budget per shadowed write (1.5 s from its first kernel call): every connect, handshake, publish, act and read draws
+on what is left, each also capped at 0.5 s, so a stall at any stage ends the add as `timeout` within the budget
+(`test_one_deadline_per_add_covers_every_socket_stage`, `test_every_verb_runs_on_one_deadline`); a full queue (64) drops and counts; nothing the worker does can raise
 into a turn (`test_the_live_add_is_identical_with_the_shadow_off_dead_or_on`: the rows the live path writes and the outcome it returns are identical
 with the flag off, with the kernel dead, refusing, closing the connection mid-call, or answering garbage).
 

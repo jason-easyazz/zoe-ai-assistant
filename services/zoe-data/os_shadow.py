@@ -60,8 +60,8 @@ REMIND_MAX_MIN = 10080         # the kernel's ``remind.set`` takes 1..10080 whol
 # ---- the wire (kernel protocol v1; see the module docstring) ----------------------------------------------------------------------
 WIRE_VERSION = 1
 MAX_REPLY = 64 * 1024          # the client's own cap: a shadow reply is a receipt, never 16 MB
-OP_TIMEOUT_S = 0.5             # per socket operation
-JOB_DEADLINE_S = 1.5           # publish + act together
+OP_TIMEOUT_S = 0.5             # per socket operation, and never past the write's own deadline
+JOB_DEADLINE_S = 1.5           # ONE overall budget per shadowed write: connects, handshakes, publish and act all draw on it
 CIRCUIT_S = 5.0                # after an unavailable kernel, skip connecting this long (counted, not retried per add)
 FORGET_TIMEOUT_S = 8.0
 QUEUE_MAX = 64
@@ -178,9 +178,22 @@ def roster() -> frozenset:
 
 
 # ---- the socket protocol ------------------------------------------------------------------------------------------------------------
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
+def _op_timeout(until: Optional[float]) -> float:
+    """The timeout for the NEXT socket operation: ``OP_TIMEOUT_S``, cut to what is left of the write's budget (``until``, a
+    ``time.monotonic()`` instant; None = no overall budget, e.g. a forget). A spent budget raises ``socket.timeout`` before the
+    operation starts, so no connect, send or read can run past the write's deadline."""
+    if until is None:
+        return OP_TIMEOUT_S
+    left = until - time.monotonic()
+    if left <= 0:
+        raise socket.timeout("deadline")
+    return min(OP_TIMEOUT_S, left)
+
+
+def _recv_exact(sock: socket.socket, n: int, until: Optional[float] = None) -> bytes:
     buf = bytearray()
     while len(buf) < n:
+        sock.settimeout(_op_timeout(until))           # per chunk: a reply dripped byte by byte cannot outlast the budget
         chunk = sock.recv(n - len(buf))
         if not chunk:
             raise KernelUnavailable("closed")
@@ -188,12 +201,12 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return bytes(buf)
 
 
-def _read_frame(sock: socket.socket) -> dict:
-    (size,) = struct.unpack(">I", _recv_exact(sock, 4))
+def _read_frame(sock: socket.socket, until: Optional[float] = None) -> dict:
+    (size,) = struct.unpack(">I", _recv_exact(sock, 4, until))
     if size > MAX_REPLY:
         raise KernelProtocol("reply too large")
     try:
-        obj = json.loads(_recv_exact(sock, size))
+        obj = json.loads(_recv_exact(sock, size, until))
     except ValueError as exc:
         raise KernelProtocol("not json") from exc
     if not isinstance(obj, dict):
@@ -201,8 +214,9 @@ def _read_frame(sock: socket.socket) -> dict:
     return obj
 
 
-def _write_frame(sock: socket.socket, obj: dict) -> None:
+def _write_frame(sock: socket.socket, obj: dict, until: Optional[float] = None) -> None:
     body = json.dumps(obj, separators=(",", ":")).encode()
+    sock.settimeout(_op_timeout(until))
     sock.sendall(struct.pack(">I", len(body)) + body)
 
 
@@ -210,17 +224,17 @@ class _Conn:
     """One authenticated connection (one kernel identity). Any failure closes it: a half-read reply must never be mistaken for the
     answer to the next request."""
 
-    def __init__(self, path: str, skill: str, credential: bytes) -> None:
+    def __init__(self, path: str, skill: str, credential: bytes, until: Optional[float] = None) -> None:
         self._id = 0
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            self.sock.settimeout(OP_TIMEOUT_S)
+            self.sock.settimeout(_op_timeout(until))
             self.sock.connect(path)
-            hello = _read_frame(self.sock)
+            hello = _read_frame(self.sock, until)
             nonce = bytes.fromhex(str(hello["nonce"]))
             _write_frame(self.sock, {"v": WIRE_VERSION, "skill": skill,
-                                     "proof": hmac.new(credential, nonce, hashlib.sha256).hexdigest()})
-            if _read_frame(self.sock).get("ok") is not True:
+                                     "proof": hmac.new(credential, nonce, hashlib.sha256).hexdigest()}, until)
+            if _read_frame(self.sock, until).get("ok") is not True:
                 raise KernelUnavailable("auth")
         except (KeyError, ValueError, KernelProtocol) as exc:
             self.close()
@@ -235,11 +249,11 @@ class _Conn:
         except OSError:
             pass
 
-    def call(self, op: str, **args: Any) -> Any:
+    def call(self, op: str, until: Optional[float] = None, **args: Any) -> Any:
         self._id += 1
         try:
-            _write_frame(self.sock, {"v": WIRE_VERSION, "id": self._id, "op": op, "args": args})
-            reply = _read_frame(self.sock)
+            _write_frame(self.sock, {"v": WIRE_VERSION, "id": self._id, "op": op, "args": args}, until)
+            reply = _read_frame(self.sock, until)
         except (OSError, KernelUnavailable, KernelProtocol):
             self.close()
             raise
@@ -256,9 +270,13 @@ class _Conn:
 
 
 # ---- comparison ---------------------------------------------------------------------------------------------------------------------
-RESULTS = ("worker_down", "match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
-           "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
-           "queue_full")
+#: EVERY code a shadowed write can end in, any verb, and nothing else (``test_results_is_exactly_the_set_of_codes_emitted`` pins both
+#: directions). Compared: ``match`` and the mismatch codes (``not_expressible`` included). No verdict: ``kernel_unavailable``, ``timeout``.
+#: Not compared: the rest, of which ``no_input`` (no member or no value) and ``shadow_error`` (the shadow's OWN failure,
+#: ``reason=hook|worker|code``) are not the kernel's.
+RESULTS = ("worker_down", "match", "not_expressible", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused",
+           "item_differs", "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
+           "queue_full", "live_noop", "no_input", "shadow_error")
 #: FIRST match wins, so "forgotten" comes first: the kernel's "forgotten_action_arguments" (an act citing words a forget shielded) also
 #: contains "argument", and a forgotten refusal must never be read as a fixable argument problem.
 _REASONS = (("forgotten", "forgotten"), ("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
@@ -311,7 +329,7 @@ def counters() -> dict:
 
 
 def counters_by_verb() -> dict:
-    """``{verb: {result: n}}`` since start-up (includes the codes that never log a line, e.g. ``live_noop``, ``queue_full``)."""
+    """``{verb: {result: n}}`` since start-up: the same outcomes the log lines carry, one per shadowed write."""
     with _lock:
         out: dict = {}
         for (verb, result), n in _vcounts.items():
@@ -332,6 +350,18 @@ def _log(verb: str, source: str, cls: str, live: str, kernel_state: str, result:
     """ONE line per shadowed write; codes and numbers only (tests/test_os_shadow*.py plant words and check none reach it)."""
     logger.info("OS_SHADOW_ACT verb=%s src=%s cls=%s live=%s kernel=%s result=%s reason=%s hop_ms=%.1f q_ms=%.1f",
                 verb, source, cls, live, kernel_state, result, reason or "-", hop_ms, q_ms)
+
+
+def _finish(verb: str, result: str, *, source: str, cls: str, live: str, kernel_state: str = "none", reason: str = "",
+            hop_ms: float = 0.0, q_ms: float = 0.0) -> None:
+    """THE one exit of every shadowed write (switch on, verb listed): it writes the write's one line AND counts it, so an outcome
+    cannot be counted without a line or logged without a count. Only ``_note`` (a write that ends at the door) and ``_do_act`` (a
+    write the worker took) call it, each exactly once, from a ``finally`` (``test_every_outcome_of_every_verb_writes_exactly_one_line``
+    and the structure pins). A code outside ``RESULTS`` is itself a bug: written as ``shadow_error reason=code``, never the stray code."""
+    if result not in RESULTS:
+        result, reason, kernel_state = "shadow_error", "code", "none"
+    _log(verb, source, cls, live, kernel_state, result, reason, hop_ms, q_ms)   # the line first: a counted write has always been written
+    _tally(result, hop_ms if kernel_state != "none" else None, verb=verb)
 
 
 # ---- the worker ---------------------------------------------------------------------------------------------------------------------
@@ -373,11 +403,10 @@ def revive() -> bool:
 _down_logged = False
 
 
-def _worker_down(verb: str = "list_add") -> None:
-    """A turn found no live worker: the proposal is dropped and counted (``worker_down``); the turn never starts a thread. Said ONCE per
-    process in the log, so a dead worker is visible without a line per add."""
+def _worker_down() -> None:
+    """A turn found no live worker: the proposal is dropped (the hook's one line says ``worker_down``); the turn never starts a thread.
+    The warning is said ONCE per process, so a dead worker stands out without a warning per write."""
     global _down_logged
-    _tally("worker_down", verb=verb)
     if not _down_logged:
         _down_logged = True
         logger.warning("OS_SHADOW worker down: proposals dropped (worker_down) until a start-up or a forget revives it")
@@ -400,7 +429,7 @@ class _Kernel:
         self.conns: dict[str, _Conn] = {}
         self.down_until = 0.0
 
-    def conn(self, skill: str) -> _Conn:
+    def conn(self, skill: str, until: Optional[float] = None) -> _Conn:
         if time.monotonic() < self.down_until:
             raise KernelUnavailable("circuit")
         c = self.conns.get(skill)
@@ -409,7 +438,7 @@ class _Kernel:
             if skill not in creds:
                 raise KernelUnavailable("no_credential")
             try:
-                c = self.conns[skill] = _Conn(path, skill, creds[skill])
+                c = self.conns[skill] = _Conn(path, skill, creds[skill], until)
             except (KernelUnavailable, OSError):
                 self.down_until = time.monotonic() + CIRCUIT_S
                 raise
@@ -420,9 +449,10 @@ class _Kernel:
         if c is not None:
             c.close()
 
-    def call(self, skill: str, op: str, **args: Any) -> Any:
+    def call(self, skill: str, op: str, until: Optional[float] = None, **args: Any) -> Any:
+        """``until``: the write's overall deadline (``time.monotonic()``), passed into the connect, the handshake and the call alike."""
         try:
-            return self.conn(skill).call(op, **args)
+            return self.conn(skill, until).call(op, until, **args)
         except (KernelUnavailable, KernelProtocol, OSError):
             self.drop(skill)
             raise
@@ -437,9 +467,12 @@ def _run() -> None:
             for skill in list(kernel.conns):
                 kernel.drop(skill)
             return
-        try:
-            if not replayed:
+        if not replayed:
+            try:                      # its own try: a replay that fails must never cost the job behind it (a write keeps its one line)
                 replayed = _replay_pending(kernel)
+            except Exception as exc:  # noqa: BLE001 - kept pending, tried again before the next job
+                logger.warning("OS_SHADOW replay error=%s", type(exc).__name__)
+        try:
             if job[0] == "act":
                 _do_act(kernel, *job[1:])
             else:
@@ -452,33 +485,43 @@ def _run() -> None:
 
 def _do_act(kernel: _Kernel, verb: str, user_id: str, source: str, cls: str, live: str, raw: dict, gen: int,
             queued_at: float, wall_at: float) -> None:
+    """One queued write, end to end: ONE line, whatever happens (an unexpected error is ``shadow_error reason=worker``)."""
     started = time.perf_counter()
-    q_ms = (started - queued_at) * 1000
+    out: dict = {"result": "shadow_error", "reason": "worker"}
+    try:
+        out = _act_outcome(kernel, verb, user_id, live, raw, gen, started, wall_at)
+    except Exception as exc:  # noqa: BLE001 - counted and written below; the worker never dies
+        logger.warning("OS_SHADOW worker error=%s", type(exc).__name__)
+    finally:
+        _finish(verb, out.get("result", "shadow_error"), source=source, cls=cls, live=live,
+                kernel_state=out.get("kernel_state", "none"), reason=out.get("reason", ""), hop_ms=out.get("hop_ms", 0.0),
+                q_ms=(started - queued_at) * 1000)
+
+
+def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict, gen: int, started: float, wall_at: float) -> dict:
+    """What the kernel made of one write, as ``{"result", "kernel_state", "reason", "hop_ms"}``; every return names a result. The
+    whole write runs on ONE budget (``JOB_DEADLINE_S`` from when the kernel is first called) that every socket operation draws on: a
+    stall anywhere ends it as ``timeout`` within the budget."""
     if user_id not in roster():
-        _tally("member_not_in_roster", verb=verb)
-        return
+        return {"result": "member_not_in_roster"}
     if user_erase_gate.generation(user_id) != gen or user_erase_gate.in_progress(user_id):
-        _tally("dropped_erased", verb=verb)
-        return
+        return {"result": "dropped_erased"}
     try:
         sent, why = kernel_args(verb, raw, wall_at)
     except Exception:  # noqa: BLE001 - a field the client could not read is counted against the kernel, never silently lost
         sent, why = None, "parse"
     if sent is None:              # the live write is something the kernel's verb cannot say: a disagreement, never sent
-        _tally("not_expressible", verb=verb)
-        _log(verb, source, cls, live, "none", "not_expressible", why, 0.0, q_ms)
-        return
+        return {"result": "not_expressible", "reason": why}
+    until = time.monotonic() + JOB_DEADLINE_S
     action = VERBS[verb][0]
     result_kernel: Optional[dict] = None
     reason, result = "", ""
     try:
-        ev = kernel.call(SKILL_VOICE, "publish", kind="utterance", subject=user_id, payload={"text": utterance_text(verb)})
+        ev = kernel.call(SKILL_VOICE, "publish", until, kind="utterance", subject=user_id, payload={"text": utterance_text(verb)})
         seq = ev.get("seq") if isinstance(ev, dict) else None
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise KernelProtocol("no seq")
-        if time.perf_counter() - started > JOB_DEADLINE_S:
-            raise socket.timeout()
-        rec = kernel.call(SKILL_BRAIN, "act", action=action, on_behalf_of=user_id, args={**sent, "asked": seq}, caused_by=[seq])
+        rec = kernel.call(SKILL_BRAIN, "act", until, action=action, on_behalf_of=user_id, args={**sent, "asked": seq}, caused_by=[seq])
         if not isinstance(rec, dict) or not isinstance(rec.get("verified"), bool) or not isinstance(rec.get("outcome"), str):
             raise KernelProtocol("bad receipt")
         result_kernel = rec
@@ -496,8 +539,7 @@ def _do_act(kernel: _Kernel, verb: str, user_id: str, source: str, cls: str, liv
     kstate = "none"
     if not result:
         result, kstate = compare(live, result_kernel, sent, verb)
-    _tally(result, hop_ms if kstate != "none" else None, verb=verb)
-    _log(verb, source, cls, live, kstate, result, reason, hop_ms, q_ms)
+    return {"result": result, "kernel_state": kstate, "reason": reason, "hop_ms": hop_ms}
 
 
 def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], str]:
@@ -535,64 +577,90 @@ def list_class(list_type: Optional[str]) -> str:
     return lt if lt in LIST_CLASSES else "other"
 
 
-def note_act(verb: str, user_id: Optional[str], *, source: str, raw: dict, cls: str = "-", landed: bool = True) -> None:
-    """THE hook: a live write of ``verb`` committed (call AFTER the commit). ``raw``: the fields ``kernel_args`` turns into the
-    kernel's args (nothing is parsed here). ``landed`` False = nothing was written: counted, never proposed. Never raises, never
-    blocks, O(1); with the switch off, or the verb not in ``ZOE_OS_SHADOW_VERBS``, it returns before anything is touched."""
+_OFF, _QUEUED = "off", "queued"      # hook outcomes that are NOT results: off (nothing touched) / the worker writes the line
+
+
+def _note(verb: str, user_id: Optional[str], source: str, landed: bool, build) -> None:
+    """THE hook, for every verb: a live write of ``verb`` committed (call AFTER the commit). ``build()`` returns ``(cls, raw)``, or
+    ``(cls, None)`` when the write carries no value to propose; it runs inside the guard, so a bad argument is counted, never raised.
+    Never raises, never blocks, O(1); with the switch off, or the verb not in ``ZOE_OS_SHADOW_VERBS``, nothing is touched.
+
+    Otherwise EVERY call ends in exactly one ``OS_SHADOW_ACT`` line: written here (``_finish``, in the ``finally``) when the write ends
+    at the door, or by the worker when it was queued. An unexpected error is ``shadow_error reason=hook``."""
+    outcome, cls = "shadow_error", "-"
     try:
-        if not wants(verb):
-            return
-        if not landed:
-            _tally("live_noop", verb=verb)
-            return
-        uid = (user_id or "").strip()
-        if not uid:
-            return
-        if user_erase_gate.in_progress(uid):
-            _tally("dropped_erased", verb=verb)
-            return
-        if not _worker_alive():           # never Thread.start() on a turn: drop, count, revive off the turn
-            _worker_down(verb)
-            return
+        outcome, cls = _door(verb, user_id, source, landed, build)
+    except Exception:  # noqa: BLE001 - shadow must never break the turn; counted and written below
+        outcome = "shadow_error"
+    finally:
+        if outcome not in (_OFF, _QUEUED):
+            try:
+                _finish(verb if verb in VERBS else "list_add", outcome, source=str(source), cls=cls,
+                        live="noop" if outcome == "live_noop" else "added", reason="hook" if outcome == "shadow_error" else "")
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _door(verb: str, user_id: Optional[str], source: str, landed: bool, build) -> tuple:
+    """The hook's decision: ``(_OFF | _QUEUED | the result code the write ends in here, cls)``. Every return names one."""
+    if not wants(verb):
+        return _OFF, "-"
+    cls, raw = build()
+    if not landed:
+        return "live_noop", cls
+    uid = (user_id or "").strip()
+    if not uid or raw is None:
+        return "no_input", cls
+    if user_erase_gate.in_progress(uid):
+        return "dropped_erased", cls
+    if not _worker_alive():           # never Thread.start() on a turn: drop, count, revive off the turn
+        _worker_down()
+        return "worker_down", cls
+    try:
         _q.put_nowait(("act", verb, uid, source, cls, "added", raw, user_erase_gate.generation(uid), time.perf_counter(), time.time()))
     except queue.Full:
-        _tally("queue_full", verb=verb)
-    except Exception:  # noqa: BLE001 - shadow must never break the turn
-        return
+        return "queue_full", cls
+    return _QUEUED, cls
+
+
+def note_act(verb: str, user_id: Optional[str], *, source: str, raw: dict, cls: str = "-", landed: bool = True) -> None:
+    """A live write of ``verb`` committed, with its fields already in ``raw`` (``kernel_args`` turns them into the kernel's args)."""
+    _note(verb, user_id, source, landed, lambda: (cls, raw))
+
+
+def _text(value: Optional[str]) -> str:
+    return (value or "").strip()
+
+
+def _list_raw(list_type: Optional[str], list_name: Optional[str], item: Optional[str]) -> tuple:
+    text = _text(item)
+    return list_class(list_type), ({"item": text, "list": (list_name or list_type or "shopping").strip() or "shopping"} if text else None)
 
 
 def note_add(user_id: Optional[str], *, source: str, list_type: Optional[str], list_name: Optional[str], item: Optional[str],
              landed: bool = True) -> None:
     """A list add finished (call AFTER the live commit). ``landed`` False = nothing was written (already on the list, replayed)."""
-    text = (item or "").strip()
-    if landed and not text:
-        return
-    note_act("list_add", user_id, source=source, cls=list_class(list_type), landed=landed,
-             raw={"item": text, "list": (list_name or list_type or "shopping").strip() or "shopping"})
+    _note("list_add", user_id, source, landed, lambda: _list_raw(list_type, list_name, item))
 
 
 def note_list_remove(user_id: Optional[str], *, source: str, list_type: Optional[str], list_name: Optional[str],
                      item: Optional[str]) -> None:
     """A list item was removed (call AFTER the commit). The kernel's post-condition is "that item is not on the list"."""
-    text = (item or "").strip()
-    if text:
-        note_act("list_remove", user_id, source=source, cls=list_class(list_type),
-                 raw={"item": text, "list": (list_name or list_type or "shopping").strip() or "shopping"})
+    _note("list_remove", user_id, source, True, lambda: _list_raw(list_type, list_name, item))
 
 
 def note_reminder_create(user_id: Optional[str], *, source: str, note: Optional[str], due_date: Optional[str],
                          due_time: Optional[str], recurring: bool) -> None:
     """A reminder row committed (``reminder_service.create_reminder_record``): its stored fields, parsed on the worker."""
-    text = (note or "").strip()
-    if text:
-        note_act("reminder_create", user_id, source=source, cls="repeat" if recurring else "once",
-                 raw={"note": text, "due_date": due_date, "due_time": due_time, "recurring": bool(recurring)})
+    _note("reminder_create", user_id, source, True, lambda: (
+        "repeat" if recurring else "once",
+        {"note": _text(note), "due_date": due_date, "due_time": due_time, "recurring": bool(recurring)} if _text(note) else None))
 
 
 def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optional[str], repeat: Optional[str]) -> None:
     """An alarm row committed (``alarms.create_alarm``). The kernel's alarm is one time per person: the repeat rule rides ``cls``."""
-    note_act("alarm_create", user_id, source=source, cls="once" if (repeat or "once") == "once" else "repeat",
-             raw={"time": str(time_hhmm or "")})
+    _note("alarm_create", user_id, source, True, lambda: ("once" if (repeat or "once") == "once" else "repeat",
+                                                          {"time": str(time_hhmm or "")}))
 
 
 # ---- forget -------------------------------------------------------------------------------------------------------------------------

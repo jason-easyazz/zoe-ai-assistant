@@ -230,3 +230,16 @@ def test_write_roster_is_ids_only_and_private(tmp_path):
     assert os_shadow.write_roster(["b", " a ", "", "a"], dest) == ["a", "b"]
     assert json.loads(dest.read_text()) == {"people": ["a", "b"]} and oct(dest.stat().st_mode & 0o777) == "0o600"
     assert os_shadow.main(["--write-roster"]) == 2
+
+
+def test_a_failing_replay_never_costs_the_add_behind_it_its_line(kernel, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    os_shadow._reset_for_tests()
+    monkeypatch.setattr(os_shadow, "_replay_pending", lambda k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert os_shadow.revive()
+    add()
+    settle(1)
+    assert os_shadow.counters() == {"match": 1}
+    assert sum(r.getMessage().startswith("OS_SHADOW_ACT verb=list_add ") for r in caplog.records) == 1
