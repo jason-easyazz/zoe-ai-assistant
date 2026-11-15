@@ -276,6 +276,16 @@ malformed legacy scopes purge that person's subscriber state: over-erasing a sto
 possibly forgotten content. Keeper, reminders, twin, leaving-catch and calendar-heads-up share this rule.
 
 List, reminder and alarm driver snapshots now declare versioned per-row request provenance (`asked`).
+The kernel sets provenance: after authorising the action and its cause, the dispatcher overwrites
+`asked` with the single validated `caused_by` sequence (and fills a declared `asked` if omitted).
+Actions using this scalar provenance refuse multiple causes before any driver write. Drivers use
+that value; reminder skills learn it from kernel receipts. A refusal never stores caller text:
+unknown or unauthorised actions use `unknown_action`, unverified identities use `unverified-peer`,
+and errors use fixed reasons. Audit findings cite source sequences rather than copying claim action
+text; kernel appends check both content and name shields, including argument keys, and derived
+records retain subject/cause links so forget reaches them. These changes are statically reviewed only;
+the new boundary regressions have not been run.
+
 Forget scrubs affected rows from surviving undo snapshots and from undo read-back proofs. Undo then
 restores only survivors; it does not depend causally on every old row (which would erase unrelated later
 actions). Entity/topic matching excludes these before-state copies and handles them through the same scrub.
@@ -283,6 +293,28 @@ For older or opaque snapshots without complete provenance, a nonempty forget con
 person removes the saved before-state and refuses undo explicitly. The surviving action's arguments
 remain available to reminder restoration. Empty selections invalidate nothing.
 Queued receipts refresh their bodies after forget, so they cannot deliver the pre-scrub snapshot.
+
+**Action argument shields [code; tests not run].** The dispatcher checks every action's arguments
+before writing an intent or running a driver, using the same `_payload_refusal` as publish:
+`_shielded` and `_names_forgotten` visit string values and dictionary keys through nested
+dictionaries, lists and tuples. Shield scope is unchanged (word hashes remain household-wide).
+Undo checks both saved arguments and the complete before-state before opening its intent or restoring
+rows, in addition to the provenance scrub above. Refusals carry only the fixed code
+`forgotten_action_arguments`, never argument text. Receipts for actions using `asked` also expose
+the kernel-bound sequence directly; driver proofs keep their existing shape.
+Socket-free regressions live in `tests/test_forget_action_arguments.py`; removing the argument guard
+makes the list resurrection regression fail (a planted negative control, execution pending).
+
+| Caller-text write path | Verdict |
+|---|---|
+| Action arguments to list/reminder/alarm drivers and receipts | Fixed here: shared publish shields before intent/driver. |
+| Undo arguments and restored snapshot rows | Fixed here: shared shields before intent/reverse; provenance scrub remains in place. |
+| Offers, offer responses and claims | Shielded through `Spine.publish` / `publish_many`; claims also require a matching unused receipt. |
+| Brain bridge proposals (including prevalidation disabled), socket `act`, skill `Context.act` | Fixed here through their common `Dispatcher.act` destination. |
+| Grant-change records | No free text: registered person/skill/action identifiers, grant IDs, visibility/kind enums and guardian IDs only. |
+| Stage-one production bridge events | No free text by contract: IDs and labels only; trusted origins record first-hand reality through publish. |
+| Purge driver calls | No free text: one exact request ID derived from a live forget notice, checked before driver invocation. |
+| Attention, recovery and audit records | No caller free-text fields: fixed reasons/outcomes, registered IDs and sequence numbers; driver read-back is trusted kernel output. |
 
 Forget-copy and bounded-list sweep (lab implementation, not production):
 

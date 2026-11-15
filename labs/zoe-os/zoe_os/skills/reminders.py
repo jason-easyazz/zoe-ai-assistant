@@ -68,7 +68,7 @@ class Reminders:
                           caused_by=(ev.seq,))
         if receipt.verified:                 # say "I've set that" only on a verified receipt
             self._items[rid] = {"person": ev.subject, "note": intent["note"], "due": intent["at"],
-                                "gen": 0, "receipt": receipt.seq, "asked": ev.seq, "open": True}
+                                "gen": 0, "receipt": receipt.seq, "asked": receipt.asked, "open": True}
             ctx.publish(Kind.CLAIM, subject=ev.subject, caused_by=(receipt.seq,),
                         payload={"action": "reminder.create", "receipt_seq": receipt.seq})
 
@@ -80,8 +80,15 @@ class Reminders:
         args = (p.get("undo") or {}).get("args") or {}
         rid = args.get("id")
         if p["action"] == "reminder.create" and rid:
+            # Legacy receipts lack the top-level field: use their kernel-owned causal
+            # link, never the old caller-supplied undo argument. Ambiguity fails closed.
+            asked = p.get('asked')
+            if asked is None and len(ev.caused_by) == 1:
+                asked = ev.caused_by[0]
+            if type(asked) is not int:
+                return
             self._items[rid] = {"person": ev.subject, "note": args["note"], "due": args["at"], "gen": 0,
-                                "receipt": ev.seq, "asked": args["asked"], "open": True}
+                                "receipt": ev.seq, "asked": asked, "open": True}
         elif rid in self._items and p["action"] == "reminder.snooze":
             self._items[rid] |= {"due": args["until"], "gen": self._items[rid]["gen"] + 1}
 

@@ -137,6 +137,11 @@ class DenyAll:
 class Refused(Exception):
     """Raised to the caller; the same refusal is also appended as a REFUSAL event."""
 
+    def __init__(self, message: str, *, reason: str = 'request_refused', wire: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.wire = wire      # set only by Spine._refuse, from kernel vocabulary; the one text that may cross the socket
+
 
 class ForgetResult(NamedTuple):
     count: int      # rows erased, including derived events, grants, refusals and scoped notices
@@ -327,15 +332,22 @@ class Spine:
             return "a skill must say which events its event derives from"
         reason = self._cause_refusal(ev.source, ev.caused_by)
         if not reason:
-            if self._shielded(ev):
-                reason = "carries forgotten content"
-            elif self._names_forgotten(ev):
-                reason = "names a forgotten entity"
+            reason = self._payload_refusal(ev)
         return reason
+
+    def _payload_refusal(self, ev: Event) -> str:
+        """Shared publish/action shield semantics, including nested arrays and dictionary keys."""
+        if self._shielded(ev):
+            return "carries forgotten content"
+        if self._names_forgotten(ev):
+            return "names a forgotten entity"
+        return ""
 
     def _cause_refusal(self, source: str, caused_by: tuple[int, ...]) -> str:
         """A cause must exist, be live, and be something the publisher may itself read."""
         for cause in caused_by:
+            if type(cause) is not int or cause <= 0:
+                return "invalid_cause"
             row = self._db.execute(
                 f"SELECT {_COLS}, tombstoned FROM events WHERE seq = ?", (cause,)).fetchone()
             if row is None:
@@ -352,10 +364,8 @@ class Spine:
         """Kernel services (receipts, grants, forget) append without the publish checks.
         ``then(seq)`` runs INSIDE the same transaction: the event and its bookkeeping land together."""
         with self._lock:
-            reason = ("carries forgotten content" if self._shielded(event) else
-                      "names a forgotten entity" if self._names_forgotten(event) else "")
-            if reason:
-                self._refuse(event.source, "kernel append", reason)
+            if self._payload_refusal(event):
+                self._refuse(KERNEL, "kernel_write", "forgotten_kernel_content")
             return self._append([event], then)[0]
 
     def _index_record(self, seq, kind, payload):
@@ -413,6 +423,10 @@ class Spine:
     def _refuse(self, who: str, attempted: str, reason: str) -> None:
         """Record the refusal as an event (no content: who, what was tried, why), then raise."""
         with self._lock:
+            # A failed identity/actor check must not turn the claimed name into content.
+            store = getattr(self.authorizer, 'store', None)
+            if store is not None and who not in store.manifests and who not in store.people and who != KERNEL:
+                who = 'unverified-peer'
             self.refusals += 1
             record = Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL,
                            payload={"who": who, "attempted": attempted, "reason": reason})
@@ -421,7 +435,8 @@ class Spine:
             if self._shielded(record) or self._names_forgotten(record):
                 record = Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL)
             self._append([record])
-        raise Refused(f"{who}: {attempted}: {reason}")
+        text = f"{who}: {attempted}: {reason}"
+        raise Refused(text, reason=reason, wire=text)
 
     # ---- forget -------------------------------------------------------------------
     def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None,

@@ -1116,6 +1116,8 @@ def test_nothing_else_reads_pendant_transcripts():
                "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py",
                # the forget-reach inventory (A6) only NAMES the table as a store key; it opens nothing
                "forget_reach.py",
+               # household_text only NAMES stores in metadata; its inventory test forbids runtime readers and store I/O.
+               "household_text.py",
                # the night re-pass (0075): the SECOND, offline transcript of the same audio; it replaces a transcript the same way the first pass writes it
                "omi_repass.py", "omi_repass_clean.py", "omi_transcript_book.py",
                # the morning transcript check: the OWNER corrects words of their own transcript (owner_corrected); owner-only routes, forgotten spans never shown

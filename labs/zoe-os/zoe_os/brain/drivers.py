@@ -4,8 +4,10 @@ These run in the KERNEL process (registered on its ``Dispatcher``). The brain ne
 this module. Each store is as dumb as production's are: it checks nothing, so every rule shown
 in the tests is the kernel's. Each action declares its ``params`` (the tool schema is derived
 from them) and is reversible. ``asked`` is a ``from: turn`` parameter: the adapter fills it from
-the turn the trusted voice surface recorded; the model never sees it. It is only provenance for
-a scoped forget. Request sequences are global: erasure follows them across every owner's rows.
+the turn the trusted voice surface recorded; the model never sees it. The dispatcher overwrites
+it with the single authorised cause before any driver runs. Multiple causes are refused for
+actions using this scalar provenance, so scoped forget cannot miss another cited request.
+Request sequences are global: erasure follows them across every owner's rows.
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ from ..events import Event, Kind
 from ..provenance import erased_request
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
-         "description": "the utterance this came from (filled by the adapter)"}
+         "description": "the single authorised request (set by the kernel)"}
 
 
 def _register_forget(kernel, name, store):
