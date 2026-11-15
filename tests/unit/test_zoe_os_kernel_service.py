@@ -247,4 +247,4 @@ def test_kernel_backup_ages_out_inside_the_household_backup_policy():
     ops = (MAINT / "zoe_os_kernel_ops.py").read_text()
     days = [int(n) for n in re.findall(r"> (\d+) \* 86400", ops)]
     assert days and max(days) <= fr.BACKUP_MAX_AGE_DAYS
-    assert any(s.name == "backup_zoe_os_kernel" for s in fr.STORES)
+    assert any(s.key == "backup_zoe_os_kernel" for s in fr.STORES)
