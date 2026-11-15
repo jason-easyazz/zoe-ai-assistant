@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 import uuid
 from typing import Optional
 
+import os_shadow
 import panel_principal
 import write_receipts
 
@@ -605,6 +606,8 @@ async def add_item_to_list(
                 write_receipts.record(user_id, "list", rid, why)
                 if why == "add_item_to_list":
                     note_recent_add(user_id, list_id, rid)
+                os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text,
+                                   landed=why == "add_item_to_list")
         return outcome
 
     async def _write_new_list_and_item() -> dict:
@@ -649,6 +652,7 @@ async def add_item_to_list(
     else:
         write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
         note_recent_add(user_id, outcome["list_id"], outcome["item_id"])
+        os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text)
     return outcome
 
 
@@ -681,6 +685,9 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
             (already if out.get("already") else added).append(shown)
     for uid, rid, why in receipts:
         write_receipts.record(uid, "list", rid, why)
+    for out in outcomes:      # the Zoe OS shadow (os_shadow.py): after the commit, never raises, a no-op with the flag off
+        os_shadow.note_add(kwargs.get("user_id"), source="spoken", list_type=kwargs.get("list_type"), list_name=kwargs.get("list_name"),
+                           item=out.get("_text"), landed=not out.get("deduped"))
     fresh = [o for o in outcomes if not o.get("deduped")]
     if fresh:     # the last NEW row of this spoken add is what "no, X" / "spell it X" corrects
         note_recent_add(kwargs.get("user_id"), fresh[-1]["list_id"], fresh[-1]["item_id"])

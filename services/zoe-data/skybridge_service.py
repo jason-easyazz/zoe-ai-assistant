@@ -4803,6 +4803,7 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
     added: list[str] = []
     already: list[str] = []
     new_ids: list[str] = []
+    inserted: list[str] = []      # the texts that really became rows (the Zoe OS shadow proposes exactly these)
     item_id = ""
     from list_service import list_write_txn
 
@@ -4851,6 +4852,7 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
             open_rows.append({"id": new_id, "text": part})
             new_ids.append(new_id)
             added.append(normalize_item_text(part) or part)
+            inserted.append(added[-1])
     if new_ids:
         await _maybe_commit(db)
         item_id = new_ids[0]
@@ -4863,6 +4865,12 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
         write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", _rid, "skybridge:add_item")
         if _rid in new_ids:
             _audit_list_item("add", user_id, list_id, _rid)
+    import os_shadow      # after the commit and the receipts: a no-op with ZOE_OS_LIST_SHADOW off, never raises
+
+    for text in inserted:
+        os_shadow.note_add(user_id, source="skybridge", list_type=list_type, list_name=list_name, item=text)
+    for _ in range(len(added) - len(inserted) + len(already)):      # replayed or already-open items: counted, never proposed
+        os_shadow.note_add(user_id, source="skybridge", list_type=list_type, list_name=list_name, item="-", landed=False)
     return added, already, new_ids, item_id
 
 

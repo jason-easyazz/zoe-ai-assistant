@@ -5,6 +5,7 @@ Mounted at prefix="/api/lists" with tag "lists".
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import os_shadow
 import panel_principal
 from auth import get_current_user
 from database import get_db
@@ -385,6 +386,7 @@ async def add_item(
     result = _row_to_dict(row)
 
     _audit_item("add", actor, list_id, item_id)
+    os_shadow.note_add(user_id, source="rest", list_type=list_type, list_name=list_type, item=result.get("text"))
     await broadcaster.broadcast(
         "lists",
         "list_updated",
