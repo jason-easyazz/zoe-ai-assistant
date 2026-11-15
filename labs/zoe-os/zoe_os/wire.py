@@ -55,7 +55,7 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     # served by the AUTHORITY daemon only (``authority.py``, additive): a plain KernelServer answers them ``internal``
     "health": {},
     "erase_member": {"subject": ((str,), True)},
-    "erase_item": {"digest": ((str,), True)},
+    "erase_item": {"digest": ((str,), True), "subject": ((str,), False)},     # subject: optional on the wire, REFUSED when absent
     "list_digest": {},
 }
 

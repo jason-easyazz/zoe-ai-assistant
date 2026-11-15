@@ -48,7 +48,7 @@ is invented.
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
-| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` / `erase_item` / `health` / `list_digest` ops, revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` (member-delete credential only, `erase-creds.json`) / `erase_item` (one named member) / `health` / `list_digest` ops, a roster that keeps every id the record names, revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
 | `tests/authority_proc.py`, `tests/test_authority.py` | the authority daemon as its own process with one SIGKILL point or one control armed, and its tests |
 
 ## Run it
@@ -162,17 +162,16 @@ in a permanent home beside Zoe's other stores (`~/.zoe/music-assistant/`, `~/.zo
 **proposed `~/.zoe/zoe-os/zoe-os.db`** (directory 0700, file 0600; `authority.PERMANENT_DB`). ONE setting names it:
 `ZOE_OS_KERNEL_DB` in the unit template, passed to the daemon as `--db` (both daemons take it), and the same registered flag in zoe-data
 (`os_authority.kernel_db_path()`, used only to name the store; zoe-data never opens the file). Without `--db` the lab default is
-`STATE/kernel/zoe-os.db`. A daemon given `--db` refuses to start while that file is missing but the old `~/.zoe/os-shadow/kernel/zoe-os.db`
-still exists, so a skipped move can never start an empty kernel beside an unmoved record.
+`STATE/kernel/zoe-os.db`.
 
-**One-time move (owner step, before installing either unit with `--db`; nothing here does it).** Stop the kernel, copy consistently,
-check, then remove the old copy (a second copy would be a store no forget reaches):
-
-    systemctl --user stop zoe-os-shadow-kernel.service zoe-os-authority-kernel.service 2>/dev/null
-    mkdir -p -m 700 ~/.zoe/zoe-os
-    python3 -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close(); c=sqlite3.connect(sys.argv[2]); assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; print('events', c.execute('SELECT COUNT(*) FROM events').fetchone()[0])" ~/.zoe/os-shadow/kernel/zoe-os.db ~/.zoe/zoe-os/zoe-os.db \
-      && chmod 600 ~/.zoe/zoe-os/zoe-os.db \
-      && rm -f ~/.zoe/os-shadow/kernel/zoe-os.db ~/.zoe/os-shadow/kernel/zoe-os.db-wal ~/.zoe/os-shadow/kernel/zoe-os.db-shm
+**The move is done by the daemon at start (`authority.migrate`, both daemons).** A daemon given `--db` while the old
+`~/.zoe/os-shadow/kernel/zoe-os.db` still exists first moves it: the old record is folded into one file, copied with `VACUUM INTO`
+to a `.moving` temp (0600, fsynced), renamed into place, VERIFIED (`integrity_check` ok and, per table and for the schema, the row count
+and a digest of every row equal to the old), and only then the old file and its WAL/SHM are removed and the directory fsynced. Every
+step is safe to interrupt and the next start resumes it (a half copy is thrown away and redone; a finished copy is verified and the old
+one removed; leftover sidecars are removed). A copy that does not verify REFUSES the start with both files kept, for the owner to look
+at: no kernel ever runs on the new file while the old one exists, so a mismatch is damage, never newer data. Removing a file does not
+scrub its blocks from the disk (the same holds for any deleted file).
 
 **Nightly backup (from the day shadow is on).** A concrete addition to `scripts/maintenance/mempalace-nightly-backup.sh`, the nightly
 job that already snapshots a live SQLite file with Python's online backup API (the `sqlite3` CLI is not installed on the Jetson); not

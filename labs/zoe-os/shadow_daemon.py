@@ -107,7 +107,8 @@ def build(state: Path, db: str | None = None):
     if not people or not all(isinstance(p, str) and p for p in people):
         raise SystemExit("people.json has no members: the shadow kernel records nothing for a household it does not know")
     known = remember_people(state, people)
-    path = Path(db).expanduser() if db else state / "kernel" / "zoe-os.db"      # --db: the permanent home (authority.PERMANENT_DB)
+    from authority import db_path                  # the same move rule as the authority: never start beside an unmoved record
+    path = db_path(state, db)                      # --db: the permanent home (authority.PERMANENT_DB)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # EVERY id this kernel was ever started with stays a person it knows, so a member taken off people.json can still be forgotten
     # (zoe-data forgets by id and reads "only a person can ask to forget" as "never recorded": this is what makes that true).

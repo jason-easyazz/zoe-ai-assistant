@@ -37,6 +37,8 @@ class Daemon:
         self.creds = {k: bytes.fromhex(v) for k, v in raw["creds"].items()}
         self.sock = raw["socket"]
         self.voice, self.brain, self.panel = (Client(self.sock, s, self.creds[s], timeout=5) for s in ("voice", "brain", "panel"))
+        erase = json.loads((state / "erase-creds.json").read_text())["creds"]["eraser"]
+        self.eraser = Client(self.sock, "eraser", bytes.fromhex(erase), timeout=5)       # the member-delete path's own credential
 
     def add(self, person: str, item: str) -> dict:
         said = self.voice.publish("utterance", subject=person, payload={"text": "synthetic list add"})
@@ -128,11 +130,11 @@ def test_erase_member_removes_everything_of_theirs_is_idempotent_and_holds_acros
     d.add(A, "oat milk")
     d.add(A, "eggs")
     d.add(B, "rice")
-    out = d.panel.call("erase_member", subject=A)
+    out = d.eraser.call("erase_member", subject=A)
     assert out["verified"] is True and out["erased"] >= 4 and isinstance(out["receipt_seq"], int)
     assert d.digests() == [digest("rice")]
     assert not _on_disk(state[0], b"oat milk")                       # the words left the database and its WAL
-    twice = d.panel.call("erase_member", subject=A)
+    twice = d.eraser.call("erase_member", subject=A)
     assert twice["erased"] == 0 and twice["verified"] is True        # idempotent
     with pytest.raises(Refused):
         d.add(A, "anything")                                         # the grant went with them
@@ -144,29 +146,70 @@ def test_erase_member_removes_everything_of_theirs_is_idempotent_and_holds_acros
     with pytest.raises(Refused):
         again.add(A, "anything")                                     # not re-granted at the restart
     assert again.add(B, "beans")["verified"] is True
-    assert again.panel.call("erase_member", subject="nobody")["verified"] is True     # never acted for: nothing held, nothing to do
+    out = again.eraser.call("erase_member", subject="member-qz-never")
+    assert out == {"erased": 0, "receipt_seq": None, "verified": True, "known": False}   # never seen: checked, nothing held
+    assert not _on_disk(state[0], b"member-qz-never")               # and no forget notice or ledger row was written for a stranger
 
 
 def test_control_an_erase_that_skips_the_forget_is_caught_by_its_read_back(state):
     d = start(state, control="no_member_forget")
     d.add(A, "oat milk")
-    assert d.panel.call("erase_member", subject=A)["verified"] is False     # fail closed: the caller must not say "deleted"
+    assert d.eraser.call("erase_member", subject=A)["verified"] is False    # fail closed: the caller must not say "deleted"
 
 
-def test_erase_item_forgets_one_item_for_every_member_by_digest_only(state):
+def test_only_the_member_delete_credential_may_erase_a_member(state):
+    d = start(state)
+    d.add(A, "oat milk")
+    for who in (d.panel, d.brain, d.voice):
+        with pytest.raises(Refused, match="only the member-delete path"):
+            who.call("erase_member", subject=A)
+    assert d.digests() == [digest("oat milk")]                       # nothing was erased by the refused calls
+    assert "eraser" not in json.loads((state[0] / "creds.json").read_text())["creds"]       # apart from the surfaces' file
+    assert (state[0] / "erase-creds.json").stat().st_mode & 0o777 == 0o600
+    assert d.eraser.call("erase_member", subject=A)["verified"] is True
+
+
+def test_a_member_taken_off_the_roster_is_still_erased_by_id_and_then_leaves_the_kernel(state):
+    d = start(state)
+    d.add(A, "oat milk")
+    d.add(B, "rice")
+    d.kill()
+    (state[0] / "people.json").write_text(json.dumps({"people": [B]}))      # A was taken off the roster
+    again = start(state)
+    out = again.eraser.call("erase_member", subject=A)
+    assert out["known"] is True and out["verified"] is True and out["erased"] >= 2
+    assert again.digests() == [digest("rice")] and not _on_disk(state[0], b"oat milk")
+    assert again.eraser.call("erase_member", subject=A)["known"] is False    # forget first, then the roster: they are gone
+    again.kill()
+    assert start(state).eraser.call("erase_member", subject=A)["known"] is False   # and a restart does not bring them back
+
+
+def test_a_member_off_the_roster_forgotten_through_the_forget_op_is_reached_too(state):
+    d = start(state)
+    d.add(A, "oat milk")
+    d.kill()
+    (state[0] / "people.json").write_text(json.dumps({"people": [B]}))
+    again = start(state)
+    assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
+    assert again.digests() == [] and not _on_disk(state[0], b"oat milk")
+
+
+def test_erase_item_forgets_one_members_item_by_digest_and_leaves_the_others(state):
     d = start(state)
     d.add(A, "oat milk")
     d.add(B, "Oat Milk")
     d.add(A, "eggs")
-    out = d.panel.call("erase_item", digest=digest("oat milk"))
-    assert out["verified"] is True and out["erased"] >= 4
-    assert d.digests() == [digest("eggs")]
-    assert not _on_disk(state[0], b"oat milk") and not _on_disk(state[0], b"Oat Milk")
-    assert d.panel.call("erase_item", digest=digest("oat milk"))["erased"] == 0          # idempotent
+    with pytest.raises(Refused, match="name whose item"):
+        d.panel.call("erase_item", digest=digest("oat milk"))        # no subject: refused, never household-wide
+    out = d.panel.call("erase_item", digest=digest("oat milk"), subject=A)
+    assert out["verified"] is True and out["erased"] >= 2
+    assert d.digests() == sorted([digest("eggs"), digest("Oat Milk")])       # B's copy is still there
+    assert not _on_disk(state[0], b"oat milk") and _on_disk(state[0], b"Oat Milk")
+    assert d.panel.call("erase_item", digest=digest("oat milk"), subject=A)["erased"] == 0       # idempotent
     with pytest.raises(Refused):
-        d.brain.call("erase_item", digest=digest("eggs"))
+        d.brain.call("erase_item", digest=digest("eggs"), subject=A)
     d.kill()
-    assert start(state).digests() == [digest("eggs")]
+    assert start(state).digests() == sorted([digest("eggs"), digest("Oat Milk")])
 
 
 def test_an_entity_forget_through_the_old_op_also_reaches_the_durable_rows(state):
@@ -198,7 +241,7 @@ def test_a_revoke_is_remembered_across_a_restart(state):
 
 
 # ---- the one database setting -----------------------------------------------------------------------------------------------------
-def test_the_database_lives_where_db_says_and_an_unmoved_old_record_stops_the_start(state):
+def test_the_database_lives_where_db_says_and_an_old_record_is_moved_there_at_start(state):
     perm = state[0] / "perm" / "zoe-os.db"
     d = start(state, db=str(perm))
     d.add(A, "kept")
@@ -208,6 +251,66 @@ def test_the_database_lives_where_db_says_and_an_unmoved_old_record_stops_the_st
     old = start(state)                                               # the lab default: STATE/kernel/zoe-os.db
     old.add(A, "old")
     old.kill()
-    p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0]), "--db", str(state[0] / "new.db")],
-                       capture_output=True, text=True, timeout=30)
-    assert p.returncode != 0 and "was not moved" in p.stderr and not (state[0] / "new.db").exists()
+    moved = start(state, db=str(state[0] / "new.db"))                # the start FINISHES the move
+    assert moved.digests() == [digest("old")]
+    assert not [f for f in (state[0] / "kernel").iterdir() if f.name.startswith("zoe-os.db")]     # no old copy, no sidecar
+
+
+# ---- the move, interrupted at every point (in-process: ``authority.migrate`` is what every start runs first) ---------------------
+def _old_record(state: Path) -> Path:
+    d = start(state)
+    d.add(A, "moved item")
+    d.kill()                                                         # killed: the old record still has its WAL
+    return state[0] / "kernel" / "zoe-os.db"
+
+
+def _old_left(old: Path) -> list:
+    return sorted(f.name for f in old.parent.iterdir() if f.name.startswith(old.name))
+
+
+@pytest.mark.parametrize("point", ["before_copy", "mid_copy", "after_copy", "after_removal"])
+def test_a_move_interrupted_at_any_point_is_finished_and_leaves_no_old_copy(state, point):
+    import authority
+
+    old, new = _old_record(state), state[0] / "perm" / "zoe-os.db"
+    want = authority.fingerprint(old) if point != "after_removal" else None
+    if point == "mid_copy":
+        new.parent.mkdir(mode=0o700)
+        (new.parent / "zoe-os.db.moving").write_bytes(b"SQLite format 3\x00 half a copy")
+    elif point in ("after_copy", "after_removal"):
+        def die(_db):
+            raise KeyboardInterrupt                                  # killed right after the rename, before the removal
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(authority, "_remove_copy", die)
+            with pytest.raises(KeyboardInterrupt):
+                authority.migrate(old, new)
+        assert new.is_file() and old.is_file()
+        want = authority.fingerprint(new)
+        if point == "after_removal":
+            old.unlink()                                             # the main file went; a sidecar was left behind
+            (old.parent / (old.name + "-wal")).write_bytes(b"")
+    authority.migrate(old, new)
+    assert _old_left(old) == [] and not (new.parent / "zoe-os.db.moving").exists()
+    assert authority.fingerprint(new) == want
+    assert start(state, db=str(new)).digests() == [digest("moved item")]
+
+
+def test_a_copy_that_does_not_match_the_old_record_refuses_the_start_and_keeps_both(state):
+    import authority
+
+    old, new = _old_record(state), state[0] / "perm" / "zoe-os.db"
+    new.parent.mkdir(mode=0o700)
+    con = sqlite3.connect(str(old))
+    con.execute("PRAGMA journal_mode=DELETE")
+    con.execute(f"VACUUM INTO '{new}'")
+    con.close()
+    con = sqlite3.connect(str(new))
+    con.execute("DELETE FROM events WHERE seq = (SELECT MAX(seq) FROM events)")      # the copy lost a row
+    con.commit()
+    con.close()
+    with pytest.raises(SystemExit, match="could not be verified"):
+        authority.migrate(old, new)
+    assert old.is_file() and new.is_file()                           # neither is thrown away: the owner decides
+    p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0]), "--db", str(new)],
+                       capture_output=True, text=True, timeout=30, env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
+    assert p.returncode != 0 and "could not be verified" in p.stderr
