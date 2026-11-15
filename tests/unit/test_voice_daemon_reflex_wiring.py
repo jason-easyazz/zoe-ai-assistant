@@ -69,13 +69,14 @@ def make_bank(root: Path, voice: str = "af_sky", n: int = 4):
         files[tid] = raw
         pairs.append((tid, sha))
         takes.append({"id": tid, "sha256": sha, "dur_ms": TAKE_MS + i})
-    sha8 = REFLEX.bank_sha8(voice, None, pairs)
+    man = {"voice": voice, "style_len": None, "takes": takes, "render_date": "2026-11-15"}
+    sha8 = REFLEX.manifest_sha8(man)
+    man["bank"] = sha8
     d = root / voice / sha8
     d.mkdir(parents=True)
     for tid, raw in files.items():
         (d / f"{tid}.wav").write_bytes(raw)
-    (d / "manifest.json").write_text(json.dumps({"voice": voice, "bank": sha8, "style_len": None, "takes": takes,
-                                                 "render_date": "2026-11-15"}))
+    (d / "manifest.json").write_text(json.dumps(man))
     return REFLEX.load_bank(voice, str(root), REFLEX.Settings(enabled=True)).bank
 
 
@@ -231,7 +232,7 @@ def test_shadow_logs_the_real_decision_and_plays_nothing(daemon, monkeypatch, ca
 
 @pytest.mark.parametrize("kw,skip", [
     (dict(talk=False), "talking"),                 # nobody listened after the close: unknown, silent
-    (dict(claim=0.30), "guest"),                   # scored under the far01 bar
+    (dict(claim=0.30), "low_confidence"),          # a member's claim scored under the far01 bar (not hidden as guest)
     (dict(hour=23), "night"),
     (dict(claim_s=0.40), "late"),                  # the decision ready 500 ms after the close (deadline 250)
 ])

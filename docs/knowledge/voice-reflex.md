@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: The panel reflex - a soft "Mm." at the committed close, in Zoe's own voice
-description: What the panel's "I heard you" reflex is, its truthfulness rules (never before the commit, non-lexical only, silent at night at first, one voice), the handshake with the server's spacers, the ship bar (post-close talk <= 3 per 100 turns from the instrument first; the owner's blind ear test), deploy and rollback, and what is NOT built yet. Pi flag REFLEX_ENABLED (default off), server flag ZOE_VOICE_REFLEX_AWARE (default on, inert without a reflex block).
+description: What the panel's "I heard you" reflex is, its truthfulness rules (never before the commit, non-lexical only, silent at night at first, one voice), the handshake with the server's spacers, the ship bar (post-close talk <= 3 per 100 turns from the instrument first; the owner's blind ear test), deploy and rollback, and what is NOT built yet. Pi switch REFLEX_MODE = off | shadow | on (default off; the module's own REFLEX_ENABLED is forced per call by the daemon, never a second switch), server flag ZOE_VOICE_REFLEX_AWARE (default on, inert without a reflex block).
 tags: [voice-path, panel, first-sound, kokoro, flag-dark]
 timestamp: 2026-11-14T00:00:00+08:00
 ---
@@ -86,8 +86,9 @@ so the reply starts at least `REFLEX_SEAM_MS` (120 ms) after the reflex ends. Th
 
 `~/.zoe-voice/reflex/<voice>/<bank_sha8>/{mm_01..}.wav` plus `manifest.json` (voice, style_len or null, speeds, kokoro and
 misaki versions when discoverable, sidecar code sha, render date, per-take sha256 / dur_ms / rms_db). 24 kHz mono S16, the
-format of the server's chunks. The sha8 covers the voice, the style row and every take's sha256 (not the date), so the same
-inputs give the same bank. Takes are trimmed with the daemon's own rule, faded 10 ms, RMS-matched to the reference reply speech
+format of the server's chunks. The sha8 is `manifest_sha8`: the sha256 of the WHOLE manifest bar its own `bank` key (it holds
+every take's sha256, so it covers every byte of audio and every field, render date included). The loader demands it as the
+directory name AND the `bank` key, so no file of the bank can be swapped or edited; the same inputs and date give the same bank. Takes are trimmed with the daemon's own rule, faded 10 ms, RMS-matched to the reference reply speech
 minus 3 dB (`REFLEX_GAIN_DB`), peak at most -1 dBFS.
 
 Render (owner, on the Orin, after the W1 sidecar `style_len` change if wanted):
@@ -119,7 +120,7 @@ run (rsync with `.bak-<ts>`, restart `zoe-voice`, verify active, `/health` and m
 built). Pi flags go in `/home/pi/.zoe-voice/.env.voice`. Mixed versions are safe both ways (additive keys).
 
 Rollback, cheapest first:
-- `REFLEX_ENABLED=false` in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice` on the panel;
+- `REFLEX_MODE=off` (or no line) in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice` on the panel;
 - `ZOE_VOICE_REFLEX_AWARE=0` on the Jetson, restart zoe-data (the server stops honouring the block);
 - restore the `.bak-<ts>` daemon as the deploy script printed.
 
