@@ -2733,13 +2733,15 @@ def _rotate_voice_stt_log(path: Path) -> None:
 
 
 def _stt_erase_epoch() -> int | None:
-    """The forget erase generation, read BEFORE a clip is handed to STT and carried to ``_log_voice_stt_sample``: an erase that
-    lands while the clip is transcribed then drops the line (its words may name what was just forgotten). Costs one module-global
-    int read (no disk, no env, no lock); the STT call itself is untouched. None only if the module cannot load (append fails too)."""
+    """The forget erase generation, read BEFORE a clip is handed to STT and held as the TURN's epoch (``local_text_logs.begin_turn``,
+    a ContextVar): the STT audit line and every later writer of this turn (the intent-miss log, the router shadow log, the recall
+    trace) check their append against it, so an erase that lands while the clip is transcribed drops them all (the words may name
+    what was just forgotten). One module-global int read and a ContextVar set (no disk, no env, no lock); STT itself is untouched.
+    None only if the module cannot load (append fails too)."""
     try:
         import local_text_logs
 
-        return local_text_logs.erase_epoch()
+        return local_text_logs.begin_turn()
     except Exception:  # noqa: BLE001 - an audit-log helper must never break a turn
         return None
 
@@ -2759,8 +2761,8 @@ def _log_voice_stt_sample(
     try:
         import local_text_logs
 
-        if epoch is None:   # a caller with no pre-STT capture: the line is guarded from here on only
-            epoch = local_text_logs.erase_epoch()
+        # the turn's epoch (held before STT) wins; a pre-STT reading that differs from it means an erase ran between them
+        epoch = local_text_logs.writer_epoch(epoch)
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "route": route,
@@ -3661,6 +3663,9 @@ async def voice_command(
         _note_voice_activity()
     except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
         pass
+    # The turn's erase epoch: kept when /turn or /turn_stream already read it before STT (same task / a copied context), else read
+    # here, where a text turn's words enter this process. Every erasable write of the turn checks against it. In memory only.
+    _stt_erase_epoch()
     try:  # read FIRST, before any await: a revoke that completes during this turn must win over its speaker note
         import warm_speaker as _ws_mod
         _ws_forget_epoch = _ws_mod.forget_epoch()
@@ -6934,6 +6939,11 @@ async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str |
                     reason = "empty"
                 else:
                     _stt_stream_raw_var.set(" ".join(ln.strip() for ln in lines if ln and ln.strip()))
+                    # these words were transcribed while the member spoke, before this route read the turn's epoch: an
+                    # erase since the first chunk makes every erasable write of the turn refuse
+                    import local_text_logs
+
+                    local_text_logs.turn_predates(getattr(sess, "erase_epoch", None))
     except Exception as exc:
         reason = f"error:{exc.__class__.__name__}"
         text = None
@@ -6962,10 +6972,13 @@ async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_
     if not pcm:
         raise HTTPException(status_code=400, detail="empty chunk")
 
+    epoch = _stt_erase_epoch()   # BEFORE these samples reach the stream: the taking turn compares it (_take_stt_stream_text)
     sess = await asyncio.get_running_loop().run_in_executor(
         None, _stt_stream.get_or_open, sid, seq, _open_moonshine_stream, _moonshine_infer_lock)
     if sess is None:
         raise HTTPException(status_code=429, detail="stt stream refused (unknown stream or too many sessions)")
+    if epoch is not None and (getattr(sess, "erase_epoch", None) is None or epoch < sess.erase_epoch):
+        sess.erase_epoch = epoch     # the EARLIEST chunk's reading (epochs only grow): words streamed after it may predate an erase
     return {"ok": sess.feed(seq, pcm), "samples": sess.samples_fed}
 
 
@@ -6999,6 +7012,7 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
         except Exception as exc:
             raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
         suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+        _stt_erase_epoch()   # the class rule for every STT route (nothing here writes an erasable store today)
         try:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(raw)
@@ -7293,6 +7307,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
 
     import uuid as _uuid
+    _stt_erase_epoch()   # the class rule for every STT route (its store is ambient_memory, not a local text log)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(raw)
         wav_path = tmp.name

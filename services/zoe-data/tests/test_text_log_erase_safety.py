@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import contextvars
 import json
 import logging
 import os
@@ -203,12 +204,15 @@ def test_stt_line_dropped_when_erase_lands_during_transcription(monkeypatch, tmp
     _quiet_erase(monkeypatch)
     helpers = _voice_helpers()
     args = dict(route="ci", panel_id="synthetic", audio_bytes=4, suffix="wav", transcript="synthetic sentinel words")
-    epoch = helpers["_stt_erase_epoch"]()                 # the route reads it before the clip reaches STT
-    ltl.erase_entity(re.compile("synthetic sentinel"))    # ... and the erase lands while the clip is transcribed
-    helpers["_log_voice_stt_sample"](epoch=epoch, **args)
+    def erased_turn():
+        epoch = helpers["_stt_erase_epoch"]()                 # the route reads it before the clip reaches STT
+        ltl.erase_entity(re.compile("synthetic sentinel"))    # ... and the erase lands while the clip is transcribed
+        helpers["_log_voice_stt_sample"](epoch=epoch, **args)
+
+    contextvars.copy_context().run(erased_turn)               # each turn runs in its own context, as each request does
     assert not path.exists() or "synthetic sentinel" not in path.read_text()
-    helpers["_log_voice_stt_sample"](epoch=helpers["_stt_erase_epoch"](), **args)   # no erase since: written
-    assert "synthetic sentinel" in path.read_text()
+    contextvars.copy_context().run(lambda: helpers["_log_voice_stt_sample"](epoch=helpers["_stt_erase_epoch"](), **args))
+    assert "synthetic sentinel" in path.read_text()            # no erase since: written
 
 
 def _calls(fn, name):

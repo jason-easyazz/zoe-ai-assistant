@@ -40,6 +40,7 @@ DELETED by ``prune_adhoc_backups`` (hourly, with the sweep) once older than ``AD
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import fcntl
 import json
 import logging
@@ -718,6 +719,55 @@ def erase_epoch() -> int:
     (the shadow2 worker) captures this BEFORE computing and drops its append if it moved: the utterance may have predated a forget
     that finished while it was computing."""
     return _ERASE_EPOCH
+
+
+# ── the per-turn epoch ──────────────────────────────────────────────────────────────────────────────────────────────────────
+# A writer that reads ``erase_epoch()`` at its OWN start is too late on a voice turn: the words it logs were produced by STT before
+# routing / intent detection began, so an erase that completed during STT is already inside that reading. The turn's epoch is read
+# ONCE where its words do not exist yet (before the clip reaches STT; for typed text, where it enters this process) and rides the
+# turn's context; every writer of an erasable store checks its append against it (``writer_epoch``). A ContextVar crosses
+# ``await``, ``asyncio.ensure_future`` / ``create_task`` and ``asyncio.to_thread`` (each copies the context), not a bare thread,
+# ``run_in_executor`` or a process boundary: there it is carried explicitly (``turn_token`` / an ``epoch`` argument).
+STALE_EPOCH = -1                 # never an erase epoch: a turn holding it has every append refused
+_TURN_EPOCH: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar("local_text_logs_turn_epoch", default=None)
+_BOOT = os.urandom(4).hex()      # a carried token names THIS process's counter (it restarts at 0)
+
+
+def begin_turn(carried: Any = None) -> int:
+    """Hold the erase epoch for the turn running in this context and return it: read now, before its words exist, unless the
+    context already holds one (an in-process hand-over: ``/turn`` -> ``voice_command`` keeps the epoch read before STT).
+    ``carried``: a ``turn_token()`` from an earlier request of the same turn (its words were produced there: a messaging voice note
+    transcribed before its text comes back as a chat turn). A token for any other epoch or process (an erase ran since, a restart, a
+    made-up value) holds ``STALE_EPOCH``, so a carried value can only refuse more, never less. In memory only: no disk, env or lock."""
+    held = _TURN_EPOCH.get()
+    ep = _ERASE_EPOCH if held is None else held
+    if carried is not None and carried != f"{_BOOT}:{ep}":
+        ep = STALE_EPOCH
+    if ep != held:
+        _TURN_EPOCH.set(ep)
+    return ep
+
+
+def turn_predates(epoch: Optional[int]) -> None:
+    """The turn's words already existed when ``epoch`` was read, before ``begin_turn`` (the under-speech STT stream, opened while the
+    member spoke). If an erase ran since, the turn holds ``STALE_EPOCH``. None = nothing to compare."""
+    if epoch is not None and epoch != writer_epoch():
+        _TURN_EPOCH.set(STALE_EPOCH)
+
+
+def writer_epoch(own: Optional[int] = None) -> int:
+    """The epoch a writer of an erasable store passes to its append: the turn's when the context holds one, else ``own`` (or now),
+    so a typed turn with no carrier keeps the writer's own reading. ``own`` differing from the turn's means an erase ran between the
+    two readings: ``STALE_EPOCH``."""
+    held = _TURN_EPOCH.get()
+    if held is None:
+        return _ERASE_EPOCH if own is None else own
+    return held if own is None or own == held else STALE_EPOCH
+
+
+def turn_token() -> str:
+    """The turn's epoch as an opaque token for a hop that leaves this process (returned to the client, sent back with the turn)."""
+    return f"{_BOOT}:{writer_epoch()}"
 
 
 def _bump_epoch(delta: int = 0) -> None:

@@ -204,9 +204,11 @@ async def telegram_transcribe(request: Request, _: None = Depends(require_intern
     if not binary:
         return _error(503, "ffmpeg unavailable")
 
-    from local_text_logs import erase_epoch
+    import local_text_logs
 
-    capture_epoch = erase_epoch()   # BEFORE decode + STT: an erase that lands meanwhile drops this note's capture
+    # BEFORE decode + STT: an erase that lands meanwhile drops this note's capture. The transcript leaves this process (the bot
+    # sends it back as a chat turn), so the epoch goes with it as ``erase_token`` and that turn's writers check the same one.
+    capture_epoch = local_text_logs.begin_turn()
     max_s = max_seconds()
     timings: dict[str, int] = {}
     with tempfile.TemporaryDirectory(prefix="zoe-tg-") as tmp:
@@ -244,7 +246,8 @@ async def telegram_transcribe(request: Request, _: None = Depends(require_intern
         "TELEGRAM_STT duration=%.1fs decode_ms=%s stt_ms=%s chars=%d",
         duration_s, timings.get("decode_ms"), timings.get("stt_ms"), len(text),
     )
-    return {"ok": True, "text": text, "duration_s": round(duration_s, 2), "timings": timings}
+    return {"ok": True, "text": text, "duration_s": round(duration_s, 2), "timings": timings,
+            "erase_token": local_text_logs.turn_token()}
 
 
 class _SynthesizeBody(BaseModel):
