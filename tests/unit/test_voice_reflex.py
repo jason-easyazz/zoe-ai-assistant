@@ -211,10 +211,6 @@ def test_the_explicit_inputs_fail_silent():
         assert R.decide(ok_ctx(talking=v), s=ON).skip == "talking"
     for v in (None, True, 0):
         assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
-    allow = replace(ON, for_guests=True)
-    assert R.decide(ok_ctx(guest=True), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_accept=None), s=allow).skip == "low_confidence"  # still needs an accept
     # the model's own accept: exactly True, nothing else (a raw score or a truthy stand-in is not a decision)
     for v in (None, False, 1, 0.9, "yes", "True", [True]):
         assert R.decide(ok_ctx(speaker_accept=v), s=ON).skip == "low_confidence"
@@ -233,6 +229,18 @@ def test_the_explicit_inputs_fail_silent():
     # the safe defaults: a bare Ctx (the daemon stated nothing) is silent
     bare = R.Ctx(rule="deep", speech_ms=1200, bank_voice="af_sky", current_voice="af_sky", takes=TAKES)
     assert R.decide(bare, s=ON).skip == "not_committed"
+
+
+def test_an_unknown_or_guest_speaker_is_always_silent_whatever_the_settings():
+    """The contract: an unknown speaker (no claim) or a guest is NEVER heard, even with an accepted verdict from a known
+    model, and no setting or environment value opens that guard (the old REFLEX_FOR_GUESTS escape is gone)."""
+    accepted = dict(speaker_accept=True, speaker_model=R.KNOWN_SPEAKER_MODELS[0], verdict_ms=90)
+    env_settings = R.settings({"REFLEX_ENABLED": "1", "REFLEX_FOR_GUESTS": "1"})
+    for s in (ON, env_settings):
+        for g in (None, True):
+            assert R.decide(ok_ctx(guest=g, **accepted), s=s) == R.Decision("none", None, "guest")
+        assert R.decide(ok_ctx(guest=False, **accepted), s=s).kind == "heard"   # positive control: a member is heard
+    assert not hasattr(env_settings, "for_guests") and "for_guests" not in R.Settings.__dataclass_fields__
 
 
 def test_more_silence_rules():
@@ -363,7 +371,7 @@ def test_defaults_are_the_s1_constants():
     s = R.settings({})
     assert (s.enabled, s.min_speech_ms, s.max_ms, s.seam_ms, s.min_gap_s, s.idle_greet_h, s.night_start, s.night_end,
             s.gain_db) == (False, 480, 600, 120, 30, 4, 22, 7, -3)
-    assert (s.for_guests, s.score_deadline_ms) == (False, 250)
+    assert s.score_deadline_ms == 250 and not hasattr(s, "for_guests")   # removed: no setting opens the guest guard
     assert not hasattr(s, "min_speaker_conf")               # removed: the reflex no longer owns a score threshold
     assert not hasattr(s, "require_speaker")                # removed: a missing score is always silence
 
@@ -375,8 +383,8 @@ def test_env_overrides_are_clamped():
     assert s.enabled is True and s.min_gap_s == 10 and s.max_ms == 1000 and s.seam_ms == 40
     assert s.min_speech_ms == 480 and s.gain_db == 0 and s.idle_greet_h == 4 and (s.night_start, s.night_end) == (21, 6)
     assert s.chain_every == 2
-    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_SCORE_DEADLINE_MS": "99999"})
-    assert t.for_guests and t.score_deadline_ms == 1000
+    t = R.settings({"REFLEX_SCORE_DEADLINE_MS": "99999"})
+    assert t.score_deadline_ms == 1000
     assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "-1"}).score_deadline_ms == 50
     assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "nan"}).score_deadline_ms == 250
     assert R.settings({"REFLEX_ENABLED": "maybe"}).enabled is False
@@ -426,13 +434,14 @@ def make_bank(root: Path, voice: str = "af_sky", n: int = 3, ms: int = 400, rate
               manifest_voice: str | None = None):
     files = {f"mm_{i + 1:02d}": _wav(ms + 10 * i, rate=rate, freq=150.0 + 10 * i) for i in range(n)}
     pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
-    sha8 = R.bank_sha8(voice, 60, pairs)
+    man = {"voice": manifest_voice or voice, "style_len": 60, "render_date": "2026-11-14",
+           "takes": [{"id": k, "sha256": s, "dur_ms": 0, "rms_db": -20.0} for k, s in pairs]}
+    sha8 = R.manifest_sha8(man)
+    man["bank"] = sha8
     d = root / voice / (dirname or sha8)
     d.mkdir(parents=True)
     for k, v in files.items():
         (d / f"{k}.wav").write_bytes(v)
-    man = {"voice": manifest_voice or voice, "bank": sha8, "style_len": 60, "render_date": "2026-11-14",
-           "takes": [{"id": k, "sha256": s, "dur_ms": 0, "rms_db": -20.0} for k, s in pairs]}
     (d / "manifest.json").write_text(json.dumps(man))
     return d, sha8
 
@@ -444,6 +453,37 @@ def test_loader_accepts_a_good_bank(tmp_path):
     assert res.bank.takes["mm_01"].dur_ms == 400 and len(res.bank.takes["mm_01"].pcm) == 400 * 24 * 2
     ctx = ok_ctx(bank_voice=res.bank.voice, takes=res.bank.take_ids)
     assert R.decide(ctx, s=ON).kind == "heard"
+
+
+@pytest.mark.parametrize("edit", ["dur_ms", "rms_db", "render_date", "new_key", "drop_bank", "reorder_takes"])
+def test_loader_refuses_an_edited_manifest(tmp_path, edit):
+    """Every manifest field is covered by the bank id: editing ANY of them (a take's duration or level, the render date, an
+    added key, the bank key itself, the take order) without re-rendering makes the loader refuse the bank."""
+    d, _ = make_bank(tmp_path)
+    assert R.load_bank("af_sky", str(tmp_path), ON).reason == "ok"           # positive control: the untouched bank loads
+    man = json.loads((d / "manifest.json").read_text())
+    if edit == "dur_ms":
+        man["takes"][0]["dur_ms"] = 999
+    elif edit == "rms_db":
+        man["takes"][1]["rms_db"] = -3.0
+    elif edit == "render_date":
+        man["render_date"] = "2099-01-01"
+    elif edit == "new_key":
+        man["gain_db"] = 6.0
+    elif edit == "drop_bank":
+        man.pop("bank")
+    else:
+        man["takes"] = man["takes"][::-1]
+    (d / "manifest.json").write_text(json.dumps(man))
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "sha_mismatch")
+
+
+def test_manifest_sha8_ignores_only_its_own_key_and_refuses_nan():
+    m = {"voice": "af_sky", "takes": [{"id": "mm_01", "sha256": "0" * 64}], "render_date": "2026-11-14"}
+    assert R.manifest_sha8(m) == R.manifest_sha8({**m, "bank": "deadbeef"})
+    assert R.manifest_sha8(m) != R.manifest_sha8({**m, "render_date": "2026-11-15"})
+    with pytest.raises(ValueError):
+        R.manifest_sha8({**m, "gain_db": float("nan")})
 
 
 def test_loader_refuses_a_tampered_file(tmp_path):
@@ -458,13 +498,14 @@ def _bank_with(tmp_path: Path, bad: bytes) -> Path:
     """A three-take bank whose second file is ``bad``, with a manifest whose hash MATCHES it (so only the reader refuses)."""
     files = {"mm_01": _wav(400), "mm_02": bad, "mm_03": _wav(420, freq=170.0)}
     pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
-    sha8 = R.bank_sha8("af_sky", 60, pairs)
+    man = {"voice": "af_sky", "style_len": 60, "takes": [{"id": k, "sha256": h} for k, h in pairs]}
+    sha8 = R.manifest_sha8(man)
+    man["bank"] = sha8
     d = tmp_path / "af_sky" / sha8
     d.mkdir(parents=True)
     for k, v in files.items():
         (d / f"{k}.wav").write_bytes(v)
-    (d / "manifest.json").write_text(json.dumps({"voice": "af_sky", "bank": sha8, "style_len": 60,
-                                                 "takes": [{"id": k, "sha256": h} for k, h in pairs]}))
+    (d / "manifest.json").write_text(json.dumps(man))
     return d
 
 
@@ -528,6 +569,49 @@ def test_loader_refuses_other_defects(tmp_path):
     assert R.load_bank("../x", str(tmp_path), ON).reason == "voice_mismatch"
     assert set(R.LOAD_RESULTS) >= {"ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format",
                                    "too_long", "too_few"}
+
+
+def test_loader_decodes_the_bytes_it_hashed_not_a_second_read(tmp_path, monkeypatch):
+    """A take swapped on disk AFTER its hash was checked must not reach the bank: the loader decodes the very bytes it
+    hashed. The swap is made from inside the hash call, so it lands between the check and any later read of the path."""
+    d, _ = make_bank(tmp_path)
+    target = d / "mm_02.wav"
+    original = target.read_bytes()
+    swapped = _wav(410, freq=900.0, amp=20000)                      # a valid take of the same format, different PCM
+    real = hashlib
+
+    class _SwapAfterHash:
+        @staticmethod
+        def sha256(data=b""):
+            h = real.sha256(data)
+            if bytes(data) == original:
+                target.write_bytes(swapped)                         # the attacker's swap, right after the check
+            return h
+
+    monkeypatch.setattr(R, "hashlib", _SwapAfterHash)
+    res = R.load_bank("af_sky", str(tmp_path), ON)
+    import io
+
+    with wave.open(io.BytesIO(original), "rb") as wf:
+        want = wf.readframes(wf.getnframes())
+    assert res.reason == "ok"
+    assert res.bank.takes["mm_02"].pcm == want                     # the verified PCM, never the swapped file's
+
+
+def test_loader_refuses_a_take_that_is_not_a_regular_file(tmp_path):
+    """A take path that is a FIFO (or a symlink) is refused on the open descriptor, without blocking on it."""
+    import os
+
+    d, _ = make_bank(tmp_path)
+    (d / "mm_02.wav").unlink()
+    os.mkfifo(d / "mm_02.wav")
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "missing")
+    d2, _ = make_bank(tmp_path / "s")
+    real = (d2 / "mm_02.wav").read_bytes()
+    (tmp_path / "elsewhere.wav").write_bytes(real)
+    (d2 / "mm_02.wav").unlink()
+    (d2 / "mm_02.wav").symlink_to(tmp_path / "elsewhere.wav")
+    assert R.load_bank("af_sky", str(tmp_path / "s"), ON) == R.LoadResult(None, "missing")
 
 
 def test_loader_negative_control_untampered_copy_loads(tmp_path):

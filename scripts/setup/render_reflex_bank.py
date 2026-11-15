@@ -205,9 +205,8 @@ def render(*, synth: Synth, voice: str, render_date: str, out_root, style_pin: b
         files[g["id"]] = wav
         takes.append({**g, "sha256": hashlib.sha256(wav).hexdigest(), "dur_ms": dur_ms,
                       "rms_db": round(RX.active_rms_db(pcm), 2), "peak_db": round(peak_dbfs(pcm), 2), "peak_capped": capped})
-    sha8 = RX.bank_sha8(voice, reply_style, [(t["id"], t["sha256"]) for t in takes])
     manifest = {
-        "schema": 1, "voice": voice, "bank": sha8, "style_pin": bool(style_pin), "style_len": reply_style,
+        "schema": 1, "voice": voice, "style_pin": bool(style_pin), "style_len": reply_style,
         "speeds": sorted({float(s) for s in speeds}), "kokoro_version": (versions or {}).get("kokoro"),
         "misaki_version": (versions or {}).get("misaki"), "sidecar_sha": sidecar_sha, "render_date": render_date,
         "gain_db": gain_db, "reference_rms_db": ref_db, "peak_cap_dbfs": PEAK_CAP_DBFS, "fade_ms": FADE_MS,
@@ -216,6 +215,10 @@ def render(*, synth: Synth, voice: str, render_date: str, out_root, style_pin: b
     }
     if not style_pin:
         manifest["note"] = "the sidecar does not report style_pin: rendered WITHOUT style_len (the sidecar's own style row)"
+    # the bank id covers the WHOLE manifest (every field, and through each take's sha256 every byte of audio): computed
+    # last, over everything but itself, so editing any field afterwards makes the panel loader refuse the bank
+    sha8 = RX.manifest_sha8(manifest)
+    manifest["bank"] = sha8
 
     vdir = Path(os.path.expanduser(str(out_root))) / voice
     vdir.mkdir(parents=True, exist_ok=True)

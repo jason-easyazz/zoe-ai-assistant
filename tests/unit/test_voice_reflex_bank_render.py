@@ -146,6 +146,17 @@ def test_the_same_inputs_give_the_same_bank(tmp_path):
     assert m3["bank"] != m1["bank"]
 
 
+def test_the_bank_id_covers_every_manifest_field(tmp_path):
+    """The renderer's bank id is the loader's manifest_sha8 of the WHOLE written manifest, so a later edit to any field
+    (here a take's dur_ms, which the reviewer named) leaves a directory the panel refuses."""
+    _, final, man = _render(tmp_path)
+    on_disk = json.loads((final / "manifest.json").read_text())
+    assert on_disk["bank"] == final.name == RX.manifest_sha8(on_disk)
+    on_disk["takes"][0]["dur_ms"] += 1
+    (final / "manifest.json").write_text(json.dumps(on_disk, sort_keys=True, indent=1))
+    assert RX.load_bank("af_sky", str(tmp_path / "a"), RX.Settings(enabled=True)).reason == "sha_mismatch"
+
+
 def test_keep_renders_only_the_chosen_takes_with_identical_audio(tmp_path):
     _, f1, m1 = _render(tmp_path, "a")
     _, f2, m2 = _render(tmp_path, "b", keep=["mm_02", "mm_05", "mm_09"])

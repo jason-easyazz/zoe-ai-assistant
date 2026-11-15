@@ -69,13 +69,14 @@ def make_bank(root: Path, voice: str = "af_sky", n: int = 4):
         files[tid] = raw
         pairs.append((tid, sha))
         takes.append({"id": tid, "sha256": sha, "dur_ms": TAKE_MS + i})
-    sha8 = REFLEX.bank_sha8(voice, None, pairs)
+    man = {"voice": voice, "style_len": None, "takes": takes, "render_date": "2026-11-15"}
+    sha8 = REFLEX.manifest_sha8(man)
+    man["bank"] = sha8
     d = root / voice / sha8
     d.mkdir(parents=True)
     for tid, raw in files.items():
         (d / f"{tid}.wav").write_bytes(raw)
-    (d / "manifest.json").write_text(json.dumps({"voice": voice, "bank": sha8, "style_len": None, "takes": takes,
-                                                 "render_date": "2026-11-15"}))
+    (d / "manifest.json").write_text(json.dumps(man))
     return REFLEX.load_bank(voice, str(root), REFLEX.Settings(enabled=True)).bank
 
 
@@ -86,6 +87,7 @@ def _fresh(daemon, monkeypatch, tmp_path):
     for k in ("REFLEX_ENABLED", "REFLEX_VOICE", "REFLEX_SCORE_DEADLINE_MS", "ZOE_SPEAKER_RESNET34_TIER"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(daemon, "REFLEX_MODE", "off")
+    monkeypatch.setattr(daemon, "_REFLEX_ON_ALLOWED", False)   # production: on is BLOCKED (no at-close safety gate)
     monkeypatch.setattr(daemon, "_REFLEX_BANK", None)
     monkeypatch.setattr(daemon, "_REFLEX_STATE", {})
     monkeypatch.setattr(daemon, "_REFLEX_CUR", None)
@@ -137,9 +139,12 @@ def _talk(daemon, *, chunks=0, first=99.9, last=100.3):
 
 
 def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True, claim=0.40, claim_s=0.09,
-          before="join", wire=None, hour=12, wake=True):
-    """One streamed wake turn. Returns (ok, FIRST_SOUND line, reply writes, reflex players, reply-start clock, registered)."""
+          before="join", wire=None, hour=12, wake=True, on_allowed=None):
+    """One streamed wake turn. Returns (ok, FIRST_SOUND line, reply writes, reflex players, reply-start clock, registered).
+    ``mode="on"`` exercises the GATED player: it sets ``_REFLEX_ON_ALLOWED`` on this test module's daemon copy (production is
+    False, pinned below) unless ``on_allowed`` says otherwise."""
     monkeypatch.setattr(daemon, "REFLEX_MODE", mode)
+    monkeypatch.setattr(daemon, "_REFLEX_ON_ALLOWED", (mode == "on") if on_allowed is None else bool(on_allowed))
     monkeypatch.setattr(daemon, "_REFLEX_BANK", bank)
     monkeypatch.setenv("REFLEX_VOICE", "af_sky")
     clock = FS._Clock(100.0)
@@ -211,6 +216,41 @@ def test_off_is_the_default_and_changes_nothing(daemon, monkeypatch, caplog, ban
     assert daemon._REFLEX_CUR is None and FS.FIRST_SOUND_RE.match(line), line
 
 
+# ── on is BLOCKED: no at-close crisis / medical / refusal gate exists ───────────────────────────────────────────────────
+
+def test_on_is_blocked_in_the_source():
+    """The contract pin: the reflex must not be able to play before a crisis / medical / refusal reply, and nothing at the
+    close can know. ``_REFLEX_ON_ALLOWED`` is False in the shipped source; changing it is a reviewed code change."""
+    src = DAEMON.read_text(encoding="utf-8")
+    assert src.count("\n_REFLEX_ON_ALLOWED = False\n") == 1 and "_REFLEX_ON_ALLOWED = True" not in src
+    assert src.count("self._play(d)") == 1                         # ONE call site of the player, and it is gated
+    guard = next(x for x in src.splitlines() if x.strip().startswith("if d.kind == \"heard\" and self.mode == \"on\""))
+    assert "and _REFLEX_ON_ALLOWED" in guard.split("#")[0], guard     # in the CODE of the condition, not its comment
+
+
+def test_reflex_mode_on_never_plays_and_logs_shadow(daemon, monkeypatch, caplog, bank):
+    """REFLEX_MODE=on with the production constant: the turn decides and logs as shadow, and NO player is ever started."""
+    ok, line, writes, players, first, registered, dec = _turn(daemon, monkeypatch, caplog, mode="on", bank=bank,
+                                                              on_allowed=False)
+    assert ok and players == [] and len(writes) == 3
+    assert len(dec) == 1 and "mode=shadow" in dec[0] and "kind=heard" in dec[0], dec   # would have played: counted, silent
+    assert _f(line, "reflex") == "none" and _f(line, "reflex_at_ms") == "-1"
+    # positive control: the very same turn with the gate constant True plays one take (so the block is what stopped it)
+    _, _, _, players2, _, _, dec2 = _turn(daemon, monkeypatch, caplog, mode="on", bank=bank, on_allowed=True)
+    assert len(players2) == 1 and "mode=on" in dec2[0]
+
+
+def test_the_blocked_on_mode_says_so_at_start(daemon, monkeypatch, caplog):
+    monkeypatch.setattr(daemon, "REFLEX_MODE", "on")
+    monkeypatch.setattr(daemon, "PANEL_PLATFORM", "pi", raising=False)
+    monkeypatch.setattr(REFLEX, "load_bank", lambda *a, **k: REFLEX.LoadResult(None, "missing"))
+    with caplog.at_level(logging.INFO, logger=daemon.log.name):
+        daemon._reflex_init()
+    assert any("REFLEX_MODE=on is BLOCKED" in r.getMessage() for r in caplog.records)
+    assert daemon._reflex_effective_mode("on") == "shadow" and daemon._reflex_effective_mode("shadow") == "shadow"
+    assert daemon._reflex_effective_mode("off") == "off" and daemon._reflex_effective_mode("loud") == "off"
+
+
 def test_an_unknown_mode_value_is_off(daemon):
     src = DAEMON.read_text(encoding="utf-8")
     assert 'if REFLEX_MODE not in ("off", "shadow", "on"):' in src and 'REFLEX_MODE = "off"' in src
@@ -231,7 +271,7 @@ def test_shadow_logs_the_real_decision_and_plays_nothing(daemon, monkeypatch, ca
 
 @pytest.mark.parametrize("kw,skip", [
     (dict(talk=False), "talking"),                 # nobody listened after the close: unknown, silent
-    (dict(claim=0.30), "guest"),                   # scored under the far01 bar
+    (dict(claim=0.30), "low_confidence"),          # a member's claim scored under the far01 bar (not hidden as guest)
     (dict(hour=23), "night"),
     (dict(claim_s=0.40), "late"),                  # the decision ready 500 ms after the close (deadline 250)
 ])
@@ -333,6 +373,7 @@ def _controller(daemon, monkeypatch, bank, *, mode="on"):
                               prev_q=False, hour=12, media=False, media_age_ms=10, frames=[SH.QUIET] * 40, skip=20)
     monkeypatch.setattr(daemon, "_fs_now", lambda: 100.1)
     monkeypatch.setattr(daemon, "REFLEX_MODE", mode)
+    monkeypatch.setattr(daemon, "_REFLEX_ON_ALLOWED", mode == "on")      # the gated player's mechanics (production: False)
     monkeypatch.setenv("REFLEX_VOICE", "af_sky")
     fs = daemon._FirstSound(speculative=False, win="wake")
     fs.speaker(SH._claim(daemon, 0.4), 100.05)
