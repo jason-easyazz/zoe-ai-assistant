@@ -541,7 +541,22 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
     return out
 
 
-async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int:
+async def resolve_legacy_ids(user_id: str, texts: Any) -> tuple:
+    """The saved-turn ids a LEGACY target's words resolve to (``exact_words.legacy_transcript_ids``: the transcript turns holding
+    them, as said or as redacted; over-inclusive by design). Resolved FIRST and handed back to the caller, so everything bound to
+    those turns - facts written by the upgraded writers, observations, entries - goes too, not only what carries no id. RAISES on a
+    store failure (the caller must not confirm)."""
+    import exact_words
+
+    out: list = []
+    for w in dict.fromkeys(t for t in (texts or ()) if t and str(t).strip()):
+        out += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in out]
+    if out:
+        logger.info("TURN_FORGET code=legacy_resolved ids=%d", len(out))
+    return tuple(out)
+
+
+async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, resolved: bool = False) -> int:
     """Erase what a forgotten turn's WORDS left outside the memory rows - the saved transcript turn (flagged ``off_record``), the
     night mind's observations, the exact-words entries - and return how much. THE one dispatcher every turn forget uses:
 
@@ -560,7 +575,9 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
     import night_mind
 
     ids = [str(m) for m in dict.fromkeys(mids or ()) if m]
-    resolve = not ids                         # no ids: the words name the saved turns too (the transcript lookup)
+    # no ids, or ids the caller RESOLVED from a legacy target's words (``resolve_legacy_ids``): the transcript is flagged from the
+    # words' own read (``forget_transcript``), exactly the rows those ids came from
+    resolve = not ids or resolved
     words = [w for w in dict.fromkeys(texts or ()) if w and w.strip()]
     if not ids and not words:
         return 0
@@ -578,6 +595,12 @@ async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = ()) -> int
             failure = failure or exc
             logger.warning("TURN_FORGET code=eraser_failed step=%s (%s)", getattr(coro_fn, "__name__", "?"), type(exc).__name__)
 
+    if ids and not resolve:
+        try:   # every committed copy of those turns (the durable link: same session + words): a forget by ANY id takes them all
+            ids = await exact_words.turn_copies(user_id, ids)
+        except Exception as exc:  # noqa: BLE001
+            failure = failure or exc
+            logger.warning("TURN_FORGET code=eraser_failed step=turn_copies (%s)", type(exc).__name__)
     if resolve:
         for w in words:
             await step(exact_words.forget_transcript, user_id, w)                  # the transcript flag, from the one read
@@ -612,5 +635,5 @@ def reset() -> None:  # tests
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
     "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset", "provenance", "partition", "erase_turn_words", "classify",
-    "split", "target_of",
+    "split", "target_of", "resolve_legacy_ids",
 ]

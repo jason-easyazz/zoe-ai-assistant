@@ -4085,7 +4085,14 @@ async def _execute_forget_last(user_id: str) -> str:
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
-        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts, mids=turn.mids)
+        # a turn noted with no committed id (its insert failed, no recovery yet): a LEGACY target - its words resolve to the saved
+        # turns holding them FIRST, so every row bound to those turns goes too
+        resolved = not turn.mids
+        import exact_words as _xw_copies
+
+        mids = (tuple(await _xw_copies.turn_copies(user_id, turn.mids)) if turn.mids   # every committed copy of the turn
+                else await turn_forget.resolve_legacy_ids(user_id, (text,)))
+        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts, mids=mids)
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
@@ -4131,7 +4138,7 @@ async def _execute_forget_last(user_id: str) -> str:
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
     try:    # BY the turn's saved-turn ids (its words are never compared); a turn noted with none, by its words, legacy rows only
-        await turn_forget.erase_turn_words(user_id, turn.mids, (text,))   # (the turn keeps its ids in the notes: a retry reaches all)
+        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved)   # (the turn keeps its ids in the notes: a retry reaches all)
     except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         failed += 1

@@ -677,14 +677,29 @@ async def _set_transcript_metadata(row_id: str, metadata: str) -> None:
 
 
 async def _transcript_rows_by_id(user_id: str, mids: list) -> list[tuple]:
-    """``(id, metadata)`` of the owner's saved USER turns with these ids. Postgres only; tests replace this seam."""
+    """``(id, metadata)`` of the owner's saved USER turns with these ids AND every other committed copy of each (the same session,
+    role and words: the voice lane can commit one spoken turn twice - the arrival save, and the reply's save when the arrival
+    outcome was not confirmed in time). The copies are the DURABLE link between one turn's rows (the in-process ``Turn.mids`` is
+    lost on a restart), so a forget by any id of a turn reaches all of them. Postgres only; tests replace this seam."""
     from db_pool import get_db_ctx  # type: ignore[import]
     from user_filters import message_owner_expr
     marks = ", ".join("?" for _ in mids)
     sql = ("SELECT cm.id, cm.metadata FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
-           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND cm.id IN (" + marks + ")")
+           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND (cm.id IN (" + marks + ") OR EXISTS ("
+           "SELECT 1 FROM chat_messages t WHERE t.id IN (" + marks + ") AND t.role = 'user' AND t.session_id = cm.session_id "
+           "AND t.content = cm.content))")
     async with get_db_ctx() as db:
-        return [tuple(r) for r in await (await db.execute(sql, (user_id, *mids))).fetchall()]
+        return [tuple(r) for r in await (await db.execute(sql, (user_id, *mids, *mids))).fetchall()]
+
+
+async def turn_copies(user_id: str, mids: Iterable[str]) -> list[str]:
+    """``mids`` plus every committed transcript copy of those turns (``_transcript_rows_by_id``): what a forget by id erases, so an
+    entry or observation stamped with ANOTHER copy's id (the nightly catch-up indexing the second row) goes too. RAISES on a store
+    failure. Without the SQL index: ``mids`` as given."""
+    want = list(dict.fromkeys(str(m) for m in (mids or ()) if m))
+    if not (user_id or "").strip() or not want or not isinstance(get_backend(), SqlBackend):
+        return want
+    return list(dict.fromkeys([*want, *(str(r[0]) for r in await _transcript_rows_by_id(user_id, want))]))
 
 
 def _off_record_meta(metadata: Any) -> str:
