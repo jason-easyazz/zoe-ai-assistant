@@ -975,3 +975,78 @@ def test_a_spoken_line_queued_across_the_delete_is_never_claimed_but_the_forget_
     got, expired = asyncio.run(go())
     assert [g["text"] for g in got if g["text"]] == ["a line for B"] and expired == 1
     assert [g["command"]["kind"] for g in got if g.get("command")] == ["voice_profile_forget"], "the delete's own command still reaches the panel"
+
+
+# ── a duplicate fire for the same row cannot clear the original's in-flight mark ─────────────────────────────────────────────
+
+def test_a_duplicate_fire_that_loses_the_claim_leaves_the_original_delivery_live(env, store, monkeypatch, push_lane):
+    """The original delivery holds its claim and stalls; a duplicate run for the same row (a catch-up job, the missed-job listener)
+    loses the claim and returns. The original is still live: the delete waits for it, and nothing is sent after the erase. With a plain
+    set, the duplicate's exit dropped the row id and ``claim_is_dead`` declared the live delivery dead (the reviewed code)."""
+    from proactive import engine
+    from proactive.triggers import reminders
+
+    svc, _col = env
+    monkeypatch.setattr(reminders, "_fires_here", lambda: True)
+    real_pending, gate, events = engine.create_pending, {}, []
+
+    async def held_pending(**kw):
+        gate["held"].set()
+        await gate["release"].wait()
+        return await real_pending(**kw)
+    monkeypatch.setattr(engine, "create_pending", held_pending)
+    monkeypatch.setattr("proactive.session_utils._get_compat_db", lambda: _ctx(store))
+
+    async def go():
+        gate["held"], gate["release"] = asyncio.Event(), asyncio.Event()
+        fire = asyncio.ensure_future(reminders._fire_reminder("ps-" + A, A, "take the bins out"))
+        await asyncio.wait_for(gate["held"].wait(), 10)
+        await asyncio.wait_for(reminders._fire_reminder("ps-" + A, A, "take the bins out"), 10)   # the duplicate: no claim, returns
+        assert not reminders.claim_is_dead("ps-" + A), "the original still holds the claim"
+
+        async def delete():
+            await svc.delete_user(A, actor="test", reason="synthetic member delete")
+            events.append("delete_done")
+        d = asyncio.ensure_future(delete())
+        await asyncio.sleep(0.4)
+        assert not d.done(), "the delete does not report success while the original delivery runs"
+        gate["release"].set()
+        await asyncio.wait_for(fire, 10)
+        await asyncio.wait_for(d, 10)
+
+    asyncio.run(go())
+    assert events == ["delete_done"] and push_lane.sent == [], "nothing reached the deleted member"
+    assert not reminders._IN_FLIGHT, "every run lowered its own count"
+
+
+# ── a voice session that cannot be closed fails the delete ───────────────────────────────────────────────────────────────────
+
+def test_a_voice_session_that_cannot_be_closed_fails_the_delete_and_a_retry_completes_it(env, store, monkeypatch):
+    """``revoke_member`` never raises, so a failed close used to read as done while the member's verified voice session still opened
+    private reads. Now the delete fails (after still queueing the panels' voice forget), and the retry closes it."""
+    import voice_session
+
+    svc, _col = env
+
+    async def panel():
+        await store.execute("INSERT INTO device_tokens VALUES ('t1', 'panel-1', 0)")
+        await store.commit()
+    asyncio.run(panel())
+    voice_session.reset()
+    voice_session._open_or_renew("panel-1", A, 0.0, "synthetic")
+    real_close = voice_session.close_member
+
+    def broken(_member, _reason):
+        raise RuntimeError("session store broken")
+    monkeypatch.setattr(voice_session, "close_member", broken)
+    try:
+        with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
+            _delete(svc)
+        assert voice_session.member_panels(A) == ["panel-1"], "the session really is still open"
+        assert _q(store, "SELECT panel_id FROM voice_announcements WHERE trigger_type = 'voice_profile_forget'") == [("panel-1",)], \
+            "every reachable step still ran: the panel was told to drop the voice"
+        monkeypatch.setattr(voice_session, "close_member", real_close)
+        _delete(svc)                                   # the retry
+        assert voice_session.member_panels(A) == []
+    finally:
+        voice_session.reset()

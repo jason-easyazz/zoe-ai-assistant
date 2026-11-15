@@ -322,22 +322,46 @@ async def _after_commit(user_id: str) -> None:
     reads the store). Face copies on a panel wait for its next sync; the server refuses a stale face corroboration (speaker_adaptation)."""
     import voice_clips
 
-    voice_clips.erase_member(user_id)
-    await _push_forget_strict(user_id)
+    failure = None
+    try:
+        voice_clips.erase_member(user_id)
+    except Exception as exc:  # noqa: BLE001 - the sessions and the panels below are still reached, then this is raised
+        failure = exc
+    try:
+        await _push_forget_strict(user_id)
+    except Exception as exc:  # noqa: BLE001
+        failure = failure or exc
+    if failure is not None:
+        raise failure
 
 
 async def _push_forget_strict(user_id: str) -> int:
-    """Queue ``voice_profile_forget`` for every panel holding a device token, FAIL CLOSED: any failure (the panel list, one queue
-    write) RAISES, so ``delete_user`` does not report success while a panel keeps the voice (the caller retries the whole delete; it is
-    idempotent, and the retry re-queues). No device panel at all is not a failure: there is nothing to purge. Also closes the member's
-    open voice sessions (``voice_session.revoke_member``, never raises). ``voice_enrollment.push_forget_to_panels`` stays best effort
-    for its own callers (a profile delete that already happened)."""
+    """Close the member's open voice sessions and queue ``voice_profile_forget`` for every panel holding a device token, both FAIL
+    CLOSED: ``delete_user`` does not report success while the member's verified voice session still opens private reads, or a panel keeps
+    the voice. Both steps are ATTEMPTED whatever the other did; then the first failure RAISES (the caller retries the whole delete; it is
+    idempotent, and the retry re-queues). ``voice_session.revoke_member`` never raises, so its result is checked: a session of the member
+    still open afterwards is the failure. No device panel at all is not a failure: there is nothing to purge.
+    ``voice_enrollment.push_forget_to_panels`` stays best effort for its own callers (a profile delete that already happened)."""
+    failure = None
     try:
         import voice_session
 
         await voice_session.revoke_member(user_id, "member_deleted")
-    except Exception:  # noqa: BLE001 - access is removed in memory first inside revoke_member; the purge below must still run
-        pass
+        if voice_session.member_panels(user_id):
+            raise RuntimeError("member_owned_forget: a voice session of the member is still open")
+    except Exception as exc:  # noqa: BLE001 - attempted first; the panel purge below still runs, then this is raised
+        failure = exc
+    queued = 0
+    try:
+        queued = await _queue_panel_forget(user_id)
+    except Exception as exc:  # noqa: BLE001
+        failure = failure or exc
+    if failure is not None:
+        raise failure
+    return queued
+
+
+async def _queue_panel_forget(user_id: str) -> int:
     import voice_announce
     import voice_enrollment
 
@@ -390,6 +414,10 @@ async def forget_user(user_id: str) -> int:
         if _no_pool(exc):
             return 0
         logger.error("member_owned_forget: member-owned stores NOT erased (%s)", type(exc).__name__)
+        try:   # the stores failed, but the member's ACCESS is still removed now (voice sessions, the panels' voice copies); the clip
+            await _push_forget_strict(uid)   # files wait for the retry, which the raise below makes the caller run
+        except Exception:  # noqa: BLE001 - the first failure (the stores) is the one reported
+            pass
         raise
     await _after_commit(uid)
     if r.removed:

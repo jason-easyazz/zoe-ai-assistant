@@ -222,8 +222,11 @@ OTHER: tuple[Store, ...] = (
     Store("flue_session_log", "file", WORDS, GAP, "No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
-    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: legacy clips only. A member delete removes every clip whose verdict sidecar names the member (voice_clips.erase_member, via member_owned_forget); a clip saved before ZOE_VOICE_CLIP_VERDICT names nobody and stays. ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
-          "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
+    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: a clip without a verdict sidecar names nobody. ~/.zoe-voice-samples: the owner's regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). A clip is located "
+          "only by its verdict sidecar (written while ZOE_VOICE_CLIP_VERDICT is on): a member delete removes every clip whose sidecar names the member "
+          "(voice_clips.erase_member, via member_owned_forget), a guest forget every clip labelled as that guest (voice_clips.erase_guests), and with "
+          "ZOE_VOICE_CLIP_RETENTION on, guest / unknown clips older than 30 days go (voice_clips.sweep). What stays: a clip with no sidecar (saved "
+          "before or without ZOE_VOICE_CLIP_VERDICT): no forget can find it.",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
     Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
           "panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own.",
