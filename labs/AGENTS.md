@@ -550,3 +550,6 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
+- [speed-loop/AGENTS.md](speed-loop/AGENTS.md) — unwired single-knob response-speed
+  search with a numeric ledger, declared windows, safe surface loader, fake backend
+  and refusing replay stub. Local net: `test_speed_loop.py` (no ci_safe marker).
