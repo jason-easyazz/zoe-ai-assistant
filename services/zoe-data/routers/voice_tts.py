@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3384,15 +3385,37 @@ async def _handle_introduce_intent(
 
 
 class _ArrivalRow:
-    """The user row ``voice_command`` is writing the moment a turn ARRIVES. ``saved`` is True only once the insert is CONFIRMED
-    (``_save_chat_message`` returns False on a swallowed failure); ``settled`` is set when the attempt is over either way, so
-    the reply's later save can wait for the outcome and write the row itself when the first attempt failed."""
+    """The user row of ONE spoken turn. ``voice_command`` writes it the moment the turn ARRIVES; ``saved`` is True only once an
+    insert is CONFIRMED (``_save_chat_message`` returns False on a swallowed failure); ``settled`` is set when that attempt is over
+    either way, so the reply's later save can wait for the outcome and write the row itself when the first attempt failed.
 
-    __slots__ = ("session_id", "text", "saved", "settled")
+    ONE ROW BY CONSTRUCTION: the row's id (``mid``) is minted HERE, once per turn, and every writer of the turn's user row goes
+    through ``write`` under that id (``chat_messages.id`` is the primary key and the insert is ``ON CONFLICT DO NOTHING``), so an
+    arrival insert that commits after the reply's recovery save gave up on it is a no-op instead of a second row. The row's
+    content (session, words, user, speaker verdict) is fixed here too, so it is the same whichever insert wins. The turn is
+    COUNTED (``count_turn``: provenance numbering + the "forget that" turn note) by whichever writer reaches the save first."""
 
-    def __init__(self, session_id: str, text: str) -> None:
+    __slots__ = ("session_id", "text", "saved", "settled", "mid", "user_id", "speaker_verified", "counted")
+
+    def __init__(self, session_id: str, text: str, user_id: Optional[str] = None,
+                 speaker_verified: Optional[bool] = None) -> None:
         self.session_id, self.text, self.saved = session_id, text, False
         self.settled = asyncio.Event()
+        self.mid = uuid.uuid4().hex                   # the turn's ONE user-row id (in-memory mint, no I/O)
+        self.user_id, self.speaker_verified = user_id, speaker_verified
+        self.counted = False
+
+    async def write(self, save, user_id: Optional[str] = None) -> bool:
+        """Insert the turn's user row under its minted id through ``save`` (``routers.chat._save_chat_message``). True when the row
+        is committed (by this insert or, on a conflict, by the other writer's). The FIRST call counts the turn; every later one
+        passes ``count_turn=False``. ``user_id`` is only a fallback for a row made without one."""
+        count, self.counted = not self.counted, True   # claimed before the await: the save counts synchronously at its start
+        ok = bool(await save(
+            self.session_id, "user", self.text, user_id=self.user_id or user_id, count_turn=count, message_id=self.mid,
+            **({"speaker_verified": False} if self.speaker_verified is False else {})))
+        if ok:
+            self.saved = True      # never cleared: a later writer's failed attempt does not un-commit the row
+        return ok
 
 
 #: the arrival row of the turn running in this task. ``_schedule_voice_chat_save`` reads it so the exchange's user row is written
@@ -3464,19 +3487,20 @@ async def _schedule_voice_chat_save(
             # here or every insert dies on the session FK (the silent zero-
             # voice-rows outage behind W0).
             await _ensure_user_and_chat_session(session_id, user_id)
-            write_user = bool(user_text)
-            if arrival is not None:
+            row = arrival
+            if row is not None:
                 # the arrival insert is the user row's first attempt: wait for its OUTCOME (bounded), and only a confirmed
-                # insert makes this one redundant - a swallowed failure must not leave the turn with no user row at all
+                # insert makes this one redundant - a swallowed failure must not leave the turn with no user row at all. The
+                # recovery reuses the turn's minted id, so an arrival insert that lands after this gave up adds no second row.
                 try:
-                    await asyncio.wait_for(arrival.settled.wait(), _ARRIVAL_SETTLE_TIMEOUT_S)
+                    await asyncio.wait_for(row.settled.wait(), _ARRIVAL_SETTLE_TIMEOUT_S)
                 except asyncio.TimeoutError:
                     pass
-                write_user = not arrival.saved
-            if write_user:
-                # count_turn=False: voice_command already numbered this user turn when it arrived
-                await _svc(session_id, "user", user_text, user_id=user_id, count_turn=False,
-                           **({"speaker_verified": False} if speaker_verified is False else {}))
+            elif user_text:
+                # no arrival row for these words: this save is the user row's only writer (it mints the id, and counts the turn)
+                row = _ArrivalRow(session_id, user_text, user_id, speaker_verified)
+            if row is not None and not row.saved:
+                await row.write(_svc, user_id)
             if reply:
                 await _svc(session_id, "assistant", reply, user_id=user_id)
 
@@ -4046,7 +4070,7 @@ async def voice_command(
                 _save_chat_message as _svc_user_turn,
             )
 
-            _arrival = _ArrivalRow(session_id, text)
+            _arrival = _ArrivalRow(session_id, text, effective_user, _speaker_verified)   # mints the turn's ONE user-row id
 
             async def _persist_user_turn() -> None:
                 try:
@@ -4054,10 +4078,8 @@ async def voice_command(
                     # never pass through POST /sessions/, so mint the parent row.
                     await _ensure_sess_user_turn(session_id, effective_user)
                     # `_save_chat_message` swallows a DB failure and returns False: only a CONFIRMED insert marks the row saved,
-                    # so the reply's later save writes the user row itself when this one did not land
-                    _arrival.saved = bool(await _svc_user_turn(
-                        session_id, "user", text, user_id=effective_user,
-                        **({"speaker_verified": False} if _speaker_verified is False else {})))
+                    # so the reply's later save writes the user row itself (under the same id) when this one did not land
+                    await _arrival.write(_svc_user_turn)   # sets _arrival.saved on a confirmed commit
                 finally:
                     _arrival.settled.set()
 

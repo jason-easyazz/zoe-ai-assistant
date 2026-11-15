@@ -657,8 +657,11 @@ async def test_a_voice_save_of_a_rejected_speaker_carries_the_verdict_to_the_row
     await voice_tts._schedule_voice_chat_save("s1", "I told Dana the gate is blue", "ok", USER)
     for t in tasks:
         await t
-    assert calls == [("user", {"count_turn": False, "speaker_verified": False}), ("assistant", {}),
-                     ("user", {"count_turn": False}), ("assistant", {})]
+    mids = [kw.pop("message_id", None) for role, kw in calls if role == "user"]
+    assert len(mids) == 2 and all(isinstance(m, str) and len(m) == 32 for m in mids) and mids[0] != mids[1]
+    # no arrival row for these words: each save is its user row's only writer, so it counts the turn (one-user-row PR)
+    assert calls == [("user", {"count_turn": True, "speaker_verified": False}), ("assistant", {}),
+                     ("user", {"count_turn": True}), ("assistant", {})]
 
 
 # ── the audited delete fails closed ──────────────────────────────────────────
