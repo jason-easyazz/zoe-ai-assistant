@@ -117,6 +117,8 @@ The hook is a flag read and, with the flag on, one bounded `queue.put_nowait`. T
 0.005 ms; flag on p95 0.011 ms** per add, against a target of under 5 ms. This is the time added on the caller; it does not include the
 worker thread's GIL share while it talks to the socket [not measured] and was not measured under a real turn [not run].
 
+With the REAL lab kernel (`labs/zoe-os/shadow_daemon.py`, one process, 200 adds paced 10 ms apart, system python 3.10, box under normal builder load; a one-off scratch script, not committed) [lab, 2026-11-15, before the worker moved to import time]: the hook cost on the caller was **p50 0.06 ms, p95 0.14 ms** (max 7 ms: the very first add started the worker thread; the worker now starts at import while the switch is `shadow`, not re-measured), and the kernel round trip (publish + act, on the worker thread) was **p50 1.6 ms, p95 2.2 ms, max 11 ms**, all 200 `match`. The hop is paid by the worker, never by the turn. A burst of 300 adds in a tight loop overflowed the 64-slot queue (236 `queue_full`, nothing blocked).
+
 A slow kernel is cut off per operation (0.5 s) and per add (1.5 s); a full queue (64) drops and counts; nothing the worker does can raise
 into a turn (`test_the_live_add_is_identical_with_the_shadow_off_dead_or_on`: the rows the live path writes and the outcome it returns are identical
 with the flag off, with the kernel dead, refusing, closing the connection mid-call, or answering garbage).
