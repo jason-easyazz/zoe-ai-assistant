@@ -735,3 +735,60 @@ Still open and unbuilt: whether an older child's lines should stop going to a gu
 lines may be shared beyond their guardians at all (today they cannot be, by anyone). The choice is kept in
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
+
+## 13. Reminders in the kernel: what production can do, and what still does not map
+
+The kernel's reminder model (`labs/zoe-os/zoe_os/reminder_rows.py`, served by the authority daemon `authority.py`) was
+written from production's code (`services/zoe-data/reminder_service.py`, `routers/reminders.py`,
+`proactive/triggers/reminder_scan.py`, `reminder_recurrence.py`), read and never imported. **[code]**
+
+**The row.** `owner` (who it is for), `by` (who set it), `note`, ONE schedule form, `visibility` (personal | family),
+`active`, `done`, `snoozed_until`, `after` (nothing at or before it fires). The forms are production's, with its meaning:
+an instant (`in_minutes`, today's argument, still 1..10080); a day and a time, any horizon; a day only, which fires at
+the household default time (a daemon setting, `--default-time`, production `ZOE_REMINDER_DEFAULT_TIME`), or two minutes
+after the write when set for today after that time had passed (production's same-day fallback); a time only, which is
+DAILY until done (production `build_run_at` with no date); a repeat (production's RRULE subset exactly: DAILY, WEEKLY
+with days, MONTHLY by day of month or one ordinal weekday, YEARLY, INTERVAL 1..52), anchored at its first occurrence.
+When it fires is one pure function, `schedule.reminder_next_fire`; the recurrence maths is production's mirrored, and
+`tests/test_schedule.py` runs the mirror and production's own module on one grid (three zones, both daylight changes,
+month ends, the leap day) with a negative control that shows a wrong rule disagrees. Wall times are read in the
+household zone (a daemon setting, `--tz`, production `ZOE_TIMEZONE`): a time in a spring-forward gap is shifted, never
+skipped; an ambiguous fall-back time fires once, at its first instance.
+
+**Actions**, each read back and each with a real undo: `remind.set`, `remind.snooze` (production default 15 minutes),
+`remind.done` (a repeat is done for this occurrence only, anything else for good), `remind.cancel`, `remind.edit`
+(note, day, time, on/off, visibility; a new day re-anchors a repeat, a re-sent anchor keeps its phase). Refusals are
+decided before anything is written: a past day, a repeat outside the subset, a repeat with no upcoming time.
+
+**Who may**, production's rules (`routers/reminders.py`): a person sees their own and every family reminder; any member
+may edit or cancel a family one; only the owner snoozes or marks it done, and only the owner changes who sees it (a
+member's visibility change is dropped, as production drops it).
+
+**Durable.** Rows are rebuilt from the kernel's own verified receipts (`rows.DurableRows`, the list store's rule): each
+receipt's proof carries its row, and a row exists only while the receipt that created it is live. Kill tests at each
+stage of a write are in `tests/test_authority.py`; in-process restart, undo and forget tests in
+`tests/test_reminder_rows.py`.
+
+**Where the kernel says MORE than production** (production cannot send these yet, and the kernel does not pretend it can):
+an END to a repeat (`until`; production's parser refuses UNTIL); a reminder FOR someone else (`for`): only a guardian, for
+their child, and only when the asking event names the child, so the child's forget reaches it (production has one
+`user_id` and no "set by"); a day and time already past is REFUSED (production stores it and it never fires).
+
+**What does not map, precisely.**
+- Spoken forms ("10am", "tomorrow", "every weekday"): production resolves them before it stores; the kernel takes the
+  stored forms (`YYYY-MM-DD`, `HH:MM` 24-hour, the RRULE). A stored "10:25 PM" must be converted by the caller.
+- `category`, `priority`, `reminder_type`, the notification rows and the broadcast: not modelled (they decide nothing).
+- Quiet hours, delivery, the claim and generation guards of the fire path: the kernel computes WHEN; delivering stays
+  production's.
+- A snooze length: production takes any integer; the kernel takes 1..1440.
+- A time-only reminder in a fall-back hour: production compares wall clocks, the kernel instants (an hour's difference,
+  once a year, at most).
+- An entity or topic forget by the OWNER does not reach another member's receipt of an edit of a shared reminder whose
+  new words no longer hold the entity (the row still goes: its create is gone). A whole-member erase does reach it.
+- An undo of an edit after another member cancelled the row brings the row back (the undo is the editor's last action).
+
+**What the shadow hook can now send instead of `not_expressible`** (`services/zoe-data/os_shadow.py` `kernel_args`, on
+the shadow-widen branch): `recurring` (send the stored RRULE as `repeat` with `date` and `time`), `no_time` (send `date`
+alone: the default time is the kernel's setting), and `range` (send `date` and `time`: no 7-day limit). It must convert a
+12-hour stored time to `HH:MM` first (`reminder_scan._parse_due_time`). The authority daemon must be started with the
+household's `--tz` and `--default-time` for the comparison to mean anything.

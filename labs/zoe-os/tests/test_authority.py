@@ -43,6 +43,13 @@ class Daemon:
         return self.brain.call("act", action="list.add", on_behalf_of=person,
                                args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
 
+    def remind(self, person: str, action: str = "remind.set", **args) -> dict:
+        said = self.voice.publish("utterance", subject=person, payload={"text": "synthetic reminder"})
+        return self.brain.call("act", action=action, on_behalf_of=person, args={**args, "asked": said.seq}, caused_by=[said.seq])
+
+    def notes(self, person: str) -> dict:
+        return {r["note"]: r for r in self.panel.call("reminders", person=person)["reminders"]}
+
     def digests(self) -> list:
         return self.panel.call("list_digest")["digests"]
 
@@ -211,3 +218,69 @@ def test_the_database_lives_where_db_says_and_an_unmoved_old_record_stops_the_st
     p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0]), "--db", str(state[0] / "new.db")],
                        capture_output=True, text=True, timeout=30)
     assert p.returncode != 0 and "was not moved" in p.stderr and not (state[0] / "new.db").exists()
+
+
+# ---- the durable reminder rows: the same guarantees ----------------------------------------------------------------------------
+@pytest.mark.parametrize("die,present,uncertain", [("after_intent", False, 1), ("after_do", False, 1), ("after_commit", True, 0)])
+def test_an_acknowledged_reminder_survives_a_kill_and_an_unacknowledged_one_is_absent_or_uncertain(state, die, present, uncertain):
+    d = start(state, die=die)
+    assert d.remind(A, note="kept", in_minutes=30)["verified"] is True
+    with pytest.raises((ConnectionError, OSError, wire.WireError)):
+        d.remind(A, note="die", time="20:00")
+    assert d.proc.wait(timeout=10) == -9
+    again = start(state)
+    got = again.notes(A)
+    assert "kept" in got and ("die" in got) is present
+    assert again.brain.call("health")["recovered"] == uncertain
+    assert again.remind(B, note="after", repeat="FREQ=DAILY")["verified"] is True and "after" in again.notes(B)
+
+
+@pytest.mark.parametrize("die", ["after_intent", "after_do"])
+def test_a_snooze_killed_before_its_receipt_is_not_half_applied(state, die):
+    d = start(state, die=die)
+    rid = d.remind(A, note="tea", time="20:00")["proof"]["id"]
+    with pytest.raises((ConnectionError, OSError, wire.WireError)):
+        d.remind(A, "remind.snooze", id=rid, minutes=13)
+    d.proc.wait(timeout=10)
+    row = start(state).notes(A)["tea"]
+    assert row["snoozed_until"] is None and row["after"] < row["next_fire"]
+
+
+def test_control_without_the_reminder_rebuild_an_acknowledged_reminder_is_lost_and_the_test_sees_it(state):
+    d = start(state)
+    assert d.remind(A, note="kept", in_minutes=30)["verified"] is True
+    d.kill()
+    assert "kept" not in start(state, control="no_rem_rebuild").notes(A)
+
+
+def test_a_reminder_undo_after_a_restart_reverses_it_and_stays_reversed(state):
+    d = start(state)
+    rid = d.remind(A, note="bins", time="19:00")["proof"]["id"]
+    d.remind(A, "remind.cancel", id=rid)
+    d.kill()
+    again = start(state)
+    assert "bins" not in again.notes(A)
+    assert again.panel.call("undo", person=A, actor=A)["verified"] is True and "bins" in again.notes(A)
+    again.kill()
+    assert "bins" in start(state).notes(A)
+
+
+def test_erase_member_takes_their_reminders_and_another_members_edit_of_one_and_they_stay_gone(state):
+    d = start(state)
+    rid = d.remind(A, note="oat milk run", time="19:00", visibility="family")["proof"]["id"]
+    d.remind(B, "remind.edit", id=rid, note="oat milk run and bread")          # B's receipt now carries A's words
+    d.remind(B, note="rice", time="19:00")
+    out = d.panel.call("erase_member", subject=A)
+    assert out["verified"] is True
+    assert set(d.notes(B)) == {"rice"} and not _on_disk(state[0], b"oat milk")
+    d.kill()
+    assert set(start(state).notes(B)) == {"rice"}
+
+
+def test_an_entity_forget_through_the_old_op_also_reaches_the_reminder_rows(state):
+    d = start(state)
+    d.remind(A, note="gift for Dana", time="19:00")
+    d.remind(A, note="eggs", time="19:00")
+    d.panel.call("forget", subject=A, actor=A, entity="Dana")
+    d.kill()
+    assert set(start(state).notes(A)) == {"eggs"}

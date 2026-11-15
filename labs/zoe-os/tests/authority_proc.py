@@ -2,7 +2,8 @@
 
     python3 authority_proc.py --dir STATE  [OS_LAB_DIE_AT=after_intent|after_do|after_commit]  [OS_LAB_CONTROL=name]
 
-``OS_LAB_DIE_AT`` SIGKILLs the whole kernel at one exact point of a ``list.add`` whose item is ``die``:
+``OS_LAB_DIE_AT`` SIGKILLs the whole kernel at one exact point of a ``list.add`` whose item is ``die``, a reminder write whose note is
+``die``, or a reminder snooze of 13 minutes:
   after_intent  the write-ahead intent is durable; the driver has not run
   after_do      the driver changed its rows; the receipt is not stored
   after_commit  the verified receipt is stored; the reply has not been sent
@@ -18,12 +19,13 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parent.parent)]
 
 import authority  # noqa: E402
+from zoe_os.rows import DurableRows  # noqa: E402
 
 DIE = os.environ.get("OS_LAB_DIE_AT", "")
 
 
 def _die(when: str, args) -> None:
-    if DIE == when and args.get("item") == "die":
+    if DIE == when and (args.get("item") == "die" or args.get("note") == "die" or args.get("minutes") == 13):
         os.kill(os.getpid(), signal.SIGKILL)
 
 
@@ -43,6 +45,8 @@ def _wrap(cls, name, when, before=True):
 
 _wrap(authority.DurableLists, "snapshot", "after_intent")       # the dispatcher snapshots after the intent, before the driver
 _wrap(authority.DurableLists, "added", "after_do")              # the read-back: the rows changed, the receipt not yet stored
+_wrap(DurableRows, "target", "after_intent")                    # the durable reminder rows: the snapshot names its row first
+_wrap(DurableRows, "read_back", "after_do")
 _orig_act = authority.AuthorityServer._op_act
 
 
@@ -56,6 +60,7 @@ authority.AuthorityServer._op_act = _act_then_die
 
 CONTROLS = {
     "no_rebuild": lambda: setattr(authority.DurableLists, "rebuild", lambda self, person=None: 0),
+    "no_rem_rebuild": lambda: setattr(DurableRows, "rebuild", lambda self: 0),
     "no_member_forget": lambda: setattr(authority.AuthorityServer, "_op_erase_member", _erase_without_forget),
 }
 

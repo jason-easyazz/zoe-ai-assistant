@@ -57,6 +57,7 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "erase_member": {"subject": ((str,), True)},
     "erase_item": {"digest": ((str,), True)},
     "list_digest": {},
+    "reminders": {"person": ((str,), True)},
 }
 
 # error codes (closed)

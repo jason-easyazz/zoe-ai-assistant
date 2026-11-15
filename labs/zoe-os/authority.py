@@ -34,16 +34,20 @@ from pathlib import Path
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
-from shadow_daemon import ACTS, ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds  # noqa: E402
-from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists, Reminders  # noqa: E402
-from zoe_os.capability import Person  # noqa: E402
+from shadow_daemon import ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds  # noqa: E402
+from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists  # noqa: E402
+from zoe_os.capability import CHILD, Person  # noqa: E402
 from zoe_os.events import Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
+from zoe_os.reminder_rows import DurableReminders  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os.spine import Refused  # noqa: E402
 
 SCHEMA = 1          # the authority's own record shape (the rebuild rule below); bumped when it changes meaning
 _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0"
+#: the brain's ceiling as the authority serves it: the shadow's acts plus the durable reminder verbs (``remind.set`` already in it)
+AUTHORITY_BRAIN = {**SHADOW_BRAIN, "acts": [*SHADOW_BRAIN["acts"], *(a for a in DurableReminders.actions if a not in SHADOW_BRAIN["acts"])]}
+AUTH_ACTS = tuple(AUTHORITY_BRAIN["acts"])
 
 
 def digest(item: str) -> str:
@@ -136,25 +140,28 @@ class DurableLists(Lists):
 
 
 class DurableKeeper(Keeper):
-    """On a forget the list rows are REBUILT from what the log still holds (a forget by named events carries no scope, and the lab
-    keeper reads that as "everything": the rebuild is right for every scope). Reminders and alarms keep the lab keeper's rule."""
+    """On a forget the list rows and the durable reminder (and alarm) rows are REBUILT from what the log still holds (a forget by
+    named events carries no scope, and the lab keeper reads that as "everything": the rebuild is right for every scope). The lab
+    in-memory stores still in ``others`` keep the lab keeper's rule."""
 
-    def __init__(self, lists: DurableLists, *others) -> None:
+    def __init__(self, lists: DurableLists, *others, durable=()) -> None:
         super().__init__(*others)
-        self.lists = lists
+        self.lists, self.durable = lists, tuple(durable)
 
     def on_event(self, ev, ctx) -> None:
         super().on_event(ev, ctx)
         if ev.kind is Kind.FORGET and ev.payload.get("subject"):
             self.lists.rebuild(ev.payload["subject"])
+            for store in self.durable:
+                store.rebuild()
 
 
 class AuthorityServer(KernelServer):
     """The kernel server plus the authority's ops (``wire.OPS``: ``health``, ``erase_member``, ``erase_item``, ``list_digest``)."""
 
-    def __init__(self, kernel, path: str, lists: DurableLists, others=(), **kw) -> None:
+    def __init__(self, kernel, path: str, lists: DurableLists, others=(), durable=(), **kw) -> None:
         super().__init__(kernel, path, **kw)
-        self.lists, self.others = lists, tuple(others)
+        self.lists, self.others, self.durable = lists, tuple(others), tuple(durable)
         self.last_write_ok: bool | None = None     # None: no write since start
 
     def _op_act(self, conn, a: dict) -> dict:
@@ -183,7 +190,8 @@ class AuthorityServer(KernelServer):
                 db.execute("ROLLBACK")
             self.last_write_ok = False
         return {"alive": True, "schema": SCHEMA, "last_write_ok": self.last_write_ok,
-                "recovered": len(self.kernel.recovered), "rows": sum(len(r) for r in self.lists.rows.values())}
+                "recovered": len(self.kernel.recovered), "rows": sum(len(r) for r in self.lists.rows.values()),
+                **{store.prefix + "_rows": len(store.rows) for store in self.durable}}
 
     def _receipts_for(self, person: str, item_digest: str) -> list[int]:
         """The person's live list receipts for the item (by digest), and the utterances they cite (the words go with them)."""
@@ -208,13 +216,21 @@ class AuthorityServer(KernelServer):
         subject = a["subject"]
         if subject not in self.kernel.grants.people:
             return {"erased": 0, "receipt_seq": None, "verified": True, "known": False}     # never acted for: nothing held
-        count = self.kernel.spine.forget(subject, actor=subject).count
+        count = 0
+        for store in self.durable:     # another member's receipt over a row of theirs (an edit of a shared reminder) carries its words
+            for seq, actor in store.touching(subject):
+                if actor and actor != subject:
+                    count += self.kernel.spine.forget(actor, actor=actor, seqs=[seq]).count
+        count += self.kernel.spine.forget(subject, actor=subject).count
         notice = self.kernel.spine.last_seq                                  # the FORGET event: the erase's durable receipt
         self.kernel.grants.revoke(subject, SHADOW_BRAIN["skill"])
         self.lists.rebuild(subject)
-        for store in self.others:                                            # the lab reminder / alarm stores, in memory
+        for store in self.others:                                            # the lab in-memory alarm store
             (store.at if isinstance(store, Alarms) else store.rows).pop(subject, None)
-        left = len(self.lists.rows.get(subject, [])) + self._live_events(subject)
+        for store in self.durable:
+            store.rebuild()
+        left = len(self.lists.rows.get(subject, [])) + self._live_events(subject) + sum(
+            store.held_for(subject) + len(store.touching(subject)) for store in self.durable)
         return {"erased": count, "receipt_seq": notice, "verified": left == 0, "known": True}
 
     def _op_erase_item(self, conn, a: dict) -> dict:
@@ -235,6 +251,15 @@ class AuthorityServer(KernelServer):
     def _op_list_digest(self, conn, a: dict) -> dict:
         self._person_op(conn, "read the list digest")
         return {"digests": sorted(digest(r["item"]) for rows in self.lists.rows.values() for r in rows)}
+
+    def _op_reminders(self, conn, a: dict) -> dict:
+        """The reminders ``person`` may see (production's list filter), each with its next fire time: a surface reads it for them."""
+        self._person_op(conn, "read reminders")
+        return {"reminders": self.reminders.visible_to(a["person"])}
+
+    @property
+    def reminders(self) -> DurableReminders:
+        return next(s for s in self.durable if isinstance(s, DurableReminders))
 
 
 def revoked(k: Kernel, skill: str) -> set[str]:
@@ -264,25 +289,41 @@ def db_path(state: Path, db: str | None) -> Path:
     return path
 
 
-def build(state: Path, db: str | None = None):
-    people = json.loads((state / "people.json").read_text("utf-8"))["people"]
-    if not people or not all(isinstance(p, str) and p for p in people):
+def roster(raw: list) -> list[Person]:
+    """``people.json`` members: an id, or ``{"id", "role": "adult"|"child", "guardians": [ids]}`` (a child's guardians are what
+    lets an adult set a reminder for them, and sign the child's grant)."""
+    out = []
+    for p in raw:
+        p = {"id": p} if isinstance(p, str) else p
+        if not isinstance(p, dict) or not isinstance(p.get("id"), str) or not p["id"]:
+            raise SystemExit("people.json has a member without an id")
+        out.append(Person(p["id"], p.get("role", "adult"), tuple(p.get("guardians", ()))))
+    if not out:
         raise SystemExit("people.json has no members: the kernel acts for nobody it does not know")
+    return out
+
+
+def build(state: Path, db: str | None = None, *, tz: str = "UTC", default_time: str = "09:00"):
+    members = roster(json.loads((state / "people.json").read_text("utf-8"))["people"])
+    people = [p.id for p in members]
     path = db_path(state, db)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    k = Kernel(str(path), [Person(p) for p in people])
+    k = Kernel(str(path), members)
     k.spine._db.execute("INSERT OR REPLACE INTO meta VALUES ('authority_schema', ?)", (str(SCHEMA).encode(),))
     lists = DurableLists(k.spine).register(k)
     lists.rebuild()
-    reminders, alarms = Reminders(lambda: k.clock()).register(k), Alarms().register(k)
-    for manifest in (*ADAPTERS, SHADOW_BRAIN):
+    reminders = DurableReminders(k.spine, lambda: k.clock(), k.grants, tz=tz, default_time=default_time).register(k)
+    reminders.rebuild()
+    alarms = Alarms().register(k)
+    for manifest in (*ADAPTERS, AUTHORITY_BRAIN):
         k.grants.install(manifest)
-    k.install(DurableKeeper(lists, reminders, alarms))
+    k.install(DurableKeeper(lists, alarms, durable=(reminders,)))
     no = revoked(k, SHADOW_BRAIN["skill"])
-    for person in people:
-        if person not in no:
-            k.grants.grant(person, SHADOW_BRAIN["skill"], acts=list(ACTS))
-    srv = AuthorityServer(k, str(state / "k.sock"), lists, (reminders, alarms))
+    for p in members:
+        if p.id not in no:
+            k.grants.grant(p.id, SHADOW_BRAIN["skill"], acts=list(AUTH_ACTS),
+                           guardian=p.guardians[0] if p.role == CHILD and p.guardians else None)
+    srv = AuthorityServer(k, str(state / "k.sock"), lists, (alarms,), (reminders,))
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
@@ -291,11 +332,13 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", help="state directory (default $ZOE_OS_SHADOW_DIR or ~/.zoe/os-shadow)")
     ap.add_argument("--db", help=f"the kernel's database file (the unit passes {PERMANENT_DB}); default STATE/kernel/zoe-os.db")
+    ap.add_argument("--tz", default="UTC", help="the household time zone (IANA name) reminders are read in; default UTC")
+    ap.add_argument("--default-time", default="09:00", help="HH:MM a reminder with a day and no time fires at; default 09:00")
     opts = ap.parse_args(argv)
     state = state_dir(opts.dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.umask(0o077)
-    k, srv, creds = build(state, opts.db)
+    k, srv, creds = build(state, opts.db, tz=opts.tz, default_time=opts.default_time)
     write_creds(state, srv.path, creds)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
