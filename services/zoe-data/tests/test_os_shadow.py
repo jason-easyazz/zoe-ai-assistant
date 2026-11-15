@@ -19,6 +19,7 @@ import struct
 import tempfile
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,7 @@ class FakeKernel:
         self.forget_mode = "ok"
         self.known = None                      # the members the kernel knows (None = everyone): a stranger's forget is refused
         self.delay = 0.0
+        self.stall: dict = {}                  # (stage, connection number) -> seconds the kernel sits on that stage
         self._seq = 0
         self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.srv.bind(self.path)
@@ -79,11 +81,16 @@ class FakeKernel:
             except OSError:
                 return
             self.connections += 1
-            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+            threading.Thread(target=self._serve, args=(conn, self.connections), daemon=True).start()
 
-    def _serve(self, conn):
+    def _wait(self, stage, n):
+        if self.stall.get((stage, n)):
+            time.sleep(self.stall[(stage, n)])
+
+    def _serve(self, conn, n=0):
         try:
             nonce = secrets.token_bytes(32)
+            self._wait("hello", n)
             _send(conn, {"v": 1, "nonce": nonce.hex()})
             hello = _recv(conn)
             skill = hello.get("skill")
@@ -91,12 +98,14 @@ class FakeKernel:
             if not hmac.compare_digest(want, str(hello.get("proof"))):
                 _send(conn, {"v": 1, "id": None, "ok": False, "error": {"code": "unauthenticated", "reason": "bad credential"}})
                 return
+            self._wait("auth", n)
             _send(conn, {"v": 1, "ok": True})
             while True:
                 req = _recv(conn)
                 self.calls.append((skill, req["op"], req["args"]))
                 if self.delay:
                     time.sleep(self.delay)
+                self._wait(req["op"], n)
                 self._answer(conn, skill, req)
         except (ConnectionError, OSError, ValueError):
             pass
@@ -289,8 +298,8 @@ def test_a_slow_kernel_times_out_and_the_caller_is_not_held(kernel):
 
 def test_the_hook_never_raises_and_never_blocks(kernel, monkeypatch):
     monkeypatch.setattr(os_shadow, "_worker_alive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    add()                                             # swallowed, and nothing was queued
-    assert os_shadow._q.qsize() == 0
+    add()                                             # swallowed, nothing was queued, and still counted and written: the shadow's own fault
+    assert os_shadow._q.qsize() == 0 and os_shadow.counters() == {"shadow_error": 1}
 
 
 def test_a_full_queue_is_counted_and_never_blocks(kernel, monkeypatch):
@@ -331,10 +340,10 @@ def test_a_no_op_add_is_counted_and_never_proposed(kernel):
     assert os_shadow.counters() == {"live_noop": 1} and os_shadow._q.qsize() == 0 and kernel.calls == []
 
 
-def test_empty_member_or_item_is_ignored(kernel):
+def test_empty_member_or_item_is_never_proposed_but_is_counted(kernel):
     add(item="  ")
     add(user="")
-    assert os_shadow.counters() == {} and os_shadow._q.qsize() == 0
+    assert os_shadow.counters() == {"no_input": 2} and os_shadow._q.qsize() == 0
 
 
 def test_the_log_line_carries_no_words(kernel, caplog):
@@ -457,3 +466,173 @@ def test_a_forgotten_refusal_is_classed_forgotten_even_when_it_names_arguments()
     assert os_shadow.reason_code("refused: forgotten_action_arguments") == "forgotten"
     assert os_shadow.reason_code("wrong argument type") == "params"
     assert os_shadow.reason_code("no grant from that person") == "no_grant"
+
+
+# ---- every outcome is ONE line, and the closed set is exactly what can be written --------------------------------------------------
+def _lines(caplog):
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("OS_SHADOW_LIST_ADD ")]
+
+
+def _result(line):
+    return line.split(" result=", 1)[1].split(" ", 1)[0]
+
+
+FIELDS = ["src", "cls", "live", "kernel", "result", "reason", "hop_ms", "q_ms"]
+
+
+def _sweep(kernel, monkeypatch):
+    """Drive every outcome a list add can end in, ONE call each; returns the result each call must have written."""
+    want = []
+
+    def one(code, fn, n=1):
+        fn()
+        want.extend([code] * n)
+        settle(len(want))
+
+    one("match", add)
+    for mode, code in (("refuse", "kernel_refused_live_did"), ("unverified", "kernel_unverified_live_did"),
+                       ("item_differs", "item_differs"), ("list_differs", "list_differs"), ("malformed", "kernel_malformed")):
+        kernel.act_mode = mode
+        one(code, add)
+    kernel.act_mode = "ok"
+    one("kernel_did_live_refused", lambda: os_shadow._q.put(          # no call site feeds a live refusal yet: the worker can still say it
+        ("add", MEMBER, "spoken", "shopping", "refused", ITEM, "Shopping", user_erase_gate.generation(MEMBER), time.perf_counter())))
+    one("member_not_in_roster", lambda: add(user="someone-else"))
+    one("live_noop", lambda: add(landed=False))
+    one("no_input", lambda: add(item=" "))
+    one("no_input", lambda: add(user=""))
+    with user_erase_gate.erase_span(MEMBER):
+        one("dropped_erased", add)                                    # at the door
+    user_erase_gate.reset()
+    one("dropped_erased", lambda: os_shadow._q.put(                   # in the worker: queued before an erase finished
+        ("add", MEMBER, "spoken", "shopping", "added", ITEM, "Shopping", -1, time.perf_counter())))
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "_worker_alive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("shadow_error", add)                                      # reason=hook
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "roster", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("shadow_error", add)                                      # reason=worker
+    kernel.delay = 1.0
+    one("timeout", add)
+    kernel.delay = 0.0
+    with monkeypatch.context() as m:
+        full: queue.Queue = queue.Queue(maxsize=1)
+        full.put_nowait(("stop",))
+        m.setattr(os_shadow, "_q", full)
+        one("queue_full", add)
+    os_shadow._q.put(("stop",))                                       # the worker dies (counters kept)
+    os_shadow._worker.join(5)
+    one("worker_down", add)
+    kernel.srv.close()
+    Path(kernel.path).unlink()
+    assert os_shadow.revive()
+    one("kernel_unavailable", add)
+    return want
+
+
+def test_every_note_add_outcome_writes_exactly_one_line(kernel, caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    want = _sweep(kernel, monkeypatch)
+    lines = _lines(caplog)
+    assert sorted(_result(ln) for ln in lines) == sorted(want), "an outcome was counted without its line, or written twice"
+    assert os_shadow.counters() == dict(Counter(want))                # and every line is counted once
+    for ln in lines:                                                  # the same field set, in the same order, on every line
+        assert [kv.split("=", 1)[0] for kv in ln.split()[1:]] == FIELDS, ln
+    errors = [ln for ln in lines if _result(ln) == "shadow_error"]
+    assert sorted(ln.split(" reason=", 1)[1].split()[0] for ln in errors) == ["hook", "worker"]
+    assert set(want) == set(os_shadow.RESULTS), set(os_shadow.RESULTS) ^ set(want)   # every code is reachable; nothing outside it
+
+
+def test_the_flag_off_writes_no_line(kernel, caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    add()
+    add(landed=False)
+    add(item="")
+    assert _lines(caplog) == []
+
+
+def test_a_code_outside_results_is_written_as_shadow_error_not_dropped(kernel, caplog):
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    os_shadow._finish("brand_new_code", source="spoken", cls="shopping", live="added")
+    (line,) = _lines(caplog)
+    assert " result=shadow_error reason=code " in line and os_shadow.counters() == {"shadow_error": 1}
+
+
+@pytest.mark.parametrize("stage,conn", [("hello", 1), ("auth", 1), ("publish", 1), ("hello", 2), ("auth", 2), ("act", 2)])
+def test_one_deadline_per_add_covers_every_socket_stage(kernel, caplog, monkeypatch, stage, conn):
+    """A kernel that sits on ANY stage (connect handshake, auth, publish, the act connection, act) for longer than the add's budget,
+    but under the per-operation timeout, ends the add as ``timeout`` WITHIN the budget, with its one line."""
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    monkeypatch.setattr(os_shadow, "OP_TIMEOUT_S", 1.0)              # no single operation would time out on its own
+    monkeypatch.setattr(os_shadow, "JOB_DEADLINE_S", 0.2)
+    kernel.stall[(stage, conn)] = 0.6
+    add()
+    settle(1, timeout=3)
+    assert os_shadow.counters() == {"timeout": 1}
+    (line,) = _lines(caplog)
+    hop = float(line.split(" hop_ms=", 1)[1].split()[0])
+    assert hop < 350, f"the add ran {hop} ms against a 200 ms budget"
+
+
+def _module_tree():
+    return ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
+
+
+def _fn(tree, name):
+    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def _consts(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.IfExp):
+        return _consts(node.body) | _consts(node.orelse)
+    return set()
+
+
+def test_no_literal_code_outside_results_reaches_the_emitter():
+    """Static: every string that can become a result (``_finish``'s first argument, a ``_door`` return, a ``result`` in an outcome
+    dict, an assignment to ``result``/``outcome``, ``compare``'s first element) is in RESULTS."""
+    tree = _module_tree()
+    found = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_finish" and n.args:
+            found |= _consts(n.args[0])
+        if isinstance(n, ast.Dict):
+            found |= {v for k, val in zip(n.keys, n.values) if isinstance(k, ast.Constant) and k.value == "result" for v in _consts(val)}
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                names = [t] if isinstance(t, ast.Name) else (t.elts if isinstance(t, ast.Tuple) else [])
+                vals = [n.value] if isinstance(t, ast.Name) else (n.value.elts if isinstance(n.value, ast.Tuple) else [])
+                for tn, v in zip(names, vals):
+                    if getattr(tn, "id", "") in ("result", "outcome"):
+                        found |= _consts(v)
+    for name in ("_door",):
+        found |= {c for r in ast.walk(_fn(tree, name)) if isinstance(r, ast.Return) and r.value is not None for c in _consts(r.value)}
+    for r in ast.walk(_fn(tree, "compare")):
+        if isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple):
+            found |= _consts(r.value.elts[0])
+    found.discard("")                                                 # `result = ""`: "not decided yet", resolved before the emitter
+    assert len(found) >= 12 and found <= set(os_shadow.RESULTS), found - set(os_shadow.RESULTS)
+
+
+def test_every_outcome_path_goes_through_the_one_emitter():
+    """Structure: only ``_finish`` counts or logs an add; it is called once in ``note_add`` and once in ``_do_add``, each from a
+    ``finally``; every return of the outcome functions names an outcome (falling off the end would write nothing)."""
+    tree = _module_tree()
+    callers: dict = {}
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for c in ast.walk(fn):
+            if isinstance(c, ast.Call) and getattr(c.func, "id", "") in ("_tally", "_log", "_finish"):
+                callers.setdefault(c.func.id, []).append(fn.name)
+    assert callers["_tally"] == ["_finish"] and callers["_log"] == ["_finish"]
+    assert sorted(callers["_finish"]) == ["_do_add", "note_add"]
+    for name in ("note_add", "_do_add"):
+        tries = [t for t in ast.walk(_fn(tree, name)) if isinstance(t, ast.Try) and t.finalbody]
+        assert len(tries) == 1 and any(getattr(c.func, "id", "") == "_finish" for f in tries[0].finalbody for c in ast.walk(f)
+                                       if isinstance(c, ast.Call)), name
+        assert not [r for r in ast.walk(_fn(tree, name)) if isinstance(r, ast.Return)], f"{name} must have one exit"
+    for name in ("_door", "_add_outcome"):
+        fn = _fn(tree, name)
+        assert isinstance(fn.body[-1], ast.Return) and all(r.value is not None for r in ast.walk(fn) if isinstance(r, ast.Return)), name
