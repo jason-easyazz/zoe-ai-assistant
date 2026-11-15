@@ -6,8 +6,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP="$HERE/brain-lab-app"
-LIVE_DEPS="${ZOE_OS_LAB_DEPS_FROM:-/home/zoe/assistant/labs/flue-zoe-brain-2x/node_modules}"
-FLOOR_MB="${ZOE_OS_PREP_FLOOR_MB:-1500}"
+LIVE_DEPS="${OSLAB_DEPS_FROM:-/home/zoe/assistant/labs/flue-zoe-brain-2x/node_modules}"
+FLOOR_MB="${OSLAB_PREP_FLOOR_MB:-1500}"
 mem() { awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; }
 if [ "$(mem)" -lt "$FLOOR_MB" ]; then echo "prep: MemAvailable $(mem) MiB < $FLOOR_MB; not building" >&2; exit 4; fi
 if pgrep -f '^([^ ]*/)?python[0-9.]*( +-[^ ]+)* +[^ ]*(voice_regression_probe|measure_voice|measure_tts|measure_cold_first_turn)\.py' >/dev/null; then

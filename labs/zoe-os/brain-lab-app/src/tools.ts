@@ -1,6 +1,6 @@
 /**
  * The lab app's ONLY tools: one `defineTool` per schema the kernel bridge derived. The runner writes
- * those schemas (BrainBridge.tools(), OpenAI function shape) to ZOE_OS_TOOLS_FILE before this
+ * those schemas (BrainBridge.tools(), OpenAI function shape) to OSLAB_TOOLS_FILE before this
  * process starts; nothing is hand-written here. `run()` forwards the model's arguments to the bridge
  * over localhost and returns the ONE sentence the kernel's receipt produced. There is no member,
  * store, token or credential in this file: who the turn is for is set by the runner on the bridge.
@@ -23,7 +23,7 @@ function field(spec: Spec & { description?: string }) {
 }
 
 export function bridgeUrl(): string {
-  return process.env.ZOE_OS_BRIDGE_URL ?? '';
+  return process.env.OSLAB_BRIDGE_URL ?? '';
 }
 
 async function forward(tool: string, args: unknown): Promise<string> {
@@ -42,7 +42,7 @@ async function forward(tool: string, args: unknown): Promise<string> {
 }
 
 export function labTools() {
-  const file = process.env.ZOE_OS_TOOLS_FILE;
+  const file = process.env.OSLAB_TOOLS_FILE;
   if (!file) return [];
   const fns = (JSON.parse(readFileSync(file, 'utf8')) as { function: Fn }[]).map((t) => t.function);
   return fns.map((fn) => {

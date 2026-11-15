@@ -359,7 +359,7 @@ and 2 skipped as an ordinary user (the two second-user tests). Thirty-six are ne
 
 ## 6. The bridge plan: five call sites, no rewrite
 
-Stage 1 puts five publish calls into production code, behind one new flag (working name `ZOE_OS_SPINE`,
+Stage 1 puts five publish calls into production code, behind one new flag (working name `OSLAB_SPINE`,
 default `off`, to be registered when the first call lands). Nothing subscribes. The adapters are written and
 tested in the lab (`labs/zoe-os/zoe_os/bridge.py`); **no production file is changed by this record.**
 
@@ -409,7 +409,7 @@ Call site 2 of section 6, chosen because it is off the voice path and already ha
    in a directory only that unit's user can read and its socket in a runtime directory the zoe-data user can
    reach. Its manifest list has one entry: an origin adapter `bridge.reminders` that may emit `reminder_fired`.
    The unit hands zoe-data that one credential (a file readable by the zoe-data user only).
-2. **A flag.** `ZOE_OS_SPINE`, default `off`, registered in the flag registry in the same change
+2. **A flag.** `OSLAB_SPINE`, default `off`, registered in the flag registry in the same change
    (`docs/knowledge/flag-registry.md`).
 3. **A bridge module in zoe-data** that owns one client connection and a small bounded queue with one worker
    thread. The lab client is blocking, so the call site must never talk to the socket itself.

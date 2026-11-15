@@ -450,8 +450,8 @@ class Stack:
         if port in LIVE_PORTS or not free_port(port):
             raise RuntimeError(f"app port {port} is a live port or already in use")
         env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp), "PORT": str(port), "HOST": "127.0.0.1",
-               "ZOE_OS_TOOLS_FILE": str(tools_file), "ZOE_OS_BRIDGE_URL": f"http://127.0.0.1:{self.server.port}",
-               "ZOE_OS_LAB_LLAMA": llama_url.rstrip("/") + "/v1", "ZOE_OS_LAB_MAX_TOKENS": str(self.args.max_tokens), "ZOE_OS_LAB_POLICY": self.args.policy}
+               "OSLAB_TOOLS_FILE": str(tools_file), "OSLAB_BRIDGE_URL": f"http://127.0.0.1:{self.server.port}",
+               "OSLAB_LLAMA": llama_url.rstrip("/") + "/v1", "OSLAB_MAX_TOKENS": str(self.args.max_tokens), "OSLAB_POLICY": self.args.policy}
         dist = HERE / "brain-lab-app" / "dist" / "server.mjs"
         if not dist.exists():
             raise RuntimeError("lab app not built: run labs/zoe-os/prep_real_turn.sh first (in daylight)")

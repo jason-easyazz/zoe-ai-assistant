@@ -26,7 +26,7 @@ export const SIDECAR_TOOL_DOCTRINE =
   '("add milk" -> add it). Do not claim you cannot do something until a tool has actually tried and failed.';
 
 const tools = labTools();
-const instructions = LAB_INSTRUCTIONS + ((process.env.ZOE_OS_LAB_POLICY ?? '') === 'sidecar' ? SIDECAR_TOOL_DOCTRINE : '');
+const instructions = LAB_INSTRUCTIONS + ((process.env.OSLAB_POLICY ?? '') === 'sidecar' ? SIDECAR_TOOL_DOCTRINE : '');
 
 export function Lab(): string {
   useModel(LAB_MODEL_SPECIFIER, { compaction: false });
