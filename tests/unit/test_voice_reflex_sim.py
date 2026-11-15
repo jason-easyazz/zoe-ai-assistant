@@ -129,6 +129,34 @@ def test_the_free_text_check_can_fail():
     assert _words("- zebracrossing: 1 (100.0%)") & set(FREE)
 
 
+def test_the_safety_count_is_the_shadows_own_and_says_unavailable_while_the_server_is_silent():
+    unknown = ["2026-01-01 12:00:00,1 INFO REFLEX_SAFETY mode=shadow would_play=1 class=unknown"] * 3
+    out = SIM.summarise_safety(unknown)
+    assert "UNAVAILABLE" in out and ": 0" not in out and "cannot see refusals" in out   # never a misleading zero
+    stated = unknown[:1] + ["x REFLEX_SAFETY mode=shadow would_play=1 class=distress",
+                            "x REFLEX_SAFETY mode=shadow would_play=1 class=refusal",
+                            "x REFLEX_SAFETY mode=shadow would_play=0 class=medical",
+                            "x REFLEX_SAFETY mode=shadow would_play=1 class=none",
+                            "x REFLEX_SAFETY mode=shadow would_play=1 class=pineapple"]   # off-enum: not a row
+    out = SIM.summarise_safety(stated)
+    assert "4 of 5 decided turns classified" in out
+    assert "would-play turns before a safety reply: 2" in out and "- distress: 1" in out and "- refusal: 1" in out
+    assert "- medical: 0" in out and "pineapple" not in out
+    assert SIM.summarise_safety(["nothing here"]) == "safety count: no REFLEX_SAFETY lines"
+
+
+def test_main_prints_the_shadows_count_and_labels_the_marker_join_as_the_lab_measure(tmp_path, capsys):
+    dec = tmp_path / "d.txt"
+    dec.write_text("2026-01-01 12:00:00,123 INFO REFLEX_DECISION mode=shadow kind=heard skip=- take=mm_01 decided_ms=190 "
+                   "talk_obs_ms=4 noise_db=-70 spk=1 media=0 win=wake bank=3811a303\n"
+                   "2026-01-01 12:00:05,123 INFO REFLEX_SAFETY mode=shadow would_play=1 class=unknown\n")
+    mk = tmp_path / "m.txt"
+    mk.write_text("2026-01-01 12:00:20 DISTRESS_HANDOFF\n")
+    assert SIM.main(["--decisions", str(dec), "--markers", str(mk)]) == 0
+    out = capsys.readouterr().out
+    assert "safety count: UNAVAILABLE" in out and "LAB measure (a time correlation" in out and "blind to refusals" in out
+
+
 def test_join_safety_counts_would_play_turns_near_a_server_marker():
     dec = ["2026-01-01 12:00:00,123 INFO REFLEX_DECISION mode=shadow kind=heard skip=- take=mm_01 decided_ms=190 talk_obs_ms=4 noise_db=-70 spk=1 media=0 win=wake bank=3811a303",
            "2026-01-01 12:10:00,123 INFO REFLEX_DECISION mode=shadow kind=heard skip=- take=mm_01 decided_ms=190 talk_obs_ms=4 noise_db=-70 spk=1 media=0 win=wake bank=3811a303",

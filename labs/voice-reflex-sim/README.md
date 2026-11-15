@@ -20,4 +20,9 @@ Not modelled: the corpus audio (`~/.zoe-voice-samples`; replaying it needs the e
 does not load), the reply being cut by the reflex (that is a delay of zero by design: the reply is never waited for), and
 anything about how the sound is heard.
 
+Safety count (`--decisions`): the SHADOW'S OWN count is the daemon's `REFLEX_SAFETY would_play= class=` lines (the class
+from the server's done-frame `safety` key). Today's server sends none, so the lab prints `safety count: UNAVAILABLE`, never a
+zero. `--markers` adds the LAB measure: would-play decisions with a server `DISTRESS_HANDOFF` / `MEDICAL_SAFETY` /
+`CHILD_SAFETY_FLOOR` log marker within 45 s, a time correlation that cannot see refused commands.
+
 Self-check: `tests/unit/test_voice_reflex_sim.py` (CI).

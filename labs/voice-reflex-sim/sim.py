@@ -244,6 +244,28 @@ def summarise_decisions(lines: Iterable[str]) -> str:
     return "\n".join(out)
 
 
+SAFETY_RE = re.compile(r"REFLEX_SAFETY mode=(shadow|on) would_play=([01]) class=(none|distress|medical|child_floor|refusal|unknown)$")
+SAFETY_CLASSES = ("distress", "medical", "child_floor", "refusal")
+
+
+def summarise_safety(lines: Iterable[str]) -> str:
+    """The SHADOW'S OWN safety count, from the daemon's ``REFLEX_SAFETY`` lines: would-play turns per safety class, as the
+    server classified them in the done frame. While every line is ``class=unknown`` (today: the server sends no ``safety``
+    key) the count is UNAVAILABLE, and this says so rather than printing a zero."""
+    rows = [m for m in (SAFETY_RE.search(x.rstrip()) for x in lines) if m]
+    if not rows:
+        return "safety count: no REFLEX_SAFETY lines"
+    stated = [m for m in rows if m.group(3) != "unknown"]
+    if not stated:
+        return (f"safety count: UNAVAILABLE ({len(rows)} decided turns, every one class=unknown: the server sends no done-frame "
+                "safety class yet; see --markers for the time-correlated lab measure, which cannot see refusals)")
+    by = {c: sum(1 for m in stated if m.group(2) == "1" and m.group(3) == c) for c in SAFETY_CLASSES}
+    out = [f"safety count (the shadow's own, from the server's done-frame class): {len(stated)} of {len(rows)} decided "
+           f"turns classified; would-play turns before a safety reply: {sum(by.values())}"]
+    out += [f"- {c}: {n}" for c, n in by.items()]
+    return "\n".join(out)
+
+
 TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 MARKER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (DISTRESS_HANDOFF|MEDICAL_SAFETY|CHILD_SAFETY_FLOOR)$")
 
@@ -287,8 +309,10 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     if a.decisions:
         dec = Path(a.decisions).read_text().splitlines()
         print(summarise_decisions(dec))
+        print("\n" + summarise_safety(dec))
         if a.markers:
-            print("\nwould-play turns with a safety marker within 45 s:", join_safety(dec, Path(a.markers).read_text().splitlines()))
+            print("\nLAB measure (a time correlation, not the shadow's count; blind to refusals): would-play turns with a "
+                  "server safety marker within 45 s:", join_safety(dec, Path(a.markers).read_text().splitlines()))
         return 0
     if a.synthetic:
         print(report(synthetic_turns(a.synthetic), "synthetic, invented turns"))
