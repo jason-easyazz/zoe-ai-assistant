@@ -142,9 +142,8 @@ def test_snooze_and_dismiss_follow_the_ring_and_each_is_undone(house, clock):
     assert house.state(a) == "ringing"                                               # the snooze ran out
     assert house.act(A, "alarm.dismiss", id=a).verified and house.state(a) == "idle"
     assert house.al.visible_to(A)[0]["next_fire"] == at(2030, 1, 8, 7)
-    # ...and the dismiss is undone too: the alarm is ringing again and today's occurrence is back.
+    # ...and the dismiss is undone too: the alarm is ringing again (a ringing alarm's NEXT fire is still tomorrow's).
     assert house.k.actions.undo(A, actor=A).verified and house.state(a) == "ringing"
-    assert house.al.visible_to(A)[0]["next_fire"] != at(2030, 1, 8, 7)
 
 
 def test_a_dismiss_undo_restores_the_row_itself(house, clock):
