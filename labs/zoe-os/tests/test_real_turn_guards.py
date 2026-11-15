@@ -183,3 +183,27 @@ def test_the_voice_hold_reads_size_only(tmp_path, monkeypatch):
     assert rt._voice_hold() is None                                   # empty
     (d / "voice-hold").write_text("pr-1234")
     assert rt._voice_hold()
+
+
+def test_the_quiet_guard_reads_turn_loggers_only_and_never_a_message():
+    import real_turn as rt
+    from datetime import datetime, timezone
+
+    def line(sec_ago, logger, msg="SECRET-WORDS"):
+        ts = datetime.fromtimestamp(1_800_000_000 - sec_ago, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
+        return f"{ts} INFO     {logger}: {msg}"
+    now = 1_800_000_000.0
+    housekeeping = "\n".join(line(s, n) for s, n in ((5, "apscheduler.scheduler"), (20, "multica_autopilot_sync"), (400, "main")))
+    assert rt.last_turn_age_s(housekeeping, now) == 400                      # no turn in the tail: quiet for its whole span
+    assert rt.last_turn_age_s(housekeeping + "\n" + line(12, "routers.voice_tts"), now) == 12     # a turn 12 s ago: active
+    assert rt.last_turn_age_s(line(90, "zoe_flue_client") + "\n" + line(3, "brain_scheduler"), now) == 90
+    assert rt.last_turn_age_s("garbage with no timestamp\n\n", now) is None                       # unparseable: the caller refuses
+    for name in ("routers.chat", "intent_router", "distress_handoff"):
+        assert rt.last_turn_age_s(line(7, name), now) == 7
+    # control: with every logger treated as a turn (the old "any write" rule) housekeeping alone reads as active
+    old = rt.TURN_LOGGERS
+    try:
+        rt.TURN_LOGGERS = frozenset({"apscheduler.scheduler", "multica_autopilot_sync", "main"})
+        assert rt.last_turn_age_s(housekeeping, now) == 5
+    finally:
+        rt.TURN_LOGGERS = old

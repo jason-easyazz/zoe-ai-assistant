@@ -11,8 +11,8 @@ REFUSES unless every guard below passes; each refusal says why and exits 3 (the 
 Guards, in order (``refusals``): the explicit flag; the local-time window 22:00-01:50 (and the repo's
 own ``harness_quiet`` hours, panel-yield and brain-window rules, and ``night_busy.sh``); the harness
 lock (taken by this process, not waited for); no python voice probe process; the speech service
-active; every llama slot idle; MemAvailable above the floor; zoe-data's app log untouched for N seconds
-(mtime only, never content). In ``--dry-run`` the window, panel and log-quiet guards are advisory
+active; every llama slot idle; MemAvailable above the floor; no conversation turn in zoe-data's app log for N seconds
+(timestamps and logger names only, never a message). In ``--dry-run`` the window, panel and log-quiet guards are advisory
 (they cannot pass in daylight) and everything else is enforced; the model is replaced by a scripted
 mock llama on an ephemeral port, so no turn reaches the real brain.
 
@@ -99,10 +99,45 @@ def _mem_mb() -> int:
     return 0
 
 
+#: the loggers that write when someone is TALKING to Zoe (a voice or chat turn). Housekeeping loggers (the scheduler, the idle
+#: sweep, sync jobs) write every minute or two with nobody there, so "any write" was never quiet; these names are the signal.
+TURN_LOGGERS = frozenset({"routers.voice_tts", "routers.chat", "zoe_flue_client", "intent_router", "fast_tiers",
+                          "brain_dispatch", "distress_handoff", "medical_safety", "child_safety_floor"})
+
+
+def last_turn_age_s(tail: str, now: float) -> float | None:
+    """Seconds since the newest line in ``tail`` written by a conversation-turn logger, or the tail's whole span when it holds
+    none (so "no turn in this tail" reads as quiet for at least that long). Only each line's TIMESTAMP and LOGGER NAME are
+    looked at; the message is never read, kept or printed. None = nothing parseable (the caller refuses)."""
+    from datetime import datetime
+
+    newest_turn = oldest = None
+    for line in tail.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 3:
+            continue
+        try:
+            ts = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+        except ValueError:
+            continue
+        oldest = ts if oldest is None else min(oldest, ts)
+        if parts[2].rstrip(":") in TURN_LOGGERS:
+            newest_turn = ts if newest_turn is None else max(newest_turn, ts)
+    if oldest is None:
+        return None
+    return max(0.0, now - (newest_turn if newest_turn is not None else oldest))
+
+
 def _log_age() -> float | None:
+    """Seconds since the household last had a conversation turn, from the service log's last 256 KB (timestamps and logger
+    names only). Unreadable or unparseable = None = refuse."""
     p = Path.home() / ".zoe-logs" / "zoe-data.app.log"
     try:
-        return time.time() - p.stat().st_mtime            # mtime only: the content is never read
+        with open(p, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 262144))
+            tail = f.read().decode("utf-8", "replace")
+        return last_turn_age_s(tail, time.time())
     except OSError:
         return None
 
@@ -222,7 +257,7 @@ def refusals(args, probes: Probes, *, held_lock: bool) -> list[tuple[str, str]]:
             print(f"[dry-run] advisory: zoe-data log: " + ("unreadable" if age is None else f"touched {age:.0f}s ago"))
         else:
             no("log-quiet", "zoe-data's app log is unreadable" if age is None else
-               f"zoe-data's app log was touched {age:.0f}s ago (< {args.log_quiet_s}s: the household is active)")
+               f"a conversation turn was logged {age:.0f}s ago (< {args.log_quiet_s}s: the household is active)")
     return out
 
 
