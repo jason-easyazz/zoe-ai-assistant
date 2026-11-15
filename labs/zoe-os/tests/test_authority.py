@@ -26,10 +26,11 @@ A, B = "member-a", "member-b"
 
 
 class Daemon:
-    def __init__(self, state: Path, *, die: str = "", control: str = "") -> None:
+    def __init__(self, state: Path, *, die: str = "", control: str = "", db: str = "") -> None:
         env = {"PATH": os.environ["PATH"], "HOME": str(state), "OS_LAB_DIE_AT": die, "OS_LAB_CONTROL": control}
         self.state = state
-        self.proc = subprocess.Popen([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state)],
+        self.proc = subprocess.Popen([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state),
+                                      *(["--db", db] if db else [])],
                                      stdout=subprocess.PIPE, text=True, env=env)
         assert self.proc.stdout.readline().startswith("zoe-os authority kernel up")
         raw = json.loads((state / "creds.json").read_text())
@@ -194,3 +195,19 @@ def test_a_revoke_is_remembered_across_a_restart(state):
     with pytest.raises(Refused, match="no grant"):
         again.add(A, "x")
     assert again.add(B, "y")["verified"] is True
+
+
+# ---- the one database setting -----------------------------------------------------------------------------------------------------
+def test_the_database_lives_where_db_says_and_an_unmoved_old_record_stops_the_start(state):
+    perm = state[0] / "perm" / "zoe-os.db"
+    d = start(state, db=str(perm))
+    d.add(A, "kept")
+    d.kill()
+    assert perm.is_file() and not (state[0] / "kernel" / "zoe-os.db").exists()
+    assert start(state, db=str(perm)).digests() == [digest("kept")]
+    old = start(state)                                               # the lab default: STATE/kernel/zoe-os.db
+    old.add(A, "old")
+    old.kill()
+    p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0]), "--db", str(state[0] / "new.db")],
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode != 0 and "was not moved" in p.stderr and not (state[0] / "new.db").exists()

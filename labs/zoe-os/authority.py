@@ -247,12 +247,30 @@ def revoked(k: Kernel, skill: str) -> set[str]:
     return {who for who, change in last.items() if change == "revoked"}
 
 
-def build(state: Path):
+#: the PROPOSED permanent home of the kernel's own database (owner decision 2026-11-15: its own file, beside Zoe's other stores, in the
+#: nightly backup). The unit template passes it as ``--db``; without ``--db`` the lab default is ``STATE/kernel/zoe-os.db``.
+PERMANENT_DB = "~/.zoe/zoe-os/zoe-os.db"
+
+
+def db_path(state: Path, db: str | None) -> Path:
+    """The database to open. Refuses (exits) when ``--db`` names a file that does not exist while the OLD lab location still holds one:
+    a kernel that started empty beside an unmoved record would decide adds with no history and leave a copy forget cannot see."""
+    old = state / "kernel" / "zoe-os.db"
+    if not db:
+        return old
+    path = Path(db).expanduser()
+    if not path.exists() and old.exists():
+        raise SystemExit(f"the kernel database was not moved: run the one-time move in labs/zoe-os/README.md first ({old.name})")
+    return path
+
+
+def build(state: Path, db: str | None = None):
     people = json.loads((state / "people.json").read_text("utf-8"))["people"]
     if not people or not all(isinstance(p, str) and p for p in people):
         raise SystemExit("people.json has no members: the kernel acts for nobody it does not know")
-    (state / "kernel").mkdir(mode=0o700, exist_ok=True)
-    k = Kernel(str(state / "kernel" / "zoe-os.db"), [Person(p) for p in people])
+    path = db_path(state, db)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    k = Kernel(str(path), [Person(p) for p in people])
     k.spine._db.execute("INSERT OR REPLACE INTO meta VALUES ('authority_schema', ?)", (str(SCHEMA).encode(),))
     lists = DurableLists(k.spine).register(k)
     lists.rebuild()
@@ -272,10 +290,12 @@ def build(state: Path):
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", help="state directory (default $ZOE_OS_SHADOW_DIR or ~/.zoe/os-shadow)")
-    state = state_dir(ap.parse_args(argv).dir)
+    ap.add_argument("--db", help=f"the kernel's database file (the unit passes {PERMANENT_DB}); default STATE/kernel/zoe-os.db")
+    opts = ap.parse_args(argv)
+    state = state_dir(opts.dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.umask(0o077)
-    k, srv, creds = build(state)
+    k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):

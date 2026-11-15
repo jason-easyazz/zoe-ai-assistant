@@ -82,13 +82,14 @@ def state_dir(arg: str | None) -> Path:
     return Path(arg or os.environ.get("ZOE_OS_SHADOW_DIR") or Path.home() / ".zoe" / "os-shadow")
 
 
-def build(state: Path):
+def build(state: Path, db: str | None = None):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
     people = json.loads((state / "people.json").read_text("utf-8"))["people"]
     if not people or not all(isinstance(p, str) and p for p in people):
         raise SystemExit("people.json has no members: the shadow kernel records nothing for a household it does not know")
-    (state / "kernel").mkdir(mode=0o700, exist_ok=True)
-    k = Kernel(str(state / "kernel" / "zoe-os.db"), [Person(p) for p in people])
+    path = Path(db).expanduser() if db else state / "kernel" / "zoe-os.db"      # --db: the permanent home (authority.PERMANENT_DB)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    k = Kernel(str(path), [Person(p) for p in people])
     lists = Lists().register(k)
     register_list_remove(k, lists)
     reminders, alarms = Reminders(time.time).register(k), Alarms().register(k)
@@ -120,10 +121,12 @@ def serve(k: Kernel, srv: KernelServer, stop: threading.Event) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", help="state directory (default $ZOE_OS_SHADOW_DIR or ~/.zoe/os-shadow)")
-    state = state_dir(ap.parse_args(argv).dir)
+    ap.add_argument("--db", help="the kernel's database file; default STATE/kernel/zoe-os.db")
+    opts = ap.parse_args(argv)
+    state = state_dir(opts.dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.umask(0o077)                       # the database, its WAL and the credentials are this user's alone
-    k, srv, creds = build(state)
+    k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):

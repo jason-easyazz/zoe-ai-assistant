@@ -6,7 +6,7 @@
 # ZOE_OS_LIST_ADD_AUTHORITY=kernel is also set for zoe-data. While it is down, slow or unhealthy zoe-data adds exactly as it does today
 # (a counted fallback), so stopping it is always safe.
 #
-# Owner install (after the roster exists, see zoe-os-shadow-kernel.service):
+# Owner install (after the roster exists, see zoe-os-shadow-kernel.service, and after the one-time database move in labs/zoe-os/README.md):
 #   systemctl --user disable --now zoe-os-shadow-kernel.service 2>/dev/null
 #   cp ~/assistant/labs/zoe-os/zoe-os-authority-kernel.service ~/.config/systemd/user/ && systemctl --user daemon-reload
 #   systemctl --user enable --now zoe-os-authority-kernel.service
@@ -27,9 +27,13 @@ StartLimitBurst=10
 [Service]
 Type=simple
 WorkingDirectory=%h/assistant/labs/zoe-os
-# The private state directory: k.sock (0600), creds.json (0600), people.json, kernel/zoe-os.db (+ -wal, -shm). Never in a checkout.
+# The private state directory: k.sock (0600), creds.json (0600), people.json. Never in a checkout.
 Environment=ZOE_OS_SHADOW_DIR=%h/.zoe/os-shadow
-ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/authority.py --dir ${ZOE_OS_SHADOW_DIR}
+# THE ONE database setting (owner decision 2026-11-15): the kernel's OWN SQLite file, in its permanent home beside Zoe's other stores,
+# in the nightly backup (labs/zoe-os/README.md "Backup"). zoe-data's ZOE_OS_KERNEL_DB names the same path; set both or neither. The
+# daemon refuses to start if this file is missing while the old ~/.zoe/os-shadow/kernel/zoe-os.db still exists (the move was skipped).
+Environment=ZOE_OS_KERNEL_DB=%h/.zoe/zoe-os/zoe-os.db
+ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/authority.py --dir ${ZOE_OS_SHADOW_DIR} --db ${ZOE_OS_KERNEL_DB}
 Restart=always
 RestartSec=2
 TimeoutStopSec=10
