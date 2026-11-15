@@ -82,8 +82,8 @@ The comparison is made for each list add that really landed (`os_shadow.compare`
 | outcome class | `added` | `verified` / `unverified` / `uncertain` / `refused` |
 
 Result codes (the closed set; one per add): `match`, `kernel_refused_live_did` (with `reason=` `no_grant|manifest|params|cause|forgotten|other`),
-`kernel_unverified_live_did`, `item_differs`, `list_differs`, `member_differs` (a verified receipt for ANOTHER member, or `kernel_malformed` for
-none), `kernel_malformed` (`reason=crossed` when the reply's `v` / `id` is not this request's: a stale or crossed reply is never the answer),
+`kernel_unverified_live_did`, `item_differs`, `list_differs`, `member_differs` (a verified receipt for ANOTHER member) and `member_unproven` (a receipt
+that names no member), `kernel_malformed` (`reason=crossed` when the reply's `v` / `id` is not this request's: a stale or crossed reply is never the answer),
 `kernel_unavailable`, `timeout`,
 and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop` (`live=noop`), `worker_down`, `no_input` (no member
 or no item) and `shadow_error` (the shadow's OWN failure: `reason=hook` at the door, `worker` in the worker, `code` for a code outside the set).

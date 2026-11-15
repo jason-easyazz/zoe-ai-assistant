@@ -507,7 +507,7 @@ def _sweep(kernel, monkeypatch):
     one("match", add)
     for mode, code in (("refuse", "kernel_refused_live_did"), ("unverified", "kernel_unverified_live_did"),
                        ("item_differs", "item_differs"), ("list_differs", "list_differs"), ("malformed", "kernel_malformed"),
-                       ("wrong_member", "member_differs")):
+                       ("wrong_member", "member_differs"), ("no_member", "member_unproven")):
         kernel.act_mode = mode
         one(code, add)
     kernel.act_mode = "ok"
@@ -655,7 +655,7 @@ def test_every_outcome_path_goes_through_the_one_emitter():
 
 
 # ---- for whom, and whose reply ----------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("mode,result", [("wrong_member", "member_differs"), ("no_member", "kernel_malformed"), ("ok", "match")])
+@pytest.mark.parametrize("mode,result", [("wrong_member", "member_differs"), ("no_member", "member_unproven"), ("ok", "match")])
 def test_a_verified_receipt_for_another_member_is_never_a_match(kernel, mode, result):
     kernel.act_mode = mode
     add()
@@ -682,7 +682,7 @@ def test_compare_checks_the_member_only_when_told():
     sent = {"item": "a", "list": "L"}
     assert os_shadow.compare("added", done, sent, member="m1") == ("match", "verified")
     assert os_shadow.compare("added", done, sent, member="m2") == ("member_differs", "verified")
-    assert os_shadow.for_whom({"verified": True}, "m1") == "kernel_malformed"
+    assert os_shadow.for_whom({"verified": True}, "m1") == "member_unproven"
 
 
 # ---- nothing a caller hands the hook reaches a log line or a counter ------------------------------------------------------------
