@@ -10,6 +10,8 @@ must prove first, and how it is undone. It does not replace the records it leans
 - `docs/architecture/zoe-os.md`: what the kernel is and why (arrives with PR #2630).
 - `docs/architecture/zoe-os-brain-bridge.md`: how the brain proposes and the kernel disposes (PR #2630).
 - `docs/knowledge/zoe-os-integration.md`: the shadow stage in detail and the twelve things a production kernel lacks (PR #2631).
+- `docs/architecture/zoe-os-implementation-map.md`: the engineering companion: every production seam, the kernel's gaps, what
+  around it must change, and the work packages.
 - `docs/ROADMAP.md` owns the order of all work; this page is the order *inside* Zoe OS.
 
 Claims are labelled [lab] (run in the lab on the box), [live] (seen on the running system), [code] (read in the tree) or
