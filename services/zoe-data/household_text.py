@@ -238,7 +238,6 @@ WRITE_SITES: dict[str, str] = {
     "services/zoe-data/routers/telegram_media.py::_maybe_capture": "telegram_stt_capture",
     "services/zoe-data/semantic_router.py::_append_shadow_line": "router_shadow_log",
     "services/zoe-data/zoe_agent.py::_log_feedback_triple": "production_feedback_log",
-    "services/zoe-data/routers/voice_tts.py::_log_voice_stt_sample": "voice_stt_log",
     "services/zoe-data/self_review.py::_write_private": "self_review_records",
     "services/zoe-data/night_extract.py::_write_private": "night_extract_facts",
     "scripts/maintenance/router_struggle_retrain.py::_write_private": "router_retrain_texts",
