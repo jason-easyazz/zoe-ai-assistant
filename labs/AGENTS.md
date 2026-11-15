@@ -52,6 +52,10 @@ with its own README/RUNBOOK and is self-contained.
   loop; templates kept under the lab, never installed by any script; dispatch defaults to
   `dry`, it idles while `~/.zoe/self_heal_paused` exists, and its GitHub landing only ever
   opens DRAFT PRs).
+  `zoe-os/` -> `scripts/setup/systemd/zoe-os-shadow-kernel.service` (the Zoe OS SHADOW kernel, `labs/zoe-os/shadow_daemon.py`: a long-running
+  stdlib process that records every real list add beside the live path in its OWN store under `~/.zoe/os-shadow/`; never authoritative, owner
+  opt-in, never auto-installed or auto-enabled, and inert until `ZOE_OS_LIST_SHADOW=shadow` is also set for zoe-data. zoe-data reaches it ONLY over
+  its Unix socket (`services/zoe-data/os_shadow.py`, no import from `labs/`); contract `docs/knowledge/zoe-os-list-shadow.md`).
   No other lab may ship a unit without amending this contract.)
 - ⚠ **`labs/flue-zoe-brain-2x/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
   are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`
@@ -563,3 +567,6 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   declared actions as tools and turns a tool call into one kernel `act` (the brain proposes, the kernel disposes),
   proven with a scripted and a recorded driver; NO real model turn has run through it (single llama slot shared with
   the household), and it must not be wired to `flue-zoe-brain-2x/`. `bench_brain.py` measures the hop.
+  `shadow_daemon.py` is the one long-running entry point: the kernel + the lab list driver for the list-add SHADOW (`docs/knowledge/zoe-os-list-shadow.md`),
+  started only by the owner-installed `zoe-os-shadow-kernel.service` (see Forbidden); `services/zoe-data/tests/test_os_shadow_contract.py` runs the zoe-data client against it
+  and is skipped with a named reason when this lab is absent.

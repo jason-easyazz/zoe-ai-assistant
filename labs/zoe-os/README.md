@@ -4,8 +4,9 @@ A lab-only prototype of the kernel described in
 [`docs/architecture/zoe-os.md`](../../docs/architecture/zoe-os.md): one event spine every part plugs into,
 with consent, forgetting and receipts as properties of the spine rather than of each feature.
 
-**Nothing here is wired to anything.** No production module imports it, there is no flag, no service, no
-unit. Standard library only (SQLite in a temp dir, a Unix socket). Every person and every word in the tests
+**Nothing here is wired to anything.** No production module imports it. (The one exception is a socket: `shadow_daemon.py` is
+what zoe-data's flag-dark list-add shadow talks to once the owner installs its unit; zoe-data never imports this code.) There is no
+service or unit that runs by default. Standard library only (SQLite in a temp dir, a Unix socket). Every person and every word in the tests
 is invented.
 
 ## What is in it
@@ -35,6 +36,7 @@ is invented.
 | `zoe_os/brain/bridge.py` | the brain's adapter: tool list derived from the kernel's `describe`, one tool call = one `act`, one sentence back |
 | `zoe_os/brain/drivers.py` | kernel-side drivers for the brain's three actions (lists, reminders, alarms) and the keeper that erases them on forget |
 | `zoe_os/brain/drive.py` | the scripted agent and the recorded-stream replay (no model) |
+| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's list-add shadow (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only |
 | `bench_brain.py` | latency of the kernel hop per brain action |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
