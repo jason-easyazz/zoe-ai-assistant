@@ -525,6 +525,40 @@ def may_override(power: int, target_cls: str) -> bool:
     return power >= USER_RANK or power >= RANK.get(target_cls, 0)
 
 
+# ── who AUTHORED a row: an adult's fact is not changed by a child's correction (owner decision, 2026-11-15) ──────────────────
+#: "if an adult sets facts for a kid, they must be important enough to stay": a fact an ADULT member authored (about anyone, a child
+#: included) is changed only by an adult. A child's correction of it is kept as a held note for an adult to review, never applied.
+AUTHOR_ADULT = "adult"
+AUTHOR_CHILD = "child"
+
+
+def author_class(meta: Mapping[str, Any], text: str = "") -> Optional[str]:
+    """``adult`` | ``child`` | None (the row does not say). POSITIVE provenance only, so a row whose author was never recorded is
+    None - not an adult's, not protected:
+
+    * a CURATED row (``row_class``) is an adult's by construction: only a household adult admin curates (``memory_curation.require_curator``);
+    * else an explicit first-class ``author_class`` stamp of ``adult`` / ``child`` (reserved for the writers that know their
+      speaker's class; no writer stamps it yet, so today only curated rows are protected by this rule).
+
+    Rows written before either existed, and every ordinary own-space row, record no author class."""
+    meta = meta or {}
+    if row_class(meta, text) == CURATED:
+        return AUTHOR_ADULT
+    stamped = str(meta.get("author_class") or "").strip().lower()
+    return stamped if stamped in (AUTHOR_ADULT, AUTHOR_CHILD) else None
+
+
+def adult_authored(meta: Mapping[str, Any], text: str = "") -> bool:
+    return author_class(meta, text) == AUTHOR_ADULT
+
+
+def may_correct(speaker_adult: Optional[bool], author: Optional[str]) -> bool:
+    """The owner's rule: a fact authored by an adult is corrected only by a speaker who is POSITIVELY an adult (``speaker_adult is
+    True``). A child, a guest, an unknown account and a failed lookup (False / None) are not. A fact whose author is a child, or not
+    recorded, has no restriction here (the ordinary rank rule, ``may_override``, still applies)."""
+    return author != AUTHOR_ADULT or speaker_adult is True
+
+
 #: ``authority_basis`` values that say the writer READ the owner's words and they do NOT carry the fact. ("no_user_evidence" -
 #: a caller that passed no words at all - is deliberately not here: it says nothing about the fact, and a plain review(edit)
 #: from a lane with no turn to quote must keep working.)

@@ -3427,6 +3427,19 @@ class MemoryService:
             )
         return True
 
+    async def hold_correction_note(self, row: "MemoryRef", new_text: str, *, user_id: str, writer: str,
+                                   session_id: Optional[str] = None) -> Optional[str]:
+        """Keep a speaker's correction of ``row`` as a ``disputed`` note linked to it (``contradicts_id``), for the row's adult author
+        to review (never approved, never recalled). The row is untouched. Used when a speaker who may not change the row (a child
+        correcting an adult's fact, ``memory_authority.may_correct``) still said it: the words are kept, not lost. Returns the note's
+        id, None when nothing was kept. Never raises."""
+        meta = row.metadata or {}
+        kind = _auth.conflict_kind(new_text, row.text) or _auth.kind_of(row.text)
+        return await self._write_candidate(
+            (new_text or "").strip(), user_id=user_id, writer=writer, contradicts=row.id, kind=kind, session_id=session_id,
+            memory_type=str(meta.get("memory_type") or "fact"), entity_type=meta.get("entity_type"),
+            entity_id=meta.get("entity_id"), cls=_auth.USER_STATED, basis="adult_fact_held")
+
     async def _target_class(self, meta: Mapping[str, Any]) -> str:
         """The class of the row a candidate disputes (``contradicts_id``); "" for an edge, a missing row or a read error."""
         ref = str(meta.get("contradicts_id") or "")
