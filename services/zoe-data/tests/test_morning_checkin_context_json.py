@@ -28,7 +28,8 @@ import proactive.session_utils as session_utils
 from proactive.triggers.morning_checkin import _build_morning_context
 
 DUE_NAIVE_UTC = datetime(2026, 9, 30, 18, 33, 27)  # what asyncpg returns for TIMESTAMP
-CAL_ROW = ("Dentist", "09:30", "10:00", "Main St", "", 30)
+CAL_ROW = {"id": "e1", "title": "Dentist", "start_date": "2026-09-30", "start_time": "09:30", "end_time": "10:00",
+           "location": "Main St", "end_date": "", "duration": 30}   # read by name, as the shared calendar read path does
 
 
 class _Cur:
