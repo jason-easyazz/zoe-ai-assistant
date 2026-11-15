@@ -50,7 +50,7 @@ def main(n: int) -> dict:
             t = time.perf_counter_ns()
             out = bridge.propose(turn, tool, args)
             us = (time.perf_counter_ns() - t) / 1000
-            assert out.status == "done", out
+            assert out.status == "done", 'proposal_failed'
             hop.append(us)
             by_tool[tool].append(us)
         lists, direct = Lists(), []

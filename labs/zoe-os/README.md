@@ -1,5 +1,12 @@
 # labs/zoe-os: the Zoe OS kernel prototype
 
+PR #2630 review regressions: `tests/test_privacy_review.py` covers text-free diagnostics, token-protected
+HTTP handlers without sockets, cross-owner request erasure, and suspended replay snapshot refresh.
+Diagnostic outputs retain IDs, closed codes and counts, never utterances, arguments, say strings or reasons.
+Request-derived stores must purge erased sequences across all owners; `purge_key` opts a driver into
+notice-bound deletion even after consent is revoked. Validation of this correction is pending: the builder
+observed less than 800 MiB available memory and could not run Python under the builder brief's memory gate.
+
 A lab-only prototype of the kernel described in
 [`docs/architecture/zoe-os.md`](../../docs/architecture/zoe-os.md): one event spine every part plugs into,
 with consent, forgetting and receipts as properties of the spine rather than of each feature.
@@ -70,16 +77,17 @@ bad outcome.
 | a forgotten event is withdrawn from a live queue | `test_forget.py` | `Subscription._purge_forgotten` a no-op: the queued sentinel is delivered |
 | the forget reaches everything derived | `test_forget.py` | `Spine._closure` returns only the seed: a derived copy survives |
 | forgotten words cannot be re-published by a skill | `test_forget.py`, `test_attack.py` | `Spine._shielded` always no: the words are back on the spine |
+| action arguments and undo state cannot restore shielded words or names (validation pending) | `test_forget_action_arguments.py`, `test_forget_receipts_notices.py` | disabling `Dispatcher._check_arguments` makes the resurrection regression fail; disabling snapshot scrub AND this guard permits restoration |
 | the bytes are gone from disk | `test_forget.py`, `test_attack.py` | positive control: the sentinel is in the files before the forget |
 | no action without the manifest and that person's grant | `test_receipts.py`, `test_attack.py` | `Dispatcher._authorize` always yes: the light is toggled for someone who never agreed |
 | a consequential action needs the person's own unused yes | `test_receipts.py`, `test_skills.py` | (declined, missing, reused and someone else's yes are each refused) |
-| no claim without a verified receipt | `test_receipts.py` | `ClaimAuditor.backed` always yes: an unbacked claim is not found |
+| no claim without a verified receipt | `test_upper_review.py`, `test_receipts.py` | disabling `Spine._claim_refusal` allows an unbacked claim |
 
 ### Across the process boundary
 
 | Guarantee | Test | Control: remove this, and the bad thing happens |
 |---|---|---|
-| the malicious skill, from another process: ten attempts, ten recorded refusals | `test_boundary.py` | the same four controls, applied inside the kernel process |
+| the malicious skill, from another process: six remaining attempts refused; forgotten cache entries unavailable | `test_boundary.py` | the same four controls, applied inside the kernel process |
 | a skill cannot be another skill, name its own source, or speak for a person | `test_boundary_attacks.py` | no credential check: it becomes the panel and reads everything |
 | a captured handshake or a re-issued credential does not log in | `test_boundary_attacks.py` | a predictable challenge: the capture logs in |
 | an oversized frame is refused before its body is read | `test_boundary_attacks.py` | no size cap: it is stored |
@@ -90,7 +98,7 @@ bad outcome.
 | forget by entity and by topic keeps every forget guarantee | `test_forget_scope.py` | the cascade, the tombstone, the queue purge and the shields, each removed in turn |
 | a forgotten name stays forgotten in new words | `test_forget_scope.py` | `Spine._names_forgotten` always no |
 | a receipt and a used yes survive a killed kernel | `test_durable.py` | the used yes held in memory: one yes buys two actions |
-| an unbacked claim is found after a restart, once | `test_durable.py` | a trusting auditor finds nothing |
+| an unbacked claim is refused and remains absent after restart | `test_durable.py` | a trusting receipt check admits a false claim |
 | a kill between the write and the receipt is reported `uncertain`, never done, never retried | `test_durable.py` | no write-ahead intent: no trace; a recovery that says "done": a false claim passes |
 | review fixes: derived-only text and tuple-wrapped words or names stay forgotten; a child's grant opens only the child's events; one receipt backs one claim; a forget scrubs the intent rows and a yes stays spent; "the last action" is the newest | `test_review_findings.py` | each test failed on the code before its fix (the old code is the control) |
 
@@ -205,7 +213,9 @@ after the backup's date. The backup holds the same words the kernel does, so it 
 through `/proc` and reads it; `test_HONEST_LIMIT_a_skill_running_as_the_same_user_...` asserts that it can.
 File permissions and a second OS user stop it, shown only in a root sandbox with a throwaway user.
 
-Forget cannot reach a copy a skill already took, and does not catch reworded content, near spellings, part of
+The supported subscriber cache holds only sequence numbers and resolves bodies from the live authorized log:
+forget removes source and derived text from it immediately, including the malicious helper's cache. A private
+body copy outside that contract cannot be erased by Python. Forget does not catch reworded content, near spellings, part of
 a name or a pronoun (`test_HONEST_LIMIT_reworded_content_...` asserts three of these get through).
 
 "Durable" means against a killed process, not power loss. An `uncertain` receipt has no resolution step.
@@ -221,6 +231,21 @@ event; the rehearsal reports that, the kernel does not stop it. A forget by name
 reduced copy once the kernel's events have aged out (`test_HONEST_LIMIT_a_forget_by_name_after_...`). The suite
 has shown one unexplained failure in about fifty full runs.
 
+The guarded runner confines `--lock` and `--out` to `labs/zoe-os/.state/` (the default) or
+`~/.zoe/agent-tools/zoe-os/`, resolving symlinks and refusing traversal. Real runs additionally require the
+pre-existing shared voice harness lock, opened read-only. Only explicit-port HTTP loopback llama origins are
+accepted; Python disables proxies and redirects and the Node fetch boundary refuses redirects. Quiet guards
+retain only log prefixes and process identities, never log bodies or whole command lines.
+
+Claims are checked at public publish time, including batches: one matching verified receipt backs one live
+claim. `ClaimAuditor.scan()` is diagnostic only. Socket-free review regressions are in `tests/test_upper_review.py`;
+the Node boundary's synthetic stub-fetch test is `node --test labs/zoe-os/brain-lab-app/src/local-network.test.mjs`.
+
 One kernel process, one lock. No rate limit on failed handshakes. Presence, memory and
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
+
+Review correction: authorised explainer and twin display results retain household content;
+tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
+also clears the owner's reduced twin facts through its watermark after source retention,
+while cross-owner cleanup matches explicit erased request sequences.

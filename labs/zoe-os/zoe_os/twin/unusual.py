@@ -1,7 +1,7 @@
 """What is unusual today: departures from a person's own baseline, and nothing else.
 
     result = unusual(twin, "2030-03-25")
-    for d in result.departures: print(d.text)
+    display = shown_to(result, viewer, people)  # authorised display, not a tool log
 
 Every line has one shape: THIS differs from the last N days in THIS way, with the count that
 makes it unusual. It is NEVER a diagnosis and never a guess about why. There is no code path
