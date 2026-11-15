@@ -182,3 +182,15 @@ def test_blank_or_invalid_timezone_does_not_break_the_module(monkeypatch):
         # Resolves, and still applies the window using the fallback timezone.
         assert voice_delivery.resolve(LONG_NEUTRAL, hour=2).profile == "gentle"
         assert voice_delivery.resolve(LONG_NEUTRAL, hour=12).speed is None
+
+
+def test_resolve_reply_ignores_the_length_guard_and_keeps_the_flag_gate(monkeypatch):
+    """ZOE_KOKORO_STYLE_PIN decides ONE speed per reply from its first unit: a short first clause must not play at 1.0
+    and the rest of its sentence at 0.84 (the length guard's seam). The flag gate is unchanged: off = neutral."""
+    assert voice_delivery.resolve_reply(SHORT_WARM, hour=2) == voice_delivery.NEUTRAL       # flag off
+    _on(monkeypatch)
+    assert voice_delivery.resolve(SHORT_WARM, hour=2).speed is None                         # resolve keeps its guard
+    assert voice_delivery.resolve_reply(SHORT_WARM, hour=2).speed == voice_delivery.SPEED_GENTLE
+    assert voice_delivery.resolve_reply(SHORT_WARM, hour=12).speed == voice_delivery.SPEED_WARM
+    assert voice_delivery.resolve_reply("Sure.", hour=12).speed is None                      # no reason: still neutral
+    assert voice_delivery.resolve_reply(LONG_WARM, hour=2) == voice_delivery.resolve(LONG_WARM, hour=2)

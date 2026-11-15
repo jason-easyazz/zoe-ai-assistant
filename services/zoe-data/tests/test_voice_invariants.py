@@ -38,7 +38,7 @@ def test_fast_first_audio_present_and_wired():
     assert "def _extract_first_unit" in s, "first-audio clause splitter removed"
     assert "_fast_first_audio_enabled" in s, "fast-first-audio flag removed"
     # Actually wired into the streaming loop (not just defined):
-    assert "_emit_sentence(first_unit)" in s, "first-unit flush not wired into stream loop"
+    assert "_emit_sentence(first_unit, unit_kind=_unit_kind)" in s, "first-unit flush not wired into stream loop"
 
 
 def test_first_unit_keeps_short_replies_whole_and_is_number_safe():

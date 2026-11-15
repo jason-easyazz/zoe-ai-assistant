@@ -260,7 +260,8 @@ def _kokoro_http_client() -> "httpx.AsyncClient":
     return _KOKORO_HTTP
 
 
-async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None) -> Optional[bytes]:
+async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None, *, style_len: Optional[int] = None,
+                                     speed: Optional[float] = None) -> Optional[bytes]:
     """Synthesize via the Kokoro sidecar (the TTS rock's warm process).
 
     Calls the local FastAPI sidecar on port 10201 which keeps the Kokoro
@@ -271,6 +272,9 @@ async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None) -> 
     ``voice``: explicit per-call override (the settings Preview); otherwise the
     persisted household preference resolves, with ZOE_KOKORO_VOICE/af_sky as the
     fallback default (voice_settings.resolve_tts_voice).
+
+    ``style_len`` / ``speed`` (ZOE_KOKORO_STYLE_PIN): the turn's ONE style row and ONE speed, decided by the caller once per
+    reply; a passed ``speed`` replaces the per-chunk delivery mapper. Neither passed = the request is byte-identical to before.
     """
     text = _clean_for_speech(text)
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
@@ -281,10 +285,14 @@ async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None) -> 
     # deliberately never a short one, because the sidecar's phrase cache only
     # serves at speed 1.0 (see voice_delivery for the full reasoning).
     payload: dict[str, Any] = {"text": text, "voice": voice}
+    if speed is not None:
+        payload["speed"] = float(speed)
+    if style_len is not None:
+        payload["style_len"] = int(style_len)
     try:
         import voice_delivery
 
-        _delivery = voice_delivery.resolve(text)
+        _delivery = voice_delivery.resolve(text) if speed is None else voice_delivery.NEUTRAL
         if _delivery.speed is not None:
             payload["speed"] = _delivery.speed
             logger.debug("expressive delivery: profile=%s speed=%s", _delivery.profile, _delivery.speed)

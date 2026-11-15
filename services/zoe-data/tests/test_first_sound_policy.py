@@ -155,3 +155,29 @@ def test_prefetch_edges_empty_error_and_close():
         stream.close_nowait()                   # idempotent
 
     asyncio.run(go())
+
+
+# -- W1 splitter cases (design note proof plan 1) --------------------------------------------------------------------
+@pytest.mark.parametrize("text,unit", [
+    ("Dr. Smith, the one from the clinic, called earlier about your results", "Dr. Smith, the one from the clinic,"),
+    ("Bring a few things, e.g., snacks and drinks for the long afternoon", None),                # no cut at "e.g.,"
+    ("The total came to about 3.5, which is a bit more than last week", None),
+    ("At 8:05, the first bus leaves from the corner stop near the park", None),
+    ("The shop closes at 5 p.m., then reopens again tomorrow morning", None),
+    ("On March 3, 2026, the clinic opens a little later than usual", None),
+    ("The first bus from the corner stop leaves at 8:05, then goes on to town", None),          # only the digit rule holds
+    ("The clinic says it opens a little later on March 3, 2026, for the holiday", None),          # these two
+    ("Your appointment is on Monday, March 3rd at ten in the morning", "Your appointment is on Monday,"),   # cuts: pinned
+    ("eggs, milk, bread, and more", None),                                                       # every clause under 24
+    ("Here is what is on the list: eggs, milk, bread, and oranges", "Here is what is on the list:"),
+    ('She said "wait, not yet, please" and then she left the room', None),                      # inside a quote
+])
+def test_w1_splitter_cases(clause_on, text, unit):
+    got, rest = fs.extract_first_clause(text)
+    assert got == unit
+    if got:
+        assert (got + " " + rest).split() == text.split()
+
+
+def test_a_one_word_reply_waits_for_the_end_of_stream_flush(clause_on):
+    assert v._extract_first_unit_ex("Sure.") == (None, "Sure.", "")

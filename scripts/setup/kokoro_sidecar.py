@@ -100,6 +100,49 @@ _phrase_cache: dict[str, bytes] = {}
 def _phrase_cache_key(voice: str, text: str) -> str:
     return f"{voice}|{text.strip().lower()}"
 
+
+# ── Pinned style (zoe-data ZOE_KOKORO_STYLE_PIN sends ``style_len``) ──
+# KPipeline.infer picks the style row ``pack[len(phonemes) - 1]``, so every chunk of a reply gets a different row (a pitch
+# reset between chunks). A pinned pack has ONE row repeated, so every phoneme length maps to it. load_voice returns a CPU
+# float32 tensor unchanged, so the pack is passed as ``voice=`` with no library patch. Absent ``style_len`` = unchanged.
+_STYLE_ROWS = 510
+_PINNED_PACKS_MAX = 8
+_pinned_packs: dict = {}
+
+
+def _style_row(style_len: int) -> int:
+    """The clamped 1..510 style length a pinned request uses."""
+    return max(1, min(_STYLE_ROWS, int(style_len)))
+
+
+def _pinned_cache_key(voice: str, text: str, style_len: int) -> str:
+    """A pinned entry's key. The part before the first ``|`` is never a bare voice id (``#`` is outside the voice-id
+    alphabet), so a pinned call can neither read nor overwrite an unpinned entry, whatever the text says."""
+    return f"{voice}#s{_style_row(style_len)}|{text.strip().lower()}"
+
+
+def _pin_style_rows(base, style_len: int):
+    """``base`` (rows x ...) with every row replaced by row ``style_len - 1`` (clamped to the pack). Pure: indexing only, so a
+    tensor gives a new tensor of the same dtype and device, and a test can pass any array."""
+    n = int(base.shape[0])
+    row = max(1, min(int(style_len), n)) - 1
+    return base[[row] * n]
+
+
+def _pinned_pack(voice: str, style_len: int):
+    """The voice's pinned pack as a CPU float32 tensor (bounded cache). Called inside the synth executor, under the lock."""
+    import torch
+
+    key = (voice, _style_row(style_len))
+    pack = _pinned_packs.get(key)
+    if pack is None:
+        base = _pipeline.load_voice(voice)
+        pack = _pin_style_rows(base.detach().to("cpu", torch.float32), key[1]).contiguous()
+        _pinned_packs[key] = pack
+        while len(_pinned_packs) > _PINNED_PACKS_MAX:
+            _pinned_packs.pop(next(iter(_pinned_packs)), None)
+    return pack
+
 # Phrases to pre-warm at startup.  Chosen to cover the most frequent short Zoe
 # responses so they return in <1ms instead of ~450ms.
 _WARM_PHRASES = [
@@ -738,7 +781,7 @@ def _pcm_to_wav(audio_tensor, sample_rate: int = _SAMPLE_RATE) -> bytes:
 _MAX_OOM_RETRIES = 2  # 2 retries × 500ms sleep = max ~1.5s extra; HTTP conn stays open
 
 
-def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
+def _blocking_synthesize(text: str, voice: str, speed: float, style_len: int | None = None) -> bytes:
     """Run Kokoro inference synchronously (called inside run_in_executor).
 
     Calls torch.cuda.empty_cache() before every attempt to release any
@@ -758,7 +801,8 @@ def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
     def _run_inference():
         torch.cuda.empty_cache()
         chunks: list = []
-        for result in _pipeline(text, voice=voice, speed=speed):
+        pack = voice if style_len is None else _pinned_pack(voice, style_len)
+        for result in _pipeline(text, voice=pack, speed=speed):
             if result.audio is not None and result.audio.numel() > 0:
                 chunks.append(result.audio.detach())
         if not chunks:
@@ -783,11 +827,14 @@ def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
     raise RuntimeError(f"CUDA OOM after {_MAX_OOM_RETRIES} retries") from last_exc
 
 
-async def _run_synthesis(text: str, voice: str, speed: float = 1.0) -> bytes:
+async def _run_synthesis(text: str, voice: str, speed: float = 1.0, style_len: int | None = None) -> bytes:
     """Async wrapper: runs blocking inference in thread pool under the lock."""
     loop = asyncio.get_event_loop()
     async with _pipeline_lock:
-        out = await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed)
+        if style_len is None:
+            out = await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed)
+        else:
+            out = await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed, style_len)
     _schedule_idle_trim(loop)
     return out
 
@@ -858,6 +905,14 @@ class SynthRequest(BaseModel):
     text: str
     voice: str = _VOICE
     speed: float = 1.0
+    style_len: int | None = None   # pin ONE style row for this utterance (zoe-data ZOE_KOKORO_STYLE_PIN); absent = unchanged
+
+
+def _synth(text: str, voice: str, speed: float, style_len: int | None):
+    """The synthesis call; an unpinned request calls ``_run_synthesis`` exactly as before the pin existed."""
+    if style_len is None:
+        return _run_synthesis(text, voice, speed)
+    return _run_synthesis(text, voice, speed, style_len=_style_row(style_len))
 
 
 def _checked_voice(raw: str | None) -> str:
@@ -875,6 +930,7 @@ async def health():
         "voice": _VOICE,
         "device": _device,
         "pipeline_loaded": _pipeline is not None,
+        "style_pin": True,
     }
     if _degraded_reason:
         # Not a hard failure — Zoe still speaks — but CPU synthesis is slower than
@@ -898,14 +954,15 @@ async def synthesize(req: SynthRequest):
     # Cacheable for ANY voice — the key is voice-scoped, so a non-default voice
     # gets its own hot set instead of bypassing the cache (or worse, colliding).
     cacheable = req.speed == 1.0 and len(text) <= _CACHE_MAX_TEXT_LEN
-    cache_key = _phrase_cache_key(voice, text)
+    cache_key = (_phrase_cache_key(voice, text) if req.style_len is None
+                 else _pinned_cache_key(voice, text, req.style_len))
     if cacheable:
         hit = _cache_get(cache_key)
         if hit is not None:
             return Response(content=hit, media_type="audio/wav", headers={"X-Cache": "hit"})
 
     try:
-        wav_bytes = await _run_synthesis(text, voice, req.speed)
+        wav_bytes = await _synth(text, voice, req.speed, req.style_len)
     except Exception as exc:
         logger.warning("Kokoro synthesis failed voice=%s: %s", voice, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -946,7 +1003,7 @@ async def synthesize_stream(req: SynthRequest):
     if _pipeline is None:
         raise HTTPException(status_code=503, detail="Kokoro model not loaded")
     voice = _checked_voice(req.voice)
-    speed = req.speed
+    speed, style_len = req.speed, req.style_len
     _DONE = object()
 
     async def _gen():
@@ -954,7 +1011,7 @@ async def synthesize_stream(req: SynthRequest):
 
         async def _produce():
             try:
-                queue.put_nowait(_wav_to_pcm16_le(await _run_synthesis(text, voice, speed)))
+                queue.put_nowait(_wav_to_pcm16_le(await _synth(text, voice, speed, style_len)))
             except Exception as exc:  # logged here, surfaced to the client generator below
                 logger.warning("Kokoro stream synthesis failed voice=%s: %s", voice, exc)
                 queue.put_nowait(exc)
