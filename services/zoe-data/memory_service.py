@@ -1494,19 +1494,37 @@ _SPOKEN_EMAIL_RE = re.compile(
     r"(?i)\b(e-?mail(?:\s+address)?(?:\s{1,8}(?:is|was))?\s{0,8}:?\s{1,8})"
     r"([\w.+-]{1,64}\s+at\s+[\w-]{1,63}(?:\s{1,8}dot\s{1,8}[\w-]{1,63}){0,3}\s+dot\s+[a-z]{2,6})\b"
 )
+#: the separator BETWEEN two digit groups of one phone number: spaces, a dash with optional spaces, or a dot with NO space
+#: after it, and always a digit (or "(") next. A sentence end (". ", "; ", "! ", "? ") or a line break is never inside a
+#: number, so a phone cannot run on into the next number and push it over the digit cap (review, PR #2574)
+_PHONE_SEP = r"(?: {0,2}- {0,2}|\.| {1,3})"
 _PHONE_LABEL_RE = re.compile(
     rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
-    rf"{_CONNECT}(\+?\(?\d[\d ().-]{{5,22}}\d)"
+    rf"{_CONNECT}(\+?\(?\d(?:[\d()]|{_PHONE_SEP}(?=[\d(])){{5,40}}\d)"   # 40: room for two numbers (caps below)
 )
 #: unlabelled phone shapes: a leading +, a leading trunk 0 (AU / UK), or the 3-3-4 North American form with - or .
-_PHONE_INTL_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[\d .-]{5,16}\d(?!\w)")
-_PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,3}(?!\w|[.,/-]\d)")
+_PHONE_INTL_RE = re.compile(rf"(?<![\w+])\+\d{{1,3}}[ .-]?(?:\(\d{{1,4}}\)[ .-]?)?\d(?:\d|{_PHONE_SEP}(?=\d)){{5,40}}\d(?!\w)")
+#: up to 7 groups: two trunk numbers said back to back with a space are taken whole (cap 22 digits below), never split
+_PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,7}(?!\w|[.,/-]\d)")
 _PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
+#: FALLBACK, run after the passes above: the earlier wide shapes, whose value may cross ". ". After the split passes, a run-on
+#: pair is already two [REDACTED]s, so this only fires where the split left a fragment under the digit cap that the wide
+#: shape still reads as ONE number ("call me on 0400. 555 101"): kept so the split never frees what the wide shape caught
+_PHONE_LABEL_WIDE_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
+    rf"{_CONNECT}(\+?\(?\d[\d ().-]{{5,40}}\d)"
+)
+_PHONE_INTL_WIDE_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[\d .-]{5,40}\d(?!\w)")
 _UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
+#: a postcode, and any digit groups straight after it. A postcode ends an address, so digits that continue it are the head
+#: of the NEXT number ("... Street, 07700 900123"): they are taken too, never split, so no part of that number survives
+#: (both are redacted: we cannot tell "WA 6000 0400 555 101" from one long number). Bounded: four more groups, single
+#: separators, so it never crosses ". " (review, PR #2574)
+_POSTCODE = r"\d{4,5}\b(?:[ .-]?\d{1,10}\b){0,4}"
 #: ``[unit] number Capitalised Name street-type [, Suburb] [STATE] [postcode]``; a lower-case street needs a label below
 _ADDRESS_RE = re.compile(
     rf"(?<![\w/.-]){_UNIT},?\s{{1,8}}(?:[A-Z][A-Za-z'’-]{{0,40}}\s{{1,8}}){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
-    r"(?:(?:,\s{0,8}|\s{1,8})(?:[A-Z][\w'’-]{0,40}\s{1,8}){0,3}(?:[A-Z]{2,3}\s{1,8})?\d{4,5}\b"
+    rf"(?:(?:,\s{{0,8}}|\s{{1,8}})(?:[A-Z][\w'’-]{{0,40}}\s{{1,8}}){{0,3}}(?:[A-Z]{{2,3}}\s{{1,8}})?{_POSTCODE}"
     r"|,\s{0,8}[A-Z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2})?"
 )
 #: every repeat below is bounded (a fixed-width prefix of at most four words): an unbounded "my my my ... address" prefix
@@ -1514,12 +1532,14 @@ _ADDRESS_RE = re.compile(
 _ADDRESS_LABEL_RE = re.compile(
     r"(?i)\b((?:(?:my|our|his|her|their|the|home|postal|street|new|old|billing|delivery|shipping)\s{1,8}){0,4}(?<!ip\s)(?<!mac\s)"
     r"address(?:\s{1,8}(?:is|was)|\s{0,8}:)\s{0,8})"
-    r"(\d[^.;!?\n]{0,80}?(?=\s{0,8}(?:[.;!?\n]|$)|\s{1,8}(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]{0,80})"
-)
+    r"(\d[^.;!?\n]{0,80}?(?=\s{0,8}(?:[.;!?\n]|$)|\s{1,8}(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]*)"
+)   # ^ no end within 80 characters: take the rest of the sentence. A fixed 80-character cut split the NEXT item ("... ring the
+    #   shop on (" | "08) 5550 1202") and freed its tail (pairwise review, 2026-11-16); one greedy class, so still linear
 _LIVE_AT_RE = re.compile(
     rf"(?i)\b((?:i|we|they|he|she|who)?\s{{0,8}}(?:live|lives|living|stay|stays|staying)\s{{1,8}}at\s{{1,8}})"
     rf"({_UNIT},?\s{{1,8}}(?:[\w'’-]{{1,40}}\s{{1,8}}){{1,3}}?(?:{_alt(_STREET_TYPES)})\b\.?"
-    r"(?:(?:,?\s{1,8}[A-Za-z][\w'’-]{0,40}){0,3}?,?\s{1,8}\d{4,5}\b|,\s{0,8}[A-Za-z][\w'’-]{0,40}(?:\s{1,8}[A-Za-z][\w'’-]{0,40}){0,2}?)?)"
+    rf"(?:(?:,?\s{{1,8}}[A-Za-z][\w'’-]{{0,40}}){{0,3}}?,?\s{{1,8}}{_POSTCODE}|"
+    r",\s{0,8}[A-Za-z][\w'’-]{0,40}(?:\s{1,8}[A-Za-z][\w'’-]{0,40}){0,2}?)?)"
 )
 _PO_BOX_RE = re.compile(r"(?i)\bP\.?\s?O\.?\s+Box\s+\d{1,6}\b")
 _REDACT = "[REDACTED]"
@@ -1563,10 +1583,14 @@ def _scrub_contact(text: str) -> str:
     text = _LIVE_AT_RE.sub(r"\1" + _REDACT, text)
     text = _ADDRESS_RE.sub(_REDACT, text)
     text = _PO_BOX_RE.sub(_REDACT, text)
-    text = _PHONE_LABEL_RE.sub(_keep_label_if(8, 15), text)
-    text = _PHONE_INTL_RE.sub(_whole_if(8, 15), text)
-    text = _PHONE_TRUNK_RE.sub(_whole_if(9, 11), text)
-    return _PHONE_NANP_RE.sub(_REDACT, text)
+    # the upper caps allow TWO numbers said back to back with only a space ("0400 555 101 0400 555 202"): a run that long is
+    # two phones run together, never a reason to keep both (a card number is rejected earlier, by the Luhn check)
+    text = _PHONE_LABEL_RE.sub(_keep_label_if(8, 30), text)
+    text = _PHONE_INTL_RE.sub(_whole_if(8, 30), text)
+    text = _PHONE_TRUNK_RE.sub(_whole_if(9, 22), text)
+    text = _PHONE_NANP_RE.sub(_REDACT, text)
+    text = _PHONE_LABEL_WIDE_RE.sub(_keep_label_if(8, 30), text)
+    return _PHONE_INTL_WIDE_RE.sub(_whole_if(8, 30), text)
 
 
 def _luhn_valid(digits: str) -> bool:

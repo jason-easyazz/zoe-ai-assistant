@@ -235,6 +235,10 @@ def test_the_night_quote_gate_refuses_the_new_classes(text):
     "account number" + " " * 12000 + "x1", "my number" + " " * 12000 + "x1", "email" + " " * 12000 + "x dot com 1",
     "door code" + " " * 12000 + "x1", "pin" + " " * 12000 + "x1", "password" + " " * 12000 + ", 1",
     "I live at" + " " * 12000 + "1", "I live at 1" + " Aa" * 6000, "12" + " Aa" * 6000, "call" + " me" * 6000 + " on 1",
+    # contact run-ons (2026-11-16): the bounded postcode follow-on groups and the phone separator
+    "1 Aa St, 1234 " * 2000, "we live at 1 a st and 1234" + " 1" * 6000, "1 Aa St 1234" + "-1" * 8000,
+    "0400 555 101. " * 3000, "+61 4. " * 4000, "+61 4" + " 5" * 8000, "call me on 0400" + " 5" * 8000,
+    "call me on " + "1." * 8000, "call me on 1" + " - 2" * 4000, "my number is 1" + "(2)" * 5000,
 ])
 def test_a_long_adversarial_string_is_fast(blob):
     """Linear, not catastrophic: measured relative to a benign sentence of the SAME length on the same box (so a loaded CI
@@ -351,11 +355,11 @@ def _all_must_rows() -> list:
     return [(t, s) for table in (SECRET_CATCH, CONTACT_CATCH) for rows in table.values() for t, s in rows] + LABELLED
 
 
-#: KNOWN, pre-existing run-ons between two CONTACT patterns (not the secret / labelled passes): a street address takes the next
-#: number's leading group as its postcode, and an international / trunk phone runs across ". " into the next number. Pinned as a
-#: ratchet: a NEW leaking pair fails the test, and fixing one of these fails it too until the entry is removed. The address
-#: helpers are being reworked on a separate branch; recorded in docs/knowledge/open-problems.md.
-_KNOWN_CONTACT_RUN_ONS = {
+#: run-ons between two CONTACT patterns that still leak. EMPTY since 2026-11-16 (the postcode takes the digit groups that follow
+#: it, ``memory_service._POSTCODE``; a phone never crosses ". " or a line break, ``_PHONE_SEP``). Kept as a ratchet: a new
+#: leaking pair fails the test; it must stay empty.
+_KNOWN_CONTACT_RUN_ONS: set = set()
+_FIXED_RUN_ONS_2026_11_16 = {
     (" and ", "we live at 12 Example Street", "07700 900123 is my cell"),
     (" and ", "I live at 33 sample road", "07700 900123 is my cell"),
     (" and ", "she lives at 5 placeholder close, springfield", "07700 900123 is my cell"),
@@ -395,3 +399,71 @@ def test_the_whole_must_table_joined_pairwise_loses_every_secret(join):
             if not reject and (sa in out or sb in out):
                 leaks.add((join, ta, tb))
     assert leaks == {k for k in _KNOWN_CONTACT_RUN_ONS if k[0] == join}, sorted(leaks ^ _KNOWN_CONTACT_RUN_ONS)
+
+
+def test_the_run_on_ratchet_is_empty():
+    assert not _KNOWN_CONTACT_RUN_ONS
+
+
+#: two or three contact details in a row: (text, every value that must be gone)
+RUN_ON_CATCH: list[tuple[str, list[str]]] = [
+    # an address followed by a phone number, an account number, a labelled secret
+    ("we live at 12 Example Street 0400 555 101", ["12 Example Street", "555 101"]),
+    ("it's 221B Example Lane, 07700 900123 is my cell", ["221B Example Lane", "07700", "900123"]),
+    ("drop it at 4 Example Road, Springfield 6000 0400 555 101", ["4 Example Road", "555 101"]),
+    ("we live at 12 Example Street and 9555 0123 is the landline", ["12 Example Street", "9555", "0123"]),
+    ("drop it at 4 Example Road, Springfield 6000 and my account number is 12345678", ["4 Example Road", "12345678"]),
+    ("we live at 12 Example Street, door code 5791", ["12 Example Street", "5791"]),
+    ("I live at 33 sample road 6000, the alarm code is 4821", ["33 sample road", "4821"]),
+    # two phone numbers across sentence punctuation or a line break
+    ("call me on 0400 555 101. 0400 555 202 is the backup", ["555 101", "555 202"]),
+    ("the office is +61 400 555 101. 020 7946 0958 is the London line", ["400 555 101", "7946 0958"]),
+    ("my number is 5550 1234; 07700 900123 is my cell", ["5550 1234", "900123"]),
+    ("call me on 0400 555 101! 0400 555 202 also works", ["555 101", "555 202"]),
+    ("is it 0400 555 101? 0400 555 202 maybe", ["555 101", "555 202"]),
+    ("call me on 0400 555 101\n0400 555 202 is the backup", ["555 101", "555 202"]),
+    ("+61 400 555 101\n+61 400 555 202", ["400 555 101", "400 555 202"]),
+    # two numbers back to back with only a space: the run is over one number's cap, so it is two numbers, both redacted
+    ("call me on 0400 555 101 0400 555 202", ["555 101", "555 202"]),
+    ("07700 900123 07700 900456 are ours", ["900123", "900456"]),
+    # a number spelled with ". " inside it is still read as ONE number by the wide fallback (never freed)
+    ("call me on 0400. 555 101", ["0400", "555 101"]),
+    ("+61 400. 555 101", ["400", "555 101"]),
+    # three in a row
+    ("we live at 12 Example Street, 07700 900123 is my cell. call mum on 9555 0123",
+     ["12 Example Street", "900123", "9555 0123"]),
+    ("the office is +61-8-5550-1303. call mum on 9555 0123. 020 7946 0958 is the London line",
+     ["5550-1303", "9555 0123", "7946 0958"]),
+    ("Unit 3, 18 Placeholder Crescent, 07700 900123 is my cell and my account number is 12345678",
+     ["18 Placeholder Crescent", "900123", "12345678"]),
+]
+
+
+@pytest.mark.parametrize("text,gone", RUN_ON_CATCH, ids=[t[:40] for t, _g in RUN_ON_CATCH])
+def test_contact_details_in_a_row_all_go(text, gone):
+    out, reject = scrub_pii(text)
+    assert reject is None and not [g for g in gone if g in out], out
+
+
+@pytest.mark.parametrize("join", _JOINS)
+def test_contact_rows_joined_in_triples_lose_every_value(join):
+    """PROPERTY over the CONTACT table: every ordered pair (i, j) plus a third row spread from them, joined three in a row."""
+    rows = [(t, s) for table in (CONTACT_CATCH,) for rs in table.values() for t, s in rs]
+    n, leaks = len(rows), []
+    for i in range(n):
+        for j in range(n):
+            k = (i * 7 + j * 3 + 1) % n
+            trio = [rows[i], rows[j], rows[k]]
+            if len({t for t, _s in trio}) < 3 or any(sa in tb for ta, sa in trio for tb, _sb in trio if ta != tb):
+                continue
+            out, reject = scrub_pii(join.join(t for t, _s in trio))
+            if not reject and any(sec in out for _t, sec in trio):
+                leaks.append((join, [t for t, _s in trio], out))
+    assert not leaks, leaks[:3]
+
+
+@pytest.mark.parametrize("join,a,b", sorted(_FIXED_RUN_ONS_2026_11_16))
+def test_the_21_former_run_on_pairs_lose_both_values(join, a, b):
+    secret = dict(_all_must_rows())
+    out, reject = scrub_pii(a + join + b)
+    assert reject is None and secret[a] not in out and secret[b] not in out, out
