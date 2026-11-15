@@ -182,6 +182,15 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 | D8 | May "learn this again" lift a forget | **Decided 2026-11-15:** blocked in the code today (fail closed) until built; allow it only as a deliberate, recognised request from the same person, for phrases; never automatically |
 | D9 | Sold boxes | **Decided 2026-11-15:** every phase must work with no GitHub and no cloud: the kernel, its tests and the harness run offline |
 
+### Further owner decisions (2026-11-15, from the implementation map's questions)
+
+| Question | Decision |
+|---|---|
+| Does removing an account erase that person's data | Yes: everything, **except** items that were shared with other members and accepted into their data, which stay with those members. The Settings delete button must run the full erase, not only remove the sign-in account. What counts as "shared and accepted" has to be defined in the data model (an author and an accepted-by record) before the exception can be honoured; until then nothing may be kept on a guess |
+| Does a spoken "remove X from the list" tick the item or delete it | Delete it. The paths that tick it are wrong for that request |
+| How does the kernel learn who lives in the house | Automatically, from the accounts Zoe already has. The owner keeps no second list |
+| Where should the kernel live, and how much should go through it | Open: an architecture study is under way. The owner's expectation is that most things go through the kernel; the study must state the boundary and justify every exception |
+
 ## 7. Risks, and what answers each
 
 | Risk | Answer |
