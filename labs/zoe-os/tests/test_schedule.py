@@ -190,16 +190,17 @@ def test_control_a_fixed_24_hour_step_is_caught_by_the_daylight_test():
     assert first + 86400 != right and right - first == 23 * 3600
 
 
-def test_a_snooze_at_or_before_the_rows_floor_never_fires():
-    """``after`` is the row's floor for EVERY form, a snooze included: a snooze at or before it is not a fire time."""
+def test_a_snooze_behind_the_rows_floor_never_fires():
+    """A snooze sets the floor AT its own time, so snooze == floor is the live snooze. A snooze BEHIND the floor was
+    overtaken by a later write and is not a fire time."""
     row = {"date": "2030-01-08", "time": "09:00", "after": at(2030, 1, 7, 12)}
-    assert fire(row | {"snoozed_until": at(2030, 1, 7, 13)}, at(2030, 1, 7, 10)) == at(2030, 1, 7, 13)     # past the floor: wins
-    assert fire(row | {"snoozed_until": at(2030, 1, 7, 12)}, at(2030, 1, 7, 10)) == at(2030, 1, 8, 9)     # AT the floor: ignored
-    assert fire(row | {"snoozed_until": at(2030, 1, 7, 11)}, at(2030, 1, 7, 10)) == at(2030, 1, 8, 9)     # before it: ignored
+    assert fire(row | {"snoozed_until": at(2030, 1, 7, 13)}, at(2030, 1, 7, 10)) == at(2030, 1, 7, 13)     # ahead of the floor
+    assert fire(row | {"snoozed_until": at(2030, 1, 7, 12)}, at(2030, 1, 7, 10)) == at(2030, 1, 7, 12)     # the live snooze
+    assert fire(row | {"snoozed_until": at(2030, 1, 7, 11)}, at(2030, 1, 7, 10)) == at(2030, 1, 8, 9)      # overtaken: ignored
 
 
-def test_control_a_snooze_that_ignores_the_floor_is_caught(monkeypatch):
-    """The old order (snooze compared with the caller's ``after`` only) returns the forbidden time."""
+def test_control_a_snooze_that_ignores_the_floor_is_caught():
+    """The old rule (snooze compared with the caller's ``after`` only) returns the overtaken time."""
     row = {"active": 1, "done": 0, "after": at(2030, 1, 7, 12), "snoozed_until": at(2030, 1, 7, 11), "at": None,
            "date": "2030-01-08", "time": "09:00", "repeat": None, "until": None}
     old = row["snoozed_until"] if row["snoozed_until"] > at(2030, 1, 7, 10) else None
