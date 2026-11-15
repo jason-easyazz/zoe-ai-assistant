@@ -280,7 +280,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
             # a failed physical erase is NOT "forgotten": the text is still on disk. The rows stay rejected; a retry finishes it.
             await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
             physical = True
-    erased = await pa._erase_words(user_id, exp, ref.text or "")
+    erased = await pa._erase_words(user_id, exp, ref.text or "", mids=tuple(pa._mids_of(exp, ref)))   # by the saved turn when it has one
     logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
     if status == "rejected" and len(gone) == 1 and not erased and not physical:
         return "gone"          # already forgotten earlier and nothing was left to remove
@@ -331,7 +331,8 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
 
         if physical_erase_enabled():
             await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
-    await pa._erase_words(owner, _explained_for(rid, ref), ref.text or "")
+    _exp = _explained_for(rid, ref)
+    await pa._erase_words(owner, _exp, ref.text or "", mids=tuple(pa._mids_of(_exp, ref)))
     logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
     return "forgotten"
 

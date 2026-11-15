@@ -295,7 +295,8 @@ class Z0Arm(Arm):
             return
         xw = importlib.import_module("exact_words")
         when = _dt.datetime.now(_dt.timezone.utc).timestamp() - float(self._cur_day or 0) * 86400.0
-        await xw.index_turn(self._user, t.text, said_at=when, source=source, speaker_verified=verified)
+        # a lab turn has no saved chat turn: its entries name an explicit non-turn source kind (an id-less entry is refused)
+        await xw.index_turn(self._user, t.text, said_at=when, source=source, speaker_verified=verified, provenance="lab")
 
     def _extract(self, t: Turn, prev: str):
         return self.svc.memory_extractor.extract_candidates(

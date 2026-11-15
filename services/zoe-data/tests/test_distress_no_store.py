@@ -67,7 +67,7 @@ def turn(text, user=UID):
     mp.claim_turn(user, text)
     res = run(fast_tiers.resolve(text, user, "s1", channel="voice"))
     run(memory_extractor.extract_and_ingest(text, "ok", user_id=user, session_id="s1"))
-    run(xw.index_turn(user, text))
+    run(xw.index_turn(user, text, message_id="m-" + __import__("hashlib").sha1(text.encode()).hexdigest()[:12]))   # its saved turn
     return res
 
 

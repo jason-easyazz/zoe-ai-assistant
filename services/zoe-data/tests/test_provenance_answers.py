@@ -946,10 +946,10 @@ def test_the_turn_digest_and_the_exact_words_index_skip_a_marked_turn(svc, monke
     mp.note_user_turn(UID, CORMAC, "s1")
     mp.claim_turn(UID, CORMAC)
     assert run(memory_digest.run_turn_digest(UID, CORMAC, "ok", session_id="s1")).get("off_record") is True
-    assert run(xw.index_turn(UID, CORMAC)) is False and run(xw.get_backend().count(UID)) == 0
+    assert run(xw.index_turn(UID, CORMAC, message_id="m-cormac")) is False and run(xw.get_backend().count(UID)) == 0
     # control: the same index takes an ordinary turn
     mp.note_user_turn(UID, ODALYS, "s1", now=mp._STATES[UID].last_note_ts + 30)
-    assert run(xw.index_turn(UID, ODALYS)) is True and run(xw.get_backend().count(UID)) == 1
+    assert run(xw.index_turn(UID, ODALYS, message_id="m-odalys")) is True and run(xw.get_backend().count(UID)) == 1
 
 
 def test_the_post_turn_chat_hook_skips_a_marked_turn_and_runs_for_a_normal_one(svc, monkeypatch):

@@ -485,7 +485,7 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
     within ``SIBLING_WINDOW_S``, the same turn (equal source excerpts, then overlap >= ``SIBLING_MIN_OVERLAP``)
     or, with no excerpt on one side, one row's content words wholly inside the other's; when ``ref`` is the derived row only an
     ask row counts. Never another turn's look-alike: a second ask (its own ask id); rows carrying saved-turn ids (``source_turn``)
-    are twins only of the same id; an old row with a redacted excerpt is never a twin. Never raises."""
+    are twins only of the same id; rows with none (legacy) by their words. Never raises."""
     try:
         meta = ref.metadata or {}
         ts = _added_ts(meta)
@@ -509,12 +509,12 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             ta, tb = str(meta.get("user_turn_id") or ""), str(m.get("user_turn_id") or "")
             if ref_is_ask and is_ask_row(m) and ta and tb and ta != tb:
                 continue
-            sa, sb = str(meta.get("source_turn") or ""), str(m.get("source_turn") or "")
-            if sa or sb:                    # identity decides: the same saved turn, or not a twin
-                if sa != sb:
-                    continue
-            elif "[redacted]" in ex_a or "[redacted]" in ex_b:
-                continue                    # an old redacted row: which turn it was cannot be told, so it is never a twin
+            import turn_forget
+            ka, sa = turn_forget.provenance(meta)
+            kb, sb = turn_forget.provenance(m)
+            sa, sb = (sa if ka == "turn" else ""), (sb if kb == "turn" else "")
+            if (sa or sb) and sa != sb:     # identity decides: a row with a saved turn is NEVER a twin by its words
+                continue
             same_turn = False
             if ex_a and ex_b:
                 if ex_a not in ex_b and ex_b not in ex_a:

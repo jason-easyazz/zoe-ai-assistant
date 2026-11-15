@@ -13,6 +13,7 @@ unverified-speaker rule off).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import io
 import sys
@@ -61,7 +62,13 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def mid(text, user=USER, days_ago=0.0):
+    """A synthetic saved-turn (``chat_messages``) id: every new entry names its saved turn (an id-less one is refused)."""
+    return "m-" + hashlib.sha1(f"{user}|{text}|{days_ago}".encode()).hexdigest()[:12]
+
+
 def say(text, *, user=USER, days_ago=0.0, **kw):
+    kw.setdefault("message_id", mid(text, user, days_ago))
     return run(xw.index_turn(user, text, said_at=NOW - days_ago * DAY, **kw))
 
 
@@ -257,8 +264,8 @@ def test_the_audited_user_delete_removes_every_row_of_the_user(index):
 async def test_memory_service_delete_user_also_removes_the_owners_verbatim_turns(svc, index, monkeypatch):
     monkeypatch.setattr(svc, "_list_ids_for_user", lambda uid: [])          # the palace half is the palace's own tests
     monkeypatch.setattr(svc, "_delete_audit_for_user_sync", lambda uid: 0)
-    assert await xw.index_turn(USER, SENTENCE, said_at=NOW)
-    assert await xw.index_turn(OTHER, SENTENCE, said_at=NOW)
+    assert await xw.index_turn(USER, SENTENCE, said_at=NOW, message_id=mid(SENTENCE))
+    assert await xw.index_turn(OTHER, SENTENCE, said_at=NOW, message_id=mid(SENTENCE, OTHER))
     await svc.delete_user(USER, actor="admin", reason="rtbf")
     assert [r["user_id"] for r in index.rows.values()] == [OTHER]
 
@@ -366,10 +373,10 @@ async def test_the_sql_backend_runs_the_same_contract_on_the_real_table(monkeypa
     use_db(monkeypatch, db)
     xw.set_backend(xw.SqlBackend())
     try:
-        assert await xw.index_turn(USER, "I told Dr Okafor I can only manage Tuesday afternoons for the dentist", said_at=NOW - 15 * DAY)
-        assert await xw.index_turn(USER, "I told Dr Okafor I can only manage Tuesday afternoons for the dentist", said_at=NOW - 15 * DAY) is False   # one row
-        assert await xw.index_turn(OTHER, "my dentist is Dr Hale and I see her on Mondays only", said_at=NOW - DAY)
-        assert await xw.index_turn(USER, "my sister Dana has two kids and they start at Hollins in January", said_at=NOW - DAY)
+        assert await xw.index_turn(USER, "I told Dr Okafor I can only manage Tuesday afternoons for the dentist", said_at=NOW - 15 * DAY, message_id="m-okafor")
+        assert await xw.index_turn(USER, "I told Dr Okafor I can only manage Tuesday afternoons for the dentist", said_at=NOW - 15 * DAY, message_id="m-okafor") is False   # one row
+        assert await xw.index_turn(OTHER, "my dentist is Dr Hale and I see her on Mondays only", said_at=NOW - DAY, message_id="m-hale")
+        assert await xw.index_turn(USER, "my sister Dana has two kids and they start at Hollins in January", said_at=NOW - DAY, message_id="m-dana")
         hits = await xw.lookup(USER, "what exactly did I say about the dentist")
         assert [h.text for h in hits] == ["I told Dr Okafor I can only manage Tuesday afternoons for the dentist"]
         assert round((NOW - hits[0].said_at) / DAY) == 15
@@ -399,7 +406,7 @@ async def test_a_store_that_fails_costs_the_block_never_the_turn(monkeypatch):
 
     xw.set_backend(Broken())
     try:
-        assert await xw.index_turn(USER, "I told Dr Okafor I can only manage Tuesday afternoons for the dentist") is False
+        assert await xw.index_turn(USER, "I told Dr Okafor I can only manage Tuesday afternoons for the dentist", message_id="m-okafor") is False
         assert await xw.lookup(USER, "what exactly did I say about the dentist") == []
         assert await xw.packet_block(USER, "what exactly did I say about the dentist") == ""
     finally:
@@ -428,13 +435,22 @@ async def test_a_slow_store_is_cut_off_at_the_read_budget(monkeypatch):
 @pytest.mark.asyncio
 async def test_extract_and_ingest_indexes_the_turn_on_both_lanes_and_skips_an_unverified_voice(svc, index):
     import memory_extractor
+    import turn_forget
     text = "I told Dr Okafor I can only manage Tuesday afternoons for the dentist"
-    await memory_extractor.extract_and_ingest(text, user_id=USER, source="chat_regex")
-    assert len(index.rows) == 1
-    await memory_extractor.extract_and_ingest(text + " and not Thursday", user_id=USER, source="voice_regex", speaker_verified=True)
+
+    async def turn(words, **kw):          # as the live lanes run it: the saved turn noted with its id, then the post-turn capture
+        turn_forget.note_user_turn(USER, words, mid=mid(words))
+        with turn_forget.capture_scope(USER, words):
+            await memory_extractor.extract_and_ingest(words, user_id=USER, **kw)
+
+    turn_forget.reset()
+    await turn(text, source="chat_regex")
+    assert len(index.rows) == 1 and xw.mid_of(next(iter(index.rows))[1]) == mid(text)      # the entry names its saved turn
+    await turn(text + " and not Thursday", source="voice_regex", speaker_verified=True)
     assert len(index.rows) == 2
-    await memory_extractor.extract_and_ingest(text + " and not Friday", user_id=USER, source="voice_regex", speaker_verified=False)
+    await turn(text + " and not Friday", source="voice_regex", speaker_verified=False)
     assert len(index.rows) == 2                                          # the speaker gate did not confirm the owner
+    turn_forget.reset()
 
 
 @pytest.mark.asyncio
@@ -696,7 +712,7 @@ class _BrokenIndex(xw.MemoryBackend):
 def test_an_entity_erase_that_fails_is_raised_not_counted_as_no_matches(phase):
     be = _BrokenIndex(on=phase)
     xw.set_backend(be)
-    assert run(xw.index_turn(USER, SENTENCE, said_at=NOW))
+    assert run(xw.index_turn(USER, SENTENCE, said_at=NOW, message_id=mid(SENTENCE)))
     with pytest.raises(RuntimeError):
         run(xw.erase_entity(USER, "Dana"))
     assert run(xw.erase_entity(USER, "")) == 0                              # no name is still quiet
@@ -705,7 +721,7 @@ def test_an_entity_erase_that_fails_is_raised_not_counted_as_no_matches(phase):
 @pytest.mark.parametrize("phase", ["read", "delete"])
 def test_the_forget_handler_does_not_confirm_when_the_verbatim_rows_could_not_be_erased(svc, no_offers, phase):
     xw.set_backend(_BrokenIndex(on=phase))
-    assert run(xw.index_turn(USER, SENTENCE, said_at=NOW))
+    assert run(xw.index_turn(USER, SENTENCE, said_at=NOW, message_id=mid(SENTENCE)))
     reply = run(intent_router.execute_intent(intent_router.Intent("memory_forget_entity", {"name": "Dana"}), USER))
     assert "forgotten" in reply and "can't say it's forgotten" in reply
     assert "I've forgotten" not in reply and "I don't have anything saved" not in reply
@@ -821,10 +837,44 @@ def test_the_verbatim_index_redacts_a_contact(index, ledger_env):
     assert "[REDACTED]" in stored and "0400" not in stored and "Example St" not in stored and "plumber" in stored
 
 
-def test_a_redacted_turn_with_no_saved_turn_id_is_never_indexed(index):
-    """No id = no way for a forget to find it (its stored words are a look-alike's too): not written. A plain turn still is."""
-    assert say("I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St") is False
-    assert say("I told my sister the cello recital moved to the Thursday evening") is True
+def test_a_turn_with_no_saved_turn_id_is_refused_and_counted(index, caplog):
+    """EVERY new entry names its source (PR #2574 re-pass): with no saved-turn id and no non-turn kind it is refused and counted -
+    plain or redacted - never stored id-less (it would then be matched by its words, like a legacy entry). The id, or an explicit
+    non-turn kind, writes it."""
+    import logging
+
+    caplog.set_level(logging.INFO)
+    before = xw.REFUSED["no_source_turn"]
+    plain = "I told my sister the cello recital moved to the Thursday evening"
+    redacted = "I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St"
+    assert say(plain, message_id="") is False and say(redacted, message_id="") is False and not index.rows
+    assert xw.REFUSED["no_source_turn"] == before + 2
+    assert any("EXACT_WORDS_REFUSED code=no_source_turn" in r.getMessage() and "cello" not in r.getMessage() for r in caplog.records)
+    assert say(plain) is True and xw.mid_of(next(iter(index.rows))[1]) == mid(plain)          # control: the saved turn names it
+    assert say(redacted, message_id="", provenance="lab") is True                            # an explicit non-turn kind
+    assert say("I told my nephew the football final moved to Sunday", message_id="", provenance="made-up") is False   # closed set
+
+
+def test_erase_text_never_matches_a_bound_entry_and_takes_a_legacy_one(index):
+    """THE partition (exact_words.partition): a bound entry (a saved-turn id) whose words ARE the legacy target's survives; the
+    legacy (id-less) entry with those words is forgotten. Control: the matcher alone (no partition) would take both."""
+    said = "I told my sister the cello recital moved to the Thursday evening"
+    assert say(said, message_id="m-other-turn")
+    run(index.add(USER, "old-2", NOW, said, xw.tokens_column(said), "chat"))       # written before the ids
+    assert run(xw.erase_text(USER, said)) == 1
+    assert [xw.mid_of(k[1]) for k in index.rows] == ["m-other-turn"]
+    bound, legacy = xw.partition([("xw-a@m-1", said), ("xw-b@src:lab", said), ("old-3", said)])
+    assert [r[0] for r in legacy] == ["old-3"] and len(bound) == 2                 # control: the split itself
+
+
+def test_a_legacy_entry_stored_redacted_is_forgotten_by_its_redacted_words(index):
+    """A legacy entry the boundary redacted is NOT left readable: its words as said match it through the redacted form (a look-alike
+    that redacts alike goes too - accepted for legacy entries only)."""
+    said = "I told the plumber to ring me back on 0400 000 000 about the leak"
+    stored = xw._squash(memory_service.scrub_pii(said)[0])
+    assert "[REDACTED]" in stored
+    run(index.add(USER, "old-r", NOW, stored, xw.tokens_column(stored), "chat"))
+    assert run(xw.erase_text(USER, said)) == 1 and not index.rows
 
 
 def test_forget_erases_a_turn_indexed_before_the_contact_scrub(index):

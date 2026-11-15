@@ -4130,15 +4130,8 @@ async def _execute_forget_last(user_id: str) -> str:
                 await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
-    try:    # BY the turn's saved-turn ids: the transcript flag and the night mind FIRST, the exact-words entries last (the turn
-        import exact_words   # keeps its ids in the notes, so a retry after a part-way failure reaches all of it); the words as
-        import night_mind    # said reach only old entries written before the ids
-        await exact_words.flag_transcript_turns(user_id, turn.mids)
-        await exact_words.forget_transcript(user_id, text)
-        for _mid in turn.mids:
-            await night_mind.erase_words(user_id, _mid)
-        await exact_words.erase_turns(user_id, turn.mids)
-        await exact_words.erase_text(user_id, text)
+    try:    # BY the turn's saved-turn ids (its words are never compared); a turn noted with none, by its words, legacy rows only
+        await turn_forget.erase_turn_words(user_id, turn.mids, (text,))   # (the turn keeps its ids in the notes: a retry reaches all)
     except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         failed += 1

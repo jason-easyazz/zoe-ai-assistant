@@ -1571,7 +1571,9 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                                     verdict.text, user_id=user_id, source="digest",
                                     memory_type=item.get("type", "fact"), confidence=0.5, status="approved",
                                     tags=["digest", item.get("type", "unknown"), "unsupported_observation"],
-                                    anchor_text=anchor_for_write, hold="unsupported_observation")
+                                    anchor_text=anchor_for_write, hold="unsupported_observation",
+                                    # the saved turn the held words came from: what a forget erases by
+                                    metadata=({"source_turn": _ht} if (_ht := locate_turn(item, verdict.text, chat_text)[1]) else None))
                                 log_row("digest", user_id, held, "held")
                                 if held is not None and memory_authority.is_candidate(held):
                                     result["candidates"] = result.get("candidates", 0) + 1

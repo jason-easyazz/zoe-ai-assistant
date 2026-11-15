@@ -1585,6 +1585,73 @@ def _excerpt_said_tag(user_id: str, raw: Optional[str], stored: str) -> str:
         return ""
 
 
+# ── write-time provenance (PR #2574): every NEW row names its source - a saved turn, or an explicit non-turn kind ──────────
+#: the explicit provenance kinds a row from NO saved chat turn carries (``metadata["source_kind"]``) instead of an empty id. A caller
+#: may pass one in ``metadata["source_kind"]``; the writer lanes below get theirs here; a row with no turn evidence at all is
+#: ``no_turn`` (nothing a turn forget could ever match it by).
+NON_TURN_KINDS = frozenset({"no_turn", "omi_recording", "provider", "restore", "curated", "ui", "notes", "journal", "mcp",
+                            "skybridge", "lab", "model"})
+#: writer lane -> its non-turn kind: lanes that never write from a saved chat turn, even when they carry an excerpt
+_LANE_KINDS = {
+    "omi_review": "omi_recording", "external_source": "provider", "contacts": "provider", "operator_restore": "restore",
+    "curator": "curated", "proposal": "ui", "review_ui": "ui", "notes": "notes", "journal": "journal", "mcp": "mcp",
+    "skybridge_action": "skybridge", "skybridge": "skybridge", "mempalace_baseline": "lab", "prompt_packet_measure": "lab",
+    "synthesis": "model", "consolidation": "model", "music_digest": "model", "ambient": "model", "profile-analysis": "model",
+    "hindsight_retain_candidate": "model", "decay_sweep": "model", "implicit_supersede": "model",
+}
+TURN_ID_FLAG = "ZOE_MEMORY_TURN_ID_REQUIRED"
+_UNBOUND_KEY = "_zoe_unbound_turn"
+#: rows that carried turn evidence but could name no saved turn and no kind (``MEMORY_WRITE_UNBOUND``); a count, never text
+UNBOUND = {"no_source_turn": 0}
+
+
+def turn_id_mode() -> str:
+    """``enforce`` = a write that cannot name its source is REFUSED (``ingest`` returns None, ``no_source_turn`` counted);
+    ``shadow`` (default) = it is stored and counted, and its row stays legacy-shaped (a forget then matches it by its words). Read
+    per call."""
+    try:
+        from typed_env import env_str
+
+        raw = env_str("ZOE_MEMORY_TURN_ID_REQUIRED").lower()   # literal on purpose: tools/audit/flag_inventory.py greps it
+    except Exception:  # noqa: BLE001
+        raw = ""
+    return "enforce" if raw == "enforce" else "shadow"
+
+
+def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Optional[str],
+                      user_turn_id: Optional[str]) -> dict:
+    """The provenance keys a new row is stamped with (``source_turn`` or ``source_kind``), or ``{_UNBOUND_KEY: True}`` when the
+    row carries turn evidence (an excerpt / a turn id) yet names neither. The saved turn: the caller's ``source_turn``, else the
+    turn the words are (``turn_forget.turn_ref``, resolved now while they are as said). Never raises."""
+    src_turn = str(extra.pop("source_turn", "") or "")
+    kind = str(extra.pop("source_kind", "") or "")
+    if not src_turn:
+        try:
+            import turn_forget
+
+            src_turn = turn_forget.turn_ref(user_id, source_excerpt or "")
+        except Exception:  # noqa: BLE001
+            src_turn = ""
+    if src_turn:
+        return {"source_turn": src_turn}
+    if kind not in NON_TURN_KINDS:
+        kind = _LANE_KINDS.get((source or "").strip(), "")
+    if not kind and not (source_excerpt or "").strip() and not (user_turn_id or "").strip():
+        kind = "no_turn"
+    return {"source_kind": kind} if kind else {_UNBOUND_KEY: True}
+
+
+def _refuse_unbound(md: dict, writer: str) -> bool:
+    """Take the unbound marker off ``md``: True = REFUSE the write (``enforce``). Counted and logged with a code either way, never
+    the text."""
+    if not md.pop(_UNBOUND_KEY, False):
+        return False
+    UNBOUND["no_source_turn"] += 1
+    mode = turn_id_mode()
+    logger.info("MEMORY_WRITE_UNBOUND code=no_source_turn writer=%s mode=%s n=%d", writer, mode, UNBOUND["no_source_turn"])
+    return mode == "enforce"
+
+
 def _opt_out_writer(source: str, origin: Optional[str] = None) -> bool:
     """Is this write held by the member's memory opt-out? By the lane ``source`` OR the real writer ``origin`` (a provider
     writing under another lane label is still the provider)."""
@@ -2050,6 +2117,9 @@ class MemoryService:
                 text=scrubbed,
                 captured_at=captured_at,
             )
+            if _refuse_unbound(metadata, writer):   # a write that cannot name its source (enforce): refused and counted
+                self._bump("no_source_turn", source)
+                return None
             for k in _auth.SOURCE_REF_KEYS:   # a pointer comes from ``source_ref`` only, never from caller metadata
                 metadata.pop(k, None)
             metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id, source_ref=source_ref))
@@ -3042,7 +3112,7 @@ class MemoryService:
                 "access_count", "embedding_model_version", "idempotency_key", "tags",
                 "concept_tags", "related_ids", "unique_query_count", "consolidation_count",
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
-                "source_excerpt", "source_excerpt_said", "source_turn", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
+                "source_excerpt", "source_excerpt_said", "source_turn", "source_kind", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
                 # validity interval: the NEW row's own (written by _build_metadata)
                 *_temporal.KEYS,
@@ -3062,11 +3132,16 @@ class MemoryService:
                 if strip_affect and key in _AFFECT_CANDIDATE_KEYS:
                     continue
                 new_meta[key] = value
-            # the excerpt's keyed identity travels only with THAT excerpt (a new excerpt from another turn is not its words)
+            # the excerpt's identity (keyed tag + provenance) travels only with THAT excerpt (a new excerpt from another turn is not
+            # its words): an edit of a bound row stays bound to its turn, of a legacy row stays legacy (matched by its words)
             if not edit_excerpt and new_meta.get("source_excerpt") == current.metadata.get("source_excerpt"):
-                for _k in ("source_excerpt_said", "source_turn"):
+                for _k in ("source_turn", "source_kind", _UNBOUND_KEY):
+                    new_meta.pop(_k, None)
+                for _k in ("source_excerpt_said", "source_turn", "source_kind"):
                     if current.metadata.get(_k):
                         new_meta[_k] = current.metadata[_k]
+            elif _refuse_unbound(new_meta, writer):
+                raise MemoryServiceError("edit refused: no source turn (no_source_turn)")
             for k in _auth.SOURCE_REF_KEYS:   # from ``source_ref`` only (caller metadata cannot plant a pointer)
                 new_meta.pop(k, None)
             new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref, source_ref=source_ref))
@@ -3786,6 +3861,7 @@ class MemoryService:
                 tags=["authority_candidate"], entity_type=entity_type, entity_id=entity_id,
                 expires_at=None, text=scrubbed,
             )
+            md.pop(_UNBOUND_KEY, None)   # no excerpt, no turn id: never unbound (``source_kind`` = no_turn or the lane's kind)
             cand_cls = cls or (_auth.MODEL_FROM_TURN if _auth.writer_class(writer) == _auth.MODEL_FROM_TURN
                                else _auth.MODEL_FROM_TRANSCRIPT)
             if _auth.writer_class(writer) == _auth.EXTERNAL_SOURCE:
@@ -4190,18 +4266,9 @@ class MemoryService:
         # Every write path (ingest, review edit, carry-forward) builds metadata
         # here, so the excerpt is scrubbed at this one boundary — no caller can
         # store raw text by skipping its own scrub.
-        # the saved turn the row came from (turn_forget.turn_ref, resolved now, while the words are as said): a forget erases
-        # BY THIS ID, never by the excerpt, which the boundary redacts below (two turns that differ by an address redact alike)
-        src_turn = str(extra.pop("source_turn", "") or "")
-        if not src_turn:
-            try:
-                import turn_forget
-
-                src_turn = turn_forget.turn_ref(user_id, source_excerpt or "")
-            except Exception:  # noqa: BLE001
-                src_turn = ""
-        if src_turn:
-            md["source_turn"] = src_turn
+        # the saved turn the row came from (or its explicit non-turn kind, ``_write_provenance``): a forget erases BY THIS ID, never
+        # by the excerpt, which the boundary redacts below (two turns that differ by an address redact alike)
+        md.update(_write_provenance(user_id, source, extra, source_excerpt, user_turn_id))
         excerpt = scrub_source_excerpt(source_excerpt)
         if excerpt:
             md["source_excerpt"] = excerpt

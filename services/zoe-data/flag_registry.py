@@ -554,6 +554,8 @@ _ENTRIES = (
        note='shadow-only: on is reserved and behaves as shadow; the value_correction in-process registry keeps deciding'),
     _f('ZOE_MEMORY_TICK_DEFER_S', 'float', 0.0, doc='services/zoe-data/AGENTS.md',
        note='prompt-read access ticks wait this long before writing (0 = at once, unchanged); 1.0 is the candidate'),
+    _f('ZOE_MEMORY_TURN_ID_REQUIRED', 'str', 'shadow', allowed=('shadow', 'enforce'), doc='docs/knowledge/forget-reach.md',
+       note='shadow: a fact write with turn evidence but no saved-turn id or non-turn kind is stored legacy-shaped and counted (MEMORY_WRITE_UNBOUND); enforce: refused'),
     _f('ZOE_MERGE_QUEUE_ENABLED', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_MERGE_QUEUE_LABEL', 'str', 'auto-merge'),
     _f('ZOE_MERGE_QUEUE_MAX_CANDIDATES', 'int', 50),

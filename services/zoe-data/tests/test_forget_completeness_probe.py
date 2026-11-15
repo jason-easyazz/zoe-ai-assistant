@@ -137,8 +137,10 @@ class ExactWords(Probe):
 
     async def seed(self):
         now = time.time()
-        assert await self.xw.index_turn(USER, f"I told {FRIEND} the dinner is on Thursday at the harbour.", said_at=now - 60)
-        assert await self.xw.index_turn(USER, f"I told {KEEP} the garage door is fixed and he can come round.", said_at=now - 30)
+        assert await self.xw.index_turn(USER, f"I told {FRIEND} the dinner is on Thursday at the harbour.", said_at=now - 60,
+                                         message_id="m-dinner")
+        assert await self.xw.index_turn(USER, f"I told {KEEP} the garage door is fixed and he can come round.", said_at=now - 30,
+                                         message_id="m-garage")
 
     async def erase(self):
         await self.xw.erase_entity(USER, FRIEND)

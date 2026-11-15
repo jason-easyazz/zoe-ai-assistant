@@ -284,14 +284,123 @@ def test_every_derived_row_carries_its_saved_turn(world):
         assert xw.mid_of(_xw_rows()[key]) == chat.mid(key)
 
 
-def test_a_redacted_quote_with_no_saved_turn_id_is_refused_not_guessed(world):
-    """An entry written before the ids: its redacted words name no turn, so the forget is not confirmed and nothing is touched."""
+def test_a_legacy_redacted_entry_is_forgotten_by_its_words_not_refused(world):
+    """An entry written BEFORE the ids (legacy): refusing it would leave it readable forever, so its redacted words match it - and a
+    legacy look-alike that redacts alike goes too (over-forgetting is accepted for legacy rows only). This replaced the round-6
+    rule "no id = the forget is refused", which now holds only for NEW writes, and those always carry an id (index_turn refuses)."""
     svc, chat = world
-    run(xw.get_backend().add(UID, "xw-old", time.time(), "My plumber works from [REDACTED]", " plumber work ", "chat"))
-    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text="My plumber works from [REDACTED]",
-                       quote="My plumber works from [REDACTED]", turn_id="")
-    assert not run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
-    assert "xw-old" in {k[1] for k in xw.get_backend().rows}
+    stored = "My plumber works from [REDACTED]"
+    run(xw.get_backend().add(UID, "xw-old", time.time(), stored, " plumber work ", "chat"))
+    run(xw.get_backend().add(UID, "xw-old2", time.time(), stored + " on weekdays", " plumber work weekday ", "chat"))
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id="xw-old")
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    assert not {"xw-old", "xw-old2"} & {k[1] for k in xw.get_backend().rows}
+
+
+# ── THE PARTITION: a row WITH an id is erased by id only; only a LEGACY (id-less) row ever meets a text matcher ────────────
+
+LEGACY_SAID = "My locksmith works from the corner shop on Example Lane"
+
+
+def _plant_partition(svc):
+    """The SAME words in every store twice: once legacy (no id, written before the ids) and once bound to ANOTHER saved turn."""
+    now = time.time()
+    xw_be, nt_be = xw.get_backend(), night_store.get_backend()
+    run(xw_be.add(UID, "xw-legacy", now, LEGACY_SAID, xw.tokens_column(LEGACY_SAID), "chat"))
+    run(xw_be.add(UID, "xw-bound@m-other", now, LEGACY_SAID, xw.tokens_column(LEGACY_SAID), "chat"))
+    run(nt_be.put_observation(night_store.obs_row(id="o-legacy", user_id=UID, turn_id="", quote=LEGACY_SAID, day="2026-10-08",
+                                                  said_at=now)))
+    run(nt_be.put_observation(night_store.obs_row(id="o-bound", user_id=UID, turn_id="m-other", quote=LEGACY_SAID,
+                                                  day="2026-10-08", said_at=now)))
+    old = run(svc.ingest("User's locksmith is at the corner shop", user_id=UID, source="turn_digest", status="approved",
+                         source_excerpt=LEGACY_SAID))
+    for k in ("source_turn", "source_kind"):                      # an OLD row: written before the ids
+        svc._collection().rows[old.id][1].pop(k, None)
+    bound = run(svc.ingest("User's locksmith is in the corner shop", user_id=UID, source="turn_digest", status="approved",
+                           source_excerpt=LEGACY_SAID, metadata={"source_turn": "m-other"}))
+    return old, bound
+
+
+def _forget_legacy_target(svc):
+    """A forget whose target is LEGACY (a quoted entry with no saved-turn id): the only way into the text matchers."""
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=LEGACY_SAID, quote=LEGACY_SAID, turn_id="xw-legacy")
+    return run(pa._forget_turn(UID, exp, svc=svc))
+
+
+def _state(svc):
+    ap = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    return {k[1] for k in xw.get_backend().rows}, set(_night()), ap
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_a_legacy_target_takes_the_legacy_rows_and_never_a_bound_row(world, monkeypatch, broken):
+    """A legacy target's words take every LEGACY row holding them (exact words, night observation, fact row) and NO row bound to
+    another saved turn, however identical its words. Control (``broken``): with the partitions removed (every row legacy) the very
+    same forget takes the bound rows too - so the survivors are the partition's doing, not the matcher's."""
+    svc, chat = world
+    old, bound = _plant_partition(svc)
+    if broken:
+        monkeypatch.setattr(xw, "partition", lambda rows: ([], list(rows or ())))
+        monkeypatch.setattr(night_mind, "partition_observations", lambda obs: ([], list(obs or ())))
+        monkeypatch.setattr(turn_forget, "partition", lambda rows: ([], list(rows or ())))
+    assert _forget_legacy_target(svc).startswith("Done")
+    words, night, approved = _state(svc)
+    assert "xw-legacy" not in words and "legacy" not in night and old.id not in approved     # legacy rows: forgotten
+    survived = {"xw-bound@m-other" in words, "bound" in night, bound.id in approved}
+    assert survived == ({False} if broken else {True})
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_a_bound_row_is_never_matched_by_text_when_the_forget_has_an_id(world, monkeypatch, broken):
+    """A forget WITH a saved-turn id compares no words at all: rows of another turn holding the target's very words survive, and a
+    legacy row with those words is not this turn's either. Control (``broken``): the old text fallback (night_mind before this
+    change: the words over every observation) takes the other turn's observation."""
+    svc, chat = world
+    _old, bound = _plant_partition(svc)
+    if broken:
+        monkeypatch.setattr(night_mind, "partition_observations", lambda obs: ([], list(obs or ())))
+        run(night_mind.erase_words(UID, "", LEGACY_SAID))            # what a text fallback beside the id did
+    run(turn_forget.erase_turn_words(UID, ("m-target",), (LEGACY_SAID,)))
+    words, night, approved = _state(svc)
+    assert ("bound" in night) is (not broken)
+    assert "xw-bound@m-other" in words and "xw-legacy" in words and bound.id in approved
+
+
+def test_row_is_from_turn_consults_no_words_for_a_bound_or_non_turn_row():
+    said = "My locksmith works from the corner shop"
+    assert turn_forget.row_is_from_turn({"source_excerpt": said}, said)                               # legacy: by its words
+    assert not turn_forget.row_is_from_turn({"source_excerpt": said, "source_turn": "m-1"}, said, mids=("m-2",))
+    assert turn_forget.row_is_from_turn({"source_excerpt": said, "source_turn": "m-1"}, said, mids=("m-1",))
+    assert not turn_forget.row_is_from_turn({"source_excerpt": said, "source_kind": "omi_recording"}, said)
+
+
+def test_every_new_fact_row_names_its_source_or_is_counted_unbound(world, monkeypatch, caplog):
+    """(a) for the fact store: a row from a saved turn carries its id; a row with no turn evidence, or from a non-turn lane, an
+    explicit ``source_kind``; a row WITH turn evidence and neither is counted (shadow, default) and REFUSED under enforce - never
+    silently stored id-less. The log line carries a code and counts only."""
+    svc, chat = world
+    caplog.set_level(logging.INFO)
+    plain = run(svc.ingest("User likes tea", user_id=UID, source="chat_regex", status="approved"))
+    assert run(svc.get(plain.id)).metadata.get("source_kind") == "no_turn"
+    # a lane that never writes from a saved chat turn names its kind even with an excerpt (a pendant recording's quote)
+    assert memory_service._write_provenance(UID, "omi_review", {}, "the locksmith is on Example Lane", None) == {
+        "source_kind": "omi_recording"}
+    assert memory_service._write_provenance(UID, "turn_digest", {"source_kind": "made-up"}, "words said", None) == {
+        memory_service._UNBOUND_KEY: True}                                                   # the kinds are a closed set
+    before = memory_service.UNBOUND["no_source_turn"]
+    shadow = run(svc.ingest("User's cousin plays the cello", user_id=UID, source="turn_digest", status="approved",
+                            source_excerpt="my cousin plays the cello every weekend"))
+    assert shadow is not None and memory_service.UNBOUND["no_source_turn"] == before + 1
+    assert not {"source_turn", "source_kind"} & set(run(svc.get(shadow.id)).metadata)       # legacy-shaped: a forget finds it by words
+    monkeypatch.setenv(memory_service.TURN_ID_FLAG, "enforce")
+    refused = run(svc.ingest("User's cousin plays the viola", user_id=UID, source="turn_digest", status="approved",
+                             source_excerpt="my cousin plays the viola every weekend"))
+    assert refused is None and memory_service.UNBOUND["no_source_turn"] == before + 2
+    lines = [r.getMessage() for r in caplog.records if "MEMORY_WRITE_UNBOUND" in r.getMessage()]
+    assert lines and all("code=no_source_turn" in m and "cousin" not in m and "viola" not in m for m in lines)
+    named = run(svc.ingest("User's cousin plays the harp", user_id=UID, source="turn_digest", status="approved",
+                           source_excerpt="my cousin plays the harp", metadata={"source_turn": "m-harp"}))
+    assert named is not None and run(svc.get(named.id)).metadata.get("source_turn") == "m-harp"       # control: the id writes it
 
 
 def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, monkeypatch, caplog):

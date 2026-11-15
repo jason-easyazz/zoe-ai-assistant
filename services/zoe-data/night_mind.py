@@ -1979,42 +1979,44 @@ def _flat(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
-_PLACEHOLDER = "[redacted]"
+def partition_observations(obs: Any) -> tuple[list, list]:
+    """``(bound, legacy)`` observations: bound = saved with the turn's id (``turn_id``, the chat message id), erased by that id
+    alone; legacy = saved with none - the ONLY observations a text matcher is ever handed (``erase_words``)."""
+    bound, legacy = [], []
+    for o in obs or ():
+        (bound if str(o.get("turn_id") or "").strip() else legacy).append(o)
+    return bound, legacy
 
 
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
-    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn: those saved from that
-    saved turn (``turn_id``: the chat message id every observation carries), erased BY ID - another turn's observation can hold the
-    very same words (a look-alike turn whose difference the scrub removed), and then ``texts`` are NOT consulted; only when the id
-    names no observation (an old caller) those whose quote sits inside - or contains - any of ``texts`` AS SAID. A text holding the redaction placeholder is never compared (it names no turn).
-    "Forget it" after an explained answer must reach what the night pass saved from the same words, which ``erase_entity`` (name-based)
-    does not. A store failure is RAISED."""
+    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. With its saved turn
+    (``turn_id``: the chat message id every new observation carries): the observations saved from it, BY ID ONLY - another turn's
+    observation can hold the very same words (a look-alike whose difference the scrub removed), so ``texts`` are never compared.
+    Without one (a LEGACY target, ``turn_forget.erase_turn_words``): only the LEGACY observations (``partition_observations``: saved
+    with no turn id) whose quote sits inside - or contains - any of ``texts``; over-inclusive there by design. A store failure is
+    RAISED."""
     if not (user_id or "").strip():
         return 0
-    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2 and _PLACEHOLDER not in t]
     tid = str(turn_id or "").strip()
+    wanted = [] if tid else [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
     if not wanted and not tid:
         return 0
     async with _user_lock(user_id):
         try:
             backend = night_store.get_backend()
-            obs = await backend.observations(user_id)
-            by_id = [o for o in obs if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
-            ids = {o["id"] for o in by_id}
-            # a turn the id resolved is erased BY ID ONLY: its words, even as said, also sit inside a look-alike turn's (the span
-            # the scrub left is the same in both), so once the turn is known no text is compared at all
-            by_words = [] if by_id else [o for o in obs if (o["quote"] or "").strip()
-                                         and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
-            if not (by_id or by_words):
+            bound, legacy = partition_observations(await backend.observations(user_id))
+            if tid:
+                hit = [o for o in bound if str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
+            else:
+                hit = [o for o in legacy if (o["quote"] or "").strip()
+                       and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+                if hit:
+                    logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(hit))
+            if not hit:
                 return 0
-
-            def _pattern(rows):
-                return re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in rows}, key=len, reverse=True)))
-            n = 0
-            if by_id:
-                n += int(await backend.erase_matching(user_id, _pattern(by_id), only_ids=sorted(ids)) or 0)
-            if by_words:
-                n += int(await backend.erase_matching(user_id, _pattern(by_words)) or 0)
+            pattern = re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in hit}, key=len, reverse=True)))
+            # ``only_ids`` always: the pattern alone would also take another turn's observation that holds the same words
+            n = int(await backend.erase_matching(user_id, pattern, only_ids=sorted(o["id"] for o in hit)) or 0)
         except Exception as exc:  # noqa: BLE001
             if _no_table(exc):
                 return 0
