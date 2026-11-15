@@ -141,8 +141,9 @@ conflicting high-confidence memories."**
    >    started at `main.py:1215`) and the weekly consolidation in-process on Sunday at
    >    04:00 (`routers/system.py:521,560`, started at `main.py:1216`). The same scripts
    >    also listed a weekly preference update; it has no other schedule, and its worker
-   >    (`scripts/maintenance/weekly_preference_update.py`) imports a `preference_learner`
-   >    module that no longer exists, so it could not have run. It is dead code to remove.
+   >    (`scripts/maintenance/weekly_preference_update.py`) imported a `preference_learner`
+   >    module that no longer exists, so it could not have run. That worker was removed with
+   >    the scripts (2026-11-15).
    > 3. **Admin route** — `POST /memories/consolidate` (`routers/system.py`).
    >
    > **Don't confuse this with the dream cycle.** The nightly dream timers
