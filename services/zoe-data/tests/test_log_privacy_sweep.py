@@ -337,6 +337,7 @@ PINNED = {
     "routers/voice_tts.py": {"_skybridge_reply"},
     "stt_snap.py": set(),
     "device_confirm.py": set(),
+    "os_shadow.py": {"item", "text", "list_name", "name", "topic", "entity"},   # Zoe OS shadow: closed codes only
     "child_safety_floor.py": {"text", "s"},   # one class-code line; the words and the age never ride it
 }
 SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "kind_refusal_tag", "exc_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string

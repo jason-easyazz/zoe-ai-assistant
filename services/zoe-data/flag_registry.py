@@ -709,6 +709,8 @@ _ENTRIES = (
     _f('ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S', 'int', 1800),
     _f('ZOE_OMNIGENT_URL', 'str', 'http://127.0.0.1:6767', doc='docs/guides/MODULE_SYSTEM.md'),
     _f('ZOE_ORT_CPU_ARENA', 'bool', False, doc='docs/knowledge/ram-audit-nonvoice-2026-11.md'),
+    _f('ZOE_OS_LIST_SHADOW', 'str', 'off', allowed=('off', 'shadow'), doc='docs/knowledge/zoe-os-list-shadow.md', note='every real list add is ALSO proposed to a Zoe OS kernel over its socket; the live add stays authoritative; there is no on'),
+    _f('ZOE_OS_SHADOW_DIR', 'str', '', doc='docs/knowledge/zoe-os-list-shadow.md', note='blank = ~/.zoe/os-shadow (kernel credentials, roster, pending forgets)'),
     _f('ZOE_OTEL_ENABLED', 'str', ''),
     _f('ZOE_OUTCOME_EDGES', 'str', 'off', allowed=('off', 'on'), doc='docs/research/samantha-initiative-2026-11-03/lane-D-cognitive-architecture.md', note='flag-dark: unset = off'),
     _f('ZOE_OWN_FACT_PRECEDENCE', 'str', '', doc='docs/knowledge/conversation-quality-classes.md'),
