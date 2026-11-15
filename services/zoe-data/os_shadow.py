@@ -225,8 +225,10 @@ class _Conn:
 RESULTS = ("worker_down", "match", "kernel_refused_live_did", "kernel_unverified_live_did", "kernel_did_live_refused", "item_differs",
            "list_differs", "kernel_unavailable", "timeout", "kernel_malformed", "member_not_in_roster", "dropped_erased",
            "queue_full")
-_REASONS = (("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
-            ("cited", "cause"), ("forgotten", "forgotten"))
+#: FIRST match wins, so "forgotten" comes first: the kernel's "forgotten_action_arguments" (an act citing words a forget shielded) also
+#: contains "argument", and a forgotten refusal must never be read as a fixable argument problem.
+_REASONS = (("forgotten", "forgotten"), ("no grant", "no_grant"), ("manifest", "manifest"), ("argument", "params"), ("cause", "cause"),
+            ("cited", "cause"))
 
 
 def reason_code(reason: str) -> str:
