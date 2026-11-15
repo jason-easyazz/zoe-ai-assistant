@@ -3736,14 +3736,45 @@ _MEDIA_MAX_LIST_BYTES = 256 * 1024
 _MEDIA_BACKOFF_S = (1.0, 60.0)
 
 
-def _media_list_sink_inputs() -> "str | None":
-    """``pactl list sink-inputs`` in the C locale (so "Corked:" is never translated); None on any failure."""
+def _media_list_sink_inputs(timeout_s: float = 1.5) -> "str | None":
+    """``pactl list sink-inputs`` in the C locale (so "Corked:" is never translated); None on any failure. BOUNDED while it
+    is read: stdout is pulled in pieces and a listing longer than ``_MEDIA_MAX_LIST_BYTES`` is abandoned (the child is
+    killed) and reported UNKNOWN, never buffered whole and never cut short (a cut listing could hide a foreign stream)."""
+    import select
+
+    proc = None
     try:
-        res = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True, timeout=1.5,
-                             env={**os.environ, "LC_ALL": "C"})
-        return res.stdout if res.returncode == 0 else None
+        proc = subprocess.Popen(["pactl", "list", "sink-inputs"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+        deadline = time.monotonic() + float(timeout_s)
+        fd = proc.stdout.fileno()
+        buf = bytearray()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                return None                        # too slow: unknown
+            piece = os.read(fd, 65536)
+            if not piece:
+                break
+            buf += piece
+            if len(buf) > _MEDIA_MAX_LIST_BYTES:
+                return None                        # over the bound: unknown (never a truncated parse)
+        rc = proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+        return buf.decode("utf-8", "replace") if rc == 0 else None
     except Exception:
         return None
+    finally:
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+            except Exception:
+                pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
 
 
 def _media_spawn_subscribe():
@@ -3763,9 +3794,12 @@ def _proc_ppid(pid: int) -> "int | None":
 
 
 def _parse_sink_inputs(text: str) -> "list[tuple[bool, int | None]]":
-    """[(corked, pid or None)] per sink-input. A block with no Corked line counts as playing (uncorked)."""
+    """[(corked, pid or None)] per sink-input. A block with no Corked line counts as playing (uncorked). A listing over
+    ``_MEDIA_MAX_LIST_BYTES`` raises ValueError (the caller's unknown): parsing only its head could miss a foreign stream."""
+    if len(text) > _MEDIA_MAX_LIST_BYTES:
+        raise ValueError("sink-input listing over the bound")
     out: list = []
-    for line in text[:_MEDIA_MAX_LIST_BYTES].splitlines():
+    for line in text.splitlines():
         if re.match(r"\s*Sink Input #\d+", line):
             out.append([False, None])
             continue
