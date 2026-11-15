@@ -50,6 +50,7 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "act": {"action": ((str,), True), "on_behalf_of": ((str,), True), "args": ((dict,), True),
             "caused_by": ((list,), True)},
     "undo": {"person": ((str,), True), "actor": ((str,), True)},
+    "describe": {},
     "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
 }
 

@@ -59,17 +59,49 @@ class Receipt:
     reversible: bool = False      # the receipt holds what ``Dispatcher.undo`` needs
 
 
+_PARAM_TYPES = {"string": (str,), "integer": (int,), "number": (int, float)}
+MAX_STR = 500
+
+
+def check_params(params: dict | None, args: object) -> str:
+    """'' when ``args`` is exactly what ``params`` declares, else a fixed reason (no content)."""
+    if params is None:
+        return ""
+    if not isinstance(args, dict) or set(args) - set(params):
+        return "unknown argument"
+    for name, spec in params.items():
+        if name not in args:
+            if spec.get("required", False):
+                return "missing argument"
+            continue
+        v = args[name]
+        if isinstance(v, bool) or not isinstance(v, _PARAM_TYPES[spec["type"]]):
+            return "wrong argument type"
+        if isinstance(v, str) and not (0 < len(v.strip()) and len(v) <= spec.get("max", MAX_STR)):
+            return "wrong argument type"
+    return ""
+
+
 class Dispatcher:
     def __init__(self, spine: Spine, enforcer) -> None:
         self.spine, self.enforcer = spine, enforcer
         self._actions: dict[str, tuple[Do, Verify, bool]] = {}
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
+        self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
-                 snapshot: Snapshot | None = None, undo: Undo | None = None) -> None:
+                 snapshot: Snapshot | None = None, undo: Undo | None = None,
+                 doc: str = "", params: dict | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
-        not, its receipts say so, and ``undo`` will refuse it rather than pretend."""
+        not, its receipts say so, and ``undo`` will refuse it rather than pretend.
+
+        ``params`` declares the arguments: ``{name: {"type": "string"|"integer"|"number",
+        "description": text, "required": bool}}``. With it, ``act`` refuses (and records) any
+        arguments that are not exactly that shape BEFORE the driver runs, and ``catalog``
+        can describe the action to a caller. Without it nothing is checked and the action is
+        not described (the behaviour every earlier action has)."""
         self._actions[action] = (do, verify, needs_accept)
+        self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
 
@@ -84,6 +116,9 @@ class Dispatcher:
             if action not in self._actions:
                 self.spine._refuse(skill, attempted, "no such action")
             do, verify, needs_accept = self._actions[action]
+            bad = check_params(self._meta[action][1], args)
+            if bad:
+                self.spine._refuse(skill, attempted, bad)
             reason = self.spine._cause_refusal(skill, caused_by) if caused_by else \
                 "an action must cite the event that asked for it"
             accept = None
@@ -111,6 +146,17 @@ class Dispatcher:
                 Kind.ACTION_RECEIPT, KERNEL, subject=on_behalf_of, caused_by=caused_by, payload=payload))
             return Receipt(f"r{ev.seq}", ev.seq, action, skill, on_behalf_of,
                            verdict.grant_id or "", proof, bool(proof), outcome, before is not None)
+
+    def catalog(self, names) -> list[dict]:
+        """What a caller may be told about the registered actions among ``names``: only those
+        that declared their ``params``. No driver, no store, nothing that can run."""
+        out = []
+        for name in sorted(names):
+            doc, params = self._meta.get(name, ("", None))
+            if name in self._actions and params is not None:
+                out.append({"action": name, "doc": doc, "params": params,
+                            "needs_accept": self._actions[name][2], "reversible": name in self._reverse})
+        return out
 
     # ---- undo ---------------------------------------------------------------------------------
     def _may_undo(self, actor: str, person: str) -> bool:

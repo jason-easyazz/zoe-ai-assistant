@@ -93,6 +93,9 @@ class Client:
     def revoke(self, person: str, skill: str) -> dict:
         return self.call("revoke", person=person, skill=skill)
 
+    def describe(self) -> list[dict]:
+        return self.call("describe")["actions"]
+
     def explain(self, seq: int | None = None, **more) -> dict:
         """``person=`` (a surface asking for a person) and ``last=`` go through as given."""
         return self.call("explain", **({} if seq is None else {"seq": seq}), **more)
