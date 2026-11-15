@@ -154,7 +154,8 @@ class Enforcer:
         if event.subject:
             g = self.store.of(source, event.subject)
             return Decision(True, grant_id=g.id) if g else Decision(False, "no grant from that person")
-        return Decision(bool(self.store.all_for(source)), "no grant")
+        return Decision(any(self._adult(g.person) for g in self.store.all_for(source)),
+                        "no grant")     # about nobody in particular = the household's: an adult's grant
 
     def may_subscribe(self, reader: str, kinds, subject: str | None) -> Decision:
         m = self.store.manifests.get(reader)
@@ -174,10 +175,15 @@ class Enforcer:
             g = self.store.of(reader, event.subject)
             ok = g is not None and g.reads.get(event.kind) is Visibility.PRIVATE
             return Decision(True, grant_id=g.id) if ok else Decision(False, "no grant from the subject")
-        for g in self.store.all_for(reader):    # household / kernel: any member's grant that covers it
-            if _covers(g.reads.get(event.kind), event.visibility):
+        for g in self.store.all_for(reader):    # household / kernel: an ADULT's grant that covers it,
+            if _covers(g.reads.get(event.kind), event.visibility) and (  # or the subject's own: a child's
+                    self._adult(g.person) or g.person == event.subject):  # grant opens only their events
                 return Decision(True, grant_id=g.id)
         return Decision(False, "no grant")
+
+    def _adult(self, person: str) -> bool:
+        who = self.store.people.get(person)
+        return who is not None and who.role == ADULT
 
     def may_act(self, skill: str, action: str, on_behalf_of: str) -> Decision:
         m = self.store.manifests.get(skill)

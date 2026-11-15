@@ -50,10 +50,8 @@ class Explainer:
     # ---- the query --------------------------------------------------------------------------
     def last(self, person: str, what: str = "action") -> int | None:
         """The newest action receipt / offer about this person ("that" in "why did you do that")."""
-        rows = self.spine._fetch(0, frozenset({LAST[what]}), person if what != "refusal" else None,
-                                 1_000_000)
-        mine = [e.seq for e in rows if e.kind is LAST[what] and self._may_see(person, e)]
-        return mine[-1] if mine else None
+        rows = self.spine._newest(frozenset({LAST[what]}), person if what != "refusal" else None)
+        return next((e.seq for e in rows if e.kind is LAST[what] and self._may_see(person, e)), None)
 
     def why(self, seq: int, *, person: str) -> dict:
         with self.spine._lock:
@@ -95,7 +93,7 @@ class Explainer:
     def _grant(self, grant_id, asker: str) -> dict | None:
         if not grant_id:
             return None
-        for e in reversed(self.spine._fetch(0, frozenset({Kind.GRANT_CHANGE}), None, 1_000_000)):
+        for e in self.spine._newest(frozenset({Kind.GRANT_CHANGE}), None):
             if e.payload.get("grant_id") == grant_id and e.payload.get("change") == "granted":
                 return {"seq": e.seq, **e.payload} if self._may_see(asker, e) else None
         return None

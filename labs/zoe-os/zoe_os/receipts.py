@@ -9,7 +9,8 @@ the spine as a kernel event. A receipt whose read-back failed is ``verified: fal
 proves an attempt, not a result.
 
 ``ClaimAuditor`` is the "claim without receipt" detector: every CLAIM event must cite a
-verified receipt for the same action and person, made by the claimant.
+verified receipt for the same action and person, made by the claimant, that no earlier claim
+already cited (one receipt backs one claim).
 
 DURABLE across a kernel restart or a kill:
 * a receipt is an event, so it was always on disk. What was NOT: which yes had been used, and
@@ -186,9 +187,8 @@ class Dispatcher:
         return self.spine._db.execute("SELECT 1 FROM intents WHERE undoes = ?", (seq,)).fetchone() is not None
 
     def last_action(self, person: str) -> Event | None:
-        rows = self.spine._fetch(0, frozenset({Kind.ACTION_RECEIPT}), person, 1_000_000)
-        mine = [e for e in rows if e.kind is Kind.ACTION_RECEIPT and e.subject == person]
-        return mine[-1] if mine else None
+        return next((e for e in self.spine._newest(frozenset({Kind.ACTION_RECEIPT}), person)
+                     if e.subject == person), None)
 
     def undo(self, person: str, *, actor: str) -> Receipt:
         """Reverse ``person``'s last action. Raises ``Refused`` (recorded) when it may not or cannot."""
@@ -315,14 +315,24 @@ class ClaimAuditor:
             (self.READER, seq))
 
     def backed(self, claim: Event) -> bool:
+        """A matching verified receipt that no EARLIER live claim of the same skill, person and
+        action already cited: one action, one claim. Read from the log itself, so a restart (or
+        re-judging after a crash) gives the same answer."""
         seq = claim.payload.get("receipt_seq")
         receipt = self.spine._get(seq) if isinstance(seq, int) else None
-        return bool(
+        if not (
             receipt is not None and receipt.kind is Kind.ACTION_RECEIPT and receipt.seq < claim.seq
             and receipt.payload.get("verified") is True
             and receipt.payload.get("action") == claim.payload.get("action")
             and receipt.subject == claim.subject
-            and receipt.payload.get("skill") == claim.source)
+            and receipt.payload.get("skill") == claim.source):
+            return False
+        earlier = self.spine._db.execute(
+            "SELECT 1 FROM events WHERE kind = 'claim' AND tombstoned = 0 AND seq > ? AND seq < ?"
+            " AND source = ? AND subject IS ? AND json_extract(payload, '$.receipt_seq') = ?"
+            " AND json_extract(payload, '$.action') IS ? LIMIT 1",
+            (seq, claim.seq, claim.source, claim.subject, seq, claim.payload.get("action")))
+        return earlier.fetchone() is None
 
     def scan(self) -> list[Event]:
         """Check every claim since the last scan. Returns the unbacked ones."""
