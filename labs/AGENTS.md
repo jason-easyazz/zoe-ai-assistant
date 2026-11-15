@@ -550,7 +550,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
-- `zoe-os/` — **Zoe OS kernel prototype** (`docs/architecture/zoe-os.md`): stdlib Python, SQLite in a temp dir,
+- `zoe-os/` — **Zoe OS kernel** (binding local contract: [zoe-os/AGENTS.md](zoe-os/AGENTS.md); `docs/architecture/zoe-os.md`): stdlib Python, SQLite in a temp dir,
   synthetic people. An event spine (closed set of kinds, private by default, durable append, capability-filtered
   subscriptions, bounded queues with lag-to-replay, replay, forget with cascade + on-disk erase + a re-publish
   shield), skill manifests and per-person grants with one enforcer, an action dispatcher with read-back receipts and
