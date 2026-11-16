@@ -25,6 +25,7 @@ def _function(path, name, **namespace):
     tree = ast.parse((ROOT / path).read_text())
     node = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
     namespace.update(uuid=uuid, Any=object)
+    namespace.setdefault("os_shadow", __import__("os_shadow"))  # the shadow hook is a flag-dark no-op here
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(ROOT / path), "exec"), namespace)
     return namespace[name]
 
