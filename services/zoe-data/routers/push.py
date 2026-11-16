@@ -12,6 +12,8 @@ from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
 
+import delivery_tally
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
 
@@ -201,6 +203,7 @@ async def send_push_to_user(
                 ),
             )
             sent += 1
+            delivery_tally.note()  # counted the moment THIS subscription's push succeeded, not when the loop ends
         except WebPushException as e:
             logger.warning(f"Push failed for {row['endpoint'][:40]}...: {e}")
             # Self-prune PERMANENTLY dead subscriptions. Two classes:

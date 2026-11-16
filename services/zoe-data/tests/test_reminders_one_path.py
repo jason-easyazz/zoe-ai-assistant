@@ -771,6 +771,10 @@ def _engine_world(monkeypatch, db, *, push, spoken=False):
         return push
 
     async def speak(**_k):
+        if spoken:
+            import delivery_tally
+
+            delivery_tally.note()      # the real spoken lane notes the delivery the moment it is enqueued
         return spoken
 
     async def compose(_trigger_type, _ctx, fallback, **_k):    # the real composer POSTs to the local brain: never from a test
@@ -1155,3 +1159,109 @@ async def test_a_nudge_whose_push_partly_got_through_keeps_its_claim(monkeypatch
                                          item_id=result.item_id, context=result.context, retract_if_undelivered=True)
     assert out is True and len(db.pending) == 1 and len(claims.rows) == 1
     assert await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5)) == []
+
+
+# ── deliveries are counted AS THEY HAPPEN: a cancel mid-lane still knows what already got through ─────────────────────────
+def _blocking_push_world(monkeypatch, *, block_on):
+    """routers.push with two subscriptions (a, b); the push to ``block_on`` blocks in its executor thread until released, so the
+    test can cancel the task while that one is in flight (the other, if earlier, has already been sent)."""
+    import sys
+    import threading
+    import types
+
+    import routers.push as push
+
+    class Rows:
+        async def fetchall(self):
+            return [{"endpoint": "https://push.invalid/a", "keys_p256dh": "k", "keys_auth": "a"},
+                    {"endpoint": "https://push.invalid/b", "keys_p256dh": "k", "keys_auth": "a"}]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    class Db:
+        def execute(self, sql, params=()):
+            return Rows()
+
+        async def commit(self):
+            pass
+
+    async def get_db():
+        yield Db()
+
+    world = types.SimpleNamespace(release=threading.Event(), sent=[], blocked=threading.Event())
+
+    def webpush(**kw):
+        ep = kw["subscription_info"]["endpoint"]
+        if ep.endswith("/" + block_on):
+            world.blocked.set()
+            world.release.wait(10)
+            return
+        world.sent.append(ep)
+
+    mod = types.ModuleType("pywebpush")
+    mod.webpush, mod.WebPushException = webpush, type("WPE", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "pywebpush", mod)
+    monkeypatch.setattr(push, "get_db", get_db)
+    monkeypatch.setattr(push, "_get_vapid_keys", lambda: {"private_key": "k"})
+    return world
+
+
+async def _fire_then_cancel(monkeypatch, claims, *, block_on):
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=0)
+    world = _blocking_push_world(monkeypatch, block_on=block_on)
+
+    async def real_send_push(user_id, message, extra=None):
+        from routers.push import send_push_to_user
+        return await send_push_to_user(user_id=user_id, message=message, extra=extra or {}) or 0
+
+    monkeypatch.setattr(engine, "_send_push", real_send_push)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    task = asyncio.ensure_future(engine.fire_notification(
+        user_id=result.user_id, message=result.message, trigger_type=result.trigger_type, item_id=result.item_id,
+        context=result.context, retract_if_undelivered=True))
+    for _ in range(500):                                   # until the blocked subscription's push is in flight
+        if world.blocked.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert world.blocked.is_set()
+    task.cancel()
+    world.release.set()
+    with pytest.raises(asyncio.CancelledError):            # the cancellation is re-raised, never swallowed
+        await task
+    return ph, nine, db, world
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_during_the_second_subscription_keeps_the_claim_and_the_row(monkeypatch, claims):
+    ph, nine, db, world = await _fire_then_cancel(monkeypatch, claims, block_on="b")
+    assert world.sent == ["https://push.invalid/a"]                       # the first subscription HAD been delivered
+    assert len(db.pending) == 1 and len(claims.rows) == 1                  # so the row and the daily claim stay
+    assert await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5)) == []   # a restart does not repeat it
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_before_anything_was_delivered_releases_the_claim(monkeypatch, claims):
+    ph, nine, db, world = await _fire_then_cancel(monkeypatch, claims, block_on="a")
+    assert world.sent == []
+    assert db.pending == [] and claims.rows == {}                          # nothing got through: as before, retried next tick
+    assert len(await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_tally_is_per_send_and_a_lane_outside_one_counts_nothing():
+    import delivery_tally
+
+    delivery_tally.note()                                  # no tally open: a no-op
+    t1, tok1 = delivery_tally.start()
+    delivery_tally.note()
+    t2, tok2 = delivery_tally.start()                      # a nested / concurrent send has its OWN count
+    assert t2.n == 0
+    delivery_tally.stop(tok2)
+    delivery_tally.note()
+    delivery_tally.stop(tok1)
+    assert t1.n == 2

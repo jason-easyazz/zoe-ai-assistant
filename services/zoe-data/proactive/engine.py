@@ -20,6 +20,7 @@ from typing import Any
 
 
 from db_compat import get_compat_db as _get_compat_db
+import delivery_tally
 from proactive.composer import compose_message
 from proactive.session_utils import create_pending
 from proactive.scheduler import start_scheduler, stop_scheduler
@@ -168,7 +169,7 @@ async def fire_notification(
         await _release_claim(claim_key)  # nothing was sent: the next tick may claim and try again
         raise
 
-    delivered_any = False
+    tally, tally_token = delivery_tally.start()  # every lane notes a delivery the moment it succeeds; every exit reads this
     try:
         if _erased_since(ctx, user_id):  # erased between the row and the first lane: remove the row, send nothing
             await _retract_pending(pid)
@@ -181,8 +182,6 @@ async def fire_notification(
             user_id=user_id, message=message, trigger_type=trigger_type,
             guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
         )
-        if spoken:
-            delivered_any = True  # recorded the moment the lane took it: a cancel from here on keeps the row and the claim
 
         deep_link = f"/chat.html?p={pid}"
         # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
@@ -194,8 +193,6 @@ async def fire_notification(
             subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
             if phone == "shadow":
                 await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
-        if subscribers_reached > 0:
-            delivered_any = True
         in_app_fallback_ok = False
 
         # If no WebSocket subscribers received the push, fall back to an in-app
@@ -221,15 +218,15 @@ async def fire_notification(
                         ),
                     )
                     await db.commit()
+                delivery_tally.note()  # the row is in the notification centre: delivered, whatever happens to the live broadcast below
                 await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
                 in_app_fallback_ok = True
-                delivered_any = True
                 log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
             except Exception as _fe:
                 log.warning("reminder fallback: in-app insert failed: %s", _fe)
 
         delivered = subscribers_reached > 0 or in_app_fallback_ok
-        delivered_any = delivered_any or delivered or bool(spoken)
+        delivered_any = bool(tally) or delivered or bool(spoken)
         if pending_id:
             async with _get_compat_db() as db:
                 await db.execute(
@@ -247,12 +244,15 @@ async def fire_notification(
             await _release_claim(claim_key)
         return delivered_any
     except BaseException as exc:
-        if not delivered_any:  # a send that raised before any lane got through did not go through: the next tick tries again
+        kept = bool(tally)  # CancelledError, a timeout, a later lane's failure: all read the same live count
+        if not kept:  # a send that raised before any lane got through did not go through: the next tick tries again
             await _retract_pending(pid)
             await _release_claim(claim_key)
         log.warning("fire_notification raised after the pending row (%s): %s", type(exc).__name__,
-                    "kept (a lane had delivered)" if delivered_any else "row removed, will retry")
+                    "kept (a lane had delivered)" if kept else "row removed, will retry")
         raise
+    finally:
+        delivery_tally.stop(tally_token)
 
 
 def _erased_since(ctx: dict, user_id: str) -> bool:
@@ -324,6 +324,7 @@ async def _speak_on_panel(
                 requested_by="proactive",
                 panel_id=panel_id,
             )
+            delivery_tally.note()  # the kiosk toast is queued: counted now, inside the connection block (a cancel during its cleanup keeps it)
     except Exception as exc:
         panel_outcome = f"error:{exc}"
     # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
@@ -357,6 +358,7 @@ async def _speak_on_panel(
                          claim_id),
                     )
                 ann_id = queued
+            delivery_tally.note()  # queued (and committed): counted before the connection is released
     except Exception as exc:
         daemon_outcome = f"error:{exc}"
     return panel_outcome, daemon_outcome, ann_id
