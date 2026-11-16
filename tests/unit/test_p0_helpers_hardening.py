@@ -241,5 +241,5 @@ def test_the_exported_tree_gets_its_env_file_as_a_link_to_the_root_only_one():
     verified root-only env file, never a copy of the secrets inside the tree."""
     text = DEPLOY.read_text()
     body = text.split("def export_tree(", 1)[1].split("\ndef ", 1)[0]
-    assert "os.symlink(ENV_FILE, env_link)" in body and "copy" not in body.split("env_link")[0][-200:]
+    assert "os.symlink(ENV_FILE, env_link)" in body and "shutil.copy" not in body
     assert body.index("os.symlink(ENV_FILE, env_link)") < body.index(".zoe-compose-deploy-complete")
