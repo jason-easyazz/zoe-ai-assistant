@@ -165,9 +165,9 @@ def test_a_guardian_may_set_one_for_their_child_when_the_ask_names_the_child(hou
     assert row["owner"] == K and row["by"] == A and [x["id"] for x in house.rem.visible_to(K)] == [row["id"]]
     with pytest.raises(Refused, match="must name who it is for"):
         house.act(A, "remind.set", note="x", time="07:45", **{"for": K})
-    with pytest.raises(Refused, match="only a guardian"):
+    with pytest.raises(Refused, match="only a carer"):
         house.act(B, "remind.set", note="x", time="07:45", mentions=(K,), **{"for": K})
-    with pytest.raises(Refused, match="only a guardian"):
+    with pytest.raises(Refused, match="only a carer"):
         house.act(A, "remind.set", note="x", time="07:45", mentions=(B,), **{"for": B})
 
 
@@ -204,7 +204,11 @@ def test_a_childs_forget_reaches_the_reminder_their_guardian_set_for_them(house,
 
 
 def test_control_a_rebuild_that_ignores_the_create_anchor_resurrects_a_forgotten_row(house, monkeypatch):
-    """Without "a row exists only while its create is live", a later edit's receipt brings back what a forget took."""
+    """Without "a row exists only while its create is live", a later edit's receipt brings back what a forget took. The spine's
+    forward link (a forgotten reminder takes its later records, ``Spine._row_source``) is a second layer that would hide it, so it
+    is switched off here too: each layer on its own keeps the row gone (see the next test)."""
+    from zoe_os import spine as spine_mod
+    monkeypatch.setattr(spine_mod, "_row_source", lambda payload: None)
     rid = rid_of(house.act(A, "remind.set", note="gift for Dana", time="20:00"))
     house.act(A, "remind.edit", id=rid, note="a present")                  # the edit's proof no longer names Dana
     house.act(A, "remind.snooze", id=rid, minutes=5)
@@ -213,3 +217,13 @@ def test_control_a_rebuild_that_ignores_the_create_anchor_resurrects_a_forgotten
     monkeypatch.setattr(DurableReminders, "anchored", lambda self, rid, made: True)     # the anchor rule removed
     house.rem.rebuild()
     assert rid in house.rem.rows                                         # the snooze receipt alone resurrects it: the test sees it
+
+
+def test_with_the_anchor_rule_removed_the_forward_link_alone_still_keeps_a_forgotten_row_gone(house, monkeypatch):
+    rid = rid_of(house.act(A, "remind.set", note="gift for Dana", time="20:00"))
+    house.act(A, "remind.edit", id=rid, note="a present")
+    house.act(A, "remind.snooze", id=rid, minutes=5)
+    house.forget(A, entity="Dana")                                       # the create goes, and with it every later record of the row
+    monkeypatch.setattr(DurableReminders, "anchored", lambda self, rid, made: True)
+    house.rem.rebuild()
+    assert rid not in house.rem.rows

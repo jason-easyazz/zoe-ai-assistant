@@ -18,7 +18,7 @@ does not exist, are refused with the same words, so asking is not a way to probe
 """
 from __future__ import annotations
 
-from .capability import ADULT, GUEST, Person
+from .capability import ADULT, GUEST, Person, guards
 from .events import Event, Kind, Visibility
 from .spine import Spine
 
@@ -34,7 +34,7 @@ class Explainer:
     # ---- who may see what ---------------------------------------------------------------
     def _is(self, asker: str, person: str | None) -> bool:
         owner = self.people.get(person or "")
-        return bool(owner) and (asker == owner.id or asker in owner.guardians)
+        return bool(owner) and (asker == owner.id or guards(asker, owner))
 
     def _may_see(self, asker: str, ev: Event) -> bool:
         who = self.people.get(asker)

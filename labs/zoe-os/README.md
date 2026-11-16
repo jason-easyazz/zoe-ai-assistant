@@ -35,7 +35,7 @@ is invented.
 | `zoe_os/explain.py` | "why did you do that?": the chain behind an action, refusal or offer, and one sentence built by code |
 | `zoe_os/replay.py` | the replay harness: a recorded day in, a deterministic report out, a diff between two skill versions |
 | `zoe_os/retention.py` | full, then a skeleton, then a count. The owner chose the "balanced" policy (2026-11-14); nothing sweeps by itself |
-| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store |
+| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store that acts only on the person's own rows (the erasure `purge` reaches every owner) |
 | `zoe_os/twin/days.py` | the household twin's day generator: synthetic days for a seed, awkward days on purpose |
 | `zoe_os/twin/baseline.py` | the twin skill: what is normal per person, as counts; "not enough days yet" below ten working days |
 | `zoe_os/twin/rehearse.py` | a changed skill against generated and recorded days: privacy failures first, then every difference |
@@ -43,12 +43,13 @@ is invented.
 | `zoe_os/brain/bridge.py` | the brain's adapter: tool list derived from the kernel's `describe`, one tool call = one `act`, one sentence back |
 | `zoe_os/brain/drivers.py` | kernel-side drivers for the brain's three actions (lists, reminders, alarms) and the keeper that erases them on forget |
 | `zoe_os/brain/drive.py` | the scripted agent and the recorded-stream replay (no model) |
-| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's shadow (list add, list remove, reminder create, alarm create) (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only |
+| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's shadow (list add, list remove, reminder create, alarm create) (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only. An EMPTY or unreadable `people.json` starts it with nobody granted and forget of recorded people still served; a missing one refuses the start. `tests/test_shadow_daemon.py` proves its forget / known-people / roster behaviour on the wire with the lab's own client |
 | `bench_brain.py` | latency of the kernel hop per brain action |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
-| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` / `erase_item` / `health` / `list_digest` ops, revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` (the member-delete credential, `erase-creds.json`, or the member's own speaker assertion) / `erase_item` (one named member) / `health` / `list_digest` ops, a roster that keeps every id the record names (an EMPTY or unreadable `people.json` starts the kernel with nobody granted and forget still served; a missing one refuses the start), revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `zoe_os/speaker.py` | speaker assertions: the proof, minted by the speaker-verifier, of who decided a person-bound request (see "Speaker assertions") |
 | `tests/authority_proc.py`, `tests/test_authority.py` | the authority daemon as its own process with one SIGKILL point or one control armed, and its tests |
 
 ## Run it
@@ -77,6 +78,7 @@ bad outcome.
 | a forgotten event is withdrawn from a live queue | `test_forget.py` | `Subscription._purge_forgotten` a no-op: the queued sentinel is delivered |
 | the forget reaches everything derived | `test_forget.py` | `Spine._closure` returns only the seed: a derived copy survives |
 | forgotten words cannot be re-published by a skill | `test_forget.py`, `test_attack.py` | `Spine._shielded` always no: the words are back on the spine |
+| per-person shields allow unrelated private reuse by B; forgetting grant/refusal records removes consent | `test_forget_owner.py` (verification pending) | old global text shield refuses B; omitting payload-reference indexing leaves grant/refusal rows naming A |
 | action arguments and undo state cannot restore shielded words or names (validation pending) | `test_forget_action_arguments.py`, `test_forget_receipts_notices.py` | disabling `Dispatcher._check_arguments` makes the resurrection regression fail; disabling snapshot scrub AND this guard permits restoration |
 | the bytes are gone from disk | `test_forget.py`, `test_attack.py` | positive control: the sentinel is in the files before the forget |
 | no action without the manifest and that person's grant | `test_receipts.py`, `test_attack.py` | `Dispatcher._authorize` always yes: the light is toggled for someone who never agreed |
@@ -89,6 +91,7 @@ bad outcome.
 |---|---|---|
 | the malicious skill, from another process: six remaining attempts refused; forgotten cache entries unavailable | `test_boundary.py` | the same four controls, applied inside the kernel process |
 | a skill cannot be another skill, name its own source, or speak for a person | `test_boundary_attacks.py` | no credential check: it becomes the panel and reads everything |
+| a SURFACE cannot speak for a person: every person-bound op needs a speaker assertion for that person and verb, used once, within 60 s, for THIS kernel run's generation; forged and truncated tokens refused alike; nothing logs the token or the secret | `test_speaker.py` | `_prove_speaker` removed: the panel alone reaches every person-bound op; the start-time rule removed: a pre-restart token replays |
 | a captured handshake or a re-issued credential does not log in | `test_boundary_attacks.py` | a predictable challenge: the capture logs in |
 | an oversized frame is refused before its body is read | `test_boundary_attacks.py` | no size cap: it is stored |
 | a malformed frame is refused, recorded, and harms nothing (23 cases) | `test_boundary_attacks.py` | no validator: an unknown argument is accepted, nothing recorded |
@@ -109,7 +112,8 @@ bad outcome.
 | an explanation never shows another person's private event, not even its number | `test_explain.py` | no visibility check: the private words are in the answer |
 | undo is for the person (or a child's guardian), once, and never faked | `test_undo.py` | no ownership check; no once rule; "the last reversible action" instead of "the last action" |
 | the same recording gives the same report, byte for byte | `test_replay.py` | (checked across three processes with different hash seeds and time zone) |
-| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the rule-free store moves it |
+| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the store moves it |
+| an action for one person cannot snooze, ack, delete or overwrite another person's reminder by id; a foreign id answers like a missing one | `test_reminder_owner.py` | `ReminderStore._own` ignores the owner: SAM's action changes ALEX's reminder |
 | a forget still reaches what derived from an event that aged out | `test_retention.py` | expiry that drops the links, or retires a skeleton early: the copy survives |
 
 ### The brain bridge ([record](../../docs/architecture/zoe-os-brain-bridge.md))
@@ -119,6 +123,7 @@ bad outcome.
 | an action's declared arguments are checked before its driver runs | `test_describe_params.py` | `check_params` always yes: the driver runs on malformed arguments |
 | an action for a person must cite an event about that person | `test_cause_binding.py` | `Dispatcher._concerns` always yes: a deputy acts for one person on another's word |
 | the brain's tools are derived from the kernel; the turn's own values are hidden from the model | `test_brain_bridge.py` | a bridge that shows every parameter, or accepts `asked` from the model |
+| a tool call is bound to the turn it came from: a late call from an earlier turn is refused `stale_turn` and reaches no driver | `test_turn_binding.py` | `BridgeServer._bound` returns whatever turn is open: turn N's call writes into turn N+1's person's list |
 | forgetting a person removes the effect in the stores, not only the events | `test_brain_bridge.py` | a keeper that ignores the notice |
 | kernel down or lost mid-call is said honestly and writes nothing half-way | `test_brain_bridge.py` | (a kill between write and receipt is `uncertain`, never done) |
 
@@ -144,12 +149,94 @@ and nothing about a real household (record, section 12).
 In-process controls are monkeypatches in the tests. Controls for the kernel process are named patches in
 `tests/kernel_proc.py`, applied through the parent's pipe. Never switches in the kernel.
 
+## Speaker assertions (`zoe_os/speaker.py`)
+
+A person-bound request (`forget`, `erase_member`, `erase_item`, `grant`, `revoke`, `undo`, `explain` with `person`) from a surface
+carries `speaker`: `<body>.<mac>`, `body` the unpadded base64url of the compact, key-sorted JSON
+`{"a": audience, "g": generation, "n": 32 hex, "p": person, "t": issued_ms}`, `mac` the hex HMAC-SHA256 of
+`"zoe-os speaker assertion v1\0" + body` under the speaker-verifier's secret. Mint with
+`speaker.mint(key, person, audience, generation=g)` (or `speaker.mint_for(key, op, args, generation=g)`, which reads who and which
+audience from the request).
+
+* **The secret and the generation**: `STATE/identity-creds.json`,
+  `{"socket", "creds": {"speaker-verifier": hex}, "generation": 32 hex, "ttl_s": 60}`, 0600, atomic, written by both daemons at every
+  start (a fresh secret AND a fresh generation each time). Never in `creds.json`, never readable through any op, never printed.
+* **The window**: accepted only while `now < issued + 60 s` and `issued <= now + 2 s`, and only for THIS run's generation. A used
+  nonce is kept (in memory, a heap on its keep-until) until `issued + 60 s + 2 s`: keyed to the token's OWN issue time, so it
+  outlives every instant the token could be accepted in this run. Across runs the generation does the work: no token minted for a
+  previous run is ever accepted, whatever the clocks did (a restart inside the skew, a wall clock stepped back) and even under a
+  provisioned secret. There is no dead window after a start: a token for the new generation is good at once.
+* **Inside one run the wall clock may do anything**: verification time is `max(last seen, wall clock)`, so it never goes back
+  within a generation. A wall clock seen to step back by MORE than the 2 s skew ROLLS the generation (new id, used-nonce store
+  emptied, time re-anchored, `identity-creds.json` rewritten at once); so does a full used-nonce store (1024: it can only stay full
+  while time is stuck). Every token of the old generation is then refused, and an honest client recovers at once by re-reading the
+  file. A step back of up to 2 s does not roll: time holds until the wall clock passes it again. The trade: a roll costs every
+  in-flight token one refusal and a retry; the alternative (`max()` alone) would refuse every honest token after a corrected forward
+  jump until the wall clock caught up, possibly for hours. (Property tests over one run with arbitrary clock sequences and over
+  restart sequences, and millisecond-boundary tests, in `test_speaker.py`.)
+* **In the lab**, the test is the component that verifies people: `Box.client("panel")`, `BrainBox.client("panel")` and the
+  authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=, speaker_generation=)`);
+  `Box.assertion()`
+  mints one for a raw frame. Skills' clients get no key.
+* **A production client must**: read `identity-creds.json` (the key AND `generation`) from the provisioned state directory, put
+  `"g": generation` in every token, and re-read the file after ANY `speaker unproven` refusal or a reconnect, then retry the request
+  once with a fresh token. The generation can change MID-RUN (a backward clock step past the skew, or a full nonce store), with the
+  same key and the same socket: never cache it across a refusal. A restarted kernel has a new key and a new generation. Mint one assertion per request ONLY after it has itself
+  verified the person who is deciding, with the audience that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
+* **Not additive**: a surface client that sends no `speaker` is refused `speaker unproven` (code `refused`), a real refusal.
+
+## The reconcile digest (`list_digest`)
+
+`list_digest` answers ONLY the reconcile tool's own credential (`reconciler`, in `STATE/reconcile-creds.json`, 0600, written at every
+start: `{"socket", "creds": {"reconciler": hex}, "digest_key": hex}`); a surface, a skill and the eraser are refused
+`only the reconciler`. It returns `authority.keyed_digest(digest_key, member, list, item)` for every row: HMAC-SHA256 under a key
+fresh at each start, over the JSON array `[member id, list name, item.strip().lower()]` (compact separators, `ensure_ascii=False`)
+after the domain `"zoe-os list digest v1\0"`, as 64 hex. Equal items of two members or two lists differ, and nobody without the key
+can confirm a guessed item (the old unkeyed, member-less sha256 could be confirmed by hashing a list of common items).
+
 ## Authority kernel (`authority.py`)
 
 **Why the rows are rebuilt from the log.** A row exists exactly when a live, verified `list.add` receipt says so (less the verified
 `list.remove` / `undo` receipts after it). The receipt is already durable and committed in one transaction with its write-ahead
 intent, and every forget already reaches it, so there is ONE copy of the words to erase and nothing here changes the spine's or the
-dispatcher's transaction code. The cost is a scan of the receipts at start (measured below) and after each forget (one person's).
+dispatcher's transaction code. The cost is a scan of the receipts at start (measured below) and after each forget (per member it
+reached).
+
+**What a forget rebuilds, and what it can never bring back.**
+* A forget rebuilds EVERY member whose rows came from what it erased, not just its subject (A's row from words that named B goes
+  when B forgets everything). `DurableLists.owner_of` maps each list request (`asked`) and list receipt seq to the row's owner, so
+  the members are found in time proportional to the notice's seqs; each is then rebuilt from its own live receipts.
+* THE RULE (`Spine._closure`): after a forget, NO live record holds the forgotten content: not the action that created it, not an
+  action that reversed or restored it, not their snapshots, arguments, proofs or receipts.
+  BACKWARD, a forgotten reversal takes what it reversed: an `undo` takes the action it `undoes`; a removal (its snapshot is marked
+  `reverses`, and each removed row's request is indexed in the spine's `reversals` table) takes the adds whose rows it removed.
+  FORWARD, a forgotten row takes the removals of it: a removal whose removed rows are ALL forgotten is erased whole, with its request
+  ("remove X" is X's words); an undo of it derives from it and goes too. A removal that also took rows that survive (the
+  authority's remove takes every copy of the item on that list, so two adds of the same item, one forgotten) keeps its receipt, which
+  the surviving row's history needs, and loses the forgotten row from its snapshot; its arguments and proof name the item, which the
+  surviving row still holds in its own records. Erasure reaches the bytes: `secure_delete`, then a WAL checkpoint after the forget.
+* LEGACY records (the shadow kernel's, moved here): the spine indexes removals by KIND as well as by the marker (`LEGACY_REMOVALS`:
+  `list.remove`, whose snapshot is the whole previous list; its targets are the rows with the removed (list, item), which is what a
+  removal takes; a record that cannot say, conservatively every earlier add of that item by that person, which can erase older,
+  already-removed adds of the same item too, never resurrect one). The index is rebuilt once per version (`reversals_v2`), in one
+  transaction (a crash halfway leaves nothing half done). At every start the authority rewrites legacy list snapshots into its own
+  lean ones (`convert_legacy`: an add keeps no copy, a removal keeps only the rows it removed, an undo's `restored` follows), in one
+  transaction followed by a WAL checkpoint, so an undo of a migrated removal restores only what it removed and no receipt keeps
+  copies of other rows. `tests/test_legacy_migration.py` generates the legacy database with the real shadow daemon.
+* Backstop, scoped to the row's owner: a replayed or restored row that names an entity its owner asked to forget is dropped. The
+  plain word shield is GLOBAL in this kernel, so it is not used as a replay filter: it would drop another member's own live row of
+  the same words, and the rebuilt rows would differ from the running ones.
+* For the reminder and alarm rows on the branches above: the SAME RULE. When they become durable (rebuilt from receipts) they must
+  (1) find the affected owners from the notice's seqs the same way (an `asked`/receipt -> owner index), never just the subject;
+  (2) mark a snapshot `reverses` (provenance 1, rows with their `asked`) for any action that takes rows away (a reminder cancel, an
+  alarm clear or move), so the spine indexes it: forgetting that action forgets what it reversed, and forgetting the rows it took
+  erases it (whole, or scrubbed when other rows survive); (3) never replay a row whose receipt is gone; (4) keep an alarm's
+  "before" (the time it replaced) as a row with its `asked`, or the forward rule cannot reach it; (5) for THEIR legacy records
+  (the lab `Reminders` / `Alarms` drivers' receipts: `remind.set` with the person's whole reminder list, `alarm.set` with the
+  previous alarm, neither marked): add any kind that takes rows away to `LEGACY_REMOVALS` with its targets (an `alarm.set` replaces
+  the previous alarm: its target is that alarm's `asked`), and convert the whole-list snapshots at start the way `convert_legacy`
+  does for lists, or an undo will re-append every row. Today's in-memory lab stores already purge cross-owner rows by seq
+  (`provenance.erased_request`).
 
 **Kill points** (`tests/test_authority.py`, real SIGKILL): after the intent, after the driver ran but before the receipt (absent after
 the restart, an `uncertain` receipt), after the receipt but before the reply (present and verified). Controls: `no_rebuild` (an
@@ -160,30 +247,29 @@ acknowledged add is lost and the test sees it), `no_member_forget` (the erase's 
 **Where the database lives (owner decision 2026-11-15).** The kernel keeps its OWN SQLite file, never tables in the main database,
 in a permanent home beside Zoe's other stores (`~/.zoe/music-assistant/`, `~/.zoe/night-extract/`, `~/.zoe/omi-recordings/`, ...):
 **proposed `~/.zoe/zoe-os/zoe-os.db`** (directory 0700, file 0600; `authority.PERMANENT_DB`). ONE setting names it:
-`ZOE_OS_KERNEL_DB` in the unit template, passed to the daemon as `--db` (both daemons take it), and the same registered flag in zoe-data
-(`os_authority.kernel_db_path()`, used only to name the store; zoe-data never opens the file). Without `--db` the lab default is
-`STATE/kernel/zoe-os.db`. A daemon given `--db` refuses to start while that file is missing but the old `~/.zoe/os-shadow/kernel/zoe-os.db`
-still exists, so a skipped move can never start an empty kernel beside an unmoved record.
+the daemon's `--db` argument, written as a literal path in the unit template's `ExecStart` (both daemons take it); there is NO
+environment name for it (a lab process reads no product-prefixed name, and an unregistered `ZOE_*` name fails `validate`). zoe-data
+never opens the file. Without `--db` the lab default is `STATE/kernel/zoe-os.db`.
 
-**One-time move (owner step, before installing either unit with `--db`; nothing here does it).** Stop the kernel, copy consistently,
-check, then remove the old copy (a second copy would be a store no forget reaches):
-
-    systemctl --user stop zoe-os-shadow-kernel.service zoe-os-authority-kernel.service 2>/dev/null
-    mkdir -p -m 700 ~/.zoe/zoe-os
-    python3 -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close(); c=sqlite3.connect(sys.argv[2]); assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; print('events', c.execute('SELECT COUNT(*) FROM events').fetchone()[0])" ~/.zoe/os-shadow/kernel/zoe-os.db ~/.zoe/zoe-os/zoe-os.db \
-      && chmod 600 ~/.zoe/zoe-os/zoe-os.db \
-      && rm -f ~/.zoe/os-shadow/kernel/zoe-os.db ~/.zoe/os-shadow/kernel/zoe-os.db-wal ~/.zoe/os-shadow/kernel/zoe-os.db-shm
+**The move is done by the daemon at start (`authority.migrate`, both daemons).** A daemon given `--db` while the old
+`~/.zoe/os-shadow/kernel/zoe-os.db` still exists first moves it: the old record is folded into one file, copied with `VACUUM INTO`
+to a `.moving` temp (0600, fsynced), renamed into place, VERIFIED (`integrity_check` ok and, per table and for the schema, the row count
+and a digest of every row equal to the old), and only then the old file and its WAL/SHM are removed and the directory fsynced. Every
+step is safe to interrupt and the next start resumes it (a half copy is thrown away and redone; a finished copy is verified and the old
+one removed; leftover sidecars are removed). A copy that does not verify REFUSES the start with both files kept, for the owner to look
+at: no kernel ever runs on the new file while the old one exists, so a mismatch is damage, never newer data. Removing a file does not
+scrub its blocks from the disk (the same holds for any deleted file).
 
 **Nightly backup (from the day shadow is on).** A concrete addition to `scripts/maintenance/mempalace-nightly-backup.sh`, the nightly
 job that already snapshots a live SQLite file with Python's online backup API (the `sqlite3` CLI is not installed on the Jetson); not
 `postgres-nightly-backup.sh`, which is `pg_dump` only. Proposed block, after the MemPalace rotation (not applied by this change):
 
-    ZOE_OS_DB="${ZOE_OS_KERNEL_DB:-$HOME/.zoe/zoe-os/zoe-os.db}"
-    ZOE_OS_ROOT="${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
-    if [[ -f "$ZOE_OS_DB" ]]; then
-      mkdir -p -m 700 "$ZOE_OS_ROOT"
-      out="$ZOE_OS_ROOT/zoe-os-$(date +%Y%m%d-%H%M%S).db"
-      python3 - "$ZOE_OS_DB" "$out" <<'PY'
+    kernel_db="$HOME/.zoe/zoe-os/zoe-os.db"                          # the unit's --db
+    kernel_root="${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
+    if [[ -f "$kernel_db" ]]; then
+      mkdir -p -m 700 "$kernel_root"
+      out="$kernel_root/zoe-os-$(date +%Y%m%d-%H%M%S).db"
+      python3 - "$kernel_db" "$out" <<'PY'
     import sqlite3, sys
     src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)   # WAL: a reader beside the live kernel, never a file copy
     dst = sqlite3.connect(sys.argv[2])
@@ -194,7 +280,7 @@ job that already snapshots a live SQLite file with Python's online backup API (t
     assert chk.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()   # a kernel database, not an empty file
     PY
       chmod 600 "$out" && gzip -9 "$out"
-      ls -1t "$ZOE_OS_ROOT"/zoe-os-*.db.gz | tail -n +8 | xargs -r rm -f       # keep 7, like the palace
+      ls -1t "$kernel_root"/zoe-os-*.db.gz | tail -n +8 | xargs -r rm -f       # keep 7, like the palace
     fi
 
 Never `cp` the live `.db` (its `-wal` holds committed adds the main file does not have yet). `creds.json` and `k.sock` are re-made at
@@ -221,10 +307,17 @@ a name or a pronoun (`test_HONEST_LIMIT_reworded_content_...` asserts three of t
 "Durable" means against a killed process, not power loss. An `uncertain` receipt has no resolution step.
 Grants, manifests and credentials are in memory: a restart denies everything until granted again.
 
-A skill's own store is outside the kernel: a skill that ignores a forget notice keeps the words
-(`test_HONEST_LIMIT_a_skill_that_ignores_the_notice_...`). A forget by entity or topic cannot match an event
+A skill's arbitrary private memory is outside the kernel. A registered store is purged directly by
+the kernel even if its skill ignores the notice (`test_kernel_purges_store_even_when_skill_ignores_the_notice`).
+A forget by entity or topic cannot match an event
 whose content has aged out (`test_HONEST_LIMIT_a_scoped_forget_...`). Retention has a chosen policy (record,
 section 9) and no scheduler: nothing expires until something calls the sweep.
+
+Whole-member forget erases consent records too. The kernel purges the reminder store and verifies it
+before erasing consent; the skill then drops its cache without acting through the former grant.
+The kernel-side brain keeper erases its stores directly without consulting a skill grant. Per-person shield
+and legacy-store rules, including anonymous whole-member notices, are in the architecture record §2.3–2.4.
+Trusted origins can no longer reassert forgotten text for the forgetting member.
 
 When two people enable the same skill, the kernel lets it derive something for one from the other's private
 event; the rehearsal reports that, the kernel does not stop it. A forget by name does not reach the twin's
@@ -245,7 +338,100 @@ One kernel process, one lock. No rate limit on failed handshakes. Presence, memo
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
 
+## Offline load evidence [code]
+
+`bench_kernel.py` owns latency (all nine verbs), 1/4/16-client concurrency, a seeded
+20,000-operation soak (290 s cap), 50 SIGKILL/restart trials, and cold start to the
+first authenticated answer. `bench_support.py` starts one scratch kernel child;
+clients use threads, never additional worker processes. It uses the SAME `Client`,
+`KernelServer`, wire, consent, dispatcher and record as the brain bridge. Effects
+are **durable synthetic SQLite drivers**, not the brain's in-memory example stores.
+No model is loaded or contacted. No service or environment setting is changed.
+Scratch files stay inside this directory and are removed on exit.
+
+When the host's memory/probe rules allow, on a host permitting Unix socket bind:
+
+```sh
+python3 -B labs/zoe-os/bench_kernel.py --mode all --seed 7 --n 100 --soak-n 20000 --crashes 50 --out labs/zoe-os/bench-results.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --history-n 20000 --out labs/zoe-os/bench-history.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --profile --history-n 20000 --out labs/zoe-os/bench-profile.json
+python3 -B -m pytest -p no:cacheprovider -q labs/zoe-os/test_bench_kernel.py
+```
+
+Numbers and fixed statuses only leave the harness: never credentials or payloads.
+A failure writes its exception CLASS, exits nonzero, and does not masquerade as a
+completed measurement. CLI modes run independently so all failures are recorded.
+Keep baseline/after JSON from identical parameters and a comparable host load.
+Do not compare profiled timings to unprofiled timings. `--profile` writes a top-level
+`profile` object (also under `latency`), with one extra call per verb and `phases_us`
+for decode, consent, SQL, commit and receipt. Fixture setup precedes the counter reset.
+`--history-n` preloads at least that many action-history events through real calls,
+excluded from timing, so links and completed intents also grow. Counters are inclusive,
+not additive: `receipt_inclusive` contains append/SQL timings; JSON decoding includes
+wire parsing and DB payload decoding. SQL commit/autocommit include SQLite sync work;
+**fsync is not separately timed**. Cursor stepping is included in SQL time;
+supervisor commands are excluded from JSON decode counters. This is instrumentation,
+not an fsync attribution. Zero is an unused phase; receipt overlaps SQL and commit.
+
+Crash trials shuffle all six semantic crash points once per block, deterministically
+for the seed. The supervisor waits for a hook INSIDE the selected phase before
+SIGKILL; it does not hope a timer hits a write. It checks SQLite integrity, closed
+intent/receipt correspondence, payload completeness, acknowledged receipts AND actual
+effects, persistent survival sentinels, and undo after every restart. A volatile effect
+store must fail that same oracle. A driver that writes to the wrong member must fail
+the concurrency oracle even if its own read-back is unverified. The seeded workload
+is repeatable; thread schedules and timings are not. Process kill is not power loss.
+
+Forget timings cover a scoped isolated event, not deletion of a large member history
+or asynchronous erasure from external stores. Setup calls are excluded from per-verb
+latency; total concurrency wall time includes both successful writes and adversarial
+cross-member calls. Tail latency describes successful writes. Soak counts mixed
+operations separately from wire calls including fixture setup. RSS is the child process,
+not the controller, and disk growth includes the SQLite database, WAL and SHM files.
+Cold start includes Python imports, schema, synthetic grants, authentication and describe.
+
+[lab, coordinator] Seed-7 baseline numbers and the failed 20,000-call soak are recorded
+in the architecture document's “Load, soak and crash results”. New indexed lookups are
+unmeasured until the coordinator reruns them. The 290 s cap remains: baseline medians
+plus fixture setup imply about 75 s at steady cost. Timeout now retains partial
+measurements with a failure status. Each requested-history quarter reports per-verb
+percentiles and sequence boundaries, including any partially completed quarter.
+
+The builder sandbox cannot bind AF_UNIX; wire, concurrency, crash and the original
+oversized-frame scenario must be rerun by the coordinator. Socket-free complexity
+guards live in `tests/test_history_cost.py` (200/5,000 events, fixed SQLite VM-step
+budgets, deliberate scans as failing controls). VM steps measure SQL work, not storage
+latency. Scoped ID forget is bounded by affected rows; broad/entity/topic forget and
+pending-intent cause inspection still scale with their candidates. WAL truncation
+remains synchronous. Additive `CREATE INDEX IF NOT EXISTS` statements apply on opening
+an existing lab store; there is no production migration or new environment variable.
+
+Owner-decision repair: forget counts all erased event rows (including grants,
+refusals and named scoped notices). Shield controls restore explicit consent before
+turning off the shield, so erasing consent cannot mask the control's attack. Text
+reassertion and explicit entity release remain blocked pending the owner's decision
+on deliberate relearning. Trusted bootstrap can register idempotent store purges and
+independent read-back with the kernel; forget runs them before erasing consent.
+The reminder store is purged synchronously even if the skill ignores its notice.
+Store-purge registration is absent from Context and the wire/action catalog.
+Context's replay delete is restricted to driver-opted-in IDs from a live forget notice;
+it cannot erase arbitrary rows or supply a replacement grant. The architecture document
+records the failure/retry boundary and the outstanding owner question.
+
+Fresh scratch schemas use `WITHOUT ROWID` for cursors, metadata and retired counts,
+eliminating three redundant primary-key B-trees. Person and cause links are sets
+with composite primary keys, replacing each link table's separate lookup B-tree.
+The named `people_seq` and `latest_receipt` indexes remain, as do the cause lookup
+and all intent indexes; repeated links are ignored rather than stored twice.
+The oversized-frame oracle checks that no 4096-byte run of the 200,000-byte body
+is on disk and that DB/WAL/SHM total stays below twice its length, matching the
+boundary test. SQL complexity budgets stay unchanged.
+The socket-free disk oracle now includes the launcher's initial audit grant; the
+former empty-spine fixture understated WAL growth. Existing scratch tables retain
+their layout; these DDL changes compact fresh stores, without rewriting old ones.
 Review correction: authorised explainer and twin display results retain household content;
 tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
 also clears the owner's reduced twin facts through its watermark after source retention,
-while cross-owner cleanup matches explicit erased request sequences.
+while cross-owner cleanup matches explicit erased request sequences. It also erases events about
+another member whose payload names the forgotten member's id (record, "Combined forget transaction"), and a remote skill that
+cannot resolve the anonymous notice keeps only state whose source it can still read.

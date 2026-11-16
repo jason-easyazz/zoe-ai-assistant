@@ -54,9 +54,9 @@ class Lights:
         return {"room": args["room"]}
 
 
-def household(tmp_path):
+def household(tmp_path, extra=()):
     k = Kernel(str(tmp_path / "zoe-os.db"),
-               [Person(ALEX), Person(SAM), Person(KID, CHILD, guardians=(ALEX,))],
+               [Person(ALEX), Person(SAM), Person(KID, CHILD, guardians=(ALEX,)), *map(Person, extra)],
                clock=lambda: NOW)
     k.path = str(tmp_path / "zoe-os.db")
     for m in (*ADAPTERS, AUDIT):

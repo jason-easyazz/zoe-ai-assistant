@@ -166,7 +166,7 @@ def test_HONEST_LIMIT_a_scoped_forget_cannot_match_an_event_whose_content_has_ag
     sweep(spine, 31)
     assert spine.forget(A, actor=A, entity="Zorvane Quillfeather").count == 0   # nothing left to match
     assert kept.seq in [e.seq for e in spine.replay("all")]
-    assert spine.forget(A, actor=A).count == 2                         # the person-forget still reaches it
+    assert spine.forget(A, actor=A).count == 3  # skeleton, copy and earlier named scoped notice
 
 
 # ---- no policy is built in ---------------------------------------------------------------------------

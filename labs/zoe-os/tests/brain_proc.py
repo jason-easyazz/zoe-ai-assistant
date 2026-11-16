@@ -43,7 +43,9 @@ def main() -> None:
     creds = {name: srv.issue(name, surface=name == "panel").hex()
              for name in ("brain", "voice", "panel", "audit")}
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    print(json.dumps({"pid": os.getpid(), "creds": creds, "recovered": [e.seq for e in k.recovered]}),
+    print(json.dumps({"pid": os.getpid(), "creds": creds, "speaker_key": srv.speaker_secret().hex(),
+                      "speaker_generation": srv.speaker_generation(),
+                      "recovered": [e.seq for e in k.recovered]}),
           flush=True)
     for line in sys.stdin:
         cmd, out = json.loads(line)["cmd"], {}

@@ -5,7 +5,7 @@ do what), ``proactive/triggers/reminder_scan.py`` (when a row fires), ``reminder
 ``schedule.py``). ``docs/architecture/zoe-os.md`` section 13 maps every rule to its production line and lists what does not map.
 
 A row: ``id, owner`` (who it is for), ``by`` (who set it), ``note``, ONE schedule form (``at`` | ``date``/``time`` | ``repeat`` +
-``date`` anchor, optional ``until``), ``visibility`` (personal | family), ``active``, ``done``, ``snoozed_until``, ``after`` (nothing
+``date`` anchor, optional ``until``), ``visibility`` (personal | family | private: private shuts out a carer too), ``active``, ``done``, ``snoozed_until``, ``after`` (nothing
 at or before it fires), ``grace_at``. When it fires: ``schedule.reminder_next_fire``, the one pure function.
 
 Actions (all reversible, all read back): ``remind.set`` (today's ``{note, in_minutes}`` still works), ``remind.snooze``,
@@ -25,7 +25,7 @@ from .rows import DurableRows
 GRACE_MIN = 2                 # production reminder_scan._SAME_DAY_GRACE_MIN
 SNOOZE_DEFAULT_MIN = 15       # production models.SnoozeBody.snooze_minutes
 SNOOZE_MAX_MIN = 1440         # production has no bound; the kernel takes a day at most
-VISIBILITY = r"personal|family"
+VISIBILITY = r"personal|family|private"
 ID = {"type": "string", "required": True, "max": 64, "description": "which reminder"}
 OPT = lambda kind, desc, **kw: {"type": kind, "required": False, "description": desc, **kw}  # noqa: E731
 
@@ -33,6 +33,7 @@ OPT = lambda kind, desc, **kw: {"type": kind, "required": False, "description": 
 class DurableReminders(DurableRows):
     prefix, creates = "rem", "remind.set"
     actions = ("remind.set", "remind.snooze", "remind.done", "remind.cancel", "remind.edit")
+    removes = ("remind.cancel",)
 
     def __init__(self, spine, clock, grants, *, tz: str = "UTC", default_time: str = "09:00") -> None:
         super().__init__(spine, clock)
@@ -50,22 +51,29 @@ class DurableReminders(DurableRows):
 
     def visible_to(self, person: str) -> list[dict]:
         """Production's list filter, ``visibility = 'family' OR user_id = me`` (routers/reminders.py ``_visibility_filter_sql``),
-        plus the setter of a row they set for someone else."""
+        plus the setter of a row they set for someone else, plus a CARER for the person they care for (not a private one)."""
         return [r | {"next_fire": self.next_fire(r)} for _, r in sorted(self.rows.items())
-                if r["visibility"] == "family" or person in (r["owner"], r["by"])]
+                if r["visibility"] == "family" or person in (r["owner"], r["by"]) or self._cares(person, r)]
 
     # ---- who may ---------------------------------------------------------------------------------------------------------------
-    def _guardian(self, adult: str, child: str) -> bool:
-        who, by = self.grants.people.get(child), self.grants.people.get(adult)
+    def _carer(self, adult: str, person: str) -> bool:
+        """Owner rule (2026-11-16): a guardian is a CARER who may see and manage reminders for the person they care for, a child OR
+        an adult in care (an adult whose roster entry names guardians). That reach is for MANAGING rows only: forget, undo and
+        explain stay child-only (``capability.guards``), so a carer can never erase or read back an adult's record."""
+        who, by = self.grants.people.get(person), self.grants.people.get(adult)
         return who is not None and by is not None and by.role == ADULT and adult in who.guardians
+
+    def _cares(self, person: str, row: dict) -> bool:
+        return row["visibility"] != "private" and self._carer(person, row["owner"])
 
     def _may(self, person: str, row: dict | None, what: str) -> str:
         if row is None:
             return "no such reminder"
-        mine = person in (row["owner"], row["by"]) or self._guardian(person, row["owner"])
-        if what == "edit":           # update / delete: own, or any member for a family reminder (routers/reminders.py:202-212, 293-301)
-            return "" if mine or row["visibility"] == "family" else "no such reminder"
-        if person == row["owner"]:   # snooze / done: the owner only (routers/reminders.py:334-335, 398-399)
+        mine = person in (row["owner"], row["by"])
+        carer = self._cares(person, row)                      # a private reminder shuts a carer out
+        if what == "edit":           # update / delete: own, a carer, or any member for a family reminder (routers/reminders.py:202-212)
+            return "" if mine or carer or row["visibility"] == "family" else "no such reminder"
+        if person == row["owner"] or carer:   # snooze / done: the owner (routers/reminders.py:334-335, 398-399), or their carer
             return ""
         return "only its owner may do that" if mine or row["visibility"] == "family" else "no such reminder"
 
@@ -110,8 +118,8 @@ class DurableReminders(DurableRows):
     def _check_set(self, person, args, caused_by):
         owner = args.get("for", person)
         if owner != person:
-            if not self._guardian(person, owner):
-                return "only a guardian may set one for someone else"
+            if not self._carer(person, owner):
+                return "only a carer may set one for someone else"
             if not any(owner in getattr(self.spine._get(s), "mentions", ()) for s in caused_by):
                 return "the asking event must name who it is for"       # so that person's forget reaches it
         return self._schedule(args, self.clock())[1]
@@ -196,14 +204,14 @@ class DurableReminders(DurableRows):
                 "repeat": OPT("string", "a repeat rule (RRULE: FREQ=DAILY|WEEKLY|MONTHLY|YEARLY ...)", max=120),
                 "until": OPT("string", "the last day it repeats, YYYY-MM-DD", pattern=sch.DAY, max=10),
                 "for": OPT("string", "who it is for, when not the person asking", max=64),
-                "visibility": OPT("string", "personal or family", pattern=VISIBILITY, max=8), "asked": ASKED}),
+                "visibility": OPT("string", "personal, family or private", pattern=VISIBILITY, max=8), "asked": ASKED}),
             "remind.snooze": (self._snooze, self._check_row("own"), "Snooze one of the person's reminders", {
                 "id": ID, "minutes": OPT("integer", "how long", minimum=1, maximum=SNOOZE_MAX_MIN), "asked": ASKED}),
             "remind.done": (self._done, self._check_row("own"), "Mark a reminder done", {"id": ID, "asked": ASKED}),
             "remind.cancel": (self._cancel, self._check_row("edit"), "Cancel a reminder", {"id": ID, "asked": ASKED}),
             "remind.edit": (self._edit, self._check_edit, "Change a reminder", {
                 "id": ID, "note": OPT("string", "what to remind"), **when,
-                "visibility": OPT("string", "personal or family", pattern=VISIBILITY, max=8),
+                "visibility": OPT("string", "personal, family or private", pattern=VISIBILITY, max=8),
                 "active": OPT("integer", "1 on, 0 off", minimum=0, maximum=1), "asked": ASKED}),
         })
         return self

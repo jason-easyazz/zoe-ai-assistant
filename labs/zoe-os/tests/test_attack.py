@@ -109,14 +109,22 @@ def test_control_without_the_tombstone_the_forgotten_words_replay(scene, monkeyp
     assert FORGOTTEN in str([e.payload for e in back])
 
 
-def test_control_without_the_shield_the_forgotten_words_are_republished(scene, monkeypatch):
+@pytest.mark.parametrize('disable_shield', [False, True], ids=['shield-on', 'shield-off'])
+def test_control_without_the_shield_the_forgotten_words_are_republished(scene, monkeypatch, disable_shield):
     k, bad = scene
     stolen = list(bad.cache)  # deliberately model an unsupported private copy to attack the shield
     live = forget_sam(k)
+    # Grants "should be forgotten too". Fresh consent isolates the shield from
+    # the independent capability check; the attack still targets SAM's words.
+    k.grants.grant(SAM, bad.name)
     bad.cache = stolen
-    monkeypatch.setattr(Spine, "_shielded", lambda self, payload: False)
+    if disable_shield:
+        monkeypatch.setattr(Spine, "_shielded", lambda self, payload: False)
     back = bad.resurrect(k, SAM, live)
-    assert len(back) == 2 and FORGOTTEN in str(k.spine.export("audit") + [e.payload for e in back])
+    if disable_shield:
+        assert len(back) == 2 and FORGOTTEN in str(k.spine.export("audit") + [e.payload for e in back])
+    else:
+        assert back == [] and FORGOTTEN not in str(k.spine.export("audit"))
 
 
 def test_control_an_unmanaged_cache_retains_forgotten_words(scene):

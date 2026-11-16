@@ -688,6 +688,7 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
   uneven, refresh the weights from a run's ledgers: download the `shard-ledger-*` artifacts, then
   `python3 tools/ci/shard_ledger.py weights --out tools/ci/shard_weights.json <ledger>.json…` (by hand, never per PR).
 
+- **Lab tests in `validate` (2026-11-15):** the Zoe OS kernel suite (`labs/zoe-os/tests`, ~510 tests, ~55 s on the Jetson) is selected by the `ci_safe` marker its `conftest.py` applies and by its path being listed beside `tests/unit` in the unit shards and the `collect` job, so the shard ledger counts it in the `tests/unit` lane exactly once. Its weights live in `shard_weights.json`. Skipped, not dropped: the second-OS-user tests (need root). Not yet in CI: the `brain-lab-app` Node test.
 - Parts of `validate.yml` run an **explicit, enumerated list of test files**, not pytest
   path-discovery. A new `tests/**` file **silently does not run in CI** unless its lane picks it up —
   so a brand-new regression test can "pass" by never executing.

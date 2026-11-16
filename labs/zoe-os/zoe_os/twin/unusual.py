@@ -64,7 +64,7 @@ class Sharing:
 
     def __init__(self, spine: Spine, people: dict[str, Person]) -> None:
         self.spine, self.people = spine, people
-        self._with: dict[str, set[str]] = {}
+        self._with: dict[str, dict[str, int]] = {}
 
     def _may_set(self, by: str, person: str) -> bool:
         """Only an adult, and only for themself. A child's lines already go to their guardians
@@ -78,10 +78,13 @@ class Sharing:
         them = self.people.get(other)
         if them is None or them.role == GUEST or other == person:
             raise ConsentError("lines can be shared only with another member of the household")
-        (self._with.setdefault(person, set()).add if change == "shared" else
-         self._with.setdefault(person, set()).discard)(other)
-        self.spine._kernel_append(Event(Kind.GRANT_CHANGE, KERNEL, visibility=Visibility.KERNEL,
-                                        payload={"change": change, "person": person, "with": other}))
+        record = self.spine._kernel_append(Event(
+            Kind.GRANT_CHANGE, KERNEL, visibility=Visibility.KERNEL,
+            payload={"change": change, "person": person, "with": other}))
+        if change == 'shared':
+            self._with.setdefault(person, {})[other] = record.seq
+        else:
+            self._with.setdefault(person, {}).pop(other, None)
 
     def share(self, person: str, other: str, *, by: str) -> None:
         self._change("shared", person, other, by)
@@ -90,7 +93,8 @@ class Sharing:
         self._change("unshared", person, other, by)
 
     def shared_with(self, person: str) -> frozenset[str]:
-        return frozenset(self._with.get(person, ()))
+        return frozenset(other for other, seq in self._with.get(person, {}).items()
+                         if self.spine._get(seq) is not None)
 
 
 def shown_to(result: Unusual, viewer: str, people: dict[str, Person],

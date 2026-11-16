@@ -2,7 +2,7 @@
 
     stdin line 1   {"db_dir": ..., "socket": ..., "install": [manifests], "surfaces": [names],
                     "server": {KernelServer keyword arguments}}
-    stdout line 1  {"pid": ..., "creds": {skill: hex}}       <- the supervisor's pipe
+    stdout line 1  {"pid": ..., "creds": {skill: hex}, "speaker_key": hex, "speaker_generation": str}   <- the supervisor's pipe
 
 The pipe to the parent stands in for the supervisor (systemd in production): it is how a
 credential reaches the one process it is for, and it is NOT reachable from the socket. The
@@ -23,6 +23,7 @@ sys.path[:0] = [str(Path(__file__).parent.parent), str(Path(__file__).parent)]
 from world import household  # noqa: E402
 
 from zoe_os.capability import Enforcer  # noqa: E402
+from zoe_os.forget_match import entity_key  # noqa: E402
 from zoe_os.receipts import ClaimAuditor, Dispatcher  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os.spine import Decision, Spine  # noqa: E402
@@ -40,6 +41,8 @@ CONTROLS = {     # name -> remove exactly one guarantee
                                      _concerns=lambda s, person, caused_by: True),   # the cause rule is a second layer
     "no_tombstone": lambda srv: _set(Spine, _tombstone=lambda s, seqs: None),
     "no_shield": lambda srv: _set(Spine, _shielded=lambda s, payload: False),
+    # the former owner hash, over the NORMALISED name: ids that fold alike share it
+    "normalised_owner": lambda srv: _set(Spine, _owner=lambda s, person: s._fp('owner\0' + entity_key(person))),
     "no_verify": lambda srv: _set(KernelServer, _verify=lambda s, name, nonce, proof: True),
     "fixed_nonce": lambda srv: _set(KernelServer, _nonce=lambda s: b"\0" * 32),
     "no_size_cap": lambda srv: _set(srv, max_frame=1 << 24),
@@ -97,9 +100,12 @@ def main() -> None:
     os.umask(0o077)                       # the database and its WAL are the kernel user's alone
     for name in cfg.get("controls", ()):       # before the kernel opens: these cover recovery too
         CONTROLS[name](None)
-    k = household(Path(cfg["db_dir"]))
+    k = household(Path(cfg["db_dir"]), cfg.get("extra_people", ()))
     for manifest in cfg.get("install", ()):
         k.grants.install(manifest)
+    if cfg.get("reminder_store"):
+        from reminder_store import ReminderStore
+        k.reminder_store = ReminderStore().register(k)
     device = Device(cfg["device"], k)
     k.actions.register("light.toggle", device.do, device.verify, needs_accept=False)
     k.actions.register("alarm.move", device.do, device.verify,
@@ -108,7 +114,8 @@ def main() -> None:
     creds = {name: srv.issue(name, surface=name in cfg.get("surfaces", ())).hex()
              for name in k.grants.manifests}
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    print(json.dumps({"pid": os.getpid(), "creds": creds,
+    print(json.dumps({"pid": os.getpid(), "creds": creds, "speaker_key": srv.speaker_secret().hex(),
+                      "speaker_generation": srv.speaker_generation(),
                       "recovered": [e.seq for e in k.recovered]}), flush=True)
     for line in sys.stdin:                # EOF (the parent died) ends the kernel too
         msg = json.loads(line)
@@ -121,6 +128,13 @@ def main() -> None:
             out = {"unbacked": [c.seq for c in k.auditor.scan()]}
         elif msg["cmd"] == "control":
             CONTROLS[msg["name"]](srv)
+        elif msg["cmd"] == "retire":       # retention's two stages, now: the rows leave the log
+            k.spine._expire(msg["seqs"])
+            k.spine._retire(msg["seqs"])
+        elif msg["cmd"] == "last":
+            out = {"seq": k.spine.last_seq}
+        elif msg["cmd"] == "reminder_rows":     # ids and owners only, never a note
+            out = {"rows": sorted([rid, row["owner"]] for rid, row in k.reminder_store.rows.items())}
         elif msg["cmd"] == "reissue":
             out = {"cred": srv.issue(msg["skill"]).hex()}
         elif msg["cmd"] == "stop":

@@ -33,7 +33,7 @@ def test_the_op_table_is_the_whole_surface():
 
 def test_every_op_round_trips_over_the_socket(box):
     panel, voice, helper = box.raw("panel"), box.raw("voice"), box.raw(HELPER)
-    assert ok(panel, "grant", person=SAM, skill=HELPER)["grant_id"].startswith("g")
+    assert ok(panel, "grant", person=SAM, skill=HELPER, speaker=box.assertion(SAM, "grant"))["grant_id"].startswith("g")
     sub = ok(helper, "subscribe", kinds=["utterance"])["sub"]
     said = ok(voice, "publish", kind="utterance", subject=SAM, payload={"text": "synthetic words"})
     assert said["source"] == "voice" and said["seq"] > 0          # the kernel names the source
@@ -46,9 +46,11 @@ def test_every_op_round_trips_over_the_socket(box):
     why = ok(helper, "explain", seq=said["seq"])
     assert why["event"] == said and why["causes"] == []
     assert [g["person"] for g in ok(helper, "explain")["grants"]] == [SAM]
-    assert ok(panel, "forget", subject=SAM, actor=SAM) == {"count": 2, "upto": receipt["seq"]}
+    # Grant and refusal records "should be forgotten too": count every erased row.
+    assert ok(panel, "forget", subject=SAM, actor=SAM, speaker=box.assertion(SAM, "forget.person")) == {
+        "count": 3, "upto": receipt["seq"]}
     assert [e["kind"] for e in ok(helper, "poll", sub=sub, max=8)["events"]] == ["forget"]
-    assert ok(panel, "revoke", person=SAM, skill=HELPER) == {"revoked": True}
+    assert ok(panel, "revoke", person=SAM, skill=HELPER, speaker=box.assertion(SAM, "revoke")) == {"revoked": True}
     assert box.audit() == []
 
 

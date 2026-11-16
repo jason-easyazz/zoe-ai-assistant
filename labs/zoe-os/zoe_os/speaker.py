@@ -1,0 +1,206 @@
+"""Speaker assertions: proof of WHO is speaking, from the component that verifies people.
+
+A surface (the panel, the voice adapter) relays a person's decision; it does not get to say which person. A person-bound request
+(``forget``, ``erase_member``, ``erase_item``, ``grant``, ``revoke``, ``undo``, ``explain`` for a person) carries a ``speaker``
+assertion minted by the ``speaker-verifier`` identity (in production: the zoe-data code that has just verified the voice or the
+panel session). The surface can pass it along; without the identity secret it cannot mint one.
+
+A token is ``<body>.<mac>``: ``body`` = unpadded base64url of
+``{"p": person, "t": issued_ms, "n": nonce_hex, "a": audience, "g": generation}``, ``mac`` = hex HMAC-SHA256(secret, DOMAIN + body).
+The kernel accepts it only when the MAC is right (constant-time compare), the person and the audience are what the request needs,
+its ``generation`` is THIS kernel run's (a random id fresh at every start, published in ``identity-creds.json``), it was issued LESS
+than ``TTL_S`` ago and no more than ``SKEW_S`` ahead, and its nonce has not been used in this run.
+
+THE INVARIANT: within a run, once a token has been accepted it is never accepted again, for any sequence of wall-clock values.
+How (``Verifier._why``): verification time ``now`` is NON-DECREASING within a generation (``max(last seen, wall clock)``); a token
+issued at ``t`` (ms) is acceptable only while ``now < t + TTL``; its used nonce is kept until ``now >= t + TTL + SKEW``, keyed to the
+token's OWN issue time. A wall clock seen to step BACK by more than ``SKEW`` ROLLS the generation (a new random id, the used-nonce
+store cleared, ``now`` re-anchored to the wall clock, ``on_roll`` told so the daemon republishes ``identity-creds.json``): every
+token of the old generation is then refused, so nothing it accepted can come back, and honest clients recover at once by re-reading
+the file and minting again (rather than waiting, possibly hours, for the wall clock to catch up with a corrected forward jump). A step
+back of up to ``SKEW`` does not roll: ``now`` simply holds until the wall clock passes it again (at most ``SKEW``). A FULL used-nonce
+store also rolls (it can only stay full while ``now`` is stuck; rolling empties it), so it never refuses forever.
+ACROSS runs: a token names the generation it was minted for, and no two runs share one, so NOTHING a previous run could have
+accepted is accepted by this one: whatever the clocks did (a restart inside the skew, a wall clock stepped backwards between runs)
+and even under a provisioned secret that survives the restart. Losing the in-memory nonce store at a restart is safe for that reason.
+
+Every failure is the same refusal (``UNPROVEN``); the reason is counted by a fixed name and never logged with the token. Stdlib
+only; verification is O(log n) at worst (the used-nonce heap).
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import collections
+import hashlib
+import heapq
+import hmac
+import json
+import secrets
+import time
+from typing import Callable
+
+IDENTITY = "speaker-verifier"              # the identity that mints: never a connection, never a manifest
+IDENTITY_CREDS = "identity-creds.json"     # its secret, 0600, apart from creds.json and erase-creds.json
+TTL_S = 60.0                               # a spoken decision is relayed within seconds; a minute covers a slow turn
+SKEW_S = 2.0                               # same host: a token from the future beyond this is refused
+MAX_TOKEN = 512                            # checked before anything is decoded
+MAX_LIVE = 1024                            # used nonces kept for their TTL; full = refuse (fail closed), never forget one early
+UNPROVEN = "speaker unproven"
+_DOMAIN = b"zoe-os speaker assertion v1\0"
+
+#: who must be proven, per person-bound op. The ONE table: the server and the lab client both read ``binding``.
+PERSON_BOUND = frozenset({"forget", "erase_member", "erase_item", "grant", "revoke", "undo", "explain", "reminders"})
+#: what the member-delete path's ``eraser`` credential may do without an assertion: the forget family, nothing else
+ERASER_MAY = frozenset({"forget", "erase_member", "erase_item"})
+AUDIENCES = frozenset({"forget.person", "forget.scoped", "grant", "revoke", "undo", "explain", "reminders"})
+
+
+def binding(op: str, args: dict, is_child: Callable[[str], bool] | None = None) -> tuple[object, str] | None:
+    """``(who must be proven speaking, audience)`` for a person-bound request, ``None`` for any other.
+
+    The person is the request's SPEAKING field: ``actor`` for forget and undo (the kernel's own rule then decides whether that
+    actor may act for the subject: themself, or a guardian for their child), the guardian for a child's grant, else the person
+    the request names. A whole-person forget and a scoped one are different audiences, so "forget that" cannot become "forget me".
+    ``is_child`` (the kernel's roster) makes a guardian count only for a child; without it (a client) the guardian is assumed."""
+    if op == "forget":
+        scoped = any(args.get(k) is not None for k in ("seqs", "entity", "topic"))
+        return args.get("actor"), "forget.scoped" if scoped else "forget.person"
+    if op == "erase_member":
+        return args.get("subject"), "forget.person"
+    if op == "erase_item":
+        return args.get("subject"), "forget.scoped"
+    if op == "grant":
+        guardian, person = args.get("guardian"), args.get("person")
+        child = guardian is not None and (is_child is None or is_child(person))
+        return (guardian if child else person), "grant"
+    if op in ("revoke", "undo"):
+        return args.get("person" if op == "revoke" else "actor"), op
+    if op == "reminders":                     # a person's reminders are read FOR that proven person, never for whoever asks
+        return args.get("person"), "reminders"
+    if op == "explain" and "person" in args:
+        return args.get("person"), "explain"
+    return None
+
+
+def _ms(seconds: float) -> int:
+    return int(round(seconds * 1000))           # round, not truncate: a float clock must not lose a millisecond at a boundary
+
+
+def _mac(key: bytes, body: bytes) -> bytes:
+    return hmac.new(key, _DOMAIN + body, hashlib.sha256).hexdigest().encode()
+
+
+def mint(key: bytes, person: str, audience: str, *, generation: str, now: float | None = None, nonce: str | None = None) -> str:
+    """What the speaker-verifier hands the surface after it verified ``person``, for the kernel run ``generation`` names (read
+    from ``identity-creds.json`` with the key). Never logged."""
+    if audience not in AUDIENCES:
+        raise ValueError("unknown audience")
+    claims = {"p": person, "t": _ms(time.time() if now is None else now), "n": nonce or secrets.token_hex(16),
+              "a": audience, "g": generation}
+    body = base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    return (body + b"." + _mac(key, body)).decode()
+
+
+def mint_for(key: bytes, op: str, args: dict, *, generation: str, now: float | None = None) -> str | None:
+    """The assertion a lab client attaches to ``op`` (``None``: the op is not person-bound, or names nobody)."""
+    bound = binding(op, args)
+    if bound is None or not isinstance(bound[0], str):
+        return None
+    return mint(key, bound[0], bound[1], generation=generation, now=now)
+
+
+class Verifier:
+    """The kernel's side, one per kernel RUN. ``clock`` is injectable (tests). ``generation``: the current id, random (128 bits)
+    and never chosen by a caller; it changes at every start and whenever this run rolls it (a backward clock step past the skew, or
+    a full nonce store); a token for any other generation is refused (``generation``). ``on_roll(new_generation)`` is called after
+    a roll (the daemons rewrite ``identity-creds.json``); a failing callback is counted, never raised into a request."""
+
+    def __init__(self, key: bytes, *, clock: Callable[[], float] = time.time, ttl: float = TTL_S,
+                 max_live: int = MAX_LIVE, on_roll: Callable[[str], None] | None = None) -> None:
+        if len(key) < 32:
+            raise ValueError("a speaker secret is at least 32 bytes")
+        self._key, self._clock, self.on_roll = key, clock, on_roll
+        self._ttl_ms, self._skew_ms, self._max = int(ttl * 1000), int(SKEW_S * 1000), max_live
+        self.generation = secrets.token_hex(16)
+        self._last_ms = _ms(clock())                        # the high-water mark of verification time in this generation
+        self.rolls: collections.Counter[str] = collections.Counter()      # why the generation rolled (fixed names)
+        self._used: dict[str, int] = {}                     # nonce -> keep until (ms) = its token's issue time + TTL + skew
+        self._expiry: list[tuple[int, str]] = []            # a heap on keep-until: pruning is O(log n) per nonce
+        self.refused: collections.Counter[str] = collections.Counter()    # fixed reason names only
+        self.accepted = 0
+
+    def check(self, token: object, person: str, audience: str) -> bool:
+        why = self._why(token, person, audience)
+        if why:
+            self.refused[why] += 1
+            return False
+        self.accepted += 1
+        return True
+
+    def _now(self) -> int:
+        """Verification time: never earlier than any time already used in this generation. A step back past the skew rolls."""
+        wall = _ms(self._clock())
+        if wall < self._last_ms - self._skew_ms:
+            self._roll("clock went back")
+            self._last_ms = wall
+        else:
+            self._last_ms = max(self._last_ms, wall)
+        return self._last_ms
+
+    def _roll(self, why: str) -> None:
+        self.generation = secrets.token_hex(16)
+        self._used.clear()
+        self._expiry.clear()
+        self.rolls[why] += 1
+        if self.on_roll is not None:
+            try:
+                self.on_roll(self.generation)
+            except Exception:  # noqa: BLE001 - a failed republish must not fail a request; clients then retry and re-read
+                self.rolls["republish failed"] += 1
+
+    def _prune(self, now_ms: int) -> None:
+        while self._expiry and self._expiry[0][0] <= now_ms:
+            _, nonce = heapq.heappop(self._expiry)
+            self._used.pop(nonce, None)
+
+    def _why(self, token: object, person: str, audience: str) -> str:
+        if token is None:
+            return "missing"
+        if not isinstance(token, str) or not 0 < len(token) <= MAX_TOKEN or token.count(".") != 1:
+            return "malformed"
+        body, mac = token.split(".")
+        try:
+            raw_body, raw_mac = body.encode("ascii"), mac.encode("ascii")
+        except UnicodeEncodeError:
+            return "malformed"
+        if not hmac.compare_digest(_mac(self._key, raw_body), raw_mac):
+            return "mac"
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(raw_body + b"=" * (-len(raw_body) % 4)))
+        except (ValueError, binascii.Error):
+            return "malformed"
+        if not isinstance(claims, dict) or set(claims) != {"p", "t", "n", "a", "g"} or not isinstance(claims["t"], int) \
+                or isinstance(claims["t"], bool) or not isinstance(claims["n"], str) or len(claims["n"]) != 32:
+            return "malformed"
+        if claims["a"] != audience:
+            return "audience"
+        if claims["p"] != person:
+            return "person"
+        now_ms, t = self._now(), claims["t"]               # first: a backward step rolls the generation before it is compared
+        if not isinstance(claims["g"], str) or not hmac.compare_digest(claims["g"].encode(), self.generation.encode()):
+            return "generation"                            # minted for another run or generation: dead, whatever the clocks say
+        if t > now_ms + self._skew_ms:
+            return "future"
+        if now_ms - t >= self._ttl_ms:                     # acceptable only while now < t + TTL
+            return "expired"
+        self._prune(now_ms)
+        if claims["n"] in self._used:
+            return "replay"
+        if len(self._used) >= self._max:
+            self._roll("store full")                       # only a stuck clock keeps it full: empty it, never refuse forever
+            return "busy"
+        keep = t + self._ttl_ms + self._skew_ms           # > every instant the token is acceptable (t + TTL), whatever "now" was
+        self._used[claims["n"]] = keep
+        heapq.heappush(self._expiry, (keep, claims["n"]))
+        return ""

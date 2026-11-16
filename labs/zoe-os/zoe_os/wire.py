@@ -15,6 +15,10 @@ every op and every argument it takes. Anything else is ``bad_request``, never a 
 
 The version changes when the meaning of an op or a required argument changes. A NEW op or a
 new optional argument is additive: an older kernel refuses it cleanly as unknown.
+
+NOT additive, deliberately: ``speaker`` is optional on the wire but the kernel REQUIRES it from a
+surface for every person-bound op (``speaker.PERSON_BOUND``). A surface client that sends none is
+refused ``speaker unproven``: a surface cannot speak for a person.
 """
 from __future__ import annotations
 
@@ -33,6 +37,7 @@ MAX_REPLY = 16 * 1024 * 1024   # what a client will accept back (a poll can carr
 MAX_POLL, MAX_WAIT_MS = 64, 5000
 
 _OPT_STR = (str, type(None))
+_SPEAKER = ((str,), False)     # a speaker assertion (``speaker.py``): optional on the wire, REQUIRED by the kernel for a surface
 # op -> {argument: (accepted types, required)}
 OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "publish": {"kind": ((str,), True), "payload": ((dict,), True), "subject": (_OPT_STR, False),
@@ -43,21 +48,22 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "poll": {"sub": ((int,), True), "max": ((int,), False), "wait_ms": ((int,), False),
              "ack": ((int,), False)},
     "forget": {"subject": ((str,), True), "actor": ((str,), True), "seqs": ((list,), False),
-               "entity": ((str,), False), "topic": ((str,), False)},
+               "entity": ((str,), False), "topic": ((str,), False), "speaker": _SPEAKER},
     "grant": {"person": ((str,), True), "skill": ((str,), True), "reads": ((dict,), False),
-              "acts": ((list,), False), "guardian": (_OPT_STR, False)},
-    "revoke": {"person": ((str,), True), "skill": ((str,), True)},
+              "acts": ((list,), False), "guardian": (_OPT_STR, False), "speaker": _SPEAKER},
+    "revoke": {"person": ((str,), True), "skill": ((str,), True), "speaker": _SPEAKER},
     "act": {"action": ((str,), True), "on_behalf_of": ((str,), True), "args": ((dict,), True),
             "caused_by": ((list,), True)},
-    "undo": {"person": ((str,), True), "actor": ((str,), True)},
+    "undo": {"person": ((str,), True), "actor": ((str,), True), "speaker": _SPEAKER},
     "describe": {},
-    "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
+    "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False),
+                "speaker": _SPEAKER},
     # served by the AUTHORITY daemon only (``authority.py``, additive): a plain KernelServer answers them ``internal``
     "health": {},
-    "erase_member": {"subject": ((str,), True)},
-    "erase_item": {"digest": ((str,), True)},
+    "erase_member": {"subject": ((str,), True), "speaker": _SPEAKER},
+    "erase_item": {"digest": ((str,), True), "subject": ((str,), False), "speaker": _SPEAKER},     # subject: optional on the wire, REFUSED when absent
     "list_digest": {},
-    "reminders": {"person": ((str,), True)},
+    "reminders": {"person": ((str,), True), "speaker": _SPEAKER},
 }
 
 # error codes (closed)
