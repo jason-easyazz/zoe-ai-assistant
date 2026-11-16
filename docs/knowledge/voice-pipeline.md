@@ -1689,8 +1689,12 @@ per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks 
   - `close` is `deep|quiet|clean|hesitation|no_speech` with the rule limit (as on the `Recorded` line), `cap=0ms`,
     `other=0ms`, or `none=0ms` when no close is known. `post_ms` is negative on a speculative turn, because the POST
     goes out before the close.
-  - The `reflex*` and `gap_ms` fields are constants until the Pi reflex exists. A parser written now does not
-    change when it ships.
+  - The `reflex*` and `gap_ms` fields are constants (`reflex=none ... -1`) unless a take was really written, which today
+    never happens: `REFLEX_MODE=on` is BLOCKED in code (it runs as shadow; see voice-reflex.md). Were it allowed:
+    `reflex=heard`, `reflex_at_ms` (close to first sample offered), `reflex_dur_ms`, `reflex_cut` (1 =
+    the reply's first audio cut it) and `gap_ms` (reflex end to server first sound, 0 when cut). The line's shape never
+    changes, so a parser written earlier keeps working. In `shadow` they stay constants and the decision is on a separate
+    `REFLEX_DECISION` line; see [voice-reflex.md](voice-reflex.md).
   - `server_first_ms` is the `t_start` of the first PCM write (offered, a lower bound; see `PCM_WRITE`), and the
     appended `first_end_ms` is the `t_end` of that write. A whole-blob reply (a
     `full_audio` frame played by the file player) has no observable first-sample time, so it records `-1`, never
