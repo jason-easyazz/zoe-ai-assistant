@@ -115,7 +115,7 @@ is the household default), so in shadow every outcome is an L0 observation.
 
 ## Wiring note (NOT done; the exact call sites)
 
-Server, `services/zoe-data/routers/voice_tts.py` (owned by another session; line numbers on `feature/voice-first-sound-instrument`):
+Server, `services/zoe-data/routers/voice_tts.py` (owned by another session; line numbers on main at 4c12717fd):
 
 ```python
 # at each done frame - 5721 (streamed command), 6289 (canned), 6869 (turn stream) - before it is serialised:
@@ -123,6 +123,15 @@ import listen_pace, carried_speaker
 _lp = listen_pace.done_frame_field(panel_id, carried_speaker.current(panel_id), child=_member_is_child)
 if _lp is not None:
     frame["listen"] = _lp            # 6869 has no panel_id in scope today: pass the request's panel id
+```
+
+```python
+# the carried verified speaker (services/zoe-data/carried_speaker.py), beside _note_voice_speaker (3965):
+if _scope_identity_user:
+    carried_speaker.note_verified(panel_id, _scope_identity_user)   # the server-verified member of THIS turn
+else:
+    carried_speaker.note_unverified(panel_id)
+# and on a wake turn's start: carried_speaker.on_wake(panel_id); on a voice-session close: carried_speaker.on_session_close(panel_id)
 ```
 
 ```python
@@ -141,14 +150,14 @@ async def voice_turn_outcome(body: dict, caller: dict = Depends(_require_voice_a
 Panel, `scripts/setup/zoe_voice_daemon.py` (and add `zoe_voice_listen_pace.py` to `deploy-pi-voice.sh`'s shipped list):
 
 ```python
-# done-frame parse, beside conversation_mode (4275):
+# done-frame parse, beside conversation_mode (4288):
 _PACE.note_frame(obj, time.monotonic())
-# any wake detected (2480):
+# any wake detected (2486):
 _PACE.on_wake()
-# the three recorders build the endpointer with the chosen tails (2736/2738 wake, 4735 follow-up; never 2116 barge seeds):
+# the three recorders build the endpointer with the chosen tails (2742/2744 wake, 4748 follow-up; never 2119 barge seeds):
 prof, src = _PACE.choose(win, time.monotonic())
 endpointer = _Endpointer(..., **lpm.tail_kwargs(prof))   # needs the _Endpointer tail_deep_ms/tail_quiet_ms/tail_clean_ms seam
-# after the FIRST_SOUND line (4131): one fire-and-forget POST of lpm.outcome_body(...) and log.info(lpm.pace_line(...))
+# after the FIRST_SOUND line (4144): one fire-and-forget POST of lpm.outcome_body(...) and log.info(lpm.pace_line(...))
 ```
 
 ## Not built yet

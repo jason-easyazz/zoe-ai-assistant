@@ -2357,6 +2357,12 @@ class MemoryService:
                     await asyncio.to_thread(listen_pace.forget_user, user_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("memory_service: listen-pace rows not erased for a deleted user (%s)", type(exc).__name__)
+                # The carried verified speaker (in memory, seconds-long ttl): dropped too, so no window turn starts on its row.
+                try:
+                    import carried_speaker
+                    carried_speaker.forget_user(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: carried speaker not dropped for a deleted user (%s)", type(exc).__name__)
                 needles: list[str] = []
                 try:
                     ids = await self._run_sync(self._list_ids_for_user, user_id)
