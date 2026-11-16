@@ -507,7 +507,8 @@ async def test_merged_but_not_live_after_an_hour_is_one_broke_notice():
     await run(gh, bot, at("11:20"))
     assert len(bot.delivered) == 1
     assert bot.delivered[0]["text"] == (
-        'Heads up: two changes did not go live: "A" and "B". They were merged over an hour ago and are not running '
+        'Heads up: two changes did not go live: "A" and "B". They were merged over '
+        f"{cn.stale_words(cn.stale_after())} ago and are not running "      # the configured wait in words, not a clock reading
         "yet. The last deploy failed. It may need a look. (#90, #91)")
     assert bot.delivered[0]["url"].endswith("/actions/runs/1")
 
@@ -879,10 +880,13 @@ def _decision_item(n=2010):
             "title": "feat(panel): dim at night", "url": f"https://x/{n}", **cn.pr_fields("", body)}
 
 
+STALE = timedelta(minutes=60)     # the stuck notice's wait, as the tests configure it
+
+
 def _stuck_item():
     return {"key": "deploy:stuck:x", "kind": "stuck", "category": "broke", "title": "Merged but not live",
             "summary": cn.stuck_text([{"number": 2005, "title": "fix(reminders): repeat on weekdays only"}],
-                                     timedelta(minutes=60), {"conclusion": "failure"})}
+                                     STALE, {"conclusion": "failure"})}
 
 
 FIX = _live(2001, "fix(memory): widen the scrubber (#2001)", FIX_BODY)
@@ -931,11 +935,13 @@ def test_a_revert_and_a_stuck_deploy_lead_plainly():
         'Heads up first: "Snooze from the panel" was rolled back and is no longer running. The snooze button is '
         "gone again for now.\nNothing for you to do.")
     assert cn.render_instant([_stuck_item()], "technical", "o/r").text == (
-        'Heads up: "Repeat on weekdays only" did not go live. It was merged over an hour ago and is not running '
+        'Heads up: "Repeat on weekdays only" did not go live. It was merged over '
+        f"{cn.stale_words(STALE)} ago and is not running "
         "yet. The last deploy failed. It may need a look. (#2005)")
     m = cn.render_instant([FIX, CHORE, _decision_item(), _stuck_item()], "technical", "o/r", turn=0, local=MORNING)
     assert m.text == (  # bad news first, never buried; then what waits on you; then the good news
-        'Heads up: "Repeat on weekdays only" did not go live. It was merged over an hour ago and is not running '
+        'Heads up: "Repeat on weekdays only" did not go live. It was merged over '
+        f"{cn.stale_words(STALE)} ago and is not running "
         "yet. The last deploy failed. It may need a look. (#2005)\n"
         "Waiting on you:\n"
         "• The hall panel would dim itself at 9pm. Should it dim at 9pm, or stay bright? If you leave it, it stays "
