@@ -25,8 +25,9 @@ check_tts_not_degraded() {
     # cannot see. A *reachable but degraded* sidecar is unambiguous, so it FAILs the
     # gate (exit 1): the signal is worthless if nothing gates on it, and freeing memory
     # + restarting kokoro-tts.service is the known fix. An UNREACHABLE sidecar is only a
-    # WARN: it is optional by design (zoe-data falls back to edge/espeak TTS), so its
-    # absence must not fail the platform gate the deploy/autopilot path keys on.
+    # WARN: voice readiness is /readyz's job (Kokoro down = Zoe is silent, there is no
+    # fallback voice), so its absence must not fail the platform gate the
+    # deploy/autopilot path keys on.
     local url="${1:-http://127.0.0.1:10201/health}"
     local body
     body="$(curl --silent --show-error --fail --max-time 5 "$url" 2>&1)" || {
