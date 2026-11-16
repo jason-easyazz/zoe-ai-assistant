@@ -539,17 +539,22 @@ def test_thread_reads_on_events_and_survives_a_dying_subscribe(daemon):
     assert _wait(lambda: not w._thread.is_alive() and not w._reader.is_alive())
 
 
-def test_heartbeat_keeps_it_fresh_with_no_subscribe_at_all(daemon):
+@pytest.mark.parametrize("HB", [0.02, 3600.0])
+def test_heartbeat_keeps_it_fresh_with_no_subscribe_at_all(daemon, HB):
+    """With no subscribe at all, only the heartbeat keeps the snapshot fresh: a working heartbeat reaches five reads, and (the
+    control) an hour-long one does not."""
     reads = []
 
     def _never():
         raise FileNotFoundError("pactl")
 
     w = daemon._MediaWatch(list_inputs=lambda: (reads.append(1), "")[1], spawn_subscribe=_never, own_pid=OWN,
-                           parent_of=PARENTS.get, heartbeat_s=0.02, min_gap_s=0.0, backoff_s=(0.05, 0.05))
+                           parent_of=PARENTS.get, heartbeat_s=HB, min_gap_s=0.0, backoff_s=(60.0, 60.0))
     w.start()
     try:
-        assert _wait(lambda: len(reads) >= 5)
+        # the subscribe fails ONCE and is not retried for a minute (it used to retry every 50 ms, and each retry woke the
+        # loop, so the reads arrived with the heartbeat disabled): the start and that one failure can cause two reads at most
+        assert _wait(lambda: len(reads) >= 5) is (HB < 1.0)
         assert w._thread.is_alive()
     finally:
         w.stop()
