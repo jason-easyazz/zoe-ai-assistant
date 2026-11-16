@@ -1012,7 +1012,8 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     fut: concurrent.futures.Future = concurrent.futures.Future()
     code = ""
     try:
-        _ensure_worker()
+        # Thread.start() waits for the new thread to come up: in a thread, never on the turn's loop (a forget is awaited by the turn)
+        await asyncio.to_thread(_ensure_worker)
         _q.put_nowait(("forget", user_id, entity, topic, fut))
     except Exception as exc:  # noqa: BLE001 - queue.Full above all: park, never wait on the loop
         code = "queue_full" if isinstance(exc, queue.Full) else type(exc).__name__
