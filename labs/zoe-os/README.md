@@ -162,15 +162,23 @@ audience from the request).
   nonce is kept (in memory, a heap on its keep-until) until `issued + 60 s + 2 s`: keyed to the token's OWN issue time, so it
   outlives every instant the token could be accepted in this run. Across runs the generation does the work: no token minted for a
   previous run is ever accepted, whatever the clocks did (a restart inside the skew, a wall clock stepped back) and even under a
-  provisioned secret. There is no dead window after a start: a token for the new generation is good at once. (Property tests over
-  one run and over restart sequences, and millisecond-boundary tests, in `test_speaker.py`.)
+  provisioned secret. There is no dead window after a start: a token for the new generation is good at once.
+* **Inside one run the wall clock may do anything**: verification time is `max(last seen, wall clock)`, so it never goes back
+  within a generation. A wall clock seen to step back by MORE than the 2 s skew ROLLS the generation (new id, used-nonce store
+  emptied, time re-anchored, `identity-creds.json` rewritten at once); so does a full used-nonce store (1024: it can only stay full
+  while time is stuck). Every token of the old generation is then refused, and an honest client recovers at once by re-reading the
+  file. A step back of up to 2 s does not roll: time holds until the wall clock passes it again. The trade: a roll costs every
+  in-flight token one refusal and a retry; the alternative (`max()` alone) would refuse every honest token after a corrected forward
+  jump until the wall clock caught up, possibly for hours. (Property tests over one run with arbitrary clock sequences and over
+  restart sequences, and millisecond-boundary tests, in `test_speaker.py`.)
 * **In the lab**, the test is the component that verifies people: `Box.client("panel")`, `BrainBox.client("panel")` and the
   authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=, speaker_generation=)`);
   `Box.assertion()`
   mints one for a raw frame. Skills' clients get no key.
 * **A production client must**: read `identity-creds.json` (the key AND `generation`) from the provisioned state directory, put
-  `"g": generation` in every token, and re-read the file after any `speaker unproven` refusal or a reconnect (a restarted kernel has a
-  new key and a new generation; retry the request once with a fresh token). Mint one assertion per request ONLY after it has itself
+  `"g": generation` in every token, and re-read the file after ANY `speaker unproven` refusal or a reconnect, then retry the request
+  once with a fresh token. The generation can change MID-RUN (a backward clock step past the skew, or a full nonce store), with the
+  same key and the same socket: never cache it across a refusal. A restarted kernel has a new key and a new generation. Mint one assertion per request ONLY after it has itself
   verified the person who is deciding, with the audience that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
 * **Not additive**: a surface client that sends no `speaker` is refused `speaker unproven` (code `refused`), a real refusal.
 

@@ -11,9 +11,15 @@ The kernel accepts it only when the MAC is right (constant-time compare), the pe
 its ``generation`` is THIS kernel run's (a random id fresh at every start, published in ``identity-creds.json``), it was issued LESS
 than ``TTL_S`` ago and no more than ``SKEW_S`` ahead, and its nonce has not been used in this run.
 
-THE INVARIANT, within one run (``Verifier._why``): a token issued at ``t`` (ms) can be accepted only while ``now < t + TTL``, and its
-nonce, once used, is kept until ``now >= t + TTL + SKEW``: keyed to the token's OWN issue time, never to when it was accepted. So a
-used nonce outlives every instant at which its token could be accepted, and a second presentation is never accepted.
+THE INVARIANT: within a run, once a token has been accepted it is never accepted again, for any sequence of wall-clock values.
+How (``Verifier._why``): verification time ``now`` is NON-DECREASING within a generation (``max(last seen, wall clock)``); a token
+issued at ``t`` (ms) is acceptable only while ``now < t + TTL``; its used nonce is kept until ``now >= t + TTL + SKEW``, keyed to the
+token's OWN issue time. A wall clock seen to step BACK by more than ``SKEW`` ROLLS the generation (a new random id, the used-nonce
+store cleared, ``now`` re-anchored to the wall clock, ``on_roll`` told so the daemon republishes ``identity-creds.json``): every
+token of the old generation is then refused, so nothing it accepted can come back, and honest clients recover at once by re-reading
+the file and minting again (rather than waiting, possibly hours, for the wall clock to catch up with a corrected forward jump). A step
+back of up to ``SKEW`` does not roll: ``now`` simply holds until the wall clock passes it again (at most ``SKEW``). A FULL used-nonce
+store also rolls (it can only stay full while ``now`` is stuck; rolling empties it), so it never refuses forever.
 ACROSS runs: a token names the generation it was minted for, and no two runs share one, so NOTHING a previous run could have
 accepted is accepted by this one: whatever the clocks did (a restart inside the skew, a wall clock stepped backwards between runs)
 and even under a provisioned secret that survives the restart. Losing the in-memory nonce store at a restart is safe for that reason.
@@ -103,16 +109,20 @@ def mint_for(key: bytes, op: str, args: dict, *, generation: str, now: float | N
 
 
 class Verifier:
-    """The kernel's side, one per kernel RUN. ``clock`` is injectable (tests). ``generation``: this run's id, random (128 bits)
-    and never chosen by a caller, so a restart always changes it; a token for any other generation is refused (``generation``)."""
+    """The kernel's side, one per kernel RUN. ``clock`` is injectable (tests). ``generation``: the current id, random (128 bits)
+    and never chosen by a caller; it changes at every start and whenever this run rolls it (a backward clock step past the skew, or
+    a full nonce store); a token for any other generation is refused (``generation``). ``on_roll(new_generation)`` is called after
+    a roll (the daemons rewrite ``identity-creds.json``); a failing callback is counted, never raised into a request."""
 
     def __init__(self, key: bytes, *, clock: Callable[[], float] = time.time, ttl: float = TTL_S,
-                 max_live: int = MAX_LIVE) -> None:
+                 max_live: int = MAX_LIVE, on_roll: Callable[[str], None] | None = None) -> None:
         if len(key) < 32:
             raise ValueError("a speaker secret is at least 32 bytes")
-        self._key, self._clock = key, clock
+        self._key, self._clock, self.on_roll = key, clock, on_roll
         self._ttl_ms, self._skew_ms, self._max = int(ttl * 1000), int(SKEW_S * 1000), max_live
         self.generation = secrets.token_hex(16)
+        self._last_ms = _ms(clock())                        # the high-water mark of verification time in this generation
+        self.rolls: collections.Counter[str] = collections.Counter()      # why the generation rolled (fixed names)
         self._used: dict[str, int] = {}                     # nonce -> keep until (ms) = its token's issue time + TTL + skew
         self._expiry: list[tuple[int, str]] = []            # a heap on keep-until: pruning is O(log n) per nonce
         self.refused: collections.Counter[str] = collections.Counter()    # fixed reason names only
@@ -125,6 +135,27 @@ class Verifier:
             return False
         self.accepted += 1
         return True
+
+    def _now(self) -> int:
+        """Verification time: never earlier than any time already used in this generation. A step back past the skew rolls."""
+        wall = _ms(self._clock())
+        if wall < self._last_ms - self._skew_ms:
+            self._roll("clock went back")
+            self._last_ms = wall
+        else:
+            self._last_ms = max(self._last_ms, wall)
+        return self._last_ms
+
+    def _roll(self, why: str) -> None:
+        self.generation = secrets.token_hex(16)
+        self._used.clear()
+        self._expiry.clear()
+        self.rolls[why] += 1
+        if self.on_roll is not None:
+            try:
+                self.on_roll(self.generation)
+            except Exception:  # noqa: BLE001 - a failed republish must not fail a request; clients then retry and re-read
+                self.rolls["republish failed"] += 1
 
     def _prune(self, now_ms: int) -> None:
         while self._expiry and self._expiry[0][0] <= now_ms:
@@ -154,9 +185,9 @@ class Verifier:
             return "audience"
         if claims["p"] != person:
             return "person"
+        now_ms, t = self._now(), claims["t"]               # first: a backward step rolls the generation before it is compared
         if not isinstance(claims["g"], str) or not hmac.compare_digest(claims["g"].encode(), self.generation.encode()):
-            return "generation"                            # minted for another run of the kernel: dead, whatever the clocks say
-        now_ms, t = _ms(self._clock()), claims["t"]
+            return "generation"                            # minted for another run or generation: dead, whatever the clocks say
         if t > now_ms + self._skew_ms:
             return "future"
         if now_ms - t >= self._ttl_ms:                     # acceptable only while now < t + TTL
@@ -165,6 +196,7 @@ class Verifier:
         if claims["n"] in self._used:
             return "replay"
         if len(self._used) >= self._max:
+            self._roll("store full")                       # only a stuck clock keeps it full: empty it, never refuse forever
             return "busy"
         keep = t + self._ttl_ms + self._skew_ms           # > every instant the token is acceptable (t + TTL), whatever "now" was
         self._used[claims["n"]] = keep

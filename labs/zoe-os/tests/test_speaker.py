@@ -205,15 +205,19 @@ def test_a_restart_kills_every_assertion_minted_for_the_run_before_it_even_with_
     assert control.check(token, SAM, "forget.person")
 
 
-def test_the_used_nonce_store_is_bounded_fails_closed_when_full_and_frees_itself_after_the_ttl():
+def test_a_full_nonce_store_refuses_rolls_the_generation_and_never_forgets_a_nonce_early():
     key, clock = secrets.token_bytes(32), Clock(T0)
-    v = speaker.Verifier(key, clock=clock, max_live=2)
-    clock.t += 1
-    tokens = [speaker.mint(key, SAM, "undo", generation=v.generation, now=clock.t) for _ in range(3)]
+    rolled: list = []
+    v = speaker.Verifier(key, clock=clock, max_live=2, on_roll=rolled.append)
+    clock.t += 1                                                         # ... and then the clock is STUCK here
+    old = v.generation
+    tokens = [speaker.mint(key, SAM, "undo", generation=old, now=clock.t) for _ in range(3)]
     assert v.check(tokens[0], SAM, "undo") and v.check(tokens[1], SAM, "undo")
-    assert not v.check(tokens[2], SAM, "undo") and v.refused == {"busy": 1}             # full: refuse, never forget a nonce early
-    clock.t += speaker.TTL_S + speaker.SKEW_S + 1
-    assert v.check(speaker.mint(key, SAM, "undo", generation=v.generation, now=clock.t), SAM, "undo") and len(v._used) == 1
+    assert not v.check(tokens[2], SAM, "undo") and v.refused == {"busy": 1}             # full: refused, and the generation rolls
+    assert v.generation != old and rolled == [v.generation] and v.rolls == {"store full": 1} and not v._used
+    assert not v.check(tokens[0], SAM, "undo") and v.refused["generation"] == 1        # an accepted token never comes back
+    fresh = speaker.mint(key, SAM, "undo", generation=v.generation, now=clock.t)
+    assert v.check(fresh, SAM, "undo") and len(v._used) == 1                            # a stuck clock never locks clients out
 
 
 # ---- through the socket ----------------------------------------------------------------------------------------------------------
@@ -328,11 +332,11 @@ def _at(v: speaker.Verifier, clock: Clock, key: bytes, *, issued_ms: int, at_ms:
 def test_the_acceptance_window_on_both_sides_of_the_millisecond(edge, ok_at, bad_at):
     key, t0 = secrets.token_bytes(32), int(T0 * 1000)
     clock = Clock(T0)
-    v = speaker.Verifier(key, clock=clock)
     issued = t0 + 10_000
-    assert _at(v, clock, key, issued_ms=issued, at_ms=issued + ok_at)
-    assert not _at(v, clock, key, issued_ms=issued, at_ms=issued + bad_at)
-    assert v.refused == {"expired" if edge == "expiry" else "future": 1}
+    ok_run, bad_run = speaker.Verifier(key, clock=clock), speaker.Verifier(key, clock=clock)   # one run per side: time never goes back
+    assert _at(ok_run, clock, key, issued_ms=issued, at_ms=issued + ok_at)
+    assert not _at(bad_run, clock, key, issued_ms=issued, at_ms=issued + bad_at)
+    assert bad_run.refused == {"expired" if edge == "expiry" else "future": 1} and not ok_run.refused
 
 
 def test_the_reviewers_restart_case_issued_t_plus_2_accepted_at_t_restart_at_t_plus_half_is_refused():
@@ -424,15 +428,14 @@ def test_property_across_restarts_nothing_a_previous_run_could_accept_is_accepte
     assert accepted > 1000
 
 
-def test_the_cap_holds_under_the_issue_time_retention_and_frees_by_issue_time_not_arrival():
+def test_used_nonces_are_freed_by_their_tokens_issue_time_not_by_arrival():
     key, clock = secrets.token_bytes(32), Clock(T0)
-    v = speaker.Verifier(key, clock=clock, max_live=2)
+    v = speaker.Verifier(key, clock=clock, max_live=3)
     t = int(T0 * 1000)
     assert _at(v, clock, key, issued_ms=t + 2000, at_ms=t + 100)        # issued later (inside the skew): kept longer
     assert _at(v, clock, key, issued_ms=t + 50, at_ms=t + 100)
-    assert not _at(v, clock, key, issued_ms=t + 100, at_ms=t + 100) and v.refused == {"busy": 1}
-    assert _at(v, clock, key, issued_ms=t + 50 + TTL_MS - 1, at_ms=t + 50 + TTL_MS + SKEW_MS)   # the t+50 nonce freed first
-    assert len(v._used) == 2
+    assert _at(v, clock, key, issued_ms=t + 50 + TTL_MS - 1, at_ms=t + 50 + TTL_MS + SKEW_MS)   # prunes the t+50 nonce only
+    assert len(v._used) == 2 and not v.rolls
 
 
 # ---- a guardian link reaches only a CHILD, by the kernel's own roster -----------------------------------------------------------------
@@ -470,3 +473,84 @@ def test_the_same_link_on_a_child_reaches_and_stops_the_moment_the_roster_says_a
         "not theirs to undo")
     assert not k.explainer._is(ALEX, KID)
     assert ask(s, "panel", "forget", subject=KID, actor=KID, speaker=mint(s, clock, KID, "forget.person"))["ok"]   # their own
+
+
+# ---- the wall clock may do anything inside one run ---------------------------------------------------------------------------------
+def test_the_reviewers_rollback_case_accept_at_t_request_at_t63_clock_back_to_t1_is_refused():
+    key, t = secrets.token_bytes(32), int(T0 * 1000)
+    clock, rolled = Clock(T0), []
+    v = speaker.Verifier(key, clock=clock, on_roll=rolled.append)
+    token = _tok(key, v.generation, t)
+    assert _present(v, clock, token, t)                                  # accepted at T
+    assert _present(v, clock, _tok(key, v.generation, t + 63_000), t + 63_000)   # a fresh request at T+63 s prunes its nonce
+    assert len(v._used) == 1                                             # only the fresh request's nonce is left
+    assert not _present(v, clock, token, t + 1_000)                      # the wall clock steps back to T+1 s: refused
+    assert v.refused == {"generation": 1} and v.rolls == {"clock went back": 1} and rolled == [v.generation]
+    assert _present(v, clock, _tok(key, v.generation, t + 1_000), t + 1_100)    # honest clients recover at once (re-read the file)
+
+
+def test_a_backward_step_inside_the_skew_holds_time_without_rolling_and_still_refuses_the_replay():
+    key, t = secrets.token_bytes(32), int(T0 * 1000)
+    clock = Clock(T0)
+    v = speaker.Verifier(key, clock=clock)
+    token = _tok(key, v.generation, t)
+    assert _present(v, clock, token, t)
+    assert _present(v, clock, _tok(key, v.generation, t + 62_500), t + 62_500)  # prunes the first nonce (t + 62 s)
+    assert not _present(v, clock, token, t + 62_500 - SKEW_MS)            # back by exactly the skew: no roll, time holds -> expired
+    assert v.refused == {"expired": 1} and not v.rolls
+
+
+def test_a_large_forward_jump_corrected_back_rolls_once_and_honest_clients_are_not_locked_out():
+    key, t = secrets.token_bytes(32), int(T0 * 1000)
+    clock, rolled = Clock(T0), []
+    v = speaker.Verifier(key, clock=clock, on_roll=rolled.append)
+    assert _present(v, clock, _tok(key, v.generation, t + 3_600_000), t + 3_600_000)   # the clock jumps an hour ahead
+    gen = v.generation
+    honest = _tok(key, gen, t + 10)                                      # minted after the correction, with the file it had
+    assert not _present(v, clock, honest, t + 10) and v.rolls == {"clock went back": 1}  # one refusal ...
+    assert _present(v, clock, _tok(key, rolled[-1], t + 20), t + 20)      # ... then the re-read generation works at once
+
+
+def test_a_roll_rewrites_identity_creds_with_the_new_generation(tmp_path):
+    from shadow_daemon import write_identity
+    base = Path(tempfile.mkdtemp(prefix="zr"))
+    k = household(base)
+    clock = Clock(T0)
+    s = KernelServer(k, str(base / "k.sock"), clock=clock)
+    try:
+        write_identity(base, s)
+        s.on_speaker_roll(lambda _g: write_identity(base, s))
+        before = json.loads((base / speaker.IDENTITY_CREDS).read_text())["generation"]
+        clock.t = T0 - 60                                                # the wall clock goes back a minute
+        s._speaker.check(speaker.mint(s.speaker_secret(), SAM, "undo", generation=before, now=clock.t), SAM, "undo")
+        after = json.loads((base / speaker.IDENTITY_CREDS).read_text())
+        assert after["generation"] == s.speaker_generation() != before
+        assert (base / speaker.IDENTITY_CREDS).stat().st_mode & 0o777 == 0o600
+    finally:
+        s.shutdown()
+        k.close()
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_property_within_one_run_an_accepted_token_is_never_accepted_again_for_any_clock_sequence():
+    import random
+    rnd = random.Random(20261118)
+    key, accepted, rolls = secrets.token_bytes(32), 0, 0
+    for _ in range(1500):
+        t = int(T0 * 1000)
+        clock = Clock(t / 1000)
+        v = speaker.Verifier(key, clock=clock, max_live=rnd.choice((2, 4, 1024)))
+        wall = t
+        token = _tok(key, v.generation, wall + rnd.randrange(-TTL_MS, SKEW_MS + 1), secrets.token_hex(16))
+        hits = 0
+        for _ in range(rnd.randrange(2, 12)):
+            step = rnd.choice((0, 0, 1, -1, SKEW_MS, -SKEW_MS, -SKEW_MS - 1, TTL_MS, TTL_MS + SKEW_MS + 1, 63_000, -62_000,
+                               3_600_000, -3_600_000, rnd.randrange(-100_000, 100_000)))
+            wall += step                                                  # forward jumps, backward steps, repeated values
+            if rnd.random() < 0.5:                                        # an honest fresh request at the current wall time
+                _present(v, clock, _tok(key, v.generation, wall), wall)
+            hits += _present(v, clock, token, wall)
+        assert hits <= 1
+        accepted += hits
+        rolls += sum(v.rolls.values())
+    assert accepted > 300 and rolls > 100                                 # both paths were exercised, not vacuous

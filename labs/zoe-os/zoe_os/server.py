@@ -101,8 +101,13 @@ class KernelServer:
         return self._speaker._key
 
     def speaker_generation(self) -> str:
-        """For the supervisor only (never a verb): this run's generation, which every assertion must name."""
+        """For the supervisor only (never a verb): the current generation, which every assertion must name. It can change
+        mid-run (``speaker.Verifier``: a backward clock step past the skew, or a full nonce store)."""
         return self._speaker.generation
+
+    def on_speaker_roll(self, callback) -> None:
+        """For the supervisor: called with the new generation after a roll (the daemons rewrite ``identity-creds.json``)."""
+        self._speaker.on_roll = callback
 
     def withdraw(self, name: str) -> None:
         self._creds.pop(name, None)

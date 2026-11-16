@@ -398,7 +398,9 @@ The member-delete path's `eraser` credential needs no assertion, for the forget 
 `identity-creds.json` (0600, apart from `creds.json` and `erase-creds.json`), fresh at every start. Used
 nonces live in memory (bounded at 1024, a full store refuses); a restart loses them, which is safe because a
 new run has a new generation and refuses every token minted for an earlier one, whatever the clocks did and
-even under a provisioned secret. A guardian link grants reach (forget, undo, seeing private events, signing a
+even under a provisioned secret. Within a run, verification time never goes back (`max(last seen, wall)`), and
+a wall clock seen to step back past the skew rolls the generation mid-run (republished at once), so an
+accepted token is never accepted again for any sequence of wall-clock values. A guardian link grants reach (forget, undo, seeing private events, signing a
 grant) only while the kernel's own roster says the subject is a child. There is no setting
 that turns the check off. What it does not defend: a process holding the identity secret can mint for anyone,
 so that secret must live only with the code that verifies people.

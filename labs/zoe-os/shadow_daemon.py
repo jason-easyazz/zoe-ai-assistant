@@ -271,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
     write_identity(state, srv)
+    srv.on_speaker_roll(lambda _generation: write_identity(state, srv))      # a mid-run roll republishes the generation
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
