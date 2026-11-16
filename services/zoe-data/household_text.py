@@ -267,6 +267,7 @@ NOT_HOUSEHOLD: dict[str, str] = {
     "scripts/maintenance/ha_intents_corpus.py::*": "the public Home Assistant intents corpus",
     "scripts/maintenance/mtp_draft_vocab_trim.py::*": "token ids",
     "scripts/maintenance/zoe_cheap_pr_agent.py::*": "edits a repo file",
+    "scripts/maintenance/zoe_health.py::main": "the health check's own state file: check names, counts and times, never household words",
     "services/zoe-data/self_model.py::<module>": "the self-model snapshot (capability facts from code; --snapshot only)",
     "scripts/setup/zoe_voice_daemon.py::*": "in-memory or temporary WAVs (chimes, warm-up; deleted); recorded speech goes to the server",
     "scripts/utilities/*::*": "legacy 2025 one-off utilities: their own logs and benchmark results",
