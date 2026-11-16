@@ -8,7 +8,7 @@ import pytest
 from spine_helpers import AllowList
 from world import ALEX, SAM, answer, emit, household
 
-from zoe_os.capability import CHILD, Enforcer, GrantStore, Person
+from zoe_os.capability import ADULT, CHILD, Enforcer, GrantStore, Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.explain import Explainer
 from zoe_os.receipts import ClaimAuditor
@@ -72,7 +72,7 @@ def test_a_tuple_cannot_smuggle_a_forgotten_name_past_the_entity_shield(spine):
 # ---- #2505 finding 2: HOUSEHOLD means "an adult granted it", not "any member did" ----------------
 @pytest.fixture
 def consent(tmp_path):
-    store = GrantStore([Person("adult-a"), Person("adult-b"),
+    store = GrantStore([Person("adult-a", ADULT), Person("adult-b", ADULT),
                         Person("kid", CHILD, guardians=("adult-a",))])
     store.install({"skill": "voice", "emits": ["utterance"], "origin": True})
     store.install({"skill": "helper", "reads": {"utterance": "private"}})
