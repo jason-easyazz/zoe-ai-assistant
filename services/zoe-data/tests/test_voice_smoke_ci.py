@@ -7,7 +7,7 @@ the slim CI runner:
 
 - It imports the REAL ``routers.voice_tts`` and ``intent_router`` modules. Both only
   pull slim deps at import time (fastapi / httpx / asyncpg); every heavy engine
-  (moonshine_voice, edge_tts, espeak-ng) is imported lazily *inside* a function, and
+  (moonshine_voice, espeak-ng) is imported lazily *inside* a function, and
   the Kokoro rock is the out-of-process PyTorch sidecar reached over HTTP, so we fake
   those without ever installing or loading a model.
 - No DB pool, no network, no real sleeps. STT and every TTS provider are monkeypatched
@@ -16,7 +16,8 @@ the slim CI runner:
 
 Two invariants are guarded:
   (a) the /synthesize TTS waterfall ORDER — Kokoro (the rock) is attempted before the
-      cloud Edge fallback, which is attempted before the espeak-ng last resort;
+      local sidecar, which is attempted before the espeak-ng local last resort (there is
+      no off-box engine: Edge TTS was retired 2026-11-16);
   (b) a basic STT -> intent -> TTS round-trip wires together end to end with fakes.
 
 See test_canonical_invariants.py for the static rock-default guards; this file proves
@@ -63,21 +64,20 @@ def _patch_all_tts_providers(monkeypatch, order, *, succeed="espeak"):
     # Names mirror the legacy waterfall in synthesize() (Kokoro-first since PR #872),
     # reached only under an explicit ZOE_TTS_MODE=hybrid; the default is Kokoro-only
     # (test_tts_kokoro_only.py):
-    #   Kokoro sidecar (GPU) -> local override -> Edge (cloud) -> espeak
+    #   Kokoro sidecar (GPU) -> local override -> espeak
     monkeypatch.setattr(vt, "_synthesize_local_service", recorder("local_service"))
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", recorder("kokoro_sidecar"))
-    monkeypatch.setattr(vt, "_synthesize_edge_tts", recorder("edge"))
     monkeypatch.setattr(vt, "_synthesize_espeak", recorder("espeak"))
     return CANNED
 
 
 # ── (a) TTS waterfall ordering invariant ─────────────────────────────────────
-def test_tts_waterfall_order_kokoro_before_edge_before_espeak(monkeypatch):
+def test_tts_waterfall_order_kokoro_before_local_before_espeak(monkeypatch):
     """The live /synthesize waterfall must attempt providers in the canonical order.
 
     Kokoro (the out-of-process PyTorch sidecar) is the primary rock and is tried FIRST;
-    the optional ``ZOE_LOCAL_TTS_URL`` override sits after it, Edge TTS is the cloud
-    fallback, and espeak-ng is the last resort. We let every provider miss so the route
+    the optional ``ZOE_LOCAL_TTS_URL`` override sits after it, and espeak-ng is the
+    local last resort. We let every provider miss so the route
     walks the entire chain, then assert the recorded order. (We clear ``ZOE_LOCAL_TTS_URL``
     to keep the run self-contained; the local-service step still records in-place when
     reached, proving it stays behind the rock, never ahead of it.)
@@ -93,16 +93,15 @@ def test_tts_waterfall_order_kokoro_before_edge_before_espeak(monkeypatch):
     assert resp.headers.get("X-Zoe-TTS-Provider") == "espeak-ng"
     # Kokoro is the primary rock and runs FIRST — ahead of the optional local sidecar
     # override (PR #872). espeak-ng stays the last resort.
-    assert order == ["kokoro_sidecar", "local_service", "edge", "espeak"], order
+    assert order == ["kokoro_sidecar", "local_service", "espeak"], order
 
     # The load-bearing sub-orderings (what actually keeps the rock the rock):
-    assert order.index("kokoro_sidecar") < order.index("edge"), "Kokoro before Edge"
-    assert order.index("edge") < order.index("espeak"), "Edge before espeak"
+    assert order.index("kokoro_sidecar") < order.index("espeak"), "Kokoro before espeak"
     assert order[-1] == "espeak", "espeak-ng must be the final last-resort provider"
 
 
 def test_tts_picks_kokoro_first_when_available(monkeypatch):
-    """When the Kokoro sidecar answers, the waterfall stops there — the cloud/espeak
+    """When the Kokoro sidecar answers, the waterfall stops there — the local/espeak
     fallbacks must NOT be reached. Guards against the rock being demoted below a fallback."""
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.delenv("ZOE_LOCAL_TTS_URL", raising=False)
@@ -112,7 +111,7 @@ def test_tts_picks_kokoro_first_when_available(monkeypatch):
     resp = _run(vt.synthesize({"text": "what time is it"}, caller={}))
 
     assert resp.headers.get("X-Zoe-TTS-Provider") == "kokoro-sidecar"
-    assert "edge" not in order and "espeak" not in order, f"fallbacks reached despite Kokoro success: {order}"
+    assert "local_service" not in order and "espeak" not in order, f"fallbacks reached despite Kokoro success: {order}"
     assert order[-1] == "kokoro_sidecar"
 
 
