@@ -1134,9 +1134,21 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                     return {"ok": False, "error": "not_found"}
                 action = row["action_type"]
                 slots = json.loads(row["pre_filled_slots"] or "{}")
-                result = await _execute_action(conn, action, slots, user_id, after_commit)
-                if action == "forget_alias":
-                    await _scrub_forget_alias(suggestion_id, conn)
+                try:
+                    result = await _execute_action(conn, action, slots, user_id, after_commit)
+                    if action == "forget_alias":
+                        await _scrub_forget_alias(suggestion_id, conn)
+                except BaseException:
+                    # EVERY exit that is not a success gives the offer back: the raise rolls the transaction back, and the claim is also
+                    # undone explicitly so it holds on a connection whose transaction does not undo (and for an action that acted
+                    # through another store and reported "not applied"). The question stays open.
+                    try:
+                        await conn.execute("UPDATE pending_suggestions SET resolved = 0 WHERE id = $1 AND user_id = $2",
+                                           suggestion_id, user_id)
+                    except Exception as undo_exc:  # noqa: BLE001 - the rollback is the backstop
+                        logger.warning("pending_suggestions: could not undo the claim (%s); the rollback restores it",
+                                       type(undo_exc).__name__)
+                    raise
             for later in after_commit:  # committed: the reminder is real now (best-effort, the scan retries a job)
                 try:
                     await later()
@@ -1150,4 +1162,4 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         return {"ok": False, "error": getattr(exc, "spoken", None) or "reminder_not_valid"}
     except Exception as exc:
         logger.warning("pending_suggestions.execute failed: %s", type(exc).__name__)
-        return {"ok": False, "error": type(exc).__name__}
+        return {"ok": False, "error": str(exc)}

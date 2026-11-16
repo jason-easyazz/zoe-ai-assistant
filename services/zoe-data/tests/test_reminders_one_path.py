@@ -146,8 +146,10 @@ async def test_cancel_own_only_is_stricter(quiet):
 class _PgState:
     """The database: one suggestion row, the reminders, and the ROW LOCK a claiming UPDATE takes until its transaction ends."""
 
-    def __init__(self, slots=None):
+    def __init__(self, slots=None, action="reminder_create", rollback=True):
         import asyncio
+
+        self.action, self.rollback = action, rollback             # rollback=False: a connection whose transaction does not undo
 
         self.reminders, self.notifications, self.resolved = {}, [], 0
         self.slots = slots or '{"title": "book the vet", "date": "2099-06-16", "time": "15:00"}'
@@ -176,7 +178,7 @@ class _PgConn:
             async def __aexit__(self, exc_type, *_):
                 conn.depth -= 1
                 st = conn.st
-                if exc_type is not None:
+                if exc_type is not None and st.rollback:
                     st.reminders, st.notifications, st.resolved = self.snap
                 if conn.held:
                     conn.held = False
@@ -208,7 +210,7 @@ class _PgConn:
             if self.st.resolved:
                 return None
             self.st.resolved = 1
-            return {"action_type": "reminder_create", "pre_filled_slots": self.st.slots}
+            return {"action_type": self.st.action, "pre_filled_slots": self.st.slots}
         return None
 
     async def execute(self, sql, *args):
@@ -221,6 +223,8 @@ class _PgConn:
                                           "due_time": args[8], "is_active": 1, "acknowledged": 0, "deleted": 0}
         elif "INSERT INTO notifications" in sql:
             self.st.notifications.append(args)
+        elif "UPDATE pending_suggestions SET resolved = 0" in sql:
+            self.st.resolved = 0
         return "OK 1"
 
 
@@ -313,6 +317,46 @@ async def test_a_failed_winner_hands_the_offer_to_the_waiting_accept(monkeypatch
 
     first, second = await asyncio.gather(pending_suggestions.execute_suggestion("sug-1", A), heal())
     assert first["ok"] is False and second["ok"] is True and len(state.reminders) == 1 and len(scheduled) == 1
+
+
+@pytest.mark.parametrize("exit_name", ["unknown_action", "needs_time", "past_day", "dispute_not_applied", "forget_alias_not_applied",
+                                       "action_raises", "scrub_raises"])
+@pytest.mark.asyncio
+async def test_every_exit_that_is_not_a_success_leaves_the_question_open(monkeypatch, exit_name):
+    """Every way out of ``execute_suggestion`` short of success gives the offer back, even on a connection whose transaction does
+    not undo (the claim is undone explicitly as well as by the rollback)."""
+    import memory_disputes
+    import memory_forget_alias
+
+    action, slots = "reminder_create", '{"title": "book the vet"}'
+    if exit_name == "unknown_action":
+        action = "no_such_action"
+    elif exit_name == "past_day":
+        slots = '{"title": "book the vet", "date": "2001-01-01", "time": "9am"}'
+    elif exit_name == "dispute_not_applied":
+        action = "memory_dispute"
+    elif exit_name in ("forget_alias_not_applied", "scrub_raises"):
+        action = "forget_alias"
+    state = _PgState(slots=slots, action=action, rollback=False)
+    pool, scheduled, announced = _accept_world(monkeypatch, state)
+
+    async def no(*_a, **_k):
+        return False
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(memory_disputes, "resolve", no)
+    monkeypatch.setattr(memory_forget_alias, "forget_confirmed", no)
+    if exit_name == "action_raises":
+        monkeypatch.setattr(pending_suggestions, "_execute_action", boom)
+    if exit_name == "scrub_raises":
+        async def yes(*_a, **_k):
+            return True
+        monkeypatch.setattr(memory_forget_alias, "forget_confirmed", yes)
+        monkeypatch.setattr(pending_suggestions, "_scrub_forget_alias", boom)
+    out = await pending_suggestions.execute_suggestion("sug-1", A)
+    assert out["ok"] is False and state.resolved == 0 and state.reminders == {} and scheduled == [] and announced == []
 
 
 @pytest.mark.asyncio
