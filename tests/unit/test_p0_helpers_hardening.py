@@ -242,4 +242,4 @@ def test_the_exported_tree_gets_its_env_file_as_a_link_to_the_root_only_one():
     text = DEPLOY.read_text()
     body = text.split("def export_tree(", 1)[1].split("\ndef ", 1)[0]
     assert "os.symlink(ENV_FILE, env_link)" in body and "shutil.copy" not in body
-    assert body.index("os.symlink(ENV_FILE, env_link)") < body.index(".zoe-compose-deploy-complete")
+    assert body.index("os.symlink(ENV_FILE, env_link)") < body.rindex(".zoe-compose-deploy-complete")   # before the marker
