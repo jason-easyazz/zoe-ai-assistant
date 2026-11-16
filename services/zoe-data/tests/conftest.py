@@ -125,7 +125,23 @@ for _var, _leaf in _ERASE_PATHS.items():
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
 
 
-from _shadow_guard import shadow_dir_violation as _shadow_dir_violation  # noqa: E402
+def _shadow_dir_violation() -> str:
+    """'' when the Zoe OS shadow client points at a test directory; else what is wrong. The real install is ~/.zoe/os-shadow (and
+    anything under ~/.zoe); a test's own directory is under the session store or pytest's tmp."""
+    raw = os.environ.get("ZOE_OS_SHADOW_DIR", "")
+    if not raw:
+        return "ZOE_OS_SHADOW_DIR unset: the client falls back to ~/.zoe/os-shadow (the live install)"
+    where = os.path.realpath(raw)
+    live = os.path.realpath(os.path.join(os.path.expanduser("~"), ".zoe"))
+    if where == live or where.startswith(live + os.sep):
+        return "ZOE_OS_SHADOW_DIR points under ~/.zoe (the live install)"
+    return ""
+
+
+@pytest.fixture
+def shadow_dir_violation():
+    """The guard itself, for test_os_shadow_test_isolation.py (inline here so a copied conftest loads on its own)."""
+    return _shadow_dir_violation
 
 
 @pytest.fixture(autouse=True)
