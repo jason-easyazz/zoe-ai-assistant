@@ -84,9 +84,17 @@ async def fire_notification(
     pending_id: str | None = None,
     context: dict[str, Any] | None = None,
     item_id: str = "",
-) -> None:
+    retract_if_undelivered: bool = False,
+) -> bool | None:
     """
-    Core notification dispatch:
+    Core notification dispatch (returns True / False once it has tried to deliver: True = at least one lane got through; None =
+    deferred by quiet hours).
+
+    A row in ``proactive_pending`` is the mark a once-a-day trigger reads as "sent today", so it must mean a send went
+    through: if a lane RAISES after the row is written, the row is removed and the error re-raised (the next tick retries);
+    with ``retract_if_undelivered`` (a trigger that asks for it) a send that no lane delivered (no push subscriber reached, no
+    in-app fallback, nothing spoken) also removes it. "Delivered" = at least one lane succeeded: panel speech, push or phone,
+    in-app. Steps:
       1. Check quiet hours (skip if quiet, unless force_send in context).
       2. Optionally compose a richer message via the LLM.
       3. Create a proactive_pending row (lazy session, claimed on tap).
@@ -151,68 +159,91 @@ async def fire_notification(
         context=ctx,
     )
 
-    # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
-    # always sent regardless of what happens in here, and the adapter never
-    # raises (any spoken-path failure must not block the push).
-    await _maybe_speak_notification(
-        user_id=user_id, message=message, trigger_type=trigger_type,
-        guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
-    )
+    delivered_any = False
+    try:
+        # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
+        # always sent regardless of what happens in here, and the adapter never
+        # raises (any spoken-path failure must not block the push).
+        spoken = await _maybe_speak_notification(
+            user_id=user_id, message=message, trigger_type=trigger_type,
+            guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
+        )
 
-    deep_link = f"/chat.html?p={pid}"
-    # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
-    # "on" moves reminder web push into the seam (owner-only, opt-in, adults, quiet hours, neutral text) and adds Telegram.
-    phone = _reminder_phone_mode() if trigger_type == "reminder" else "off"
-    if phone == "on":
-        subscribers_reached = await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=False)
-    else:
-        subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
-        if phone == "shadow":
-            await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
-    in_app_fallback_ok = False
+        deep_link = f"/chat.html?p={pid}"
+        # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
+        # "on" moves reminder web push into the seam (owner-only, opt-in, adults, quiet hours, neutral text) and adds Telegram.
+        phone = _reminder_phone_mode() if trigger_type == "reminder" else "off"
+        if phone == "on":
+            subscribers_reached = await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=False)
+        else:
+            subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
+            if phone == "shadow":
+                await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
+        in_app_fallback_ok = False
 
-    # If no WebSocket subscribers received the push, fall back to an in-app
-    # notification so the reminder appears in the notification centre when the
-    # user next opens the app.
-    if subscribers_reached == 0 and trigger_type == "reminder":
-        try:
-            import uuid as _uuid
-            import datetime as _dt
-            from push import broadcaster as _broadcaster  # deferred to avoid circular imports
-            _new_id = str(_uuid.uuid4())
+        # If no WebSocket subscribers received the push, fall back to an in-app
+        # notification so the reminder appears in the notification centre when the
+        # user next opens the app.
+        if subscribers_reached == 0 and trigger_type == "reminder":
+            try:
+                import uuid as _uuid
+                import datetime as _dt
+                from push import broadcaster as _broadcaster  # deferred to avoid circular imports
+                _new_id = str(_uuid.uuid4())
+                async with _get_compat_db() as db:
+                    await db.execute(
+                        """INSERT INTO notifications
+                           (id, user_id, type, title, message, delivered, created_at)
+                           VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
+                        (
+                            _new_id,
+                            user_id,
+                            "Reminder",
+                            message,
+                            _dt.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ),
+                    )
+                    await db.commit()
+                await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
+                in_app_fallback_ok = True
+                log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
+            except Exception as _fe:
+                log.warning("reminder fallback: in-app insert failed: %s", _fe)
+
+        delivered = subscribers_reached > 0 or in_app_fallback_ok
+        delivered_any = delivered or bool(spoken)
+        if pending_id:
             async with _get_compat_db() as db:
                 await db.execute(
-                    """INSERT INTO notifications
-                       (id, user_id, type, title, message, delivered, created_at)
-                       VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
-                    (
-                        _new_id,
-                        user_id,
-                        "Reminder",
-                        message,
-                        _dt.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    ),
+                    "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
                 )
                 await db.commit()
-            await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
-            in_app_fallback_ok = True
-            log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
-        except Exception as _fe:
-            log.warning("reminder fallback: in-app insert failed: %s", _fe)
+            if trigger_type == "reminder" and not delivered:
+                log.warning(
+                    "reminder scheduled %s marked fired without push/in-app delivery for user %s",
+                    pending_id,
+                    user_id,
+                )
+        if retract_if_undelivered and not delivered_any:
+            await _retract_pending(pid)
+        return delivered_any
+    except BaseException as exc:
+        if not delivered_any:  # a send that raised before any lane got through did not go through: the next tick tries again
+            await _retract_pending(pid)
+        log.warning("fire_notification raised after the pending row (%s): %s", type(exc).__name__,
+                    "kept (a lane had delivered)" if delivered_any else "row removed, will retry")
+        raise
 
-    delivered = subscribers_reached > 0 or in_app_fallback_ok
-    if pending_id:
+
+async def _retract_pending(pid: str) -> None:
+    """Remove a ``proactive_pending`` row whose send did not go through (best-effort; the row's absence is what lets a once-a-day
+    trigger try again)."""
+    try:
         async with _get_compat_db() as db:
-            await db.execute(
-                "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
-            )
+            await db.execute("DELETE FROM proactive_pending WHERE id = ?", (pid,))
             await db.commit()
-        if trigger_type == "reminder" and not delivered:
-            log.warning(
-                "reminder scheduled %s marked fired without push/in-app delivery for user %s",
-                pending_id,
-                user_id,
-            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not remove the pending row of an undelivered send (%s)", type(exc).__name__)
 
 
 def _spoken_enabled() -> bool:
@@ -300,8 +331,10 @@ async def _speak_on_panel(
 async def _maybe_speak_notification(
     user_id: str, message: str, trigger_type: str, guest_safe_message: str | None = None,
     pending_id: str | None = None,
-) -> None:
-    """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
+) -> bool:
+    """Returns True when a spoken lane took it (panel toast enqueued or daemon queued), else False.
+
+    P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
     allowlisted, and the user has a fresh foreground panel session
     (proactive.presence.panel_presence), deliver the composed message to BOTH
     spoken lanes:
@@ -330,9 +363,9 @@ async def _maybe_speak_notification(
     """
     try:
         if not _spoken_enabled():
-            return
+            return False
         if trigger_type not in _spoken_triggers():
-            return
+            return False
         # Deferred imports: keep flag-OFF free of them and avoid import cycles
         # (ui_orchestrator pulls in push.broadcaster, same reason _send_push
         # defers routers.push).
@@ -342,12 +375,12 @@ async def _maybe_speak_notification(
             if not guest_safe_message:
                 log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s tier=%s "
                          "outcome=no_guest_safe_text", trigger_type, user_id, panel_id, tier)
-                return
+                return False
             message = guest_safe_message
         elif tier != _presence.TIER_OWNER or not panel_id:
             log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
                      trigger_type, user_id)
-            return
+            return False
         claim_id = None
         if tier == _presence.TIER_OWNER and trigger_type == "morning_checkin":
             # B2.1: with brief-on-arrival on, the full brief is spoken at most
@@ -362,16 +395,18 @@ async def _maybe_speak_notification(
             if verdict != "speak":
                 log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s tier=%s",
                          trigger_type, user_id, panel_id, verdict, tier)
-                return
+                return False
         panel_outcome, daemon_outcome, _ann_id = await _speak_on_panel(
             user_id=user_id, panel_id=panel_id, message=message, trigger_type=trigger_type,
             claim_id=claim_id,
         )
         log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s tier=%s",
                  trigger_type, user_id, panel_id, panel_outcome, daemon_outcome, tier)
+        return panel_outcome == "enqueued" or daemon_outcome == "queued"
     except Exception as exc:
         log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
                     trigger_type, user_id, exc)
+    return False
 
 
 def _reminder_phone_mode() -> str:
@@ -452,6 +487,8 @@ async def _slow_loop() -> None:
                         trigger_type=r.trigger_type,
                         item_id=r.item_id,
                         context=r.context,
+                        retract_if_undelivered=any(getattr(t, "retract_if_undelivered", False)
+                                                   for t in _slow_triggers if t.trigger_type == r.trigger_type),
                     )
                 except Exception as exc:
                     log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",

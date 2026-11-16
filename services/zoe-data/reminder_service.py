@@ -484,7 +484,9 @@ async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: s
 
 async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: str, minutes: int, *,
                                  now_utc: datetime | None = None) -> dict:
-    """Snooze (owner only): ``snoozed_until`` is a UTC instant it re-fires at; due date, time and rule are untouched."""
+    """Snooze (owner only): ``snoozed_until`` is a UTC instant it re-fires at; due date, time and rule are untouched. A snooze
+    re-arms a reminder that was marked done (``acknowledged`` cleared, as the old MCP tool did): the job scheduled for the snooze
+    would otherwise be refused by the delivery trigger's "acknowledged" check and the reminder would never fire."""
     await require_feature_access(db, actor, feature="reminders", action="snooze")
     user_id = str(actor["user_id"])
     row = await load_for_actor(db, actor, reminder_id, verb="snooze")
@@ -495,7 +497,7 @@ async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: s
     # B2: cancel the OLD-time job before the state change commits; the generation bump voids an already-claimed one.
     await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
-        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
+        "UPDATE reminders SET snoozed_until = ?, acknowledged = 0, updated_at = NOW(), "
         "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
         [snoozed_until, reminder_id],
     )

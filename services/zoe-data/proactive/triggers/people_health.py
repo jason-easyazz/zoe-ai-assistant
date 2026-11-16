@@ -59,6 +59,9 @@ class PeopleHealthTrigger(ProactiveTrigger):
     """Daily: fire for Inner Circle people whose health_score is low."""
 
     trigger_type = "people_health"
+    # The "sent today" mark is its proactive_pending row, so a send that no lane delivered (and one that raised) removes it:
+    # the next tick tries again; one lane getting through keeps it (not repeated).
+    retract_if_undelivered = True
 
     async def check(self, db, now_utc: datetime | None = None) -> list[TriggerResult]:
         # Once per person per household day. The mark is the proactive_pending row of a send that went through, so it
@@ -99,7 +102,7 @@ class PeopleHealthTrigger(ProactiveTrigger):
                 ) as cur:
                     rows = await cur.fetchall()
             except Exception as exc:
-                log.warning("PeopleHealthTrigger.check failed: %s", exc)
+                log.warning("PeopleHealthTrigger.check failed: %s", type(exc).__name__)
                 return []
 
         results: list[TriggerResult] = []

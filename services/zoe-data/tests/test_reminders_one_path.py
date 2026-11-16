@@ -649,3 +649,158 @@ def test_no_logger_call_in_the_reminder_paths_carries_exception_text():
     root = Path(__file__).resolve().parents[1]
     for name in ("pending_suggestions.py", "reminder_service.py"):
         assert bad((root / name).read_text(encoding="utf-8")) == [], name
+
+
+# ── the nudge's "sent today" mark means a send went through (the row is removed when no lane delivered) ───────────────────
+def _engine_world(monkeypatch, db, *, push, spoken=False):
+    """``fire_notification`` over a fake pending table (the ``_PeopleDb``): the row is written, then the lanes run. ``push`` is
+    the web-push count, or an exception class to raise from that lane."""
+    import contextlib
+
+    from proactive import engine
+
+    async def create_pending(*, user_id, message, trigger_type, item_id, context, **_k):
+        db.pending.append({"user_id": user_id, "item_id": item_id, "trigger_type": trigger_type, "day": "2026-06-10", "id": "pid-1"})
+        return "pid-1"
+
+    class _Del:
+        async def execute(self, sql, params=()):
+            if sql.startswith("DELETE FROM proactive_pending"):
+                db.pending = [r for r in db.pending if r["id"] != params[0]]
+
+        async def commit(self):
+            pass
+
+    @contextlib.asynccontextmanager
+    async def compat():
+        yield _Del()
+
+    async def send_push(**_k):
+        if isinstance(push, type):
+            raise push("push lane down")
+        return push
+
+    async def speak(**_k):
+        return spoken
+
+    monkeypatch.setattr(engine, "create_pending", create_pending)
+    monkeypatch.setattr(engine, "_get_compat_db", compat)
+    monkeypatch.setattr(engine, "_send_push", send_push)
+    monkeypatch.setattr(engine, "_maybe_speak_notification", speak)
+    monkeypatch.setattr(engine, "_is_in_quiet_hours", lambda: False)
+    monkeypatch.setattr(engine, "_reminder_phone_mode", lambda: "off")
+    return engine
+
+
+@pytest.mark.parametrize("lane,push,spoken,row_stays,raises", [
+    ("every lane raises", RuntimeError, False, False, True),      # the row was written, the send blew up: retried next tick
+    ("no lane reached anyone", 0, False, False, False),           # nothing delivered and nothing raised: retried too
+    ("push reached one", 1, False, True, False),                  # one lane succeeded: not repeated
+    ("only the spoken lane", 0, True, True, False),
+])
+@pytest.mark.asyncio
+async def test_a_nudge_is_marked_sent_only_once_a_lane_delivered(monkeypatch, lane, push, spoken, row_stays, raises):
+    import zoneinfo
+
+    from proactive.triggers import people_health as ph
+
+    monkeypatch.setattr(ph, "_ZOE_TZ", zoneinfo.ZoneInfo("Australia/Perth"))
+    nine = datetime(2026, 6, 10, 1, 0, tzinfo=timezone.utc)
+    db = _PeopleDb([{"id": "p1", "name": "Person One", "user_id": A,
+                     "last_contacted_at": (nine - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), "context": ""}])
+    engine = _engine_world(monkeypatch, db, push=push, spoken=spoken)
+    trig = ph.PeopleHealthTrigger()
+    (result,) = await trig.check(db, now_utc=nine)
+    kw = dict(user_id=result.user_id, message=result.message, trigger_type=result.trigger_type, item_id=result.item_id,
+              context=result.context, retract_if_undelivered=trig.retract_if_undelivered)
+    if raises:
+        with pytest.raises(RuntimeError):
+            await engine.fire_notification(**kw)
+    else:
+        assert await engine.fire_notification(**kw) is True or not (push or spoken)
+    assert bool(db.pending) is row_stays
+    again = await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))
+    assert (again == []) is row_stays                                 # retried on the next tick, or not repeated
+
+
+@pytest.mark.asyncio
+async def test_a_trigger_that_does_not_ask_keeps_its_row_when_nothing_delivered(monkeypatch):
+    db = _PeopleDb([])
+    engine = _engine_world(monkeypatch, db, push=0)
+    out = await engine.fire_notification(user_id=A, message="m", trigger_type="morning_checkin", item_id="")
+    assert out is False and len(db.pending) == 1                    # the default is unchanged (the brief's row is read elsewhere)
+
+
+# ── a snooze re-arms a done reminder: the job it schedules is DELIVERED by the real trigger path ──────────────────────────
+class _E2EDb:
+    """One reminder row that APPLIES the store's snooze UPDATE, the scheduled row's claim, and the trigger's supersede read."""
+
+    def __init__(self, **row):
+        self.row = {"id": "rem-1", "user_id": A, "title": "take pills", "visibility": "personal", "due_date": "2099-06-15",
+                    "due_time": "08:00", "recurring_pattern": None, "is_active": 1, "acknowledged": 1, "deleted": 0,
+                    "snoozed_until": None, "schedule_generation": 3, **row}
+        self.job_generation = None
+
+    def execute(self, sql, params=()):
+        db, norm, p = self, " ".join(sql.split()), list(params)
+
+        class _R:
+            async def _run(self):
+                r = db.row
+                if norm.startswith("SELECT") and "FROM users" in norm:
+                    return _Cursor({"id": p[0], "role": "user", "name": "Member"})
+                if norm.startswith("SELECT is_active, acknowledged, deleted, schedule_generation"):
+                    return _Cursor(dict(r))
+                if norm.startswith("SELECT schedule_generation FROM reminders"):
+                    return _Cursor({"schedule_generation": r["schedule_generation"]})
+                if norm.startswith("SELECT"):
+                    return _Cursor(dict(r))
+                if norm.startswith("UPDATE reminders SET snoozed_until"):
+                    r["snoozed_until"] = p[0]
+                    if "acknowledged = 0" in norm:
+                        r["acknowledged"] = 0
+                    r["schedule_generation"] += 1
+                if norm.startswith("UPDATE proactive_scheduled SET claimed_at"):
+                    return _Cursor({"id": "sched-1", "item_id": "rem-1", "schedule_generation": db.job_generation})
+                return _Cursor()
+
+            def __await__(self):
+                return self._run().__await__()
+
+            async def __aenter__(self):
+                return await self._run()
+
+            async def __aexit__(self, *_):
+                return False
+        return _R()
+
+    async def commit(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_snoozing_a_done_reminder_still_fires_through_the_trigger(quiet, monkeypatch):
+    import contextlib
+
+    from proactive.triggers import reminders as trig
+
+    db = _E2EDb()                                              # acknowledged = 1: it was marked done
+    delivered = []
+
+    @contextlib.asynccontextmanager
+    async def compat():
+        yield db
+
+    async def schedule(**kw):                                  # the store's one-shot: record the generation the job carries
+        db.job_generation = await trig._reminder_generation(kw["item_id"])
+
+    async def fire(**kw):
+        delivered.append(kw["item_id"])
+
+    monkeypatch.setattr(trig, "_get_compat_db", compat)
+    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", schedule)
+    monkeypatch.setattr("proactive.engine.fire_notification", fire)
+    await rs.snooze_reminder_record(db, _actor(A), "rem-1", 10, now_utc=FROZEN)
+    assert db.row["acknowledged"] == 0 and db.row["snoozed_until"] == "2026-06-10T04:10:00Z"
+    await trig._fire_reminder("sched-1", A, "take pills")      # the job comes due: the real claim, supersede check and delivery
+    assert delivered == ["rem-1"]
