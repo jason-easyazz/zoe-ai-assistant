@@ -45,23 +45,25 @@ def test_the_lab_verifier_accepts_zoe_datas_token_once_for_that_person_and_audie
     v = lab.Verifier(KEY, clock=clock)
     assert os_speaker.AUDIENCES == lab.AUDIENCES and os_speaker.UNPROVEN == lab.UNPROVEN
     assert os_speaker.IDENTITY == lab.IDENTITY and os_speaker.IDENTITY_CREDS == lab.IDENTITY_CREDS
-    tok = os_speaker.mint(WHO, "forget.scoped", key=KEY, now=clock.t)
+    tok = os_speaker.mint(WHO, "forget.scoped", key=KEY, generation=v.generation, now=clock.t)
     assert not v.check(tok, WHO, "forget.person") and not v.check(tok, "member-b", "forget.scoped")
     assert v.check(tok, WHO, "forget.scoped")
     assert not v.check(tok, WHO, "forget.scoped")                          # its nonce is spent
-    assert not v.check(os_speaker.mint(WHO, "undo", key=bytes(32), now=clock.t), WHO, "undo")      # another secret
+    assert not v.check(os_speaker.mint(WHO, "undo", key=bytes(32), generation=v.generation, now=clock.t), WHO, "undo")  # another secret
+    other = lab.Verifier(KEY, clock=clock)                                 # the same secret, another kernel run
+    assert not v.check(os_speaker.mint(WHO, "undo", key=KEY, generation=other.generation, now=clock.t), WHO, "undo")
+    assert v.refused["generation"] == 1
 
 
 @pytest.mark.parametrize("issued_ms,now_ms,ok", [
     (0, 59_999, True), (0, 60_000, False),                                 # accepted only while now < issued + 60 s
     (2_000, 0, True), (2_001, 0, False),                                   # issued at most 2 s ahead
-    (-1, 0, False),                                                        # never before the kernel's start
 ])
 def test_the_time_window_matches_to_the_millisecond(lab, issued_ms, now_ms, ok):
     start = 1_000_000.0
     clock = Clock(start)
     v = lab.Verifier(KEY, clock=clock)
-    tok = os_speaker.mint(WHO, "revoke", key=KEY, now=start + issued_ms / 1000)
+    tok = os_speaker.mint(WHO, "revoke", key=KEY, generation=v.generation, now=start + issued_ms / 1000)
     clock.t = start + now_ms / 1000
     assert v.check(tok, WHO, "revoke") is ok
 

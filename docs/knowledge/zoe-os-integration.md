@@ -187,10 +187,10 @@ guardian ceremony, a child without a guardian grant must FALL BACK, not be refus
 **Who may ask (the kernel's speaker rule).** The kernel refuses a person-bound request (forget, erase, grant, revoke, undo, explain for
 a person) from a surface unless it carries a SPEAKER ASSERTION minted with the kernel's per-start identity secret
 (`identity-creds.json`, 0600). zoe-data is the component that verifies people, so it mints them itself: `os_speaker.py` re-implements
-the token from the kernel README's spec (stdlib HMAC, no import from `labs/`), reads the secret fresh for every mint (a kernel
-restart writes a new one), mints ONE per request for the person zoe-data already verified with the audience the request needs, and
+the token from the kernel README's spec (stdlib HMAC, no import from `labs/`), reads the secret and the kernel run's `generation` (every token names it) fresh for every mint (a kernel
+restart writes new ones), mints ONE per request for the person zoe-data already verified with the audience the request needs, and
 never logs it; a `speaker unproven` answer is retried once with the secret read again, then it is the kernel's real answer (never
-"unavailable", and a scoped forget is never widened into a whole-member one on it). The member-delete path connects as the kernel's
+"unavailable", and a scoped forget is never widened into a whole-member one on it, nor on a `not theirs to forget` refusal). The member-delete path connects as the kernel's
 `eraser` instead (`erase-creds.json`): the shadow's whole-member forget and `erase_member` both use it when it is provisioned. The
 reconcile reads `list_digest` as the `reconciler` (`reconcile-creds.json`: credential plus the per-start digest key). Contract
 against the real lab code: `services/zoe-data/tests/test_os_speaker_contract.py` and `test_os_authority_contract.py`.

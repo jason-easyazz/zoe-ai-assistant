@@ -23,6 +23,7 @@ from test_os_shadow import MEMBER, SVC
 pytestmark = pytest.mark.ci_safe
 
 KEY = bytes(range(32))
+GEN = "0123456789abcdef" * 2
 
 
 def claims(tok: str) -> dict:
@@ -31,18 +32,20 @@ def claims(tok: str) -> dict:
 
 
 def test_the_token_is_the_spec_format_with_rounded_milliseconds_and_a_fresh_nonce():
-    tok = os_speaker.mint(MEMBER, "forget.scoped", key=KEY, now=1000.0006)
+    tok = os_speaker.mint(MEMBER, "forget.scoped", key=KEY, generation=GEN, now=1000.0006)
     body, mac = tok.split(".")
     assert "=" not in body and mac == hmac.new(KEY, b"zoe-os speaker assertion v1\0" + body.encode(), hashlib.sha256).hexdigest()
     c = claims(tok)
-    assert set(c) == {"p", "t", "n", "a"} and c["p"] == MEMBER and c["a"] == "forget.scoped"
+    assert set(c) == {"a", "g", "n", "p", "t"} and c["p"] == MEMBER and c["a"] == "forget.scoped" and c["g"] == GEN
+    raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode()
+    assert raw == json.dumps(c, separators=(",", ":"), sort_keys=True)          # compact, key-sorted
     assert c["t"] == 1000001                                   # ROUNDED (1000000.6 ms), as the kernel rounds on verify
     assert len(c["n"]) == 32 and int(c["n"], 16) >= 0
-    assert claims(os_speaker.mint(MEMBER, "forget.scoped", key=KEY))["n"] != c["n"]
+    assert claims(os_speaker.mint(MEMBER, "forget.scoped", key=KEY, generation=GEN))["n"] != c["n"]
     with pytest.raises(ValueError):
-        os_speaker.mint(MEMBER, "everything", key=KEY)
+        os_speaker.mint(MEMBER, "everything", key=KEY, generation=GEN)
     with pytest.raises(ValueError):
-        os_speaker.mint("", "undo", key=KEY)
+        os_speaker.mint("", "undo", key=KEY, generation=GEN)
 
 
 def test_the_keyed_digest_is_the_spec_function():
@@ -61,14 +64,18 @@ def test_a_secret_file_that_is_not_owner_only_is_treated_as_absent(ak):
     path.write_text("not json")
     with pytest.raises(os_shadow.KernelUnavailable):
         os_speaker.mint(MEMBER, "undo")
+    raw = {"socket": "x", "creds": {"speaker-verifier": ak.identity.hex()}, "ttl_s": 60}     # no generation: refused, never guessed
+    _secret_file(path, raw)
+    with pytest.raises(os_shadow.KernelUnavailable):
+        os_speaker.mint(MEMBER, "undo")
     path.unlink()
     assert os_speaker.speaker_arg(MEMBER, "undo") == {}           # an older kernel: no identity secret, no speaker argument
 
 
 def test_the_secret_is_read_again_for_every_mint(ak):
     old = os_speaker.mint(MEMBER, "undo")
-    ak.identity = secrets.token_bytes(32)
-    provision(ak.state, ak)                                     # a kernel restart writes a fresh secret
+    ak.identity, ak.generation = secrets.token_bytes(32), secrets.token_hex(16)
+    provision(ak.state, ak)                                     # a kernel restart writes a fresh secret and generation
     new = os_speaker.mint(MEMBER, "undo")
     assert not ak.unproven({"speaker": new}, MEMBER, "undo") and ak.unproven({"speaker": old}, MEMBER, "undo")
 
@@ -109,6 +116,15 @@ def test_a_scoped_forget_carries_a_scoped_assertion_and_an_unproven_one_is_never
         os_shadow._kernel_forget(k, MEMBER, "Dana", None)
     assert [a.get("entity") for _s, _o, a in k.calls] == ["Dana", "Dana"]     # retried once, fresh; never "forget me" instead
     assert len({a["speaker"] for _s, _o, a in k.calls}) == 2
+
+
+def test_a_refusal_of_who_asked_is_never_widened(ak):
+    def rule(s, o, a):
+        raise os_shadow.KernelRefused("not theirs to forget")
+    k = _Recorder(rule)
+    with pytest.raises(os_shadow.KernelRefused):
+        os_shadow._kernel_forget(k, MEMBER, "Dana", None)
+    assert [s for s, _o, _a in k.calls] == ["panel"]
 
 
 def test_an_unmatchable_scope_still_over_forgets_as_before(ak):

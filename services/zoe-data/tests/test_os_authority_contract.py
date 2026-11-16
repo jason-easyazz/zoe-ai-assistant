@@ -148,3 +148,19 @@ async def add_many_as(db, member, text):
     import list_service
     return await list_service.add_items_to_list(db, text=text, user_id=member, list_type="shopping", list_name="Shopping",
                                                 new_list_visibility="family")
+
+
+def test_the_shadow_forget_is_accepted_scoped_with_a_speaker_and_whole_as_the_eraser(real):
+    """os_shadow's forget on the real kernel: a scoped forget carries zoe-data's forget.scoped assertion; a whole-member forget goes as
+    the eraser. Without the identity secret the scoped one is a real ``speaker unproven`` refusal, never widened."""
+    k = os_shadow._Kernel()
+    try:
+        assert os_shadow._kernel_forget(k, A, "Dana", None) >= 0
+        assert os_shadow._kernel_forget(k, A, None, None) >= 0
+        (os_shadow.state_dir() / os_speaker.IDENTITY_CREDS).unlink()
+        with pytest.raises(os_shadow.KernelRefused) as e:
+            os_shadow._kernel_forget(k, B, "Dana", None)
+        assert os_speaker.is_unproven(e.value.reason)
+    finally:
+        for skill in list(k.conns):
+            k.drop(skill)

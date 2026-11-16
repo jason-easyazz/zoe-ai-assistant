@@ -47,6 +47,7 @@ class AuthorityFake(FakeKernel):
         super().__init__()
         self.creds.update(eraser=secrets.token_bytes(32), reconciler=secrets.token_bytes(32))
         self.identity = secrets.token_bytes(32)
+        self.generation = secrets.token_hex(16)            # this kernel RUN's id: a restart changes it with the secret
         self.digest_key = secrets.token_bytes(32)
         self.health = {"alive": True, "schema": 1, "last_write_ok": True, "recovered": 0, "rows": 0}
         self.erase_verified = True
@@ -63,6 +64,8 @@ class AuthorityFake(FakeKernel):
         if not hmac.compare_digest(hmac.new(self.identity, _SPEAKER_DOMAIN + body.encode(), hashlib.sha256).hexdigest(), mac):
             return True
         claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        if set(claims) != {"a", "g", "n", "p", "t"} or claims["g"] != self.generation:
+            return True
         if claims["p"] != person or claims["a"] != audience or claims["n"] in self.used_nonces:
             return True
         self.used_nonces.add(claims["n"])
@@ -116,7 +119,8 @@ def provision(state: Path, k: AuthorityFake) -> None:
     reconcile-creds.json (each 0600)."""
     (state / "creds.json").write_text(json.dumps({"socket": k.path, "creds": {s: k.creds[s].hex() for s in SURFACES}}))
     _secret_file(state / "erase-creds.json", {"socket": k.path, "creds": {"eraser": k.creds["eraser"].hex()}})
-    _secret_file(state / "identity-creds.json", {"socket": k.path, "creds": {"speaker-verifier": k.identity.hex()}, "ttl_s": 60})
+    _secret_file(state / "identity-creds.json", {"socket": k.path, "creds": {"speaker-verifier": k.identity.hex()},
+                                                   "generation": k.generation, "ttl_s": 60})
     _secret_file(state / "reconcile-creds.json", {"socket": k.path, "creds": {"reconciler": k.creds["reconciler"].hex()},
                                                   "digest_key": k.digest_key.hex()})
 
@@ -433,7 +437,7 @@ async def test_erase_item_names_the_member_carries_one_assertion_and_never_the_w
 
 @pytest.mark.asyncio
 async def test_an_unproven_erase_item_is_a_real_refusal_and_a_restarted_secret_is_read_again(ak):
-    ak.identity = secrets.token_bytes(32)                                # the kernel restarted: a new secret, the file not yet rewritten
+    ak.identity, ak.generation = secrets.token_bytes(32), secrets.token_hex(16)   # restarted: new secret and run, file not yet rewritten
     with pytest.raises(os_authority.AuthorityEraseFailed) as e:
         await os_authority.erase_item(MEMBER, ITEM)
     assert e.value.refused and e.value.code == "refused_unproven"
