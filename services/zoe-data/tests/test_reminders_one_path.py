@@ -572,11 +572,29 @@ async def test_spoken_cancel_removes_only_the_speakers_own_reminder(monkeypatch,
     assert store.row["deleted"] == 1 and quiet["seam"] == ["cancel"]
 
 
+@pytest.fixture(autouse=True)
+def no_real_network(monkeypatch):
+    """Nothing in this file may reach a real endpoint (the proactive composer POSTs to the LOCAL BRAIN): an un-stubbed composer or any
+    httpx send raises, loudly, instead of reaching the live system."""
+    import httpx
+
+    def refuse(*_a, **_k):
+        raise AssertionError("a test reached for the network (stub the composer / the client it uses)")
+
+    async def refuse_async(*_a, **_k):
+        refuse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", refuse_async)
+    monkeypatch.setattr(httpx.Client, "send", refuse)
+    monkeypatch.setattr("proactive.composer.compose_message", refuse_async)
+    monkeypatch.setattr("proactive.engine.compose_message", refuse_async)
+
+
 class _Claims:
     """``app_settings`` as ``nudge_claims`` uses it: a unique key, ``ON CONFLICT DO NOTHING`` (rowcount 1 / 0), the prune and the erase."""
 
     def __init__(self):
-        self.rows, self.after_read = {}, None
+        self.rows, self.marks = {}, {}       # marks: member -> the durable erase mark (memory_forgotten.forgotten_at)
 
     def execute(self, sql, params=()):
         norm, p = " ".join(sql.split()), list(params)
@@ -587,7 +605,12 @@ class _Claims:
 
         async def run():
             cur = _Cur()
-            if norm.startswith("INSERT INTO app_settings"):
+            if norm.startswith("INSERT INTO app_settings") and "SELECT CAST" in norm:
+                key, at, uid, _mark_key, started = p
+                if (uid not in store.marks or store.marks[uid] < started) and key not in store.rows:   # ONE conditional statement
+                    store.rows[key] = {"updated_at": at}
+                    cur.rowcount = 1
+            elif norm.startswith("INSERT INTO app_settings"):
                 if p[0] not in store.rows:
                     store.rows[p[0]] = {"updated_at": p[1]}
                     cur.rowcount = 1
@@ -622,8 +645,12 @@ def claims(monkeypatch):
     async def db():
         yield store
 
+    import user_erase_gate
+
+    user_erase_gate.reset()
     monkeypatch.setattr(nudge_claims, "_db", db)
-    return store
+    yield store
+    user_erase_gate.reset()
 
 
 # ── the "you haven't spoken to X" nudge: once per household day, not every tick of the 9 o'clock hour ─────────────────────
@@ -632,6 +659,7 @@ class _PeopleDb:
 
     def __init__(self, people):
         self.people, self.pending, self.pending_read_fails = people, [], False
+        self.after_people_read = None                # an async hook run between the trigger's read and its claim
 
     def sent(self, results, day):  # what fire_notification leaves behind for a send that worked
         self.pending += [{"user_id": r.user_id, "item_id": r.item_id, "trigger_type": r.trigger_type, "day": day} for r in results]
@@ -654,7 +682,10 @@ class _PeopleDb:
                     kind, tz_key, day = params
                     assert tz_key == "Australia/Perth"
                     return [r for r in db.pending if r["trigger_type"] == kind and r["day"] == day]
-                return [dict(p) for p in db.people]
+                rows = [dict(p) for p in db.people]
+                if db.after_people_read is not None:
+                    await db.after_people_read()
+                return rows
         return _C()
 
 
@@ -742,6 +773,10 @@ def _engine_world(monkeypatch, db, *, push, spoken=False):
     async def speak(**_k):
         return spoken
 
+    async def compose(_trigger_type, _ctx, fallback, **_k):    # the real composer POSTs to the local brain: never from a test
+        return fallback
+
+    monkeypatch.setattr(engine, "compose_message", compose)
     monkeypatch.setattr(engine, "create_pending", create_pending)
     monkeypatch.setattr(engine, "_get_compat_db", compat)
     monkeypatch.setattr(engine, "_send_push", send_push)
@@ -933,9 +968,83 @@ async def test_claims_are_pruned_and_erased_with_the_member(claims):
     import nudge_claims
 
     old, new = datetime(2026, 6, 1, tzinfo=timezone.utc), datetime(2026, 6, 10, tzinfo=timezone.utc)
-    assert await nudge_claims.claim("nudge:people_health:member_a:p1:2026-06-01", now=old)
-    assert not await nudge_claims.claim("nudge:people_health:member_a:p1:2026-06-01", now=old)   # the second claimer loses
-    assert await nudge_claims.claim("nudge:people_health:member_a:p1:2026-06-10", now=new)       # prunes the key a week+ old
+    import erase_watermark
+    import user_erase_gate as erase_gate
+
+    t0 = erase_watermark._now()
+    take = lambda k, u, now: nudge_claims.claim(k, user_id=u, gen=erase_gate.generation(u), started_at=t0, now=now)  # noqa: E731
+    assert await take("nudge:people_health:member_a:p1:2026-06-01", "member_a", old)
+    assert not await take("nudge:people_health:member_a:p1:2026-06-01", "member_a", old)   # the second claimer loses
+    assert await take("nudge:people_health:member_a:p1:2026-06-10", "member_a", new)       # prunes the key a week+ old
     assert list(claims.rows) == ["nudge:people_health:member_a:p1:2026-06-10"]
-    await nudge_claims.claim("nudge:people_health:member_b:p1:2026-06-10", now=new)
+    await take("nudge:people_health:member_b:p1:2026-06-10", "member_b", new)
     assert await nudge_claims.forget_user("member_a") == 1 and list(claims.rows) == ["nudge:people_health:member_b:p1:2026-06-10"]
+
+
+# ── a member erase wins every race with a nudge claim (the gate's generation and the durable mark) ──────────────────────────
+@pytest.mark.parametrize("how", ["gate", "durable_mark_only"])
+@pytest.mark.asyncio
+async def test_a_member_deleted_between_the_read_and_the_claim_gets_no_claim_and_no_nudge(monkeypatch, claims, how):
+    import erase_watermark
+    import nudge_claims
+    import user_erase_gate as erase_gate
+
+    ph, nine, db = _nudge_world(monkeypatch)
+
+    async def delete_member():                                   # runs after the trigger read the member's rows, before its claim
+        if how == "gate":
+            with erase_gate.erase_span(A):
+                await nudge_claims.forget_user(A)
+        else:                                                    # another process / a restart: only the durable mark is visible
+            claims.marks[A] = erase_watermark._iso(erase_watermark._now() + timedelta(milliseconds=5))
+
+    db.after_people_read = delete_member
+    assert await ph.PeopleHealthTrigger().check(db, now_utc=nine) == []     # nothing to compose or deliver
+    assert claims.rows == {}                                      # no claim row holding the member's id
+    db.after_people_read = None
+    if how == "gate":                                             # a tick that STARTS after the erase is a new world: it claims again
+        assert len(await ph.PeopleHealthTrigger().check(db, now_utc=nine)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_claim_that_landed_first_is_erased_with_the_member(monkeypatch, claims):
+    import nudge_claims
+    import user_erase_gate as erase_gate
+
+    ph, nine, db = _nudge_world(monkeypatch)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    assert len(claims.rows) == 1
+    with erase_gate.erase_span(A):
+        assert await nudge_claims.forget_user(A) == 1
+    assert claims.rows == {}
+    del result
+
+
+@pytest.mark.asyncio
+async def test_a_member_deleted_between_the_claim_and_the_send_is_not_sent_to(monkeypatch, claims):
+    import user_erase_gate as erase_gate
+
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=1)
+    sent = []
+
+    async def spy(**k):
+        sent.append(k)
+        return 1
+
+    monkeypatch.setattr(engine, "_send_push", spy)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    with erase_gate.erase_span(A):                                # the delete lands after the tick built its results
+        pass
+    out = await engine.fire_notification(user_id=result.user_id, message=result.message, trigger_type=result.trigger_type,
+                                         item_id=result.item_id, context=result.context, retract_if_undelivered=True)
+    assert out is False and sent == [] and db.pending == [] and claims.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_the_compose_step_cannot_reach_the_network_from_these_tests(monkeypatch):
+    """The guard itself: an un-stubbed composer fails loudly instead of POSTing to the local brain."""
+    from proactive import engine
+
+    with pytest.raises(AssertionError, match="network"):
+        await engine.compose_message("people_health", {"x": 1}, fallback="f")

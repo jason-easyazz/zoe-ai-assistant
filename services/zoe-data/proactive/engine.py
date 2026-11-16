@@ -150,6 +150,10 @@ async def fire_notification(
         if trigger_type not in ("reminder", "scheduled") and ctx:
             message = await compose_message(trigger_type, ctx, fallback=message)
 
+        if _erased_since(ctx, user_id):  # the member was erased since the trigger read them (during the compose, say): send nothing
+            await _release_claim(claim_key)
+            return False
+
         # Always create a proactive_pending row — this is the id used by claim_pending()
         # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
         # is only used below to mark that row as fired; it must NOT be used as the URL id.
@@ -166,6 +170,10 @@ async def fire_notification(
 
     delivered_any = False
     try:
+        if _erased_since(ctx, user_id):  # erased between the row and the first lane: remove the row, send nothing
+            await _retract_pending(pid)
+            await _release_claim(claim_key)
+            return False
         # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
         # always sent regardless of what happens in here, and the adapter never
         # raises (any spoken-path failure must not block the push).
@@ -245,6 +253,14 @@ async def fire_notification(
         log.warning("fire_notification raised after the pending row (%s): %s", type(exc).__name__,
                     "kept (a lane had delivered)" if delivered_any else "row removed, will retry")
         raise
+
+
+def _erased_since(ctx: dict, user_id: str) -> bool:
+    """True when the trigger stamped the member's erase generation (``erase_gen``) and an erase has run since, or one is running now."""
+    if ctx.get("erase_gen") is None:
+        return False
+    import user_erase_gate as erase_gate
+    return erase_gate.generation(user_id) != ctx["erase_gen"] or erase_gate.in_progress(user_id)
 
 
 async def _release_claim(claim_key: str | None) -> None:

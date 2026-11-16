@@ -10,7 +10,9 @@ import os
 import zoneinfo
 from datetime import datetime, timezone
 
+import erase_watermark
 import nudge_claims
+import user_erase_gate as erase_gate
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -69,6 +71,8 @@ class PeopleHealthTrigger(ProactiveTrigger):
         # survives a restart and a new instance, and a send that failed is retried on the next tick. Two processes checking in the same tick (a deploy overlap) cannot both send: each person's claim is an
         # ``app_settings`` row with a unique key (nudge_claims), released if the send does not go through.
         now_utc = now_utc or datetime.now(timezone.utc)
+        # Taken BEFORE the first read of any member's rows: a member erased after this point is refused at the claim (nudge_claims).
+        gens, started = erase_gate.snapshot(), erase_watermark._now()
         now_local = now_utc.astimezone(_ZOE_TZ)
         if now_local.hour != _FIRE_HOUR:
             return []
@@ -124,7 +128,8 @@ class PeopleHealthTrigger(ProactiveTrigger):
             # two overlapping processes cannot both win. ``fire_notification`` releases it on a send that did not go through.
             key = nudge_claims.key_for(self.trigger_type, d["user_id"], d["id"], local_day)
             try:
-                if not await nudge_claims.claim(key, now=now_utc):
+                if not await nudge_claims.claim(key, user_id=d["user_id"], gen=gens.get(d["user_id"], 0), started_at=started,
+                                                now=now_utc):
                     continue
             except Exception as exc:  # noqa: BLE001
                 log.warning("PeopleHealthTrigger: claim failed, skipping this person this tick: %s", type(exc).__name__)
@@ -136,7 +141,8 @@ class PeopleHealthTrigger(ProactiveTrigger):
                 message=msg,
                 trigger_type=self.trigger_type,
                 item_id=d["id"],
-                context={"person_id": d["id"], "person_name": d["name"], "claim_key": key},
+                context={"person_id": d["id"], "person_name": d["name"], "claim_key": key,
+                         "erase_gen": gens.get(d["user_id"], 0)},
             ))
 
         return results

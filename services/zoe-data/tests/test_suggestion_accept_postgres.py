@@ -36,7 +36,7 @@ _VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 #: (migration file, table) in creation order: users first (the FK parent)
 _TABLES = (("0001_initial_schema.py", "users"), ("0001_initial_schema.py", "reminders"),
            ("0001_initial_schema.py", "notifications"), ("0008_pending_suggestions.py", "pending_suggestions"),
-           ("0018_app_settings.py", "app_settings"))   # 0018's first CREATE is its PostgreSQL branch
+           ("0018_app_settings.py", "app_settings"), ("0038_memory_forgotten.py", "memory_forgotten"))   # 0018's first CREATE is its PostgreSQL branch
 _ALTER = ("0012_proactive_scheduled_retry.py", r"ALTER TABLE reminders ADD COLUMN IF NOT EXISTS schedule_generation [^\"]+")
 GOOD = '{"title": "book the vet", "date": "2099-06-16", "time": "15:00"}'
 
@@ -232,20 +232,70 @@ async def test_two_concurrent_nudge_claims_on_two_pooled_connections_claim_once(
         async with world.pool.acquire() as conn:     # a DIFFERENT pooled connection per call, as two processes would have
             yield db_pool.AsyncpgCompat(conn)
 
+    import user_erase_gate as erase_gate
+
     monkeypatch.setattr(nudge_claims, "_db", pooled)
+    erase_gate.reset()
+    started = datetime.now(timezone.utc) - timedelta(seconds=1)
+    gen = erase_gate.generation(world.uid)
+
+    async def take(key, at):
+        return await nudge_claims.claim(key, user_id=world.uid, gen=gen, started_at=started, now=at)
+
     now = datetime(2026, 6, 10, 1, 0, tzinfo=timezone.utc)
     for n in range(10):                              # many rounds: one race can be won by luck, ten cannot
         key = nudge_claims.key_for("people_health", world.uid, f"p{n}", "2026-06-10")
-        a, b = await asyncio.gather(nudge_claims.claim(key, now=now), nudge_claims.claim(key, now=now))
+        a, b = await asyncio.gather(take(key, now), take(key, now))
         assert sorted([a, b]) == [False, True], (n, a, b)
     key = nudge_claims.key_for("people_health", world.uid, "p0", "2026-06-10")
     await nudge_claims.release(key)
-    assert await nudge_claims.claim(key, now=now)                                  # released: a later tick may take it
+    assert await take(key, now)                                  # released: a later tick may take it
     old = nudge_claims.key_for("people_health", world.uid, "p0", "2026-05-01")
-    assert await nudge_claims.claim(old, now=now - timedelta(days=30))
-    assert await nudge_claims.claim(nudge_claims.key_for("people_health", world.uid, "p1", "2026-06-11"), now=now + timedelta(days=1))
+    assert await take(old, now - timedelta(days=30))
+    assert await take(nudge_claims.key_for("people_health", world.uid, "p1", "2026-06-11"), now + timedelta(days=1))
     assert await world.admin.fetchval("SELECT count(*) FROM app_settings WHERE key = $1", old) == 0   # pruned: older than a week
     other = nudge_claims.key_for("people_health", "someone-else", "p0", "2026-06-10")
-    assert await nudge_claims.claim(other, now=now)
+    assert await nudge_claims.claim(other, user_id="someone-else", gen=0, started_at=started, now=now)
     removed = await nudge_claims.forget_user(world.uid)
     assert removed >= 10 and await world.admin.fetchval("SELECT count(*) FROM app_settings") == 1   # only the other member's key is left
+
+
+async def test_a_member_erase_between_the_read_and_the_claim_wins_on_real_postgres(world, monkeypatch):
+    """The erase-vs-claim race on two real connections: the claim's work began at ``started``; the durable mark (written first thing in
+    ``delete_user``) lands afterwards, from ANOTHER connection, before the claim's single conditional INSERT runs; and the mirror: a
+    claim that landed first is deleted by the member erase (taken as an eraser through the gate)."""
+    import contextlib
+    from datetime import datetime, timedelta, timezone
+
+    import db_pool
+    import erase_watermark
+    import nudge_claims
+    import user_erase_gate as erase_gate
+
+    @contextlib.asynccontextmanager
+    async def pooled():
+        async with world.pool.acquire() as conn:
+            yield db_pool.AsyncpgCompat(conn)
+
+    monkeypatch.setattr(nudge_claims, "_db", pooled)
+    erase_gate.reset()
+    started = erase_watermark._now()
+    gen = erase_gate.generation(world.uid)
+    key = nudge_claims.key_for("people_health", world.uid, "p1", "2026-06-10")
+    # the delete's durable mark, from a second connection, AFTER the work began (no in-memory gate bump: another process)
+    mark = (started + timedelta(milliseconds=5)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    await world.admin.execute(
+        "INSERT INTO memory_forgotten (user_id, key_hash, scope, actor, forgotten_at, shield_until) VALUES ($1, $2, 'erase', '', $3, $4)",
+        world.uid, erase_watermark.KEY, mark, erase_watermark.NEVER)
+    assert not await nudge_claims.claim(key, user_id=world.uid, gen=gen, started_at=started)
+    assert await world.admin.fetchval("SELECT count(*) FROM app_settings") == 0                 # no claim row holding the member's id
+    # work that began AFTER the erase is a new world: it claims; then the mirror, the member erase removes it
+    later = erase_watermark._now() + timedelta(seconds=1)
+    assert await nudge_claims.claim(key, user_id=world.uid, gen=gen, started_at=later)
+    assert await world.admin.fetchval("SELECT count(*) FROM app_settings") == 1
+    with erase_gate.erase_span(world.uid):
+        assert await nudge_claims.forget_user(world.uid) == 1
+    assert await world.admin.fetchval("SELECT count(*) FROM app_settings") == 0
+    # the gate's generation: work that began before an erase ran in this process is refused without touching the table
+    assert not await nudge_claims.claim(key, user_id=world.uid, gen=gen, started_at=later)
+    assert await world.admin.fetchval("SELECT count(*) FROM app_settings") == 0
