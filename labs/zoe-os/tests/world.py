@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from zoe_os.capability import CHILD, Person
+from zoe_os.capability import ADULT, CHILD, Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.kernel import Kernel
 
@@ -56,7 +56,8 @@ class Lights:
 
 def household(tmp_path, extra=()):
     k = Kernel(str(tmp_path / "zoe-os.db"),
-               [Person(ALEX), Person(SAM), Person(KID, CHILD, guardians=(ALEX,)), *map(Person, extra)],
+               [Person(ALEX, ADULT), Person(SAM, ADULT), Person(KID, CHILD, guardians=(ALEX,)),
+                *(Person(e, ADULT) for e in extra)],
                clock=lambda: NOW)
     k.path = str(tmp_path / "zoe-os.db")
     for m in (*ADAPTERS, AUDIT):

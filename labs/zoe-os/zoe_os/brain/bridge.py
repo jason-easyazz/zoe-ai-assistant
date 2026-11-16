@@ -33,6 +33,7 @@ SAY = {
     "unknown argument": "I could not do that: the request was not valid. Nothing changed.",
     "missing argument": "I could not do that: the request was incomplete. Nothing changed.",
     "wrong argument type": "I could not do that: the request was not valid. Nothing changed.",
+    "needs exactly one of its alternative arguments": "I could not do that: the request was incomplete. Nothing changed.",
     "the person has not accepted an offer for this": "That needs your yes first. Nothing changed.",
     "derives from a forgotten event": "I could not do that: what you asked for has been forgotten.",
 }
@@ -94,7 +95,18 @@ class BrainBridge:
 
     @staticmethod
     def _visible(entry: dict) -> dict:
-        return {n: s for n, s in entry["params"].items() if s.get("from") != "turn"}
+        """What the model may set: never a ``from`` param (``turn``: filled here; ``caller``: a non-model client's, e.g. an
+        absolute ``due_at`` zoe-data already knows)."""
+        return {n: s for n, s in entry["params"].items() if "from" not in s}
+
+    @staticmethod
+    def _required(vis: dict) -> list:
+        """Required for the model: declared required, or the only visible member of a ``one_of`` group."""
+        groups: dict[str, list] = {}
+        for n, s in vis.items():
+            if "one_of" in s:
+                groups.setdefault(s["one_of"], []).append(n)
+        return sorted({n for n, s in vis.items() if s.get("required")} | {g[0] for g in groups.values() if len(g) == 1})
 
     def tools(self) -> list[dict]:
         """OpenAI-style function schemas, one per action the kernel described. An action that
@@ -107,7 +119,7 @@ class BrainBridge:
             out.append({"type": "function", "function": {
                 "name": name, "description": entry["doc"],
                 "parameters": {"type": "object", "additionalProperties": False,
-                               "required": sorted(n for n, s in vis.items() if s.get("required")),
+                               "required": self._required(vis),
                                "properties": {n: {k: s[k] for k in ("type", "description", "pattern", "minimum", "maximum") if k in s}
                                               for n, s in vis.items()}}}})
         return out
@@ -127,7 +139,7 @@ class BrainBridge:
             if bad:
                 return Outcome("invalid", SAY[bad], reason=bad, shape=shape(self._visible(entry), arguments))
         args = dict(arguments) if isinstance(arguments, dict) else {}
-        if any(entry["params"].get(k, {}).get("from") == "turn" for k in args):
+        if any("from" in entry["params"].get(k, {}) for k in args):
             return Outcome("invalid", SAY["unknown argument"], reason="unknown argument",
                            shape=shape(self._visible(entry), arguments))    # the model never supplies what the turn does
         for name, spec in entry["params"].items():

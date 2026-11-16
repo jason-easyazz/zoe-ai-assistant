@@ -3,7 +3,7 @@ import pytest
 
 from spine_helpers import AllowList
 from test_history_cost import vm_budget
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.kernel import Kernel
 from zoe_os.brain.bridge import BrainBridge, Turn
@@ -158,7 +158,7 @@ def test_legacy_global_rows_stay_global_on_upgrade(tmp_path):
 
 @pytest.fixture
 def kernel(tmp_path):
-    k = Kernel(str(tmp_path / 'kernel.db'), [Person(A), Person(B)])
+    k = Kernel(str(tmp_path / 'kernel.db'), [Person(A, ADULT), Person(B, ADULT)])
     k.grants.install({'skill': 'voice', 'origin': True, 'emits': ['utterance']})
     k.grants.install({'skill': 'skill', 'reads': {'utterance': 'private'},
                       'acts': ['synthetic.act']})
