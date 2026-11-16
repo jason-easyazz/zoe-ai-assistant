@@ -490,7 +490,76 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         import expert_dispatch as _xd
 
         logger.info("ROUTINE_TIER claimed=%s channel=%s verified=%d", kind, ch, int(verified))
+        panel_id = str((extra_ctx or {}).get("panel_id") or "") if ch == "voice" else ""
+        if panel_id:                                       # the member's private card, to THIS panel only
+            await _push_card(panel_id, member)
         return _xd.DispatchResult(domain="routines", reply=reply, intent=f"routine_{kind}", tier=TIER)
     except Exception as exc:  # noqa: BLE001
         logger.warning("ROUTINE_TIER failed (non-fatal): %s", type(exc).__name__)
         return None
+
+
+# -- the private panel card (read by ``routers/routines.py``) ----------------------------------------------------------------------
+CARD_KIND = "routines"
+CARD_TITLE = "Your routines"
+_ACTIONS = [{"key": "done", "label": "Done"}, {"key": "skip", "label": "Skip"}, {"key": "snooze", "label": "Later"}]
+_UNDO = [{"key": "undo", "label": "Undo"}]
+
+
+async def visible_days(viewer: Optional[str]) -> list[dict]:
+    """Today's copy of every routine ``viewer`` may see (None = the household panel: family routines only), made on first need."""
+    out = []
+    for r in await rs.list_routines(viewer):
+        d = await rs.day_copy(viewer, r["id"])
+        if d is not None:
+            out.append(d)
+    return out
+
+
+def day_json(d: dict) -> dict:
+    """One routine's day for the touch UI: the text exactly as stored, never cleaned."""
+    r, steps = d["routine"], d["steps"]
+    return {"id": r["id"], "name": r["name"], "anchor": r["anchor"], "visibility": r["visibility"], "window": list(rs.window_of(r)),
+            "done": sum(s["state"] == "done" for s in steps), "total": len(steps),
+            "steps": [{"id": s["id"], "text": s["text"], "kind": s["kind"], "state": s["state"], "today_only": s["today_only"]}
+                      for s in steps]}
+
+
+async def card_frame(panel_id: str, member: str, *, card=None) -> dict:
+    """The private card for ``member`` on ``panel_id``. Rows are named by OPAQUE ids (``s1`` ...); a re-read keeps each line's id. A
+    new card voids the panel's older one (``panel_review_cards.mint``: one live card per panel)."""
+    import panel_review_cards as prc
+
+    prev = {it.get("ref"): key for key, it in (card.items.items() if card is not None else ())}
+    n = len(prev)
+    reg, items, groups = {}, [], {}
+    for d in await visible_days(member):
+        rid = d["routine"]["id"]
+        groups[rid] = d["routine"]["name"]
+        for s in d["steps"]:
+            key = prev.get(s["id"])
+            if key is None:
+                n += 1
+                key = f"s{n}"
+            reg[key] = {"type": "routine_step", "ref": s["id"]}
+            items.append({"id": key, "group": rid, "text": s["text"], "kind": s["kind"], "state": s["state"],
+                          "meta": "today only" if s["today_only"] else "",
+                          "actions": _ACTIONS if s["state"] in ("pending", "snoozed") else _UNDO})
+    if card is None:
+        token = prc.mint(panel_id, member, CARD_KIND, reg)
+    else:
+        card.items.clear()
+        card.items.update(reg)
+        token = card.token
+    return {"panel_id": panel_id, "member_id": member, "kind": CARD_KIND, "private": True, "title": CARD_TITLE,
+            "subtitle": "Say “done”, “skip” or “later”, or tap.", "items": items, "groups": groups, "more": 0,
+            "empty": "No routines today.", "card_token": token}
+
+
+async def _push_card(panel_id: str, member: str) -> None:
+    try:
+        import voice_cards
+
+        await voice_cards.push(await card_frame(panel_id, member))
+    except Exception as exc:  # noqa: BLE001 - the card never breaks the spoken answer
+        logger.info("ROUTINE_TIER card not pushed (%s)", type(exc).__name__)

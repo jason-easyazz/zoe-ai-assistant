@@ -2410,6 +2410,9 @@ from routers.alarms import router as alarms_router  # noqa: E402
 app.include_router(alarms_router)
 from routers.presence import router as presence_router  # noqa: E402  (flag-dark ZOE_HA_PRESENCE=on)
 app.include_router(presence_router)
+# Routines card API (ZOE_ROUTINES, default off = every route 404s): the touch card's read + taps. docs/knowledge/routines.md.
+from routers.routines import router as routines_router  # noqa: E402
+app.include_router(routines_router)
 
 try:
     from routers.voice_livekit import router as voice_livekit_router

@@ -40,6 +40,7 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
 | 1a | the tables (alembic `0081_routines.py`), routines + steps in `services/zoe-data/routines_store.py`, both erasers, forget reach | 11 (for the four tables that exist) |
 | 1b | the day: lazy day copies, one-off lines, the walk (`note_named`) and the said / tapped ticks | 3 (store-level tick rule) |
 | 2 | the conversation tier `services/zoe-data/routines_tier.py`, registered in `fast_tiers._resolve_tiers` | 1, 2, 3, 4 (voice side), 9 |
+| 3 | the panel card API `services/zoe-data/routers/routines.py` + the private card the tier pushes (server side only) | 1 ("today only" on the card), 3, 4 (the card is the prompt) |
 
 ### PR 1 (1a + 1b) - the store
 
@@ -113,6 +114,23 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
   present. A medicine line needs `speaker_verified is True` on voice (chat is the member's own session); otherwise Zoe says so and
   ticks nothing. A dry run (`allow_writes=False`, the replay harness) takes nothing. No unprompted speech: every reply answers the
   person's own words.
+
+### PR 3 - the panel card API (server side)
+
+- `GET /api/routines/today` and `POST /api/routines/steps/act` (`{"item"|"step", "action": done|skip|snooze|undo}`), mounted in
+  `main.py`, 404 for everyone while `ZOE_ROUTINES` is off.
+- **Who** (the private panel card pattern): an `X-Panel-Card` token the voice tier minted for this panel's member (honoured only
+  while their voice session there is open, or with their own session; rows named by opaque card ids `s1`, `s2`, ...; a card of
+  another kind is refused); a member's own session; or the household panel with nobody identified, which sees family routines
+  only and taps under the fridge rule. Every tick rule stays in the store.
+- **The card**: when the tier answers a voice turn with a `panel_id`, it pushes `kind="routines"` (private, title "Your routines",
+  items grouped by routine with Done / Skip / Later, "today only" on a one-off, Undo on a settled line) to THAT panel only
+  (`voice_cards.push`). One live card per panel (`panel_review_cards.mint`).
+- **What the touch UI PR needs** (not built here): render `kind="routines"` frames and send taps to `/api/routines/steps/act`
+  with the `X-Panel-Card` header and the row's opaque `item` id (NOT `/api/panel/cards/act`, which does not know this kind); a Day
+  screen "Routines" section and one Home "Your Day" line per routine ("Morning, 3 of 5 done") from `GET /api/routines/today`
+  (`done` / `total` per routine); family routines only for a guest-held panel; the `sw.js` version + precache digest bump; no
+  fake data while the flag is off (the route 404s).
 
 ## The numbers
 
