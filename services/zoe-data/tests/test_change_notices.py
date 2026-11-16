@@ -1578,3 +1578,120 @@ def test_property_no_message_exceeds_the_route_limit():
             for k in m.keys:
                 step = by_key[k].get("owner_step")
                 assert not step or step in m.text, (trial, k)
+                own = _own_line(by_key[k])  # bad news and decisions are marked only if their own line was shown
+                assert own is None or own in m.text, (trial, k)
+
+
+# ── bad news and decisions are must-keep, trailer or not ──────────────────────
+def _own_line(item):
+    """A fragment of the item's own line for kinds that must be SHOWN to count (None = may be counted)."""
+    if item["kind"] == "stuck":
+        return item["summary"][:60]
+    if item["kind"] == "live" and item["category"] == "broke":
+        subj = cn.subject(item.get("title", ""))
+        return f'"{subj}"' if len(subj) <= 60 else f'"{subj[:60]}'
+    if item["kind"] == "raised":
+        return (cn._hh(item) or f'"{cn.subject(item.get("title", ""))}"')[:60]
+    return None
+
+
+_LONG_HH = "For-The-Household: " + "This sentence says what changes in the house for everyone. " * 5
+
+
+def _reverts(n):
+    return [_live(9000 + k, f'Revert "feat: thing {k}"', _LONG_HH) for k in range(n)]
+
+
+def _asks(n, body=_LONG_HH):  # a decision with no Owner-Step trailer
+    return [{"key": f"pr:{9100 + k}:decision", "kind": "raised", "category": "decision", "number": 9100 + k,
+             "title": f"feat: ask {k}", "url": "u", **cn.pr_fields("", body.replace("changes", f"changes ({k})"))}
+            for k in range(n)]
+
+
+def _bare_asks(n):  # no trailer at all
+    return _asks(n, "")
+
+
+def _drain_digest(items, prefs):
+    rest, out = list(items), []
+    for _round in range(len(items) + 1):
+        if not rest:
+            break
+        msgs = cn.render_digest(rest, [], prefs, opener=0, repo_name="o/r")
+        got = {k for m in msgs for k in m.keys}
+        assert got
+        out += msgs
+        rest = [i for i in rest if i["key"] not in got]
+    assert not rest
+    return out
+
+
+
+def _both_details():
+    return (comm_prefs.normalise(None, "admin"),
+            comm_prefs.normalise({"categories": {c: {"detail": "plain"} for c in comm_prefs.CATEGORIES}}, "admin"))
+
+
+@pytest.mark.parametrize("make,n", [(_reverts, 30), (_asks, 30), (_bare_asks, 80)],
+                         ids=["30 reverts", "30 decisions without an Owner-Step", "80 decisions with no trailer"])
+def test_bad_news_and_decisions_are_each_shown_before_they_count(make, n):
+    items = make(n)
+    by_key = {i["key"]: i for i in items}
+    forms = [_drain_instant(items, d) for d in ("technical", "plain")] + [_drain_digest(items, p)
+                                                                           for p in _both_details()]
+    for msgs in forms:
+        assert sorted(k for m in msgs for k in m.keys) == sorted(by_key)  # each exactly once
+        for m in msgs:
+            assert len(m.text) <= cn.CHUNK_CHARS
+            for k in m.keys:
+                assert _own_line(by_key[k]) in m.text, (k, m.text[:200])
+            assert "more on GitHub" not in m.text  # nothing here may be counted unseen
+
+
+def test_in_a_mix_only_good_news_is_folded():
+    good = [_live(9200 + k, "fix: thing", "For-The-Household: Good news " + "here " * 30) for k in range(60)]
+    items = _reverts(10) + _asks(10) + good + [{**_stuck_item(), "key": "deploy:stuck:mix"}]
+    by_key = {i["key"]: i for i in items}
+    for prefs in _both_details():
+        msgs = _drain_digest(items, prefs)
+        assert any("more on GitHub" in m.text for m in msgs)  # good news was folded into the count
+        for m in msgs:
+            for k in m.keys:
+                own = _own_line(by_key[k])
+                assert own is None or own in m.text, k
+        assert sorted(k for m in msgs for k in m.keys) == sorted(by_key)
+
+
+async def test_a_follow_up_is_held_when_quiet_hours_begin_mid_tick():
+    async def scenario(clock_at):
+        gh, bot = FakeGitHub(), FakeBot()
+        people = [_env_owner()]
+        await run(gh, bot, at("21:00"), people=people)
+        await _six_long_steps(gh)
+
+        async def recipients():
+            return people
+
+        await cn.tick(gh=gh, sender=bot.sender(), recipients=recipients, now=at("21:59"), sleep=_noop_sleep,
+                      run_mode="on", clock=lambda: clock_at)
+        return bot, cn.load_state()["deliveries"]
+
+    bot, ds = await scenario(at("22:00"))  # the first message went at 21:59; quiet hours (22-7) began before the next
+    assert len(bot.delivered) == 1
+    assert sum(d["status"] == "queued" for k, d in ds.items() if ":live" in k) >= 1  # held, not rolled, not sent
+    assert not _audit_events("rolled_to_digest")
+
+
+async def test_control_a_follow_up_before_quiet_hours_is_sent(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_STATE_DIR", str(tmp_path / "cn2"))
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner()]
+    await run(gh, bot, at("21:00"), people=people)
+    await _six_long_steps(gh)
+
+    async def recipients():
+        return people
+
+    await cn.tick(gh=gh, sender=bot.sender(), recipients=recipients, now=at("21:59"), sleep=_noop_sleep,
+                  run_mode="on", clock=lambda: at("21:59"))
+    assert len(bot.delivered) > 1

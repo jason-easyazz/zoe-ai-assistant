@@ -655,7 +655,10 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
     bad = [i for i in live if _is_bad(i)]
     good = [i for i in live if i["kind"] == "live" and not _is_bad(i)]
     steps = [i for i in bad + good if i.get("owner_step")]
-    hold = {i["key"] for i in steps}  # these land only on their step's line; never inside "...and N more"
+    # MUST-KEEP: a step, bad news (a revert, a stuck deploy) and a decision land only when their own line is shown,
+    # trailer or not; on overflow they are held for the follow-up, never inside "...and N more". Only ordinary good
+    # news and housekeeping may be counted without being shown.
+    hold = {i["key"] for i in steps} | {i["key"] for i in bad} | {i["key"] for i in live if i["category"] == "decision"}
 
     def own(i: dict) -> list[str]:  # the key rides on the item's own line unless its step line carries it
         return [] if i["key"] in hold else [i["key"]]
@@ -667,7 +670,6 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
     if waiting:
         lines.append(("\nWaiting on you:", []))
         lines += [("• " + _decision_line(i) + _ref(i, tech(i)), [i["key"]]) for i in waiting]
-        hold |= {i["key"] for i in waiting if i.get("owner_step")}  # a decision's step is its question
     good_steps = [i for i in good if i.get("owner_step")]
     if good_steps:
         lines.append(("\nFor you to do:", []))
@@ -825,6 +827,7 @@ class Ctx:
     sender: Sender
     sleep: Callable[[float], Awaitable[Any]]
     repo: str
+    clock: Optional[Callable[[], datetime]] = None  # the real clock, read before each follow-up (None = ``now``)
     new_keys: list[str] = field(default_factory=list)
     sent_messages: int = 0
 
@@ -1081,7 +1084,8 @@ async def _deliver_instant(c: Ctx, r: Recipient) -> None:
             if follow_up:
                 if killed():
                     return  # the kill switch appeared mid-tick: the rest stays queued, unsent
-                now_local = _local(c)
+                # the real clock, not the tick's frozen ``now``: quiet hours may have begun since the tick started
+                now_local = (c.clock() if c.clock else c.now).astimezone(_local(c).tzinfo)
                 if comm_prefs.in_quiet_hours(r.prefs, now_local.hour * 60 + now_local.minute):
                     return  # quiet hours began: held, as at the start of a tick
                 if not r.env_default:
@@ -1184,15 +1188,17 @@ def _prune(c: Ctx) -> None:
 async def tick(*, gh: Optional[GitHub] = None, sender: Sender = telegram_sender,
                recipients: Optional[Callable[[], Awaitable[list[Recipient]]]] = None,
                now: Optional[datetime] = None, sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
-               run_mode: Optional[str] = None) -> dict:
-    """One pass. Every dependency is injectable; the defaults are the live box's."""
+               run_mode: Optional[str] = None, clock: Optional[Callable[[], datetime]] = None) -> dict:
+    """One pass. Every dependency is injectable; the defaults are the live box's. ``clock`` is read before each
+    follow-up message (default: the real clock live; the injected ``now`` when a test fixes the time)."""
     m = run_mode or mode()
     if m == "off":
         return {"mode": "off"}
     if killed():
         return {"mode": m, "killed": True}
     st = await asyncio.to_thread(load_state)
-    c = Ctx(st=st, now=now or datetime.now(timezone.utc), mode=m, sender=sender, sleep=sleep, repo=repo())
+    c = Ctx(st=st, now=now or datetime.now(timezone.utc), mode=m, sender=sender, sleep=sleep, repo=repo(),
+            clock=clock or (None if now else (lambda: datetime.now(timezone.utc))))
     _recover(c)
     silent = not st.get("bootstrapped")
     await _collect(c, gh or GhCli(), silent=silent)

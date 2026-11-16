@@ -70,6 +70,16 @@ update from an assistant". The rules, all in `change_notices.py` and pinned by e
   `MAX_CHUNKS` (3) instant messages a tick. What does not fit rolls into the next digest with the same
   `rolled_to_digest` event (`reason` `spacing`, `cap` or `rate`). Within a tick the single messages now go bad news
   first; the set of messages is the same.
+- **Bad news and decisions are must-keep, trailer or not.** A revert, a stuck deploy and a decision count as
+  delivered only once their own line was in a sent message; they are never folded into "...and N more" (instant
+  batch and digest, technical and plain). What does not fit follows (instant: the same tick; digest: the next
+  tick). Only ordinary good news and housekeeping may be counted without being shown. Pointer mode is the
+  exception by design: a pointer is the member's chosen level of detail (design 3.1, `detail: pointer` =
+  content-free), so its one message marks everything it stands for delivered; the content stays on the desktop and
+  GitHub.
+- **Follow-ups read the real clock for quiet hours.** The first messages of a tick use the tick's own time, as
+  before; before each follow-up the live clock is read (`tick(clock=...)`, injectable for tests), so a follow-up is
+  held if quiet hours began after the tick started.
 - **No message can exceed the route's limit.** When the last allowed digest message overflows, the whole suffix
   it will carry ("...and N more on GitHub.", "The rest of what needs you follows shortly." and the closing line,
   with the real count) is computed first and lines move out of that message until message plus suffix fits 990
