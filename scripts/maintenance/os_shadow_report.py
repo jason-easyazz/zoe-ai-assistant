@@ -26,7 +26,9 @@ import re
 import sys
 from collections import Counter
 
-LINE = re.compile(r"OS_SHADOW_LIST_ADD\s+(.*)")
+#: the marker followed by its payload, OR the marker alone (a line cut right after it, with or without a newline): every marker line
+#: is read, and one whose payload is missing or cut short is ``rejected`` (counted), never skipped
+LINE = re.compile(r"OS_SHADOW_LIST_ADD(?:\s+(.*)|\s*$)")
 #: every field the report reads, with its CLOSED set of values (os_shadow.py writes only these). Anything else becomes ``unknown``: the
 #: report never echoes a value it does not know, so a planted or corrupted field cannot print text.
 UNKNOWN = "unknown"
@@ -94,7 +96,7 @@ def parse_counted(lines) -> tuple[list[dict], int]:
     for raw in lines:
         m = LINE.search(raw)
         if m:
-            rec = clean(m.group(1).split())
+            rec = clean((m.group(1) or "").split())
             if rec is None:
                 rejected += 1
             else:

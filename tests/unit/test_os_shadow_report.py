@@ -185,3 +185,15 @@ def test_an_unknown_key_is_counted_by_a_tag_never_by_its_name(tmp_path, capsys):
     rep.main([str(f)])
     out = capsys.readouterr().out
     assert f"{tag}=1" in out and "Zq7Secret" not in out
+
+
+@pytest.mark.parametrize("cut", ["OS_SHADOW_LIST_ADD", "OS_SHADOW_LIST_ADD\n", "OS_SHADOW_LIST_ADD   ",
+                                 "x INFO os_shadow: OS_SHADOW_LIST_ADD src=spoken",                     # the marker plus one field
+                                 "x INFO os_shadow: OS_SHADOW_LIST_ADD src=spoken cls=shopping li",      # cut mid-key
+                                 "x INFO os_shadow: OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=ma"])  # mid-value
+def test_a_marker_line_cut_short_anywhere_is_counted_as_rejected(cut, tmp_path, capsys):
+    recs, rejected = rep.parse_counted([line(), cut])
+    assert len(recs) == 1 and rejected == 1
+    f = tmp_path / "log"
+    f.write_text(line() + "\n" + cut)                                 # the cut line LAST in the file, newline or not
+    assert rep.main([str(f)]) == 0 and "rejected lines 1" in capsys.readouterr().out
