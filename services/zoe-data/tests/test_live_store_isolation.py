@@ -147,3 +147,15 @@ def test_resolved_state_paths_are_off_the_live_home(monkeypatch, module, accesso
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     resolved = pathlib.Path(str(getattr(mod, accessor)())).resolve()
     assert not str(resolved).startswith(str(_HOME / ".zoe") + "/"), f"{module}.{accessor}() -> {resolved}"
+
+
+def test_forget_session_epochs_are_per_test_and_off_the_live_home(tmp_path):
+    """2026-11-14: ``forget_session`` has no env knob and wrote ``~/.zoe/forget_session_epochs.json`` from 22 ``ci_safe`` files; the
+    autouse fixture in conftest gives every test its own file and an empty table (so no earlier test's forget changes a session id)."""
+    import forget_session
+
+    assert tmp_path in forget_session._PATH.parents and not str(forget_session._PATH).startswith(str(_HOME / ".zoe") + "/")
+    assert forget_session.sidecar_session("u1", "s1") == "s1"            # nothing inherited from an earlier test or the box
+    forget_session.note_forget("u1")
+    assert forget_session._PATH.is_file() and forget_session.sidecar_session("u1", "s1").startswith("s1~f")
+
