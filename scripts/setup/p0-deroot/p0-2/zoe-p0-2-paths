@@ -215,9 +215,17 @@ def apply_item(it, root, state):
                     copy_tree_pinned(src, new)            # a planted symlink is copied as a link, never followed
                 finally:
                     os.close(src)
+            elif os.path.lexists(old):
+                raise RuntimeError(f"{old} exists but is not a directory; refusing (fix the manifest or the path)")
             else:
-                os.makedirs(new, exist_ok=True)
-            open(os.path.join(new, STAMP), "w").close()
+                os.makedirs(new, exist_ok=True)       # an absent source is a first initialisation: an empty dir
+            # The stamp is created EXCLUSIVELY and never through a link: the copied tree is the service user's, so a
+            # `.p0-2-moved` it planted (a symlink to a host file, say) would otherwise be opened and truncated as root.
+            try:
+                os.close(os.open(os.path.join(new, STAMP), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
+            except FileExistsError:
+                raise RuntimeError(f"{old} already contains {STAMP}: refusing (a planted stamp, or a source that "
+                                   f"was itself a moved tree); inspect it by hand") from None
             chown_tree(new, uid, gid)
         else:
             if not os.path.isfile(old) or os.path.islink(old):

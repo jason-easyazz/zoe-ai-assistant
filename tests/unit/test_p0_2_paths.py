@@ -261,3 +261,26 @@ def test_a_symlink_inside_the_tree_is_copied_as_a_link(box, tmp_path):
     copied = root / "srv/zoe/app/sub/link"
     assert copied.is_symlink() and os.readlink(copied) == "/etc/hostname"
     assert (root / "srv/zoe/app/sub/x").read_text() == "x\n"
+
+
+
+def test_a_planted_stamp_symlink_is_refused_and_its_target_untouched(box, tmp_path):
+    """The service user owns the old tree: a `.p0-2-moved` there that links to a host file must never be opened
+    (as root it would be truncated)."""
+    root, man, common = box
+    victim = tmp_path / "host-file"
+    victim.write_text("must survive\n")
+    (root / "home/zoe/app/.p0-2-moved").symlink_to(victim)
+    a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
+    assert a.returncode != 0 and "already contains" in a.stderr, (a.returncode, a.stderr)
+    assert victim.read_text() == "must survive\n"
+
+
+def test_a_source_that_is_not_a_directory_is_refused(box):
+    root, man, common = box
+    import shutil as _sh
+    _sh.rmtree(root / "home/zoe/app")
+    (root / "home/zoe/app").write_text("a file where a directory belongs\n")
+    a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
+    assert a.returncode != 0 and "not a directory" in a.stderr, a.stderr
+    assert not (root / "srv/zoe/app").exists()
