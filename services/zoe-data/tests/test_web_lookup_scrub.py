@@ -265,3 +265,13 @@ def test_a_schemeless_link_that_can_carry_data_is_refused(raw):
 
 def test_a_bare_domain_alone_is_still_a_word():
     assert scrub_query("best sites like reddit.com").send
+
+
+@pytest.mark.parametrize("raw", ["pizza delivery call 0491/570/006 tonight", "pizza delivery call 0491–570–006 tonight"])
+def test_a_phone_number_with_any_separator_is_stripped(raw):
+    r = scrub_query(raw)
+    assert r.send and not any(ch.isdigit() for ch in r.query), r
+
+
+def test_a_fraction_is_not_a_phone_number():
+    assert scrub_query("3/4 cup flour conversion").send
