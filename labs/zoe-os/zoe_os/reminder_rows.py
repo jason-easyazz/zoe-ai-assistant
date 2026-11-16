@@ -51,7 +51,7 @@ class DurableReminders(DurableRows):
 
     def visible_to(self, person: str) -> list[dict]:
         """Production's list filter, ``visibility = 'family' OR user_id = me`` (routers/reminders.py ``_visibility_filter_sql``),
-        plus the setter of a row they set for someone else, plus a CARER for the person they care for (not a private one). A family
+        plus a CARER for the person they care for, by the CURRENT care link (not a private one). A family
         reminder is shared: a LEAST-access reader (no role stated) sees only their own (``capability.LEAST``)."""
         shared = self._stated(person)
         return [r | {"next_fire": self.next_fire(r)} for _, r in sorted(self.rows.items())
@@ -73,9 +73,10 @@ class DurableReminders(DurableRows):
 
     @staticmethod
     def _mine(person: str, row: dict) -> bool:
-        """The owner, or the member who SET it for them, unless the owner has made it private (which shuts the setter out too: a
-        carer who set a reminder for someone loses it the moment that person marks it private)."""
-        return person == row["owner"] or (person == row["by"] and row["visibility"] != "private")
+        """The OWNER only. Who set a reminder is never standing authority: a carer who set one for someone reaches it through the
+        CURRENT care link (``_cares``, checked at every use), so a removed carer, or one shut out by a private mark, loses reading,
+        editing, snoozing, marking done and cancelling at once."""
+        return person == row["owner"]
 
     def _cares(self, person: str, row: dict) -> bool:
         return row["visibility"] != "private" and self._carer(person, row["owner"])
