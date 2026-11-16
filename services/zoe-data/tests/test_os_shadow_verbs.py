@@ -425,12 +425,29 @@ NOTE_CALLS = {
 }
 
 
+def _spy_on_build(monkeypatch, early=False):
+    """Every note function hands ``_door`` a ``build`` callable: wrap ``_door`` so the one it receives is a spy. ``built`` then lists
+    every payload build, whichever helpers the builder happens to call (patching ``_list_raw`` / ``_text`` missed the alarm and
+    ``note_act`` builders, which call neither). ``early`` is the mutation the test must catch: build() run ahead of the flag check."""
+    built = []
+    real_door = os_shadow._door
+
+    def door(verb, user_id, source, landed, build):
+        def spy():
+            built.append(verb)
+            return build()
+        if early:
+            spy()
+        return real_door(verb, user_id, source, landed, spy)
+
+    monkeypatch.setattr(os_shadow, "_door", door)
+    return built
+
+
 @pytest.mark.parametrize("name", sorted(NOTE_CALLS))
 @pytest.mark.parametrize("off", ["switch", "verb"])
 def test_with_the_feature_off_no_note_function_builds_its_payload(kernel, monkeypatch, name, off):
-    boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("built with the feature off"))      # noqa: E731
-    monkeypatch.setattr(os_shadow, "_list_raw", boom)
-    monkeypatch.setattr(os_shadow, "_text", boom)
+    built = _spy_on_build(monkeypatch)
     if off == "switch":
         monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
         monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
@@ -441,8 +458,20 @@ def test_with_the_feature_off_no_note_function_builds_its_payload(kernel, monkey
     real_flag = __import__("typed_env").flag
     monkeypatch.setattr(__import__("typed_env"), "flag", lambda n, *a, **k: (reads.append(n), real_flag(n, *a, **k))[1])
     NOTE_CALLS[name]()
+    assert built == [], f"{name} built its payload with the feature off"
     assert os_shadow.counters() == {} and os_shadow._q.qsize() == 0
     assert len(reads) == len(set(reads)) and set(reads) <= {os_shadow.FLAG, os_shadow.VERBS_FLAG}, reads   # each flag read once at most
+
+
+@pytest.mark.parametrize("name", sorted(NOTE_CALLS))
+def test_the_build_spy_catches_a_payload_built_ahead_of_the_flag_check(kernel, monkeypatch, name):
+    """NEGATIVE CONTROL for the test above: with build() moved ahead of the flag check (the mutation a reviewer made by hand), the spy
+    sees the build for EVERY note function, the alarm and ``note_act`` builders included, so the test above would fail."""
+    built = _spy_on_build(monkeypatch, early=True)
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    NOTE_CALLS[name]()
+    assert built, f"the spy did not see {name} build its payload"
 
 
 @pytest.mark.parametrize("name", ["note_add", "note_list_remove", "note_reminder_create"])
