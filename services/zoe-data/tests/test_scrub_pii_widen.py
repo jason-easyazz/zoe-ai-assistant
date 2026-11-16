@@ -62,7 +62,7 @@ SECRET_CATCH: dict[str, list[tuple[str, str]]] = {
         ("the passcode is 4821", "4821"),                                # already caught before 2026-11-15
         ("the password was zebrafiddle", "zebrafiddle"),
         ("password is: zebrafiddle", "zebrafiddle"),
-        ("my password is on the fridge: zebrafiddle", "zebrafiddle"),   # a kept state word, then the value after a colon
+        ("my password is on the fridge: zebrafiddle", "zebrafiddle"),   # the first word goes AND the value after the colon
     ],
     "labelled_account": [
         ("my account number is 12345678", "12345678"),
@@ -137,10 +137,8 @@ MUST_NOT: list[str] = [
     "I need a password manager", "the password reset link expired", "type it in the password field",
     "our password policy changed", "the file is password protected", "the password prompt froze", "use the password hint",
     "the password box is empty", "the password change worked", "the password rules are strict", "the password for the wifi",
-    "I forgot my password.", "the password was reset yesterday", "change your password now", "my password doesn't work",
-    # "<label> is / was" + a STATE / PLACE / negation word (``_LABELLED_NOT_VALUES``): about the password, not its value
-    "my password is not working", "The wifi password is on the fridge", "the password is wrong",
-    "the password is written on the fridge",
+    "I forgot my password.", "change your password now", "my password doesn't work",
+    # (a STATE / PLACE word right after "<label> is / was" is NOT here: it is redacted, fail closed - test_state_words_*)
     # email / address concepts
     "send an email to the school", "I'll email you", "down the road", "we walked 5 km down the road",
     "she lives at the end of the street", "I live at home", "the road was closed", "my address is changing",
@@ -209,12 +207,12 @@ def test_existing_behaviour_is_unchanged(text, want):
     assert scrub_pii(text) == want
 
 
-def test_a_place_word_after_password_is_is_now_kept_a_deliberate_change():
-    """A DELIBERATE CHANGE (2026-11-16), not existing behaviour: the old scrubber redacted ANY word after "password is", so
-    "The wifi password is on the fridge" was stored as "... is [REDACTED] the fridge" - the meaning changed. Now a state or place
-    word after "<label> is / was" (``_LABELLED_NOT_VALUES``) is not a value and is kept; everything else is still redacted."""
-    assert scrub_pii("The wifi password is on the fridge") == ("The wifi password is on the fridge", None)
-    assert scrub_pii("The wifi password is zebrafiddle")[0] == "The wifi password is [REDACTED]"     # control: a value still goes
+def test_a_place_word_after_password_is_is_redacted_fail_closed():
+    """FAIL CLOSED (review of #2660, as main does): the word right after "password is" is ALWAYS redacted - a password can be any
+    word, "on" included - so "The wifi password is on the fridge" is stored as "... is [REDACTED] the fridge" (a word lost,
+    accepted: docs/knowledge/open-problems.md)."""
+    assert scrub_pii("The wifi password is on the fridge") == ("The wifi password is [REDACTED] the fridge", None)
+    assert scrub_pii("The wifi password is zebrafiddle")[0] == "The wifi password is [REDACTED]"
 
 
 # ── the callers' contract: the night mind's verbatim gate rejects any changed text ─────────────────────────────────
@@ -269,34 +267,33 @@ def test_any_unlisted_word_after_password_is_redacted(word, form):
     so an invented word nobody listed is always redacted."""
     import memory_service
 
-    assert word.lower() not in memory_service._PASSWORD_NOT_VALUES and word.lower() not in memory_service._LABELLED_NOT_VALUES
+    assert word.lower() not in memory_service._PASSWORD_NOT_VALUES
     out, reject = scrub_pii(form.format(w=word))
     assert reject is None and word not in out and R in out
 
 
-def _labelled_not_values():
+#: the words the scrubber USED to excuse after "<label> is / was" (state, time, place): now every one of them is redacted there
+STATE_WORDS = sorted({
+    "wrong", "incorrect", "invalid", "valid", "expired", "working", "broken", "gone", "lost", "forgotten", "missing", "saved",
+    "stored", "kept", "written", "hidden", "weak", "strong", "long", "short", "blank", "empty", "unset", "fine", "ok", "okay",
+    "same", "yesterday", "today", "tonight", "recently", "earlier", "lately", "on", "in", "under", "behind", "inside", "with",
+    "somewhere", "there", "here"})
+
+
+@pytest.mark.parametrize("word", STATE_WORDS)
+@pytest.mark.parametrize("form", ["my password is {w} now then", "the password was {w}", "the pin is {w}", "password: {w}",
+                                  "the token = {w}"])
+def test_state_words_right_after_a_label_are_redacted(word, form):
+    """FAIL CLOSED (review of #2660): right after a secret label + is / was / : / = the next word is ALWAYS the value, state word
+    or not ("my password is hidden" may BE the password)."""
+    out, reject = scrub_pii(form.format(w=word))
+    assert reject is None and word not in out.lower().split() and R in out, out
+
+
+def test_no_state_word_list_is_left_to_excuse_a_value():
     import memory_service
 
-    # collection must not depend on the list existing (the old-code control collects this file): a missing list fails the test
-    return sorted(getattr(memory_service, "_LABELLED_NOT_VALUES", None) or {"not", "on", "wrong"})
-
-
-@pytest.mark.parametrize("word", _labelled_not_values())
-@pytest.mark.parametrize("form", ["my password is {w} today", "the password was {w}", "the pin is {w}"])
-def test_every_listed_state_word_after_is_or_was_is_left_alone(word, form):
-    """The closed list after "<label> is / was" is real: each word on it is kept (the sentence is about the secret). After ":" or
-    "=" no word is excused (a colon always introduces a value)."""
-    text = form.format(w=word)
-    assert scrub_pii(text) == (text, None)
-    assert word not in scrub_pii(f"password: {word}")[0].split(": ", 1)[1]
-
-
-def test_no_introducer_is_on_the_kept_list():
-    """The is / was list must not excuse a word that INTRODUCES a value ("is the word ...", "is my dog's name")."""
-    import memory_service
-
-    assert not memory_service._LABELLED_NOT_VALUES & memory_service._LABELLED_INTRODUCERS
-    assert not memory_service._LABELLED_NOT_VALUES & {"the", "a", "an", "my", "our", "your", "his", "her", "their"}
+    assert not hasattr(memory_service, "_LABELLED_NOT_VALUES") and not hasattr(memory_service, "_LABELLED_KEPT_VALUE_RE")
 
 
 # ── one match never swallows the next label (cross-review, PR #2574): every secret of a multi-secret sentence goes ──────────────
@@ -516,22 +513,34 @@ def test_fail_closed_every_modifier_and_every_chain_of_two_before_an_invented_wo
                     assert w not in out, (text, out)
 
 
-def test_every_modifier_then_a_slot_ending_word_is_kept():
-    """MUST_NOT, exhaustive: after "is" / "was", any modifier (and two) followed by a state or place word is kept as said."""
+def test_every_modifier_then_a_state_word_is_redacted():
+    """Exhaustive: after "is" / "was", any modifier (and two) followed by a former state / place word - that word is the value."""
     ms = _ms()
     for mod in sorted(ms._VALUE_MODIFIERS):
-        for slot in sorted(ms._LABELLED_NOT_VALUES):
-            for text in (f"my password is {mod} {slot}", f"the passcode was {mod} {mod} {slot}"):
-                assert scrub_pii(text) == (text, None), text
+        for word in STATE_WORDS:
+            for text in (f"my password is {mod} {word}", f"the passcode was {mod} {mod} {word}"):
+                out, _ = scrub_pii(text)
+                assert word not in out.lower().split()[-1:] and R in out, (text, out)
 
 
 @pytest.mark.parametrize("text", [
-    "my password is still working", "my password is not working", "my password is now on the fridge",
-    "my password is no longer valid", "the password was reset", "change your password now", "change your password again",
+    # modifiers only after "is" / "was": no value was said; and no connector at all (the bare label's closed list)
+    "the password was reset", "my password is still", "change your password now", "change your password again",
     "my password no longer works", "the password reset link expired", "the password change worked",
 ])
 def test_modifier_forms_that_carry_no_value_are_kept(text):
     assert scrub_pii(text) == (text, None)
+
+
+@pytest.mark.parametrize("text,want", [
+    ("my password is still working", "my password is still [REDACTED]"), ("my password is not working", "my password is not [REDACTED]"),
+    ("my password is now on the fridge", "my password is now [REDACTED] the fridge"),
+    ("my password is no longer valid", "my password is no longer [REDACTED]"),
+    ("the password was reset yesterday", "the password was reset [REDACTED]"),      # formerly a MUST_NOT row
+])
+def test_modifier_then_a_state_word_after_is_loses_the_word(text, want):
+    """Formerly kept; fail closed now (review of #2660): the word after the modifiers is redacted, whatever it is."""
+    assert scrub_pii(text) == (want, None)
 
 
 @pytest.mark.parametrize("text,secret", [
@@ -556,6 +565,7 @@ _TIMING_FORMS = [f"{label}{conn}" for label in ("password", "passcode", "passphr
     "the door code is", "door code", "my pin", "account number is", "bsb", "call me on", "my number is", "my email is",
     "email:", "my address is", "I live at", "we live at 12", "send it to", "+61", "0400"]
 _TIMING_PADS = {"spaces": " ", "tabs": "\t", "mixed": " \t", "newlines": "\n", "is": "is ", "mods": "still ", "now": "now ",
+                "fillers": "actually really just ", "quote": "\" ",
                 "digits": "1-2 "}
 _TIMING_BOUND_S = 0.25
 
@@ -642,11 +652,13 @@ def test_a_quoted_value_of_several_words_is_redacted_through_its_closing_quote()
     assert not any(w in out for w in ("qzx", "plum", "wkv"))
 
 
-@pytest.mark.parametrize("said", [
-    "my password is on the fridge", "my password is hidden", "my password was wrong", "my password is still valid",
+@pytest.mark.parametrize("said,gone", [
+    ("my password is on the fridge", "on"), ("my password is hidden", "hidden"), ("my password was wrong", "wrong"),
+    ("my password is still valid", "valid"),
 ])
-def test_the_same_state_words_unquoted_are_still_kept(said):
-    assert scrub_pii(said) == (said, None)
+def test_the_same_state_words_unquoted_are_redacted_too(said, gone):
+    out, _ = scrub_pii(said)
+    assert gone not in out.split() and R in out, out
 
 
 # --- filler words between the connector and a code (review of #2660) ---------------------------------------------------------
@@ -661,3 +673,43 @@ def test_a_code_said_after_a_filler_word_is_redacted(form, fill):
 def test_a_filler_word_with_no_code_after_it_changes_nothing():
     said = "the door code is actually broken"
     assert scrub_pii(said) == (said, None)
+
+
+# ── a quoted value runs to its closing quote (or the end of the clause), with NO token cap (review of #2660) ──────────────────────
+
+_WORDS20 = ("amber birch cobalt dune ember fjord garnet heron iris juniper kelp lumen moss nectar opal pine quartz reed "
+            "sable thistle").split()
+_QUOTE_PAIRS = [('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")]
+_QUOTED_FORMS = ["my password is {v}", "the passcode was {v}", "my secret: {v}", "my password {v}", "the passphrase = {v}",
+                 "the password for the wifi is {v}", "the door code is {v}", "the alarm code: {v}"]
+
+
+@pytest.mark.parametrize("n", [9, 20])
+@pytest.mark.parametrize("qo,qc", _QUOTE_PAIRS)
+@pytest.mark.parametrize("form", _QUOTED_FORMS)
+def test_a_long_quoted_value_loses_every_word_closed_or_not(form, qo, qc, n):
+    words = _WORDS20[:n]
+    for value, tail in ((qo + " ".join(words) + qc, " and then we left"), (qo + " ".join(words), ". Then we left")):
+        out, _ = scrub_pii(form.format(v=value) + tail)
+        assert not any(w in out for w in words), (form, value, out)
+        assert "left" in out and R in out                              # the rest of the sentence after the quote is kept
+
+
+def test_an_apostrophe_inside_a_quoted_value_does_not_close_it():
+    out, _ = scrub_pii("my password is 'my dog's name is pickle' ok")
+    assert "pickle" not in out and "name" not in out and out.endswith(" ok"), out
+
+
+# ── any number of filler words before a code (review of #2660): a closed list, repeatable, linear ──────────────────────────────
+
+_FILLERS = ["actually", "really", "just", "now", "still", "currently", "definitely", "only"]
+_CODE_FORMS = ["the door code is {f}5791", "the alarm code was {f}5791", "the gate code: {f}5791", "the code for the safe is {f}5791",
+               "the wifi password is {f}plum-ladder-9", "the garage pin = {f}5791", "my padlock combination is {f}5791"]
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("form", _CODE_FORMS)
+def test_zero_to_four_fillers_before_a_code_on_every_code_form(form, k):
+    fill = "".join(f + " " for f in _FILLERS[:k])
+    out, _ = scrub_pii(form.format(f=fill))
+    assert "5791" not in out and "plum-ladder-9" not in out, out

@@ -1377,24 +1377,10 @@ _LABELLED_SECRET_RE = re.compile(
     # same spaces - two adjacent runs around an optional ":" were quadratic on a long run of trailing whitespace (bot review)
     r"(\S+?)(?=[.,;!?]{0,8}(?:\s|$))" + _SUFFIX,
 )
-#: after "<label> is / was" (NOT after = or :, which always introduce a value) the first word is kept only when it says what STATE
-#: the secret is in or WHERE it is, or negates: a closed, whole-word list. Deliberately tighter than ``_PASSWORD_NOT_VALUES``: no
-#: article, possessive or other word that commonly INTRODUCES a value ("is the word ...", "is my dog's name") - those redact.
-_LABELLED_NOT_VALUES = frozenset({
-    # STATE words: no value follows them in the clause ("is wrong", "is still working")
-    "wrong", "incorrect", "invalid", "valid", "expired", "working", "broken", "gone", "lost", "forgotten", "missing", "saved",
-    "stored", "kept", "written", "hidden", "weak", "strong", "long", "short", "blank", "empty", "unset", "fine", "ok", "okay",
-    "same",
-    # TIME words: when it happened, not what it is ("was reset yesterday")
-    "yesterday", "today", "tonight", "recently", "earlier", "lately",
-    # PLACE words that start a location phrase ("is on the fridge", "is in my notebook", "is with my sister")
-    "on", "in", "under", "behind", "inside", "with", "somewhere", "there", "here",
-})
-#: MODIFIERS say nothing about what follows: they are SKIPPED (at most ``_MAX_MODIFIERS``) and the rule is applied to the NEXT word,
-#: so "is still <value>", "is not <value> any more" redact the value while "is still working", "is no longer valid" are kept.
-#: Moved out of the slot-ending list (a value CAN follow them): still, now, too, also, not; changed / reset / set / updated
-#: ("was changed to <value>"), with "to" skipped after them; old / new / different (as adjectives they can sit in front of a value:
-#: "is new <value>") left the lists entirely: they are redacted like any other word.
+#: FAIL CLOSED: right after a secret label + is / was / : / = the next value word is ALWAYS redacted - a password can be any word,
+#: "wrong" or "on" included, and over-redacting "my password is wrong" costs nothing. MODIFIERS say nothing about what follows:
+#: they are SKIPPED (at most ``_MAX_MODIFIERS``), so the word after them is the one redacted ("is still <value>", "is not <value>
+#: any more"); a label followed by modifiers only ("my password is still") said no value and is kept.
 _VALUE_MODIFIERS = frozenset({
     "still", "now", "also", "too", "actually", "really", "just", "currently", "definitely", "probably", "always", "usually",
     "simply", "basically", "literally", "only", "again", "already", "not", "never", "no", "longer", "changed", "reset", "set",
@@ -1403,11 +1389,11 @@ _VALUE_MODIFIERS = frozenset({
 _MAX_MODIFIERS = 4
 #: a first word that INTRODUCES the value: the value is the next words, so up to six more tokens of the clause go with it
 _LABELLED_INTRODUCERS = frozenset({"the", "a", "an", "my", "our", "your", "his", "her", "their", "its", "called", "like"})
-#: a kept "<label> is [modifiers] on the fridge: <value>": the value after a colon / equals sign later in the SAME clause (bounded)
-_LABELLED_KEPT_VALUE_RE = re.compile(
-    r"(?i)\b((?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\s*(?:is|was)\s+"
-    r"(?:(?:" + "|".join(sorted(_VALUE_MODIFIERS, key=len, reverse=True)) + r")\s{1,8}){0,4}"
-    r"(?:" + "|".join(sorted(_LABELLED_NOT_VALUES, key=len, reverse=True)) + r")\b[^.;!?\n:=]{0,60}?[:=]\s*)\S+"
+#: a LATER value in the same clause: "<label> is <word> <words>: <value>" / "... = <value>" - the first word went (fail closed) and the
+#: value after the colon goes too. Bounded (60 characters, one clause); a value already redacted is left as it is
+_LABELLED_LATER_VALUE_RE = re.compile(
+    r"(?i)\b((?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\s*(?:is|was)\b"
+    r"[^.;!?\n:=]{0,60}?[:=]\s*)(?!\[REDACTED\])\S+"
 )
 
 
@@ -1416,32 +1402,24 @@ def _norm_word(token: str) -> str:
 
 
 _QUOTES = "\"'‘’“”"
-
-
-def _quoted(token: str) -> bool:
-    """A word said IN QUOTES after a secret label is always the value, whatever the word is ("my password is \"on\"")."""
-    return token[:1] in _QUOTES
+#: the closing mark of each opening quote
+_CLOSE_QUOTE = {'"': '"', "'": "'", "‘": "’", "’": "’", "“": "”", "”": "”"}
 
 
 def _judge_value(head: str, toks: "list[tuple[str, str]]", *, excuse: bool, rescan: "Callable[[str], str]") -> str:
     """The value slot after a label + connector, word by word (``toks`` = (leading space, token)): up to ``_MAX_MODIFIERS``
-    modifiers are skipped (kept as said); then the NEXT word decides - nothing left (only modifiers) or, when ``excuse``
-    (after "is" / "was"), a slot-ending word: kept; an introducer: it and the rest of the slot redacted; anything else: that word
-    redacted. Whatever follows is scrubbed again (``rescan``). Linear: one pass over at most seven tokens."""
+    modifiers are skipped (kept as said); then the NEXT word is the value and is redacted - an introducer takes the rest of the slot
+    with it. Nothing after the modifiers: after "is" / "was" (``excuse``) no value was said and the clause is kept; after ":" / "="
+    those words ARE the value. A quoted value is handled before this (``_scrub_quoted``). Whatever follows is scrubbed again
+    (``rescan``). Linear: one pass over at most seven tokens."""
     i = 0
-    while i < len(toks) and i < _MAX_MODIFIERS and not _quoted(toks[i][1]) and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
+    while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
         i += 1
     kept = "".join(sp + t for sp, t in toks[:i])
     if i == len(toks):          # modifiers only: after is / was no value was said; after : or = those words ARE the value
         return head + (kept if excuse else _REDACT)
-    if _quoted(toks[i][1]):     # a quoted value: redacted through its closing quote (the whole slot when it never closes)
-        j = next((k for k in range(i, len(toks)) if len(toks[k][1].rstrip(".,;:!?")) > (k == i)
-                  and toks[k][1].rstrip(".,;:!?")[-1:] in _QUOTES), len(toks) - 1)
-        return head + kept + toks[i][0] + _REDACT + rescan("".join(sp + t for sp, t in toks[j + 1:]))
     word = _norm_word(toks[i][1])
     tail = "".join(sp + t for sp, t in toks[i + 1:])
-    if excuse and word in _LABELLED_NOT_VALUES:
-        return head + kept + toks[i][0] + toks[i][1] + rescan(tail)
     if word in _LABELLED_INTRODUCERS:
         return head + kept + toks[i][0] + _REDACT
     return head + kept + toks[i][0] + _REDACT + rescan(tail)
@@ -1459,14 +1437,14 @@ def _for_sub(m: "re.Match[str]") -> str:
 
 
 def _labelled_sub(m: "re.Match[str]") -> str:
-    """``_LABELLED_SECRET_RE``'s replacement: the label and connector stay; the value goes - unless (is / was only) the first word
-    after any modifiers is on ``_LABELLED_NOT_VALUES``; an introducer takes the next words of the slot with it (default redact)."""
+    """``_LABELLED_SECRET_RE``'s replacement: the label and connector stay; the first word after any modifiers goes, whatever it
+    is (fail closed); an introducer takes the next words of the slot with it."""
     return _judge_value(m.group(1) + m.group(2), _slot_tokens(m.group(3), m.group(4)),
                         excuse=m.group(2).strip().lower() in ("is", "was"), rescan=_scrub_labelled)
 
 
 def _scrub_labelled(text: str) -> str:
-    return _LABELLED_KEPT_VALUE_RE.sub(r"\1" + _REDACT, _LABELLED_SECRET_RE.sub(_labelled_sub, text))
+    return _LABELLED_LATER_VALUE_RE.sub(r"\1" + _REDACT, _LABELLED_SECRET_RE.sub(_labelled_sub, text))
 
 # ── widened classes (2026-11-15). Every label list is CLOSED and lives HERE only; a label never redacts without a value
 # (a code / number needs a digit), so "the alarm code changed", "the dress code is casual" and "pineapple" are untouched.
@@ -1499,8 +1477,9 @@ def _alt(words: tuple[str, ...]) -> str:
 
 
 _CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an optional word between two \s* is quadratic on a long space run
-#: the connector plus up to two filler words before the value ("the door code is actually 5791"): a closed list, bounded
-_CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|definitely|really|only)\s{1,8}){0,2})"
+#: the connector plus any number of filler words before the value ("the door code is actually really just 5791"): the list is CLOSED and
+#: each repeat consumes one whole word, so the run stays linear (pinned by the long-filler timing test)
+_CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|definitely|really|only)\s{1,8})*)"
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
 #: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
 #: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
@@ -1510,6 +1489,48 @@ _CODE_RE = re.compile(
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
     rf"{_CONNECT_FILL}({_TOKEN})"
 )
+#: a QUOTED value after any secret label (labelled, bare, "for / to <thing>", a code label), whatever the words: it runs to its
+#: closing quote, or - never closed - to the end of the clause, with NO token cap (a quoted nine-word passphrase loses all nine).
+#: The prefix is bounded everywhere; the close is an index scan from the opening quote (``_scrub_quoted``): linear
+_QUOTED_PREFIX_RE = re.compile(
+    r"(?i)\b(?:(?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30}"
+    rf"|(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    r"|password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b"
+    r"\s{0,8}(?:(?:is|was|'s|’s)\b(?:\s{0,8}[:=])?\s{0,8}|[:=-]\s{0,8})?"
+    rf"(?:(?:{_alt(tuple(_VALUE_MODIFIERS))})\s{{1,8}}){{0,4}}"
+    r"(?=[\"'‘’“”](?![sS]\b))"     # an opening quote - never the apostrophe of "password's"
+)
+_CLAUSE_END_RE = re.compile(r"[.;!?\n](?=\s|$)")
+
+
+def _scrub_quoted(text: str) -> str:
+    """Every quoted value after a secret label, to its closing quote (one followed by a space, punctuation or the end - so an
+    apostrophe inside, "my dog's", does not close it) or, never closed, to the end of the clause. One left-to-right pass."""
+    out, pos = [], 0
+    while True:
+        m = _QUOTED_PREFIX_RE.search(text, pos)
+        if m is None:
+            break
+        start = m.end()
+        close = _CLOSE_QUOTE.get(text[start], text[start])
+        end, k = -1, start + 1
+        while True:
+            k = text.find(close, k)
+            if k < 0:
+                break
+            if k + 1 == len(text) or not (text[k + 1].isalnum() or text[k + 1] == "_"):
+                end = k + 1
+                break
+            k += 1
+        if end < 0:                                         # never closed: to the end of the clause
+            c = _CLAUSE_END_RE.search(text, start + 1)
+            end = c.start() if c else len(text)
+        out.append(text[pos:start] + _REDACT)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
+
+
 #: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
 _BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
 #: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
@@ -1526,8 +1547,9 @@ _PASSWORD_NOT_VALUES = (
     # a pronoun / determiner). The MODIFIERS (now, too, already, please ...) are NOT here: they are skipped and the next word judged
     "is", "was", "are", "were", "be", "been", "has", "had", "have", "will", "would", "can", "could", "should", "must", "may",
     "doesn't", "didn't", "isn't", "wasn't", "won't", "can't", "and", "or", "but", "so", "if", "when", "because",
-    "for", "of", "on", "in", "at", "with", "from", "by", "about", "into", "the", "a", "an", "this", "that", "it", "i",
-    "you", "we", "they", "he", "she", "my", "your", "our", "their", "here", "there",
+    "for", "of", "on", "in", "at", "with", "from", "by", "about", "into", "it", "i",
+    "you", "we", "they", "he", "she", "here", "there",
+    # (no article / possessive / demonstrative: they INTRODUCE a value - "my password the word <value>" - and are redacted)
 )
 #: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
 #: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
@@ -1537,10 +1559,22 @@ _PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[ -]\d{2,12}){0,3}"
 #: <value>" redact the value; "change your password now" (a modifier, then nothing) is kept
 #: (not changed / reset / set / updated / to: after a bare label they are a compound - "password reset link", "password change")
 _BARE_MODIFIERS = tuple(sorted((_VALUE_MODIFIERS - {"changed", "reset", "set", "updated", "to"}) | {"then", "yet", "today", "please"}))
+#: an introducer after a bare label takes the rest of the slot with it ("my password the word <value>"), stopping before a label
+_BARE_INTRO = (r"(?:" + "|".join(sorted(_LABELLED_INTRODUCERS, key=len, reverse=True)) + r")\b(?:\s{1,8}" + _NEXT_LABEL
+               + r"[^\s,;.!?]+){0,6}")
+#: WITHOUT a connector ("my password zebrafiddle"): the word after the label (and any modifiers) is redacted unless it is on the
+#: closed list - it says the sentence is ABOUT the password ("password reset link", "my password works")
 _BARE_PASSWORD_RE = re.compile(
-    r"(?i)\b(password|passphrase)\b(\s{0,8}(?:(?:=|:|-|'s|’s)\s{0,8})?"
+    r"(?i)\b(password|passphrase)\b(\s{1,8}"
     rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
-    rf"((?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-])){_PASSWORD_VALUE})"
+    rf"({_BARE_INTRO}|(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-]))(?![-'’=:]){_PASSWORD_VALUE})"
+)
+#: WITH a connector ("password: x", "password - x", "my password's x" - the same as "is"): FAIL CLOSED, no word excused; modifiers
+#: are skipped and the word after them redacted
+_BARE_PASSWORD_CONN_RE = re.compile(
+    r"(?i)\b(password|passphrase)((?:\s{0,8}[=:]|'s|’s|\s{1,8}-)\s{0,8}"     # a dash only spaced: "password-protected" is a word
+    rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
+    rf"({_BARE_INTRO}|{_PASSWORD_VALUE})"
 )
 #: "the password for the wifi is <value>" / "... to my laptop was <value>": the labelled form, an explicit connector, no word excused
 #: (an introducer takes the rest of the clause, as in ``_labelled_sub``)
@@ -1714,7 +1748,8 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
         return text, "iban"
 
     # a bare password (letters-only too) is redacted here as well: ``_scrub_secrets`` skips a text with no digit at all
-    redacted = _FOR_PASSWORD_RE.sub(_for_sub, _scrub_labelled(text))
+    redacted = _FOR_PASSWORD_RE.sub(_for_sub, _scrub_labelled(_scrub_quoted(text)))
+    redacted = _BARE_PASSWORD_CONN_RE.sub(r"\1\2" + _REDACT, redacted)   # "password: x", "password's x": fail closed
     redacted = _BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, redacted)   # a password said without "is", letters-only too
     redacted = _scrub_secrets(redacted)
     return (_scrub_contact(redacted) if contact else redacted), None
