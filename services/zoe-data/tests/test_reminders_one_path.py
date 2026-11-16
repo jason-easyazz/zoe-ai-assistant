@@ -749,9 +749,10 @@ def _engine_world(monkeypatch, db, *, push, spoken=False):
 
     from proactive import engine
 
-    async def create_pending(*, user_id, message, trigger_type, item_id, context, **_k):
-        db.pending.append({"user_id": user_id, "item_id": item_id, "trigger_type": trigger_type, "day": "2026-06-10", "id": "pid-1"})
-        return "pid-1"
+    async def create_pending(*, user_id, message, trigger_type, item_id, context, pending_id=None, **_k):
+        pid = pending_id or "pid-1"
+        db.pending.append({"user_id": user_id, "item_id": item_id, "trigger_type": trigger_type, "day": "2026-06-10", "id": pid})
+        return pid
 
     class _Del:
         async def execute(self, sql, params=()):
@@ -815,7 +816,7 @@ async def test_a_nudge_is_marked_sent_only_once_a_lane_delivered(monkeypatch, cl
         with pytest.raises(RuntimeError):
             await engine.fire_notification(**kw)
     else:
-        assert await engine.fire_notification(**kw) is True or not (push or spoken)
+        assert await engine.fire_notification(**kw) is bool(push or spoken)
     assert bool(db.pending) is row_stays
     assert bool(claims.rows) is row_stays                             # the claim goes back with the row: kept only after a delivery
     again = await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))
@@ -1272,6 +1273,7 @@ async def test_a_cancel_before_any_send_started_releases_the_claim(monkeypatch, 
         if db.pending:                                     # the pending row is written, the lanes have not started
             break
         await asyncio.sleep(0.01)
+    assert len(db.pending) == 1 and len(claims.rows) == 1  # the row and the claim EXIST at cancel time (else the asserts below are vacuous)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -1286,12 +1288,116 @@ async def test_the_tally_is_per_send_and_a_lane_outside_one_counts_nothing():
     delivery_tally.note()                                  # no tally open: a no-op
     t1, tok1 = delivery_tally.start()
     delivery_tally.note()
-    delivery_tally.begin()
-    assert t1                                                 # a send handed off and unresolved counts (at most once)
-    delivery_tally.settle()
     t2, tok2 = delivery_tally.start()                      # a nested / concurrent send has its OWN count
     assert t2.n == 0
     delivery_tally.stop(tok2)
     delivery_tally.note()
     delivery_tally.stop(tok1)
     assert t1.n == 2
+
+
+def test_an_unresolved_send_alone_makes_the_tally_true_and_settling_clears_it(monkeypatch):
+    """On a FRESH tally nothing has been delivered (n == 0), so only ``begin()`` can make it true (the earlier assertion ran after a
+    ``note()`` and passed whatever ``begin()`` did)."""
+    import delivery_tally
+
+    t, tok = delivery_tally.start()
+    try:
+        assert t.n == 0 and not t                          # nothing delivered, nothing started
+        delivery_tally.begin()
+        assert t.n == 0 and t.inflight == 1 and t          # started and unresolved: uncertain counts as delivered
+        delivery_tally.settle()
+        assert t.inflight == 0 and not t                   # resolved without a delivery: false again
+    finally:
+        delivery_tally.stop(tok)
+    assert delivery_tally.Tally().__bool__() is False
+    only_inflight = delivery_tally.Tally()
+    only_inflight.inflight = 1
+    assert bool(only_inflight) is True                     # __bool__ reads inflight, not just n
+
+
+def test_control_with_begin_stubbed_out_the_assertion_fails(monkeypatch):
+    """Negative control: with ``begin()`` doing nothing, the fresh tally stays false, so the assertion above would fail."""
+    import delivery_tally
+
+    monkeypatch.setattr(delivery_tally, "begin", lambda: None)
+    t, tok = delivery_tally.start()
+    try:
+        delivery_tally.begin()
+        assert not t                                       # the property the real test requires (``assert t``) does NOT hold
+    finally:
+        delivery_tally.stop(tok)
+
+
+# ── a cancel inside create_pending (the INSERT committed, the connection release was cancelled) cannot suppress the nudge ─────
+@pytest.mark.parametrize("delivered", [False, True])
+@pytest.mark.asyncio
+async def test_a_cancel_at_connection_release_keeps_only_delivered_rows(monkeypatch, claims, delivered):
+    import contextlib
+
+    from proactive import session_utils
+
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=1, spoken=delivered)
+    sends = []
+    committed = asyncio.Event()
+    release = asyncio.Event()
+    inserts = []
+
+    class Connection:
+        cancel_on_release = False
+
+        async def execute(self, sql, params=()):
+            if "INSERT INTO proactive_pending" in sql:
+                pid, user, message, kind, item, context, expires = params
+                db.pending.append({"id": pid, "user_id": user, "item_id": item,
+                                   "trigger_type": kind, "day": "2026-06-10"})
+                inserts.append(pid)
+                self.cancel_on_release = not delivered
+            elif sql.startswith("UPDATE proactive_scheduled"):
+                self.cancel_on_release = delivered
+            elif sql.startswith("DELETE FROM proactive_pending"):
+                db.pending = [r for r in db.pending if r["id"] != params[0]]
+            else:
+                raise AssertionError(sql)
+
+        async def commit(self):
+            pass
+
+    @contextlib.asynccontextmanager
+    async def compat():
+        conn = Connection()
+        yield conn
+        if conn.cancel_on_release:
+            committed.set()
+            await release.wait()                           # cancellation lands AFTER commit, before helper return
+
+    async def send_push(**kw):
+        sends.append(kw)
+        return 1
+
+    monkeypatch.setattr(session_utils, "_get_compat_db", compat)
+    monkeypatch.setattr(engine, "_get_compat_db", compat)
+    monkeypatch.setattr(engine, "create_pending", session_utils.create_pending)
+    monkeypatch.setattr(engine, "_send_push", send_push)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    task = asyncio.ensure_future(engine.fire_notification(
+        user_id=result.user_id, message=result.message, trigger_type=result.trigger_type, item_id=result.item_id,
+        context=result.context, pending_id="scheduled-1" if delivered else None, retract_if_undelivered=True))
+    await asyncio.wait_for(committed.wait(), 2)
+    assert len(inserts) == 1 and db.pending[0]["id"] == inserts[0] and len(claims.rows) == 1
+    assert len(sends) == int(delivered)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(db.pending) == int(delivered) and len(claims.rows) == int(delivered)
+    again = await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))
+    if delivered:
+        assert again == []
+    else:
+        (retry,) = again
+        release.set()
+        assert await engine.fire_notification(
+            user_id=retry.user_id, message=retry.message, trigger_type=retry.trigger_type, item_id=retry.item_id,
+            context=retry.context, retract_if_undelivered=True) is True
+        assert len(sends) == 1 and len(db.pending) == 1 and len(claims.rows) == 1

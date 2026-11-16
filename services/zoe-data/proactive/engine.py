@@ -12,6 +12,7 @@ Public API:
 from __future__ import annotations
 
 import asyncio
+import uuid
 import logging
 import os
 import zoneinfo
@@ -145,7 +146,10 @@ async def fire_notification(
             )
         return
 
-    claim_key = ctx.get("claim_key")  # a once-a-day trigger's durable claim (nudge_claims): released on every path that did not deliver
+    claim_key = ctx.get("claim_key")
+    # Choose the id before awaiting the insert: connection release may be cancelled
+    # after commit, before create_pending returns it.
+    pid = str(uuid.uuid4())
     try:
         # LLM-compose only for non-reminder types (reminders already have a good message).
         if trigger_type not in ("reminder", "scheduled") and ctx:
@@ -164,9 +168,14 @@ async def fire_notification(
             trigger_type=trigger_type,
             item_id=item_id,
             context=ctx,
+            pending_id=pid,
         )
     except BaseException:
-        await _release_claim(claim_key)  # nothing was sent: the next tick may claim and try again
+        # Nothing was sent. A row may or may not exist (the INSERT can have committed while the cancel landed in the connection
+        # release): remove it by the id chosen above, as well as the claim, so the "sent today" read cannot see a send that never
+        # happened. Shielded: the cleanup itself must not be cancelled half way.
+        await _shielded(_retract_pending(pid))
+        await _shielded(_release_claim(claim_key))
         raise
 
     tally, tally_token = delivery_tally.start()  # every lane notes a delivery the moment it succeeds; every exit reads this
@@ -218,12 +227,12 @@ async def fire_notification(
                         ),
                     )
                     await db.commit()
-                delivery_tally.note()  # the row is in the notification centre: delivered, whatever happens to the live broadcast below
+                    delivery_tally.note()  # committed delivery, even if connection release is cancelled
                 await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
                 in_app_fallback_ok = True
                 log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
             except Exception as _fe:
-                log.warning("reminder fallback: in-app insert failed: %s", _fe)
+                log.warning("reminder fallback: in-app insert failed: %s", type(_fe).__name__)
 
         delivered = subscribers_reached > 0 or in_app_fallback_ok
         delivered_any = bool(tally) or delivered or bool(spoken)
@@ -246,8 +255,8 @@ async def fire_notification(
     except BaseException as exc:
         kept = bool(tally)  # CancelledError, a timeout, a later lane's failure: all read the same live count
         if not kept:  # a send that raised before any lane got through did not go through: the next tick tries again
-            await _retract_pending(pid)
-            await _release_claim(claim_key)
+            await _shielded(_retract_pending(pid))
+            await _shielded(_release_claim(claim_key))
         log.warning("fire_notification raised after the pending row (%s): %s", type(exc).__name__,
                     "kept (a lane had delivered)" if kept else "row removed, will retry")
         raise
@@ -261,6 +270,17 @@ def _erased_since(ctx: dict, user_id: str) -> bool:
         return False
     import user_erase_gate as erase_gate
     return erase_gate.generation(user_id) != ctx["erase_gen"] or erase_gate.in_progress(user_id)
+
+
+async def _shielded(coro) -> None:
+    """Run a cleanup coroutine so a (second) cancellation cannot stop it half way: it finishes as its own task."""
+    task = asyncio.ensure_future(coro)
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue  # wait for cleanup even if another cancellation arrives
+    task.result()
 
 
 async def _release_claim(claim_key: str | None) -> None:
