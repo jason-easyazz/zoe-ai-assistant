@@ -871,8 +871,30 @@ def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
             parsed = {}  # the grammar read NOTHING of the hint (it stays in the title and the date is its default "today"): unreadable
         due_date, due_time = parsed.get("date") or None, parsed.get("time") or None
         if not (due_date or due_time):
-            due_date = hint
+            due_date, due_time = _day_and_time_of_hint(hint)
     return due_date, due_time
+
+
+_HINT_TIME_TAIL = re.compile(r"\s*(?:\bat\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*$", re.IGNORECASE)
+_HINT_TIME_WORDS = re.compile(r"\b(?:at\s+\d|\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight|morning|afternoon|evening|tonight)\b", re.IGNORECASE)
+
+
+def _day_and_time_of_hint(hint: str) -> tuple[str | None, str | None]:
+    """A ``when_hint`` the spoken-reminder grammar declined ("friday at 3pm"): its trailing clock time is read here and the rest is
+    the day. A hint carrying any other clock wording ("friday morning", "friday at 3") is NOT fully understood and is refused
+    (None, None: the offer stays open) rather than accepted as a day with the time silently dropped."""
+    from intent_router import _parse_time
+
+    day, due_time = hint, None
+    m = _HINT_TIME_TAIL.search(hint)
+    if m:
+        due_time = _parse_time(m.group(1))
+        if due_time is None:
+            return None, None
+        day = hint[:m.start()].strip()
+    if _HINT_TIME_WORDS.search(day):
+        return None, None
+    return (day or None), due_time
 
 
 async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_commit: list | None = None) -> dict:

@@ -1048,3 +1048,110 @@ async def test_the_compose_step_cannot_reach_the_network_from_these_tests(monkey
 
     with pytest.raises(AssertionError, match="network"):
         await engine.compose_message("people_health", {"x": 1}, fallback="f")
+
+
+# ── review fixes: a weekday hint keeps its clock time; a push that partly got through keeps the claim ─────────────────────────
+@pytest.mark.parametrize("hint,expected", [
+    ("friday", ("friday", None)),                       # unchanged
+    ("friday at 3pm", ("friday", "15:00")),             # the time is read, not dropped
+    ("on friday at 3:30pm", ("on friday", "15:30")),
+    ("friday morning", (None, None)),                   # clock wording we cannot read: refused, never "a day with the time dropped"
+    ("friday at 3", (None, None)),
+])
+def test_a_weekday_hint_keeps_its_clock_time_or_is_refused(hint, expected):
+    assert pending_suggestions._suggested_when("book the vet", {"when_hint": hint}) == expected
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_weekday_hint_with_a_time_makes_a_reminder_at_that_time(monkeypatch):
+    from datetime import date
+
+    state = _PgState(slots='{"title": "book the vet", "when_hint": "friday at 3pm"}')
+    _accept_world(monkeypatch, state)
+    out = await pending_suggestions.execute_suggestion("sug-1", A)
+    assert out["ok"] is True
+    (row,) = state.reminders.values()
+    assert row["due_time"] == "15:00" and date.fromisoformat(row["due_date"]).weekday() == 4       # a Friday, at 15:00
+    state2 = _PgState(slots='{"title": "book the vet", "when_hint": "friday morning"}')
+    _accept_world(monkeypatch, state2)
+    assert await pending_suggestions.execute_suggestion("sug-1", A) == {"ok": False, "error": "reminder_needs_time"}
+    assert state2.reminders == {} and state2.resolved == 0
+
+
+def _fake_push_world(monkeypatch, *, cleanup_fails, second="expired"):
+    """routers.push with two subscriptions: the first is delivered; the second is expired (410) or raises something unexpected; the
+    dead-row cleanup then fails (or not)."""
+    import sys
+    import types
+
+    import routers.push as push
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def fetchall(self):
+            return self.rows
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    class Db:
+        def execute(self, sql, params=()):
+            if sql.strip().upper().startswith("DELETE"):
+                async def go():
+                    if cleanup_fails:
+                        raise RuntimeError("db gone")
+                return go()
+            return Rows([{"endpoint": "https://push.invalid/a", "keys_p256dh": "k", "keys_auth": "a"},
+                         {"endpoint": "https://push.invalid/b", "keys_p256dh": "k", "keys_auth": "a"}])
+
+        async def commit(self):
+            pass
+
+    async def get_db():
+        yield Db()
+
+    class WPE(Exception):
+        pass
+
+    def webpush(**kw):
+        if kw["subscription_info"]["endpoint"].endswith("/b"):
+            raise WPE("410 gone") if second == "expired" else RuntimeError("unexpected")
+
+    mod = types.ModuleType("pywebpush")
+    mod.webpush, mod.WebPushException = webpush, WPE
+    monkeypatch.setitem(sys.modules, "pywebpush", mod)
+    monkeypatch.setattr(push, "get_db", get_db)
+    monkeypatch.setattr(push, "_get_vapid_keys", lambda: {"private_key": "k"})
+    return push
+
+
+@pytest.mark.parametrize("second,cleanup_fails", [("expired", True), ("unexpected", False)])
+@pytest.mark.asyncio
+async def test_a_push_that_partly_got_through_still_reports_the_delivery(monkeypatch, second, cleanup_fails):
+    push = _fake_push_world(monkeypatch, cleanup_fails=cleanup_fails, second=second)
+    assert await push.send_push_to_user(user_id=A, message="m") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_nudge_whose_push_partly_got_through_keeps_its_claim(monkeypatch, claims):
+    """The reviewer's case end to end: one subscription delivered, the cleanup of the expired one raised. The real ``_send_push`` and
+    ``send_push_to_user`` run; the pending row and the daily claim stay, and the next tick does not repeat the nudge."""
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=0)
+    _fake_push_world(monkeypatch, cleanup_fails=True)
+
+    async def real_send_push(user_id, message, extra=None):
+        from routers.push import send_push_to_user
+        return await send_push_to_user(user_id=user_id, message=message, extra=extra or {}) or 0
+
+    monkeypatch.setattr(engine, "_send_push", real_send_push)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    out = await engine.fire_notification(user_id=result.user_id, message=result.message, trigger_type=result.trigger_type,
+                                         item_id=result.item_id, context=result.context, retract_if_undelivered=True)
+    assert out is True and len(db.pending) == 1 and len(claims.rows) == 1
+    assert await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5)) == []

@@ -219,16 +219,23 @@ async def send_push_to_user(
                 or "invalid auth key" in msg
             ):
                 dead_endpoints.append(row["endpoint"])
+        except Exception as e:  # noqa: BLE001 - one subscription's unexpected error must not discard the sends already made
+            logger.warning("Push failed for one subscription (%s); continuing", type(e).__name__)
 
     # Step 3: fresh short-lived connection only if there's cleanup to do.
     # Scope by user_id too: uniqueness is (user_id, endpoint), so the same
     # endpoint can belong to another user whose subscription is still valid.
     if dead_endpoints:
-        async for db in get_db():
-            for endpoint in dead_endpoints:
-                await db.execute(
-                    "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
-                    (user_id, endpoint),
-                )
-            await db.commit()
+        try:
+            async for db in get_db():
+                for endpoint in dead_endpoints:
+                    await db.execute(
+                        "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+                        (user_id, endpoint),
+                    )
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            # Best-effort housekeeping: the pushes above WERE delivered, so a cleanup failure must not turn into "nobody reached"
+            # (the caller would then retry or repeat a send that already got through). The dead rows are pruned on a later send.
+            logger.warning("push: dead-subscription cleanup failed (%s); %d sent", type(exc).__name__, sent)
     return sent
