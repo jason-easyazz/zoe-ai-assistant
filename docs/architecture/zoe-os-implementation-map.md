@@ -638,8 +638,14 @@ needs no install step. The first unit install is an owner step.
   `backup` op that uses SQLite's online backup into the backup staging directory, and add that file as a `Source` in `zoe_offbox.py`.
 - Add `check_kernel_db` (integrity check plus the event-count manifest) to `scripts/maintenance/zoe_restore_drill.py:584-620`, with
   tests in `tests/unit/test_zoe_offbox.py` and `test_restore_drill.py`.
-- **Forget and backups.** Backups are kept 35 days. The kernel's forget tombstones rows, but a backup holds the old words. That is the
-  same rule as Postgres (restoring means re-issuing the delete), and it must be written in the kernel's store entry.
+- **Forget and backups.** Backups are kept 35 days, and a backup taken before a forget still holds the forgotten words. So today an
+  erase is **not complete until the 35-day window has passed**; re-issuing the delete after a restore keeps the words out of the
+  live store, but it does not remove them from the backup files. That falls short of "forgotten means forever", and the kernel must
+  not inherit the gap silently. **Owner decision needed before cut-over** (it applies to Postgres backups as much as the kernel's):
+  either backups are encrypted with a per-member key that a forget destroys, so the old words become unreadable at once, or the
+  forget is backup-aware and rewrites or drops the affected backups, or the 35-day delay is accepted and said plainly to the
+  household. Whichever is chosen is written in the kernel's store entry in `forget_reach.py`, and a restore always re-issues every
+  forget recorded since the backup was taken before the kernel serves a read.
 - **Open PRs on the same files:** #2516 (off-box backup) and #2514 both touch `zoe_offbox.py` and `zoe_restore_drill.py`. Build this
   after them.
 

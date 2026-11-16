@@ -113,7 +113,7 @@ shadowed:
 | One alarm per person, no repeat rule | alarms | several alarms per person, repeat rules, snooze |
 | No recurring reminders; no date-only; nothing past 7 days | reminders | recurrence, date-only at the household default time, long horizons |
 | Reminder and alarm stores in memory | both | durable stores, crash-tested like the record |
-| Children treated as adults in the shadow roster | everything authoritative | the guardian model for a child's permission (owner decision D7) |
+| Children treated as adults in the shadow roster | any authoritative verb acting for a child (Phase 3 keeps children on the old path through the `fallback_child` floor, its item 8) | the guardian model for a child's permission (owner decision D7) |
 | The kernel learns of members by hand | everything | member add and remove pushed to the kernel (owner decision D6) |
 | Nothing calls the retention sweep | growth | a night job, rehearsed by day first (owner decision D5) |
 | Kernel runs as the same system user as the skills | the trust boundary | its own system user, with the two file-permission tests repeated on the real box |
