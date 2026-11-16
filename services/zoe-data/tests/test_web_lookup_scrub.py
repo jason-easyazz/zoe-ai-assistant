@@ -209,3 +209,22 @@ def test_the_module_does_no_io_and_no_logging():
     src = open(ws.__file__, encoding="utf-8").read()
     for banned in ("import logging", "import os", "import socket", "urllib", "httpx", "requests", "print("):
         assert banned not in src
+
+
+@pytest.mark.parametrize("raw", ["mi ra bel shellfish allergy symptoms", "m ira bel shellfish allergy symptoms",
+                                 "mir a b el shellfish allergy symptoms"])
+def test_a_known_name_split_over_three_or_more_words_never_leaves(raw):
+    r = scrub_query(raw, PrivateTerms.of(names=["Mirabel"]))
+    assert (not r.send) or ("mirabel" not in r.query.replace(" ", "")), r
+
+
+@pytest.mark.parametrize("raw", ["jazz festivals for my friend dana smith", "jazz festivals for my friend dana",
+                                 "concerts my partner sam would like"])
+def test_a_lowercase_name_after_my_relation_is_stripped(raw):
+    r = scrub_query(raw)
+    assert r.send, r
+    assert not {"dana", "smith", "sam"}.intersection(r.query.split()), r
+
+
+def test_a_relation_word_used_as_a_plain_noun_keeps_the_query():
+    assert scrub_query("dog food recall brands australia").query == "dog food recall brands australia"

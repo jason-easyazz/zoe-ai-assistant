@@ -270,8 +270,18 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
         named = tokens[j] in lex["naming_words"]
         if named:
             j += 1
-        if j < len(tokens) and tokens[j] and tokens[j] not in lex["drop_words"] and (named or words[j][:1].isupper()):
+        # No capital letter is required: voice transcripts and model-written queries are often all lower case,
+        # and "my friend dana smith" must not leave the house. The word after a relation word is a name, and so
+        # is the one after that unless it is a function word (a first name plus a surname). Over-stripping costs
+        # a weaker query; under-stripping sends a person's name.
+        owned = i > 0 and tokens[i - 1] in lex.get("possessive_words", _POSSESSIVES)   # "my friend", not "dog food"
+        if j < len(tokens) and tokens[j] and tokens[j] not in lex["drop_words"] and tokens[j] not in lex["question_words"] \
+                and (named or owned or words[j][:1].isupper()):
             drop.setdefault(j, "relation_name")
+            k = j + 1
+            if not named and owned and k < len(tokens) and tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"] \
+                    and tokens[k] not in lex["relation_words"]:
+                drop.setdefault(k, "relation_name")
     for i in _memory_runs(tokens, terms, lex):
         drop.setdefault(i, "memory")
 
@@ -312,7 +322,19 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)
 
 
+_POSSESSIVES = frozenset({"my", "our", "your", "his", "her", "their"})
+
+
 def _glued_span(query: str, single: str) -> bool:
-    """True when ``single`` appears across a word boundary in ``query`` (split over two kept words)."""
+    """True when ``single`` appears across word boundaries in ``query``: split over ANY run of kept words, so
+    "mi ra bel" is caught as well as "mira bel" (a run is bounded by the name's own length in characters)."""
     toks = [fold(w) for w in query.split()]
-    return any(single in a + b and single not in a and single not in b for a, b in zip(toks, toks[1:]))
+    for i in range(len(toks)):
+        acc = toks[i]
+        for j in range(i + 1, len(toks)):
+            acc += toks[j]
+            if single in acc and not any(single in t for t in toks[i:j + 1]):   # one word holding it is the
+                return True                                                       # whole-word rules' job
+            if len(acc) > len(single) + len(toks[i]) + len(toks[j]):
+                break
+    return False
