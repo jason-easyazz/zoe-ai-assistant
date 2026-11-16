@@ -170,6 +170,19 @@ test('linked sender, mode=voice: download → transcribe → /api/chat AS the me
   assert.doesNotMatch(trace.logs[0]!, /what time|ten past/); // timings + ids only; never the transcript or reply
 });
 
+test('the erase token from the transcription rides to the brain call unchanged (none from a plain transcript)', async () => {
+  const tokens: Array<string | undefined> = [];
+  const ask = async (_t: string, _s: string, _u: string, eraseToken?: string) => {
+    tokens.push(eraseToken);
+    return 'ok';
+  };
+  const withToken = deps({ ask, transcribe: async () => ({ text: 'what time is it', eraseToken: 'synthetic-boot:3' }) });
+  await handleVoiceNote(99999, 42, note(), withToken.d, OPTS);
+  const plain = deps({ ask });
+  await handleVoiceNote(99999, 42, note(), plain.d, OPTS);
+  assert.deepEqual(tokens, ['synthetic-boot:3', undefined]);
+});
+
 test('mode=text: text only, synthesis never called', async () => {
   const { d, trace } = deps();
   await handleVoiceNote(1, 42, note(), d, { ...OPTS, mode: 'text' });

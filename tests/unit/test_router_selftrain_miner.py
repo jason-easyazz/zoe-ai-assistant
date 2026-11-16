@@ -355,3 +355,45 @@ def test_write_outputs_emits_the_train_lora_shape_and_meta(tmp_path):
     assert rows[1]["tool"] is None                       # no-tool gold
     assert set(rows[0]) == {"text", "tool", "args", "source"}
     assert json.load(open(metaf, encoding="utf-8"))["held_out_guard"]["result"] == "pass"
+
+
+# ── a member erase: the corpus never learns the erased member's pre-erase words ──────────────────────────────────────────────
+
+def test_the_chat_join_drops_an_erased_members_turns_at_or_before_the_erase(monkeypatch):
+    """The transcript survives a member erase, and the hash-only shadow rows do too (only the text layer is cleared), so the
+    hash -> text join would hand the erased member's words back to the training corpus. Turns at or before their erase watermark are
+    dropped; their later turns, and every other member's, are kept; an unreadable watermark drops that member's turns."""
+    import asyncio
+
+    asyncpg = pytest.importorskip("asyncpg")
+    mark = "2026-11-14T01:00:00.000000Z"
+    chat = [{"content": "turn the hall light off", "created_at": "2026-11-14 08:59:00+08", "owner": "member-a"},
+            {"content": "set a timer for ten minutes", "created_at": "2026-11-14 09:00:00+08", "owner": "member-a"},
+            {"content": "play some quiet music", "created_at": "2026-11-14 09:00:01+08", "owner": "member-a"},
+            {"content": "what is the weather tomorrow", "created_at": "2026-11-14 08:00:00+08", "owner": "member-b"}]
+
+    class Conn:
+        down = False
+
+        async def fetch(self, sql, *args):
+            if "memory_forgotten" in sql:
+                if self.down:
+                    raise ConnectionError("store down")
+                return [(mark,)] if args[0] == "member-a" else []
+            assert "chat_messages" in sql
+            return chat
+
+        async def close(self):
+            pass
+
+    conn = Conn()
+
+    async def connect(_url):
+        return conn
+
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://unit-test.invalid/zoe")
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    texts = set(asyncio.run(miner._fetch_chat_texts()).values())
+    assert texts == {"play some quiet music", "what is the weather tomorrow"}, "the turn AT the mark (09:00:00 +08) is dropped too"
+    conn.down = True
+    assert set(asyncio.run(miner._fetch_chat_texts()).values()) == set(), "unreadable: every member with a lookup is dropped"

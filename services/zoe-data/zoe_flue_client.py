@@ -91,6 +91,7 @@ from __future__ import annotations
 import asyncio
 import brain_scheduler
 import brain_slot_guard
+import contextlib
 import contextvars
 import errno
 import json
@@ -1332,6 +1333,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
 
         if not memory_gate._touch_tokens(message):
             return ""
+    t_fetch = time.monotonic()
     try:
         if household:
             packet = await asyncio.wait_for(_fetch_for_prompt_packet(user_id, message, no_offer=True),
@@ -1340,13 +1342,16 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
                             else _fetch_for_prompt_packet(user_id, message))
     except asyncio.TimeoutError:
+        _prepost_add("household" if household else "recall_fetch", t_fetch)
         logger.info("SEAM_HOUSEHOLD user=%s budget_exceeded=%.2fs - turn proceeds without the block", user_id, _HOUSEHOLD_FETCH_BUDGET_S)
         return ""
     except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
+        _prepost_add("household" if household else "recall_fetch", t_fetch)
         logger.warning(
             "seam recall inject: packet fetch failed, continuing without it: %s", exc
         )
         return ""
+    fetch_ms = _prepost_add("household" if household else "recall_fetch", t_fetch)
     packet = (_truncate_packet_keeping_relational((packet or "").strip()) if named
               else _truncate_packet((packet or "").strip(), max_chars=_HOUSEHOLD_MAX_CHARS,
                                     max_bullets=_HOUSEHOLD_MAX_BULLETS) if household
@@ -1355,7 +1360,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         import memory_gate
 
         touched = memory_gate.packet_touches_question(message, packet)
-        logger.info("SEAM_HOUSEHOLD user=%s touched=%d chars=%d", user_id, int(touched), len(packet))
+        logger.info("SEAM_HOUSEHOLD user=%s touched=%d chars=%d ms=%d", user_id, int(touched), len(packet), fetch_ms)
         if not touched:
             return ""
     bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
@@ -1615,8 +1620,23 @@ _CONTINUITY_PORTRAIT_MAX_CHARS = 240
 # Pre-brain budget for the continuity fetch (packet + portrait, concurrent). A
 # miss costs only the block, never the turn — voice latency outranks the floor.
 _CONTINUITY_TIMEOUT_S = 3.0
+# ZOE_CONTINUITY_CEILING_S (default 3.0 = the value above, unchanged): the packet wait, read per turn. 0.4 is the candidate
+# (speed audit 2026-11-14 B6; the household fallback's _HOUSEHOLD_FETCH_BUDGET_S): a late packet is simply not carried, as
+# today past 3 s. The portrait's own budget never exceeds this ceiling either. A value outside (0, 10] is the default.
+_CONTINUITY_CEILING_MAX_S = 10.0
 # The portrait is optional: a shorter budget measured from the same start.
 _CONTINUITY_PORTRAIT_TIMEOUT_S = 1.0
+
+
+def _continuity_timeout_s() -> float:
+    """The continuity packet's wait ceiling (``ZOE_CONTINUITY_CEILING_S``); never raises."""
+    try:
+        from typed_env import flag
+
+        v = float(flag("ZOE_CONTINUITY_CEILING_S"))
+    except Exception:  # noqa: BLE001
+        return _CONTINUITY_TIMEOUT_S
+    return v if 0.0 < v <= _CONTINUITY_CEILING_MAX_S else _CONTINUITY_TIMEOUT_S
 
 
 def _continuity_inject_enabled() -> bool:
@@ -1710,9 +1730,10 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     # never retrieved" when the packet path returns early.
     portrait_task.add_done_callback(lambda t: t.cancelled() or t.exception())
     packet, portrait, focus = "", "", {}
+    ceiling = _continuity_timeout_s()
     try:
         try:
-            packet_res = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or {}
+            packet_res = await asyncio.wait_for(packet_task, timeout=ceiling) or {}
             packet = str(packet_res.get("packet") or "")
             focus = packet_res.get("continuity_focus") or {}
         except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
@@ -1721,7 +1742,7 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
                 exc,
             )
         if packet:
-            remaining = max(0.0, _CONTINUITY_PORTRAIT_TIMEOUT_S - (loop.time() - t0))
+            remaining = max(0.0, min(_CONTINUITY_PORTRAIT_TIMEOUT_S, ceiling) - (loop.time() - t0))
             try:
                 portrait = _portrait_line(
                     str(await asyncio.wait_for(portrait_task, timeout=remaining) or "")
@@ -1803,6 +1824,348 @@ async def _continuity_debug_uid(user_id: str) -> bool:
     except Exception as exc:  # noqa: BLE001 — unverifiable id → never log it
         logger.debug("seam continuity debug: registration check failed, not logging: %r", exc)
         return False
+
+
+# ── FLUE_PREPOST: what the turn awaited before the POST (speed audit 2026-11-14, A1 step 1) ──────────────────────────
+# ~20 sequential context-block awaits run before every brain POST and nothing measured them. One line per turn that
+# reaches the POST: ``total_ms`` (wrapper entry -> payload built), one ``<block>_ms`` per await that ran (a skipped
+# block has no field), ``other_ms`` (the rest: the synchronous note_turn calls, assembly). Numbers and fixed block
+# names only - never text, never a raw id (the session is a short hash, ``sid=``). Measurement only: nothing awaited
+# changes order or bytes.
+_PREPOST_BLOCKS = (
+    # the wrapper (run_flue_brain_streaming), in call order
+    "distress", "medical", "restraint", "brief", "raise", "debug",
+    # the turn (_run_flue_brain_streaming_turn), in call order
+    "verify", "recall", "recall_fetch", "household", "continuity", "hop", "offer", "list_share", "risk", "every_turn", "fastpath", "bridge",
+    "notes", "identity", "named_guest", "now_card", "register_apply", "register", "manner", "persona", "speculative",
+)
+_PREPOST_BLOCK_SET = frozenset(_PREPOST_BLOCKS)
+# sub-steps measured INSIDE another block (the recall block's packet fetch): own field, never summed into blocks_ms
+_PREPOST_NESTED = frozenset({"recall_fetch", "household"})
+
+
+class _PrepostTimer:
+    """Per-turn pre-POST timer. ``timed(name, aw)`` awaits ``aw`` exactly as a bare ``await`` would (same result, same
+    exception) and adds its wall time to ``name``. ``claimed`` marks a timer the inner turn has adopted, so a timer left
+    in the contextvar by an earlier turn on the same task is never reused."""
+
+    __slots__ = ("t0", "ms", "claimed", "logged", "tasks")
+
+    def __init__(self) -> None:
+        self.t0 = time.monotonic()
+        self.ms: "dict[str, float]" = {}
+        self.claimed = False
+        self.logged = False
+        self.tasks: "list[asyncio.Future]" = []   # ZOE_FLUE_PREPOST_CONCURRENT prefetches; the wrapper cancels any left
+
+    def cancel_tasks(self) -> None:
+        for t in self.tasks:
+            if not t.done():
+                t.cancel()
+
+    async def settle_tasks(self) -> None:
+        """Cancel what is still running, then WAIT for every prefetch to settle (results and exceptions retrieved), so
+        nothing outlives the turn and no "Task exception was never retrieved" is left behind. Never raises."""
+        if not self.tasks:
+            return
+        self.cancel_tasks()
+        try:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+        except Exception:  # noqa: BLE001 - outcomes are collected by gather; a cancel of THIS task still propagates
+            pass
+
+    def add(self, name: str, since: float) -> None:
+        """Add the wall time since ``since`` (a ``time.monotonic()`` reading) to ``name``."""
+        if name in _PREPOST_BLOCK_SET:
+            self.ms[name] = self.ms.get(name, 0.0) + (time.monotonic() - since) * 1000.0
+
+    @contextlib.contextmanager
+    def span(self, name: str):
+        """``with t.span(name):`` around a statement that awaits - the same measure as ``timed``, for a call site
+        whose literal text is pinned by a test (the one-construction-site pins)."""
+        t = time.monotonic()
+        try:
+            yield
+        finally:
+            self.add(name, t)
+
+    async def timed(self, name: str, aw: Any) -> Any:
+        t = time.monotonic()
+        try:
+            return await aw
+        finally:
+            self.add(name, t)
+
+    def render(self, session_id: str, *, now: "float | None" = None) -> str:
+        total = ((time.monotonic() if now is None else now) - self.t0) * 1000.0
+        ran = [b for b in _PREPOST_BLOCKS if b in self.ms]
+        blocks = sum(self.ms[b] for b in ran if b not in _PREPOST_NESTED)
+        fields = " ".join(f"{b}_ms={int(round(self.ms[b]))}" for b in ran)
+        # ``sid`` is a short hash, never the raw session id (join: ``_short_hash(<session id>)``)
+        return (f"FLUE_PREPOST sid={_short_hash(str(session_id or ''))} total_ms={int(round(total))} blocks_ms={int(round(blocks))} "
+                f"other_ms={int(round(max(0.0, total - blocks)))} "
+                f"awaited={sum(1 for b in ran if b not in _PREPOST_NESTED)}" + (f" {fields}" if fields else ""))
+
+    def log(self, session_id: str) -> None:
+        """At most once per turn. Never raises."""
+        try:
+            if self.logged:
+                return
+            self.logged = True
+            logger.info("%s", self.render(session_id))
+        except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+            pass
+
+
+_PREPOST: "contextvars.ContextVar[_PrepostTimer | None]" = contextvars.ContextVar("flue_prepost", default=None)
+
+
+# ── ZOE_FLUE_PREPOST_CONCURRENT (default OFF; speed audit 2026-11-14 A1 step 2) ───────────────────────────────────────
+# The blocks every brain turn awaits WHATEVER the precedence chain decides (fast-path, bridge, notes, identity / named
+# guest, now card, register request + line, manner, persona) start together as tasks right after the verify-on-challenge
+# early return, and run beside the precedence chain (recall > continuity > hop > offer / list share > risk > every turn),
+# which stays sequential in the turn: its blocks consume state (the offer cooldown, the list-share "said once", the
+# recall gate's counters) only when they win, so none of them ever runs speculatively. Each prefetched block is still
+# awaited at its own place in the assembly, so the bytes and their order are exactly the sequential ones; only WHEN the
+# work happens changes. Only READS are prefetched: the style-request WRITE (register_requests.apply) stays in the
+# sequential assembly exactly where it ran, and the register line it feeds is read after it, in place (nothing is left
+# to overlap it with there). The named-guest block runs only when the account identity block came back empty. Every
+# prefetch has its outcome retrieved, and the wrapper settles (cancels, then awaits) any left. Off = no task, the exact
+# sequential code path (``take`` awaits the call in place).
+_PREPOST_CONCURRENT_GROUP = ("fastpath", "bridge", "notes", "identity", "named_guest", "now_card", "manner", "persona")
+
+
+def _retrieve_outcome(task: "asyncio.Future") -> None:
+    """Done-callback: read a prefetch's exception so an unawaited one never logs "never retrieved"."""
+    if not task.cancelled():
+        task.exception()
+
+
+def _prepost_concurrent_enabled() -> bool:
+    try:
+        from typed_env import flag
+
+        return bool(flag("ZOE_FLUE_PREPOST_CONCURRENT"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class _Prefetch:
+    """Per-turn prefetch of the always-awaited blocks. ``take(name, factory)`` returns the prefetched result, or awaits
+    ``factory()`` in place (timed under ``name``) when nothing was prefetched - the sequential path, byte for byte."""
+
+    __slots__ = ("pp", "tasks", "drafts")
+
+    def __init__(self, pp: "_PrepostTimer") -> None:
+        self.pp = pp
+        self.tasks: "dict[str, asyncio.Future]" = {}
+        self.drafts: list = []   # turn_draft.TurnDraft of the prefetched blocks that change state: committed at the POST
+
+    def block(self, result: Any) -> str:
+        """A prefetched TurnDraft's block (its commit held for the POST), or the in-place call's plain string."""
+        if isinstance(result, str) or result is None:
+            return result or ""
+        self.drafts.append(result)
+        return str(getattr(result, "block", "") or "")
+
+    async def commit_drafts(self) -> None:
+        """The turn reached the POST: apply the held state changes, once, in assembly order. Never raises."""
+        drafts, self.drafts = self.drafts, []
+        for d in drafts:
+            try:
+                await d.commit()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def start(self, factories: "dict[str, Any]") -> None:
+        """``factories``: name -> zero-arg callable returning a coroutine. Starts each as a task (timed under its name)."""
+        for name, factory in factories.items():
+            self.add(name, asyncio.ensure_future(self.pp.timed(name, factory())))
+
+    def add(self, name: str, task: "asyncio.Future") -> None:
+        task.add_done_callback(_retrieve_outcome)
+        self.tasks[name] = task
+        self.pp.tasks.append(task)
+
+    async def take(self, name: str, factory: Any) -> Any:
+        task = self.tasks.pop(name, None)
+        if task is not None:
+            return await task
+        return await self.pp.timed(name, factory())
+
+
+def _prefetch_for_turn(pp: "_PrepostTimer", uid: str, session_id: str, message: str, kwargs: dict) -> _Prefetch:
+    """A ``_Prefetch``; with ZOE_FLUE_PREPOST_CONCURRENT on, the always-awaited group is already running. Never raises."""
+    pre = _Prefetch(pp)
+    if not _prepost_concurrent_enabled():
+        return pre
+    try:
+        import conversation_notes
+        import flue_fastpath_context
+        import named_guests
+        import voice_session_bridge
+
+        voice = bool(kwargs.get("voice_mode"))
+
+        pre.start({
+            "fastpath": lambda: flue_fastpath_context.block_for(uid, session_id, message),
+            # the bridge and the notes advance state when built (turn counts, the notes cooldown + served count): prefetched as a
+            # pure read (prepare_block), their changes are committed only when the turn reaches the POST (_commit_drafts)
+            "bridge": lambda: voice_session_bridge.prepare_block(uid, session_id),
+            "notes": lambda: conversation_notes.prepare_block(uid, session_id),
+            "identity": lambda: _identity_context_block(uid),
+            "now_card": lambda: _now_card_context_block(uid, voice),
+            "manner": lambda: _manner_context_block(uid, message),
+            "persona": lambda: _persona_context_block(uid),
+        })
+        identity_task = pre.tasks["identity"]
+
+        async def named_guest():
+            # the sequential order: the account identity block first, the named guest only when it came back empty
+            try:
+                if await asyncio.shield(identity_task):
+                    return ""
+            except Exception:  # noqa: BLE001 - the identity block's own take re-raises it in place
+                return ""
+            return await pp.timed("named_guest", named_guests.brain_block(uid))
+
+        pre.add("named_guest", asyncio.ensure_future(named_guest()))
+    except Exception:  # noqa: BLE001 - a prefetch problem falls back to the sequential path
+        pp.cancel_tasks()   # each task's outcome is retrieved by its done-callback; the wrapper also settles them
+        pre.tasks.clear()
+    return pre
+
+
+def _prepost_add(name: str, since: float) -> int:
+    """Add a sub-step's wall time to the CURRENT turn's timer (``recall_fetch`` / ``household``: the packet fetch inside
+    the recall block, so a budget miss is visible per call). Returns the ms. Never raises; no timer = only the ms."""
+    ms = int(round((time.monotonic() - since) * 1000.0))
+    try:
+        t = _PREPOST.get()
+        if t is not None:
+            t.add(name, since)
+    except Exception:  # noqa: BLE001
+        pass
+    return ms
+
+
+def _prepost_timer_for_turn() -> _PrepostTimer:
+    """The wrapper's timer when this turn was started by ``run_flue_brain_streaming`` (unclaimed), else a fresh one."""
+    t = _PREPOST.get()
+    if t is None or t.claimed:
+        t = _PrepostTimer()
+        _PREPOST.set(t)
+    t.claimed = True
+    return t
+
+
+# ── PANEL_KV_MISS cause: what changed in the prompt PREFIX since this session's previous turn ─────────────────────────
+# The sidecar renders, in order: system prompt (doctrines + the envelope-driven persona / locale / manner / register /
+# user-model card / now card) -> tool block -> history -> the newest user message. llama-server reuses only a byte-equal
+# prefix, so a re-prefill starts at the FIRST of these that changed. Per turn this seam keeps a structural signature -
+# a hash per envelope line (never the content), the member hash, whether the user message carried a delimited block
+# (the sidecar elides those from older turns under ZOE_BRAIN_ELIDE_STALE_BLOCKS) - completed at the terminal with the
+# sidecar's context_budget section sizes (tools / history / elided). ``_kv_miss_cause`` compares two signatures.
+KV_MISS_CAUSES = ("cold", "slot_evicted", "member_switch", "system_changed", "block_order_changed",
+                  "tool_block_changed", "elided_block", "history_truncated", "unknown")
+_PREFIX_STRUCT: "dict[str, dict]" = {}
+_PREFIX_STRUCT_MAX = 256
+
+
+def _short_hash(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256((text or "").encode("utf-8", "replace")).hexdigest()[:10]
+
+
+def _carries_context_block(text: str) -> bool:
+    """True when ``text`` has a whole line the sidecar's stale-block elision would drop (an open line of
+    ``_FLUE_CONTEXT_BLOCKS`` or the hop's one-line note)."""
+    for raw in (text or "").split("\n"):
+        line = raw.rstrip()
+        if line.startswith("(you know this about me: ") and line.endswith(")"):
+            return True
+        if line.endswith("]") and any(line == f"{p}]" or line.startswith(f"{p} ") for p, _ in _FLUE_CONTEXT_BLOCKS):
+            return True
+    return False
+
+
+def prefix_structure(outbound_message: str, uid: str = "") -> dict:
+    """Structural signature of one outbound message: hashes only. Pure; never raises."""
+    try:
+        envelope: list[tuple[str, str]] = []
+        rest = outbound_message or ""
+        for _ in range(12):
+            m = re.match(r"^ zoe-([a-z][a-z-]*):([^\n]*)\n", rest)
+            if not m:
+                break
+            if m.group(1) not in ("replay", "spec"):   # per-turn wire markers the sidecar never renders
+                envelope.append((m.group(1), _short_hash(m.group(2))))
+            rest = rest[len(m.group(0)):]
+        return {
+            "member": _short_hash((uid or "").strip().lower() or "guest"),
+            "env_order": tuple(n for n, _ in envelope),
+            "env": tuple(sorted(envelope)),
+            "block": _carries_context_block(rest),
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _note_prefix_structure(session_id: str, outbound_message: str, uid: str) -> None:
+    """Shift this session's current signature to ``prev`` and record this turn's. Never raises."""
+    try:
+        sid = str(session_id or "")
+        if not sid:
+            return
+        entry = _PREFIX_STRUCT.pop(sid, None) or {}
+        _PREFIX_STRUCT[sid] = {"prev": entry.get("cur"), "cur": prefix_structure(outbound_message, uid)}
+        while len(_PREFIX_STRUCT) > _PREFIX_STRUCT_MAX:
+            _PREFIX_STRUCT.pop(next(iter(_PREFIX_STRUCT)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _note_prefix_budget(session_id: str, budget: Any) -> bool:
+    """Complete the session's current signature with the sidecar's section sizes. True when the tool block's size
+    differs from the session's previous turn (the B4 measure: the sticky tool block grew mid-session). Never raises."""
+    try:
+        entry = _PREFIX_STRUCT.get(str(session_id or "")) or {}
+        cur, prev = entry.get("cur"), entry.get("prev")
+        if isinstance(cur, dict) and isinstance(budget, dict):
+            for k in ("tools", "history", "elided"):
+                cur[k] = int(budget.get(k) or 0)
+            return isinstance(prev, dict) and "tools" in prev and prev["tools"] != cur["tools"]
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _kv_miss_cause(prev: "dict | None", cur: "dict | None", *, warm: bool,
+                   others_between: int = 0, background_between: int = 0) -> str:
+    """The FIRST prefix section that differs between two consecutive turns of one session, as one of
+    ``KV_MISS_CAUSES``. Precedence follows the render order (an earlier section's change explains the miss on
+    its own). A field either side lacks is never evidence. Pure; never raises."""
+    try:
+        if not warm or not prev or not cur:
+            return "cold"
+        if others_between > 0 or background_between > 0:
+            return "slot_evicted"   # --parallel 1: another request used the one slot in between
+        if prev.get("member") != cur.get("member"):
+            return "member_switch"
+        if prev.get("env") != cur.get("env"):
+            return "system_changed"
+        if prev.get("env_order") != cur.get("env_order"):
+            return "block_order_changed"
+        if "tools" in prev and "tools" in cur and prev["tools"] != cur["tools"]:
+            return "tool_block_changed"
+        if prev.get("block") and cur.get("elided"):
+            return "elided_block"   # the previous user message carried a block the sidecar now elides
+        if "history" in prev and "history" in cur and cur["history"] < prev["history"]:
+            return "history_truncated"
+        return "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
 
 
 def _log_prompt_cache(session_id: str, terminal: dict) -> None:
@@ -1899,12 +2262,16 @@ def _panel_kv_alarm(session_id: str, first_prompt: int, first_cache: int, traffi
             return None
         since = (t - prev[0]) if prev else None
         kind = "warm" if since is not None and since < _PANEL_KV_WARM_S else "first"
+        struct = _PREFIX_STRUCT.get(sid) or {}
+        cause = _kv_miss_cause(struct.get("prev"), struct.get("cur"), warm=kind == "warm",
+                               others_between=(others - prev[1]) if prev else 0,
+                               background_between=(background - prev[2]) if prev else 0)
         logger.warning(
             "PANEL_KV_MISS session=%s kind=%s first_prompt_n=%d first_cache_n=%d since_prev_s=%s "
-            "non_household_turns_between=%s background_calls_between=%s threshold=%d",
+            "non_household_turns_between=%s background_calls_between=%s threshold=%d cause=%s",
             sid, kind, int(first_prompt), int(first_cache),
             f"{since:.0f}" if since is not None else "-",
-            (others - prev[1]) if prev else "-", (background - prev[2]) if prev else "-", threshold,
+            (others - prev[1]) if prev else "-", (background - prev[2]) if prev else "-", threshold, cause,
         )
         try:
             from voice_metrics import panel_kv_miss_count
@@ -2013,8 +2380,10 @@ def _log_context_budget(session_id: str, terminal: dict) -> None:
         b = terminal.get("context_budget")
         if isinstance(b, dict):
             keys = ("system", "tools", "history", "tail", "stale", "elided")
-            logger.info("FLUE_CONTEXT_BUDGET session=%s " + " ".join(f"{k}=%d" for k in keys),
-                        session_id, *(int(b.get(k) or 0) for k in keys))
+            # `` tools_changed=1`` only on a turn whose tool block differs from the session's previous turn (absent = same)
+            changed = _note_prefix_budget(session_id, b)
+            logger.info("FLUE_CONTEXT_BUDGET session=%s " + " ".join(f"{k}=%d" for k in keys) + ("%s"),
+                        session_id, *(int(b.get(k) or 0) for k in keys), " tools_changed=1" if changed else "")
             u = _SESSION_UID.get(session_id)
             if u and u in _LAST_TURN and _LAST_TURN[u].get("session") == session_id:
                 _LAST_TURN[u]["system"] = int(b.get("system") or 0)
@@ -2708,6 +3077,10 @@ async def run_flue_brain_streaming(
     import restraint
     from proactive import selector as proactive_selector
 
+    # FLUE_PREPOST (measurement only): a fresh timer per turn, adopted by the inner turn, which logs it at the POST.
+    _pp = _PrepostTimer()
+    _PREPOST.set(_pp)
+
     # The owner's short answer to the one clarifying question Zoe asked ("Which Marisol?" -> "the sister"):
     # the brain gets the original request with the full name in it (ask_when_ambiguous, ZOE_ASK_WHEN_AMBIGUOUS).
     # In-memory dict lookup, no I/O; the pending question is consumed by the next turn whatever it says.
@@ -2716,18 +3089,21 @@ async def run_flue_brain_streaming(
     # and persona never see the turn.
     import distress_handoff
 
-    _dh = await distress_handoff.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")))
+    _dh = await _pp.timed("distress", distress_handoff.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation"))))
     if _dh:
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "distress_handoff")
+        _pp.claimed = True   # never reached the POST: no line, and no later turn adopts this timer
         yield _dh
         return
     # The medical safety floor (ZOE_MEDICAL_SAFETY, default enforce) is second: a poisoning, an emergency-number question (even mid-thread), a red-flag symptom or a blood
     # sugar reading gets ONE fixed reply with the household's numbers, whatever memory or the open thread says (docs/knowledge/medical-safety.md).
     import medical_safety
 
-    _ms = await medical_safety.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")), voice=bool(kwargs.get("voice_mode")))
+    _ms = await _pp.timed("medical", medical_safety.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")),
+                                                         voice=bool(kwargs.get("voice_mode"))))
     if _ms:
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "medical_safety")
+        _pp.claimed = True   # never reached the POST: no line, and no later turn adopts this timer
         yield _ms
         return
     message = _resolve_clarification(message, user_id, session_id)
@@ -2735,9 +3111,10 @@ async def run_flue_brain_streaming(
     # brain, so the very next brief / raise / packet honours it. In enforce the acknowledgement is
     # spoken by code (the verify-on-challenge pattern: no model call, instant, never improvised);
     # in shadow it is recorded and the brain replies as usual.
-    ack = "" if kwargs.get("replay_isolation") else await restraint.handle_turn(_spoken, user_id, session_id)
+    ack = "" if kwargs.get("replay_isolation") else await _pp.timed("restraint", restraint.handle_turn(_spoken, user_id, session_id))
     if ack:
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "restraint_mute")
+        _pp.claimed = True   # never reached the POST: no line, and no later turn adopts this timer
         yield ack
         return
     # An emotional turn (emotional_turn_guard, ZOE_EMOTIONAL_TURN_GUARD=off|shadow|on, default off) carries nothing unrelated: no
@@ -2746,9 +3123,9 @@ async def run_flue_brain_streaming(
     import emotional_turn_guard
 
     emotional_hold = emotional_turn_guard.holds_extras(_spoken, user_id)
-    brief = None if emotional_hold else await brief_first_turn.prepare(message, user_id, session_id)
-    raised = await proactive_selector.prepare(
-        message, user_id, session_id, brief_active=brief is not None)
+    brief = None if emotional_hold else await _pp.timed("brief", brief_first_turn.prepare(message, user_id, session_id))
+    raised = await _pp.timed("raise", proactive_selector.prepare(
+        message, user_id, session_id, brief_active=brief is not None))
     # Roles are stated, never guessed (S22, ZOE_ROLE_GUESS_GUARD): the recall block fills this
     # sink when the named-person floor fired for a person no row relates to the user; every
     # other turn passes through untouched.
@@ -2808,7 +3185,7 @@ async def run_flue_brain_streaming(
 
     if notification_tail.store.enabled() and not emotional_hold and not kwargs.get("replay_isolation"):
         turn = notification_tail.append_stream(turn, _spoken, user_id, session_id, skip=(_FALLBACK_TEXT,))
-    debug = await _continuity_debug_uid((user_id or "").strip())
+    debug = await _pp.timed("debug", _continuity_debug_uid((user_id or "").strip()))
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)
     # The brain's ONE llama slot now holds this conversation: post-turn 4B callers wait for it to go quiet instead of
@@ -2828,7 +3205,10 @@ async def run_flue_brain_streaming(
         try:
             await turn.aclose()
         finally:
-            brain_slot_guard.turn_finished()
+            try:
+                await _pp.settle_tasks()   # ZOE_FLUE_PREPOST_CONCURRENT: a turn closed before its POST leaves no task behind
+            finally:
+                brain_slot_guard.turn_finished()
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
@@ -2848,6 +3228,24 @@ async def run_flue_brain_streaming(
                 "SEAM_CONTINUITY_DEBUG user=%s session=%s reply=%r",
                 (user_id or "").strip(), session_id, "".join(reply)[:200],
             )
+
+
+def _volatile_after_user_enabled() -> bool:
+    """``ZOE_BRAIN_VOLATILE_AFTER_USER`` (default OFF; speed audit 2026-11-14 B3). The user's words lead the message.
+    Right after them: the risk cue and every-turn blocks (the turn's safety / own-fact context). Then the run that today
+    rides BEFORE the words, in its own order: identity -> bridge -> notes -> fast-path -> the claim-correction line ->
+    the recall packet (whole, any marker inside it included) -> offer / list share -> hop preamble. Then continuity /
+    hop / brief / raise / date / verify as before. (Distress, medical and restraint answer in code before any of this.) Why: the sidecar elides every
+    block from all but the newest user message (ZOE_BRAIN_ELIDE_STALE_BLOCKS), so the stored copy of the previous turn
+    changes at the block's position; with the block first that re-prefills the words, the reply and the new turn, with
+    the block after the words the previous turn's cached bytes still match through the words. Off = exactly the bytes
+    of before (pinned by tests/test_brain_cache_stability.py over a synthetic corpus). Never raises."""
+    try:
+        from typed_env import flag
+
+        return bool(flag("ZOE_BRAIN_VOLATILE_AFTER_USER"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _run_flue_brain_streaming_turn(
@@ -2895,6 +3293,7 @@ async def _run_flue_brain_streaming_turn(
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
+    _pp = _prepost_timer_for_turn()   # FLUE_PREPOST: the wrapper's timer when it started this turn, else a fresh one
     # Similar-recall turn embed (ZOE_RECALL_SIMILAR, default OFF): start it NOW, beside the note_turn / verify / block work below, so
     # ``recall_every_turn.block_for`` further down finds it finished. A no-op (one flag read) unless both recall flags are on;
     # never raises, never waits. The distress / medical gates in the wrapper above have already run: they never reach here.
@@ -2939,7 +3338,7 @@ async def _run_flue_brain_streaming_turn(
     # a world-fact answer runs ONE bounded web search. A hit rides as a block
     # AFTER the user's words; a miss answers honestly right here — the brain is
     # never asked to re-assert an unchecked claim.
-    verify_plan = await _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode")))
+    verify_plan = await _pp.timed("verify", _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode"))))
     if verify_plan is not None and verify_plan.reply:
         _record_outcome(outcome_sink, FLUE_OUTCOME_SEAM_REPLY, f"verify_on_challenge:{verify_plan.status}")
         if isinstance(kwargs.get("_code_reply"), dict):
@@ -2947,13 +3346,15 @@ async def _run_flue_brain_streaming_turn(
         yield verify_plan.reply
         return
     verify_block = verify_plan.block if verify_plan is not None else ""
+    # ZOE_FLUE_PREPOST_CONCURRENT (default OFF): the always-awaited blocks start now, beside the precedence chain below.
+    _pre = _prefetch_for_turn(_pp, uid, session_id, message, kwargs)
     # Deterministic recall floor (default OFF): on a personal-, event- or evidence-shaped
     # question turn, prepend the for-prompt packet so recall no longer depends on the model
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
     # so the block rides AFTER the identity line on the wire (the sidecar's
     # single-line strip regex is anchored at message start).
     _ROLE_GUARD_SINK.set(kwargs.get("_role_guard"))
-    recall_block = "" if verify_block else await _recall_context_block(message, uid)
+    recall_block = "" if verify_block else await _pp.timed("recall", _recall_context_block(message, uid))
     # Continuity (default ON): a first-person mood/state STATEMENT gets the
     # recent-first packet so yesterday's worry reaches today's reply. Never on
     # the same turn as a recall block — the recall floor owns question turns.
@@ -2963,7 +3364,7 @@ async def _run_flue_brain_streaming_turn(
     continuity_block = ""
     continuity_turn = False
     if not recall_block and not verify_block:
-        continuity_block = await _continuity_context_block(message, uid)
+        continuity_block = await _pp.timed("continuity", _continuity_context_block(message, uid))
         continuity_turn = is_continuity_turn(message, uid)
     # Personalisation hop (default ON): a generic-advice request carries the durable fact that changes the
     # answer. Exclusive with every other block that asks the 4B for one job (recall owns question turns,
@@ -2975,7 +3376,7 @@ async def _run_flue_brain_streaming_turn(
         import personalisation_hop
 
         hop_placement = personalisation_hop.placement()
-        hop_block = await _hop_context_block(message, uid, hop_placement)
+        hop_block = await _pp.timed("hop", _hop_context_block(message, uid, hop_placement))
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice. DEFERRED on a continuity turn: the
@@ -2998,17 +3399,19 @@ async def _run_flue_brain_streaming_turn(
         if _offer_inject_enabled():
             logger.info("SEAM_OFFER user=%s deferred=1 reason=emotional", uid)
     elif "[pending-contact]" not in recall_block and not verify_block:
-        offer_block = await _pending_offer_block(uid, message)
+        with _pp.span("offer"):
+            offer_block = await _pending_offer_block(uid, message)
         if not offer_block and not kwargs.get("replay_isolation"):      # a replay must never consume a real member's heads-up
             # "<sharer> has shared a list with you" - said once, in the recipient's next turn no other block claimed (list_sharing.py;
             # ZOE_LIST_SHARE_HEADSUP). Same block delimiters as the contact offer, so the sidecar elides it from older turns.
-            offer_block = await _list_share_block(uid)
+            offer_block = await _pp.timed("list_share", _list_share_block(uid))
     # Risk cue (ZOE_RISK_CUES, default OFF): the problem in an adult's announced plan, named by code (risk_cues.py). Exclusive with every
     # other block that asks the 4B for one job - one block per turn - and "" (no work at all) with the flag off.
     risk_block = ""
     if not (recall_block or verify_block or continuity_block or continuity_turn or hop_block or offer_block
             or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
-        risk_block = await _risk_cue_block(message, uid, session_id)
+        with _pp.span("risk"):
+            risk_block = await _risk_cue_block(message, uid, session_id)
     # Household recall on every turn (ZOE_RECALL_EVERY_TURN, default OFF; recall_every_turn.py): a household member's turn that no
     # other block claimed carries the member's own durable facts the turn's words actually touch (a cheap lexical gate, a token
     # budget, private classes / mutes / forgotten rows excluded). After the user's words like the hop block, so the cached prefix
@@ -3021,37 +3424,37 @@ async def _run_flue_brain_streaming_turn(
                                        ("continuity", continuity_block or continuity_turn), ("hop", hop_block),
                                        ("offer", offer_block), ("risk", risk_block), ("raise", raise_block),
                                        ("brief", kwargs.get("day_brief_block"))) if b)
-    every_turn_block = await recall_every_turn.block_for(uid, message, claimed_by=_claimed,
-                                                         voice=bool(kwargs.get("voice_mode")))
+    every_turn_block = await _pp.timed("every_turn", recall_every_turn.block_for(uid, message, claimed_by=_claimed,
+                                                                                 voice=bool(kwargs.get("voice_mode"))))
     # Fast-path exchanges (reminder, "what do you know about me", ...) the brain never saw (flue_fastpath_context.py): without them a
     # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
     import flue_fastpath_context
 
-    fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
+    fastpath_block = await _pre.take("fastpath", lambda: flue_fastpath_context.block_for(uid, session_id, message))
     # Where we left off (ZOE_VOICE_SESSION_BRIDGE, default OFF; voice_session_bridge.py): a panel voice session that rolled after
     # the idle TTL starts with history=0 in the sidecar, so its first few brain turns carry the SAME confirmed speaker's last
     # exchanges from the session it replaced - in memory, forget-ledger checked (strict), token-capped. Ahead of the fast-path
     # block (it is older), inside the latest user message: the cached prefix is untouched. Off => "" before any work.
     import voice_session_bridge
 
-    bridge_block = await voice_session_bridge.block_for(uid, session_id)
+    bridge_block = _pre.block(await _pre.take("bridge", lambda: voice_session_bridge.block_for(uid, session_id)))
     # Notes about earlier conversations with this member (ZOE_CONVERSATION_NOTES, default OFF; conversation_notes.py): the first
     # brain turns of a session carry the member's newest 1-2 notes as soft context ("last time you talked about X; it is open").
     # Same slot and delimiters as the bridge (the sidecar elides it from older turns); confirmed speaker only; shadow logs, serves "".
     import conversation_notes
 
-    notes_block = await conversation_notes.block_for(uid, session_id)
+    notes_block = _pre.block(await _pre.take("notes", lambda: conversation_notes.block_for(uid, session_id)))
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
-    identity_block = await _identity_context_block(uid)
+    identity_block = await _pre.take("identity", lambda: _identity_context_block(uid))
     if not identity_block:
         # A NAMED GUEST (ZOE_NAMED_GUESTS, named_guests.py): who Zoe is talking with + their OWN past exchanges, in the same slot.
         # "" for a member and for any other unidentified voice (the bytes are unchanged).
         import named_guests
 
-        identity_block = await named_guests.brain_block(uid)
+        identity_block = await _pre.take("named_guest", lambda: named_guests.brain_block(uid))
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
     # so "why did you say that?" does not call a reply that offered to add a contact memory-free. Labels only; the message is
     # not touched (the sidecar prefix and the prompt cache are unaffected).
@@ -3063,6 +3466,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
+    # (ZOE_BRAIN_VOLATILE_AFTER_USER moves the whole run after the words - see _volatile_after_user_enabled)
     _blocks = "\n".join(b for b in (identity_block, bridge_block, notes_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
@@ -3074,16 +3478,31 @@ async def _run_flue_brain_streaming_turn(
     # sidecar's history still holds the claim the model made with no tool call, so this turn opens with one plain line saying it
     # did not happen. Not a delimited block, so the sidecar's stale-block elision keeps it next to the claim it corrects.
     correction = "" if kwargs.get("replay_isolation") else _claim_correction_line(session_id)
-    if correction:
-        safe_message = f"{correction}\n{safe_message}"
-    brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
+    volatile_after = _volatile_after_user_enabled()
+    if volatile_after:
+        # B3: the words lead, so an elided block diverges only after them. Straight after the words come the risk cue and
+        # the member's own facts (the turn's safety / correctness context, unchanged in content), then the run that used to
+        # ride ahead of the words, in its own order, with the claim correction moved WITH it (ahead of the recall packet:
+        # it corrects the reply the history holds, and the packet is what the model answers from).
+        brain_message = safe_message
+        for b in (risk_block, every_turn_block):
+            if b:
+                brain_message = f"{brain_message}\n{b}"
+        _run = "\n".join(b for b in (identity_block, bridge_block, notes_block, fastpath_block, correction, recall_block,
+                                      offer_block, hop_block if hop_placement == "preamble" else "") if b)
+        if _run:
+            brain_message = f"{brain_message}\n{_run}"
+    else:
+        if correction:
+            safe_message = f"{correction}\n{safe_message}"
+        brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
     if hop_block and hop_placement != "preamble":   # block: the delimited block after the words; suffix: ONE line
         brain_message = f"{brain_message}\n{hop_block}"
-    if risk_block:   # after the user's words, like the hop block (the two are never both present)
+    if risk_block and not volatile_after:   # after the user's words, like the hop block (the two are never both present)
         brain_message = f"{brain_message}\n{risk_block}"
-    if every_turn_block:   # after the user's words; never beside another memory block (gated above)
+    if every_turn_block and not volatile_after:   # after the user's words; never beside another memory block (gated above)
         brain_message = f"{brain_message}\n{every_turn_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.
@@ -3113,20 +3532,24 @@ async def _run_flue_brain_streaming_turn(
     # Now card (ZOE_MEMORY_NOW_CARD, default OFF; now_card.py): the member's nightly card, between the manner line and the identity
     # line; the sidecar puts it in the SYSTEM prompt after the user-model card. "" (off, shadow, a guest, an unverified voice) = unchanged bytes.
     outbound_message = _wrap_message_with_now_card(
-        outbound_message, await _now_card_context_block(uid, bool(kwargs.get("voice_mode"))))
+        outbound_message, await _pre.take("now_card", lambda: _now_card_context_block(uid, bool(kwargs.get("voice_mode")))))
     # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
     # An explicit style request in THIS turn ("stop ending with questions", "be more casual") is stored first, so the line rendered next
     # already carries it and this very reply obeys it (register_requests; rides ZOE_MEMBER_REGISTER, adults only, a no-op while off).
     if not kwargs.get("replay_isolation"):
         import register_requests
 
-        await register_requests.apply(uid, message)
-    outbound_message = _wrap_message_with_register(outbound_message, await _register_context_block(uid))
-    outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
+        await _pp.timed("register_apply", register_requests.apply(uid, message))   # a WRITE: never prefetched
+    outbound_message = _wrap_message_with_register(
+        outbound_message, await _pre.take("register", lambda: _register_context_block(uid)))
+    outbound_message = _wrap_message_with_manner(
+        outbound_message, await _pre.take("manner", lambda: _manner_context_block(uid, message)))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
     # replay line and the identity line. "" (the default) = unchanged bytes.
-    outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
+    outbound_message = _wrap_message_with_persona(
+        outbound_message, await _pre.take("persona", lambda: _persona_context_block(uid)))
     _note_turn_envelope(uid, session_id, outbound_message)
+    _note_prefix_structure(session_id, outbound_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
     outbound_message = _wrap_message_with_replay(
@@ -3135,9 +3558,11 @@ async def _run_flue_brain_streaming_turn(
     # B1.1: a speculative voice turn's id rides OUTERMOST so the sidecar can echo
     # it on this turn's tool writes. Nothing bound (every other turn) → unchanged.
     outbound_message = _wrap_message_with_speculative_turn(
-        outbound_message, await _speculative_turn_for_wire()
+        outbound_message, await _pp.timed("speculative", _speculative_turn_for_wire())
     )
     payload = _request_payload(outbound_message)
+    _pp.log(session_id)
+    await _pre.commit_drafts()   # ZOE_FLUE_PREPOST_CONCURRENT: the prefetched bridge / notes state moves only now, at the POST
 
     if _wire_version() >= _WIRE_2 and not _stream_enabled():
         # Wire 2 has no whole-result call: the non-streaming turn is a stream

@@ -118,11 +118,12 @@ def _no_sys_modules_stub_leaks(request):
 @pytest.fixture(autouse=True)
 def _verbatim_and_night_stores_in_process():
     """``MemoryService.delete_user`` erases the owner's verbatim turns (``exact_words``) AND the night mind's rows
-    (``night_store``) and FAILS CLOSED when either erase fails. Both are Postgres tables in production and no unit test has
+    (``night_store``) and FAILS CLOSED when either erase fails (or when its erase watermark, ``erase_watermark``, cannot be recorded). Both are Postgres tables in production and no unit test has
     that pool, so every unit test gets the in-process stores (the same rule as ``services/zoe-data/tests/conftest.py``);
     a test that wants the SQL backend sets it itself. A real erase failure is NOT hidden by this: it only supplies a
     working store where the test has no pool (pinned by the two test_delete_user_*night* tests in test_memory_service_fixes.py)."""
     try:
+        import erase_watermark
         import exact_words
         import night_store
         import struggle_detector
@@ -133,7 +134,7 @@ def _verbatim_and_night_stores_in_process():
     # long as it is open (module-scoped), and a per-test swap here would pull them out from under it.
     installed = []
     for mod, make in ((exact_words, exact_words.MemoryBackend), (night_store, night_store.MemoryBackend),
-                      (struggle_detector, struggle_detector.MemoryBackend)):
+                      (struggle_detector, struggle_detector.MemoryBackend), (erase_watermark, erase_watermark.MemoryBackend)):
         if getattr(mod, "_backend", None) is None:
             be = make()
             mod.set_backend(be)

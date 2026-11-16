@@ -13,7 +13,7 @@
  *
  * Voice notes (flag-dark, zoe-data's `telegram_media` router) add two more:
  *
- *   POST /api/system/telegram/transcribe   raw audio → { ok, text }
+ *   POST /api/system/telegram/transcribe   raw audio → { ok, text, erase_token }
  *   POST /api/system/telegram/synthesize   { text }  → audio/ogg bytes | 503
  *
  * Nothing here ever reaches the live zoe-data on :8000: the tests set
@@ -102,7 +102,7 @@ export async function startMockZoeData(): Promise<MockZoeData> {
       }
       if (url.startsWith('/api/system/telegram/transcribe')) {
         if (!raw.length) return json({ ok: false, error: 'empty audio' }, 400);
-        return json({ ok: true, text: state.transcript, duration_s: 4.0 });
+        return json({ ok: true, text: state.transcript, duration_s: 4.0, erase_token: 'synthetic-boot:7' });
       }
       if (url.startsWith('/api/system/telegram/synthesize')) {
         if (!state.synthOk) return json({ ok: false, error: 'tts unavailable' }, 503);

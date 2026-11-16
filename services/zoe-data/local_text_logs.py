@@ -40,10 +40,13 @@ DELETED by ``prune_adhoc_backups`` (hourly, with the sweep) once older than ``AD
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import fcntl
 import json
 import logging
 import os
+import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -64,11 +67,36 @@ class TextLog:
     text_field: str
     expire: str                      # "strip": remove ``text_field`` and keep the record; "drop": remove the record
     ts_field: str = "ts"
+    ts_iso: bool = False             # the timestamp is an ISO-8601 string, not epoch seconds
 
 
 ROUTER_SHADOW = TextLog("router_shadow", "utt_text", "strip")
 INTENT_MISSES = TextLog("intent_misses", "text", "drop")
 LOGS = (ROUTER_SHADOW, INTENT_MISSES)
+#: The panel STT audit log (``routers/voice_tts._log_voice_stt_sample``: ``{"ts": ISO, "transcript", ...}``, one ``.1`` size segment).
+#: Reached by retention, the entity forget and the member erase ONLY while ``ZOE_FORGET_REACH_EXTRA`` is ``on`` (default ``off``):
+#: turning it on starts deleting lines older than the retention window from a log the owner's STT tools read.
+VOICE_STT = TextLog("voice_stt", "transcript", "drop", ts_iso=True)
+EXTRA_LOGS = (VOICE_STT,)
+
+
+def _flag(name: str):
+    """A registered flag through ``typed_env`` (this module is also loaded by path from the hourly job, so put its own directory first)."""
+    if str(_HERE) not in sys.path:
+        sys.path.insert(0, str(_HERE))
+    import typed_env
+
+    return typed_env.flag(name)
+
+
+def extra_reach_on() -> bool:
+    """``ZOE_FORGET_REACH_EXTRA`` (off | on, default off): the household-text inventory's extra reach - the voice STT log and the
+    opt-in Telegram STT capture directory join retention, the entity forget and the member erase."""
+    return str(_flag("ZOE_FORGET_REACH_EXTRA")).lower() == "on"
+
+
+def active_logs() -> tuple[TextLog, ...]:
+    return LOGS + (EXTRA_LOGS if extra_reach_on() else ())
 
 
 def _anchored(raw: str) -> Path:
@@ -90,6 +118,9 @@ def log_path(log: TextLog) -> Path:
     if log is INTENT_MISSES:
         # the writer (intent_router.detect_intent) is fixed at ~/training/data; the env var exists so a TEST can pin this module off it
         return _anchored(os.environ.get("ZOE_INTENT_MISS_LOG") or str(Path.home() / "training" / "data" / "intent-misses.jsonl"))
+    if log is VOICE_STT:
+        # the writer opens ZOE_VOICE_STT_LOG as given, from the service's working directory (= _HERE): the same file for a relative value
+        return _anchored(_flag("ZOE_VOICE_STT_LOG") or str(Path.home() / ".zoe-voice" / "voice_stt.jsonl"))
     raise KeyError(log.name)
 
 
@@ -98,7 +129,7 @@ def segments(log: TextLog) -> list[Path]:
     segment above a since-lowered ``ZOE_ROUTER_SHADOW_KEEP`` is never rotated away again, so it must still be swept) then the live file."""
     base = log_path(log)
     out: list[Path] = []
-    if log is ROUTER_SHADOW and base.parent.is_dir():
+    if log in (ROUTER_SHADOW, VOICE_STT) and base.parent.is_dir():
         rotated = [(int(p.name[len(base.name) + 1:]), p) for p in base.parent.glob(base.name + ".*")
                    if p.name[len(base.name) + 1:].isdigit()]
         out += [p for _n, p in sorted(rotated, reverse=True)]
@@ -123,13 +154,16 @@ def retention_days() -> Optional[float]:
 
 
 _MISS_THREAD_LOCK = threading.Lock()
+_VOICE_STT_LOCK = threading.Lock()
 
 
 def _append_lock(log: Optional[TextLog] = None):
     """The log's in-process append lock: the router's own when this process has it loaded (zoe-data), this module's for the
-    intent-miss log; otherwise a no-op context."""
+    intent-miss log and the voice STT log; otherwise a no-op."""
     if log is INTENT_MISSES:
         return _MISS_THREAD_LOCK
+    if log is VOICE_STT:
+        return _VOICE_STT_LOCK
     mod = sys.modules.get("semantic_router")
     lock = getattr(mod, "_shadow_write_lock", None)
     if lock is not None:
@@ -173,11 +207,11 @@ def _bounded(lock: Any):
 
 @contextlib.contextmanager
 def locked(log: TextLog):
-    """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then (router log only) an exclusive
+    """Hold the log's write lock for a whole multi-segment pass: the in-process append lock, then an exclusive
     ``flock`` on ``<log>.lock`` - the SAME lock ``semantic_router._append_shadow_line`` takes around rotate + append, in the same order.
     So no append and no rotation can interleave with the rewrite, in this process or another. Fails closed: if the lock file cannot be opened it raises ``OSError``; if the flock cannot be
-    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). BOTH logs take
-    it: the intent-miss writer appends through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
+    had within ``LOCK_WAIT_S`` it raises ``TimeoutError`` (the sweep reports -1, the cascade step fails and is retried). All logs take
+    it: the intent-miss and STT writers append through ``append_line`` (same lock). The old-inode catch-up in ``rewrite`` stays as defence
     against a writer process still running the old, lock-less code."""
     with _bounded(_append_lock(log)):
         path = lock_path(log)
@@ -205,10 +239,11 @@ def locked(log: TextLog):
             fh.close()
 
 
-def append_line(log: TextLog, line: str, epoch: Optional[int] = None) -> bool:
+def append_line(log: TextLog, line: Optional[str], epoch: Optional[int] = None, *, max_bytes: int = 0) -> bool:
     """Append one JSON line to ``log`` under the SAME locks a rewrite pass holds (in-process lock + ``flock`` on ``<log>.lock``), so
     an append can never land in an inode a sweep/erase is about to replace. Never WAITS (it runs on a live voice turn): if a pass
     holds the lock the observation is skipped and False returned. I/O errors raise to the caller (which swallows them).
+    ``max_bytes``: rotate to ``.1`` under the same locks before appending; None as the line rotates only.
     ``epoch``: the ``erase_epoch()`` captured BEFORE the observation was computed; inside the lock the line is refused if an erase is
     in progress or the epoch moved (same rule as ``semantic_router._append_shadow_line``): it may carry words an erase just removed."""
     tlock = _append_lock(log)
@@ -229,8 +264,13 @@ def append_line(log: TextLog, line: str, epoch: Optional[int] = None) -> bool:
             except BlockingIOError:
                 return False
             try:
-                with open(path, "a") as out:
-                    out.write(line.rstrip("\n") + "\n")
+                # Rotation and append are ONE critical section, shared with
+                # the eraser's complete segment enumeration and rewrite pass.
+                if max_bytes > 0 and path.exists() and path.stat().st_size >= max_bytes:
+                    os.replace(path, path.with_name(path.name + ".1"))
+                if line is not None:
+                    with open(path, "a") as out:
+                        out.write(line.rstrip("\n") + "\n")
                 return True
             finally:
                 fcntl.flock(fh, fcntl.LOCK_UN)
@@ -374,6 +414,10 @@ def _strip_or_drop(log: TextLog, line: str, *, older_than: Optional[float] = Non
 
 def _ts(rec: dict[str, Any], log: TextLog) -> float:
     try:
+        if log.ts_iso:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(str(rec.get(log.ts_field)).replace("Z", "+00:00"))
+            return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
         return float(rec.get(log.ts_field))
     except (TypeError, ValueError):
         return 0.0                                    # no timestamp = oldest: it ages out rather than living forever
@@ -449,6 +493,185 @@ def prune_adhoc_backups(now: Optional[float] = None) -> int:
     return removed
 
 
+def telegram_capture_dir() -> Optional[Path]:
+    """The opt-in Telegram STT capture corpus (``routers/telegram_media.capture_dir``: ``ZOE_TELEGRAM_STT_CAPTURE_DIR``, unset = none).
+    Each voice note is a pair ``tg-<stamp>-<pid>.wav`` + ``.txt`` (its transcript); no member id."""
+    raw = str(_flag("ZOE_TELEGRAM_STT_CAPTURE_DIR") or "").strip()
+    if not raw:
+        return None
+    root = Path(raw).expanduser()
+    if not root.is_absolute() or root.anchor != "/" or len(root.parts) < 2 or ".." in root.parts:
+        raise ValueError("capture directory must be an absolute, non-root path without parent traversal")
+    return root
+
+
+@contextlib.contextmanager
+def capture_directory(*, create: bool = False):
+    """Resolve once and open each component without following links. All capture
+    reads, writes and deletes use this directory descriptor, so renaming a
+    parent or planting a symlink cannot redirect an operation outside the root.
+    None means capture is disabled (or the configured directory is absent).
+    """
+    root = telegram_capture_dir()
+    if root is None:
+        yield None
+        return
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            for part in root.parts[1:]:
+                if create:
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+        except FileNotFoundError:
+            if create:
+                raise
+            yield None
+            return
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _capture_stat(directory: int, name: str):
+    try:
+        result = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(result.st_mode):
+        raise OSError("capture entry is not a regular file")
+    return result
+
+
+def _capture_text(directory: int, name: str) -> str:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise OSError("capture transcript is not a regular file")
+        return stream.read()
+
+
+def _flock_capture(directory: int, *, wait: bool) -> bool:
+    """Exclusive ``flock`` on the capture DIRECTORY descriptor: the one serialisation the pair writer (``write_capture_pair``) and the
+    eraser (``erase_capture``) share. Each ``capture_directory()`` call opens its own descriptor, so two holders contend in one
+    process as across processes, and no lock file is added to the corpus. ``wait``: the eraser waits up to ``LOCK_WAIT_S``
+    (``TimeoutError``: the step fails and is retried); the writer never waits (it runs on a request) and gets False instead."""
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if not wait:
+                return False
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"capture directory lock busy for {LOCK_WAIT_S:.0f}s") from None
+            time.sleep(0.05)
+
+
+def write_capture_pair(wav_path: str, text: str, epoch: Optional[int]) -> bool:
+    """Write one capture pair (``tg-<stamp>-<pid>.wav`` then ``.txt``) ALL OR NOTHING with respect to an erase. ``epoch``: the
+    ``erase_epoch()`` captured BEFORE the audio was transcribed. Under the eraser's directory lock the pair is refused if an erase is
+    in progress or ran since ``epoch`` (the transcript may name what it forgot), checked before the audio and again before the
+    transcript; a refusal or failure after the audio was written removes the audio, so no half pair is left. Never waits: an
+    erase holding the lock means this note is not captured. Returns True only when both files were written. Raises ``OSError``
+    / ``ValueError`` (the caller logs them; capture is optional)."""
+    with capture_directory(create=True) as directory:
+        if directory is None or not _flock_capture(directory, wait=False):
+            return False
+        written: list[str] = []
+        done = False
+
+        def fresh() -> bool:
+            return not erase_in_progress() and (epoch is None or erase_epoch() == epoch)
+
+        def opener(name, flags):
+            return os.open(name, flags | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+
+        try:
+            if not fresh():
+                return False
+            base = f"tg-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            with open(wav_path, "rb") as source, open(f"{base}.wav", "xb", opener=opener) as dest:
+                written.append(f"{base}.wav")              # only a file THIS call created is ever removed below
+                shutil.copyfileobj(source, dest)
+            if not fresh():
+                return False
+            with open(f"{base}.txt", "x", encoding="utf-8", opener=opener) as dest:
+                written.append(f"{base}.txt")
+                dest.write(text + "\n")
+            done = True
+            return True
+        finally:
+            if not done:
+                for name in written:
+                    try:
+                        os.unlink(name, dir_fd=directory)
+                    except FileNotFoundError:
+                        pass
+            fcntl.flock(directory, fcntl.LOCK_UN)
+
+
+def erase_capture(*, match: Any = None, older_than: Optional[float] = None, everything: bool = False) -> int:
+    """Delete capture pairs: every pair (``everything``), a pair whose transcript matches ``match``, or one older than ``older_than``
+    (file mtime). Entity matching requires readable UTF-8 text: unreadable transcripts and orphaned WAVs are kept and reported
+    as counts only. Full member erase deletes them unconditionally; retention still removes orphaned WAVs.
+    The whole pass holds the capture directory lock (``_flock_capture``), so no pair is written half before and half after it.
+    Returns the number of files removed. RAISES on a failed delete (the cascade step / sweep then fails, never silently)."""
+    with capture_directory() as directory:
+        if directory is None:
+            return 0
+        _flock_capture(directory, wait=True)
+        try:
+            return _erase_capture_held(directory, match=match, older_than=older_than, everything=everything)
+        finally:
+            fcntl.flock(directory, fcntl.LOCK_UN)
+
+
+def _erase_capture_held(directory: int, *, match: Any, older_than: Optional[float], everything: bool) -> int:
+    """``erase_capture``'s pass; the caller holds the capture directory lock."""
+    removed = unreadable = orphaned = 0
+    gone: set[str] = set()  # the listing is a snapshot: a pair deleted below must not be re-read as an orphan
+    for name in sorted(os.listdir(directory)):
+        entry = Path(name)
+        if name in gone or not name.startswith("tg-") or entry.suffix not in (".wav", ".txt"):
+            continue
+        txt, wav = str(entry.with_suffix(".txt")), str(entry.with_suffix(".wav"))
+        text_stat = _capture_stat(directory, txt)
+        _capture_stat(directory, wav)
+        if entry.suffix == ".wav" and text_stat is not None:
+            continue
+        if match is not None and not everything:
+            if text_stat is None:
+                orphaned += 1
+                continue
+            try:
+                doomed = bool(match.search(_capture_text(directory, txt)))
+            except (OSError, UnicodeError):
+                unreadable += 1
+                continue
+        else:
+            doomed = everything or text_stat is None
+        if not doomed and match is None and older_than is not None:
+            doomed = text_stat.st_mtime < older_than
+        if doomed:
+            for filename in (txt, wav):
+                try:
+                    os.unlink(filename, dir_fd=directory)
+                    removed += 1
+                    gone.add(filename)
+                except FileNotFoundError:
+                    pass
+    if unreadable or orphaned:
+        logger.warning("local_text_logs: entity capture skipped unreadable=%d orphaned=%d", unreadable, orphaned)
+    return removed
+
+
 def sweep(now: Optional[float] = None) -> dict[str, int]:
     """Apply the retention window to every registered log, and expire the owner scripts' one-off backups.
     ``{name: records stripped or dropped | backups removed}``; a value of -1 means that part FAILED (the hosting job must fail
@@ -463,12 +686,18 @@ def sweep(now: Optional[float] = None) -> dict[str, int]:
     if days is None:
         return out
     cutoff = (now if now is not None else time.time()) - days * 86400.0
-    for log in LOGS:
+    for log in active_logs():
         try:
             out[log.name] = _apply(log, older_than=cutoff)
         except Exception as exc:  # noqa: BLE001 - a retention pass must never break the job that hosts it
             logger.error("local_text_logs: sweep of %s failed (%s)", log.name, type(exc).__name__)
             out[log.name] = -1
+    if extra_reach_on():
+        try:
+            out["telegram_capture"] = erase_capture(older_than=cutoff)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("local_text_logs: sweep of telegram_capture failed (%s)", type(exc).__name__)
+            out["telegram_capture"] = -1
     if any(v > 0 for v in out.values()):
         logger.info("local_text_logs: retention sweep %s", " ".join(f"{k}={v}" for k, v in out.items()))
     return out
@@ -492,6 +721,55 @@ def erase_epoch() -> int:
     return _ERASE_EPOCH
 
 
+# ── the per-turn epoch ──────────────────────────────────────────────────────────────────────────────────────────────────────
+# A writer that reads ``erase_epoch()`` at its OWN start is too late on a voice turn: the words it logs were produced by STT before
+# routing / intent detection began, so an erase that completed during STT is already inside that reading. The turn's epoch is read
+# ONCE where its words do not exist yet (before the clip reaches STT; for typed text, where it enters this process) and rides the
+# turn's context; every writer of an erasable store checks its append against it (``writer_epoch``). A ContextVar crosses
+# ``await``, ``asyncio.ensure_future`` / ``create_task`` and ``asyncio.to_thread`` (each copies the context), not a bare thread,
+# ``run_in_executor`` or a process boundary: there it is carried explicitly (``turn_token`` / an ``epoch`` argument).
+STALE_EPOCH = -1                 # never an erase epoch: a turn holding it has every append refused
+_TURN_EPOCH: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar("local_text_logs_turn_epoch", default=None)
+_BOOT = os.urandom(4).hex()      # a carried token names THIS process's counter (it restarts at 0)
+
+
+def begin_turn(carried: Any = None) -> int:
+    """Hold the erase epoch for the turn running in this context and return it: read now, before its words exist, unless the
+    context already holds one (an in-process hand-over: ``/turn`` -> ``voice_command`` keeps the epoch read before STT).
+    ``carried``: a ``turn_token()`` from an earlier request of the same turn (its words were produced there: a messaging voice note
+    transcribed before its text comes back as a chat turn). A token for any other epoch or process (an erase ran since, a restart, a
+    made-up value) holds ``STALE_EPOCH``, so a carried value can only refuse more, never less. In memory only: no disk, env or lock."""
+    held = _TURN_EPOCH.get()
+    ep = _ERASE_EPOCH if held is None else held
+    if carried is not None and carried != f"{_BOOT}:{ep}":
+        ep = STALE_EPOCH
+    if ep != held:
+        _TURN_EPOCH.set(ep)
+    return ep
+
+
+def turn_predates(epoch: Optional[int]) -> None:
+    """The turn's words already existed when ``epoch`` was read, before ``begin_turn`` (the under-speech STT stream, opened while the
+    member spoke). If an erase ran since, the turn holds ``STALE_EPOCH``. None = nothing to compare."""
+    if epoch is not None and epoch != writer_epoch():
+        _TURN_EPOCH.set(STALE_EPOCH)
+
+
+def writer_epoch(own: Optional[int] = None) -> int:
+    """The epoch a writer of an erasable store passes to its append: the turn's when the context holds one, else ``own`` (or now),
+    so a typed turn with no carrier keeps the writer's own reading. ``own`` differing from the turn's means an erase ran between the
+    two readings: ``STALE_EPOCH``."""
+    held = _TURN_EPOCH.get()
+    if held is None:
+        return _ERASE_EPOCH if own is None else own
+    return held if own is None or own == held else STALE_EPOCH
+
+
+def turn_token() -> str:
+    """The turn's epoch as an opaque token for a hop that leaves this process (returned to the client, sent back with the turn)."""
+    return f"{_BOOT}:{writer_epoch()}"
+
+
 def _bump_epoch(delta: int = 0) -> None:
     global _ERASE_EPOCH, _ERASES_IN_PROGRESS
     with _EPOCH_LOCK:
@@ -507,7 +785,8 @@ def erase_entity(rx: Any) -> int:
     _bump_epoch(+1)
     try:
         # ... and the owner's opt-in recall-gate trace: a line whose words or row text name the entity, inside the same interval
-        return sum(_apply(log, match=rx) for log in LOGS) + recall_gate_trace.erase_entity(rx)
+        extra = erase_capture(match=rx) if extra_reach_on() else 0
+        return sum(_apply(log, match=rx) for log in active_logs()) + recall_gate_trace.erase_entity(rx) + extra
     finally:
         _bump_epoch(-1)
 
@@ -519,7 +798,8 @@ def erase_all_text() -> int:
     _bump_epoch(+1)
     try:
         # ... and the owner's opt-in recall-gate trace (owner words + row text) the same household-wide way, inside the same interval
-        return sum(_apply(log, everything=True) for log in LOGS) + recall_gate_trace.erase_all()
+        extra = erase_capture(everything=True) if extra_reach_on() else 0
+        return sum(_apply(log, everything=True) for log in active_logs()) + recall_gate_trace.erase_all() + extra
     finally:
         _bump_epoch(-1)
 
