@@ -142,12 +142,13 @@ class Dispatcher:
         self._actions: dict[str, tuple[Do, Verify, bool]] = {}
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
+        self._checks: dict[str, Callable] = {}                    # action -> its own rule (``register``)
         self._purges: dict[str, tuple[str, str]] = {}
         self._purge_do: dict[str, Do] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
-                 doc: str = "", params: dict | None = None,
+                 doc: str = "", params: dict | None = None, check: Callable | None = None,
                  purge_key: tuple[str, str] | None = None, purge: Do | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
@@ -161,8 +162,15 @@ class Dispatcher:
 
         ``purge`` is the driver the erasure duty runs (default: ``do``). A store whose ``do`` acts
         only on the person's OWN rows gives its owner-blind delete here: an action reaches one
-        person's rows, an erasure notice reaches the erased requests of every owner."""
+        person's rows, an erasure notice reaches the erased requests of every owner.
+
+        ``check(person, args, caused_by) -> reason`` is the action's own rule (a time already past, a row that is not theirs):
+        a non-empty reason refuses (and records) the act BEFORE the intent is written, like a bad argument."""
         self._actions[action] = (do, verify, needs_accept)
+        if check is not None:
+            self._checks[action] = check
+        else:
+            self._checks.pop(action, None)       # a re-registration without a rule drops the old one
         if purge_key is not None:
             self._purges[action] = purge_key
         else:
@@ -232,6 +240,8 @@ class Dispatcher:
                     self.spine._refuse(skill, attempted, "ambiguous_request_provenance")
                 args = dict(args, asked=caused_by[0])
             bad = check_params(params, args)
+            if not bad and action in self._checks:        # the action's own rule, on the kernel-bound arguments
+                bad = self._checks[action](on_behalf_of, args, tuple(caused_by))
             if bad:
                 self.spine._refuse(skill, attempted, bad)
             self._check_arguments(skill, attempted, on_behalf_of, args)
