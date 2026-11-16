@@ -38,8 +38,11 @@ def run(cid, arm, w=W):
     return cellmod.run_cell(CELLS[cid].rendered(w), w, arm)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def z0n():
+    # Per test, not per module: an open arm owns the process-wide in-process stores, and every other test in this file opens
+    # and closes arms of its own. Shared across the module, the arm was only intact while its three tests ran back to back
+    # (file order); in any other order the second of them ran on stores another arm's close() had reset (K1 judged 0 observations).
     arm = Z0Arm(name="Z0n", night=True)
     yield arm
     arm.close()

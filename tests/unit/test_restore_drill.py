@@ -220,19 +220,28 @@ def _ha_tree(tmp_path: Path) -> Path:
     return ha
 
 
+@pytest.fixture
+def not_root():
+    """The export helper honours ``ZOE_HA_CONFIG_DIR`` only when it is NOT root (sudo strips the environment; a root caller
+    always reads the real HA config dir), so the two tests that export a temporary tree cannot pass as root.
+    Skips WITH the reason when run as root outside CI; under ``CI`` it runs (and would fail loudly) - a runner is never root."""
+    if os.geteuid() == 0 and not os.environ.get("CI"):
+        pytest.skip("zoe-ha-config-export ignores ZOE_HA_CONFIG_DIR when run as root: this test needs a non-root user")
+
+
 def _export(ha: Path) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-I", str(LIBEXEC / "zoe-ha-config-export"), "storage"],
                           capture_output=True, env={**os.environ, "ZOE_HA_CONFIG_DIR": str(ha)})
 
 
-def test_ha_helper_exports_storage_and_cloud(tmp_path):
+def test_ha_helper_exports_storage_and_cloud(tmp_path, not_root):
     r = _export(_ha_tree(tmp_path))
     assert r.returncode == 0
     with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r:gz") as t:
         assert sorted(t.getnames()) == [".cloud/c.json", ".storage/core.config_entries"]
 
 
-def test_ha_helper_never_follows_a_planted_symlink(tmp_path):
+def test_ha_helper_never_follows_a_planted_symlink(tmp_path, not_root):
     ha = _ha_tree(tmp_path)
     os.symlink(tmp_path / "outside" / "s.txt", ha / ".storage" / "planted")
     os.link(ha / ".storage" / "core.config_entries", ha / ".storage" / "hardlinked")
