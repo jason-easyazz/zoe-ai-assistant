@@ -429,6 +429,14 @@ FOLLOWS = "The rest of what needs you follows shortly."
 POINTER_TEXT = "There's an update from Zoe for you. Ask me \"what's new?\" or look on the desktop."
 
 
+def _hh(item: dict) -> str:
+    """The household line. A notice stored before the assistant voice has no ``household`` field, only the old
+    ``summary`` (trailer, else first paragraph, else title): that is used, through the same de-jargon path."""
+    if "household" in item:
+        return item["household"] or ""
+    return _end(_sentences(_dejargon(item.get("summary") or ""), 2, 280))
+
+
 def _is_bad(item: dict) -> bool:
     return item["kind"] == "stuck" or (item["kind"] == "live" and item["category"] == "broke")
 
@@ -459,7 +467,7 @@ def _lead(item: dict, turn: int) -> str:
 
 def _story(item: dict, turn: int, *, lead: bool) -> str:
     """One went-live line: the household sentence (with a lead in a single message), else the housekeeping line."""
-    hh = item.get("household") or ""
+    hh = _hh(item)
     if item["kind"] == "stuck":
         return item["summary"]
     if _is_bad(item):
@@ -470,7 +478,7 @@ def _story(item: dict, turn: int, *, lead: bool) -> str:
 
 
 def _decision(item: dict, turn: int) -> list[str]:
-    what = item.get("household") or f'It is about "{subject(item.get("title", ""))}".'
+    what = _hh(item) or f'It is about "{subject(item.get("title", ""))}".'
     ask = item.get("owner_step") or "Can you have a look when you get a minute?"
     out = [f"{_pick(_DECISION, turn)} {what}", ask]
     if item.get("if_no_answer"):
@@ -480,7 +488,7 @@ def _decision(item: dict, turn: int) -> list[str]:
 
 def _decision_line(item: dict) -> str:
     """A decision as one line inside a batch or a digest (the single message is ``_decision``)."""
-    hh, step = item.get("household") or "", item.get("owner_step") or ""
+    hh, step = _hh(item), item.get("owner_step") or ""
     if not hh and not step:
         return f'"{subject(item.get("title", ""))}" needs a look from you.'
     what = hh or f'"{subject(item.get("title", ""))}":'
@@ -553,10 +561,10 @@ def _batch(items: list[dict], detail: str, turn: int, local: Optional[datetime],
         head = (f"One change went in {when}." if n == 1 else
                 _pick(_BATCH_HEADS, turn).format(N=_cap(_word(n)), n=_word(n), when=when, When=_cap(when)))
         lines.append((f"Also, {_low(head)}" if bad or waiting else head, 0, True))
-    stories = [i for i in good if i.get("household")]
-    chores = [i for i in good if not i.get("household")]
+    stories = [i for i in good if _hh(i)]
+    chores = [i for i in good if not _hh(i)]
     for i in stories:
-        hh = _clip_words(i["household"], hh_cap) if hh_cap else i["household"]
+        hh = _clip_words(_hh(i), hh_cap) if hh_cap else _hh(i)
         lines.append((f"• {hh}{_ref(i, tech)}", 1, False))
         if tech and numbers_on and i.get("numbers"):
             lines.append((f"   {_numbers_line(i)}", 0, False))
@@ -653,13 +661,13 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
     if steps:
         lines.append(("\nFor you to do:", []))
         lines += [(f"• {i['owner_step']}", [i["key"]]) for i in steps]  # its number is on the item's line
-    stories = [i for i in good if i.get("household")]
+    stories = [i for i in good if _hh(i)]
     if stories and len(lines) > 1:
         lines.append(("\nWhat went in:", []))
     for i in stories:
         extra = f"\n   {_numbers_line(i)}" if tech(i) and i.get("numbers") else ""
-        lines.append((f"• {i['household']}{_ref(i, tech(i))}{extra}", own(i)))
-    chores = [i for i in good if not i.get("household")]
+        lines.append((f"• {_hh(i)}{_ref(i, tech(i))}{extra}", own(i)))
+    chores = [i for i in good if not _hh(i)]
     if chores:
         refs = _refs([i for i in chores if tech(i)])
         lead = "Plus " if stories else ""
@@ -883,7 +891,8 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             st["pending_live"].pop(n_s, None)
             _new_notice(c, {"key": f"pr:{p['number']}:live", "kind": "live", "number": p["number"],
                             "title": p["title"], "url": p.get("url"), "category": p["category"],
-                            **{k: p.get(k) or ("" if k != "numbers" else []) for k in PR_FIELDS}}, silent=silent)
+                            "summary": p.get("summary") or "",  # a merge stored before the upgrade has only this
+                            **{k: p[k] for k in PR_FIELDS if k in p}}, silent=silent)
         elif (live is False or not deployed) and c.now - merged_at > stale_after():
             stuck.append(p)  # definitely not in the deployed code (an unchecked or unknown one is not counted)
     if stuck and not silent:
@@ -1033,27 +1042,29 @@ async def _deliver_instant(c: Ctx, r: Recipient) -> None:
             audit("rolled_to_digest", member=r.user_id, key=i["key"], reason=reason)
 
     sent_now = 0  # instant messages to this member in this tick (design 6: at most MAX_CHUNKS a minute)
-    for b_idx, batch in enumerate(batches):
+    for batch in batches:
         follow_up = False
         while batch:
-            # Every limit is rechecked before EVERY message, the first and each follow-up (a notice whose step did
-            # not fit the message before): nothing a follow-up sends can step around them.
-            if killed():
-                return  # the kill switch appeared mid-tick: the rest stays queued, unsent
-            now_local = _local(c)
-            if comm_prefs.in_quiet_hours(r.prefs, now_local.hour * 60 + now_local.minute):
-                return  # quiet hours began: held, as at the start of a tick
-            if follow_up and not r.env_default:  # a follow-up is a new instant message: the spacing applies to it
-                spaced = [i for i in batch if c.now - (_parse(st["last_instant"].get(f"{r.user_id}|{i['category']}"))
-                                                       or c.now - SAME_KIND_SPACING) < SAME_KIND_SPACING]
-                roll(spaced, "spacing")
-                batch = [i for i in batch if i not in spaced]
-                if not batch:
+            # The base's messages (one per batch) go exactly as before this PR: the selection above is their only
+            # check. A FOLLOW-UP (a notice whose step did not fit the message before) is new, so it is rechecked
+            # against every limit and can never overrun one; what does not fit rolls into the digest.
+            if follow_up:
+                if killed():
+                    return  # the kill switch appeared mid-tick: the rest stays queued, unsent
+                now_local = _local(c)
+                if comm_prefs.in_quiet_hours(r.prefs, now_local.hour * 60 + now_local.minute):
+                    return  # quiet hours began: held, as at the start of a tick
+                if not r.env_default:
+                    spaced = [i for i in batch if c.now - (_parse(st["last_instant"].get(
+                        f"{r.user_id}|{i['category']}")) or c.now - SAME_KIND_SPACING) < SAME_KIND_SPACING]
+                    roll(spaced, "spacing")
+                    batch = [i for i in batch if i not in spaced]
+                    if not batch:
+                        break
+                over = "cap" if len(sent_today) >= cap else "rate" if sent_now >= MAX_CHUNKS else ""
+                if over:
+                    roll(batch, over)
                     break
-            over = "cap" if len(sent_today) >= cap else "rate" if sent_now >= MAX_CHUNKS else ""
-            if over:
-                roll([i for b in [batch, *batches[b_idx + 1:]] for i in b], over)
-                return
             turn = int(st["opener"].get(r.user_id, -1)) + 1  # the digest's counter: two in a row never match
             st["opener"][r.user_id] = turn
             msg = render_instant(batch, detail, c.repo, turn=turn, local=local)
@@ -1113,13 +1124,8 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
     msgs = render_digest(items, uncertain, r.prefs, opener=idx, repo_name=c.repo, local=local,
                          period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
-    outcomes, sent_msgs = [], []
-    for m in msgs:
-        if killed():  # the kill switch appeared mid-tick: the rest stays queued, the period is not marked sent
-            return
-        outcomes.append(await _send(c, r, m))
-        sent_msgs.append(m)
-    landed = {k for m in sent_msgs for k in m.keys}
+    outcomes = [await _send(c, r, m) for m in msgs]
+    landed = {k for m in msgs for k in m.keys}
     if any(i["key"] not in landed for i in items):  # a step that did not fit: its notice follows next tick
         audit("digest_follow_up", member=r.user_id, keys=[i["key"] for i in items if i["key"] not in landed])
     elif all(o != "retry" for o in outcomes):

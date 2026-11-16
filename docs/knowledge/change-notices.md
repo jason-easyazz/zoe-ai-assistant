@@ -61,13 +61,19 @@ update from an assistant". The rules, all in `change_notices.py` and pinned by e
   dropped. A notice counts as delivered only if its step was shown (or it has none): one whose step does not fit is
   left queued and follows in the next message (instant: the same tick, up to 3 messages; digest: the next tick,
   after "The rest of what needs you follows shortly.").
-- **A follow-up never steps around a limit.** Before EVERY instant message of a tick (the first and each follow-up)
-  `_deliver_instant` rechecks: the kill switch file (stops; the rest stays queued), quiet hours (stops; held), the
-  30-minute same-category spacing (follow-ups only, not for an env-defaulted owner), the daily instant cap and at
-  most `MAX_CHUNKS` (3) instant messages per tick. Over the cap or the rate, the rest rolls into the next digest with
-  the same `rolled_to_digest` audit event (`reason` `cap`, `spacing` or `rate`) as before. The digest rechecks the
-  kill switch before each of its messages. Trailers inside a ``` or ~~~ fence (closed or not) or an HTML comment are
+- **The base timing is unchanged; a follow-up never steps around a limit.** The selection at the start of a tick
+  (quiet hours, daily cap, 30-minute same-category spacing) and the messages it produces (one per notice, or one
+  batch for 3 or more) are exactly as before this change, pinned by a table test and, where `origin/main` is
+  available, a differential test against it. Only the NEW follow-up messages (a notice whose step did not fit) are
+  rechecked, each one before it is sent: the kill switch file (stops; the rest stays queued), quiet hours (stops;
+  held), the spacing (not for an env-defaulted owner), the daily cap (counting this tick's messages) and at most
+  `MAX_CHUNKS` (3) instant messages a tick. What does not fit rolls into the next digest with the same
+  `rolled_to_digest` event (`reason` `spacing`, `cap` or `rate`). Within a tick the single messages now go bad news
+  first; the set of messages is the same.
+- **Trailers in code are not trailers.** A trailer inside a ``` or ~~~ fence (closed or not) or an HTML comment is
   ignored; a 4-space indented line never matches, because a trailer must start at column 0.
+- **Notices stored before this change** (with only the old `summary`, no `household` field) use that summary as
+  their line, through the same de-jargon path, instead of becoming housekeeping.
 - **Batches and digests in the same voice**: "Three things went in this morning." / "Good evening. Here's today: ...".
   Sections only where they help: "Waiting on you", "For you to do", "What went in". Every size bound holds (990
   characters a message, 3 messages, "...and N more on GitHub" so every notice lands in exactly one message), and the

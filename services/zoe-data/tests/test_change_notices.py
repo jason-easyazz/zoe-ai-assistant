@@ -245,8 +245,7 @@ async def test_control_large_batch_threshold_sends_one_each(monkeypatch):
     for n in (31, 32, 33, 34):
         gh.raise_pr(n, f"fix: n{n}", labels=["needs-owner"])
     await run(gh, bot, at("13:00"))
-    assert len(bot.delivered) == 3  # one each, and still at most MAX_CHUNKS a tick: the 4th rolls to the digest
-    assert [a["reason"] for a in _audit_events("rolled_to_digest")] == ["rate"]
+    assert len(bot.delivered) == 4  # the base's single messages are unchanged (no follow-up involved)
 
 
 async def test_same_kind_within_30_min_and_the_daily_cap_roll_into_the_digest():
@@ -1350,7 +1349,9 @@ async def test_property_a_random_remaining_cap_is_never_exceeded():
 
         c = cn.Ctx(st=st, now=now, mode="on", sender=sender, sleep=_noop_sleep, repo="o/r")
         await cn._deliver_instant(c, r)
-        assert len(sent) <= min(cap - used, cn.MAX_CHUNKS), (trial, cap, used, len(sent))
+        left = cap - used
+        base = 0 if left <= 0 else 1 if len(items) >= cn.BATCH_AT else len(items)  # exactly what main sends
+        assert base <= len(sent) <= max(base, min(left, cn.MAX_CHUNKS)), (trial, cap, used, len(sent))
         landed = [k for m in sent for k in m.keys]
         assert len(landed) == len(set(landed))
         rolled = {k.split("|", 1)[1] for k, d in st["deliveries"].items() if d["lane"] == "digest"}
@@ -1362,3 +1363,125 @@ async def test_property_a_random_remaining_cap_is_never_exceeded():
             for k in m.keys:
                 step = st["notices"][k].get("owner_step")
                 assert not step or step in m.text
+
+
+# ── the base's instant timing is unchanged; only follow-ups are rechecked ──────
+def _short(n, cat="fixed", kind="live"):
+    title = {"fixed": "fix: short", "decision": "feat: ask"}[cat]
+    it = {**_live(n, title, f"For-The-Household: Short {n}."), "category": cat, "kind": kind,
+          "key": f"pr:{n}:{'decision' if cat == 'decision' else 'live'}", "summary": f"Short {n}.", "bullets": []}
+    return it
+
+
+async def _instant_run(mod, items, *, cap, used, env_default=True, last=None, batch_at=None, monkeypatch=None):
+    """One ``_deliver_instant`` of ``mod`` (this module or main's) for an owner with ``cap - used`` slots left."""
+    if batch_at is not None:
+        monkeypatch.setattr(mod, "BATCH_AT", batch_at)
+    doc = comm_prefs.normalise({"preset": "everything", "daily_instant_cap": cap}, "admin")
+    r = mod.Recipient("u-owner", "admin", OWNER_TID, doc, env_default=env_default)
+    st = mod.empty_state()
+    st["notices"] = {i["key"]: dict(i) for i in items}
+    st["deliveries"] = {f"u-owner|{i['key']}": {"status": "queued", "lane": "instant", "attempts": 0,
+                                                "next_at": None, "at": "2026-10-19T04:00:00Z"} for i in items}
+    now = at("12:05")
+    st["instant_sent"]["u-owner"] = ["2026-10-19T08:00:00+08:00"] * used
+    st["last_instant"] = dict(last or {})
+    sent = []
+
+    async def sender(_tid, msg):
+        sent.append(tuple(sorted(msg.keys)))
+        return "sent"
+
+    before = (mod.state_dir() / "audit.jsonl").read_text().splitlines() if (mod.state_dir() / "audit.jsonl").exists() \
+        else []
+    await mod._deliver_instant(mod.Ctx(st=st, now=now, mode="on", sender=sender, sleep=_noop_sleep, repo="o/r"), r)
+    after = (mod.state_dir() / "audit.jsonl").read_text().splitlines()[len(before):]
+    events = sorted((a["event"], str(a.get("key", a.get("keys"))), a.get("reason", "")) for a in map(json.loads, after)
+                    if a["event"] != "send")
+    marked = sorted(k.split("|", 1)[1] for k, d in st["deliveries"].items() if d["status"] == "sent")
+    rolled = sorted(k.split("|", 1)[1] for k, d in st["deliveries"].items() if d["lane"] == "digest")
+    return sorted(sent), marked, rolled, events
+
+
+def _cases():
+    ten_min_ago = (at("12:05") - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {  # name: (items, kwargs, expected messages, expected rolled) - read off main's _deliver_instant
+        "1 slot left, 2 ready -> 2 sent": ([_short(1), _short(2)], {"cap": 3, "used": 2},
+                                          [("pr:1:live",), ("pr:2:live",)], []),
+        "0 slots left -> none, all rolled": ([_short(1), _short(2), _short(3)], {"cap": 2, "used": 2}, [],
+                                             ["pr:1:live", "pr:2:live", "pr:3:live"]),
+        "3 ready -> one batched message": ([_short(1), _short(2), _short(3)], {"cap": 6, "used": 5},
+                                           [("pr:1:live", "pr:2:live", "pr:3:live")], []),
+        "batching disabled, 4 ready -> 4 sent": ([_short(n, "decision", "raised") for n in (31, 32, 33, 34)],
+                                                 {"cap": 6, "used": 0, "batch_at": 99},
+                                                 [(f"pr:{n}:decision",) for n in (31, 32, 33, 34)], []),
+        "spacing: fixed 10 min ago rolls, the decision goes": (
+            [_short(1), _short(2), _short(40, "decision", "raised")],
+            {"cap": 6, "used": 0, "env_default": False, "last": {"u-owner|fixed": ten_min_ago}},
+            [("pr:40:decision",)], ["pr:1:live", "pr:2:live"]),
+    }
+
+
+@pytest.mark.parametrize("name", list(_cases()))
+async def test_base_instant_timing_table(name, monkeypatch):
+    items, kw, want_msgs, want_rolled = _cases()[name]
+    sent, marked, rolled, _events = await _instant_run(cn, items, monkeypatch=monkeypatch, **kw)
+    assert sent == sorted(want_msgs) and rolled == want_rolled
+    assert marked == sorted(k for m in want_msgs for k in m)
+
+
+def _main_module(tmp_path, monkeypatch):
+    import importlib.util
+    import pathlib
+    import subprocess
+    import sys
+
+    repo = pathlib.Path(__file__).resolve().parents[3]
+    try:
+        src = subprocess.run(["git", "-C", str(repo), "show", "origin/main:services/zoe-data/change_notices.py"],
+                             capture_output=True, text=True, timeout=20, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("origin/main is not available here (offline or shallow checkout)")
+    path = tmp_path / "change_notices_main.py"
+    path.write_text(src, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("change_notices_main", path)
+    mod = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "change_notices_main", mod)  # dataclasses resolve their module by name
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("name", list(_cases()))
+async def test_differential_against_main_when_nothing_is_held_back(name, tmp_path, monkeypatch):
+    main_cn = _main_module(tmp_path, monkeypatch)
+    items, kw, _m, _r = _cases()[name]
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_STATE_DIR", str(tmp_path / "base"))
+    base = await _instant_run(main_cn, items, monkeypatch=monkeypatch, **kw)
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_STATE_DIR", str(tmp_path / "new"))
+    new = await _instant_run(cn, items, monkeypatch=monkeypatch, **kw)
+    assert new == base  # same messages (as key sets), keys marked sent, rolls and audit events
+
+
+# ── notices stored before the upgrade keep their line ─────────────────────────
+def test_a_legacy_notice_falls_back_to_its_stored_summary():
+    legacy = {"key": "pr:7:live", "kind": "live", "number": 7, "title": "fix(music): resume after a call",
+              "summary": "Music `resumes` after a call (#7).", "bullets": ["Music resumes"], "url": "https://x/7",
+              "category": "fixed"}  # the shape main stores: no household field
+    assert cn.render_instant([legacy], "technical", "o/r", turn=0).text == (
+        "A fix is in and running. Music resumes after a call.\nNothing for you to do.")
+
+
+async def test_a_legacy_pending_merge_going_live_keeps_its_summary():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner()]
+    await run(gh, bot, at("09:00"), people=people)
+    st = cn.load_state()
+    st["pending_live"]["8"] = {"number": 8, "title": "fix(music): resume after a call", "sha": f"{8:040x}",
+                               "url": "https://x/8", "merged_at": "2026-10-19T03:00:00Z", "base": "main",
+                               "summary": "Music resumes after a call.", "bullets": ["Music resumes"],
+                               "category": "fixed"}
+    cn.save_state(st)
+    gh.ancestors.add(f"{8:040x}")
+    await run(gh, bot, at("12:05"), people=people)
+    assert [d["text"] for d in bot.delivered] == ["A fix is in and running. Music resumes after a call.\n"
+                                                  "Nothing for you to do."]
