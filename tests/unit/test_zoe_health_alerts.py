@@ -450,6 +450,114 @@ def test_steady_is_counted_from_the_last_recovery_not_the_outage_start():
     assert lines == []
 
 
+# ── combined alerts are bounded without losing a transition ──────────────────────────────────────────────────────
+
+def _every_check_failing():
+    names = [f"{n} :{p}" for n, p in health.SPINE.items()] + list(health.CHECK_WORDS)
+    return [C(n, False, "x", code="failing") for n in names]
+
+
+def _two_runs(checks):
+    _, st = health.plan(checks, {}, now=NOW)
+    items, new = health.plan(checks, st, now=NOW + 300)
+    return st, items, new
+
+
+def test_the_message_limit_matches_the_delivery_helpers():
+    assert health.MSG_LIMIT == clw.MAX_TEXT
+
+
+def test_every_failing_check_reaches_the_owner_in_messages_under_the_limit():
+    checks = _every_check_failing()
+    before, items, new = _two_runs(checks)
+    assert len("\n\n".join(i["text"] for i in items)) > health.MSG_LIMIT, "the scenario must overflow one message"
+    sent: list[str] = []
+    state, got, ok = health.send_run(items, before, new, deliver=lambda t: sent.append(t) or "delivered")
+    assert ok and got == sent and 1 < len(sent) <= health.MAX_MESSAGES
+    assert all(len(m) <= health.MSG_LIMIT for m in sent)
+    text = "\n".join(sent)
+    for c in checks:
+        assert health.words(c)["headline"] in text, c.name
+    assert all(state[c.name]["alerted"] for c in checks)
+    assert not any(_LOG_SHAPE.search(m) for m in sent)
+
+
+def test_a_failed_second_message_leaves_only_what_it_carried_pending(monkeypatch):
+    checks = _every_check_failing()
+    before, items, new = _two_runs(checks)
+    msgs, _over = health.pack(items)
+    assert len(msgs) >= 3
+    outcomes = iter(["delivered", "failed", "delivered"])
+    tried: list[str] = []
+    state, sent, ok = health.send_run(items, before, new, deliver=lambda t: tried.append(t) or next(outcomes))
+    assert not ok and sent == [msgs[0][0]] and tried == [msgs[0][0], msgs[1][0]], "sending stops at the failure"
+    first = {n for it in msgs[0][1] for n in it["names"]}
+    assert {c.name for c in checks if state[c.name]["alerted"]} == first
+    # the next run sends exactly what is pending
+    nxt, st2 = health.plan(checks, state, now=NOW + 600)
+    assert {n for it in nxt for n in it["names"]} == {c.name for c in checks} - first
+    assert st2
+
+
+def test_a_queued_message_stops_the_sending_but_counts_as_handed_over():
+    checks = _every_check_failing()
+    before, items, new = _two_runs(checks)
+    msgs, _ = health.pack(items)
+    tried: list[str] = []
+    state, sent, ok = health.send_run(items, before, new, deliver=lambda t: tried.append(t) or "queued")
+    assert len(tried) == 1 and sent == tried and not ok
+    first = {n for it in msgs[0][1] for n in it["names"]}
+    assert {c.name for c in checks if state[c.name]["alerted"]} == first
+
+
+def test_past_the_message_cap_the_overflow_is_named_and_stays_pending(monkeypatch):
+    checks = _every_check_failing()
+    before, items, new = _two_runs(checks)
+    orig = health.pack
+    monkeypatch.setattr(health, "pack", lambda it: orig(it, cap=2))
+    sent: list[str] = []
+    state, got, ok = health.send_run(items, before, new, deliver=lambda t: sent.append(t) or "delivered")
+    assert not ok and len(sent) == 2 and all(len(m) <= health.MSG_LIMIT for m in sent)
+    assert re.search(r"And \d+ more to tell you next time: ", sent[-1]) and not _LOG_SHAPE.search(sent[-1])
+    pending = [c for c in checks if not state[c.name]["alerted"]]
+    assert pending, "the overflow was not marked as told"
+    for c in pending:                                   # each pending one is named in the summary, and told next run
+        assert health.words(c)["noun"] in sent[-1]
+    for c in checks:
+        if state[c.name]["alerted"]:
+            assert health.words(c)["headline"] in "\n".join(sent)
+    nxt, _ = health.plan(checks, state, now=NOW + 600)
+    assert {n for it in nxt for n in it["names"]} == {c.name for c in pending}
+
+
+def test_a_recovery_that_was_not_delivered_is_said_again():
+    k = "kokoro-tts :10201"
+    down = C(k, False, "x", code="no-answer")
+    _, st = health.plan([down], {}, now=NOW)
+    items, st = health.plan([down], st, now=NOW + 300)
+    st, _s, _ok = health.send_run(items, {}, st, deliver=lambda t: "delivered")
+    items, after = health.plan([C(k, True, "x")], st, now=NOW + 900)
+    kept, _s, ok = health.send_run(items, st, after, deliver=lambda t: "failed")
+    assert not ok and kept[k]["alerted"] is True
+    items, _ = health.plan([C(k, True, "x")], kept, now=NOW + 1200)
+    assert [i["text"] for i in items] == ["My voice is back. It was out for 20 minutes."]
+
+
+def test_a_planned_skip_forgets_an_untold_drop_so_the_long_drop_alert_ignores_planned_downtime():
+    k = "kokoro-tts :10201"
+    sent, st = _replay([(1.5 * H, 15), (5 * H + 600, 20), (6 * H, 300)], end=6 * H + 900)
+    s = st[k]
+    assert s["flap"] and not s["alerted"] and s["fails"] >= 2 and s["since"] is not None
+    for t in (6 * H + 1200, 6 * H + 3000, 6 * H + 4800):          # a planned window covers the speech outage
+        lines, st = health.transitions([C(k, True, "skipped", skipped=True)], st, now=t)
+        assert lines == []
+    assert st[k]["fails"] == 0 and st[k]["since"] is None
+    assert not any(i[1] is None for i in st[k]["incidents"]), "the planned drop is not left open as a dropout"
+    for t in (6 * H + 5100, 6 * H + 5400):                         # failing again after the window: a fresh, short drop
+        lines, st = health.transitions([C(k, False, "x", code="no-answer")], st, now=t)
+        assert lines == [], "planned downtime must not count toward 'a drop that lasted more than an hour'"
+
+
 # ── the writer ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _writer(tmp_path, *args):

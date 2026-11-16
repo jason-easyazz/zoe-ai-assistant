@@ -394,42 +394,84 @@ def _several_extra(c: Check, w: dict, now: float) -> str:
     return "" if w["todo"] in (TODO_WAIT, TODO_SELF) else f" {w['todo']}"
 
 
-def _compose(downs: list, ups: list, others: list, now: float) -> list[str]:
-    """ONE message's paragraphs for a run: the new problems (several at once become one paragraph), then what came
-    back, then the dropping-out summaries."""
-    out: list[str] = []
-    if len(downs) == 1:
-        out.append(_down_line(*downs[0], now))
-    elif downs:
-        first = min(since for _c, _w, since in downs)
-        plain = (TODO_WAIT, TODO_SELF)
-        rows = [f"- {w['headline']} {w['means']}" + _several_extra(c, w, now) for c, w, _s in downs]
-        rest = " about the rest" if any(c.overrun or w["todo"] not in plain for c, w, _s in downs) else ""
-        out.append("\n".join(["A few things went wrong at once:"] + rows + [
-            f"It started about {say_duration(now - first)} ago. Nothing for you to do yet{rest}; "
-            f"I'll tell you as each one comes back. "
-            f"({'; '.join(w['code'] + (', window overran' if c.overrun else '') for c, w, _s in downs)})"]))
-    if len(ups) == 1:
-        w, since = ups[0]
+MSG_LIMIT = 1000        # the delivery helper truncates anything longer (zoe_crash_loop_watch.MAX_TEXT; a test pins them equal)
+MAX_MESSAGES = 4        # per run; anything past this is summarised in the last one and stays NOT alerted until the next run
+
+
+def _item(text: str, kind: str, names: list, nouns: list) -> dict:
+    return {"text": text, "kind": kind, "names": list(names), "nouns": list(nouns)}
+
+
+def _chunks(entries: list, render: Callable[[list], str], limit: int) -> list[list]:
+    """Greedy split of ``entries`` (kept in order) so each chunk's rendering fits ``limit``; one entry always stands alone."""
+    out: list[list] = []
+    cur: list = []
+    for e in entries:
+        if cur and len(render(cur + [e])) > limit:
+            out.append(cur)
+            cur = []
+        cur.append(e)
+    return out + ([cur] if cur else [])
+
+
+def _down_para(chunk: list, now: float) -> str:
+    if len(chunk) == 1:
+        return _down_line(*chunk[0], now)
+    first = min(since for _c, _w, since in chunk)
+    plain = (TODO_WAIT, TODO_SELF)
+    rows = [f"- {w['headline']} {w['means']}" + _several_extra(c, w, now) for c, w, _s in chunk]
+    rest = " about the rest" if any(c.overrun or w["todo"] not in plain for c, w, _s in chunk) else ""
+    return "\n".join(["A few things went wrong at once:"] + rows + [
+        f"It started about {say_duration(now - first)} ago. Nothing for you to do yet{rest}; "
+        f"I'll tell you as each one comes back. "
+        f"({'; '.join(w['code'] + (', window overran' if c.overrun else '') for c, w, _s in chunk)})"])
+
+
+def _up_line(w: dict, since: Optional[float], now: float, single: bool) -> str:
+    if single:
         tail = "" if since is None else (f" It was out for {say_duration(now - since)}." if w["outage"]
                                          else f" That lasted {say_duration(now - since)}.")
-        out.append(w["back"] + tail)
-    elif ups:
-        out.append("\n".join(w["back"] if since is None else f"{w['back'][:-1]} after {say_duration(now - since)}."
-                             for w, since in ups))
-    return out + others
+        return w["back"] + tail
+    return w["back"] if since is None else f"{w['back'][:-1]} after {say_duration(now - since)}."
+
+
+def _up_para(chunk: list, now: float) -> str:
+    if len(chunk) == 1:
+        return _up_line(chunk[0][0], chunk[0][1], now, True)
+    return "\n".join(_up_line(w, since, now, False) for w, since, _n in chunk)
+
+
+def _compose(downs: list, ups: list, others: list, now: float) -> list[dict]:
+    """This run's message ITEMS, in order: the new problems (several at once become one paragraph per fitting group), what
+    came back, then the dropping-out summaries. Each item says which checks' state it carries, so a send failure can
+    be undone for exactly those. ``downs`` are (check, words, since); ``ups`` (words, since, name); ``others``
+    (text, kind, name, noun)."""
+    out: list[dict] = []
+    for ch in _chunks(downs, lambda c: _down_para(c, now), MSG_LIMIT):
+        out.append(_item(_down_para(ch, now), "down", [c.name for c, _w, _s in ch], [w["noun"] for _c, w, _s in ch]))
+    for ch in _chunks(ups, lambda c: _up_para(c, now), MSG_LIMIT):
+        out.append(_item(_up_para(ch, now), "up", [n for _w, _s, n in ch], [w["noun"] for w, _s, _n in ch]))
+    for text, kind, name, noun in others:
+        out.append(_item(text, kind, [name], [noun]))
+    return out
 
 
 def transitions(checks: list[Check], state: dict, now: Optional[float] = None) -> tuple[list[str], dict]:
-    """New state + this run's message paragraphs (``send`` makes them ONE message). A check alerts on its
+    """New state + this run's message paragraphs (text only; ``plan`` keeps the items ``send_run`` needs)."""
+    items, new = plan(checks, state, now)
+    return [i["text"] for i in items], new
+
+
+def plan(checks: list[Check], state: dict, now: Optional[float] = None) -> tuple[list[dict], dict]:
+    """New state + this run's message ITEMS (see ``_compose``). A check alerts on its
     FAILS_TO_ALERT-th consecutive failure and once on recovery after having alerted (never a recovery for something
     not alerted). Checks absent this run (night window) keep their state; ``unknown`` ones are not looked at; ``skipped``
-    ones (a planned window) keep an alerted state but a not-yet-alerted count restarts from zero."""
+    ones (a planned window) keep an alerted state, and a drop not yet told starts afresh (count and start time cleared)."""
     now = time.time() if now is None else now
     new = dict(state)
     downs: list = []
     ups: list = []
-    others: list[str] = []
+    others: list = []
     for c in checks:
         if c.unknown:
             continue
@@ -438,17 +480,23 @@ def transitions(checks: list[Check], state: dict, now: Optional[float] = None) -
         s.setdefault("alerted", False)
         incidents = [list(i) for i in s.get("incidents", []) if i[1] is None or now - i[1] <= FLAP_WINDOW_S]   # kept until 6 h after the RECOVERY
         if c.skipped:
-            if s["fails"] < FAILS_TO_ALERT:
+            if not s["alerted"]:           # planned downtime is not an outage: a drop never told starts afresh after the window
+                if s.get("since") is not None:
+                    gone = [i for i in incidents if i[0] == s["since"] and i[1] is None]
+                    incidents = [i for i in incidents if i not in gone]
+                    if gone and s.get("flap"):
+                        s["flap_n"] = max(0, s.get("flap_n", 0) - 1)
                 s.update(fails=0, since=None)
         elif c.ok:
             for i in incidents:
                 i[1] = now if i[1] is None else i[1]
             if s["alerted"]:
-                ups.append((words(c), s.get("since")))
+                ups.append((words(c), s.get("since"), c.name))
             if s.get("flap") and all(e is not None and now - e >= FLAP_WINDOW_S for _b, e in incidents):   # steady = 6 h since the last recovery
                 w = words(c)
-                others.append(f"{_cap(w['noun'])} has stayed steady for {say_duration(FLAP_WINDOW_S)} now, so I "
-                              f"think the dropouts are over. It dropped out {s.get('flap_n', 0)} times in all.")
+                others.append((f"{_cap(w['noun'])} has stayed steady for {say_duration(FLAP_WINDOW_S)} now, so I "
+                               f"think the dropouts are over. It dropped out {s.get('flap_n', 0)} times in all.",
+                               "steady", c.name, w["noun"]))
                 s.update(flap=False, flap_n=0)
                 incidents = []
             s.update(fails=0, alerted=False, since=None)
@@ -464,13 +512,14 @@ def transitions(checks: list[Check], state: dict, now: Optional[float] = None) -
                 if s.get("flap"):
                     if not s["alerted"] and now - s["since"] >= FLAP_LONG_S:
                         w = words(c)
-                        others.append(f"{w['headline']} This drop has lasted {say_duration(now - s['since'])}, "
-                                      f"longer than the earlier ones. {w['means']} {w['todo']} ({w['code']})")
+                        others.append((f"{w['headline']} This drop has lasted {say_duration(now - s['since'])}, "
+                                       f"longer than the earlier ones. {w['means']} {w['todo']} ({w['code']})",
+                                       "long", c.name, w["noun"]))
                         s["alerted"] = True
                 elif not s["alerted"]:
                     recent = [i for i in incidents if now - i[0] <= FLAP_WINDOW_S]   # drops BEGUN in the window
                     if len(recent) >= FLAP_COUNT:
-                        others.append(_flap_line(words(c), recent, now))
+                        others.append((_flap_line(words(c), recent, now), "flap", c.name, words(c)["noun"]))
                         s.update(flap=True, flap_n=len(recent))
                     else:
                         downs.append((c, words(c), s["since"]))
@@ -501,18 +550,88 @@ def alerting_check(broken: "Callable[[], Optional[dict]] | None" = None) -> Chec
                  code=f"{b.get('reason', '?')} failure")
 
 
-def send(lines: list[str]) -> bool:
-    """True when the lines were delivered (or there was nothing to send)."""
-    if not lines:
-        return True
+def _deliver_one(text: str, ops=None) -> str:
+    """The delivery outcome (delivered | uncertain | queued | gave_up | failed) for ONE message; never raises."""
     if os.environ.get("ZOE_HEALTH_NO_ALERT"):
-        return True
+        return "delivered"
     try:
-        outcome, _reason = _ops().deliver("health", "\n\n".join(lines))
-        return outcome in ("delivered", "uncertain", "queued")   # queued: the shared outbox retries it
+        return (ops or _ops()).deliver("health", text)[0]
     except Exception as exc:  # noqa: BLE001
         print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
-        return False
+        return "failed"
+
+
+def send(lines: list[str]) -> bool:
+    """True when the lines were delivered as ONE message (or there was nothing to send)."""
+    if not lines:
+        return True
+    return _deliver_one("\n\n".join(lines)) in ("delivered", "uncertain", "queued")   # queued: the shared outbox retries it
+
+
+def pack(items: list[dict], limit: int = MSG_LIMIT, cap: int = MAX_MESSAGES) -> tuple[list[tuple[str, list]], list]:
+    """(messages, overflow). Messages are paragraph-joined items each within ``limit`` (an item is never cut); at most ``cap``
+    of them. Items past the cap are the overflow: the last message ends with one line naming them in plain words."""
+    msgs: list[list] = []
+    for it in items:
+        if msgs and len("\n\n".join(i["text"] for i in msgs[-1] + [it])) <= limit:
+            msgs[-1].append(it)
+        else:
+            msgs.append([it])
+    out = [("\n\n".join(i["text"] for i in m), m) for m in msgs]
+    if len(msgs) <= cap:
+        return out, []
+
+    def summary(extra: list) -> str:
+        nouns = list(dict.fromkeys(n for it in extra for n in it["nouns"]))
+        return f"And {len(nouns)} more to tell you next time: {', '.join(nouns)}."
+    rest = [it for m in msgs[cap - 1:] for it in m]          # the last allowed message: as many as fit beside the summary
+    for k in range(len(rest), -1, -1):
+        body = [i["text"] for i in rest[:k]] + [summary(rest[k:])] if k < len(rest) else [i["text"] for i in rest]
+        if len("\n\n".join(body)) <= limit or k == 0:
+            out = out[:cap - 1] + [("\n\n".join(body), rest[:k])]
+            overflow = rest[k:]
+            break
+    return out, overflow
+
+
+def _revert(before: dict, after: dict, it: dict) -> dict:
+    """``after`` with the checks of an item that did NOT reach the owner put back so the next run says it again."""
+    out = dict(after)
+    for name in it["names"]:
+        if it["kind"] in ("up", "steady"):
+            if name in before:
+                out[name] = before[name]       # still recovered next run, so the recovery / steady line comes again
+        else:                                  # down, flap, long: the pending flags (the count and start time stay)
+            out[name] = undelivered({name: before.get(name, {})}, {name: after[name]})[name]
+    return out
+
+
+def send_run(items: list[dict], before: dict, after: dict,
+             deliver: Optional[Callable[[str], str]] = None) -> tuple[dict, list[str], bool]:
+    """Deliver this run's items as one or more messages, in order. Returns (state to keep, texts sent, all delivered).
+    A transition is kept as alerted ONLY if the message carrying it was delivered; a failure, or a message the outbox
+    only queued (it holds one entry per code, so a next message would replace it), stops the run's sending, and every
+    item not sent (or past the per-run cap) is put back so the next run sends it."""
+    deliver = deliver or _deliver_one
+    msgs, left = pack(items)
+    sent: list[str] = []
+    halted = False
+    for text, its in msgs:
+        if halted:
+            left += its
+            continue
+        outcome = deliver(text)
+        if outcome in ("delivered", "uncertain", "queued"):
+            sent.append(text)
+        if outcome in ("delivered", "uncertain"):
+            continue
+        halted = True
+        if outcome != "queued":
+            left += its
+    state = after
+    for it in left:
+        state = _revert(before, state, it)
+    return state, sent, not left
 
 
 def undelivered(state_before: dict, state_after: dict) -> dict:
@@ -549,12 +668,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         state = json.loads(STATE.read_text())
     except (OSError, ValueError):
         state = {}
-    lines, new = transitions(checks, state, now)
-    for ln in lines:
-        print(f"[{stamp}] ALERT {ln}")
-    if not send(lines):          # deliver FIRST; persist "alerted" only for what actually went out
-        new = undelivered(state, new)
-        print(f"[{stamp}] alert NOT delivered - will retry next run", file=sys.stderr)
+    items, new = plan(checks, state, now)
+    for it in items:
+        print(f"[{stamp}] ALERT {it['text']}")
+    new, _sent, all_sent = send_run(items, state, new)   # deliver FIRST; persist "alerted" only for what actually went out
+    if not all_sent:
+        print(f"[{stamp}] some alerts NOT delivered - will retry next run", file=sys.stderr)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(new))
