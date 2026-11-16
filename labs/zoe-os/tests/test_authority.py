@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from authority import digest, keyed_digest
+from authority import digest, keyed_digest, revoked
 from zoe_os import wire
 from zoe_os.client import Client
 from zoe_os.spine import Refused
@@ -296,6 +296,75 @@ def test_a_revoke_is_remembered_across_a_restart(state):
     with pytest.raises(Refused, match="no grant"):
         again.add(A, "x")
     assert again.add(B, "y")["verified"] is True
+
+
+def _revoked_on_disk(state) -> set[str]:
+    """Read denial state without opening another kernel or changing the daemon's database."""
+    from types import SimpleNamespace
+    from zoe_os.spine import Spine
+    db = sqlite3.connect(f"file:{state[0] / 'kernel' / 'zoe-os.db'}?mode=ro", uri=True)
+    try:
+        spine = Spine.__new__(Spine)
+        spine._db = db
+        spine._shield_key = db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()[0]
+        return revoked(SimpleNamespace(spine=spine, grants=SimpleNamespace(people={A: None, B: None})), "brain")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("scope", ["sequence", "person"])
+def test_a_revocation_survives_forgetting_its_record_and_a_restart(state, scope):
+    d = start(state)
+    d.panel.call("grant", person=A, skill="brain")
+    assert d.panel.call("revoke", person=A, skill="brain")["revoked"] is True
+    db = sqlite3.connect(f"file:{state[0] / 'kernel' / 'zoe-os.db'}?mode=ro", uri=True)
+    seq = db.execute("SELECT MAX(seq) FROM events WHERE kind = 'grant_change'").fetchone()[0]
+    db.close()
+    assert _revoked_on_disk(state) == {A}
+    assert d.panel.call("forget", subject=A, actor=A, **({"seqs": [seq]} if scope == "sequence" else {}))["count"] >= 1
+    assert _revoked_on_disk(state) == {A}                 # same process: denial is independent of the forgotten event
+    with pytest.raises(Refused, match="no grant"):
+        d.add(A, "synthetic denied before restart")
+    d.kill()
+    again = start(state)
+    assert _revoked_on_disk(state) == {A}
+    with pytest.raises(Refused, match="no grant"):
+        again.add(A, "synthetic denied after restart")
+
+
+def test_only_fresh_consent_clears_a_forgotten_revocation(state):
+    d = start(state)
+    d.panel.call("grant", person=A, skill="brain")
+    d.panel.call("revoke", person=A, skill="brain")
+    db = sqlite3.connect(f"file:{state[0] / 'kernel' / 'zoe-os.db'}?mode=ro", uri=True)
+    seq = db.execute("SELECT MAX(seq) FROM events WHERE kind = 'grant_change'").fetchone()[0]
+    db.close()
+    d.panel.call("forget", subject=A, actor=A, seqs=[seq])
+    d.kill()
+    again = start(state)
+    assert _revoked_on_disk(state) == {A}
+    with pytest.raises(Refused, match="no grant"):
+        again.add(A, "synthetic waiting for consent")
+    again.panel.call("grant", person=A, skill="brain")
+    assert _revoked_on_disk(state) == set()
+    assert again.add(A, "synthetic newly consented")["verified"] is True
+    again.kill()
+    final = start(state)
+    assert _revoked_on_disk(state) == set()
+    assert final.add(A, "synthetic consent retained")["verified"] is True
+
+
+def test_erasing_a_revoked_member_keeps_no_plaintext_id_in_the_database(state):
+    d = start(state)
+    d.panel.call("grant", person=A, skill="brain")
+    d.panel.call("revoke", person=A, skill="brain")
+    assert d.eraser.call("erase_member", subject=A)["verified"] is True
+    assert not _on_disk(state[0], A.encode())
+    d.kill()
+    again = start(state)
+    assert not _on_disk(state[0], A.encode())
+    with pytest.raises(Refused, match="no grant"):
+        again.add(A, "synthetic erased denial")
 
 
 # ---- the one database setting -----------------------------------------------------------------------------------------------------
@@ -766,6 +835,28 @@ def test_an_entity_forget_through_the_old_op_also_reaches_the_reminder_rows(stat
     d.panel.call("forget", subject=A, actor=A, entity="Dana")
     d.kill()
     assert set(start(state).notes(A)) == {"eggs"}
+
+
+@pytest.mark.parametrize("scope", [{"entity": "Dana"}, {"topic": "Dana telescope"}])
+def test_scoped_shared_edit_forget_erases_reads_receipts_and_bytes_after_daemon_restart(state, scope):
+    d = start(state)
+    rid = d.remind(A, note="shared original", time="19:00", visibility="family")["proof"]["id"]
+    edited = d.remind(B, "remind.edit", id=rid, note="Dana telescope delivery")
+    assert "Dana telescope delivery" in d.notes(A)
+    assert d.panel.call("explain", person=B, seq=edited["seq"])["seq"] == edited["seq"]
+    assert _members_bytes(state[0], b"Dana")
+    d.panel.call("forget", subject=A, actor=A, **scope)
+
+    def check(daemon):
+        for person in (A, B):
+            assert set(daemon.notes(person)) == {"shared original"}
+            with pytest.raises(Refused):
+                daemon.panel.call("explain", person=person, seq=edited["seq"])
+        assert _members_bytes(state[0], b"Dana") == []
+
+    check(d)  # the authority pumps the rebuild before replying
+    d.kill()
+    check(start(state))
 
 
 # ---- the forget rule over reminder rows: a reminder takes its later records; a cancel takes the reminder -----------------------
