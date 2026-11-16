@@ -40,12 +40,21 @@ SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 # binds too) — it validates nothing. See omnigent_issue_executor._omnigent_agent_id.
 POLLY_ID="${OMNIGENT_POLLY_ID:-057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
+# P0-2 (docs/architecture/p0-deroot.md section 8, B4): exec into the omnigent container through the root helper
+# once it is installed AND sudo allows it, else `docker exec` exactly as before. The helper takes the docker-exec
+# argv minus `docker exec`, so only this prefix changes (pinned by tests/unit/test_omnigent_exec_routing.py).
+omnigent_exec_prefix() {
+  local helper="${OMNIGENT_EXEC_HELPER:-/usr/local/libexec/zoe-priv/zoe-omnigent-exec}"
+  if [ -x "$helper" ] && sudo -n -l "$helper" >/dev/null 2>&1; then OMNI_EXEC=(sudo -n "$helper")
+  else OMNI_EXEC=(docker exec); fi
+}
+omnigent_exec_prefix
 # 1800, not 2400: the poll budget is the only large term in the BUDGET
 # arithmetic below, and 2400 put the wrapper's worst-case wall ABOVE the
 # caller's 2500s subprocess timeout (Codex, #1618). It came down again once the
 # bounded flock wait joined the sum (Codex P1, #1624). 30 minutes remains far
 # more than a polly cross-review has ever needed.
-TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-1800}"
+TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-1770}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
 [ "$TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be > 0" >&2; exit 1; }
 # Validated HERE, not left to argparse: an unvalidated value reaches the poller
@@ -84,6 +93,7 @@ LOCK_WAIT_MAX_S=120         # flock -w: the caller's clock runs during this too
 CREATE_MAX_S=60             # curl --max-time on POST /v1/sessions
 REGISTER_HTTP_TIMEOUT_S=30  # await-registration overshoots its budget by at most one request
 KICK_MAX_S=30               # timeout(1) around the detached docker-exec kick
+BRIEF_MAX_S=8               # timeout(1) around staging the brief on stdin, and again around removing it in cleanup
 POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
 # The report GET was the last one-shot HTTP call in the lane: a single
 # `curl -sf` whose failure discarded a COMPLETED review and forced a full
@@ -107,6 +117,7 @@ OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HT
 OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + REPORT_BUDGET_S + REPORT_HTTP_TIMEOUT_S + CLEANUP_MAX_S ))
 OVERHEAD_S=$(( OVERHEAD_S + STOP_BUDGET_S + STOP_HTTP_TIMEOUT_S ))
 OVERHEAD_S=$(( OVERHEAD_S + 2 * TIMEOUT_KILL_AFTER_S ))
+OVERHEAD_S=$(( OVERHEAD_S + 2 * (BRIEF_MAX_S + TIMEOUT_KILL_AFTER_S) ))   # brief staging + its cleanup removal
 WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 [ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
   echo "ALARM: budget inversion — worst-case wall ${WORST_CASE_S}s (poll ${TIMEOUT_S}s + ${OVERHEAD_S}s of bounded phases) is not below the caller's ${CALLER_TIMEOUT_S}s subprocess timeout; a kill there orphans the detached worker. Lower CROSS_REVIEW_TIMEOUT_S (max $(( CALLER_TIMEOUT_S - OVERHEAD_S - 1 ))) or CROSS_REVIEW_REGISTER_TIMEOUT_S." >&2
@@ -249,7 +260,7 @@ stop_worker() {
   # '"$SID"' quote dance below. (The directive is needed only because the
   # timeout(1) prefix stops shellcheck recognising the `sh -c` payload as code.)
   # shellcheck disable=SC2016
-  timeout -k "$TIMEOUT_KILL_AFTER_S" "$CLEANUP_MAX_S" docker exec "$CONTAINER" sh -c \
+  timeout -k "$TIMEOUT_KILL_AFTER_S" "$CLEANUP_MAX_S" "${OMNI_EXEC[@]}" "$CONTAINER" sh -c \
     'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0
      for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done
      [ "$n" -gt 0 ] || { echo none; exit 0; }
@@ -312,6 +323,8 @@ cleanup() {
   # entirely).
   s=$(stop_session)
   echo "cleanup: session stop: $s (session $SID)" >&2
+  # a brief staged for a kick that never ran must not outlive the review
+  [ -n "${BRIEF_FILE:-}" ] && timeout -k "$TIMEOUT_KILL_AFTER_S" "$BRIEF_MAX_S" "${OMNI_EXEC[@]}" "$CONTAINER" sh -c "rm -f $BRIEF_FILE" >/dev/null 2>&1 || true
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2
@@ -322,13 +335,19 @@ trap cleanup EXIT
 # the lock held (Codex, #1578) — clean up, then actually exit.
 trap 'cleanup; exit 130' INT TERM
 
-BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
+# The brief (it carries the caller's $CONTRACT) NEVER rides in an argv: once the P0-2 helper is installed the exec
+# runs as `sudo -n <helper> ...`, and sudo writes every command line to the auth log. It is staged on STDIN into a
+# container-private 0600 file, read back by the kick and deleted before omnigent starts (and by cleanup if the kick
+# never ran). Pinned by tests/unit/test_omnigent_exec_routing.py.
+BRIEF_FILE="/tmp/zoe-cross-review-brief-$SID"
+printf %s "$BRIEF" | timeout -k "$TIMEOUT_KILL_AFTER_S" "$BRIEF_MAX_S" "${OMNI_EXEC[@]}" -i "$CONTAINER" sh -c "umask 077 && cat > $BRIEF_FILE" \
+  || { echo "ALARM: could not stage the brief in the container" >&2; exit 2; }
 # `docker exec -d` returns as soon as the container accepts the exec, but that
 # is still an unbounded RPC to the daemon — bound it so the BUDGET arithmetic
 # above holds end to end (Codex, #1618).
 # The kick's cwd is the per-review dir (or `/`), NEVER the live checkout: the omnigent CLI
 # puts its cwd on sys.path, so it is also deliberately not the PR checkout itself.
-timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" docker exec -d "$CONTAINER" sh -c "cd $KICK_CWD && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
+timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" "${OMNI_EXEC[@]}" -d "$CONTAINER" sh -c "cd $KICK_CWD && B=\$(cat $BRIEF_FILE) && rm -f $BRIEF_FILE && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$B\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
 # Poll. The loop lives in cross_review_poll.py so that every response body is

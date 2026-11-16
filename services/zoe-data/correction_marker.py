@@ -12,6 +12,7 @@ turn is gone. Logs: counts and ids only.
 from __future__ import annotations
 
 import hashlib
+import re
 import logging
 import threading
 import time
@@ -223,6 +224,80 @@ async def _names_forgotten(user_id: str, text: str) -> bool:
         return True
 
 
+def not_replayable(text: str) -> Optional[str]:
+    """Why ``text`` may NOT stand as the member's own correction in the packet (a reason code), or None. Checked before a marker
+    is created AND again on the text fetched for the packet. Reuses the memory path's own tests, no new detector:
+
+    * ``not_own_words``: ``own_words.analyze`` finds pasted content or third-person direct speech, or ``memory_gate._own_words``
+      (quoted spans + reported speech: "mum said ...", "the email says ...") would remove anything. Unsure = not the member's.
+    * ``pii``: ``memory_service.scrub_pii`` rejects the text or would redact any of it. The marker is DROPPED rather than replayed
+      scrubbed: a redacted correction ("my PIN is [REDACTED], not ...") tells the brain nothing true, and a turn the scrubber
+      trips is a secret-bearing turn, kept out of the replay entirely.
+
+    Both read the text AS SAID, never a whitespace-flattened copy: a quoted line or a pasted speaker label is only a line start
+    in the original."""
+    import memory_gate
+    import own_words
+    from memory_service import scrub_pii
+
+    said = text or ""                       # AS SAID: the pasted-content walls are line-anchored ("> ...", "assistant: ...")
+    flat = " ".join(said.split())
+    own = own_words.analyze(said)
+    if own.changed or not own.has_own or " ".join(memory_gate._own_words(said).split()) != flat:
+        return "not_own_words"
+    scrubbed, reject = scrub_pii(said)
+    if reject or scrubbed != said:
+        return "pii"
+    return None
+
+
+_SUBJECT_STOP = frozenset("my our your his her their the a an this that it its is was not no actually sorry wait".split())
+
+
+def _terms(text: str, *, min_len: int = 3) -> set:
+    """Folded word tokens (any script) minus ``_SUBJECT_STOP``, at least ``min_len`` long."""
+    return {w for w in re.findall(r"[^\W_]+", (text or "").casefold()) if len(w) >= min_len and w not in _SUBJECT_STOP}
+
+
+def outranked(text: str, rows: list) -> bool:
+    """Would folding ``text`` as "these words win" contradict a row a spoken correction may not override? The rows it may be
+    about share a word of its subject (``value_correction.statement``'s subject at any length, else its content words:
+    over-matching only withholds). Power = a verified member's own words (``memory_authority.USER_RANK``; an unverified speaker never has a marker);
+    the target's class and ``may_override`` are memory_authority's own (curated / operator rows are beyond a sentence, whoever
+    says it - a child included)."""
+    import memory_authority as ma
+    import value_correction
+
+    corr = value_correction.statement(text)
+    # a parsed subject is a NAME, whatever its length ("Bo", "Al"); only the fallback (every content word) drops short words
+    wanted = (_terms(corr.subject, min_len=1) if corr is not None else set()) or _terms(text)
+    for r in rows or ():
+        body = getattr(r, "text", "") or ""
+        if wanted & _terms(body, min_len=1) and not ma.may_override(ma.USER_RANK,
+                                                                     ma.row_class(getattr(r, "metadata", None) or {}, body)):
+            return True
+    return False
+
+
+async def foldable(user_id: str, message: str, texts: list, rows: list) -> list:
+    """The pending-correction texts that may be folded as "the newer words win": not outranked by a row they target (dropped, not
+    turned into a question - a question still puts the overridden claim in front of the brain), and passed by the SAME restraint
+    decision the recall packet's extra blocks get (``restraint.filter_extra``, its mode honoured exactly: ``off`` and ``shadow``
+    keep everything, shadow logs; only ``enforce`` withholds). Not pulled: the marker is no lookup the member asked for."""
+    if not texts:
+        return []
+    kept = [t for t in texts if not outranked(t, rows)]
+    _log("withheld", "outranked", user_id, len(texts) - len(kept))     # from this packet only (the marker stays)
+    if not kept:
+        return []
+    import restraint
+
+    ok = await restraint.filter_extra(user_id, message, kept, pull=False)
+    out = [t for t, k in zip(kept, ok) if k]
+    _log("withheld", "restraint", user_id, len(kept) - len(out))
+    return out
+
+
 # ── the two hooks ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 async def note_turn(user_message: str, user_id: str, session_id: Optional[str], *, speaker_verified: Optional[bool] = None,
@@ -234,12 +309,17 @@ async def note_turn(user_message: str, user_id: str, session_id: Optional[str], 
 
         if not enabled() or speaker_verified is False or not session_id or is_unidentified(user_id):
             return False
-        shaped, keys = correction_shaped(user_message)
+        words = _saved_form(user_message)                       # the member's turn as saved (the voice suffix dropped)
+        shaped, keys = correction_shaped(words)
         if rewrote > 0:                                         # the rewriter closed this turn: nothing pending for it, and its
             retire_subject(user_id, keys)                       # subject's older markers would now contradict the stored row
             return False
         if await _opted_out(user_id):                           # memory_opt_out: nothing is recorded
             logger.info("PENDING_CORRECTION skipped reason=opted_out user=%s n=1", user_id)
+            return False
+        why = not_replayable(words) if shaped else None          # only what the member asserted, and never a secret
+        if why:
+            logger.info("PENDING_CORRECTION skipped reason=%s user=%s n=1", why, user_id)
             return False
         snap = generation(user_id)                              # BEFORE the first await
         turn_id = await _find_turn_id(user_id, session_id, user_message) if shaped else None
@@ -260,9 +340,11 @@ async def note_turn(user_message: str, user_id: str, session_id: Optional[str], 
         return False
 
 
-async def texts_for_packet(user_id: str, *, now: Optional[float] = None) -> list:
+async def texts_for_packet(user_id: str, *, now: Optional[float] = None, message: Optional[str] = None,
+                           rows: Optional[list] = None) -> list:
     """The member's <= MAX_SERVED newest pending corrections in their own words, newest first, each <= TEXT_CAP chars. Flag off
-    or no marker: [] with no read. Never raises."""
+    or no marker: [] with no read. With ``message`` (the packet fold) the texts are also ``foldable`` against ``rows`` - inside
+    this call, so the last marker check below runs after that await too. Never raises."""
     try:
         live = pending(user_id, now=now)[:MAX_SERVED] if enabled() else []
         if live and await _opted_out(user_id):                  # opted out since they were recorded: never replayed
@@ -274,15 +356,25 @@ async def texts_for_packet(user_id: str, *, now: Optional[float] = None) -> list
         return []
     texts = {}
     for m in live:
-        text = " ".join((found.get(m.turn_id) or "").split())
+        said = found.get(m.turn_id) or ""
+        text = " ".join(said.split())
         if not text:
             clear(user_id, m.turn_id, reason="turn_gone")
+        elif not_replayable(said):                          # the same wall again on the text actually replayed (as said)
+            clear(user_id, m.turn_id, reason=not_replayable(said))
         elif await _names_forgotten(user_id, text):        # forgotten since the marker was set: never served
             clear(user_id, m.turn_id, reason="forgotten")
         else:
             texts[m] = text[:TEXT_CAP]
-    # LAST, after every await: a forget that landed meanwhile cleared the marker, and a marker re-added for the same turn since is
-    # a different marker (its own said_at). Only the very markers that were read are served. (The fetch itself filters
+    if message is not None and texts:
+        try:
+            ok = set(await foldable(user_id, message, list(texts.values()), rows or []))
+        except Exception as exc:  # noqa: BLE001 - unsure = not folded
+            logger.debug("PENDING_CORRECTION skipped reason=fold_error user=%s err=%s", user_id, type(exc).__name__)
+            ok = set()
+        texts = {m: t for m, t in texts.items() if t in ok}
+    # LAST, after every await (the fold's restraint read included): a forget that landed meanwhile cleared the marker, and a
+    # marker re-added for the same turn since is a different marker (its own said_at). Only the very markers that were read are served. (The fetch itself filters
     # off-the-record turns, so a turn the forget flagged is not returned either.)
     still = set(pending(user_id, now=now))
     out = [t for m, t in texts.items() if m in still]
