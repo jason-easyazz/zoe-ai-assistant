@@ -4,8 +4,8 @@ words a search query may carry out of the house. Source: SCOWL via the system wo
 wamerican, /usr/share/dict/american-english), whose licence permits redistribution with its notice (shipped beside
 the list as web_lookup_allow_en.NOTICE), plus the small hand-written supplement in web_lookup_allow_extra_en.txt.
 
-Entries are folded to lower case; possessives and anything that is not plain letters are dropped. The output is
-deterministic (sorted, gzip mtime 0), so a rebuild that changes nothing changes no bytes.
+Only lower-case entries and all-capitals abbreviations are kept (proper nouns are left out); possessives and anything that is not plain letters
+are dropped. The output is deterministic (sorted, gzip mtime 0), so a rebuild that changes nothing changes no bytes.
 
     python3 tools/generators/build_web_lookup_allowlist.py [--dict PATH]
 """
@@ -24,11 +24,23 @@ EXTRA = LEX / "web_lookup_allow_extra_en.txt"
 PLAIN = re.compile(r"^[a-z]+$")
 
 
+def _plain(entry: str) -> str:
+    w = entry.strip().removesuffix("'s").casefold()
+    return "".join(c for c in unicodedata.normalize("NFKD", w) if not unicodedata.combining(c))   # cafe, naive
+
+
 def build(dict_path: Path) -> list[str]:
+    # Only entries the dictionary spells in lower case. A capitalised entry is a proper noun (Jennifer, Michael, a
+    # town), and a word that is ONLY ever capitalised must not become an ordinary word by folding: that would let a
+    # person's name out. A name that is also an ordinary word (rose, bill, mark) stays, as it always would.
+    # Capitalised words a search genuinely needs (days, months, holidays, languages) come from the supplement.
     words = set()
     for line in dict_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        w = line.strip().removesuffix("'s").casefold()
-        w = "".join(c for c in unicodedata.normalize("NFKD", w) if not unicodedata.combining(c))   # cafe, naive
+        entry = line.strip()
+        # an all-capitals abbreviation (TV, DVD, USB) is not a name, so it stays
+        if not entry or not (entry[0].islower() or (len(entry) >= 2 and entry.isupper())):
+            continue
+        w = _plain(entry)
         if PLAIN.match(w) and len(w) <= 24:
             words.add(w)
     for line in EXTRA.read_text(encoding="utf-8").splitlines():

@@ -69,7 +69,7 @@ def test_a_public_question_becomes_minimal_keywords(raw, expected):
 STRIPPED = [
     ("Is Mirabel's shellfish allergy dangerous", "shellfish allergy dangerous", {"private"}),
     ("is MIRABEL QUILLFEATHER's shellfish allergy dangerous", "shellfish allergy dangerous", {"private"}),
-    ("cheap flights from Wrenfield to Tokyo in June", "cheap flights tokyo june", {"private"}),
+    ("cheap flights from Wrenfield to Japan in June", "cheap flights japan june", {"private"}),
     ("jazz festivals 2026 for my friend Dana", "jazz festivals 2026 friend", {"relation_name"}),
     ("dog food recall for our dog called biscuit brand list", "dog food recall dog called list", {"relation_name"}),  # the word after a named one is dropped as a possible surname: privacy over query quality
     ("best pizza delivery call 0491 570 006 tonight", "best pizza delivery call tonight", {"number"}),
@@ -137,7 +137,7 @@ def test_without_private_terms_structural_rules_still_hold():
 def test_a_short_name_matches_whole_words_only():
     terms = PrivateTerms.of(names=["Al", "Mira"])
     assert scrub_query("aluminium foil recycling rules", terms).query == "aluminium foil recycling rules"
-    assert scrub_query("admiral nelson biography miracle", terms).query == "admiral nelson biography miracle"
+    assert scrub_query("admiral navy biography miracle", terms).query == "admiral navy biography miracle"
     assert scrub_query("al birthday cake recipes easy", terms).query == "birthday cake recipes easy"
 
 
@@ -345,3 +345,17 @@ def test_a_private_name_inside_a_hyphenated_dictionary_compound_is_stripped(raw)
     r = scrub_query(raw, PrivateTerms.of(names=["Rose"]))
     assert "rose" not in r.query.replace("-", " ").replace(".", " ").split()
     assert r.send and r.query.startswith("garden")
+
+
+def test_a_proper_name_only_entry_is_not_an_allowed_word():
+    # SCOWL lists "Jennifer" capitalised only; folding it to an ordinary word would let a person's name out.
+    allow = ws.allow_words()
+    assert {"jennifer", "michael", "sarah", "nelson"}.isdisjoint(allow)
+    assert {"rose", "violin", "tv", "monday", "christmas", "japan"}.issubset(allow)   # words, abbreviations, supplement
+    r = scrub_query("jennifer violin lessons price", PrivateTerms())
+    assert r.send and r.query == "violin lessons price"
+
+
+def test_a_malformed_lexicon_refuses_instead_of_raising():
+    r = scrub_query("weather forecast", lexicon={"enabled": True})
+    assert not r.send and r.reason == ws.REASON_ERROR

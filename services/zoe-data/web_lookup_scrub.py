@@ -53,6 +53,7 @@ REASON_MEMORY_HEAVY = "memory_heavy"
 REASON_PRIVATE_ONLY = "private_only"
 REASON_TRIPWIRE = "tripwire"
 REASON_NO_ALLOW_LIST = "no_allow_list"
+REASON_ERROR = "error"   # a broken lexicon or list: refuse rather than raise
 
 _LEXICON_DIR = Path(__file__).resolve().parent / "lexicons_data"
 _WORD_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
@@ -210,9 +211,15 @@ def _memory_glue(terms: PrivateTerms, lex: dict) -> set[str]:
 
 
 def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict | None = None) -> ScrubResult:
-    """The minimal public query for ``raw``, or a refusal. Pure; never raises on any input."""
-    terms = terms or PrivateTerms()
-    lex = lexicon or load_lexicon()
+    """The minimal public query for ``raw``, or a refusal. Pure; never raises on any input: an unreadable or
+    malformed lexicon, or anything else unexpected, refuses (fails closed) instead."""
+    try:
+        return _scrub(raw, terms or PrivateTerms(), lexicon or load_lexicon())
+    except Exception:  # noqa: BLE001 - refusing is the safe answer; raising would leave the caller to guess
+        return ScrubResult(False, "", REASON_ERROR)
+
+
+def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     if not isinstance(raw, str) or not raw.strip():
         return ScrubResult(False, "", REASON_EMPTY)
     if len(raw) > MAX_RAW_CHARS:
