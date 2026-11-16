@@ -100,9 +100,62 @@ True when done:
 - "She doesn't talk about it." No unprompted remarks about tuning; a plain answer when asked.
 - "Forget me means forget this too." The member's row goes with the member forget.
 
+## Where it lives
+
+| piece | file | state |
+|---|---|---|
+| decision core (levels, rule, override, who) | `services/zoe-data/listen_pace.py` | built, tested, unwired |
+| persistence + per-turn token + the narrow calls | same module: `Book`, `done_frame_field`, `record_outcome`, `forget_user` | built, tested, unwired |
+| member forget | `MemoryService.delete_user` calls `listen_pace.forget_user`; `forget_reach.py` entry `listen_pace_levels` | wired, FAIL CLOSED: a forget whose file rewrite fails raises and the delete reports failure (the retry rewrites it); a no-op while nothing is stored |
+| state file | `~/.zoe/listen-pace.json`, 0600, atomic write, at most 256 subjects | never written while the flag is off |
+
+The state file holds a level, counters and times per `"<panel>|<member id or *>"`: no words, no audio. A malformed file is an
+empty book (everyone back to today's tails); a malformed entry is dropped alone. A token is one-shot, lives 10 minutes, and maps
+an outcome back to the subject whose level the panel was handed: a wake turn teaches the panel's household row, a follow-up or
+conversation turn teaches the carried member's row. The panel's tails without a profile are assumed to be L0 (its `.env.voice`
+is the household default), so in shadow every outcome is an L0 observation.
+
+## Wiring note (NOT done; the exact call sites)
+
+Server, `services/zoe-data/routers/voice_tts.py` (owned by another session; line numbers on `feature/voice-first-sound-instrument`):
+
+```python
+# at each done frame - 5721 (streamed command), 6289 (canned), 6869 (turn stream) - before it is serialised:
+import listen_pace, carried_speaker
+_lp = listen_pace.done_frame_field(panel_id, carried_speaker.current(panel_id), child=_member_is_child)
+if _lp is not None:
+    frame["listen"] = _lp            # 6869 has no panel_id in scope today: pass the request's panel id
+```
+
+```python
+# a new route, the SAME device-token + local-panel check /profiles/sync uses (VT 7802-7821):
+@router.post("/turn_outcome")
+async def voice_turn_outcome(body: dict, caller: dict = Depends(_require_voice_auth)):
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from biometric_scope import require_local_panel
+    require_local_panel(caller, "the listen-pace outcome")
+    reason = await asyncio.to_thread(listen_pace.record_outcome, body)
+    logger.info("PACE outcome=%s", reason or "-")       # an enum only
+    return {"ok": True}
+```
+
+Panel, `scripts/setup/zoe_voice_daemon.py` (and add `zoe_voice_listen_pace.py` to `deploy-pi-voice.sh`'s shipped list):
+
+```python
+# done-frame parse, beside conversation_mode (4275):
+_PACE.note_frame(obj, time.monotonic())
+# any wake detected (2480):
+_PACE.on_wake()
+# the three recorders build the endpointer with the chosen tails (2736/2738 wake, 4735 follow-up; never 2116 barge seeds):
+prof, src = _PACE.choose(win, time.monotonic())
+endpointer = _Endpointer(..., **lpm.tail_kwargs(prof))   # needs the _Endpointer tail_deep_ms/tail_quiet_ms/tail_clean_ms seam
+# after the FIRST_SOUND line (4131): one fire-and-forget POST of lpm.outcome_body(...) and log.info(lpm.pace_line(...))
+```
+
 ## Not built yet
 
-- The panel side: `_Endpointer` keyword arguments for the three tails, the recorders passing the profile in.
-- The wire: the done-frame `listen` key from the server and the `turn_outcome` POST up.
-- The spoken intents (Skybridge, lexicons).
-- The settings-page view and reset.
+- The `_Endpointer` keyword seam for the three tails (`None` = today's globals, byte-identical), and the wiring above.
+- `talk_first_ms` on the `FIRST_SOUND` line (when the talk resumed after the close): without it the replayer can only say a
+  longer level "possibly" avoided a cut-off.
+- The spoken intents (Skybridge, lexicons) and the settings-page view and reset.
