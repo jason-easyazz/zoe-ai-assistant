@@ -107,9 +107,10 @@ def test_decisions_read_codes_only_and_never_echo_a_planted_value():
              "x OS_AUTHORITY verb=list_add result=fallback code=oat milk ms=1.0",      # not a code: never read
              "x OS_AUTHORITY verb=list_add result=fallback code=planted_word ms=1.0",   # not a known code: unknown
              "x OS_AUTHORITY verb=list_add result=refused code=forgotten ms=1.0",
+             "x OS_AUTHORITY verb=list_add result=fallback code=late ms=150.2",      # a grant verified after the turn left
              "x OS_AUTHORITY verb=list_add result=rollback code=incomplete n=2 left=1",
              "unrelated line"]
-    assert rec.decisions(lines) == {"fallback:timeout": 1, "fallback:unknown": 1, "kernel:verified": 1, "refused:forgotten": 1,
+    assert rec.decisions(lines) == {"fallback:late": 1, "fallback:timeout": 1, "fallback:unknown": 1, "kernel:verified": 1, "refused:forgotten": 1,
                                     "rollback:incomplete": 1}
 
 

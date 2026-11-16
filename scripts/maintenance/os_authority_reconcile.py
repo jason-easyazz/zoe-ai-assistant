@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 LINE = re.compile(r"OS_AUTHORITY verb=list_add result=(off|kernel|refused|fallback) code=(\S{1,40}) ms=")
 ROLLBACK = re.compile(r"OS_AUTHORITY verb=list_add result=rollback code=(done|incomplete) n=\d+ left=\d+")
 #: os_authority.py's closed set of codes; anything else is ``unknown`` (never echoed)
-CODES = frozenset({"verified", "no_grant", "forgotten", "empty", "not_in_roster", "erasing", "circuit", "no_unit", "timeout",
+CODES = frozenset({"verified", "no_grant", "forgotten", "empty", "not_in_roster", "erasing", "circuit", "no_unit", "late", "timeout",
                    "unavailable", "socket", "protocol", "unhealthy", "write_failed", "unverified", "error", "refused_params",
                    "refused_manifest", "refused_cause", "refused_forgotten", "refused_other", "-"})
 SHARED_VISIBILITY = frozenset({"family"})
