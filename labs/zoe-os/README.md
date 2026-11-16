@@ -212,6 +212,14 @@ reached).
   authority's remove takes every copy of the item on that list, so two adds of the same item, one forgotten) keeps its receipt, which
   the surviving row's history needs, and loses the forgotten row from its snapshot; its arguments and proof name the item, which the
   surviving row still holds in its own records. Erasure reaches the bytes: `secure_delete`, then a WAL checkpoint after the forget.
+* LEGACY records (the shadow kernel's, moved here): the spine indexes removals by KIND as well as by the marker (`LEGACY_REMOVALS`:
+  `list.remove`, whose snapshot is the whole previous list; its targets are the rows with the removed (list, item), which is what a
+  removal takes; a record that cannot say, conservatively every earlier add of that item by that person, which can erase older,
+  already-removed adds of the same item too, never resurrect one). The index is rebuilt once per version (`reversals_v2`), in one
+  transaction (a crash halfway leaves nothing half done). At every start the authority rewrites legacy list snapshots into its own
+  lean ones (`convert_legacy`: an add keeps no copy, a removal keeps only the rows it removed, an undo's `restored` follows), in one
+  transaction followed by a WAL checkpoint, so an undo of a migrated removal restores only what it removed and no receipt keeps
+  copies of other rows. `tests/test_legacy_migration.py` generates the legacy database with the real shadow daemon.
 * Backstop, scoped to the row's owner: a replayed or restored row that names an entity its owner asked to forget is dropped. The
   plain word shield is GLOBAL in this kernel, so it is not used as a replay filter: it would drop another member's own live row of
   the same words, and the rebuilt rows would differ from the running ones.
@@ -220,7 +228,11 @@ reached).
   (2) mark a snapshot `reverses` (provenance 1, rows with their `asked`) for any action that takes rows away (a reminder cancel, an
   alarm clear or move), so the spine indexes it: forgetting that action forgets what it reversed, and forgetting the rows it took
   erases it (whole, or scrubbed when other rows survive); (3) never replay a row whose receipt is gone; (4) keep an alarm's
-  "before" (the time it replaced) as a row with its `asked`, or the forward rule cannot reach it. Today's in-memory lab stores already purge cross-owner rows by seq
+  "before" (the time it replaced) as a row with its `asked`, or the forward rule cannot reach it; (5) for THEIR legacy records
+  (the lab `Reminders` / `Alarms` drivers' receipts: `remind.set` with the person's whole reminder list, `alarm.set` with the
+  previous alarm, neither marked): add any kind that takes rows away to `LEGACY_REMOVALS` with its targets (an `alarm.set` replaces
+  the previous alarm: its target is that alarm's `asked`), and convert the whole-list snapshots at start the way `convert_legacy`
+  does for lists, or an undo will re-append every row. Today's in-memory lab stores already purge cross-owner rows by seq
   (`provenance.erased_request`).
 
 **Kill points** (`tests/test_authority.py`, real SIGKILL): after the intent, after the driver ran but before the receipt (absent after

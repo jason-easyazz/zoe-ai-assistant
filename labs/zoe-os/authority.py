@@ -139,7 +139,10 @@ class DurableLists(Lists):
                 "rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
 
     def put_back_removed(self, person, args, before):
-        self.rows.setdefault(person, []).extend(dict(r) for r in before["rows"] if not self._forgotten(person, r.get("item")))
+        rows = before["rows"]
+        if before.get("reverses") is not True:             # a legacy snapshot (the WHOLE previous list): only the removed rows
+            rows = [r for r in rows if self.key(r) == self.key(args)]
+        self.rows.setdefault(person, []).extend(dict(r) for r in rows if not self._forgotten(person, r.get("item")))
 
     def remove(self, person, args):
         rows = self.rows.get(person, [])
@@ -361,6 +364,57 @@ class AuthorityServer(KernelServer):
                                   for person, rows in self.lists.rows.items() for r in rows)}
 
 
+def convert_legacy(spine) -> int:
+    """Rewrite the list receipts the SHADOW kernel wrote (same database, moved here) into this kernel's lean snapshot shape, once.
+
+    A shadow ``list.add`` / ``list.remove`` saved the person's WHOLE previous list as its before-state, and an undo of one saved the
+    whole list again as ``proof.restored``. Replayed as they are, an undo of a migrated removal re-appends every row ([milk, eggs] ->
+    remove milk -> undo = two eggs), its read-back can never match, and each receipt keeps copies of OTHER rows' words. So:
+    * ``list.add``: before -> ``{"provenance": 1, "rows": []}`` (its undo takes back only its own row);
+    * ``list.remove``: before -> the rows it REMOVED (those with its (list, item): a removal takes every copy), marked ``reverses``;
+    * an ``undo`` of either: ``proof.restored`` -> the converted before of what it undid.
+    Runs at EVERY start (one pass over the receipts, the same cost as the rebuild), not once behind a flag: a shadow kernel started
+    again on this database (a rollback) writes legacy receipts after any "done" mark could have been set. ONE transaction (a crash
+    halfway converts nothing; the next start does it all), then a WAL checkpoint, so the old copies leave the disk (``secure_delete``
+    is on). Idempotent: an already-lean snapshot is left as it is. Returns the receipts rewritten."""
+    db = spine._db
+    converted: dict[int, dict] = {}
+    changed = 0
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        for seq, raw in db.execute("SELECT seq, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0 ORDER BY seq"
+                                   ).fetchall():
+            p = json.loads(raw) if raw else {}
+            new = None
+            saved = p.get("undo") if isinstance(p.get("undo"), dict) else None
+            before = saved.get("before") if saved else None
+            if p.get("action") in ("list.add", "list.remove") and isinstance(before, dict) and isinstance(saved.get("args"), dict):
+                if p["action"] == "list.add" and before != {"provenance": 1, "rows": []}:
+                    new = {"provenance": 1, "rows": []}
+                elif p["action"] == "list.remove" and before.get("reverses") is not True:
+                    want = DurableLists.key(saved["args"])
+                    new = {"provenance": 1, "reverses": True,
+                           "rows": [dict(r) for r in before.get("rows", ()) if isinstance(r, dict) and r.get("item") is not None
+                                    and DurableLists.key(r) == want]}
+                if new is not None:
+                    p["undo"] = {**saved, "before": new}
+                converted[seq] = (p.get("undo") or {}).get("before")
+            elif p.get("action") == "undo" and isinstance(p.get("proof"), dict) and "restored" in p["proof"]:
+                target = converted.get(p.get("undoes"))
+                if target is not None and p["proof"]["restored"] != target:
+                    p["proof"] = {**p["proof"], "restored": target}
+                    new = target
+            if new is not None:
+                db.execute("UPDATE events SET payload = ? WHERE seq = ?", (json.dumps(p, sort_keys=True), seq))
+                changed += 1
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return changed
+
+
 def revoked(k: Kernel, skill: str) -> set[str]:
     """Members whose newest grant change for ``skill`` in the log is a revoke."""
     last: dict[str, str] = {}
@@ -476,6 +530,7 @@ def build(state: Path, db: str | None = None):
     # the roster PLUS every id the record still names: a member taken off people.json is still erased by id (never granted)
     k = Kernel(str(path), [Person(p) for p in sorted(set(people) | recorded_people(path))])
     k.spine._db.execute("INSERT OR REPLACE INTO meta VALUES ('authority_schema', ?)", (str(SCHEMA).encode(),))
+    convert_legacy(k.spine)                        # receipts the shadow kernel wrote, into this kernel's lean snapshots: before any replay
     lists = DurableLists(k.spine).register(k)
     lists.rebuild()
     reminders, alarms = Reminders(lambda: k.clock()).register(k), Alarms().register(k)
