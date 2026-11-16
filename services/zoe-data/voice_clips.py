@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,9 @@ SWEEP_EVERY_S = 6 * 3600
 
 # The clip THIS transcription saved (a fresh holder per transcription, like ``_stt_raw_var``: never a previous turn's clip).
 _HOLDER: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar("voice_clip_holder", default=None)
+#: one writer of the pending-drop list at a time: an append never lands between the retry's read and its prune (zoe-data is ONE process;
+#: the append runs on the loop thread, the retry in an executor thread)
+_PENDING_LOCK = threading.Lock()
 
 
 def verdict_enabled() -> bool:
@@ -80,11 +84,40 @@ def drop_current(member: str = "") -> bool:
     if not clip:
         return False
     side = sidecar_path(clip)
-    if member and not os.path.exists(side):
-        _write(side, dict(v=1, kind="member", id=str(member)[:64], cluster="", ts=int(time.time())))
-    _remove_strict(side, clip)
+    # the label says the clip is the member's AND that it must go (``pending_drop``): if the removal below fails, that marker on disk
+    # is the durable retry (``retry_pending_drops``), even after the member's delete completed; a clip saved later is never marked
+    marked = True
+    try:
+        _write(side, dict(v=1, kind="member", id=str(member or "")[:64], cluster="", ts=int(time.time()), pending_drop=1))
+    except OSError as exc:      # no marker (a full disk, an unwritable corpus): the removal is still tried - it may well succeed
+        marked = False
+        logger.error("VOICE_CLIP_DROP_MARK_FAILED reason=%s", type(exc).__name__)
+    try:
+        _remove_strict(side, clip)
+    except OSError:
+        if not marked:          # neither a marker nor a removal: the clip's PATH goes into the pending-drop list instead
+            try:
+                _note_pending(clip)
+            except OSError as exc:
+                logger.error("VOICE_CLIP_DROP_UNRECORDED reason=%s", type(exc).__name__)
+        raise
     _HOLDER.set({})
     return True
+
+
+def pending_file() -> str:
+    """The fallback retry record of a clip drop that could neither mark nor remove its clip: one clip PATH per line (a capture-time
+    file name, no member id, no words), 0600. Read and pruned by ``retry_pending_drops``."""
+    return env_str("ZOE_VOICE_CLIP_PENDING_FILE", "") or os.path.expanduser("~/.zoe/voice-clip-pending-drops.txt")
+
+
+def _note_pending(clip: str) -> None:
+    path = pending_file()
+    with _PENDING_LOCK:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(str(clip).replace("\n", "") + "\n")
 
 
 def _write(path: str, body: dict) -> None:
@@ -264,10 +297,83 @@ def newest_unknown_clip(directory: Optional[str] = None, valid=None) -> Optional
     return best
 
 
+def _retry_pending_file() -> int:
+    """The clips listed in ``pending_file`` (a drop that could not even mark its clip): removed with any sidecar; the ones that still
+    cannot go stay listed for the next pass. Counts only. Read, removal and prune hold ``_PENDING_LOCK``: an append waits for them."""
+    with _PENDING_LOCK:
+        return _retry_pending_file_locked(pending_file())
+
+
+def _retry_pending_file_locked(path: str) -> int:
+    try:
+        with open(path) as f:
+            listed = [ln.strip() for ln in f if ln.strip()]
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        logger.warning("VOICE_CLIPS pending-drop list unreadable (%s)", type(exc).__name__)
+        return 0
+    left, n = [], 0
+    for clip in dict.fromkeys(listed):
+        try:
+            _remove_strict(sidecar_path(clip), clip)
+            n += 1
+        except OSError:
+            left.append(clip)
+    try:
+        if left:
+            _write_lines(path, left)
+        else:
+            os.unlink(path)
+    except OSError as exc:
+        logger.warning("VOICE_CLIPS pending-drop list not rewritten (%s)", type(exc).__name__)
+    return n
+
+
+def _write_lines(path: str, lines: list) -> None:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".pending-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("".join(x + "\n" for x in lines))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def retry_pending_drops(directory: Optional[str] = None) -> int:
+    """The durable RETRY of a clip drop that failed: every clip whose label says ``pending_drop`` (written by ``drop_current`` just
+    before it removes the clip, only for a turn whose member was erased at or after it began) goes. It covers a clip whose speaker was
+    resolved AFTER the member delete completed (``routers/voice_tts._label_member_clip``): the marker on disk IS the retry record, so
+    no new store is needed, and a clip saved later (a new turn, a member re-created with the same id) carries no marker and stays. One
+    clip that cannot go yet never holds up another (the next pass retries it). Counts only. Blocking file work: run it in a thread."""
+    n = 0
+    for side, wav, meta in _labelled(directory or sample_dir()):
+        if not meta.get("pending_drop"):
+            continue
+        try:
+            _remove_strict(side, wav)
+            n += 1
+        except OSError as exc:
+            logger.warning("VOICE_CLIPS pending-drop retry failed (%s)", type(exc).__name__)
+    n += _retry_pending_file()
+    if n:
+        logger.info("VOICE_CLIPS pending-drop retry removed=%d", n)
+    return n
+
 
 async def run_retention_loop() -> None:
-    """Started by ``main.lifespan``; the flag is read per pass, so a flip needs no restart. Never raises."""
+    """Started by ``main.lifespan``. Every pass first retries the clip drops that failed (``retry_pending_drops``, always on: it
+    finishes a member delete, it is not retention), then the non-member retention (its flag is read per pass, so a flip needs no
+    restart). Never raises."""
     while True:
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, retry_pending_drops)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("voice_clips: pending-drop retry failed (%s)", type(exc).__name__)
         await asyncio.sleep(SWEEP_EVERY_S)
         try:
             if retention_enabled():

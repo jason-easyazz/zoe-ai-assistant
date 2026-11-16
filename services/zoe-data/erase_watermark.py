@@ -400,18 +400,151 @@ def delivery_began() -> Optional[datetime]:
 #: speaker is resolved (``turn_identify``); the START time never changes.
 _TURNS: dict = {}
 _TURN_CTX: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_turn", default=None)
-#: a turn older than this is not waited for (a stream nobody iterated never runs its ``finally``); the after-write check still holds
+#: a turn older than this is not waited for (a stream nobody iterated never runs its ``finally``): it is CANCELLED instead
+#: (``cancel_stale_turns``), and every store write it could still make is refused at the database wrapper (``store_write_guard``)
 TURN_STALE_S = 600.0
+
+
+def _current_task():
+    try:
+        import asyncio
+
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
 
 
 def turn_open(session_id: Optional[str], user_id: str) -> str:
     """A member turn began (``session_id``: a chat turn's session; None for a voice turn, which is found through the context).
-    Returns its token."""
+    Returns its token. The task running it is kept, so a STALE turn of a deleted member can be cancelled (``cancel_stale_turns``)."""
     import uuid
 
     token = uuid.uuid4().hex
-    _TURNS[token] = {"session": str(session_id) if session_id else None, "member": str(user_id or ""), "began": _now(), "refs": 1}
+    _TURNS[token] = {"session": str(session_id) if session_id else None, "member": str(user_id or ""), "began": _now(), "refs": 1,
+                     "task": _current_task()}
     return token
+
+
+def turn_bind(token: str):
+    """Bind a turn opened with ``turn_open`` (a chat turn) in the CURRENT context, as a voice turn binds itself: the store writes its
+    tools make in this task (and the tasks it starts) are then judged against this turn's start (``store_write_guard``). Returns the
+    context token for ``turn_unbind``."""
+    entry = _TURNS.get(str(token or ""))
+    return _TURN_CTX.set((str(token), entry["began"])) if entry else None
+
+
+def turn_unbind(ctx_token) -> None:
+    """Undo ``turn_bind`` / ``bind_member_turn`` (the latter also closes the tool call's own turn)."""
+    if ctx_token is None:
+        return
+    if isinstance(ctx_token, tuple) and ctx_token and ctx_token[0] == "tool":
+        _kind, token, ctx_token = ctx_token
+        _TURNS.pop(token, None)
+    try:
+        _TURN_CTX.reset(ctx_token)
+    except ValueError:      # finalised in another context (a stream closed by the server): that context dies with it
+        pass
+
+
+def bind_member_turn(user_id: str):
+    """A write that arrives WITHOUT a turn context but on behalf of a member's turn - a brain TOOL call, which reaches zoe-data as a
+    separate request (``/api/system/intent-dispatch``), an MCP tool call - is a turn of its OWN in the registry: the member's id and
+    the START of their OLDEST turn in flight (the conservative choice: an erase at or after it refuses), and the task running it. So
+    it outlives its parent turn closing, the delete waits for it (or cancels it once stale) like any turn, and it is bound in the
+    current context. No turn of the member in flight: nothing is opened or bound. Returns the token for ``turn_unbind``."""
+    uid = str(user_id or "")
+    starts = [e["began"] for e in list(_TURNS.values()) if uid and e["member"] == uid]
+    if not starts:
+        return None
+    began = min(starts)
+    token = turn_open(None, uid)
+    _TURNS[token]["began"] = began
+    return ("tool", token, _TURN_CTX.set((token, began)))
+
+
+def release_task_turns(task) -> None:
+    """Close every turn ``task`` opened and never closed (a tool call bound in a task of its own, ``mcp_server.handle_tool``)."""
+    for t in [t for t, e in list(_TURNS.items()) if task is not None and e.get("task") is task]:
+        _TURNS.pop(t, None)
+
+
+def stale_turn_tasks(user_id: str) -> list:
+    """The tasks of ``user_id``'s turns older than ``TURN_STALE_S`` that are still running."""
+    uid, cutoff = str(user_id or ""), _now().timestamp() - TURN_STALE_S
+    return [e["task"] for e in list(_TURNS.values()) if e["member"] == uid and e["began"].timestamp() < cutoff
+            and e.get("task") is not None and not e["task"].done()]
+
+
+def cancel_stale_turns(user_id: str) -> list:
+    """Cancel the member's STALE turns (the delete does not wait for them): a turn stalled for ten minutes that resumed after the
+    delete would otherwise write as a deleted member. Returns the cancelled tasks (the caller waits for them to end). The task
+    running the caller is never cancelled."""
+    me = _current_task()
+    out = [t for t in stale_turn_tasks(user_id) if t is not me]
+    for t in out:
+        t.cancel()
+    if out:
+        logger.warning("ERASE_WATERMARK_STALE_TURNS_CANCELLED count=%d", len(out))
+    return out
+
+
+class TurnWriteRefused(RuntimeError):
+    """A store write a turn made for a member erased at or after the turn BEGAN (``store_write_guard``): the write never runs."""
+
+
+#: an INSERT INTO / UPDATE / DELETE FROM <table> statement's target table (lower case)
+_WRITE_RX = re.compile(r"^\s*(?:with\b.*?\)\s*)?(?:insert\s+into|update|delete\s+from)\s+\"?([a-z_][a-z0-9_]*)", re.IGNORECASE | re.DOTALL)
+
+
+def write_target(sql: str) -> str:
+    m = _WRITE_RX.match(str(sql or ""))
+    return m.group(1).lower() if m else ""
+
+
+@contextlib.asynccontextmanager
+async def _on(conn):
+    yield conn
+
+
+async def store_write_guard(sql: str, conn: Any = None) -> None:
+    """THE ONE CHECK every member-owned store write of a turn passes (``db_pool.AsyncpgCompat``: every pooled statement): inside a
+    bound turn (voice, chat, or a brain tool call bound by ``bind_member_turn``), a write to a member-owned table
+    (``member_owned_forget.TURN_WRITE_TABLES``) for a turn whose member was erased at or after the turn began raises
+    ``TurnWriteRefused`` BEFORE the statement runs. Outside a turn it costs one ContextVar read; inside one, one mark read per
+    member-owned write, read on the CALLER's connection (``conn``: no second pooled connection, so a busy pool neither slows the write
+    nor turns the check into an unreadable mark). A member delete's own statements are never judged (``user_erase_gate.whole_member_erase``
+    unbinds). An unreadable mark lets the write run (the late-write rule's choice for a turn's own save; the erase fails closed)."""
+    bound = _TURN_CTX.get()
+    if bound is None:
+        return
+    table = write_target(sql)
+    if not table:
+        return
+    import member_owned_forget
+
+    if table not in member_owned_forget.TURN_WRITE_TABLES:
+        return
+    entry = _TURNS.get(bound[0]) if bound[0] else None
+    member = (entry or {}).get("member") or ""
+    if not member:
+        return
+    backend = get_backend()
+    in_tx = False
+    if conn is not None and isinstance(backend, SqlBackend) and backend._ctx is None:
+        backend = SqlBackend(ctx=lambda: _on(conn))
+        probe = getattr(conn, "is_in_transaction", None)
+        in_tx = bool(callable(probe) and probe())
+    try:
+        if in_tx:      # inside the caller's transaction the read runs in a SAVEPOINT: a failed read never aborts the caller's work
+            async with conn.transaction():
+                mark = await watermark(member, backend=backend)
+        else:
+            mark = await watermark(member, backend=backend)
+    except Unavailable:
+        return
+    if mark is not None and bound[1] <= mark:
+        logger.warning("ERASE_WATERMARK_STORE_WRITE_REFUSED table=%s", table)
+        raise TurnWriteRefused(table)
 
 
 def turn_close(token_or_session: str) -> None:

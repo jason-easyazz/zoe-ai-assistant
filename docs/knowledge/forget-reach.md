@@ -133,10 +133,12 @@ code) erases everything the member owns, behind no flag. It writes the member's 
 one store cannot be cleared the delete raises and nothing reports "forgotten" (the caller retries the whole delete). A table that was
 never migrated counts as nothing to clear.
 
-The rule for household-SHARED things: a row the member wrote alone goes, whatever its visibility. A household-shared container (a
-FAMILY list, a FAMILY event, a FAMILY-visible contact) is not deleted; only the entries inside it that record the member as their author
-go, plus the member's own rows anywhere else. Where a row does not record its author, nothing is guessed: it stays, and it is listed as an
-authorship gap below.
+Household-SHARED things, CURRENT INTERIM behaviour (not the rule): a row the member wrote alone goes, whatever its visibility. Until the
+removal question ships in the follow-up PR (deleting a member asks the administrator "Do you want to delete all shared content?";
+keeping is an explicit choice, and with no evidence the answer is delete), a shared container (a FAMILY list, a FAMILY event, a
+FAMILY-visible contact) is left in place and listed as a gap: only the entries inside it that record the member as their author go,
+plus the member's own rows anywhere else. A row that does not record its author is left in place too and listed as an authorship gap
+below.
 
 | what | a member delete removes | it leaves |
 |---|---|---|
@@ -158,7 +160,7 @@ authorship gap below.
 | Everything already erased before (palace, exact words, night mind, pendant, notifications, commitments, contacts model, derived stores ...) | as listed in the inventory below | - |
 
 Outside this PR, on purpose: **backups** keep a member's data until they age out (Postgres dumps and the palace tarball, at most 35
-days while the nightly jobs succeed; see the backup policy above): restoring one means re-issuing the delete. **Logs with no member id**
+days while the nightly jobs succeed; see the backup policy above). **Logs with no member id**
 (the voice STT log, the sample corpus, the Flue sidecar's own session log, the Pi intent evidence, the service log) cannot be attributed
 to a member and stay.
 
@@ -184,7 +186,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-137 stores: 102 reached, 24 out of scope, 11 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+138 stores: 102 reached, 25 out of scope, 11 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -303,6 +305,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `voice_stt_log` | file | words | gap | - | No member id: ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on. |
 | `flue_session_log` | file | words | gap | - | No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget cascade (conversation_notes.erase_entity); the log itself is outside the cascade. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | No member id: a clip without a verdict sidecar names nobody. ~/.zoe-voice-samples: the owner's regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). A clip is located only by its verdict sidecar (written while ZOE_VOICE_CLIP_VERDICT is on): a member delete removes every clip whose sidecar names the member (voice_clips.erase_member, via member_owned_forget), a guest forget every clip labelled as that guest (voice_clips.erase_guests), and with ZOE_VOICE_CLIP_RETENTION on, guest / unknown clips older than 30 days go (voice_clips.sweep). What stays: a clip with no sidecar (saved before or without ZOE_VOICE_CLIP_VERDICT): no forget can find it. |
+| `voice_clip_pending_drops` | file | metadata | out_of_scope | - | ~/.zoe/voice-clip-pending-drops.txt (ZOE_VOICE_CLIP_PENDING_FILE), 0600: the PATHS of clips a drop for a deleted member could neither mark nor remove (a capture-time file name each, no member id, no words). It IS the erase's retry: the clip loop's voice_clips.retry_pending_drops removes each listed clip and prunes the line; empty, the file goes. |
 | `flue_session_store` | db | words | out_of_scope | - | labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own. |
 | `omi_repass_work` | file | words | reached | member: `omi_recordings.forget_user` | The pendant night re-pass's per-run work files (~/.zoe/omi-repass/work/<id>.manifest.json + <id>.out.jsonl, 0600) hold the audio PATHS and the recognised WORDS of the recordings in one night run; the run deletes them in a finally block as soon as the results are applied (minutes). A member erase, an entity erase or a recording delete deletes EVERY work file whatever its age (they name no member, so none can be proven clean; a run that loses one retries), and a mid-run erase is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and shadow.jsonl (counts only: no word, no name) hold nothing of a member. |
 | `omi_repass_hyps` | file | words | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | The night re-pass's per-chunk hypotheses (~/.zoe/omi-repass/hyps/hyps-<night>.jsonl, 0600): every engine's text for each chunk, the ROVER pick and the vote counts, kept 7 days (the audio's own retention; pruned each run) for the contender ledger, the morning transcript check and owner-correction scoring. A member erase rewrites the files without that member's lines; an entity forget replaces the name with [forgotten] in every hypothesis (omi_repass_eval.forget_user / erase_entity, called from omi_recordings.forget_user / erase_entity). The contender ledger (ledger.jsonl) holds counts only. |

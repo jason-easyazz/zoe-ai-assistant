@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import itertools
 import json
 import logging
 
@@ -340,7 +341,8 @@ def test_a_turn_said_during_the_erase_is_covered_by_the_mandatory_final_mark(env
     read as "forgotten": delete_user raises (the caller retries) and the start mark still stands."""
     svc, _col = env
     start, end = W, W + dt.timedelta(seconds=2)
-    clock = iter([start, end])
+    # the first read is the start mark; every later one (the in-flight wait, the late-write checks, the end mark) is ``end``
+    clock = itertools.chain([start], itertools.repeat(end))
     monkeypatch.setattr(ew, "_now", lambda: next(clock))
     be = ew.MemoryBackend() if final_ok else _FailSecond()
     ew.set_backend(be)

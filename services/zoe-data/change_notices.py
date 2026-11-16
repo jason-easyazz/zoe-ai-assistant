@@ -1180,7 +1180,9 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
                          period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
     outcomes = [await _send(c, r, m) for m in msgs]
-    landed = {k for m, o in zip(msgs, outcomes) if o != "oversize" for k in m.keys}
+    # an erase-refused message (or one refused on an unreadable mark) did not land: its keys stay queued and follow next tick, so the
+    # period is not marked sent (a deleted member is no recipient by then)
+    landed = {k for m, o in zip(msgs, outcomes) if o not in ("oversize", "erased") for k in m.keys}
     for u in uncertain:  # not shown this time: it stays an "uncertain" mention for the next digest, never a resend
         d = ds[f"{r.user_id}|{u['key']}"]
         if u["key"] not in landed and d["status"] == "queued":

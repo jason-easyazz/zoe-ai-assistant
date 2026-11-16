@@ -37,6 +37,7 @@ def corpus(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(tmp_path))
     monkeypatch.setenv("ZOE_VOICE_SAVE_AUDIO", "1")
     monkeypatch.setenv("ZOE_VOICE_CLIP_VERDICT", "1")
+    monkeypatch.setenv("ZOE_VOICE_CLIP_PENDING_FILE", str(tmp_path.parent / (tmp_path.name + "-pending.txt")))   # never the real ~/.zoe
     return tmp_path
 
 def capture(src):
@@ -212,3 +213,130 @@ def test_the_lenient_readers_still_skip_what_they_cannot_read(corpus):
         assert vc.erase_guests(["g1"]) == 0 and vc.sweep(days=0) == dict(removed=0, kept=0)
     finally:
         os.chmod(corpus, 0o700)
+
+
+# ── a speaker resolved AFTER the member delete completed (round 10, item 3) ─────────────────────────────────────────────────────
+
+def _late_resolution(corpus, monkeypatch, *, drop_fails):
+    """The member delete has COMPLETED (its mark is recorded, its scan ran while the speaker was still unresolved and missed this
+    unlabelled clip); then the turn resolves the speaker to the deleted member (``routers/voice_tts._label_member_clip``)."""
+    import erase_watermark as ew
+    import routers.voice_tts as vt
+
+    ew.set_backend(ew.MemoryBackend())
+    clip = wav(corpus / "turn-late.wav")
+
+    async def go():
+        bound = ew.voice_turn_begin()
+        try:
+            vc.begin()
+            vc.note_saved(clip)
+            await ew.record("ann")                          # the delete ran and finished while the speaker was unknown
+            assert vc.erase_member("ann") == 0, "the delete's own scan cannot see an unlabelled clip"
+            if drop_fails:
+                real = vc._remove_strict
+
+                def boom(side, wav_path):
+                    raise PermissionError("busy")
+                monkeypatch.setattr(vc, "_remove_strict", boom)
+                await vt._label_member_clip("ann")
+                monkeypatch.setattr(vc, "_remove_strict", real)
+            else:
+                await vt._label_member_clip("ann")
+        finally:
+            ew.voice_turn_end(bound)
+    asyncio.run(go())
+    return clip
+
+
+def test_a_clip_resolved_to_a_deleted_member_is_dropped_at_resolution(corpus, monkeypatch):
+    import erase_watermark as ew
+
+    try:
+        clip = _late_resolution(corpus, monkeypatch, drop_fails=False)
+        assert not os.path.exists(clip) and not (corpus / "turn-late.verdict.json").exists()
+    finally:
+        ew.set_backend(None)
+
+
+def test_a_failed_drop_is_retried_by_the_clip_loops_pending_drop_pass(corpus, monkeypatch):
+    """The drop fails: the clip stays LABELLED as the deleted member's with a ``pending_drop`` marker, which is the retry - the clip
+    loop's ``retry_pending_drops`` removes it although the delete itself completed long ago. A live member's clip stays, and so does a
+    clip of the SAME id saved after the erase (a new turn, a re-created member): it carries no marker."""
+    import erase_watermark as ew
+
+    try:
+        clip = _late_resolution(corpus, monkeypatch, drop_fails=True)
+        meta = json.loads((corpus / "turn-late.verdict.json").read_text())
+        assert os.path.exists(clip) and meta["id"] == "ann" and meta["pending_drop"] == 1
+        live = label(corpus, "turn-bob", "member", ident="bob")
+        later = label(corpus, "turn-ann-later", "member", ident="ann")
+        assert vc.retry_pending_drops() == 1
+        assert not os.path.exists(clip) and os.path.exists(live) and os.path.exists(later)
+        assert vc.retry_pending_drops() == 0
+    finally:
+        ew.set_backend(None)
+
+
+def test_the_clip_loop_runs_the_pending_drop_pass_whatever_the_retention_flag_says():
+    src = Path(vc.__file__).read_text()
+    loop = src[src.index("async def run_retention_loop("):]
+    assert loop.index("retry_pending_drops") < loop.index("if retention_enabled():")
+
+
+def test_a_drop_whose_marker_cannot_be_written_still_removes_the_clip(corpus, monkeypatch):
+    clip = wav(corpus / "turn-nomark.wav")
+    vc.begin()
+    vc.note_saved(clip)
+
+    def full_disk(path, body):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(vc, "_write", full_disk)
+    assert vc.drop_current("ann") is True
+    assert not os.path.exists(clip), "no marker, but the removal was still tried and succeeded"
+
+
+def test_a_drop_that_can_neither_mark_nor_remove_its_clip_is_listed_and_the_next_pass_removes_it(corpus, monkeypatch):
+    """Both writes fail (an unwritable corpus): the clip's PATH goes into the pending-drop list (no member id), and the clip loop's
+    pass removes it once the corpus is writable again, then drops the list."""
+    clip = wav(corpus / "turn-stuck.wav")
+    vc.begin()
+    vc.note_saved(clip)
+
+    def fail(*a, **k):
+        raise PermissionError("read-only corpus")
+    monkeypatch.setattr(vc, "_write", fail)
+    real_remove = vc._remove_strict
+    monkeypatch.setattr(vc, "_remove_strict", fail)
+    with pytest.raises(OSError):
+        vc.drop_current("ann")
+    listed = Path(vc.pending_file()).read_text().split()
+    assert listed == [clip] and "ann" not in Path(vc.pending_file()).read_text(), "the path only, never the member"
+    monkeypatch.setattr(vc, "_remove_strict", real_remove)
+    assert vc.retry_pending_drops() == 1
+    assert not os.path.exists(clip) and not os.path.exists(vc.pending_file())
+
+
+def test_an_append_never_lands_between_the_retrys_read_and_its_prune(corpus):
+    """The retry holds the pending-list lock from its read to its prune; an append made meanwhile waits and survives."""
+    import threading
+
+    first = wav(corpus / "turn-a.wav")
+    Path(vc.pending_file()).write_text(first + "\n")
+    late = str(corpus / "turn-b.wav")
+    started, real = threading.Event(), vc._remove_strict
+
+    def slow_remove(side, clip):
+        started.set()
+        time.sleep(0.2)
+        real(side, clip)
+    vc._remove_strict = slow_remove
+    try:
+        t = threading.Thread(target=vc.retry_pending_drops)
+        t.start()
+        started.wait(2)
+        vc._note_pending(late)                      # blocks until the retry's prune is done
+        t.join(5)
+    finally:
+        vc._remove_strict = real
+    assert not os.path.exists(first) and Path(vc.pending_file()).read_text().split() == [late]

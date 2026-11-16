@@ -78,11 +78,18 @@ def erase_span(user_id: str) -> Iterator[None]:
 
 
 def whole_member_erase(method):
-    """Decorate ``async def delete_user(self, user_id, ...)``: the whole call runs inside ``erase_span(user_id)``."""
+    """Decorate ``async def delete_user(self, user_id, ...)``: the whole call runs inside ``erase_span(user_id)``, and OUTSIDE any turn
+    bound in the caller's context (``erase_watermark.store_write_guard`` judges a turn's store writes, never the delete's own)."""
     @functools.wraps(method)
     async def call(self, user_id, *args, **kwargs):
-        with erase_span(user_id):
-            return await method(self, user_id, *args, **kwargs)
+        from erase_watermark import _TURN_CTX
+
+        unbound = _TURN_CTX.set(None)
+        try:
+            with erase_span(user_id):
+                return await method(self, user_id, *args, **kwargs)
+        finally:
+            _TURN_CTX.reset(unbound)
     return call
 
 

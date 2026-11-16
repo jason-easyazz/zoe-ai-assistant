@@ -185,9 +185,10 @@ async def _label_member_clip(member: str) -> None:
         try:
             _vc.drop_current(member)       # labelled as theirs first, then WAV first and the label last: a failure keeps the label
         except OSError as exc:
-            # the turn goes on (a reply never fails on a clip); the clip stays LABELLED as the deleted member's, so a re-run of their
-            # delete (idempotent) removes it
-            logger.error("VOICE_CLIP_DROP_FAILED reason=%s - the clip keeps its owner label for the delete's re-run", type(exc).__name__)
+            # the turn goes on (a reply never fails on a clip); the clip stays LABELLED as the deleted member's with a pending-drop
+            # marker, which is the durable retry even when their delete already completed: the clip loop's
+            # ``voice_clips.retry_pending_drops`` (at start and every 6 h, whatever the retention flag says) removes it
+            logger.error("VOICE_CLIP_DROP_FAILED reason=%s - retried by the clip loop's pending-drop pass", type(exc).__name__)
 
 
 async def _release_turn_after(gen, held):

@@ -181,18 +181,28 @@ def _no_live_cold_first_turn(monkeypatch):
 _DAEMON_HOME_PATHS = ("SPEAKER_ID_SHADOW_LOG", "_PROFILE_CACHE_PATH", "_FACE_CACHE_PATH")
 
 
-def _home_snapshot() -> dict:
+def _home_files() -> tuple:
+    """The real daemon files' ABSOLUTE paths, resolved ONCE before the test runs: a test that points HOME at a temp dir (its own
+    monkeypatch is still in force when this fixture's teardown runs) must not make the after-check look at different files."""
+    import os
+
+    out = []
+    for name in ("speaker_shadow_metrics.jsonl", "speaker_profiles.json", "face_profiles.json"):
+        p = os.path.expanduser(f"~/.zoe-voice/{name}")
+        out += [p, p + ".prune", p + ".tmp"]
+    return tuple(out)
+
+
+def _home_snapshot(paths: tuple) -> dict:
     import os
 
     out = {}
-    for name in ("speaker_shadow_metrics.jsonl", "speaker_profiles.json", "face_profiles.json"):
-        p = os.path.expanduser(f"~/.zoe-voice/{name}")
-        for q in (p, p + ".prune", p + ".tmp"):
-            try:
-                st = os.stat(q)
-                out[q] = (st.st_size, st.st_mtime_ns)
-            except FileNotFoundError:
-                out[q] = None
+    for q in paths:
+        try:
+            st = os.stat(q)
+            out[q] = (st.st_size, st.st_mtime_ns)
+        except FileNotFoundError:
+            out[q] = None
     return out
 
 
@@ -202,7 +212,8 @@ def _daemon_writes_stay_in_tmp(monkeypatch, tmp_path_factory):
     REAL ~/.zoe-voice files on the machine running the tests (a panel or a developer box has them): every loaded copy of the daemon
     module has its home paths pointed at a temp dir of its own (not the test's tmp_path, which some tests require to stay empty),
     and the real files are checked unchanged (and no prune / temp file left) after."""
-    before = _home_snapshot()
+    paths = _home_files()
+    before = _home_snapshot(paths)
     home = None
     for mod in list(sys.modules.values()):
         if mod is None or not all(hasattr(mod, a) for a in _DAEMON_HOME_PATHS):
@@ -211,4 +222,4 @@ def _daemon_writes_stay_in_tmp(monkeypatch, tmp_path_factory):
         for attr in _DAEMON_HOME_PATHS:
             monkeypatch.setattr(mod, attr, str(home / attr.lower()))
     yield
-    assert _home_snapshot() == before, "a test wrote a real ~/.zoe-voice file (or left a prune/temp file there)"
+    assert _home_snapshot(paths) == before, "a test wrote a real ~/.zoe-voice file (or left a prune/temp file there)"

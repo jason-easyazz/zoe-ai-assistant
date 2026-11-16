@@ -96,6 +96,7 @@ def test_delete_user_erases_the_restraint_rows(monkeypatch):
     svc = MemoryService.__new__(MemoryService)
     svc._user_locks = {}
     svc._seen_keys_by_user = {}
+    svc._recent_auto = {}            # delete_user drops the member's recent-write memo (built by __init__, which __new__ skips)
     import exact_words
 
     async def noop(uid):

@@ -1831,6 +1831,11 @@ class MemoryService:
             if _erase_gate.erased_since_scheduled(user_id):      # background work scheduled before an erase of this member: dropped
                 _log_erase_drop(source)
                 return None
+            # a TURN's write (a tool such as MCP memory_add, a fast-tier "remember", bound to its turn) for a member erased at or
+            # after the turn began: dropped - the non-SQL half of ``erase_watermark.store_write_guard`` (MemPalace is not SQL)
+            if await _erase_watermark.turn_write_refused(None, "memory:" + str(source or "ingest"), user_id):
+                _log_erase_drop(source)
+                return None
             if idem_key in self._seen_keys:
                 self._bump("dedup", source)
                 return None
@@ -1945,9 +1950,9 @@ class MemoryService:
 
             async def _write() -> list:   # CREATED ids only: an overwrite of an existing pending row is an update (never re-creates)
                 if existing is None:
-                    await self._run_sync(self._write_row, mem_id, scrubbed, metadata)
+                    await self._run_write(self._write_row, mem_id, scrubbed, metadata)
                     return [mem_id]
-                await self._run_sync(self._update_row, mem_id, scrubbed, metadata)
+                await self._run_write(self._update_row, mem_id, scrubbed, metadata)
                 return []
 
             async def _undo(created):
@@ -2826,7 +2831,7 @@ class MemoryService:
                     new_meta["supersedes_edge_id"] = disputed[len(_EDGE_REF):]
                     disputed = ""
                 async def _write_decision() -> list:      # MODIFIES an existing row (update: never re-creates); creates nothing
-                    await self._run_sync(self._update_row, mem_id, current.text, new_meta)
+                    await self._run_write(self._update_row, mem_id, current.text, new_meta)
                     return []
                 if await _erase_watermark.guarded_write(user_id, phase, _write_decision, _undo) is None:
                     return None
@@ -2958,10 +2963,10 @@ class MemoryService:
             async def _write_edit() -> list:     # CREATES new_id (when it is a new row); only MODIFIES the superseded one
                 created = []
                 if new_id != mem_id and await self._run_sync(self._get_sync, new_id) is None:
-                    await self._run_sync(self._write_row, new_id, scrubbed, new_meta)
+                    await self._run_write(self._write_row, new_id, scrubbed, new_meta)
                     created.append(new_id)
                 else:                        # an in-place rewrite (or an existing row): update, never re-create
-                    await self._run_sync(self._update_row, new_id, scrubbed, new_meta)
+                    await self._run_write(self._update_row, new_id, scrubbed, new_meta)
                 # Guard new_id != mem_id: an edit whose text+durable identity hash to the
                 # same mem_id just overwrote the row in place, so there is no distinct old
                 # row to retire — superseding it would hide the only surviving copy.
@@ -3537,7 +3542,7 @@ class MemoryService:
                     cur.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
 
                 async def write() -> list:     # MODIFIES the existing row (update: never re-creates it); creates nothing
-                    await self._run_sync(self._update_row, mem_id, cur.text, md)
+                    await self._run_write(self._update_row, mem_id, cur.text, md)
                     await self._append_audit(
                         mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
                         before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
@@ -3580,7 +3585,7 @@ class MemoryService:
                           reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
                           review_note=("owner hedged or denied this: " + " ".join(utterance.split())[:200])[:1024],
                           challenged_by_turn=" ".join(utterance.split())[:300])
-                await self._run_sync(self._write_row, mem_id, cur.text, md)
+                await self._run_write(self._write_row, mem_id, cur.text, md)
                 await self._append_audit(
                     mem_id=mem_id, user_id=uid, actor=actor, action="flag_challenged",
                     before={"status": "approved"}, after={"status": "pending"},
@@ -3681,14 +3686,17 @@ class MemoryService:
             dup = await self._existing_candidate(user_id, scrubbed, contradicts)
             if dup is not None:
                 return dup.id
+            if await _erase_watermark.turn_write_refused(None, "memory:" + str(writer or "candidate"), user_id):   # as ingest
+                _log_erase_drop(writer)
+                return None
             async def _write():
                 if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
                     _log_erase_drop(writer)
                     return None
                 if existing is None:
-                    await self._run_sync(self._write_row, mem_id, scrubbed, md)
+                    await self._run_write(self._write_row, mem_id, scrubbed, md)
                     return [mem_id]                     # CREATED
-                await self._run_sync(self._update_row, mem_id, scrubbed, md)
+                await self._run_write(self._update_row, mem_id, scrubbed, md)
                 return []                               # modified an existing pending row: never undone
 
             async def _undo(created):
@@ -4227,6 +4235,26 @@ class MemoryService:
         # index compaction can drain in-flight work before it swaps the collection.
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _leased_call, fn, *args)
+
+    async def _run_write(self, fn, *args):
+        """``_run_sync`` for a palace WRITE (a turn's new or changed row): a CANCELLED caller still waits for its worker to finish, keeping
+        whatever lock it holds (the member's memory lock) until then - the member delete cancels a stale turn and waits for it to END,
+        so a write already in the worker can never land after the delete (round 10). Once cancelled, the cancellation is what the caller
+        gets, whatever the worker's outcome (a best-effort caller must not catch a worker error and carry on writing). Reads keep
+        ``_run_sync``: a recall timeout still returns at once. Runs ``self._run_sync`` (its lease, and any test double of it) in a task
+        of its own, which is what keeps going when the caller is cancelled."""
+        fut = asyncio.ensure_future(self._run_sync(fn, *args))
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            while not fut.done():
+                try:
+                    await asyncio.shield(fut)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:  # noqa: BLE001 - the worker's own failure: the cancellation still wins
+                    break
+            raise
 
     def _track_background_task(self, coro, *, name: str) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro, name=name)

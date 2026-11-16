@@ -523,6 +523,10 @@ def _boom(*a, **k):
 
 
 async def test_a_failing_marker_clear_never_replaces_a_forgets_result(monkeypatch, tmp_path):
+    """A topic or entity forget keeps its own result when the marker clear fails. A MEMBER delete does not: its in-lock clear of the
+    in-process turn state (pending-correction markers, the turn caches, ``value_correction``'s names and values) fails the delete
+    CLOSED (member delete, owner decision 2026-11-15: every eraser fails closed, nothing reads as "forgotten" while words of the
+    member may still be held), and the caller's retry completes it once the clear works."""
     import forget_topic
     import memory_forget_cascade as mfc
 
@@ -534,7 +538,11 @@ async def test_a_failing_marker_clear_never_replaces_a_forgets_result(monkeypatc
     assert (await mfc.cascade_forget(MEMBER, "Wren")).complete
     from test_memory_loss_class import _Col, _svc
 
-    assert await _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path).delete_user(MEMBER, actor="admin") == 1
+    svc = _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path)
+    with pytest.raises(memory_service.MemoryServiceError, match="in-process turn caches not cleared"):
+        await svc.delete_user(MEMBER, actor="admin")
+    monkeypatch.setattr(cm, "forget_user", lambda *a, **k: None)          # the clear works again: the retry finishes the delete
+    await svc.delete_user(MEMBER, actor="admin")
 
 
 async def test_a_forgets_own_exception_still_propagates(monkeypatch):

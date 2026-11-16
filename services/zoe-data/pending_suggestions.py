@@ -1081,8 +1081,9 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         if mine is not None:
             return mine
     try:
-        pool = get_pool()
-        async with pool.acquire() as conn:
+        # the pooled WRAPPER (not a raw connection): accepting an offer writes the member's reminder / list / event / note / contact,
+        # a turn's tool write, so it passes the member-delete guard (``erase_watermark.store_write_guard``) like every other one
+        async with get_db_ctx() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """SELECT action_type, pre_filled_slots FROM pending_suggestions

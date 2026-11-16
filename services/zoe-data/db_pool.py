@@ -299,6 +299,16 @@ class _ExecResult:
         pass
 
 
+async def _store_write_guard(sql: str, conn=None) -> None:
+    """Every pooled statement passes the member-delete late-write rule for a turn's store writes
+    (``erase_watermark.store_write_guard``: a write to a member-owned table by a turn whose member was erased at or after the turn
+    began never runs; the mark is read on ``conn``, the caller's own connection). Outside a turn: one ContextVar read."""
+    from erase_watermark import _TURN_CTX, store_write_guard
+
+    if _TURN_CTX.get() is not None:
+        await store_write_guard(sql, conn)
+
+
 class AsyncpgCompat:
     """Compatibility wrapper providing aiosqlite-style execute API on top of asyncpg.
 
@@ -336,6 +346,7 @@ class AsyncpgCompat:
         return _ExecResult(self._do_execute(sql, params))
 
     async def _do_execute(self, sql: str, params) -> _Cursor:
+        await _store_write_guard(sql, self)
         sql_pg, args = _adapt_params(sql, params)
         stripped = sql_pg.strip().upper().lstrip("(")
         if (
@@ -357,6 +368,24 @@ class AsyncpgCompat:
         """
         cursor = await self._do_execute(sql, params)
         return list(cursor._rows)
+
+    # the native asyncpg calls a write can take (``INSERT ... RETURNING`` through ``fetchrow``, batched rows through ``executemany``)
+    # pass the same member-delete guard as ``execute``; everything else is delegated untouched (``__getattr__``)
+    async def fetch(self, sql: str, *args, **kw):
+        await _store_write_guard(sql, self)
+        return await self._conn.fetch(sql, *args, **kw)
+
+    async def fetchrow(self, sql: str, *args, **kw):
+        await _store_write_guard(sql, self)
+        return await self._conn.fetchrow(sql, *args, **kw)
+
+    async def fetchval(self, sql: str, *args, **kw):
+        await _store_write_guard(sql, self)
+        return await self._conn.fetchval(sql, *args, **kw)
+
+    async def executemany(self, sql: str, *args, **kw):
+        await _store_write_guard(sql, self)
+        return await self._conn.executemany(sql, *args, **kw)
 
     async def commit(self) -> None:
         pass  # asyncpg auto-commits outside explicit transactions

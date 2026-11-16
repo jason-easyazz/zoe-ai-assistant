@@ -248,6 +248,10 @@ OTHER: tuple[Store, ...] = (
           "ZOE_VOICE_CLIP_RETENTION on, guest / unknown clips older than 30 days go (voice_clips.sweep). What stays: a clip with no sidecar (saved "
           "before or without ZOE_VOICE_CLIP_VERDICT): no forget can find it.",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
+    Store("voice_clip_pending_drops", "file", METADATA, OUT_OF_SCOPE, "~/.zoe/voice-clip-pending-drops.txt (ZOE_VOICE_CLIP_PENDING_FILE), "
+          "0600: the PATHS of clips a drop for a deleted member could neither mark nor remove (a capture-time file name each, no member "
+          "id, no words). It IS the erase's retry: the clip loop's voice_clips.retry_pending_drops removes each listed clip and prunes "
+          "the line; empty, the file goes.", markers=("voice-clip-pending-drops",)),
     Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
           "panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own.",
           markers=("zoe-brain.db",)),

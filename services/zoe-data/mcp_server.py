@@ -1136,7 +1136,15 @@ from db_compat import get_compat_db as _pg_get_db  # noqa: E402
 async def handle_tool(name: str, args: dict, actor_context: dict | None = None) -> str:
     async with _pg_get_db() as db:
         try:
-            result = await _execute_tool(db, name, args, actor_context=actor_context)
+            # its own task (a COPY of the context): the member-turn binding ``_execute_tool`` makes never leaks into the next call,
+            # and the tool call's own turn entry is closed when the task ends
+            import erase_watermark as _ew
+
+            call = asyncio.ensure_future(_execute_tool(db, name, args, actor_context=actor_context))
+            try:
+                result = await call
+            finally:
+                _ew.release_task_turns(call)
             return json.dumps(result, default=str)
         except Exception as e:
             return json.dumps({"error": str(e)})
@@ -1429,6 +1437,11 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
+    import erase_watermark as _ew
+
+    # an MCP tool call made for a member's turn: its store writes are judged against that turn's start (``bind_member_turn``; this
+    # runs in its own task, see ``handle_tool``, so the binding ends with the call)
+    _ew.bind_member_turn(user_id)
 
     if "list_type" in args:
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])

@@ -478,12 +478,19 @@ async def test_flag_off_keeps_the_new_belief_as_a_pending_candidate(db, monkeypa
     assert kw["contradicts"] == "edge:" + cur["id"] and kw["extra"]["edge_new_rel"] == "spouse"
 
 
+#: the ONE runtime module allowed to delete an edge: the member delete (owner decision 2026-11-15, "deleting a member should delete
+#: everything") erases the edges the member owns and the edges on their private contacts - a right-to-be-forgotten erase, not a
+#: change of fact. Every other edge change closes the edge (``valid_to``) and keeps the history.
+EDGE_ERASERS = {"member_owned_forget.py"}
+
+
 def test_no_runtime_module_deletes_an_edge():
     rx = re.compile(r"DELETE\s+FROM\s+person_relationships", re.IGNORECASE)
     assert rx.search("cur.execute('DELETE FROM person_relationships WHERE id=?')")          # the scan can see one
     hits = [str(p.relative_to(SVC)) for p in SVC.rglob("*.py")
             if not {"tests", "alembic", ".venv"} & set(p.relative_to(SVC).parts) and rx.search(p.read_text(errors="ignore"))]
-    assert hits == []
+    assert set(hits) - EDGE_ERASERS == set(), "only the member erase may delete an edge; everything else closes it"
+    assert set(hits) == EDGE_ERASERS, "an allowed eraser no longer deletes edges: drop it from EDGE_ERASERS"
 
 
 # ── 4. temporal read ─────────────────────────────────────────────────────────

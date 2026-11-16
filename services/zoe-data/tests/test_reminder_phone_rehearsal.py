@@ -101,7 +101,7 @@ def lab(tmp_path, monkeypatch):
                 CREATE TABLE push_subscriptions (user_id TEXT, endpoint TEXT);
                 CREATE TABLE reminders (id TEXT PRIMARY KEY, title TEXT, category TEXT, visibility TEXT);
                 CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
-                CREATE TABLE notifications (id TEXT, user_id TEXT, type TEXT, title TEXT, message TEXT, delivered INT, created_at TEXT);
+                CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT, type TEXT, title TEXT, message TEXT, delivered INT, created_at TEXT);
                 CREATE TABLE proactive_scheduled (id TEXT PRIMARY KEY, fired INT DEFAULT 0);
             """)
             for uid, (_aud, prefs) in MEMBERS.items():

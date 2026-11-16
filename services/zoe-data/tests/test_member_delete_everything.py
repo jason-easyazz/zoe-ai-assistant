@@ -1343,25 +1343,27 @@ def test_a_surviving_session_titled_by_the_members_first_turn_loses_their_words_
     assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-bown'") == [("A title B typed for their own chat",)]
 
 
-def test_pre_upgrade_kiosk_actions_without_an_origin_go_when_they_name_the_member_or_can_never_be_shown(env, store):
-    """Rows queued before origin_user_id was recorded: one whose payload names the member goes, one naming another member stays,
-    and an origin-less row still queued and older than the stale limit (never shown again, attributable to nobody) goes too."""
+def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_member(env, store):
+    """Rows queued before origin_user_id was recorded: one whose payload names the member goes; one naming another member stays; an
+    origin-less row that names nobody stays even when it is old and still queued (it may be another member's: a member delete never
+    reaches across members), and so does an old pre-upgrade row another member owns."""
     svc, _col = env
 
     async def seed():
         x = store.execute
-        rows = (("pre-a", {"target_user_id": A, "message": "synthetic words"}, None, None),
-                ("pre-b", {"target_user_id": B, "message": "synthetic words"}, None, None),
-                ("pre-old", {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
-                ("pre-fresh", {"message": "synthetic words"}, "queued", "2999-01-01T00:00:00Z"))
-        for aid, payload, status, made in rows:
-            await x("INSERT INTO ui_actions (id, user_id, payload, status, created_at) VALUES (?, 'guest', ?, ?, ?)",
-                    (aid, json.dumps(payload), status, made))
-            await x("INSERT INTO ui_action_ledger VALUES (?, ?, 'guest', 'kiosk-1', 'queued', ?)",
-                    ("l-" + aid, aid, json.dumps({"action_type": "show_card", "payload": payload})))   # no origin_user_id
+        rows = (("pre-a", "guest", {"target_user_id": A, "message": "synthetic words"}, None, None),
+                ("pre-b", "guest", {"target_user_id": B, "message": "synthetic words"}, None, None),
+                ("pre-old", "guest", {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
+                ("pre-old-b", B, {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
+                ("pre-fresh", "guest", {"message": "synthetic words"}, "queued", "2999-01-01T00:00:00Z"))
+        for aid, owner, payload, status, made in rows:
+            await x("INSERT INTO ui_actions (id, user_id, payload, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (aid, owner, json.dumps(payload), status, made))
+            await x("INSERT INTO ui_action_ledger VALUES (?, ?, ?, 'kiosk-1', 'queued', ?)",
+                    ("l-" + aid, aid, owner, json.dumps({"action_type": "show_card", "payload": payload})))   # no origin_user_id
         await store.commit()
     asyncio.run(seed())
     _delete(svc)
     left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
-    assert left == {"pre-b", "pre-fresh"}, left
-    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-fresh"}
+    assert left == {"pre-b", "pre-old", "pre-old-b", "pre-fresh"}, left
+    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old", "l-pre-old-b", "l-pre-fresh"}

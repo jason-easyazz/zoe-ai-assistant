@@ -41,6 +41,13 @@ OWNED = ("chat_feedback", "background_tasks",
          # member is bound to (ui_panel_sessions: one row per panel, user_id = who it is signed in / verified as; the voice path trusts
          # it for 15 min, and its ui_context / chat_session_id are the member's). A guest / kiosk row names no member and stays.
          "push_subscriptions", "ui_panel_sessions")
+#: every member-owned table a turn's TOOLS (intent handlers, fast tiers, MCP tools, a brain tool call through intent-dispatch) can
+#: write: a write to one of them inside a turn whose member was erased at or after the turn began is refused at the database wrapper
+#: (``erase_watermark.store_write_guard``). The transcript tables are not here: their writers check twice themselves.
+TURN_WRITE_TABLES = frozenset(set(OWNED) - {"openclaw_run_state"} | {
+    "lists", "list_items", "events", "event_alarms", "calendars", "people", "people_field_values", "alarms",
+    "proactive_scheduled", "proactive_pending", "pending_suggestions", "open_loops", "commitments", "notifications",
+    "user_preferences", "ambient_memory"})
 #: tables whose ``person_id`` is a plain ``REFERENCES people(id)`` (alembic 0006, no ON DELETE): another member's row pointing at one of the
 #: member's private contacts keeps the row and loses the reference
 NULLED = ("notes", "journal_entries")
@@ -215,8 +222,8 @@ async def _committed(db):
 
 async def _await_inflight_work(user_id: str) -> None:
     """THE CLASS RULE, part (i): before anything is erased, wait (at most ``INFLIGHT_WAIT_S``, then FAIL closed so the delete is
-    retried) for the member's in-flight work this process can enumerate: chat turns (``erase_watermark.inflight_turns``) and panel
-    announcement claims (``voice_announce.inflight_claims``). Reminder fires are waited for in ``_await_inflight_fires``. Part (ii),
+    retried) for the member's in-flight work this process can enumerate: chat and voice turns (``erase_watermark.inflight_turns``;
+    STALE ones are cancelled and waited for: ``cancel_stale_turns``) and panel announcement claims (``voice_announce.inflight_claims``). Reminder fires are waited for in ``_await_inflight_fires``. Part (ii),
     the unconditional half, is in every late writer: it re-checks the member's erase mark against its own start right before and
     right after its write (``erase_watermark.turn_write_refused``; the claim's post-check in ``claim_announcements``)."""
     import asyncio
@@ -226,6 +233,13 @@ async def _await_inflight_work(user_id: str) -> None:
     import voice_announce
 
     deadline = time.monotonic() + INFLIGHT_WAIT_S
+    # a STALE turn (older than TURN_STALE_S) is not waited for: it is cancelled, and the delete waits (bounded) for it to END - after
+    # that, a turn that never ends cannot write either: every store write it makes is refused at the database wrapper
+    stale = erase_watermark.cancel_stale_turns(user_id)
+    if stale:
+        _done, pending = await asyncio.wait(stale, timeout=INFLIGHT_WAIT_S)
+        if pending:
+            raise RuntimeError("member_owned_forget: a cancelled stale turn of the member has not ended")
     while erase_watermark.inflight_turns(user_id) or voice_announce.inflight_claims(user_id):
         if time.monotonic() > deadline:
             raise RuntimeError("member_owned_forget: a turn or an announcement claim of the member is still in flight")
@@ -331,10 +345,6 @@ async def _originated_ui_actions(r: _Run, user_id: str) -> None:
     await r.by_ids("DELETE FROM ui_actions WHERE id", mine)
 
 
-#: a queued panel action older than this is stale (``routers/ui_actions.get_pending_ui_actions`` fails it): never shown again
-UI_ACTION_STALE_S = 3600
-
-
 def _names_member(value: Any, user_id: str) -> bool:
     """Whether any string anywhere in a parsed JSON value IS the member's id (a payload's / ledger event's target, recipient, user)."""
     if isinstance(value, str):
@@ -347,25 +357,16 @@ def _names_member(value: Any, user_id: str) -> bool:
 
 
 async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
-    """Actions queued BEFORE ``origin_user_id`` was recorded (no origin in their queued ledger event): (1) every one whose payload or
-    any ledger event names the member's id as a value (found by a text prefilter on the JSON-quoted id, each confirmed by parsing), and
-    (2) every one still QUEUED and older than ``UI_ACTION_STALE_S``, whoever it was for - an un-attributable pre-upgrade row that can
-    never be shown again (the poll fails it as stale); erring toward erasing, on every panel. An action WITH an origin is decided by
-    its origin only (``_originated_ui_actions``)."""
-    import time
-
-    import erase_watermark
-
+    """Actions queued BEFORE ``origin_user_id`` was recorded (no origin in their queued ledger event) that NAME the member: their
+    payload or any ledger event carries the member's id as a value (found by a text prefilter on the JSON-quoted id, each confirmed
+    by parsing). Nothing else: an un-attributable pre-upgrade row (a guest kiosk's toast whose payload names nobody) may be another
+    member's, and a member delete never reaches into another member's rows (cross-member reach; the panel poll fails such a row as
+    stale, it is never shown). The member's own rows (``user_id``) go with ``ui_actions`` in ``OWNED``. An action WITH an origin is
+    decided by its origin only (``_originated_ui_actions``)."""
     quoted = f"%{json.dumps(str(user_id))}%"
     cand = {str(x[0]) for x in await r.rows("SELECT id FROM ui_actions WHERE payload LIKE ?", (quoted,)) if x[0]}
     cand |= {str(x[0]) for x in await r.rows("SELECT action_id FROM ui_action_ledger WHERE event_data LIKE ?", (quoted,)) if x[0]}
-    cutoff = time.time() - UI_ACTION_STALE_S
-    stale = set()
-    for aid, made in await r.rows("SELECT id, created_at FROM ui_actions WHERE status = 'queued'", ()):
-        t = erase_watermark.instant(made)
-        if aid and t is not None and t.timestamp() < cutoff:
-            stale.add(str(aid))
-    ids = sorted(cand | stale)
+    ids = sorted(cand)
     out = set()
     for at in range(0, len(ids), _CHUNK):
         part = ids[at:at + _CHUNK]
@@ -382,9 +383,6 @@ async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
             evs = events.get(aid, [])
             if any(t == "queued" and isinstance(d, dict) and "origin_user_id" in d for t, d in evs):
                 continue                                        # recorded after the upgrade: its origin decides
-            if aid in stale:
-                out.add(aid)
-                continue
             try:
                 payload = json.loads(payloads.get(aid) or "null")
             except ValueError:

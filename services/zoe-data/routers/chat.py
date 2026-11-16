@@ -2374,10 +2374,12 @@ async def locked_chat_stream(
     import erase_watermark as _ew
 
     _turn = _ew.turn_open(session_id, str((user or {}).get("user_id") or ""))
+    _bound = _ew.turn_bind(_turn)    # its tools' store writes are judged against this start (``erase_watermark.store_write_guard``)
     try:
         async for chunk in chat_stream_generator(message, session_id, user, **kwargs):
             yield chunk
     finally:
+        _ew.turn_unbind(_bound)
         _ew.turn_close(_turn)
         lock.release()
 
