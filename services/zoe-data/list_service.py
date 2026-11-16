@@ -697,8 +697,10 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
     parts = (split_items(text) if splits_items(kwargs.get("list_type") or "", kwargs.get("list_name") or "")
              else [normalize_item_text(text)]) or [text]
     receipts: list[tuple] = []
-    # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits.
-    async with _outer_add_txn(db):
+    # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits. The Zoe OS
+    # authority's unit wraps it: if the transaction rolls back (a later item refused, a failed insert, a failed commit), every item the
+    # kernel already granted is taken back there too (os_authority.all_or_none), so neither side keeps a part of the add.
+    async with os_authority.all_or_none(), _outer_add_txn(db):
         for part in parts:
             out = await add_item_to_list(db, text=part, receipts=receipts, authority=True, **kwargs)
             outcomes.append(out)

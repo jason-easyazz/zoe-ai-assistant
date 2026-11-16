@@ -43,6 +43,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
+import os_speaker
 import user_erase_gate
 
 logger = logging.getLogger(__name__)
@@ -503,7 +504,8 @@ class _Kernel:
             raise KernelUnavailable("circuit")
         c = self.conns.get(skill)
         if c is None:
-            path, creds = _load_creds()
+            # the member-delete path's own credential lives apart from the surfaces' (os_speaker.ERASE_CREDS, authority kernel only)
+            path, creds = os_speaker.eraser_creds() if skill == os_speaker.ERASER else _load_creds()
             if skill not in creds:
                 raise KernelUnavailable("no_credential")
             try:
@@ -897,14 +899,29 @@ def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: O
     ``people.json`` may still have events from before). Only the kernel's own "never knew them" is read as nothing to forget."""
     scoped: dict = {"entity": entity} if entity is not None else ({"topic": topic} if topic is not None else {})
     try:
-        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
+        out = _forget_call(kernel, member, scoped)
     except KernelRefused as exc:
         if NEVER_KNOWN in (exc.reason or "").lower():
             return 0
-        if not scoped:
+        if not scoped or os_speaker.is_unproven(exc.reason):     # an unproven scoped ask is never widened into "forget me"
             raise
-        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # unmatchable scope: over-forget, the safe error
+        out = _forget_call(kernel, member, {})    # unmatchable scope: over-forget, the safe error
     return int(out.get("count", 0)) if isinstance(out, dict) else 0
+
+
+def _forget_call(kernel: _Kernel, member: str, scoped: dict):
+    """A whole-member forget goes as the ``eraser`` when the kernel provisioned one (the member-delete path's credential); any other
+    goes through the panel with a speaker assertion for the member (``os_speaker``), minted fresh per request. A ``speaker unproven``
+    refusal is retried ONCE with a freshly read secret (a kernel restart mints a new one), then it is the kernel's real answer."""
+    if not scoped and os_speaker.present(os_speaker.ERASE_CREDS):
+        return kernel.call(os_speaker.ERASER, "forget", subject=member, actor=member)
+    audience = "forget.scoped" if scoped else "forget.person"
+    for attempt in (0, 1):
+        try:
+            return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped, **os_speaker.speaker_arg(member, audience))
+        except KernelRefused as exc:
+            if attempt or not os_speaker.is_unproven(exc.reason):
+                raise
 
 
 def _do_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optional[str], fut: "concurrent.futures.Future") -> None:

@@ -11,15 +11,27 @@ PROPOSED to the kernel before production writes the row, inside the list's write
   kernel does not know, a member being erased) -> the old path performs the add exactly as today and the event is a COUNTED
   fallback, one codes-only log line. The turn never fails or stalls because of the kernel.
 
-Erase reach: ``erase_member`` (``MemoryService.delete_user``) and ``erase_item`` (by digest; no production verb calls it yet), both
-fail closed while the flag is ``kernel``. The wire client is ``os_shadow``'s (kernel protocol v1); NO import from ``labs/``.
+ALL OR NONE (``all_or_none``): a spoken add of several items is one production transaction. When it rolls back after the kernel had
+already verified some of its items (item 1 verified, item 3 refused), every granted item is taken back in the kernel with a
+``list.remove`` act by the brain (the kernel has no batch verb, and its ``undo`` reverses only a person's LAST action and refuses a
+second undo in a row, so it cannot take back two items). A take-back that is not verified is recorded durably (ids only,
+``ROLLBACK_PENDING``) for the reconcile to report, and the add is never reported done.
+
+Erase reach: ``erase_member`` (``MemoryService.delete_user``) connects as the kernel's ``eraser`` (``erase-creds.json``: the
+member-delete path's own credential) and ``erase_item`` (one named member's item, by digest; no production verb calls it yet) goes
+through the panel with a speaker assertion for that member (``os_speaker``); both fail closed while the flag is ``kernel``, and an
+unprovisioned kernel fails them too. ``kernel_digests`` reads ``list_digest`` as the ``reconciler`` (keyed digests). The wire client is
+``os_shadow``'s (kernel protocol v1); NO import from ``labs/``.
 """
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import hashlib
+import json
 import logging
+import os
 import socket
 import threading
 import time
@@ -27,6 +39,7 @@ from collections import Counter
 from typing import NamedTuple, Optional
 
 import os_shadow
+import os_speaker
 import user_erase_gate
 
 logger = logging.getLogger(__name__)
@@ -38,6 +51,8 @@ TIMEOUT_S = 0.15
 CIRCUIT_S = 5.0
 HEALTH_TTL_S = 5.0
 ERASE_TIMEOUT_S = 8.0
+ROLLBACK_TIMEOUT_S = 1.0           # per take-back (publish + act): the turn has already failed, so a little more than an add
+ROLLBACK_PENDING = "authority-rollback-pending.json"     # beside creds.json: member ids, counts and times, NEVER an item or a list name
 SCHEMA = 1
 #: the kernel refusal codes (``os_shadow.reason_code``) that are a person's decision and are honoured. ``forgotten`` is one: the
 #: kernel's shield says this text was forgotten, and falling back would let the old path write it straight back. Every other code
@@ -61,7 +76,12 @@ class ListAddRefused(Exception):
 
 
 class AuthorityEraseFailed(Exception):
-    """A kernel erase could not be confirmed while the flag is ``kernel``. NOT a RuntimeError (see ``os_shadow.ShadowForgetUnavailable``)."""
+    """A kernel erase could not be confirmed while the flag is ``kernel``. NOT a RuntimeError (see ``os_shadow.ShadowForgetUnavailable``).
+    ``refused`` True: the kernel ANSWERED no (``code`` ``refused_unproven``, ``refused_<reason>``), a real refusal, never "unavailable"."""
+
+    def __init__(self, code: str, refused: bool = False) -> None:
+        super().__init__(code)
+        self.code, self.refused = code, refused
 
 
 class Decision(NamedTuple):
@@ -99,8 +119,15 @@ def kernel_db_path():
 
 
 def digest(item: str) -> str:
-    """The kernel's ``authority.digest``: what a reconcile or an erase sends instead of the words."""
+    """The kernel's ``authority.digest``: what ``erase_item`` sends instead of the words. NOT what ``list_digest`` returns (that is
+    keyed: ``KernelRows.digest``)."""
     return hashlib.sha256(item.strip().lower().encode()).hexdigest()[:16]
+
+
+def kernel_list_name(list_type: Optional[str], list_name: Optional[str]) -> str:
+    """The list name the kernel is told (the act's ``list`` argument) and so the one its keyed digest covers: ONE mapping, used by
+    ``propose_add`` and by the reconcile."""
+    return (list_name or list_type or "shopping").strip() or "shopping"
 
 
 # ---- counters and the one line per decision ---------------------------------------------------------------------------------------
@@ -197,9 +224,11 @@ async def propose_add(user_id: Optional[str], *, list_type: Optional[str], list_
             return _note(Decision("fallback", "not_in_roster"), 0.0)
         if user_erase_gate.in_progress(uid):
             return _note(Decision("fallback", "erasing"), 0.0)
+        if _ledger.get() is None:                   # outside an all_or_none unit a grant could not be taken back: never asked
+            return _note(Decision("fallback", "no_unit"), 0.0)
         if time.monotonic() < _state["down_until"]:
             return _note(Decision("fallback", "circuit"), 0.0)
-        name = (list_name or list_type or "shopping").strip() or "shopping"
+        name = kernel_list_name(list_type, list_name)
         fut = asyncio.get_running_loop().run_in_executor(_pool, _propose, uid, text, name)
         try:
             d = await asyncio.wait_for(fut, timeout=TIMEOUT_S)
@@ -208,52 +237,230 @@ async def propose_add(user_id: Optional[str], *, list_type: Optional[str], list_
         if d.code in ("timeout", "unavailable", "socket", "protocol", "unhealthy", "write_failed"):
             _state["down_until"] = time.monotonic() + CIRCUIT_S
             _state["health_at"] = -1e9
+        if d.verdict == "kernel":
+            ledger = _ledger.get()
+            if ledger is not None:
+                ledger.append((uid, name, text))
         return _note(d, (time.perf_counter() - started) * 1000)
     except Exception:  # noqa: BLE001
         return _note(Decision("fallback", "error"), (time.perf_counter() - started) * 1000)
 
 
+# ---- all or none: a production rollback takes back what the kernel granted --------------------------------------------------------
+_ledger: contextvars.ContextVar = contextvars.ContextVar("os_authority_ledger", default=None)
+_pending_lock = threading.Lock()
+
+
+class _Rollback:
+    """``async with all_or_none():`` around ONE production write transaction. Every item the kernel verifies inside it is noted; if
+    the block raises (the transaction rolled back), each is taken back in the kernel before the exception goes on. Nested use joins
+    the outer ledger, so a spoken add of several items is one all-or-none unit."""
+
+    async def __aenter__(self):
+        self._token = _ledger.set([]) if _ledger.get() is None else None
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._token is None:
+            return False
+        granted = _ledger.get()
+        _ledger.reset(self._token)
+        if exc_type is not None and granted:
+            await take_back(granted)
+        return False
+
+
+def all_or_none() -> _Rollback:
+    return _Rollback()
+
+
+def _take_back_one(member: str, list_name: str, item: str) -> bool:
+    until = time.monotonic() + ROLLBACK_TIMEOUT_S
+    k = _kernel()
+    k.down_until = 0.0
+    ev = k.call(os_shadow.SKILL_VOICE, "publish", until, kind="utterance", subject=member, payload={"text": "authority list add rollback"})
+    seq = ev.get("seq") if isinstance(ev, dict) else None
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        return False
+    rec = k.call(os_shadow.SKILL_BRAIN, "act", until, action="list.remove", on_behalf_of=member,
+                 args={"item": item, "list": list_name, "asked": seq}, caused_by=[seq])
+    return isinstance(rec, dict) and rec.get("verified") is True and rec.get("outcome") == "verified"
+
+
+def _take_back_all(granted: list) -> list:
+    left = []
+    for member, list_name, item in reversed(granted):
+        try:
+            ok = _take_back_one(member, list_name, item)
+        except Exception:  # noqa: BLE001 - a failed take-back is recorded, never raised over the add's own error
+            ok = False
+        if not ok:
+            left.append(member)
+    return left
+
+
+async def take_back(granted: list) -> int:
+    """Take back every ``(member, list, item)`` the kernel verified for a write production then rolled back. Returns how many could
+    NOT be taken back; those are recorded in ``ROLLBACK_PENDING`` (member id, count, time: never the words) for the reconcile. Never
+    raises: the caller's own exception is what the add reports (nothing was added)."""
+    left: list = list(m for m, _l, _i in granted)
+    try:
+        fut = asyncio.get_running_loop().run_in_executor(_pool, _take_back_all, list(granted))
+        left = await asyncio.wait_for(fut, timeout=ROLLBACK_TIMEOUT_S * len(granted) + 1)
+    except Exception:  # noqa: BLE001
+        pass
+    with _lock:
+        _counts["rollback:" + ("incomplete" if left else "done")] += 1
+    logger.warning("OS_AUTHORITY verb=list_add result=rollback code=%s n=%d left=%d", "incomplete" if left else "done", len(granted),
+                   len(left))
+    if left:
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _pending_add, left)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("OS_AUTHORITY rollback NOT recorded code=%s", type(exc).__name__)
+    return len(left)
+
+
+def _pending_path():
+    return os_shadow.state_dir() / ROLLBACK_PENDING
+
+
+def pending_rollbacks() -> list:
+    """The recorded take-backs that did not verify: ``[{"member", "n", "at"}]``. Raises ``OSError`` / ``ValueError`` when unreadable."""
+    path = _pending_path()
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text("utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("shape")
+    return raw
+
+
+def _pending_write(rows: list) -> None:
+    path = _pending_path()
+    if not rows:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(rows, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _pending_add(members: list) -> None:
+    with _pending_lock:
+        rows = pending_rollbacks()
+        for member, n in Counter(members).items():
+            rows.append({"member": member, "n": n, "at": int(time.time())})
+        _pending_write(rows)
+
+
+def _pending_drop(member: str) -> None:
+    """After a verified whole-member erase the member's recorded take-backs are moot (the kernel holds nothing of them)."""
+    with _pending_lock:
+        rows = pending_rollbacks()
+        keep = [r for r in rows if r.get("member") != member]
+        if len(keep) != len(rows):
+            _pending_write(keep)
+
+
 # ---- erase reach ----------------------------------------------------------------------------------------------------------------
-async def _erase(op: str, **args) -> dict:
+def _erase_sync(skill: str, op: str, audience: Optional[str], args: dict) -> dict:
+    """One erase op. Through the panel it carries a speaker assertion for ``args["subject"]`` (minted fresh per request); a
+    ``speaker unproven`` answer is retried ONCE with the secret read again (a kernel restart mints a new one)."""
+    for attempt in (0, 1):
+        extra = os_speaker.speaker_arg(args["subject"], audience) if audience else {}
+        try:
+            return _call(skill, op, ERASE_TIMEOUT_S, **args, **extra)
+        except os_shadow.KernelRefused as exc:
+            if attempt or not audience or not os_speaker.is_unproven(exc.reason):
+                raise
+    raise AssertionError("unreachable")
+
+
+async def _erase(skill: str, op: str, audience: Optional[str], **args) -> dict:
+    if not os_shadow.provisioned():
+        raise AuthorityEraseFailed("not_provisioned")          # kernel mode, no kernel credentials: the record cannot be reached
     loop = asyncio.get_running_loop()
-    out = await asyncio.wait_for(loop.run_in_executor(_pool, lambda: _call(os_shadow.SKILL_PANEL, op, ERASE_TIMEOUT_S, **args)),
-                                 timeout=ERASE_TIMEOUT_S + 1)
+    try:
+        out = await asyncio.wait_for(loop.run_in_executor(_pool, _erase_sync, skill, op, audience, args), timeout=ERASE_TIMEOUT_S + 1)
+    except os_shadow.KernelRefused as exc:
+        code = "refused_unproven" if os_speaker.is_unproven(exc.reason) else "refused_" + os_shadow.reason_code(exc.reason)
+        raise AuthorityEraseFailed(code, refused=True) from exc
     if not isinstance(out, dict) or out.get("verified") is not True:
-        raise AuthorityEraseFailed("not verified")
+        raise AuthorityEraseFailed("not_verified")
     return out
 
 
+async def _confirmed(op: str, call) -> dict:
+    try:
+        return await call
+    except AuthorityEraseFailed as exc:
+        logger.error("OS_AUTHORITY erase NOT confirmed op=%s code=%s", op, exc.code)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("OS_AUTHORITY erase NOT confirmed op=%s code=%s", op, type(exc).__name__)
+        raise AuthorityEraseFailed(type(exc).__name__) from exc
+
+
 async def erase_member(user_id: str) -> int:
-    """Everything of the member in the kernel's record and list store. With the flag ``kernel``: raises ``AuthorityEraseFailed``
-    unless the kernel's read-back found nothing left (so the delete fails and is retried). With it off: a no-op (the shadow's
-    ``forget_user`` still forgets the member, and the kernel rebuilds its rows from what the forget left)."""
-    if mode() != "kernel" or not os_shadow.provisioned():
+    """Everything of the member in the kernel's record and list store, as the kernel's ``eraser`` (the member-delete path's own
+    credential, ``erase-creds.json``). With the flag ``kernel``: raises ``AuthorityEraseFailed`` unless the kernel's read-back found
+    nothing left, so the delete fails and is retried: an unprovisioned kernel, a missing eraser credential and a refusal all fail it.
+    With the flag off: a no-op (the shadow's ``forget_user`` still forgets the member)."""
+    if mode() != "kernel":
         return 0
+    out = await _confirmed("erase_member", _erase(os_speaker.ERASER, "erase_member", None, subject=user_id))
     try:
-        return int((await _erase("erase_member", subject=user_id)).get("erased", 0))
-    except AuthorityEraseFailed:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.error("OS_AUTHORITY erase NOT confirmed op=erase_member code=%s", type(exc).__name__)
-        raise AuthorityEraseFailed(type(exc).__name__) from exc
+        await asyncio.get_running_loop().run_in_executor(None, _pending_drop, user_id)
+    except Exception as exc:  # noqa: BLE001 - the ids-only record is erased by the delete's retry; never fail a verified erase on it
+        logger.warning("OS_AUTHORITY rollback record not pruned code=%s", type(exc).__name__)
+    return int(out.get("erased", 0))
 
 
-async def erase_item(item: str) -> int:
-    """"Forget that" on one list item, household-wide, by digest (the words never cross the wire). Same fail-closed rule."""
-    if mode() != "kernel" or not os_shadow.provisioned():
+async def erase_item(user_id: str, item: str) -> int:
+    """"Forget that" on one list item of ONE member (``user_id``, whom the CALLER has verified is the one speaking), by digest (the
+    words never cross the wire), through the panel with that member's ``forget.scoped`` speaker assertion. Same fail-closed rule;
+    a kernel refusal (``speaker unproven`` included) raises ``AuthorityEraseFailed`` with ``refused`` True."""
+    if mode() != "kernel":
         return 0
+    if not (user_id or "").strip():
+        raise AuthorityEraseFailed("no_member")
+    out = await _confirmed("erase_item", _erase(os_shadow.SKILL_PANEL, "erase_item", "forget.scoped", subject=user_id.strip(),
+                                                digest=digest(item)))
+    return int(out.get("erased", 0))
+
+
+class KernelRows:
+    """The kernel's list rows as KEYED digests, plus the means to digest production's rows the same way. The key is the kernel's
+    per-start digest key: held only here, never printed, logged or stored (``repr`` shows a count)."""
+
+    def __init__(self, digests: list, key: bytes) -> None:
+        self.digests = list(digests)
+        self._key = key
+
+    def digest(self, member: str, list_name: str, item: str) -> str:
+        return os_speaker.keyed_digest(self._key, member, list_name, item)
+
+    def __repr__(self) -> str:
+        return f"KernelRows({len(self.digests)} rows)"
+
+
+def kernel_digests(timeout: float = 5.0) -> KernelRows:
+    """``list_digest`` as the ``reconciler`` (``reconcile-creds.json``, read now: its key is fresh at every kernel start). Raises when
+    the kernel cannot answer."""
+    path, cred, key = os_speaker.reconciler_creds()
+    conn = os_shadow._Conn(path, os_speaker.RECONCILER, cred, time.monotonic() + timeout)
     try:
-        return int((await _erase("erase_item", digest=digest(item))).get("erased", 0))
-    except AuthorityEraseFailed:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.error("OS_AUTHORITY erase NOT confirmed op=erase_item code=%s", type(exc).__name__)
-        raise AuthorityEraseFailed(type(exc).__name__) from exc
-
-
-def kernel_digests(timeout: float = 5.0) -> list:
-    """The kernel's list rows as digests (the reconcile script). Raises when the kernel cannot answer."""
-    return list(_pool.submit(lambda: _call(os_shadow.SKILL_PANEL, "list_digest", timeout)).result(timeout + 1)["digests"])
+        out = conn.call("list_digest", time.monotonic() + timeout)
+    finally:
+        conn.close()
+    if not isinstance(out, dict) or not isinstance(out.get("digests"), list):
+        raise os_shadow.KernelProtocol("bad reply")
+    return KernelRows(out["digests"], key)
 
 
 def _reset_for_tests() -> None:

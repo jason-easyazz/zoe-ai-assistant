@@ -138,6 +138,16 @@ editing `ZOE_OS_SHADOW_VERBS`. Leave `~/.zoe/os-shadow/` so a later forget still
   `list_items` row. `kernel_only` (a kernel-decided add production never got: the production write failed after the receipt) must
   be 0, exit 1 otherwise; `production_only_recent` is the expected count of adds the kernel did not decide (fallbacks, guests, the
   paths above, erased rows) and is read beside the `OS_AUTHORITY` fallback counts it also prints.
+- **All or none (a spoken add of several items).** `add_items_to_list` runs its one transaction inside `os_authority.all_or_none()`:
+  every item the kernel verifies is noted, and if the transaction rolls back (a later item refused, a failed insert, a failed
+  commit) each is TAKEN BACK in the kernel with a `list.remove` act by the brain, newest first, so neither side keeps part of the add
+  [code; lab: `test_first_items_verified_then_one_refused_leaves_neither_side_holding_any`, and on the real kernel
+  `test_a_later_refusal_leaves_the_real_kernel_holding_none_of_the_add`]. Not `undo`: the kernel's `undo` reverses only a person's
+  LAST action and refuses a second undo in a row ("the last action was itself an undo"), so it cannot take back two items, and the
+  kernel has no batch verb [code: `labs/zoe-os/zoe_os/receipts.py` `undo`]. A take-back that does not verify is logged
+  (`result=rollback code=incomplete`), recorded in `authority-rollback-pending.json` beside `creds.json` (0600; member id, count,
+  time, never an item or a list name) for the reconcile to report, and the add is never reported done (the add's own error stands).
+  The kernel is never asked outside such a unit (`fallback no_unit`).
 - **Kernel durability.** The kernel's list rows are rebuilt from its own receipts at start and after every forget: an acknowledged add
   survives `kill -9`; an add killed before its receipt committed is absent and its intent gets an `uncertain` receipt; one killed
   after the commit but before the reply is present and verified (the client fell back, so production has it once too) [lab:
@@ -150,8 +160,8 @@ editing `ZOE_OS_SHADOW_VERBS`. Leave `~/.zoe/os-shadow/` so a later forget still
 |---|---|---|
 | flag off | today's path, no socket | nothing |
 | verified receipt naming the item | production inserts the row; the shadow does not propose it again | `kernel verified` |
-| kernel refuses `no grant` (the member withdrew the brain's grant) | nothing written; the caller says so (`os_authority.REFUSAL_REPLY`) | `refused no_grant` |
-| kernel refuses for any other reason (`params`, `manifest`, `cause`, `forgotten`, `other`) | old path adds it | `fallback refused_<code>` |
+| kernel refuses `no grant` (the member withdrew the brain's grant) or `forgotten` (the text was forgotten) | nothing written; the caller says so (`os_authority.refusal_reply`) | `refused no_grant` / `refused forgotten` |
+| kernel refuses for any other reason (`params`, `manifest`, `cause`, `other`) | old path adds it | `fallback refused_<code>` |
 | unverified / uncertain receipt, or a proof that names another item | old path | `fallback unverified` |
 | no answer within `TIMEOUT_S` = 150 ms (hanging kernel) | old path; the circuit skips the kernel for 5 s | `fallback timeout` |
 | inside the circuit window | old path, no socket | `fallback circuit` |
@@ -161,8 +171,9 @@ editing `ZOE_OS_SHADOW_VERBS`. Leave `~/.zoe/os-shadow/` so a later forget still
 | member not in the kernel's roster (a guest, the household, a member added after the roster was written) | old path, no socket | `fallback not_in_roster` |
 | member being erased | old path, no socket | `fallback erasing` |
 | any unexpected error in the client | old path | `fallback error` |
+| asked outside an `all_or_none` unit (a grant nothing could take back) | old path, no socket | `fallback no_unit` |
 
-Refusal codes treated as REAL: `no_grant` only (`os_authority.REAL_REFUSALS`). The timeout: the healthy hop is about 1.4 ms p50
+Refusal codes treated as REAL: `no_grant` and `forgotten` (`os_authority.REAL_REFUSALS`). The timeout: the healthy hop is about 1.4 ms p50
 [live, shadow record] and about 1 ms in the lab [lab]; 150 ms is about 100 times that, and it is the most a kernel that accepts but
 never answers can add to one voice turn, once per 5 s circuit window [inferred: no voice-turn measurement was taken for this stage].
 
@@ -173,12 +184,24 @@ never proposed (`not_in_roster` fallback): nobody loses an ability. A child is a
 member the brain's acts at start, without a guardian) [code]; with D7 undecided that keeps every child's ability; when D7 adds a
 guardian ceremony, a child without a guardian grant must FALL BACK, not be refused, until the owner decides otherwise.
 
-**Erase reach.** `MemoryService.delete_user` calls `os_authority.erase_member` after the shadow's forget: with the flag `kernel` the
+**Who may ask (the kernel's speaker rule).** The kernel refuses a person-bound request (forget, erase, grant, revoke, undo, explain for
+a person) from a surface unless it carries a SPEAKER ASSERTION minted with the kernel's per-start identity secret
+(`identity-creds.json`, 0600). zoe-data is the component that verifies people, so it mints them itself: `os_speaker.py` re-implements
+the token from the kernel README's spec (stdlib HMAC, no import from `labs/`), reads the secret fresh for every mint (a kernel
+restart writes a new one), mints ONE per request for the person zoe-data already verified with the audience the request needs, and
+never logs it; a `speaker unproven` answer is retried once with the secret read again, then it is the kernel's real answer (never
+"unavailable", and a scoped forget is never widened into a whole-member one on it). The member-delete path connects as the kernel's
+`eraser` instead (`erase-creds.json`): the shadow's whole-member forget and `erase_member` both use it when it is provisioned. The
+reconcile reads `list_digest` as the `reconciler` (`reconcile-creds.json`: credential plus the per-start digest key). Contract
+against the real lab code: `services/zoe-data/tests/test_os_speaker_contract.py` and `test_os_authority_contract.py`.
+
+**Erase reach.** `MemoryService.delete_user` calls `os_authority.erase_member` (as the `eraser`) after the shadow's forget: with the flag `kernel` the
 kernel's read-back must find nothing of the member left (events, list rows, reminder/alarm rows; their grant is revoked so a restart
-does not re-grant them), else `delete_user` raises and the delete is retried; with the flag off the shadow's `forget_user` still
+does not re-grant them), else `delete_user` raises and the delete is retried (an unprovisioned kernel, a missing eraser credential and
+a refusal fail it too); with the flag off the shadow's `forget_user` still
 forgets the member and the rows are rebuilt from what is left [code; lab]. The entity and topic forgets reach the rows through the
-rebuild [lab: `test_an_entity_forget_through_the_old_op_also_reaches_the_durable_rows`]. `os_authority.erase_item` ("forget that" on
-one item, by digest, household-wide) exists and is proven against the real kernel, but **no production verb calls it**: production
+rebuild [lab: `test_an_entity_forget_through_the_old_op_also_reaches_the_durable_rows`]. `os_authority.erase_item(member, item)` ("forget that" on
+one item of ONE member, by digest, with that member's `forget.scoped` assertion) exists and is proven against the real kernel, but **no production verb calls it**: production
 has no per-item forget, and its item delete is a soft delete that keeps the words in `list_items` too, so it deliberately does not
 erase the kernel's copy either.
 
