@@ -193,10 +193,12 @@ async def _index_hits(user_id: str, groups: list) -> dict:
     return hits
 
 
-async def _said_mids(user_id: str, turns: list, hits: dict) -> list:
+async def _said_mids(user_id: str, turns: list, hits: dict, rows: Any = ()) -> list:
     """The saved-turn ids of the owner's words about the topic: each retracted recent turn's ids (a turn noted with none: the saved
-    turns its words resolve to) and each exact-words entry's (a legacy entry's words resolved the same way; a non-turn entry names
-    none). RAISES on a store failure."""
+    turns its words resolve to), each exact-words entry's (a legacy entry's words resolved the same way; a non-turn entry names
+    none) AND each matched row's own saved turn (``source_turn``): after a restart, with no recent turn and no indexed entry, the
+    row is the only thing that still names the turn, and its transcript / observations / notes go by that id. RAISES on a store
+    failure."""
     import exact_words
     import turn_forget
 
@@ -212,6 +214,10 @@ async def _said_mids(user_id: str, turns: list, hits: dict) -> list:
             add([mid])
         elif kind == turn_forget.LEGACY:
             add(await exact_words.legacy_transcript_ids(user_id, text))
+    for r in rows or ():
+        kind, mid = turn_forget.classify(r)                # a row bound to a saved turn names it; a non-turn / legacy row names none
+        if kind == turn_forget.TURN:
+            add([mid])
     return out
 
 
@@ -291,7 +297,7 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
         value_correction = None
     reg_turns = [value_correction.turn_id_of(user_id, t) for t in said] if value_correction is not None else []
     plan = forget_record.Plan(
-        rows=[r.id for r in rows], mids=await _said_mids(user_id, turns, hits), entries=list(hits),
+        rows=[r.id for r in rows], mids=await _said_mids(user_id, turns, hits, rows), entries=list(hits),
         notes=await conversation_notes.ids_for_topic(user_id, lambda text: row_matches(groups, text)),
         reg=await memory_value_registry.ids_for_names(user_id, lambda name: any(row_matches([g], name) for g in groups)),
         reg_turns=reg_turns, reg_topic=True,

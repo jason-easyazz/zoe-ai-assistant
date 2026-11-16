@@ -1368,10 +1368,15 @@ _LABEL_WORD = (r"(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|
                r"|staff|patient|health|insurance|loyalty|frequent)\b")
 _NEXT_LABEL = (r"(?!(?:and|but|or|plus)\s{1,8}(?:[^\s,;.!?]+\s{1,8}){0,3}(?:" + _LABEL_WORD + r"|[^\s,;.!?]*\d)"
                r"|(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo)\b)")
-#: up to six more words of the clause (an introducer's value), stopping before another label
-_SUFFIX = r"((?:\s{1,8}" + _NEXT_LABEL + r"[^\s,;.!?]+){0,6})"
+#: the rest of the SENTENCE after the value's first word, in a bounded window (``_SLOT_CHARS``): ``_judge_match`` decides
+#: where the value ends in it
+_SUFFIX = r"([^.;!?\n]{0,400})"
+#: the WORD connectors after a secret label: "is" / "was", and the other forms a value is said with ("will be", "should be",
+#: "has been", "are", "isn't" ...). Each is one fixed phrase with bounded inner spaces (no adjacent unbounded whitespace runs)
+_CONNECT_WORDS = (r"(?:isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
+                  r"|(?:has|had|have)\s{1,8}been)(?![\w'’])")
 _LABELLED_SECRET_RE = re.compile(
-    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:is|was)(?:\s*[:=])?|[:=])\s*)"
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:" + _CONNECT_WORDS + r")(?:\s*[:=])?|[:=])\s*)"
     # the value stops before trailing punctuation (the clause stays readable). The connector is UNAMBIGUOUS: "is" / "was" takes an
     # optional ":" / "=" only together with the spaces in front of it (``(?:\s*[:=])?``), so no two whitespace runs can split the
     # same spaces - two adjacent runs around an optional ":" were quadratic on a long run of trailing whitespace (bot review)
@@ -1384,7 +1389,6 @@ _LABELLED_NOT_VALUES = frozenset({
     # STATE words: no value follows them in the clause ("is wrong", "is still working")
     "wrong", "incorrect", "invalid", "valid", "expired", "working", "broken", "gone", "lost", "forgotten", "missing", "saved",
     "stored", "kept", "written", "hidden", "weak", "strong", "long", "short", "blank", "empty", "unset", "fine", "ok", "okay",
-    "same",
     # TIME words: when it happened, not what it is ("was reset yesterday")
     "yesterday", "today", "tonight", "recently", "earlier", "lately",
     # PLACE words that start a location phrase ("is on the fridge", "is in my notebook", "is with my sister")
@@ -1402,7 +1406,32 @@ _VALUE_MODIFIERS = frozenset({
 })
 _MAX_MODIFIERS = 4
 #: a first word that INTRODUCES the value: the value is the next words, so up to six more tokens of the clause go with it
-_LABELLED_INTRODUCERS = frozenset({"the", "a", "an", "my", "our", "your", "his", "her", "their", "its", "called", "like"})
+_LABELLED_INTRODUCERS = frozenset({"the", "a", "an", "my", "our", "your", "his", "her", "their", "its", "this", "that", "these",
+                                   "those", "called", "named", "like", "same", "as", "spelled", "spelt", "reads", "says"})
+#: after a kept STATE word, any of these later in the clause introduces a value after all ("is saved as <value>", "is saved under
+#: the name <value>", "is not working but was <value>"): everything after it, to the end of the clause, is redacted
+_STATE_THEN_VALUE = frozenset({"as", "like", "called", "named", "name", "word", "words", "value", "reads", "says", "spelt", "spelled",
+                               "is", "was", "be", "been", "are", "were", "=", ":"})
+#: a value ends where a NEW clause starts: a conjunction followed by a pronoun ("... and I am allergic to peanuts")
+_CLAUSE_CONJ = frozenset({"and", "but", "so", "because", "then", "or", "while", "although"})
+_CLAUSE_SUBJECT = frozenset({"i", "we", "you", "he", "she", "they", "it", "my", "our", "your", "his", "her", "their", "i'm",
+                             "we're", "it's", "there"})
+
+
+_VERB_INTRO = frozenset({"is", "was", "be", "been", "are", "were"})
+#: the PLACE words of ``_LABELLED_NOT_VALUES``: they start a location phrase ("is on the fridge", "is with my sister"), so the
+#: words after them are that place, not checked against ``_STATE_TAIL_OK``
+_PLACE_WORDS = frozenset({"on", "in", "under", "behind", "inside", "with", "somewhere", "there", "here"})
+#: what may directly follow a KEPT state word: a place / time phrase, a conjunction, a modifier, punctuation-led words. Anything
+#: else straight after "is written" / "is saved" / "is kept" could be the secret itself, so it is redacted (fail closed)
+_STATE_TAIL_OK = frozenset({
+    "on", "in", "under", "behind", "inside", "with", "at", "near", "by", "from", "for", "since", "until", "till", "to", "into",
+    "onto", "over", "beside", "next", "somewhere", "there", "here", "everywhere", "anywhere", "yesterday", "today", "tonight",
+    "tomorrow", "recently", "earlier", "lately", "before", "after", "ago", "again", "now", "though", "anyway", "too", "either",
+    "please", "thanks", "sadly", "unfortunately", "apparently",
+}) | _CLAUSE_CONJ | _VALUE_MODIFIERS
+
+
 #: a kept "<label> is [modifiers] on the fridge: <value>": the value after a colon / equals sign later in the SAME clause (bounded)
 _LABELLED_KEPT_VALUE_RE = re.compile(
     r"(?i)\b((?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\s*(?:is|was)\s+"
@@ -1415,46 +1444,135 @@ def _norm_word(token: str) -> str:
     return token.strip(".,;:!?\"'’").lower()
 
 
-def _judge_value(head: str, toks: "list[tuple[str, str]]", *, excuse: bool, rescan: "Callable[[str], str]") -> str:
-    """The value slot after a label + connector, word by word (``toks`` = (leading space, token)): up to ``_MAX_MODIFIERS``
-    modifiers are skipped (kept as said); then the NEXT word decides - nothing left (only modifiers) or, when ``excuse``
-    (after "is" / "was"), a slot-ending word: kept; an introducer: it and the rest of the slot redacted; anything else: that word
-    redacted. Whatever follows is scrubbed again (``rescan``). Linear: one pass over at most seven tokens."""
-    i = 0
-    while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
-        i += 1
-    kept = "".join(sp + t for sp, t in toks[:i])
-    if i == len(toks):          # modifiers only: after is / was no value was said; after : or = those words ARE the value
-        return head + (kept if excuse else _REDACT)
-    word = _norm_word(toks[i][1])
-    tail = "".join(sp + t for sp, t in toks[i + 1:])
-    if excuse and word in _LABELLED_NOT_VALUES:
-        return head + kept + toks[i][0] + toks[i][1] + rescan(tail)
-    if word in _LABELLED_INTRODUCERS:
-        return head + kept + toks[i][0] + _REDACT
-    return head + kept + toks[i][0] + _REDACT + rescan(tail)
+#: the value slot read after a label: the rest of the SENTENCE, at most this many characters (a bounded window keeps every
+#: search linear); a value still running at the window's end is redacted on to its clause end (``_boundary``)
+_SLOT_CHARS = 400
+#: after a comma the value goes on only when the next word introduces it again (", as <value>", ", or <value>")
+_COMMA_CONTINUE = frozenset({"as", "like", "called", "named", "aka", "or", "i.e.", "ie"})
+_DETERMINERS = frozenset({"the", "a", "an", "this", "that", "these", "those"})
+#: a word that closes the sentence's value without being part of it ("the password is hunter2 btw", "... is x ok?")
+_VALUE_ENDERS = frozenset({"btw", "ok", "okay", "thanks", "thx", "please", "though", "anyway", "lol", "haha", "yeah", "right",
+                           "cheers", "fyi"})
+#: where a clause ends in raw text (the window-overflow case): a sentence end, a comma not followed by an introducer, or a
+#: conjunction followed by a new subject - the same rules as ``_clause_end``. One alternation, no nested repeat: linear
+_BOUNDARY_RE = re.compile(
+    r"[.;!?\n]|,(?!\s{0,8}(?:as|like|called|named|aka|or)\b)"
+    r"|\s(?:" + "|".join(sorted(_CLAUSE_CONJ)) + r")\s{1,8}(?:"
+    + "|".join(sorted((_CLAUSE_SUBJECT | _DETERMINERS) - {"i'm", "we're", "it's"})) + r")\b", re.I)
+
+
+def _later_introducer(toks: "list[tuple[str, str]]", k: int, i: int) -> bool:
+    """Does token ``k`` (after the slot's first word ``i``) introduce a value? A word like "as" / "name" anywhere in the clause;
+    a verb ("was") only right after that word or right after a conjunction ("... but was <value>") - "and the dog is fed" has
+    its own subject, so its "is" introduces nothing about the secret."""
+    w = _norm_word(toks[k][1])
+    if w not in _STATE_THEN_VALUE:
+        return False
+    return w not in _VERB_INTRO or k == i + 1 or _norm_word(toks[k - 1][1]) in _CLAUSE_CONJ
+
+
+def _clause_end(toks: "list[tuple[str, str]]", start: int) -> int:
+    """The index where the value starting at ``start`` ends: a comma not followed by an introducer (the next item of a list,
+    "..., alarm code 4821"), or a conjunction opening a new clause (a pronoun / determiner next: "... and I am allergic", "... and
+    the dog is fed"), else the end of the slot."""
+    for j in range(start, len(toks)):
+        w = _norm_word(toks[j][1])
+        if "," in toks[j][0] and w not in _COMMA_CONTINUE:
+            return j
+        if w in _VALUE_ENDERS:
+            return j
+        if w in _CLAUSE_CONJ and j + 1 < len(toks) and _norm_word(toks[j + 1][1]) in (_CLAUSE_SUBJECT | _DETERMINERS):
+            return j
+    return len(toks)
 
 
 def _slot_tokens(first: str, suffix: str) -> "list[tuple[str, str]]":
-    return [("", first)] + [(m.group(1), m.group(2)) for m in re.finditer(r"(\s+)(\S+)", suffix or "")]
+    """``(separator, word)`` pairs, LOSSLESS: joined back they are exactly ``first + suffix`` (a trailing separator is a pair
+    with an empty word)."""
+    parts = re.split(r"([\s,]+)", suffix or "")
+    toks = [("", first + parts[0])]
+    toks += [(parts[k], parts[k + 1]) for k in range(1, len(parts) - 1, 2)]
+    return toks
 
 
-def _for_sub(m: "re.Match[str]") -> str:
-    """``_FOR_PASSWORD_RE``'s replacement: never excused (an explicit connector after a "for / to" label); modifiers skipped, an
-    introducer takes the rest of the slot; whatever follows is scrubbed again (``re.sub`` never rescans inside a match)."""
-    return _judge_value(m.group(1) + m.group(2), _slot_tokens(m.group(3), m.group(4)), excuse=False,
-                        rescan=lambda t: _FOR_PASSWORD_RE.sub(_for_sub, t))
+def _join(toks: "list[tuple[str, str]]") -> str:
+    return "".join(sp + t for sp, t in toks)
 
 
-def _labelled_sub(m: "re.Match[str]") -> str:
-    """``_LABELLED_SECRET_RE``'s replacement: the label and connector stay; the value goes - unless (is / was only) the first word
-    after any modifiers is on ``_LABELLED_NOT_VALUES``; an introducer takes the next words of the slot with it (default redact)."""
-    return _judge_value(m.group(1) + m.group(2), _slot_tokens(m.group(3), m.group(4)),
-                        excuse=m.group(2).strip().lower() in ("is", "was"), rescan=_scrub_labelled)
+def _boundary(text: str, start: int) -> int:
+    m = _BOUNDARY_RE.search(text, start)
+    return m.start() if m else len(text)
+
+
+def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, int]":
+    """One label + connector + value slot (groups 1-4): ``(what replaces text[m.start():stop], stop)``. The driver resumes
+    scanning at ``stop``, so whatever was not judged here (a kept clause's words, the text after a value) is still scanned.
+
+    Up to ``_MAX_MODIFIERS`` modifiers are skipped (kept as said); then the next word decides:
+
+    * nothing left: after a word connector (``excuse``) no value was said - kept; after ":" / "=" those words ARE the value;
+    * with ``excuse`` and a STATE / TIME / PLACE word (``_LABELLED_NOT_VALUES``, where the module has one): kept only while nothing
+      after it can be the secret - a state / time word must be followed by a place / time phrase, a conjunction or a modifier
+      (``_STATE_TAIL_OK``), else the next word is the value; a later introducer in the clause ("as", "the name", "but was")
+      redacts everything after it;
+    * anything else - an introducer included: FAIL CLOSED, the value is the rest of the clause (``_clause_end``; past the
+      window, ``_boundary``)."""
+    head = m.group(1) + m.group(2)
+    toks = _slot_tokens(m.group(3), m.group(4))
+    base = m.start(3)
+    at = lambda k: base + len(_join(toks[:k]))     # noqa: E731 - absolute offset of token k (the tokens are lossless)
+    i = 0
+    while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
+        i += 1
+    if i == len(toks) or not any(t for _sp, t in toks[i:]):   # modifiers only
+        return head + (_join(toks[:i]) if excuse else _REDACT), at(i)
+    kept = _join(toks[:i])
+    word = _norm_word(toks[i][1])
+    end = _clause_end(toks, i + 1)
+    overflow = end == len(toks) and len(m.group(4)) >= _SLOT_CHARS
+    stop = _boundary(text, m.end()) if overflow else at(end)
+    not_values = globals().get("_LABELLED_NOT_VALUES") or frozenset()
+    if excuse and word in not_values:
+        j = next((k for k in range(i + 1, end) if _later_introducer(toks, k, i)), None)
+        if (j is None and word not in _PLACE_WORDS and i + 1 < end and toks[i + 1][1]
+                and _norm_word(toks[i + 1][1]) not in _STATE_TAIL_OK):
+            j = i                                  # "is written zebrafiddle": the word straight after is the value
+        if j is not None and j + 1 < end:
+            return head + kept + _join(toks[i:j + 1]) + toks[j + 1][0] + _REDACT, stop
+        return head + kept + toks[i][0] + toks[i][1], at(i + 1)
+    return head + kept + toks[i][0] + _REDACT, stop
+
+
+def _drive(rx: "re.Pattern[str]", text: str, excuse: "Callable[[re.Match[str]], bool]") -> str:
+    """Every match of a label pattern, judged in turn (``_judge_match``); the next search starts where the judged part ended, so
+    a kept clause's words and the text after a value are still scanned. Iterative (no recursion), each search bounded by the
+    slot window: linear."""
+    out, pos = [], 0
+    while True:
+        m = rx.search(text, pos)
+        if m is None:
+            out.append(text[pos:])
+            return "".join(out)
+        rendered, stop = _judge_match(m, text, excuse=excuse(m))
+        out.append(text[pos:m.start()] + rendered)
+        pos = max(stop, m.start(3) + 1)
+
+
+def _never(_m: "re.Match[str]") -> bool:
+    return False
+
+
+def _always(_m: "re.Match[str]") -> bool:
+    return True
+
+
+def _labelled_excuse(m: "re.Match[str]") -> bool:
+    """After a WORD connector ("is", "will be") a state / place word may be kept; after ":" / "=" nothing is excused."""
+    return not any(c in m.group(2) for c in ":=")
 
 
 def _scrub_labelled(text: str) -> str:
-    return _LABELLED_KEPT_VALUE_RE.sub(r"\1" + _REDACT, _LABELLED_SECRET_RE.sub(_labelled_sub, text))
+    return _LABELLED_KEPT_VALUE_RE.sub(r"\1" + _REDACT, _drive(_LABELLED_SECRET_RE, text, _labelled_excuse))
 
 # ── widened classes (2026-11-15). Every label list is CLOSED and lives HERE only; a label never redacts without a value
 # (a code / number needs a digit), so "the alarm code changed", "the dress code is casual" and "pineapple" are untouched.
@@ -1512,8 +1630,8 @@ _PASSWORD_NOT_VALUES = (
     # a pronoun / determiner). The MODIFIERS (now, too, already, please ...) are NOT here: they are skipped and the next word judged
     "is", "was", "are", "were", "be", "been", "has", "had", "have", "will", "would", "can", "could", "should", "must", "may",
     "doesn't", "didn't", "isn't", "wasn't", "won't", "can't", "and", "or", "but", "so", "if", "when", "because",
-    "for", "of", "on", "in", "at", "with", "from", "by", "about", "into", "the", "a", "an", "this", "that", "it", "i",
-    "you", "we", "they", "he", "she", "my", "your", "our", "their", "here", "there",
+    "for", "of", "on", "in", "at", "with", "from", "by", "about", "into", "it", "i",
+    "you", "we", "they", "he", "she", "here", "there",
 )
 #: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
 #: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
@@ -1526,10 +1644,20 @@ _BARE_MODIFIERS = tuple(sorted((_VALUE_MODIFIERS - {"changed", "reset", "set", "
 _BARE_PASSWORD_RE = re.compile(
     r"(?i)\b(password|passphrase)\b(\s{0,8}(?:(?:=|:|-|'s|’s)\s{0,8})?"
     rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
-    rf"((?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-])){_PASSWORD_VALUE})"
+    rf"((?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-])){_PASSWORD_VALUE})" + _SUFFIX
 )
+
+
+#: "the password I use is <value>" / "... that you gave me was <value>": a relative clause (a pronoun and up to three words)
+#: between the label and "is" / "was" - the pronoun ends the BARE slot, so the value is judged here (state words kept)
+_REL_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase|passcode|pin)\s{1,8}(?:(?:that|which)\s{1,8})?(?:i|you|we|they|he|she|it)"
+    r"(?:\s{1,8}[\w'’]{1,30}){1,8}?)(\s{1,8}(?:" + _CONNECT_WORDS + r")\s{1,8})(" + _PASSWORD_VALUE + ")" + _SUFFIX
+)
+
+
 #: "the password for the wifi is <value>" / "... to my laptop was <value>": the labelled form, an explicit connector, no word excused
-#: (an introducer takes the rest of the clause, as in ``_labelled_sub``)
+#: (an introducer takes the rest of the clause, as in ``_judge_match``)
 _FOR_PASSWORD_RE = re.compile(
     r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30})"
     rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
@@ -1555,14 +1683,32 @@ _PHONE_INTL_RE = re.compile(rf"(?<![\w+])\+\d{{1,3}}[ .-]?(?:\(\d{{1,4}}\)[ .-]?
 #: up to 7 groups: two trunk numbers said back to back with a space are taken whole (cap 22 digits below), never split
 _PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,7}(?!\w|[.,/-]\d)")
 _PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
-#: FALLBACK, run after the passes above: the earlier wide shapes, whose value may cross ". ". After the split passes, a run-on
-#: pair is already two [REDACTED]s, so this only fires where the split left a fragment under the digit cap that the wide
-#: shape still reads as ONE number ("call me on 0400. 555 101"): kept so the split never frees what the wide shape caught
+#: the earlier WIDE shapes, whose value may cross ". ": run on the same text as the split shapes and UNIONED with them
+#: (``_scrub_phones``), so the split never frees what the wide shape caught ("call me on 0400555101. 12")
 _PHONE_LABEL_WIDE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
     rf"{_CONNECT}(\+?\(?\d[\d ().-]{{5,40}}\d)"
 )
 _PHONE_INTL_WIDE_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[\d .-]{5,40}\d(?!\w)")
+#: the NEXT contact number said straight after a redacted one ("call me on 0400 555 101. 9555 0123", "..., or 9555 0123",
+#: a newline, a third number): the split passes above end the first number at the sentence end, and the label the wide fallback
+#: needs is gone by then, so a following number would survive. A separator (punctuation, "or" / "and", a line break), then a
+#: phone-shaped run; ``_chain_sub`` takes each one of 8-30 digits and stops at the first that is not. Linear: the repeat can
+#: always end, and each link is a fixed-width separator plus one token-bounded number (pinned by the chain timing test)
+_CHAIN_SEP = r"(?:\s{0,8}[.,;:/&]{0,2}\s{0,8}(?:(?:or|and|also|alt|else|then)\s{1,8})?)"
+_CHAIN_NUMBER = rf"\+?\(?\d(?:[\d()]|{_PHONE_SEP}(?=[\d(])){{5,40}}\d(?![\w@])"
+_CONTACT_CHAIN_RE = re.compile(rf"\[REDACTED\]((?:(?i:{_CHAIN_SEP}){_CHAIN_NUMBER})+)")
+_CHAIN_LINK_RE = re.compile(rf"((?i:{_CHAIN_SEP}))({_CHAIN_NUMBER})")
+
+
+def _chain_sub(m: "re.Match[str]") -> str:
+    out, pos, chain = [_REDACT], 0, m.group(1)
+    for link in _CHAIN_LINK_RE.finditer(chain):
+        if link.start() != pos or not 8 <= _digits(link.group(2)) <= 30:
+            break
+        out.append(link.group(1) + _REDACT)
+        pos = link.end()
+    return "".join(out) + chain[pos:]
 _UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
 #: a postcode, and any digit groups straight after it. A postcode ends an address, so digits that continue it are the head
 #: of the NEXT number ("... Street, 07700 900123"): they are taken too, never split, so no part of that number survives
@@ -1615,7 +1761,7 @@ def _scrub_secrets(text: str) -> str:
         return text
     text = _CODE_RE.sub(r"\1\2" + _REDACT, text)
     text = _BARE_PIN_RE.sub(r"\1\2" + _REDACT, text)
-    text = _BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, text)
+    text = _drive(_BARE_PASSWORD_RE, text, _never)
     return _ACCOUNT_RE.sub(_keep_label_if(4, 30), text)
 
 
@@ -1631,14 +1777,60 @@ def _scrub_contact(text: str) -> str:
     text = _LIVE_AT_RE.sub(r"\1" + _REDACT, text)
     text = _ADDRESS_RE.sub(_REDACT, text)
     text = _PO_BOX_RE.sub(_REDACT, text)
-    # the upper caps allow TWO numbers said back to back with only a space ("0400 555 101 0400 555 202"): a run that long is
-    # two phones run together, never a reason to keep both (a card number is rejected earlier, by the Luhn check)
-    text = _PHONE_LABEL_RE.sub(_keep_label_if(8, 30), text)
-    text = _PHONE_INTL_RE.sub(_whole_if(8, 30), text)
-    text = _PHONE_TRUNK_RE.sub(_whole_if(9, 22), text)
-    text = _PHONE_NANP_RE.sub(_REDACT, text)
-    text = _PHONE_LABEL_WIDE_RE.sub(_keep_label_if(8, 30), text)
-    return _PHONE_INTL_WIDE_RE.sub(_whole_if(8, 30), text)
+    text = _scrub_phones(text)
+    return _CONTACT_CHAIN_RE.sub(_chain_sub, text) if _REDACT in text else text
+
+
+#: (pattern, group whose span is the number, min digits, max digits). The upper caps allow TWO numbers said back to back with
+#: only a space ("0400 555 101 0400 555 202"): a run that long is two phones run together, never a reason to keep both (a card
+#: number is rejected earlier, by the Luhn check)
+_PHONE_SPLIT = ((_PHONE_LABEL_RE, 3, 8, 30), (_PHONE_INTL_RE, 0, 8, 30), (_PHONE_TRUNK_RE, 0, 9, 22), (_PHONE_NANP_RE, 0, 0, 99))
+_PHONE_WIDE = ((_PHONE_LABEL_WIDE_RE, 3, 8, 30), (_PHONE_INTL_WIDE_RE, 0, 8, 30))
+_EDGE_RE = re.compile(r"^([^\w(+]*)(.*?)([^\w)]*)$", re.S)
+
+
+def _spans(text: str, passes) -> list:
+    return [m.span(g) for rx, g, lo, hi in passes for m in rx.finditer(text) if lo <= _digits(m.group(g)) <= hi]
+
+
+def _merge(spans: list) -> list:
+    out: list = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def _scrub_phones(text: str) -> str:
+    """Phone numbers: every pattern runs on the SAME text and the redacted spans are their UNION. The split shapes end a number
+    at a sentence end, so two numbers stay two ``[REDACTED]``; the wide shapes may cross ". " - whatever they cover that the split
+    shapes did not (``0400555101. 12``) is redacted too, its leading / trailing punctuation kept. No pass runs on text an earlier
+    pass already replaced, so a label one pass consumed can never hide the next number from another."""
+    split, wide = _merge(_spans(text, _PHONE_SPLIT)), _spans(text, _PHONE_WIDE)
+    if not split and not wide:
+        return text
+    out, pos, k = [], 0, 0           # ``k``: a forward cursor through the sorted split spans (linear, never rescanned)
+    for a, b in _merge([tuple(s) for s in split] + wide):
+        out.append(text[pos:a])
+        cur = a
+        while k < len(split) and split[k][0] < b:
+            sa, sb = split[k]
+            out.append(_redact_core(text[cur:sa]) + _REDACT)
+            cur = sb
+            k += 1
+        out.append(_redact_core(text[cur:b]))
+        pos = b
+    return "".join(out) + text[pos:]
+
+
+def _redact_core(piece: str) -> str:
+    """A stretch only a wide shape covered: redacted when it holds a digit, its leading / trailing punctuation and spaces kept."""
+    if not any(c.isdigit() for c in piece):
+        return piece
+    lead, _core, trail = _EDGE_RE.match(piece).groups()
+    return lead + _REDACT + trail
 
 
 def _luhn_valid(digits: str) -> bool:
@@ -1699,8 +1891,9 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
         return text, "iban"
 
     # a bare password (letters-only too) is redacted here as well: ``_scrub_secrets`` skips a text with no digit at all
-    redacted = _FOR_PASSWORD_RE.sub(_for_sub, _scrub_labelled(text))
-    redacted = _BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, redacted)   # a password said without "is", letters-only too
+    redacted = _drive(_FOR_PASSWORD_RE, _scrub_labelled(text), _never)
+    redacted = _drive(_REL_PASSWORD_RE, redacted, _always)              # "the password I use is <value>"
+    redacted = _drive(_BARE_PASSWORD_RE, redacted, _never)            # a password said without "is", letters-only too
     redacted = _scrub_secrets(redacted)
     return (_scrub_contact(redacted) if contact else redacted), None
 

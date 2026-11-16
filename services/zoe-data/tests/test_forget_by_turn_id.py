@@ -1329,3 +1329,85 @@ def test_the_scrubbed_excerpt_match_never_widens_a_bound_or_non_turn_twin():
     twins = {t.id for t in run(pa.twins_of(UID, target, svc=_Svc(), strict=True))}
     assert "kind" not in twins and "bound" not in twins, twins
     assert "old" in twins, twins
+
+
+# ── THE TWIN RULE, every matcher (review, PR #2574): ``turn_forget.twin_basis`` decides who may be matched by words ─────────────
+
+def _twin_matchers():
+    import ask_to_remember as atr
+
+    async def twins(svc, target):
+        return await pa.twins_of(UID, target, svc=svc, strict=True)
+
+    async def siblings(svc, target):
+        return await atr.siblings_of(svc, UID, target)
+    return {"twins_of": twins, "siblings_of": siblings}
+
+
+@pytest.mark.parametrize("matcher", ["twins_of", "siblings_of"])
+@pytest.mark.parametrize("target_kind", ["turn", "legacy"])
+def test_no_twin_matcher_pulls_a_non_turn_or_other_turn_row_into_a_forget(matcher, target_kind):
+    """Every twin / sibling matcher a forget planner uses goes through ONE rule: a candidate bound to a non-turn source
+    (``source_kind``, e.g. an Omi recording) or to ANOTHER saved turn is never a twin, however identical its words, excerpt
+    and time; a LEGACY candidate and one of the SAME saved turn still are. On d038d11e9 both matchers let the
+    ``source_kind`` row through (it fell to the words criteria)."""
+    from types import SimpleNamespace
+
+    now = time.time()
+    said = "Remember that my kayak paddles hang above the garden tap"
+
+    def row(rid, **prov):
+        return SimpleNamespace(id=rid, text="User's kayak paddles hang above the garden tap", metadata={
+            "user_id": UID, "status": "approved", "source_excerpt": said, "added_ts": now, "timestamp": now,
+            "tags": "explicit,ask_to_remember", **prov})
+    target = row("target", **({"source_turn": "m-target"} if target_kind == "turn" else {}))
+    rows = [target, row("omi", source_kind="omi_recording"), row("provider", source_kind="provider"),
+            row("other-turn", source_turn="m-another-turn"), row("legacy")]
+    if target_kind == "turn":
+        rows.append(row("same-turn", source_turn="m-target"))
+
+    class _Svc:
+        async def list_by_status(self, **_kw):
+            return rows
+    got = {r.id for r in run(_twin_matchers()[matcher](_Svc(), target))}
+    assert not {"omi", "provider", "other-turn"} & got, got
+    assert "legacy" in got, got
+    if target_kind == "turn":
+        assert "same-turn" in got, got
+
+
+@pytest.mark.parametrize("target_kind", ["turn", "legacy", "kind"])
+def test_twin_basis_is_the_one_rule(target_kind):
+    target = {"turn": {"source_turn": "m-1"}, "legacy": {}, "kind": {"source_kind": "omi_recording"}}[target_kind]
+    assert turn_forget.twin_basis(target, {}) == turn_forget.BY_WORDS
+    assert turn_forget.twin_basis(target, {"source_kind": "omi_recording"}) == ""
+    assert turn_forget.twin_basis(target, {"source_turn": "m-2"}) == ""
+    assert turn_forget.twin_basis(target, {"source_turn": "m-1"}) == (turn_forget.BY_ID if target_kind == "turn" else "")
+
+
+def test_a_topic_forget_after_a_restart_reaches_the_turn_of_each_matched_row(world, side_stores):
+    """Review P1 (PR #2574): after a restart there is no recent turn and no indexed entry - the matched fact's own ``source_turn``
+    is the only thing that names the turn. The topic forget's plan takes it, so the turn's transcript, night-mind observation and
+    turn-bound notes go with the fact. Fails on d038d11e9 (the plan's saved turns came only from recent turns and index hits)."""
+    from routers.chat import _save_chat_message
+
+    svc, chat = world
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", KW, user_id=UID)) is True
+    mid = next(m for m, (c, _meta) in chat.rows.items() if c == KW)
+    ref = run(svc.ingest("User keeps kayak paddles in the blue shed behind the garage", user_id=UID, source="turn_digest",
+                         status="approved", source_excerpt=KW))
+    meta = svc._collection().rows[ref.id][1]
+    meta.pop("source_kind", None)
+    meta["source_turn"] = mid
+    run(night_store.get_backend().put_observation(night_store.obs_row(
+        id="o-restart", user_id=UID, turn_id=mid, quote=KW, day="2026-10-08", said_at=time.time())))
+    turn_forget.reset()                                    # the restart: no recent turn in memory
+    assert not xw.get_backend().rows                       # ... and nothing in the exact-words index
+    res = run(forget_topic.forget(svc, UID, "my kayak paddles"))
+    assert res.forgotten and not (res.store_down or res.failed), res
+    assert ref.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert chat.off(mid), "the turn's transcript is still readable"
+    assert "o-restart" not in {o["id"] for o in run(night_store.get_backend().observations(UID))}, "the observation survived"
+    assert any(mid in mids for mids, _t in side_stores["notes"]), side_stores["notes"]
