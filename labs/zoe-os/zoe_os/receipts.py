@@ -81,10 +81,14 @@ class Receipt:
 
 _PARAM_TYPES = {"string": (str,), "integer": (int,), "number": (int, float)}
 MAX_STR = 500
+#: the reason when a ``one_of`` group (alternative arguments, e.g. ``in_minutes`` / ``due_at``) has none or more than one given
+ONE_OF = "needs exactly one of its alternative arguments"
 
 
 def check_params(params: dict | None, args: object) -> str:
-    """'' when ``args`` is exactly what ``params`` declares, else a fixed reason (no content)."""
+    """'' when ``args`` is exactly what ``params`` declares, else a fixed reason (no content).
+
+    A spec may name a ``one_of`` group: of the params in one group exactly one must be given (``ONE_OF`` otherwise)."""
     if params is None:
         return ""
     if not isinstance(args, dict) or set(args) - set(params):
@@ -103,6 +107,12 @@ def check_params(params: dict | None, args: object) -> str:
             return "wrong argument type"
         if not isinstance(v, str) and not (spec.get("minimum", v) <= v <= spec.get("maximum", v)):
             return "wrong argument type"
+    groups: dict[str, int] = {}
+    for name, spec in params.items():
+        if "one_of" in spec:
+            groups[spec["one_of"]] = groups.get(spec["one_of"], 0) + (name in args)
+    if any(n != 1 for n in groups.values()):
+        return ONE_OF
     return ""
 
 

@@ -39,7 +39,8 @@ from pathlib import Path
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
-from shadow_daemon import ACTS, ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds, write_identity  # noqa: E402
+from shadow_daemon import (ACTS, ADAPTERS, SHADOW_BRAIN, read_roster, recorded_people, serve, state_dir,  # noqa: E402
+                           write_creds, write_identity)
 from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person  # noqa: E402
 from zoe_os.events import Kind  # noqa: E402
@@ -52,22 +53,6 @@ _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_recei
 #: the member-delete path's identity: the forget family without a speaker assertion, nothing else. No reads, no emits, no acts.
 ERASER = {"skill": "eraser"}
 ERASER_CREDS = "erase-creds.json"
-
-
-def recorded_people(db: Path) -> set:
-    """Every id the kernel's record still names (its ``people`` links: what a whole-person forget seeds from). The same rule as
-    ``shadow_daemon.recorded_people``. Any error but "no database / no table yet" RAISES: never start without knowing who is held."""
-    if not db.exists():
-        return set()
-    con = sqlite3.connect(str(db))
-    try:
-        return {r[0] for r in con.execute("SELECT DISTINCT person FROM people")}
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc):
-            return set()
-        raise
-    finally:
-        con.close()
 
 
 def write_secret(path: Path, payload: dict) -> None:
@@ -417,32 +402,8 @@ def db_path(state: Path, db: str | None) -> Path:
     return path
 
 
-def read_roster(state: Path) -> tuple[list, str]:
-    """The CURRENT roster and how it read: ``ok``, ``empty`` or ``unreadable``. Forget never depends on it: the kernel loads every
-    id its record names whatever this says, and only roster members are granted anything.
-
-    * MISSING people.json: an operator error (the owner never exported a roster): refuse to start;
-    * EMPTY (``{"people": []}``, the last member removed): a valid household state. Nobody can be proposed for or acted for; the
-      recorded people can still be forgotten and erased;
-    * UNREADABLE (not JSON, wrong shape, a non-string id): treated as EMPTY for grants (nothing is granted on a roster nobody can
-      read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line) and ``health``
-      reports ``roster: unreadable``."""
-    path = state / "people.json"
-    if not path.exists():
-        raise SystemExit("people.json is missing: export the household roster first (see README)")
-    try:
-        people = json.loads(path.read_text("utf-8"))["people"]
-    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
-        people = None
-    if not isinstance(people, list) or not all(isinstance(p, str) and p for p in people):
-        print("zoe-os authority kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
-              file=sys.stderr, flush=True)
-        return [], "unreadable"
-    return people, "ok" if people else "empty"
-
-
 def build(state: Path, db: str | None = None):
-    people, roster_status = read_roster(state)
+    people, roster_status = read_roster(state, "authority")      # the one rule, shared with the shadow daemon
     path = db_path(state, db)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # the roster PLUS every id the record still names: a member taken off people.json is still erased by id (never granted)
