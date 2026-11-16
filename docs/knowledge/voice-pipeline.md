@@ -265,6 +265,17 @@ cached bytes diverge before its words; after the words they stay equal through t
 turn is the previous turn's words and template tokens only: the previous reply and the new turn still re-prefill.
 `ZOE_CONTINUITY_CEILING_S` (default 3.0, unchanged) is the continuity packet's wait; **0.4 is the candidate** (the household
 fallback's budget): a late packet is simply not carried, so SEAM_CONTINUITY matches may drop on a slow day.
+`ZOE_FLUE_PREPOST_CONCURRENT=1` (default off) starts the blocks every brain turn awaits whatever the precedence chain
+decides - READS only: fast-path, bridge, notes, identity / named guest, now card, manner, persona (the style-request WRITE
+and the register line it feeds stay in sequence where they ran) - as tasks
+right after the verify-on-challenge return, beside the sequential precedence chain (recall > continuity > hop > offer /
+list share > risk > every turn, whose blocks consume state only when they win). Same bytes in the same order (golden
+corpus test); a turn closed before its POST cancels and then awaits what it started, and every prefetch's outcome is
+retrieved. The bridge and the conversation notes change state when built (turn counts; the notes' 6 h cooldown and
+persisted served count): they are prefetched as a pure read (`prepare_block`, a `turn_draft.TurnDraft`) and their state
+change is committed only when the turn reaches the POST, so an aborted turn burns nothing. Synthetic plain turn:
+`FLUE_PREPOST total_ms` 253 -> 117 (`tests/test_flue_prepost_concurrent.py`, measured on the final tree); the live gain
+is what `FLUE_PREPOST` shows before and after.
 
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
@@ -1702,6 +1713,22 @@ per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks 
   - `muted_ms` is the digital-silence ms of the recording behind the turn (the figure `Recorded command` prints as
     `muted=`), for every turn kind, so the follow-up path has it without touching its own line. It is summed at the
     turn's end, off the path to the first sound. `-1` when no recording is known.
+  - `media=<1|0|-1> media_age_ms=<n|-1>` (appended last, 2026-11-14): the media watch's snapshot at the close (see
+    below). `-1 -1` while `MEDIA_WATCH_ENABLED` is off (the default).
+- **Media watch** (`_MediaWatch`, flag `MEDIA_WATCH_ENABLED` in `.env.voice`, default off, LOG-ONLY): is anything that
+  is not the daemon playing into the panel's PulseAudio server (AirPlay, the kiosk browser)? The reflex's `media`
+  input. A `media-watch` thread re-reads `pactl list sink-inputs` (C locale) on a `pactl subscribe` sink-input event
+  (coalesced to one read per 200 ms) and on a 1 s heartbeat; the close only reads the cached snapshot under a lock.
+  Foreign = an uncorked sink-input whose `application.process.id` is neither the daemon nor a direct child (parent
+  pid from `/proc/<pid>/stat`); an unattributable stream is foreign. `media=0` only when the snapshot is under
+  2000 ms old, the thread is alive, the last read succeeded and 1000 ms of clean reads exist; `1` when a foreign
+  stream was seen at the last read or went away under 1000 ms ago; else `-1`. pactl absent or dying: the
+  `media-watch-events` reader respawns `pactl subscribe` with a 1 s -> 60 s backoff while the heartbeat keeps reading.
+  Bounded: two threads, one `pactl subscribe` child, five scalars of state, subscribe lines read 512 bytes and
+  discarded, a listing parsed from at most 256 KB. RSS of the child and the per-read cost on the Pi are UNMEASURED:
+  measure on the panel before flipping it on. Pinned by `tests/unit/test_voice_daemon_media_watch.py` (every unknown
+  is `-1`, attribution, the hold, the threads surviving a dead pactl, the close never running pactl or waiting on
+  a hung read, one source mutation per rule).
 - `_PLAYOUT` (the barge ledger) is untouched. The instrument keeps its own playout model, because noting
   `_PLAYOUT` with duck off would grow it without a reset.
 - **Deploy (owner-run, Pi step is manual):** after the replay gate and landing, from a clean worktree at the merged commit

@@ -300,8 +300,346 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
     return None
 
 
+# A RECALL QUESTION about the past ("did i have chest pain last month?", "have i ever had chest pain?", "has my wife had chest pain?")
+# asks what memory holds; it reports nothing happening now (QA round 10a: three such questions got "Ring 000 now"). An ALLOW-LIST,
+# never a classifier of what is left over: a clause loses the floor only when the WHOLE clause is exactly
+#   [filler] (did <who> [ever] have | have|has|had <who> [ever] had) <symptom> [<one past-time phrase from _RECALL_TIME>]
+# where <symptom> is ONE exact red-flag phrase and nothing else (leading intensity words aside: _SYM_FILLER). The turn is split at punctuation only,
+# so a run-on is one clause and any trailing word ("its back", "it never stopped", another symptom, "and now", a typo, another
+# language) is a leftover that keeps the floor. Every clause must be one (filler-only clauses aside), and no present marker may
+# appear anywhere. If in doubt, the floor fires.
+_RQ_FILLER = r"(?:hey|hi|ok|okay|so|um+|uh+|oh|well|zoe|quick question)"
+_RQ_FILLER_ONLY_RE = re.compile(rf"^(?:{_RQ_FILLER}\s*)+$")
+_MONTHS = "january|february|march|april|may|june|july|august|september|october|november|december"
+#: THE CLOSED past-time list. "recently" is deliberately NOT in it: it can be present-relevant ("did i have chest pain recently"
+#: from someone with it now), so it keeps the floor.
+_RECALL_TIME = (
+    r"(?:last\s+(?:week|month|year|night|summer|winter|spring|autumn|christmas|easter)"
+    r"|yesterday"
+    rf"|in\s+(?:{_MONTHS})"
+    r"|in\s+(?:19|20)\d\d"
+    r"|(?:\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|a\s+few|several)\s+(?:days?|weeks?|months?|years?)\s+ago"
+    r"|years\s+ago"
+    r"|before"
+    r"|in\s+the\s+past"
+    r"|at\s+(?:christmas|easter)"
+    r"|when\s+(?:i|he|she|they|we|you)\s+(?:was|were)\s+(?:younger|little|small|a\s+kid|a\s+child|a\s+baby))"
+)
+#: the CLOSED who-slot: a pronoun, or "my / our <relation>" from a closed list. Anything else - a bare relation word used as a name
+#: ("has dad ..."), a person's name, any other word ("did help have ...") - keeps the floor (the fail-safe direction).
+_RQ_RELATIONS = ("mum|mom|mother|dad|father|wife|husband|partner|son|daughter|kid|child|brother|sister|nan|nana|grandma|grandpa|"
+                 "grandad|friend")
+_RQ_WHO = rf"(?:i|you|he|she|we|they|(?:my|our)\s+(?:{_RQ_RELATIONS}))"
+_RECALL_SHAPE_RE = re.compile(
+    rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)"
+    rf"\s+(?P<sym>[a-z ]+?)(?:\s+{_RECALL_TIME})?$")
+#: the only words a symptom may carry BEFORE the red flag itself
+_SYM_FILLER = frozenset({"a", "an", "any", "some", "the", "crushing", "bad", "severe", "sharp"})
+_PRESENT_MARK_RE = re.compile(r"(?<!\w)(?:just|now|still|again|today|tonight|this\s+(?:morning|afternoon|evening|week)|since|"
+                              r"all\s+day|at\s+the\s+moment|currently|right\s+now|anymore|recently|lately)(?!\w)")
+_CLAUSE_RE = re.compile(r"[.!?;,\n]+")
+
+
+def _only_a_symptom(sym: str, rx: dict) -> bool:
+    """Is ``sym`` exactly ONE red-flag PHRASE (call or see-today tier), with only ``_SYM_FILLER`` words beside it? The paraphrase
+    ``pairs`` are NOT accepted here: a body word and a symptom word a few words apart also fit "chest pain hurts", so a symptom
+    the exact phrases do not cover keeps the floor. Pure."""
+    words = sym.split()
+    while words and words[0] in _SYM_FILLER:      # LEADING intensity words only ("crushing chest pain"): a trailing one is a leftover
+        words.pop(0)
+    core = " ".join(words)
+    return bool(core) and any(pat.fullmatch(core) for _fid, _t, pat in rx["flags"])
+
+
+def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
+    """Is the (folded) turn ONLY a recall question about the past (above)? Pure; False whenever in doubt."""
+    rx = rx or _rx()
+    if _PRESENT_MARK_RE.search(s):
+        return False
+    clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip()]
+    clauses = [c for c in clauses if not _RQ_FILLER_ONLY_RE.match(c)]       # "hey zoe, did i ..."
+    if not clauses:
+        return False
+    for c in clauses:
+        m = _RECALL_SHAPE_RE.match(c)
+        if not m or not _only_a_symptom(m.group("sym"), rx):
+            return False
+    return True
+
+
+# PRESENT SELF-ASSESSMENT (flag ZOE_MEDICAL_SELF_ASSESS: unset = shadow; exactly off / shadow; ANY other value, a typo included,
+# = enforce). The frames, slots, conditions and their speech-to-text variants are a CLOSED allow-list in medical_safety_data/en.json
+# "self_assess" (explicit variants, never fuzzy: edit distance 1 on "stroke" also accepts "strike"): "am i having a heart attack?", "is this a
+# stroke?" name a time-critical CONDITION, not a symptom, so the red flags above never saw them and the turn reached the brain with no
+# call-now reply. The CLOSED condition list and the existing reply each one gets:
+#   heart attack / cardiac arrest              -> heart      (no red flag names the condition itself; the symptoms are covered)
+#   stroke / mini stroke / TIA / heat stroke   -> stroke     (heat stroke is a call-now condition too: the floor wins over the
+#                                                             imperfect stroke wording; "stroke of luck/genius", backstroke, a golf
+#                                                             or swimming "stroke" never match)
+#   anaphylaxis / anaphylactic shock|reaction  -> breathing  (its reply is about breathing and a swelling throat)
+#   overdose (noun and verb forms, present /  -> the human poisoning reply (Poisons line + the emergency number); the vet reply
+#   present perfect; data, like the others)      when the words clearly say an animal; "overdosed on <not a substance>" is an idiom
+# NOT added: choking and "can't breathe" (already red flags), an allergic reaction alone (hives are not call-now; with breathing trouble
+# the breathing flags already fire), a seizure (no existing reply fits; an open problem). A shape fires when the condition is asked
+# about or stated IN THE PRESENT about the speaker or someone present (am i / is he / is this / could this be / i think im having /
+# do you think ...); when it is unclear whether a question is general knowledge or about now ("could this be a heart attack?",
+# "is it a stroke if my face is drooping?") it fires. General knowledge with no present subject ("what is a stroke", "what are the
+# signs of a heart attack"), a past narrative ("my grandad had a stroke in 2019", "i nearly had a heart attack when i saw the bill")
+# and a past recall question (the allow-list shape above, with the condition) do not. Read by ``handle`` only: ``detect`` and the
+# memory filing are unchanged in every mode; off and shadow change no reply.
+SELF_ASSESS_ENV = "ZOE_MEDICAL_SELF_ASSESS"
+_SA_A = r"(?:a\s+|an\s+|the\s+)?(?:(?:big|massive|major|small|little|minor|mild|serious|bad)\s+)?"
+_SA_WHO = r"(?:i|you|he|she|they|we|it|this|that|my\s+[a-z]+|our\s+[a-z]+|your\s+[a-z]+|the\s+(?:baby|kid|child|man|woman)|(?!(?:a|an|the|what|which|how|there|here)(?!\w))[a-z]+)"
+# whole words only: without the trailing boundary "in the shower" (show), "on the playground" (play), "in the bookshop" (book) were
+# read as fiction and the emergency reply was withheld (fail-open; review of #2525)
+_SA_FICTION_WORDS = r"(?:movie|film|show|book|game|episode|series|story|novel|play)"
+
+
+def _sa_fiction() -> str:
+    """The fiction guard: "... in the movie / on the show". Whole words only, and NOT when the word is the first half of a physical
+    place ("in the game room", "at the book club", "in the movie theatre": ``fiction_place_after`` in the data), where the
+    emergency reply must not be withheld (fail-open; review of #2525)."""
+    places = "|".join(re.escape(w) for w in sorted(_sa_data().get("fiction_place_after", []), key=len, reverse=True)) or "(?!)"
+    return (r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+" + _SA_FICTION_WORDS + r"(?!\w)(?![\s-]+(?:" + places + r")(?!\w)))")
+#: a "stroke" that is not the condition: "stroke of luck / genius", a stroke on the water / in the pool / of the game
+#: function words no exclusion may be on its own (a bare "on" / "of" after a condition dropped "a stroke on my left side")
+_FUNCTION_WORDS = frozenset("a an the of on in at to for with by from down up my his her their our your this that it is was".split())
+
+
+def _phrase_rx(phrase: str) -> str:
+    """A data phrase as a regex: words joined by whitespace, ``{who}`` = any present person (``_SA_WHO``)."""
+    parts = [(_SA_WHO if w == "{who}" else re.escape(w)) for w in phrase.split()]
+    return r"\s+".join(parts) if parts else ""
+
+
+@lru_cache(maxsize=1)
+def _sa_data() -> dict:
+    return _data()["self_assess"]
+
+
+def _sa_term_key(term: str) -> str:
+    return re.sub(r"[\s-]+", "", term.lower())
+
+
+def _sa_not_after(term: str) -> str:
+    """A lookahead refusing ONE condition term only when an EXPLICIT idiom / sport / art phrase listed for THAT EXACT TERM follows it
+    ("stroke of luck", "stroke in the pool", "heart attack on a plate"); never a bare function word ("a stroke on my left side"
+    fires), and never another term of the same condition ("heat stroke in the pool", "a mini stroke in the water" fire: the
+    swim-stroke phrases belong to a bare "stroke"; review of #2525). Terms compare with spaces and hyphens removed, because the
+    term regex accepts either ("heart attack" / "heart-attack" / "heartattack" are one term)."""
+    want = _sa_term_key(term)
+    phrases = [p for g in _sa_data().get("term_not_after", []) if want in {_sa_term_key(t) for t in g.get("terms", [])}
+               for p in g.get("phrases", []) if p.split() and not set(p.split()) <= _FUNCTION_WORDS]
+    if not phrases:
+        return ""
+    return r"(?!\s+(?:" + "|".join(r"\s+".join(map(re.escape, p.split())) for p in sorted(phrases, key=len, reverse=True)) + r")(?!\w))"
+
+
+@lru_cache(maxsize=1)
+def _sa_cond() -> "tuple[str, dict]":
+    """(regex of every condition term and variant, longest first; {term: reply key}) from the data file."""
+    keys = {t.lower(): k for k, terms in _sa_data()["conditions"].items() for t in terms}
+    alts = []
+    for t in sorted(keys, key=len, reverse=True):
+        rx = r"[\s-]?".join(re.escape(w) for w in re.split(r"[\s-]+", t))
+        alts.append(rx + _sa_not_after(t))
+    return "(?:" + "|".join(alts) + r")(?!\w)", keys
+
+
+@lru_cache(maxsize=1)
+def _sa_verbs() -> "tuple[dict, dict]":
+    """({slot: regex} for the VERB forms of a condition ("am i overdosing", "has she overdosed", "did i just overdose"),
+    {term: reply key}). FAIL-SAFE: "<verb> on <X>" FIRES for any X ("overdosing on heroin", "on my dad's tablets", "on zorblex")
+    EXCEPT an object from the CLOSED idiom list (``verb_idiom_objects``: "overdosed on chocolate / netflix"); the drug-name list
+    never gates firing. The caffeine family (``verb_idiom_unless_asked``) is handled in ``self_assessment``."""
+    idioms = _sa_data().get("verb_idiom_objects", [])
+    idiom_rx = "|".join(r"\s+".join(map(re.escape, w.split())) for w in sorted(idioms, key=len, reverse=True)) or "(?!)"
+    # an idiom object ("overdosed on sugar") never wins when a MEDICINE word follows it within a few words ("sugar-coated tablets",
+    # "sugar free cough syrup": ``verb_idiom_not_before``): that is a real medicine and the reply must not be withheld (review of #2525)
+    meds = "|".join(re.escape(w) for w in sorted(_sa_data().get("verb_idiom_not_before", []), key=len, reverse=True)) or "(?!)"
+    not_med = rf"(?![\s-]+(?:[\w']+[\s-]+){{0,3}}(?:{meds})(?!\w))"
+    guard = (rf"(?!\s+on\s+(?:(?:my|his|her|their|the|some|all|that|this|those|these|a|an|so|way|too|much|many|lots|of)\s+)*"
+             rf"(?:{idiom_rx})(?!\w){not_med})")
+    slots: dict = {}
+    keys: dict = {}
+    for key, forms in _sa_data().get("verb_conditions", {}).items():
+        for slot, terms in forms.items():
+            slots.setdefault(slot, []).extend(terms)
+            keys.update({t.lower(): key for t in terms})
+    return {k: "(?:" + "|".join(re.escape(t) for t in sorted(v, key=len, reverse=True)) + r")(?!\w)" + guard
+            for k, v in slots.items()}, keys
+
+
+@lru_cache(maxsize=1)
+def _sa_present_re() -> "re.Pattern":
+    """One regex of every frame in the data file, slots filled from its slot lists; the condition and its article are {C}."""
+    d = _sa_data()
+    slots = {k: "(?:" + "|".join(_phrase_rx(p) for p in sorted(v, key=len, reverse=True)) + ")" for k, v in d["slots"].items()}
+    verbs = _sa_verbs()[0]
+    frames = []
+    for i, f in enumerate(d["frames"]):
+        rx = ""
+        j = 0
+        for tok in re.split(r"(\{[A-Z]+\})", f):
+            if tok == "{C}":
+                # the condition is captured in its OWN named slot (one name per frame), never re-searched in the whole match:
+                # a subject named like a condition ("is tia having a stroke") must not become the condition
+                rx += _SA_A + f"(?P<c{i}>" + _sa_cond()[0] + ")"
+            elif tok[1:-1] in verbs:
+                rx += f"(?P<v{i}>" + verbs[tok[1:-1]] + ")"
+            elif tok[1:-1] in _SA_SUBJECT_SLOTS:
+                # the frame's SUBJECT, captured so a decision about who it is (a pet?) reads only this span
+                rx += f"(?P<s{i}_{j}>" + slots[tok[1:-1]] + ")"
+                j += 1
+            elif re.fullmatch(r"\{[A-Z]+\}", tok):
+                rx += slots[tok[1:-1]]
+            elif tok:
+                words = r"\s+".join(re.escape(w) for w in tok.split())
+                rx += (r"\s+" if tok[0].isspace() else "") + words + (r"\s+" if tok[-1].isspace() and words else "")
+        frames.append(rx)
+    return re.compile(r"(?<!\w)(?:" + "|".join(frames) + r")" + _sa_fiction())
+
+
+#: the slots that name WHO the frame is about
+_SA_SUBJECT_SLOTS = frozenset({"Q", "S", "SUBJ", "DO", "HAS", "PERF"})
+
+
+#: a recall-question shape naming a condition ("did i have a stroke last year", "has dad had a heart attack before"): the same
+#: allow-list as the symptom one - the WHOLE clause, at most one closed past-time phrase, no present marker - or the floor fires
+@lru_cache(maxsize=1)
+def _sa_recall_res() -> "tuple[re.Pattern, re.Pattern]":
+    cond = _sa_cond()[0]
+    recall = re.compile(
+        rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)\s+{_SA_A}{cond}"
+        rf"(?:\s+{_RECALL_TIME})?$")
+    past_q = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}(?P<cpast>{cond})")
+    return recall, past_q
+
+def self_assess_mode() -> str:
+    """``ZOE_MEDICAL_SELF_ASSESS``: unset = shadow (the code default until the floor is replayed); exactly ``off`` or ``shadow`` =
+    that; ANY other value - "enforce", a typo, "on", "1" - = enforce, like every other floor (a typo never silences a floor).
+    Per-call read."""
+    try:
+        from typed_env import env_str
+
+        raw = env_str(SELF_ASSESS_ENV, "shadow").strip().lower()
+    except Exception:  # noqa: BLE001
+        return "shadow"
+    if raw in ("", "shadow"):
+        return "shadow"
+    return "off" if raw == "off" else "enforce"
+
+
+def _sa_asked(s: str) -> bool:
+    """Is the (folded) turn a present QUESTION about it (a "?" or a question head: am / is / are / could / might / do / does /
+    did / have / has, after filler)? Pure."""
+    return "?" in s or bool(re.match(rf"^(?:{_RQ_FILLER}\s+)*(?:am|is|are|could|might|can|do|does|did|have|has)(?!\w)", s))
+
+
+_SA_SPEAKER_RE = re.compile(r"^(?:am\s+i|i|im|i\s+am|we|we\s+are|were|are\s+we|do\s+i|do\s+we|have\s+i|have\s+we|ive|i\s+have|"
+                            r"weve|we\s+have)$")
+
+
+def _sa_who(m: "re.Match") -> Optional[str]:
+    """"speaker" when the frame's subject slot is the speaker (i / we), "other" when it names someone else, None when the frame
+    has no subject ("is this a stroke") or it cannot be told. Pure."""
+    subject = " ".join(v for n, v in m.groupdict().items() if v and n.startswith("s")).strip()
+    if not subject:
+        return None
+    if _SA_SPEAKER_RE.match(subject):
+        return "speaker"
+    return None if re.fullmatch(r"(?:is|are)\s+(?:it|you)|you|youre|you\s+are", subject) else "other"
+
+
+def _sa_match_verdict(m: "re.Match", s: str) -> Optional[Verdict]:
+    """The verdict of ONE frame match, from its own named slots, or None when an idiom voids this match. Pure."""
+    _cond_rx, keys = _sa_cond()
+    _verb_rx, verb_keys = _sa_verbs()
+    groups = {name: val for name, val in m.groupdict().items() if val}
+    slot = next(((n, v) for n, v in groups.items() if n[0] in "cv"), None)
+    if slot is None:
+        return None
+    if slot[0].startswith("v"):
+        key = verb_keys[slot[1].strip().lower()]
+        # the caffeine family is an idiom ("ive overdosed on coffee today") unless the turn ASKS about it in the present
+        # ("am i overdosing on caffeine?"): it voids THIS match only, never the rest of the turn
+        asked = _sa_data().get("verb_idiom_unless_asked", [])
+        after = s[m.end(slot[0]):]
+        if asked and re.match(r"\s+on\s+(?:(?:my|his|her|their|the|some|so|way|too|much|many|lots|of)\s+)*(?:"
+                              + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after) \
+                and not _sa_asked(s):
+            return None
+        if asked and re.match(r"\s+on\s+(?:(?:my|his|her|their|the|some|so|way|too|much|many|lots|of)\s+)*(?:"
+                              + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after):
+            # fired ONLY through the caffeine-class "asked now" path: the poisoning reply, ranked below any call-now condition
+            return Verdict("ingest_human", "poison_caffeine")
+    else:
+        term = re.sub(r"[\s-]+", " ", slot[1]).strip()
+        key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
+    cls = _sa_data().get("verdicts", {}).get(key, "red_call")
+    if cls == "ingest_human":
+        # an animal ONLY when the frame's own SUBJECT is one ("is my dog overdosing"); an animal mentioned anywhere else in the
+        # turn ("is alex overdosing? the dog is fine") leaves it human - when unsure, human (the safe reply)
+        subject = " ".join(v for n, v in groups.items() if n.startswith("s"))
+        rx = _rx()
+        if subject and rx["animal"].search(subject) and not rx["human"].search(subject):
+            return Verdict("ingest_animal", "poison_animal")
+    return Verdict(cls, key)
+
+
+def _sa_found(s: str) -> list:
+    """``[(verdict, who)]`` over every present frame match and every present-relevant past question of the folded turn, after the
+    speaker-over-third-party rule (below). Pure."""
+    present = list(_sa_present_re().finditer(s))
+    found = [(v, _sa_who(m)) for m in present for v in [_sa_match_verdict(m, s)] if v is not None]
+    # a past question naming a condition JOINS the choice (it no longer runs only when no present frame matched: "is my dog
+    # overdosing? have i had a stroke today?"). It is a recall question - answered from memory - only when every clause that
+    # holds no present frame is wholly the allow-listed recall shape and none of them carries a present marker
+    recall_re, past_q_re = _sa_recall_res()
+    past = list(past_q_re.finditer(s))
+    if past:
+        clauses = [c for c in re.finditer(r"[^.!?;,\n]+", s) if c.group(0).strip() and not _RQ_FILLER_ONLY_RE.match(c.group(0).strip())]
+        rest = [c.group(0).strip() for c in clauses
+                if not any(pm.start() < c.end() and c.start() < pm.end() for pm in present)]
+        recall = bool(rest) and not _PRESENT_MARK_RE.search(" ".join(rest)) and all(recall_re.match(c) for c in rest)
+        if not recall:
+            found += [(v, None) for pm in past for v in [_sa_match_verdict(pm, s)] if v is not None]
+    # the SPEAKER's own call-now condition wins the wording over a poison verdict about SOMEONE ELSE ("am i having a heart
+    # attack and my dad is overdosing on cocaine"); both the speaker's, or either unclear: URGENCY alone decides
+    if any(v.cls == "red_call" and who == "speaker" for v, who in found):
+        found = [(v, who) for v, who in found if not (v.cls == "ingest_human" and who == "other")]
+    return found
+
+
+def self_assessment(text: str) -> Verdict:
+    """The most urgent verdict (``URGENCY``) over EVERY present frame match in the turn - an idiom voids only the match it is in -
+    and every present-relevant past question naming a condition. ``NONE`` otherwise. Pure; never raises."""
+    try:
+        s = _fold(text)
+        found = _sa_found(s) if s else []
+        return min((v for v, _who in found), key=urgency) if found else NONE
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
+        return NONE
+
+
+def speaker_call_now(text: str) -> Verdict:
+    """The SPEAKER's own call-now condition in the turn (a red_call verdict whose frame subject is i / we), else ``NONE``. Pure."""
+    try:
+        s = _fold(text)
+        calls = [v for v, who in (_sa_found(s) if s else []) if v.cls == "red_call" and who == "speaker"]
+        return calls[0] if calls else NONE
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_safety speaker_call_now failed (%s)", type(exc).__name__)
+        return NONE
+
+
 def detect(text: str) -> Verdict:
     """The class of one turn (``NONE`` = leave it to the brain). Pure; never raises."""
+    return _detect(text, recall_gate=True)
+
+
+def _detect(text: str, *, recall_gate: bool) -> Verdict:
     try:
         s = _fold(text)
         if not s:
@@ -310,6 +648,9 @@ def detect(text: str) -> Verdict:
         c = _canon(s)
         ing = _ingestion_all(s, rx)
         call = _flag(s, rx, "call") or _pair(c, rx, "call")
+        recall_q = recall_gate and _recall_question(s, rx)
+        if recall_q:
+            call = None      # a symptom ASKED ABOUT in the past is answered from memory; an ingestion is never withheld
         if ing and ing.key == "object_minor" and not call:
             # a coin AND a stated sign (drooling, pain, cant swallow): the number now, not "ring if there is..."
             if _stated_sign(s, rx):
@@ -323,7 +664,7 @@ def detect(text: str) -> Verdict:
             first = min(ask.start(), ev.start())
             key = "emergency_number_poison" if rx["poison_event"].search(s[first:]) else "emergency_number"
             return Verdict("number", key, lead=s[:first])
-        soon = _flag(s, rx, "soon") or _pair(c, rx, "soon")
+        soon = None if recall_q else (_flag(s, rx, "soon") or _pair(c, rx, "soon"))
         if soon:
             return soon
         return _glucose(s, rx) or NONE
@@ -488,6 +829,31 @@ def _only_person(said: str, subject: str) -> bool:
                          said, re.IGNORECASE)
 
 
+def _present_emergency(fact: str, said: str) -> Optional[Verdict]:
+    """The call-now verdict when ``said`` (ONE turn) and the ``fact`` mined from it are the SAME call-now emergency said NOW (no past
+    time, no condition, in either), else None. The first half of ``emergency_event``'s rule. Pure."""
+    one = (said or "").strip()
+    if not one or "\n" in one or _not_now(one) or _not_now(fact):
+        return None
+    v = detect(one)
+    if v.cls != "red_call":
+        return None
+    fv = detect(fact or "")
+    return v if fv.cls == "red_call" and fv.key == v.key else None
+
+
+def unfiled_emergency(fact: str, said: str = "") -> bool:
+    """A mined fact that IS a present call-now emergency of its turn (``_present_emergency``) that ``emergency_event`` declined to
+    convert (a bystander, more than one person, a subject it cannot tie to the turn: QA round 10a). Stored as mined it reads as a
+    standing condition ("<name> fell over and cannot get up" under Routines, "wife has chest pain" as an attribute), so an AUTOMATIC
+    writer does not store it at all until the structured-claims redesign files it against the right person. The spoken reply is
+    unaffected. Pure; never raises."""
+    try:
+        return _present_emergency(fact, said) is not None and emergency_event(fact, said) is None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency).",
     "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. Only under THE CONSERVATIVE
@@ -497,13 +863,8 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     try:
         one = (said or "").strip()
         # one check, "is this happening now to this person": present (no past time), actual (no condition), then one named person
-        if not one or "\n" in one or _not_now(one) or _not_now(fact):
-            return None
-        v = detect(one)
-        if v.cls != "red_call":
-            return None
-        fv = detect(fact or "")
-        if fv.cls != "red_call" or fv.key != v.key:
+        v = _present_emergency(fact, one)
+        if v is None:
             return None
         subject = _subject(fact)
         if subject is None or not _only_person(one, subject) or _names_another(fact, one, subject):
@@ -520,6 +881,32 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
         return None
 
 
+_EVENT_TEXT_RE = re.compile(r"^(?P<who>.+?) had (?P<what>.+?) on (?P<date>\d{1,2} [A-Z][a-z]+ \d{4}) \(a medical emergency\)\.?$")
+
+
+def event_key(text: str) -> Optional[tuple]:
+    """``(person, kind, date)`` of an ``emergency_event`` text ("User had a fall on 14 November 2026 (a medical emergency)."), else
+    None. Two event texts are the SAME record only when all three match: the fixed template's own words ("User had ... on <date>
+    (a medical emergency)") outweigh the kind word, so a word-overlap paraphrase test read the day's chest pain as a repeat of the
+    day's fall and dropped it (QA round 10a). Pure."""
+    m = _EVENT_TEXT_RE.match((text or "").strip())
+    return (_event_who(m.group("who")), m.group("what").strip().lower(), m.group("date")) if m else None
+
+
+#: "User's son Max" / "my son Max" / "Max's" -> "max": a relation word is dropped ONLY when a NAME follows it, so two extractors'
+#: forms of one named person are one record. A relation with no name ("User's son") stays as it is: it is never merged with a name.
+_EVENT_REL_NAME_RE = re.compile(r"^(?i:(?:the\s+)?(?:user['’]s|my)\s+(?:[a-z]+\s+)?)(?P<name>[A-Z][a-z'’-]+)$")
+
+
+def _event_who(who: str) -> str:
+    w = " ".join((who or "").split())
+    m = _EVENT_REL_NAME_RE.match(w)
+    if m and m.group("name").lower() not in _NOT_A_NAME:
+        w = m.group("name")
+    w = re.sub(r"['’]s$", "", w)
+    return w.casefold()
+
+
 def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> str:
     """The fixed text for a verdict. Never model text. A call-now reply also says how to get someone in the house (QA round 8: a member
     who has fallen may not reach a phone): the intercom phrase only when ``intercom`` says it will work, else "call out". Zoe never
@@ -528,7 +915,8 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
     emergency, poison = _lines()
     f = dict(emergency=emergency, poison_number=poison or r["poison_number_fallback"])
     if v.cls == "ingest_human":
-        out = r[v.key if poison else v.key + "_nolines"].format(**f)
+        key = "poison_human" if v.key == "poison_caffeine" else v.key       # a caffeine overdose: the same poisoning reply
+        out = r[key if poison else key + "_nolines"].format(**f)
     elif v.cls == "ingest_animal":
         out = r["poison_animal"].format(**f)
     elif v.cls == "number":
@@ -550,24 +938,72 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
     return out
 
 
+#: THE URGENCY ORDER, most urgent first: when more than one detector reads the turn, the reply is the MOST urgent verdict, never the
+#: first one computed ("i have a headache, am i having a stroke?" is a stroke, not a headache). ``(cls, key)``; key None = any key of
+#: that class. The poisoning / call-now tier keeps ``detect``'s own choice between ingestion and a red flag (an urgent object or a
+#: poison before a red flag, a red flag before a harmless-looking object).
+URGENCY: tuple = (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
+                  ("ingest_human", "poison_caffeine"), ("ingest_human", "object_minor"), ("ingest_animal", "poison_animal"),
+                  ("ingest_animal", None), ("number", None),
+                  ("red_soon", None), ("glucose", None))
+
+
+def urgency(v: Verdict) -> int:
+    """The verdict's place in ``URGENCY`` (0 = most urgent); ``len(URGENCY)`` for no verdict. Pure."""
+    for i, (cls, key) in enumerate(URGENCY):
+        if v.cls == cls and (key is None or v.key == key):
+            return i
+    return len(URGENCY)
+
+
 async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool = False) -> Optional[str]:
     """The seam. The fixed reply when this turn is a medical-safety class in ENFORCE (the caller must NOT ask the brain), else None. NEVER raises."""
     try:
         m = mode()
         if m == "off":
             return None
-        v = detect(text)
+        v = det = detect(text)
+        # EVERY detector is read, and the MOST urgent verdict wins (URGENCY): a lower-urgency class detect found (a see-today
+        # symptom, a blood sugar, the emergency-number question) never hides the self-assessment's call-now
+        sa = self_assessment(text)
+        if sa.cls and urgency(sa) < urgency(v):
+            sam = self_assess_mode()
+            if sam != "off":
+                logger.info("MEDICAL_SELF_ASSESS user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest",
+                            sa.cls, sa.key, sam)
+            if sam == "enforce":
+                v = sa          # the call-now floor (shadow and off: the reply is exactly what it was)
         if not v.cls:
+            held = _detect(text, recall_gate=False)
+            if held.cls in ("red_call", "red_soon"):
+                # a recall question about the past: answered from memory, not the floor (a fixed code, never the words)
+                logger.info("MEDICAL_SAFETY_RECALL_QUESTION user=%s cls=%s key=%s mode=%s",
+                            (user_id or "guest").strip() or "guest", held.cls, held.key, m)
             return None
         logger.info("MEDICAL_SAFETY user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest", v.cls, v.key, m)
         if m != "enforce":
             return None
+        # CROSS-DETECTOR COMBINE (review of #2525): an ingestion / poisoning reply makes calling now CONDITIONAL on the other
+        # person's signs; when the SPEAKER's own call-now condition is also in the turn, the speaker must still hear the
+        # unconditional call-now. Both fixed replies, in that order: the speaker's call-now first, then the poisoning one.
+        # RULE: combine whenever the SPEAKER's own call-now condition is in the turn AND an ingestion / poisoning verdict (detect's,
+        # or the self-assessment's about someone else) is too - whichever of the two URGENCY ranked first; otherwise one reply.
+        other = v if v.cls in ("ingest_human", "ingest_animal") else (det if det.cls in ("ingest_human", "ingest_animal") else NONE)
+        spk = speaker_call_now(text) if other.cls and self_assess_mode() == "enforce" else NONE
+        if spk.cls:
+            v = other
+        lead = v if not spk.cls else spk
         minor = False
-        if v.cls == "red_call":
+        if lead.cls == "red_call":
             import distress_handoff
 
             minor = await distress_handoff._is_minor((user_id or "").strip())
-        return build_reply(v, minor=minor, intercom=v.cls == "red_call" and await _intercom_reachable(user_id, voice)) or None
+        out = build_reply(lead, minor=minor, intercom=lead.cls == "red_call" and await _intercom_reachable(user_id, voice))
+        if spk.cls:
+            logger.info("MEDICAL_SAFETY_COMBINED user=%s first=%s:%s then=%s:%s", (user_id or "guest").strip() or "guest",
+                        spk.cls, spk.key, v.cls, v.key)
+            out = f"{out} {build_reply(v)}"
+        return out or None
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety handle failed (%s)", type(exc).__name__)
         return None
