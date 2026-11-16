@@ -3,7 +3,10 @@
 ``docs/governance/ZOE_DESIGN_PRINCIPLES.md`` says its enforceable rules are mirrored in ``.cursor/rules/*.mdc`` and the legacy
 ``.cursorrules``, and its amendment process says a rule change updates both. Nothing read either side, so they drifted. Each
 section 3 enforceable rule and section 6 hard rule has a stable key phrase (a regex) below: it must appear in the charter's own
-section AND in at least one mirror, so a rule edited or dropped on one side fails until the other follows.
+section AND in at least one mirror, so one of THESE listed rules edited or dropped on one side fails until the other follows.
+
+What it does not do: it checks only the rules listed below, by phrase, in that one direction. A rule ADDED to the charter or to
+a mirror with no entry here is not noticed; adding a rule means adding its key phrase to this test in the same change.
 
 Two ratchets, reviewed 2026-11-16, that may only shrink:
 - ``UNMIRRORED``: charter rules no mirror carries yet.

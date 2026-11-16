@@ -791,6 +791,7 @@ _ENTRIES = (
     _f('ZOE_PRESENCE_WINDOW_S', 'str', '', doc='docs/architecture/samantha-evolution-packets.md'),
     _f('ZOE_PRIVACY_CANARY_DIR', 'str', ''),
     _f('ZOE_PRIVACY_CANARY_KEY', 'str', '', doc='tests/AGENTS.md'),
+    _f('ZOE_PRIVACY_CANARY_REQUIRED', 'bool', False, doc='tests/AGENTS.md', note='test and audit tool only: a missing canary key FAILS the scan instead of skipping'),
     _f('ZOE_PROACTIVE_ARRIVAL_RESPONSE_S', 'str', '', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_BRIEF_ON_ARRIVAL', 'str', '', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_LEDGER', 'str', '', doc='docs/knowledge/person-half-enforce-pack-2026-10-09.md'),
