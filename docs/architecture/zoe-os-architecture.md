@@ -343,7 +343,7 @@ the other side holds a projection that a drift report checks.
 | Who lives here, their role, guardians | the sign-in accounts plus child settings (D.2) | the kernel's roster |
 | Permissions, sharing, household settings, attention settings | **kernel** | the main database's `visibility` columns, written from kernel decisions so reads stay one SQL filter |
 | What was done, by whom, why; receipts; undo eligibility; refusals | **kernel** | none |
-| Forget shields (fingerprints), the forget ledger | **kernel**, plus the small ledger outside it replayed after a restore (adopted from prior art) | none |
+| Forget shields (fingerprints), the forget ledger | **kernel**. A restore brings back everything in the backup, forgotten things included (owner, 2026-11-16): nothing is replayed after one | none |
 | When a reminder or alarm fires next | **kernel** (the schedule maths) | the main service's scheduler is told |
 | Item words, notes, labels, event titles, contacts, memories | **main database** | the kernel holds fingerprints only (A.6) |
 
@@ -366,7 +366,7 @@ Everything above works with no code-hosting account and no network:
   offline;
 - the kernel's tests and the twin run offline (guarantee 10);
 - updates arrive as a new checkout or bundle; the kernel migrates its own database at start, after an automatic backup (E.2);
-- backups are local, and the forget ledger replays after a restore.
+- backups are local; they keep their data, and a restore brings back everything that was backed up (the owner's stated exception to permanent forgetting).
 
 ---
 
@@ -408,10 +408,10 @@ everything that is not the main service.
 
 ### C.3 Where a person's approval is required
 
-- **Consent changes** (grant, revoke, share), by the person, or a guardian for a child, from a verified voice or a signed-in
+- **Consent changes** (grant, revoke, share), by the person, or their carer where the care link names that power (a child's guardian today), from a verified voice or a signed-in
   screen. Never from a model proposal.
 - **Membership changes** by an adult administrator.
-- **Forget** by the person or a guardian for a child.
+- **Forget** by the person, or by a carer holding the memory-care power for them (A.7 rule 2).
 - **Consequential actions** need the person's own yes to that offer, used once ([lab] guarantee in `zoe-os.md` 2.5): unlocking or
   opening, anything that heats, sending anything outside the house, spending money, and any action whose cause is untrusted text
   (C.5).
@@ -481,7 +481,7 @@ option he chooses, never something inferred.
 | Type | Shared means | Accepted means | Removed person's items in OTHERS' containers | Removed person's own containers |
 |---|---|---|---|---|
 | Lists and list items | list visibility family, or shared with named members | "keep it" on the heads-up (a contribution keeps only that member's own items) | kept (the container is theirs) | kept if accepted by at least one remaining member, then owned by that member (one) or by the household (more than one); otherwise deleted with every item |
-| Reminders set for someone else | set by the author for another member (needs a new author field) | the recipient had granted "may remind me" (a guardian's standing permission for a child counts), or acknowledged, snoozed or completed it | a reminder the removed person set FOR a remaining member stays with that member | the removed person's own reminders, including ones others set for them, are deleted |
+| Reminders set for someone else | set by the author for another member (needs a new author field) | the recipient had granted "may remind me" (a carer's standing link counts), or explicitly kept it; acknowledging, snoozing or completing it alone is not acceptance | a reminder the removed person set FOR a remaining member stays with that member | the removed person's own reminders, including ones others set for them, are deleted |
 | Calendar events | visibility family, or invitees | an invitee's RSVP accepted (an edit by a remaining member keeps only that member's change, not the event) | kept | kept if accepted; otherwise deleted. **This changes today's behaviour**: today the erase keeps every family event, whose title is the removed person's words |
 | Contacts | visibility family | "keep" (a remaining member's own edits or links stay theirs; they do not keep the card) | n/a | the card and its fields kept if accepted; the removed person's private notes about the contact (rows with their author id) deleted |
 | Notes | visibility family | "keep" (a remaining member's own edit stays theirs) | n/a | kept if accepted, otherwise deleted |
@@ -575,7 +575,7 @@ the one quiet-hours function for its volume (WP-44). This drops map item G11.
 |---|---|---|
 | Adult member | account role admin, user or family member, and not marked minor | everything their permissions allow |
 | Child member | account role child, **or** marked minor in `member_modes` (either makes a child) | what a guardian has granted on their behalf; until the guardian ceremony exists, today's rule (D7) |
-| Guardian | an explicit link; until the owner sets them, every adult administrator, written as explicit links by the reconciler | manage the child's permissions, forget for the child, set, snooze and complete the child's reminders; reading the child's private items is owner choice H3 |
+| Guardian | an explicit link; until the owner sets them, every adult administrator, written as explicit links by the reconciler | a carer of a child or an adult in care (H3, A.7): see and manage that person's reminders, alarms, lists, routines and calendar unless an item is private; never their private notes or journal. Correcting or removing what Zoe remembers about them is the separate memory-care power, named on the link, never implied |
 | Named guest | a guest person in the roster with an expiry | add to household lists, set timers, be remembered as themselves; their own forget; their items follow D.1's rule when they are removed |
 | Anonymous guest | an unverified voice or the sentinel guest ids | household items only, timers, nothing personal, cannot grant |
 | **The household at the panel** | a principal the main service asserts for a signed-in panel device when no one is verified | owns household lists and household alarms; carries the fridge rule ("anyone at the panel may edit items on household lists"); may silence any ringing alarm in its room; cannot read anyone's personal data; cannot grant, forget or share |
@@ -627,7 +627,7 @@ fingerprints.
   any failure. The main service then runs on its fallback and the health check is red.
 - **Expand, then contract.** A release that changes the schema first adds (new code reads old and new); the next release removes.
   So rolling back the code by one release never meets a schema it cannot read. Rolling back a schema means restoring the
-  pre-migration backup and replaying the forget ledger, an owner step.
+  pre-migration backup, an owner step (a restore brings back what was backed up; nothing is replayed after it).
 
 ### E.3 Rehearse, roll out, roll back
 
