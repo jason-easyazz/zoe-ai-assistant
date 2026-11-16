@@ -134,8 +134,10 @@ editing `ZOE_OS_SHADOW_VERBS`. Leave `~/.zoe/os-shadow/` so a later forget still
   adds it decided, not a second list: it must be a SUBSET of production's rows (production's delete is a soft delete, so a decided
   row is always there in some state).
 - **How they are kept from diverging.** One order (kernel receipt, then production insert, in production's transaction) and one
-  check: `scripts/maintenance/os_authority_reconcile.py` (read-only, codes and counts) compares the kernel's row digests with every
-  `list_items` row. `kernel_only` (a kernel-decided add production never got: the production write failed after the receipt) must
+  check: `scripts/maintenance/os_authority_reconcile.py` (read-only, codes and counts) compares the kernel's rows with every
+  `list_items` row per (member, list, item) with duplicate counts, through KEYED digests (`list_digest` answers only the
+  `reconciler` credential; the key is fresh at each kernel start and never leaves the tool). Production keeps no adder per row, so a
+  personal list's row is its owner's and a shared list's row any roster member's; a run with an unreadable input says INCOMPLETE. `kernel_only` (a kernel-decided add production never got: the production write failed after the receipt) must
   be 0, exit 1 otherwise; `production_only_recent` is the expected count of adds the kernel did not decide (fallbacks, guests, the
   paths above, erased rows) and is read beside the `OS_AUTHORITY` fallback counts it also prints.
 - **All or none (a spoken add of several items).** `add_items_to_list` runs its one transaction inside `os_authority.all_or_none()`:
