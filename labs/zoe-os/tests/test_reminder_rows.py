@@ -304,3 +304,18 @@ def test_a_removed_carer_loses_every_reach_over_a_reminder_they_set_and_regains_
     house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))               # the link is back: so is the reach
     assert [r["id"] for r in house.rem.visible_to(A)] == [rid]
     assert house.act(A, "remind.snooze", id=rid, minutes=5).verified
+
+
+def test_a_removed_carer_cannot_explain_or_undo_a_reminder_they_set_until_the_link_returns(house):
+    receipt = house.act(A, "remind.set", note="synthetic marker <pack>", time="07:45", mentions=(K,), **{"for": K})
+    rid = rid_of(receipt)
+    assert house.k.explainer.why(receipt.seq, person=A)["seq"] == receipt.seq
+    house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
+    with pytest.raises(Refused):
+        house.k.explainer.why(receipt.seq, person=A)                          # the receipt holds K's reminder: no longer A's to see
+    with pytest.raises(Refused, match="not theirs to undo"):
+        house.k.actions.undo(A, actor=A)
+    assert house.row(rid)["note"] == "synthetic marker <pack>"
+    house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))               # the link is back: so is the reach
+    assert house.k.explainer.why(receipt.seq, person=A)["seq"] == receipt.seq
+    assert house.k.actions.undo(A, actor=A).verified and house.row(rid) is None

@@ -53,9 +53,11 @@ class DurableReminders(DurableRows):
         """Production's list filter, ``visibility = 'family' OR user_id = me`` (routers/reminders.py ``_visibility_filter_sql``),
         plus a CARER for the person they care for, by the CURRENT care link (not a private one). A family
         reminder is shared: a LEAST-access reader (no role stated) sees only their own (``capability.LEAST``)."""
-        shared = self._stated(person)
-        return [r | {"next_fire": self.next_fire(r)} for _, r in sorted(self.rows.items())
-                if (r["visibility"] == "family" and shared) or self._mine(person, r) or self._cares(person, r)]
+        return [r | {"next_fire": self.next_fire(r)} for _, r in sorted(self.rows.items()) if self.may_reach(person, r)]
+
+    def may_reach(self, person: str, row: dict) -> bool:
+        """Read, and so undo and explain: the owner, their carer by the CURRENT link, or any stated member for a family one."""
+        return (row["visibility"] == "family" and self._stated(person)) or self._mine(person, row) or self._cares(person, row)
 
     def _stated(self, person: str) -> bool:
         who = self.grants.people.get(person)

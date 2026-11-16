@@ -30,6 +30,7 @@ _NO = "not an event you may ask about"
 class Explainer:
     def __init__(self, spine: Spine, people: dict[str, Person]) -> None:
         self.spine, self.people = spine, people
+        self.reach: list = []        # row stores' ``reach_of``: a receipt over a row is seen by the CURRENT link, never the setter
 
     # ---- who may see what ---------------------------------------------------------------
     def _is(self, asker: str, person: str | None) -> bool:
@@ -39,6 +40,8 @@ class Explainer:
     def _may_see(self, asker: str, ev: Event) -> bool:
         who = self.people.get(asker)
         if who is None:
+            return False
+        if ev.kind is Kind.ACTION_RECEIPT and any(reach(asker, ev.payload) is False for reach in self.reach):
             return False
         if ev.visibility is Visibility.HOUSEHOLD:
             return who.role != GUEST
