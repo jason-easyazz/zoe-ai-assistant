@@ -66,6 +66,50 @@ def _cache_get(session_id: str) -> Optional[dict]:
     return None
 
 
+#: members a removal (Settings > Delete, ``member_removal``) has put behind its barrier IN THIS PROCESS: every request of theirs is
+#: refused at once, cached session or not (``bar_member`` also evicts their cached identities). A process that did not see the
+#: removal (a restart) checks the DURABLE removal row on every cache miss (``_under_removal``), so it never rests on the cache.
+_BARRED: set = set()
+
+
+def bar_member(user_id: str) -> None:
+    """Refuse every request of ``user_id`` from now on and drop their cached sessions (the removal's step 1, before the sign-in goes)."""
+    uid = str(user_id or "")
+    if not uid:
+        return
+    _BARRED.add(uid)
+    for sid in [s for s, (u, _ts) in list(_session_cache.items()) if str((u or {}).get("user_id") or "") == uid]:
+        _session_cache.pop(sid, None)
+
+
+def _store_absent(exc: BaseException) -> bool:
+    """No database to read (no pool in this process, a store never migrated): nothing durable says the member is being removed."""
+    s = str(exc).lower()
+    return ("pool" in s and ("not" in s or "no " in s)) or "no such table" in s or ("relation" in s and "does not exist" in s)
+
+
+async def _under_removal(user_id: str) -> bool:
+    """True when ``user_id`` is behind a removal's barrier: barred in this process, or a durable removal row exists. RAISES when the row
+    cannot be read (the caller decides: fail closed unless ``ZOE_AUTH_FAIL_CLOSED`` is off)."""
+    uid = str(user_id or "")
+    if not uid:
+        return False
+    if uid in _BARRED:
+        return True
+    try:
+        import member_removal
+
+        state = await member_removal.get_store().get(uid)
+    except Exception as exc:  # noqa: BLE001
+        if _store_absent(exc):
+            return False
+        raise
+    if state is not None:
+        _BARRED.add(uid)
+        return True
+    return False
+
+
 def _cache_set(session_id: str, user: dict):
     if len(_session_cache) > 500:
         cutoff = time.monotonic() - CACHE_TTL_SECONDS
@@ -231,6 +275,9 @@ async def get_current_user(request: Request) -> dict:
 
     cached = _cache_get(session_id)
     if cached:
+        if str(cached.get("user_id") or "") in _BARRED:      # a member under removal: refused, whatever the cache says
+            _session_cache.pop(session_id, None)
+            raise HTTPException(status_code=401, detail="This account is being removed")
         _refine_traffic_class(cached)
         return cached
 
@@ -259,6 +306,16 @@ async def get_current_user(request: Request) -> dict:
         degraded["auth_degraded"] = True
         _refine_traffic_class(degraded)
         return degraded
+    # the DURABLE barrier, on every cache miss: a member under removal is refused even by a process that never saw it start
+    try:
+        under_removal = await _under_removal(str(validated.get("user_id") or ""))
+    except Exception as exc:  # noqa: BLE001 - the removal row cannot be read
+        logger.warning("removal barrier unreadable (%s)", type(exc).__name__)
+        if _AUTH_FAIL_CLOSED:
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
+        under_removal = False
+    if under_removal:
+        raise HTTPException(status_code=401, detail="This account is being removed")
     _cache_set(session_id, validated)
     _refine_traffic_class(validated)
     return validated

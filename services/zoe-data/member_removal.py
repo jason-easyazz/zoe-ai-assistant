@@ -155,9 +155,13 @@ def set_store(store) -> None:
 # -- the four steps (module functions, so a test can watch their order) ---------------------------------------------------------
 
 async def put_barrier(user_id: str) -> None:
+    import auth
     import erase_watermark
     import user_erase_gate
 
+    # the member's REQUESTS stop first: their cached identities are dropped and every request of theirs is refused in this process
+    # (another process refuses them from the durable removal row, written before this step: ``auth._under_removal``)
+    auth.bar_member(user_id)
     await erase_watermark.record(user_id, actor="member_removal")      # RAISES when it cannot be made durable: nothing else runs
     async with user_erase_gate.erasing(user_id):
         pass

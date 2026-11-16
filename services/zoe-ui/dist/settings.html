@@ -1823,13 +1823,17 @@ async function resumeRemoval(id) {
 }
 
 async function watchRemoval(id, name) {
-  for (let i = 0; i < 90; i++) {
-    await new Promise(res => setTimeout(res, 2000));
+  // every 2 s for the first 3 minutes, then every 20 s for as long as the page is open (a big erase can take a while); the badge
+  // never claims more than the server said
+  for (let i = 0; ; i++) {
+    await new Promise(res => setTimeout(res, i < 90 ? 2000 : 20000));
     let st;
-    try { st = await apiCall('GET', `/api/members/${encodeURIComponent(id)}/removal`); } catch (e) { return; }
+    try { st = await apiCall('GET', `/api/members/${encodeURIComponent(id)}/removal`); }
+    catch (e) { if (i === 90) toast(`Still deleting ${name}. Reopen Settings to check.`, 'info'); continue; }
     removalsById[id] = st;
     if (st.status === 'done') { toast(`${name} was deleted, with everything Zoe kept about them.`, 'success'); loadUsers(); return; }
     if (st.status === 'retrying') { toast(`Deleting ${name} isn't finished yet. Zoe will keep retrying.`, 'error'); loadUsers(); return; }
+    if (i === 90) toast(`Still deleting ${name}. This page keeps checking.`, 'info');
   }
 }
 

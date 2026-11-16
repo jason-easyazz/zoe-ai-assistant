@@ -95,6 +95,9 @@ def world(tmp_path, monkeypatch):
     yield w
     mr.set_store(None)
     ew.set_backend(None)
+    import auth
+
+    auth._BARRED.clear()                                    # the in-process bar never leaks into another test
 
 
 def test_settings_member_delete_runs_full_erase(world):
@@ -312,3 +315,69 @@ def test_a_runner_whose_stale_claim_was_taken_over_can_neither_complete_nor_rele
             mr.full_erase = real
     assert asyncio.run(b_runs_while_a_returns()) == "done"
     assert world.steps() == ["delete_user", "sign_in_delete"]
+
+
+def test_a_cached_session_of_a_member_under_removal_cannot_write_a_note(world, monkeypatch):
+    """The class fix for #2669's review: zoe-auth ends the member's sessions at step 2, but zoe-data caches a validated identity for 30
+    s. The ONE dependency every member route uses (``auth.get_current_user``) refuses a member under removal - from the in-process
+    bar (step 1 also drops their cached identities) and, on every cache miss, from the DURABLE removal row - so a cached session posts
+    nothing. (``erase_watermark.store_write_guard`` covers only writes inside a bound TURN; a plain REST write is stopped here.)"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import auth
+    from database import get_db
+    from routers import notes as notes_router
+
+    writes = []
+
+    class _DB:
+        async def execute(self, sql, *a, **k):
+            writes.append(sql)
+
+            class _C:
+                rowcount = 1
+
+                async def fetchone(self):
+                    return None
+            return _C()
+
+        async def commit(self):
+            pass
+
+    async def no_gate(*a, **k):
+        return None
+    monkeypatch.setattr(notes_router, "require_feature_access", no_gate)
+    app = FastAPI()
+    app.include_router(notes_router.router)
+    app.dependency_overrides[get_db] = lambda: _DB()
+    auth._session_cache.clear()
+    auth._BARRED.clear()
+    auth._cache_set("sess-a", {"user_id": A, "role": "member"})
+    auth._cache_set("sess-b", {"user_id": "member-b", "role": "member"})
+    asyncio.run(mr.advance(A, actor=ADMIN, session_id=""))                    # step 1 only (no admin session: stops at the barrier)
+    c = TestClient(app, raise_server_exceptions=False)   # the control only needs to reach the INSERT
+    r = c.post("/api/notes/", json={"title": "t", "content": "synthetic words"}, headers={"X-Session-ID": "sess-a"})
+    assert r.status_code == 401 and writes == [], "the cached member is refused and nothing is written"
+    # a fresh process (nothing barred, nothing cached): zoe-auth still validates the session (step 2 not done), the durable row refuses
+    auth._session_cache.clear()
+    auth._BARRED.clear()
+
+    async def still_valid(session_id):
+        return {"user_id": A, "role": "member"}
+    monkeypatch.setattr(auth, "_validate_with_auth_service", still_valid)
+    r = c.post("/api/notes/", json={"title": "t", "content": "synthetic words"}, headers={"X-Session-ID": "sess-a"})
+    assert r.status_code == 401 and writes == []
+    # control: another member's cached session writes
+    auth._cache_set("sess-b", {"user_id": "member-b", "role": "member"})
+    r = c.post("/api/notes/", json={"title": "t", "content": "synthetic words"}, headers={"X-Session-ID": "sess-b"})
+    assert any("INSERT INTO notes" in w for w in writes), "B passed the auth dependency and the note was written"
+    auth._session_cache.clear()
+    auth._BARRED.clear()
+
+
+def test_settings_keeps_following_a_long_removal_instead_of_going_quiet():
+    src = SETTINGS.read_text(encoding="utf-8")
+    fn = src[src.index("async function watchRemoval("):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "for (let i = 0; ; i++)" in fn and "20000" in fn and "Still deleting" in fn
