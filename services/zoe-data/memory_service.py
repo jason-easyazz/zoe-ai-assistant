@@ -1375,7 +1375,7 @@ _LABELLED_SECRET_RE = re.compile(
     # the value stops before trailing punctuation (the clause stays readable). The connector is UNAMBIGUOUS: "is" / "was" takes an
     # optional ":" / "=" only together with the spaces in front of it (``(?:\s*[:=])?``), so no two whitespace runs can split the
     # same spaces - two adjacent runs around an optional ":" were quadratic on a long run of trailing whitespace (bot review)
-    r"([^\s,;!?]+?)(?=[.,;!?]*(?:\s|$))" + _SUFFIX,
+    r"(\S+?)(?=[.,;!?]{0,8}(?:\s|$))" + _SUFFIX,
 )
 #: after "<label> is / was" (NOT after = or :, which always introduce a value) the first word is kept only when it says what STATE
 #: the secret is in or WHERE it is, or negates: a closed, whole-word list. Deliberately tighter than ``_PASSWORD_NOT_VALUES``: no
@@ -1490,7 +1490,7 @@ _CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an option
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
 #: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
 #: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
-_TOKEN = r"[^\s,;!?]*?\d[^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,12}){0,3}"
+_TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[ -]\d{2,12}){0,3}"
 _CODE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
@@ -1518,7 +1518,7 @@ _PASSWORD_NOT_VALUES = (
 #: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
 #: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
 #: token, and the match is anchored on the label (linear: the adversarial timing test)
-_PASSWORD_VALUE = r"[^\s,;!?.][^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,12}){0,3}"
+_PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[ -]\d{2,12}){0,3}"
 #: words SKIPPED after a bare label (at most four), the word after them judged: "my password now <value>" / "password please
 #: <value>" redact the value; "change your password now" (a modifier, then nothing) is kept
 #: (not changed / reset / set / updated / to: after a bare label they are a compound - "password reset link", "password change")

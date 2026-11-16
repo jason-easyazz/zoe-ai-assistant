@@ -588,3 +588,35 @@ def test_every_label_form_stays_linear_on_a_long_padding_run(pad):
         if t_long > 0.08 and all(_timed(long) / max(_timed(short), 1e-4) > 2.5 for _ in range(2)):
             slow.append((form, "ratio", round(t_long, 3)))
     assert not slow, slow
+
+
+# --- a secret with punctuation INSIDE it is redacted whole (review of #2660) ------------------------------------------------------
+# The value patterns used to stop at , ; ! ? and then needed whitespace after trailing punctuation, so "abc!def" matched nothing
+# (the labelled form came back unchanged) or lost only its first half (the bare and code forms left "!def" behind).
+_PUNCT_FORMS = (
+    "my password is {v}", "my password was {v}", "the wifi password is {v}", "password: {v}", "password = {v}", "password {v}",
+    "my passcode is {v}", "the api key is {v}", "token: {v}", "my secret is {v}", "the passphrase is {v}",
+    "the door code is {v}", "the alarm code is {v}", "the gate code: {v}", "the safe combination is {v}",
+    "the password for the wifi is {v}", "my pin is {v}",
+)
+_PUNCT_VALUES = ("qzx7!wkv9", "qzx7,wkv9", "qzx7;wkv9", "qzx7?wkv9", "qzx7!wkv9,jbd4", "7qzx,9wkv", "qzx7!!wkv9", "qzx7,wkv9.")
+_PUNCT_TAILS = ("", ".", "!", " and the dog is fed", ", see you later")
+
+
+@pytest.mark.parametrize("form", _PUNCT_FORMS)
+def test_a_secret_with_punctuation_inside_is_redacted_whole(form):
+    left = []
+    for value in _PUNCT_VALUES:
+        for tail in _PUNCT_TAILS:
+            out, reject = scrub_pii(form.format(v=value) + tail)
+            if reject is None and any(part in out for part in ("qzx", "wkv", "jbd")):
+                left.append((value, tail, out))
+    assert not left, left
+
+
+def test_punctuation_after_a_secret_still_ends_it_and_the_sentence_survives():
+    """Trailing punctuation followed by a space is the END of the value: the rest of the sentence is not swallowed."""
+    out, _ = scrub_pii("my password is qzx7wkv9, and the bins go out on friday")
+    assert "qzx7wkv9" not in out and "bins go out on friday" in out
+    out, _ = scrub_pii("the door code is 4521. the plumber comes at noon")
+    assert "4521" not in out and "plumber comes at noon" in out
