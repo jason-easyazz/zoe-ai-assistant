@@ -274,3 +274,18 @@ def test_an_unrelated_forget_never_brings_back_an_undone_reminder_or_edit(house,
     assert house.row(rid) is None and house.row(kept)["note"] == "synthetic kept"
     again = restart(house, tmp_path, clock)
     assert again.row(rid) is None and again.row(kept)["note"] == "synthetic kept"
+
+
+def test_a_least_access_member_sees_no_shared_reminder_and_no_carer_acts_for_them(tmp_path, clock):
+    from zoe_os.capability import LEAST
+    from zoe_os.spine import Refused as R
+    h = House(tmp_path / "least.db", clock)
+    h.k.grants.people["member-u"] = Person("member-u", guardians=(A,))        # no role stated: least access, with a guardian link
+    try:
+        assert h.k.grants.people["member-u"].role == LEAST
+        h.act(A, "remind.set", note="synthetic family note", time="19:00", visibility="family")
+        assert h.rem.visible_to("member-u") == []                             # a shared reminder is not theirs to read
+        with pytest.raises(R, match="only a carer"):
+            h.act(A, "remind.set", note="x", time="07:45", mentions=("member-u",), **{"for": "member-u"})
+    finally:
+        h.k.close()
