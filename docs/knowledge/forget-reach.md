@@ -288,7 +288,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `agent_cost_events` | pg_table | metadata | out_of_scope | - | Token counts and cost per call. |
 | `llm_call_log` | pg_table | metadata | out_of_scope | - | Latency and token counts per call. |
 | `ui_actions` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
-| `ui_action_ledger` | pg_table | words | reached | member: `member_owned_forget.forget_user` | Event ledger for UI actions: its 'queued' event holds the action's payload (a toast's words), its 'ack' event the panel's ui_context. delete_user removes the member's rows before their actions (and the actions' ON DELETE CASCADE takes the rest). |
+| `ui_action_ledger` | pg_table | words | reached | member: `member_owned_forget.forget_user` | Event ledger for UI actions: its 'queued' event holds the action's payload (a toast's words), its 'ack' event the panel's ui_context. delete_user removes the member's rows before their actions (and the actions' ON DELETE CASCADE takes the rest), and every action queued FOR the member under a panel's identity (a guest kiosk stores it as 'guest'; the queued event's origin_user_id names the member) with all its ledger rows. Actions queued before origin_user_id was recorded name no member and are not found. |
 | `engineering_tasks` | pg_table | metadata | out_of_scope | - | The household's engineering pipeline (tickets about the code, owner-authored), not member memory. |
 | `openclaw_approvals` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
 | `openclaw_run_state` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |

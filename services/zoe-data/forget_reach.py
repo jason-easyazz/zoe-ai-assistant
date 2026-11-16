@@ -125,7 +125,7 @@ TABLES: tuple[Store, ...] = (
        "The forget LEDGER itself: salted hashes, no names, plus one erase WATERMARK per erased member (erase_watermark: an id and a "
        "time). It must survive a forget to keep the forget enforced."),
     # --- the verbatim transcript ---
-    _t("chat_sessions", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # emptied sessions go; one still holding another member's turns loses its title and goes to a remaining participant
+    _t("chat_sessions", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # emptied sessions go; every surviving one that held a deleted turn has its title re-derived from its first surviving user turn; one the member owned goes to a remaining participant
     _t("chat_messages", WORDS, REACHED, member=_OWNED_M, entity="forget_redact.on_forget"),   # every turn the member owns (per-turn owner, else the session owner)
     _t("chat_feedback", WORDS, REACHED, member=_OWNED_M),
     _t("background_tasks", WORDS, REACHED, member=_OWNED_M),
@@ -198,7 +198,9 @@ TABLES: tuple[Store, ...] = (
     _t("ui_actions", WORDS, REACHED, member=_OWNED_M),
     _t("ui_action_ledger", WORDS, REACHED, "Event ledger for UI actions: its 'queued' event holds the action's payload (a toast's words), "
        "its 'ack' event the panel's ui_context. delete_user removes the member's rows before their actions (and the actions' "
-       "ON DELETE CASCADE takes the rest).", member=_OWNED_M),
+       "ON DELETE CASCADE takes the rest), and every action queued FOR the member under a panel's identity (a guest kiosk stores it as "
+       "'guest'; the queued event's origin_user_id names the member) with all its ledger rows. Actions queued before origin_user_id was "
+       "recorded name no member and are not found.", member=_OWNED_M),
     _t("engineering_tasks", METADATA, OUT_OF_SCOPE, "The household's engineering pipeline (tickets about the code, owner-authored), not member memory."),
     _t("openclaw_approvals", WORDS, REACHED, member=_OWNED_M),   # dead since OpenClaw was retired; the table drop is the OpenClaw removal PR
     _t("openclaw_run_state", WORDS, REACHED, member=_OWNED_M),

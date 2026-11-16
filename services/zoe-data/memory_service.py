@@ -2409,7 +2409,7 @@ class MemoryService:
                 # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
                 try:   # fail closed: forget_user never raises, so its failed file rewrite (_save_failed) is checked here
                     import warm_speaker
-                    await asyncio.to_thread(warm_speaker.forget_user, user_id)
+                    await asyncio.to_thread(warm_speaker.forget_user, user_id, strict=True)   # a load failure raises too
                     if getattr(warm_speaker, "_save_failed", False):
                         raise OSError("warm-speaker memo not rewritten")
                 except Exception as exc:  # noqa: BLE001

@@ -213,8 +213,8 @@ def test_the_transcript_goes_with_no_orphans_and_shared_sessions_keep_the_other_
     _delete(svc)
     assert _ids(store, "chat_messages") == {"m5", "m6"}, "every turn A owned goes; B's turns stay, wherever they are"
     assert _ids(store, "chat_sessions") == {"s-shared", "s-b"}, "A's emptied session and the kiosk session A alone spoke in go"
-    assert _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-shared'") == [(B, "New Chat")], \
-        "the shared session loses A's title and is handed to B, who is still in it"
+    assert _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-shared'") == [(B, "B speaks")], \
+        "the shared session loses A's title (re-derived from B's first surviving turn) and is handed to B, who is still in it"
     assert _ids(store, "chat_ag_ui_runs") == set(), "the runs of an emptied session go, and a shared one's that nobody else started"
     assert not _q(store, "SELECT m.id FROM chat_messages m LEFT JOIN chat_sessions s ON s.id = m.session_id WHERE s.id IS NULL")
     assert not _q(store, "SELECT s.id FROM chat_sessions s WHERE NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id)")
@@ -1298,3 +1298,46 @@ def test_a_session_another_member_owns_that_held_only_the_members_turns_keeps_it
     assert {r[0] for r in _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-b'")} == {"m6"}
     assert _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b-own'") == [("run-bo",)], "untouched"
     assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-b-own'") == [("B only",)]
+
+
+def test_a_toast_queued_for_the_member_on_a_guest_kiosk_goes_with_its_ledger_and_another_members_stays(env, store):
+    """A guest kiosk stores every action as ``guest``: the member is only its ORIGIN (the queued ledger event's origin_user_id)."""
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        for aid, origin in (("ua-guest-a", A), ("ua-guest-b", B)):
+            await x("INSERT INTO ui_actions VALUES (?, 'guest', ?)", (aid, json.dumps({"message": "synthetic words"})))
+            await x("INSERT INTO ui_action_ledger VALUES (?, ?, 'guest', 'kiosk-1', 'queued', ?)",
+                    ("l-" + aid, aid, json.dumps({"action_type": "panel_announce", "payload": {"message": "synthetic words"},
+                                                  "origin_user_id": origin})))
+            await x("INSERT INTO ui_action_ledger VALUES (?, ?, 'guest', 'kiosk-1', 'ack:done', '{}')", ("k-" + aid, aid))
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    assert "ua-guest-a" not in _ids(store, "ui_actions") and "ua-guest-b" in _ids(store, "ui_actions")
+    assert {r for r in _ids(store, "ui_action_ledger") if "guest" in r} == {"l-ua-guest-b", "k-ua-guest-b"}
+
+
+def test_a_surviving_session_titled_by_the_members_first_turn_loses_their_words_from_its_title(env, store):
+    """A's first turn titled B's session, then B spoke: after the delete the title is re-derived from B's first surviving turn (the
+    same rule the chat path uses); B's own titled session that A never spoke in is untouched."""
+    from chat_session_title import derive_session_title
+
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-bt', ?, 'Planning the surprise party')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('bt-1', 's-bt', 'user', "
+                "'Planning the surprise party', ?, '2026-01-01 00:00:01')", (_meta(A),))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES ('bt-2', 's-bt', 'user', "
+                "'What should we cook for dinner tonight', '2026-01-01 00:00:02')")
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-bown', ?, 'A title B typed for their own chat')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('bo-9', 's-bown', 'user', 'something else')")
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    (title,), = _q(store, "SELECT title FROM chat_sessions WHERE id = 's-bt'")
+    assert "surprise" not in title.lower() and title == derive_session_title("What should we cook for dinner tonight")
+    assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-bown'") == [("A title B typed for their own chat",)]

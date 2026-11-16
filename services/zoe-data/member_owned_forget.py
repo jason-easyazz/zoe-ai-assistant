@@ -284,9 +284,54 @@ async def _transcript(r: _Run, user_id: str) -> None:
     # of every surviving session they owned or spoke in; then the gone sessions (children before parents: the FK-order test)
     orphans = [sid for sid in shared if sid in set(owned) and not await _hand_over(r, user_id, sid)]
     await r.by_ids("DELETE FROM chat_messages WHERE session_id", orphans)
-    await _shared_runs(r, user_id, [sid for sid in shared if sid not in set(orphans)])
+    surviving = [sid for sid in shared if sid not in set(orphans)]
+    await _shared_runs(r, user_id, surviving)
+    await _retitle(r, surviving)
     await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty)
     await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans)
+
+
+async def _originated_ui_actions(r: _Run, user_id: str) -> None:
+    """The UI actions queued FOR the member but stored under a panel's signed-in identity (a guest kiosk's actions are ``guest``'s):
+    their ``queued`` ledger event names the member as ``origin_user_id`` (``ui_orchestrator.enqueue_ui_action``). Found by a text
+    prefilter on that event (the JSON-quoted id, so the scan is the ledger's queued rows only, each one confirmed by parsing it), then
+    every ledger row of those actions and the actions themselves go (children first). The OWNED step takes the member's own rows."""
+    needle = f'%"origin_user_id": {json.dumps(str(user_id))}%'
+    rows = await r.rows("SELECT action_id, event_data FROM ui_action_ledger WHERE event_type = 'queued' AND event_data LIKE ?", (needle,))
+    mine = []
+    for action_id, data in rows:
+        try:
+            origin = (json.loads(data) or {}).get("origin_user_id") if isinstance(data, str) else None
+        except ValueError:
+            origin = None
+        if origin == user_id and action_id:
+            mine.append(str(action_id))
+    mine = sorted(set(mine))
+    await r.by_ids("DELETE FROM ui_action_ledger WHERE action_id", mine)
+    await r.by_ids("DELETE FROM ui_actions WHERE id", mine)
+
+
+async def _retitle(r: _Run, sessions: list) -> None:
+    """Every SURVIVING session that held a deleted turn of the member (whoever owns it) gets its title re-derived from the turns that
+    stay. A title is made from a saved turn's words while it is weak (``routers/chat._touch_chat_session``: ``derive_session_title``),
+    and nothing records whether a title was typed or derived, so its source cannot be proven to survive: it is rebuilt by the same rule
+    from the FIRST surviving user turn (a title another member's own first turn made comes back the same), else 'New Chat'."""
+    from chat_session_title import derive_session_title
+
+    for at in range(0, len(sessions), _CHUNK):
+        part = sessions[at:at + _CHUNK]
+        first: dict = {}
+        for x in await r.rows(f"SELECT session_id, role, content, created_at, id FROM chat_messages WHERE session_id IN "
+                              f"({', '.join('?' * len(part))})", tuple(part)):
+            sid, role, content = str(x[0]), str(x[1] or ""), str(x[2] or "")
+            if role != "user" or not content.strip():
+                continue
+            key = (str(x[3] or ""), str(x[4]))
+            if sid not in first or key < first[sid][0]:
+                first[sid] = (key, content)
+        for sid in part:
+            title = derive_session_title(first[sid][1]) if sid in first else "New Chat"
+            await r.run("UPDATE chat_sessions SET title = ? WHERE id = ?", (title, sid))
 
 
 async def _hand_over(r: _Run, user_id: str, sid: str) -> bool:
@@ -504,6 +549,7 @@ async def forget_user(user_id: str) -> int:
                 await r.run("DELETE FROM proactive_scheduled WHERE user_id = ?", (uid,))   # consumed above, committed
                 await r.run("DELETE FROM proactive_pending WHERE user_id = ?", (uid,))
                 await _transcript(r, uid)
+                await _originated_ui_actions(r, uid)   # actions queued FOR the member under a panel's identity (a guest kiosk)
                 for table in OWNED:
                     await r.run(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
                 await _lists(r, uid)

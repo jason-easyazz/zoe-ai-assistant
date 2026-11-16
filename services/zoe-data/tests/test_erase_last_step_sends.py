@@ -509,3 +509,47 @@ def test_the_panels_poll_never_serves_an_action_queued_for_a_member_deleted_afte
     out = asyncio.run(ui_actions.get_pending_ui_actions(panel_id="p1", limit=20, user={"user_id": A, "role": "member"}, db=db))
     assert [a["id"] for a in out["actions"]] == ["new"]
     assert any(s.startswith("UPDATE ui_actions SET status = 'skipped', error_code = 'erased'") and p == ("old",) for s, p in db.sql)
+
+
+def test_a_guest_kiosks_poll_never_serves_a_toast_queued_for_a_member_deleted_after_it(monkeypatch):
+    """The kiosk's actions are stored as ``guest``; the member is the action's ORIGIN (its queued ledger event). The poll checks the
+    origin's erase mark: the deleted member's toast is skipped, another member's toast on the same panel is served."""
+    import json as _json
+
+    import erase_watermark
+    import routers.ui_actions as ui_actions
+
+    mark = asyncio.run(erase_watermark.record(A))
+    before = (mark - timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def row(aid):
+        return {"id": aid, "panel_id": "kiosk", "chat_session_id": None, "action_type": "panel_announce", "payload": "{}",
+                "status": "queued", "requires_confirmation": 0, "confirmation_token": None, "retry_count": 0, "max_retries": 3,
+                "created_at": before, "updated_at": before}
+    rows = [row("for-erased"), row("for-other")]
+    ledger = [{"action_id": "for-erased", "event_data": _json.dumps({"origin_user_id": A})},
+              {"action_id": "for-other", "event_data": _json.dumps({"origin_user_id": "member-other"})}]
+
+    class _DB(_RecDB):
+        async def execute(self, sql, params=()):
+            await super().execute(sql, params)
+            head = sql.strip().upper()
+
+            class _C:
+                async def fetchone(self_):
+                    return {"user_id": "guest"} if "FROM UI_PANEL_SESSIONS" in head else None
+
+                async def fetchall(self_):
+                    if head.startswith("SELECT") and "FROM UI_ACTION_LEDGER" in head:
+                        return ledger
+                    return rows if head.startswith("SELECT") and "FROM UI_ACTIONS" in head else []
+            return _C()
+
+    async def allow(*_a, **_k):
+        return None
+    monkeypatch.setattr(ui_actions, "require_feature_access", allow)
+    monkeypatch.setattr(ui_actions, "_authorize_panel", allow)
+    db = _DB()
+    out = asyncio.run(ui_actions.get_pending_ui_actions(panel_id="kiosk", limit=20, user={"user_id": "guest", "role": "guest"}, db=db))
+    assert [a["id"] for a in out["actions"]] == ["for-other"]
+    assert any(s.startswith("UPDATE ui_actions SET status = 'skipped'") and p == ("for-erased",) for s, p in db.sql)

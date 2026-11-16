@@ -1546,3 +1546,29 @@ def test_yield_flag_off_restores_the_old_behaviour(monkeypatch):
     monkeypatch.setenv("ZOE_OMI_YIELD_TO_VOICE", "0")
     monkeypatch.setattr(g, "harness_lock_held", lambda path=None: True)
     assert g.busy_reason() is None
+
+
+def test_a_wav_that_cannot_be_removed_fails_the_member_erase_keeps_its_row_and_the_retry_finishes(env, monkeypatch):
+    """The member delete's audio removal is STRICT and FILE FIRST: a WAV that cannot be removed fails the erase, its row keeps its
+    audio_path (so the retry finds the file), the member's other recordings still go, and the retry leaves nothing."""
+    upload(env, make_wav(3.0), key="r1.0-11")
+    upload(env, make_wav(3.0, hz=330), key="r1.0-12")
+    first, second = rows(env)
+    real = omi._unlink_strict
+    calls = []
+
+    def fails_once(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise PermissionError("audio locked")
+        real(path)
+    monkeypatch.setattr(omi, "_unlink_strict", fails_once)
+    with pytest.raises(OSError):
+        run(omi.forget_user(OWNER))
+    left = {r["id"]: r for r in rows(env)}
+    stuck = left[next(r["id"] for r in (first, second) if r["audio_path"] == calls[0])]
+    assert stuck["status"] != "deleted" and stuck["audio_path"] == calls[0] and Path(calls[0]).exists(), "the pointer stays with its file"
+    assert sum(1 for r in left.values() if r["status"] == "deleted") == 1, "the other recording still went"
+    run(omi.forget_user(OWNER))                                   # the retry
+    assert all(r["status"] == "deleted" and r["audio_path"] == "" for r in rows(env))
+    assert not list((env.tmp / "audio").glob("*.wav"))

@@ -152,6 +152,8 @@ class _PendingDb:
             return _RowsCursor(row={"user_id": "guest"})
         if "UPDATE ui_actions" in sql:
             return _RowsCursor()
+        if "FROM ui_action_ledger" in sql:              # the poll's origin read (an action queued for a member deleted since): none here
+            return _RowsCursor(rows=[])
         if "FROM ui_actions" in sql:
             return _RowsCursor(rows=[{
                 "id": "new-card",

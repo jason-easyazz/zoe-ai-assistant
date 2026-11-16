@@ -324,18 +324,34 @@ async def get_pending_ui_actions(
     rows = await cursor.fetchall()
     # The panel's last step before it shows a queued action: an action queued for a member who was deleted at or after it was queued
     # (``erase_watermark``; a proactive toast is also withdrawn by its sender, ``engine._speak_on_panel``) is never served - it is
-    # marked skipped. An unreadable mark serves nothing now (the actions stay queued).
+    # marked skipped. "The member" is the panel's identity AND the action's ORIGINATING member (its ``queued`` ledger event's
+    # ``origin_user_id``: a guest kiosk stores a member's toast as ``guest``). An unreadable mark serves nothing now (they stay queued).
     import erase_watermark
 
+    origins: dict = {}
+    if rows:
+        marks_sql = ", ".join("?" * len(rows))
+        cur = await db.execute(f"SELECT action_id, event_data FROM ui_action_ledger WHERE event_type = 'queued' AND action_id IN ({marks_sql})",
+                               tuple(r["id"] for r in rows))
+        for x in await cur.fetchall():
+            try:
+                o = (json.loads(x["event_data"] or "{}") or {}).get("origin_user_id")
+            except (ValueError, AttributeError):
+                o = None
+            if isinstance(o, str) and o:
+                origins[str(x["action_id"])] = o
+    marks: dict = {}
     try:
-        mark = await erase_watermark.watermark(panel_user_id)
+        for who in {panel_user_id, *origins.values()}:
+            marks[who] = await erase_watermark.watermark(who)
     except erase_watermark.Unavailable:
         return {"actions": [], "count": 0}
-    if mark is not None:
+    if any(m is not None for m in marks.values()):
         kept = []
         for r in rows:
             made = erase_watermark.instant(r["created_at"])
-            if made is None or made <= mark:
+            hit = [marks.get(w) for w in (panel_user_id, origins.get(str(r["id"]))) if w and marks.get(w) is not None]
+            if hit and (made is None or any(made <= m for m in hit)):
                 await db.execute("UPDATE ui_actions SET status = 'skipped', error_code = 'erased', updated_at = NOW() WHERE id = ?",
                                  (r["id"],))
             else:

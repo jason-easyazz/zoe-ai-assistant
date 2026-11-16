@@ -84,6 +84,11 @@ async def enqueue_ui_action(
 ) -> Dict[str, Any]:
     if action_type not in ALLOWED_ACTION_TYPES:
         raise ValueError(f"Unsupported action type: {action_type}")
+    # The ORIGINATING member (who the action is for), kept BEFORE ``user_id`` becomes the panel's signed-in identity below (a guest
+    # kiosk's actions are stored as ``guest``). It is written into the action's ``queued`` ledger event (server-side only, never sent
+    # to the panel), where a member delete finds the actions queued for them (``member_owned_forget._originated_ui_actions``) and the
+    # panel's poll checks their erase mark (``routers/ui_actions.get_pending_ui_actions``).
+    origin_user_id = str(user_id or "")
 
     if not panel_id:
         # No panel specified — find the requester's foreground panel.
@@ -177,6 +182,7 @@ async def enqueue_ui_action(
             "action_type": action_type,
             "payload": payload,
             "requires_confirmation": bool(requires_confirmation),
+            "origin_user_id": origin_user_id,
         },
     )
     if commit:
