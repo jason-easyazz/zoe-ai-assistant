@@ -436,3 +436,46 @@ def test_the_erase_waits_out_the_session_cache_after_the_barrier(monkeypatch, ba
         assert slept and auth.CACHE_TTL_SECONDS < slept[0] <= auth.CACHE_TTL_SECONDS + 1.5, slept
     else:
         assert slept == []
+
+
+def test_an_unreadable_barrier_under_fail_open_gives_a_degraded_guest_never_the_member(monkeypatch):
+    """#2669 review P1: with ZOE_AUTH_FAIL_CLOSED off, a barrier that cannot be read used to fall through to the validated MEMBER.
+    It must give a degraded guest (like the zoe-auth outage fallback), and never cache it. Negative control: fail-closed still 503s."""
+    import auth
+    from fastapi import HTTPException
+
+    async def unreadable(_uid):
+        raise RuntimeError("connection reset")
+    monkeypatch.setattr(auth, "_under_removal", unreadable)
+    member = {"user_id": A, "role": "member", "username": "a"}
+    monkeypatch.setattr(auth, "_AUTH_FAIL_CLOSED", False)
+    got = asyncio.run(auth._removal_gate(member))
+    assert got["user_id"] == auth.GUEST_USER_ID and got["role"] == "guest" and got.get("auth_degraded") is True
+    monkeypatch.setattr(auth, "_AUTH_FAIL_CLOSED", True)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(auth._removal_gate(member))
+    assert e.value.status_code == 503
+
+
+def test_a_relayed_request_for_a_member_under_removal_is_refused(monkeypatch):
+    """#2669 review P1: the relay resolves its own sessions and used to return before either removal check. The gate now applies to
+    it: a relayed request whose fresh panel sign-in names a barred member gets 401. Negative control: another member passes."""
+    import auth
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(auth.relay_ingress, "is_relay", lambda _req: True)
+    who = {}
+
+    async def resolve_user(_req):
+        return {"user_id": who["id"], "role": "member", "username": "m"}
+    monkeypatch.setattr(auth.relay_ingress, "resolve_user", resolve_user)
+
+    async def under_removal(uid):
+        return uid == A
+    monkeypatch.setattr(auth, "_under_removal", under_removal)
+    who["id"] = A
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(auth.get_current_user(object()))
+    assert e.value.status_code == 401
+    who["id"] = "member-b"
+    assert asyncio.run(auth.get_current_user(object()))["user_id"] == "member-b"

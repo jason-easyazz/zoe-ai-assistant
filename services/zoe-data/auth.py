@@ -119,6 +119,29 @@ async def _under_removal(user_id: str) -> bool:
     return False
 
 
+async def _removal_gate(user: Optional[dict]) -> Optional[dict]:
+    """The removal barrier for a resolved identity (session, cache miss, or relay). Returns the identity to use: unchanged when its
+    member is not being removed; RAISES 401 when they are. When the removal row cannot be read it RAISES 503, or - only with
+    ZOE_AUTH_FAIL_CLOSED explicitly off - returns a degraded GUEST, never the member (an outage must not let a member under removal
+    through). Guests and principals with no member id pass unchanged."""
+    uid = str((user or {}).get("user_id") or "")
+    if not uid or uid == GUEST_USER_ID:
+        return user
+    try:
+        under_removal = await _under_removal(uid)
+    except Exception as exc:  # noqa: BLE001 - the removal row cannot be read
+        logger.warning("removal barrier unreadable (%s)", type(exc).__name__)
+        degraded = _degraded_user()
+        if degraded is None:
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
+        out = {k: v for k, v in degraded.items() if k != _DEGRADED_MARK}
+        out["auth_degraded"] = True
+        return out
+    if under_removal:
+        raise HTTPException(status_code=401, detail="This account is being removed")
+    return user
+
+
 def _cache_set(session_id: str, user: dict):
     if len(_session_cache) > 500:
         cutoff = time.monotonic() - CACHE_TTL_SECONDS
@@ -246,7 +269,8 @@ async def get_current_user(request: Request) -> dict:
     # anonymous-guest fallback, ZOE_UNAUTHENTICATED_ROLE, a degraded guest - is LAN-only. relay_ingress.is_relay is False
     # whenever the flag is off, so with the flag off this line changes nothing.
     if relay_ingress.is_relay(request):
-        return await relay_ingress.resolve_user(request)
+        # the relay resolves its own sessions (fresh sign-in at the panel): the removal barrier applies to them all the same
+        return await _removal_gate(await relay_ingress.resolve_user(request))
 
     session_id = request.headers.get("X-Session-ID", "")
     device_token = request.headers.get("X-Device-Token", "")
@@ -316,15 +340,10 @@ async def get_current_user(request: Request) -> dict:
         _refine_traffic_class(degraded)
         return degraded
     # the DURABLE barrier, on every cache miss: a member under removal is refused even by a process that never saw it start
-    try:
-        under_removal = await _under_removal(str(validated.get("user_id") or ""))
-    except Exception as exc:  # noqa: BLE001 - the removal row cannot be read
-        logger.warning("removal barrier unreadable (%s)", type(exc).__name__)
-        if _AUTH_FAIL_CLOSED:
-            raise HTTPException(status_code=503, detail="Authentication service unavailable")
-        under_removal = False
-    if under_removal:
-        raise HTTPException(status_code=401, detail="This account is being removed")
+    gated = await _removal_gate(validated)
+    if gated is not validated:          # an unreadable barrier under fail-open: a degraded guest, never cached
+        _refine_traffic_class(gated)
+        return gated
     _cache_set(session_id, validated)
     _refine_traffic_class(validated)
     return validated
