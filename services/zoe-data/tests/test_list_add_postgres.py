@@ -38,6 +38,12 @@ async def world(monkeypatch):
         return row["id"] if row else None
 
     monkeypatch.setattr(list_service, "find_list_id", own_list_only)
+
+    async def own_list_with_name(db, *, user_id, list_type, name):       # add_item_to_list resolves through find_list (id + name)
+        found = await own_list_only(db, user_id=user_id, list_type=list_type, name=name)
+        return (found, name) if found else None
+
+    monkeypatch.setattr(list_service, "find_list", own_list_with_name)
     monkeypatch.setattr(list_service.write_receipts, "record", lambda *a, **k: receipts.append(a))
     dbs = [db_pool.AsyncpgCompat(c) for c in conns]
     yield type("W", (), {"uid": uid, "name": name, "conns": conns, "dbs": dbs, "receipts": receipts})
