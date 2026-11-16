@@ -1529,17 +1529,21 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 found = await _phrase_list(db, user_id, said, lt)
             if found is not None:
                 target_id, lt, ln = found
-        outcome = await add_items_to_list(
-            db,
-            user_id=user_id,
-            list_type=lt,
-            list_name=ln,
-            list_id=target_id,
-            text=args["text"],
-            quantity=args.get("quantity"),
-            category=args.get("category"),
-            new_list_visibility=default_visibility(lt),
-        )
+        import os_authority
+        try:
+            outcome = await add_items_to_list(
+                db,
+                user_id=user_id,
+                list_type=lt,
+                list_name=ln,
+                list_id=target_id,
+                text=args["text"],
+                quantity=args.get("quantity"),
+                category=args.get("category"),
+                new_list_visibility=default_visibility(lt),
+            )
+        except os_authority.ListAddRefused as refused:      # the Zoe OS kernel refused for the person's own reason: nothing was written
+            return {"error": os_authority.refusal_reply(refused.code) + " Nothing was added - tell the user exactly that."}
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
         result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"],

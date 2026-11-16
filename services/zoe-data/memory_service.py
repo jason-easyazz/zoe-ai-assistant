@@ -2287,6 +2287,13 @@ class MemoryService:
             await os_shadow.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
+        # The Zoe OS AUTHORITY's list store (os_authority.py): while ZOE_OS_LIST_ADD_AUTHORITY=kernel the kernel's verified read-back must
+        # find nothing of the member left, or the delete fails and is retried. A no-op with the flag off.
+        try:
+            import os_authority
+            await os_authority.erase_member(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: Zoe OS authority erasure failed ({type(exc).__name__})") from exc
         try:   # reminder phone-delivery ledger (reminder_delivery.py: app_settings claim rows, ids only). Fail closed.
             import reminder_delivery
             await reminder_delivery.forget_user(user_id)
