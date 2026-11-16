@@ -1,12 +1,14 @@
-# Sunday 05:30 (deep dive 2 S0-8): after the night window (01:35-04:55; the 12B runs 02:50 to ~03:10) and the 02:30
-# on-box backup, before the household's day. The on-box restore drill also refuses inside the window or while
-# zoe-night-window runs, waits for a running zoe-backup / zoe-offbox-backup (05:10), and refuses below its
-# MemAvailable floor (1100 MB, measured) loudly: alert + failed unit.
+# DAILY 05:30 (2026-11-14; was Sunday-only): after the night window (01:35-04:55; the 12B runs 02:50 to ~03:10), the
+# 02:30 on-box backup and the 04:30 voice regression, before the household's day. The on-box restore drill runs only
+# when DUE (no pass for ~6.5 days), so a refused or failed drill is retried the next morning, not a week later. It
+# also refuses inside the window or while zoe-night-window runs, waits for a running zoe-backup / zoe-offbox-backup,
+# waits up to 30 min for its MemAvailable floor (1100 MB, measured; 05:20-05:45 measured 1482+ MB on 2026-11-06..14)
+# and then refuses loudly: alert + failed unit.
 [Unit]
-Description=Weekly restore drill of Zoe backups (Sunday 05:30 local)
+Description=Daily check, ~weekly restore drill of Zoe backups (05:30 local)
 
 [Timer]
-OnCalendar=Sun *-*-* 05:30:00
+OnCalendar=*-*-* 05:30:00
 RandomizedDelaySec=300
 Persistent=true
 Unit=zoe-backup-verify.service
