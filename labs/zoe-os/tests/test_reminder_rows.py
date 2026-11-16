@@ -252,3 +252,12 @@ def test_a_private_mark_shuts_out_the_carer_who_set_it(house):
     with pytest.raises(Refused, match="no such reminder"):
         house.act(A, "remind.cancel", id=rid)                          # ... nor their reach
     assert house.row(rid)["visibility"] == "private" and [r["id"] for r in house.rem.visible_to(K)] == [rid]
+
+
+def test_a_carers_undo_cannot_overwrite_what_the_person_changed_since(house):
+    rid = rid_of(house.act(A, "remind.set", note="pack the bag", time="07:45", mentions=(K,), **{"for": K}))
+    house.act(A, "remind.edit", id=rid, note="pack the bag and lunch")
+    house.act(K, "remind.edit", id=rid, note="synthetic marker <kid-later>", visibility="private")
+    with pytest.raises(Refused, match="it has changed since"):
+        house.k.actions.undo(A, actor=A)                               # the carer's last action is the edit the child has overwritten
+    assert house.row(rid)["visibility"] == "private" and house.row(rid)["note"] == "synthetic marker <kid-later>"

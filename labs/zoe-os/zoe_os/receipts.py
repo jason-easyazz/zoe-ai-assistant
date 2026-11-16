@@ -143,13 +143,15 @@ class Dispatcher:
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
         self._checks: dict[str, Callable] = {}                    # action -> its own rule (``register``)
+        self._undo_checks: dict[str, Callable] = {}               # action -> may its undo run NOW (``register``)
         self._purges: dict[str, tuple[str, str]] = {}
         self._purge_do: dict[str, Do] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
                  doc: str = "", params: dict | None = None, check: Callable | None = None,
-                 purge_key: tuple[str, str] | None = None, purge: Do | None = None) -> None:
+                 purge_key: tuple[str, str] | None = None, purge: Do | None = None,
+                 undo_check: Callable | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -165,8 +167,15 @@ class Dispatcher:
         person's rows, an erasure notice reaches the erased requests of every owner.
 
         ``check(person, args, caused_by) -> reason`` is the action's own rule (a time already past, a row that is not theirs):
-        a non-empty reason refuses (and records) the act BEFORE the intent is written, like a bad argument."""
+        a non-empty reason refuses (and records) the act BEFORE the intent is written, like a bad argument.
+
+        ``undo_check(person, receipt_payload, actor) -> reason`` is asked before an undo of this action runs (a row that has
+        changed since, or that its owner has since made private): a non-empty reason refuses the undo, nothing is written."""
         self._actions[action] = (do, verify, needs_accept)
+        if undo_check is not None:
+            self._undo_checks[action] = undo_check
+        else:
+            self._undo_checks.pop(action, None)
         if check is not None:
             self._checks[action] = check
         else:
@@ -322,6 +331,10 @@ class Dispatcher:
             if why:
                 self.spine._refuse(actor, UNDO, why)
             action, saved = last.payload["action"], last.payload["undo"]
+            if action in self._undo_checks:
+                why = self._undo_checks[action](person, last.payload, actor)
+                if why:
+                    self.spine._refuse(actor, UNDO, why)
             self._check_arguments(actor, UNDO, person, saved)
             snapshot, reverse = self._reverse[action]
             intent = self._open_intent(KERNEL, UNDO, person, None, None, (last.seq,), undoes=last.seq)

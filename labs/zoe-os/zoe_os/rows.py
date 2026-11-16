@@ -86,11 +86,20 @@ class DurableRows:
             return {"id": rid, "row": None} if row is None else None
         return {"id": rid, "row": dict(row), **self.summary(row)} if row == want else None
 
+    def undo_check(self, person, payload: dict, actor) -> str:
+        """An undo puts back the row as it was before ONE action: only while the row is still what that action left. Changed
+        since (a later edit, by anyone: the owner marking it private, say) or gone: refused, never a silent overwrite."""
+        proof = payload.get("proof") or {}
+        rid = proof.get("id")
+        if rid is None or self.rows.get(rid) != proof.get("row"):
+            return "it has changed since"
+        return ""
+
     def register_all(self, kernel, specs: dict) -> None:
         """``specs``: action -> (do, check, doc, params). Every action is reversible and has the one snapshot rule."""
         for action, (do, check, doc, params) in specs.items():
             kernel.actions.register(action, do, self.read_back, needs_accept=False, snapshot=self.snapshot_for(action),
-                                    undo=self.put_back, doc=doc, params=params, check=check)
+                                    undo=self.put_back, doc=doc, params=params, check=check, undo_check=self.undo_check)
 
     # ---- the rebuild ------------------------------------------------------------------------------------------------------------
     def rebuild(self) -> int:

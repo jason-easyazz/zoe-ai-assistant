@@ -1126,7 +1126,8 @@ their child, and only when the asking event names the child, so the child's forg
   once a year, at most).
 - An entity or topic forget by the OWNER does not reach another member's receipt of an edit of a shared reminder whose
   new words no longer hold the entity (the row still goes: its create is gone). A whole-member erase does reach it.
-- An undo of an edit after another member cancelled the row brings the row back (the undo is the editor's last action).
+- An undo is refused once the row has changed since the action it reverses (another member's edit or cancel, the owner
+  marking it private): it never silently overwrites a later change (`rows.DurableRows.undo_check`).
 
 **What the shadow hook can now send instead of `not_expressible`** (`services/zoe-data/os_shadow.py` `kernel_args`, on
 the shadow-widen branch): `recurring` (send the stored RRULE as `repeat` with `date` and `time`), `no_time` (send `date`
