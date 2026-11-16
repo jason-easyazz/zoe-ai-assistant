@@ -703,3 +703,33 @@ async def test_a_forget_that_has_to_start_the_worker_never_blocks_the_loop(kerne
     (a, b), = spans
     during = sum(1 for x in ticks if a < x < b)
     assert during >= 15, f"only {during} ticks during the worker start: it ran on the event loop"
+
+
+# ---- the park file is durable both ways: a write AND the last member's removal fsync the directory -----------------------------------
+@pytest.mark.parametrize("members", [["member-a"], []])
+def test_every_park_file_change_fsyncs_its_directory(kernel, monkeypatch, members):
+    import os
+
+    os_shadow._pending_add("member-z")                                    # something is parked, so the empty write is an unlink
+    synced, real = [], os.fsync
+    dir_fds = {}
+    real_open = os.open
+
+    def track_open(path, flags, *a):
+        fd = real_open(path, flags, *a)
+        if str(path) == str(kernel.state):
+            dir_fds[fd] = path
+        return fd
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd in dir_fds), real(fd))[1])
+    os_shadow._pending_write(members)
+    assert any(synced), "the directory was not fsync'd"
+    assert (kernel.state / "pending-forgets.json").exists() is bool(members)
+
+
+def test_an_empty_write_with_nothing_parked_touches_nothing(kernel, monkeypatch):
+    import os
+
+    monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(AssertionError("fsync with nothing to make durable")))
+    os_shadow._pending_write([])

@@ -36,6 +36,12 @@ A store can be reached by one path and not the other; that asymmetry is what `st
 |---|---|---|---|
 | router shadow log | `services/zoe-data/data/router_head_shadow.jsonl` (+ `.N` segments) | **strips** `utt_text`; the hash and routing features stay | entity: the record naming the entity is dropped whole; member: the text layer of every record is cleared |
 | intent-miss log | `~/training/data/intent-misses.jsonl` | **drops** the record | same |
+| voice STT log (flag-dark) | `$ZOE_VOICE_STT_LOG` (`~/.zoe-voice/voice_stt.jsonl` + `.1`) | **drops** the record (ISO `ts`) | same; only while `ZOE_FORGET_REACH_EXTRA=on` (default off), which also reaches the opt-in Telegram STT capture dir (`erase_capture`: a pair naming the entity, every pair on a member erase) |
+
+STT rotation and append share the eraser's thread lock and file lock, covering the whole segment pass.
+The capture writer and eraser share one resolver: `ZOE_TELEGRAM_STT_CAPTURE_DIR` must expand to an absolute, non-root path without
+parent traversal (relative settings are refused). Capture operations open directory components without following symlinks and
+use the resulting directory descriptor for file operations, including deletes; a renamed directory cannot redirect the sweep.
 
 - **Retention:** `ZOE_TEXT_LOG_RETENTION_DAYS`, default **30** (`keep` = no limit, `0` = keep none). The hourly `zoe-log-rotate` job applies it
   (`scripts/maintenance/rotate_service_logs.py`); `scripts/maintenance/redact_router_shadow.py` does the same once, with a backup and
@@ -85,7 +91,7 @@ member column are therefore recorded here instead, each with why neither forget 
 
 Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for anything else): `reached` with the eraser(s), `out_of_scope` with a one-line
 reason, or `gap` with the reason AND the key in the `forget-reach gaps:` line of [open-problems.md](open-problems.md). A table that holds **words** cannot be
-`out_of_scope`. Then regenerate the table below.
+`out_of_scope`. Then regenerate the table below. A store of words also needs its row (and its writer's `WRITE_SITES` line) in the [household-text inventory](household-text-inventory.md), whose test fails otherwise.
 
 ## Forget completeness (what a layer SERVES after a forget, 2026-11-05)
 
@@ -132,7 +138,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-135 stores: 68 reached, 31 out of scope, 36 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+136 stores: 68 reached, 30 out of scope, 38 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -246,7 +252,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `intent_miss_log` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | Same module and rules as the router shadow log (records are dropped, not stripped). |
 | `recall_gate_trace` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | ~/.zoe/recall-gate-trace/: the owner's opt-in trace (ZOE_RECALL_GATE_TRACE, default off) - the owner's words + row text per gate decision, 0600, 7-day retention, never off-box. A member erase clears it household-wide (via local_text_logs.erase_all_text), an entity forget drops every line naming the entity (via local_text_logs.erase_entity, cascade step text_logs); both inside that module's erase barrier, which the trace's appends honour. |
 | `production_feedback_log` | file | words | out_of_scope | - | Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in. |
-| `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
+| `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on. |
 | `flue_session_log` | file | words | gap | - | The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget cascade (conversation_notes.erase_entity); the log itself is outside the cascade. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py). |
 | `flue_session_store` | db | words | out_of_scope | - | labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own. |
@@ -270,6 +276,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `backup_postgres` | backup | words | gap | - | Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing keeps its old dumps (an age alarm is the fix; a time prune must never delete the last good copy). Forget cannot rewrite a dump; biometric table data is excluded from them. Restore => re-issue the forget. |
 | `backup_palace_tar` | backup | words | gap | - | Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by count after a new tarball, so a failing job keeps its old ones). Not rewritten; the JSON exports beside it are redacted by the ledger (redact_backups.py). |
 | `backup_json_exports` | backup | words | reached | entity: `forget_redact.redact_export` | Palace JSON exports and compaction backups are redacted by the forget ledger (forget_redact.redact_export, scripts/maintenance/redact_backups.py). |
-| `backup_adhoc` | backup | words | out_of_scope | - | One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep (local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup. |
+| `backup_legacy_db` | backup | words | gap | - | Neither forget path reaches the legacy SQLite snapshots a setup or migration script leaves beside the old databases (data/*.backup.<stamp>.db, <db>.pre-panel-migration.<stamp>.db): whole copies, never rewritten and never aged out. Listed by household_text.py as a kept copy; removing them is an owner cleanup. |
+| `backup_adhoc` | backup | words | gap | - | Neither forget path reaches one-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep (local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup. |
 
 <!-- END GENERATED -->
