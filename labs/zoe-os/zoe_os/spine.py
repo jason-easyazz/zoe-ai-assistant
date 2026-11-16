@@ -214,8 +214,9 @@ def _row_source(payload: dict) -> tuple[int, bool] | None:
     and for the create itself (its source is its own request, already its cause).
     * an action that takes the row away (a cancel) is a REVERSAL: forgetting it takes the create (or the rebuild brings the row
       back), and forgetting the create takes it;
-    * any other action over the row (an edit, a snooze, done) is a DEPENDENT: it carries the row's words, so forgetting the create
-      takes it; forgetting it alone takes only it."""
+    * every action over the row (a cancel too) is a DEPENDENT of the create and of every earlier action over the row: it copies
+      the row's whole state, so forgetting any of them (an edit's new words) takes it; forgetting it alone takes only it and the
+      actions after it."""
     undo = payload.get("undo") if isinstance(payload, dict) else None
     before = undo.get("before") if isinstance(undo, dict) else None
     if not isinstance(before, dict) or type(before.get("source")) is not int:
@@ -760,8 +761,8 @@ class Spine:
             marks = ",".join("?" * len(chunk))
             more = {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM causes WHERE cause IN ({marks})", chunk)}
             more |= self._reversed(chunk)
-            pending |= {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM dependents WHERE target IN ({marks})", chunk)
-                        if seq not in dead}
+            # a dependent dies with ANY of its targets (it copies each one's content)
+            more |= {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM dependents WHERE target IN ({marks})", chunk)}
             pending |= {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM reversals WHERE target IN ({marks})", chunk)
                         if seq not in dead}
             for seq in more:
@@ -774,7 +775,13 @@ class Spine:
         row = _row_source(payload)
         if row is not None:                    # a durable-row store's action over ONE row: linked to the row's creating request
             source, reverses = row
-            self._db.execute(f"INSERT INTO {'reversals' if reverses else 'dependents'} VALUES (?,?)", (seq, source))
+            # Every action over the row copies its WHOLE state (the proof, the before), so it depends on the create AND on every
+            # earlier live action over the same row: forgetting any of them (an edit's new words) takes this one too.
+            earlier = {s for (s,) in self._db.execute(
+                "SELECT seq FROM dependents WHERE target = ? UNION SELECT seq FROM reversals WHERE target = ?", (source, source))}
+            self._db.executemany("INSERT INTO dependents VALUES (?,?)", [(seq, t) for t in {source} | earlier])
+            if reverses:                       # a cancel: forgetting it takes the row it took away (backward)
+                self._db.execute("INSERT INTO reversals VALUES (?,?)", (seq, source))
             return
         targets = _reversal_targets(payload)
         if targets is None:
@@ -797,8 +804,7 @@ class Spine:
         return sorted(out)
 
     def _all_rows_dead(self, removal: int, dead: set[int]) -> bool:
-        return all(t in dead for table in ("reversals", "dependents")
-                   for (t,) in self._db.execute(f"SELECT target FROM {table} WHERE seq = ?", (removal,)))
+        return all(t in dead for (t,) in self._db.execute("SELECT target FROM reversals WHERE seq = ?", (removal,)))
 
     def _reversed(self, seqs: list[int]) -> set[int]:
         """What these (dead) receipts reversed: an undo's original; a removal's rows' requests (``reversals``). And the REQUEST of

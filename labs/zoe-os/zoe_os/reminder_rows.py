@@ -53,7 +53,7 @@ class DurableReminders(DurableRows):
         """Production's list filter, ``visibility = 'family' OR user_id = me`` (routers/reminders.py ``_visibility_filter_sql``),
         plus the setter of a row they set for someone else, plus a CARER for the person they care for (not a private one)."""
         return [r | {"next_fire": self.next_fire(r)} for _, r in sorted(self.rows.items())
-                if r["visibility"] == "family" or person in (r["owner"], r["by"]) or self._cares(person, r)]
+                if r["visibility"] == "family" or self._mine(person, r) or self._cares(person, r)]
 
     # ---- who may ---------------------------------------------------------------------------------------------------------------
     def _carer(self, adult: str, person: str) -> bool:
@@ -63,13 +63,19 @@ class DurableReminders(DurableRows):
         who, by = self.grants.people.get(person), self.grants.people.get(adult)
         return who is not None and by is not None and by.role == ADULT and adult in who.guardians
 
+    @staticmethod
+    def _mine(person: str, row: dict) -> bool:
+        """The owner, or the member who SET it for them, unless the owner has made it private (which shuts the setter out too: a
+        carer who set a reminder for someone loses it the moment that person marks it private)."""
+        return person == row["owner"] or (person == row["by"] and row["visibility"] != "private")
+
     def _cares(self, person: str, row: dict) -> bool:
         return row["visibility"] != "private" and self._carer(person, row["owner"])
 
     def _may(self, person: str, row: dict | None, what: str) -> str:
         if row is None:
             return "no such reminder"
-        mine = person in (row["owner"], row["by"])
+        mine = self._mine(person, row)
         carer = self._cares(person, row)                      # a private reminder shuts a carer out
         if what == "edit":           # update / delete: own, a carer, or any member for a family reminder (routers/reminders.py:202-212)
             return "" if mine or carer or row["visibility"] == "family" else "no such reminder"

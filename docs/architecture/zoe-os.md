@@ -1104,8 +1104,9 @@ except a `private` one. That reach is for managing rows only: forget, undo and e
 **Durable.** Rows are rebuilt from the kernel's own verified receipts (`rows.DurableRows`, the list store's rule): each
 receipt's proof carries its row, and a row exists only while the receipt that created it is live. Every later action over a
 row names the request that created it (`source` in its snapshot): forgetting the reminder takes its edits, snoozes, done
-marks and cancel (and their requests); a cancel is a REVERSAL, so forgetting it takes the reminder too, and no rebuild can
-bring it back (`Spine._row_source`). Kill tests at each
+marks and cancel (and their requests); every action over a row copies its whole state, so forgetting any one of them (an
+edit's new words) also takes every later action over the row; a cancel is a REVERSAL, so forgetting it takes the reminder
+too, and no rebuild can bring it back (`Spine._row_source`). A `private` mark shuts out the carer who set it, as well. Kill tests at each
 stage of a write are in `tests/test_authority.py`; in-process restart, undo and forget tests in
 `tests/test_reminder_rows.py`.
 

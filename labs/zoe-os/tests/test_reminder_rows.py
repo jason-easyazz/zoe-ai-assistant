@@ -34,8 +34,9 @@ class House:
         self.k.grants.grant(K, "brain", acts=list(AUTH_ACTS), guardian=A)
 
     def said(self, person, mentions=()):
-        return self.k.spine.publish(Event(Kind.UTTERANCE, "voice", person, Visibility.PRIVATE, {"text": "synthetic reminder words"},
-                                          mentions=tuple(mentions))).seq
+        self.n = getattr(self, "n", 0) + 1                  # a fresh text: forgotten words are shielded for every publisher
+        return self.k.spine.publish(Event(Kind.UTTERANCE, "voice", person, Visibility.PRIVATE,
+                                          {"text": f"synthetic reminder words {self.n}"}, mentions=tuple(mentions))).seq
 
     def act(self, person, action, mentions=(), **args):
         seq = self.said(person, mentions)
@@ -227,3 +228,27 @@ def test_with_the_anchor_rule_removed_the_forward_link_alone_still_keeps_a_forgo
     monkeypatch.setattr(DurableReminders, "anchored", lambda self, rid, made: True)
     house.rem.rebuild()
     assert rid not in house.rem.rows
+
+
+def _held(house, word: str) -> bool:
+    return any(word in (raw or "") for (raw,) in house.k.spine._db.execute(
+        "SELECT payload FROM events WHERE tombstoned = 0"))
+
+
+def test_forgetting_an_edit_takes_every_later_record_that_copied_its_words(house, tmp_path, clock):
+    rid = rid_of(house.act(A, "remind.set", note="synthetic before", time="20:00"))
+    edit = house.act(A, "remind.edit", id=rid, note="synthetic marker <edited>")
+    house.act(A, "remind.snooze", id=rid, minutes=5)                  # its proof copies the edited row
+    house.forget(A, seqs=[edit.seq])
+    assert not _held(house, "synthetic marker <edited>")
+    assert house.row(rid)["note"] == "synthetic before"               # the row is back to what it was before the edit
+    assert restart(house, tmp_path, clock).row(rid)["note"] == "synthetic before"
+
+
+def test_a_private_mark_shuts_out_the_carer_who_set_it(house):
+    rid = rid_of(house.act(A, "remind.set", note="pack the bag", time="07:45", mentions=(K,), **{"for": K}))
+    house.act(K, "remind.edit", id=rid, note="synthetic marker <kid-own>", visibility="private")
+    assert [r["id"] for r in house.rem.visible_to(A)] == []           # neither the carer's view ...
+    with pytest.raises(Refused, match="no such reminder"):
+        house.act(A, "remind.cancel", id=rid)                          # ... nor their reach
+    assert house.row(rid)["visibility"] == "private" and [r["id"] for r in house.rem.visible_to(K)] == [rid]
