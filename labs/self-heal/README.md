@@ -582,3 +582,79 @@ Measures, in the result JSON (`python3 labs/self-heal/loop_scratch.py --scenario
 `fault_to_verified_fix_s` (fixture read to ledger line; `null` when not healed), `attempts`,
 `rollbacks`, `refusals_by_reason`, plus per round: outcome, reason, failing gate, seconds, and the
 turns / tokens the engine reported (`null` = unreported).
+
+### Attacks and failures against the complete loop (`tests/test_self_heal_loop_attacks.py`)
+
+Each hostile answer runs twice on one scratch repo: as built, and with the patch check switched off
+(the negative control for that layer). The layer behind it must still refuse; nothing lands either way.
+
+| the engine's answer | refused by the patch check as | with the patch check off, refused as |
+|---|---|---|
+| edits the failing test so it passes | `patch_outside_allowlist` | `gate_failed` (the base copy of the test runs, supervised) |
+| touches a pinned file (`conftest.py`) | `patch_outside_allowlist` | `forbidden_path` |
+| adds a CI workflow | `patch_outside_allowlist` | `forbidden_path` |
+| a symlink out of the tree | `patch_symlink` | `outside_repo` |
+| renames the test file | `patch_rename` | `test_deleted` |
+| plants code in the gates' scratch dir | `patch_path_escape` | `scratch_planted` |
+| deletes the module | `patch_delete` | `gate_failed` |
+| over the diff-line cap | `diff_cap` | `diff_cap` (the runner's own count of the real tree) |
+| in bounds, fixes the test, breaks another | (passes) | `gate_failed` |
+| over the token / turn / time / size budget | `budget_tokens` / `budget_turns` / `budget_time` / `patch_oversized`, twice, then the round cap ends it | |
+| correct, but an unrelated test fails after the merge | rolled back, ledger `rolled_back` / `proof_failed` (see the landing table) | |
+| the loop is killed after main advanced | the next start rolls back before anything else; the parked fault gets no engine call; ledger `rolled_back` / `interrupted` | |
+| two loops on one repo | `landing_busy` / `lost_race` / the loser's proof fails (see the landing table) | |
+
+`test_no_planted_sentinel_reaches_the_result_the_ledger_or_any_state_file`: a token, a sentence in a
+host-readable file, an e-mail address and a password value planted in the failing test's output reach
+neither the packet (redacted), the result JSON, the ledger, the audit log nor the state file.
+
+## What a sold unit needs (and what is still unproven)
+
+The owner's ask: a sold Zoe evolves on the buyer's own Claude or ChatGPT subscription, with no GitHub.
+What the lab now shows, with a fake engine: a fault becomes a checked patch, passes gates whose verdict
+comes from outside the test process, lands on a local `main` with no remote, is proven again on the
+merged tree, is watched, is recorded, and is rolled back automatically when any of that fails.
+
+What a sold unit still needs, none of it built:
+
+1. **A real engine adapter.** Only the fake and the dry-run exist. Unproven: that `codex exec` or
+   `claude -p` produces a usable fix from a packet directory with a handful of files; how each reports
+   turns and tokens; the cost per fix; behaviour on a slow or dropped connection.
+2. **Vendor terms. UNVERIFIED.** Whether OpenAI's and Anthropic's terms allow an appliance to drive a
+   buyer's CONSUMER subscription headless and unattended has not been checked by anyone on this
+   project. It must be checked, per vendor, before any product promise. If the answer is no, the same
+   adapter seam takes an API key (metered) or a local model; the rest of the loop does not change.
+3. **The linking flow** (QR on the panel, finished on the phone) and where the credential lives.
+4. **A real apply** (move the running code, restart only what changed) and a real health probe. The
+   lab uses a noop applier and a scripted probe; "healthy" is not defined yet.
+5. **The data-only reproduction boundary** (v3 residual 1): code written against the node runner still
+   passes the supervised gate. A sold unit has no reviewer; the snapshot, the rollback, the caps and
+   the ledger bound the damage, they do not detect it.
+6. **A fault detector beyond a failing test**, and a lane that runs on the sold box's own venv within
+   the sandbox limits (unmeasured on the real lane).
+7. **A readable history for the owner.** The ledger is the record; no screen or voice path reads it.
+   Its head hash is not anchored off the box.
+8. **Updates from the vendor side.** A sold unit's `main` also moves when a product update arrives; the
+   merge + proof path handles a moved `main`, but how updates are delivered and signed is not designed.
+9. **The packet leaves the box.** The engine is a cloud service: the failing test's redacted output
+   and the in-scope source files go to the buyer's vendor. No GitHub is possible; offline is not.
+
+Residual risks of this increment: redaction is pattern-based (free-text personal detail is kept out by
+where the text comes from, not by the patterns); a repo that tracks personal data would send it; the
+process-control screen is a speed bump; the offline lane's verdict is an exit status; an engine that
+under-reports its usage is not caught by the turn / token budgets (the wall clock and the patch caps
+still hold); the ledger cannot show a cut tail; `finish_intent` trusts the recorded phase.
+
+v4 test status (2026-11-15, fake engine, this Jetson, one file or part per lane hold, rebased on
+`origin/main`): the four new files all pass locally and again with `TZ=UTC`:
+`tests/test_self_heal_propose.py` 48, `tests/test_self_heal_locallanding.py` 23,
+`tests/test_self_heal_loop.py` 21, `tests/test_self_heal_loop_attacks.py` 15 (107 tests). Both columns
+of the attack table above were run (9 answers, each as built and with the patch check off). The
+existing files were re-run against the edited runner / config / engines: 280 passed
+(`test_self_heal.py` 81; `_review` + `_round3` + `_bwrap_presence` 120; `_sandbox` 51; `_supervisor` 28).
+
+Measure, one run: `loop_scratch.py --scenario good --lab-noon` on the synthetic two-test repo with the
+FAKE engine: `fault_to_verified_fix_s` 10.74, attempts 1, rollbacks 0, no refusals, ledger 1 entry,
+chain ok. That is the loop's own overhead (gates, merge, proof, ledger), not a fix time: a real engine's
+seconds and a real lane's test time come on top and are unmeasured. The same command on the real
+clock at 01:58 was refused `quiet_hours` (the hard 01:30-05:00 window), as it should be.
