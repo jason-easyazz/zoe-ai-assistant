@@ -71,6 +71,23 @@ def current_clip() -> Optional[str]:
     return (_HOLDER.get() or {}).get("path")
 
 
+def drop_current() -> bool:
+    """Remove the clip THIS turn saved and its label (a member delete landed during the turn: the clip is neither labelled with, nor
+    kept for, the deleted member - and not kept unattributed either). True when there was one. Never raises."""
+    clip = current_clip()
+    if not clip:
+        return False
+    for p in (sidecar_path(clip), clip):
+        try:
+            os.unlink(p)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("voice_clips: a clip of a deleted member could not be dropped (%s)", type(exc).__name__)
+    _HOLDER.set({})
+    return True
+
+
 def _write(path: str, body: dict) -> None:
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".verdict-", suffix=".tmp")
     try:

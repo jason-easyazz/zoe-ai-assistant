@@ -138,10 +138,13 @@ def test_voice_command_labels_the_clip_member_guest_or_unknown():
     src = (Path(__file__).resolve().parents[1] / "routers" / "voice_tts.py").read_text()
     body = src[src.index("async def voice_command("):]
     body = body[:body.index("\n@router.")]
-    for line in ('_voice_clips.record("member", identified_user_id)', '_voice_clips.record("guest", _clip_guest.person_id)',
+    for line in ('await _label_member_clip(identified_user_id)', '_voice_clips.record("guest", _clip_guest.person_id)',
                  '_voice_clips.record("unknown", "", _learned_cluster)'):
         assert line in body
-    assert body.count("_voice_clips.record(") == 3                                    # no verdict (gate off) = no label = legacy
+    assert body.count("_voice_clips.record(") == 2                                    # no verdict (gate off) = no label = legacy
+    helper = src[src.index("async def _label_member_clip("):]
+    helper = helper[:helper.index("\nasync def ")]
+    assert '_vc.record("member", member)' in helper, "the member label goes through the late-write rule (member delete)"
 
 
 # ── a member delete's clip erase is STRICT: nothing it cannot read or remove is swallowed ───────────────────────────────────────

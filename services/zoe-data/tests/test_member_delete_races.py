@@ -184,3 +184,156 @@ def test_a_delete_between_the_announcement_claim_and_its_return_hands_the_panel_
     got = asyncio.run(go())
     assert [g["text"] for g in got] == ["a line for B"], "the deleted member's line is not handed to the panel"
     assert seen == {"in_flight": 1, "after": 0}
+
+
+# ── voice turns: the same rule, keyed by the turn's START, re-keyed when the speaker is resolved ───────────────────────────────
+
+@pytest.fixture
+def voice(monkeypatch, tmp_path, chat):
+    """The voice turn's tail through its real helpers: the clip label (``_label_member_clip``) and the transcript save
+    (``_schedule_voice_chat_save`` -> its background ``_persist`` -> ``_save_chat_message``) over the recording store."""
+    import routers.chat as chat_mod
+    import routers.voice_tts as vt
+    import voice_clips
+
+    _chat_mod, store = chat
+    store.sessions = []
+
+    async def ensure(session_id, user_id):
+        store.sessions.append((session_id, user_id))
+    monkeypatch.setattr(chat_mod, "_ensure_user_and_chat_session", ensure)
+    monkeypatch.setenv("ZOE_VOICE_CLIP_VERDICT", "1")
+    corpus = tmp_path / "voice-samples"
+    corpus.mkdir()
+    monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(corpus))
+
+    def save_clip(name):
+        voice_clips.begin()
+        p = corpus / f"{name}.wav"
+        p.write_bytes(b"RIFF")
+        voice_clips.note_saved(str(p))
+        return p
+    return vt, store, save_clip
+
+
+async def _voice_tail(vt, member, session):
+    await vt._schedule_voice_chat_save(session, "what's on tomorrow", "you have the dentist", member)
+    for t in list(vt._BG_TASKS):
+        await t
+
+
+@pytest.mark.parametrize("when", ["before_resolution", "after_resolution"])
+def test_a_delete_while_a_voice_turn_is_in_flight_leaves_nothing_of_the_speaker(voice, when):
+    import erase_watermark
+
+    vt, store, save_clip = voice
+
+    async def go():
+        bound = erase_watermark.voice_turn_begin()            # the turn starts; the speaker is not known yet
+        try:
+            clip = save_clip("turn-a")
+            if when == "before_resolution":
+                await erase_watermark.record(A)               # the delete lands before speaker identification finishes
+                await vt._label_member_clip(A)
+            else:
+                await vt._label_member_clip(A)                # identified (and labelled) ...
+                await erase_watermark.record(A)               # ... then the delete lands before the tail writes: its mark,
+                import voice_clips                             # and its clip erase, which finds the clip labelled before it
+                voice_clips.erase_member(A)
+            await _voice_tail(vt, A, "vs-1")
+            return clip
+        finally:
+            erase_watermark.voice_turn_end(bound)
+    clip = asyncio.run(go())
+    assert not clip.exists() and not clip.with_suffix(".verdict.json").exists(), "the clip is not kept, labelled or not"
+    assert store.rows["chat_messages"] == set() and store.sessions == [], "no transcript row and no session row"
+
+
+def test_a_delete_during_the_voice_turns_tail_writes_leaves_nothing_and_another_speakers_turn_is_untouched(voice):
+    import erase_watermark
+
+    vt, store, save_clip = voice
+
+    async def land():
+        store.on_insert = None
+        await erase_watermark.record(A)                       # the delete lands INSIDE the first transcript insert
+
+    async def turn(member, session, clip_name, hook=None):
+        bound = erase_watermark.voice_turn_begin()
+        try:
+            save_clip(clip_name)
+            await vt._label_member_clip(member)
+            store.on_insert = hook
+            await _voice_tail(vt, member, session)
+        finally:
+            erase_watermark.voice_turn_end(bound)
+
+    async def go():
+        await turn(A, "vs-a", "turn-a", hook=land)
+        await turn(B, "vs-b", "turn-b")
+    asyncio.run(go())
+    assert len(store.rows["chat_messages"]) == 2, "only B's two rows: A's insert was taken out again, A's reply never written"
+
+
+def test_the_delete_waits_for_a_voice_turn_once_its_speaker_is_known_and_for_its_background_tail(voice, monkeypatch):
+    import erase_watermark
+    import member_owned_forget as mof
+
+    vt, store, save_clip = voice
+    monkeypatch.setattr(mof, "INFLIGHT_WAIT_S", 0.2)
+
+    async def go():
+        bound = erase_watermark.voice_turn_begin()
+        assert erase_watermark.inflight_turns(A) == 0, "not A's yet: the speaker is unknown"
+        save_clip("turn-a")
+        await vt._label_member_clip(A)                        # re-keyed to A
+        gate = asyncio.Event()
+
+        async def slow_tail():
+            await gate.wait()
+        vt._spawn_bg(slow_tail())                             # background work the turn started
+        erase_watermark.voice_turn_end(bound)                 # the request returned ...
+        with pytest.raises(RuntimeError, match="in flight"):
+            await mof._await_inflight_work(A)                 # ... but its tail still holds the turn
+        gate.set()
+        for t in list(vt._BG_TASKS):
+            await t
+        await mof._await_inflight_work(A)                     # tail done: the delete proceeds
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("lane", ["chat", "voice"])
+def test_a_tool_write_inside_a_turn_lands_before_the_delete_erases_so_nothing_survives(lane, monkeypatch):
+    """A tool the brain calls mid-turn (a reminder, a list item) writes while the turn is in flight; the delete WAITS for the turn,
+    so the tool's write lands before the erase, which then takes it."""
+    import erase_watermark
+    import member_owned_forget as mof
+
+    store = {"reminders": set()}
+    order = []
+
+    async def go():
+        if lane == "chat":
+            token = erase_watermark.turn_open("s-tool", A)
+        else:
+            bound = erase_watermark.voice_turn_begin()
+            erase_watermark.turn_identify(A)
+        started = asyncio.Event()
+
+        async def delete():
+            started.set()
+            await mof._await_inflight_work(A)
+            order.append("erase")
+            store["reminders"] = {r for r in store["reminders"] if r[0] != A}
+        d = asyncio.ensure_future(delete())
+        await started.wait()
+        await asyncio.sleep(0)
+        store["reminders"].add((A, "rem-from-tool"))          # the tool's write, mid-turn
+        order.append("tool")
+        if lane == "chat":
+            erase_watermark.turn_close(token)
+        else:
+            erase_watermark.voice_turn_end(bound)
+        await d
+    asyncio.run(go())
+    assert order == ["tool", "erase"] and store["reminders"] == set()

@@ -135,14 +135,68 @@ def _spawn_bg(coro) -> None:
     effect — history rows, memory passes, escalations — is queued until the
     verdict and dropped on cancel (``voice_speculation.defer_until_commit``);
     otherwise ``coro`` is scheduled unchanged."""
+    import erase_watermark as _ew
+
+    held = _ew.turn_hold()           # a voice turn's background work keeps the turn in flight (the member delete waits for it)
     try:
         coro = _speculation.defer_until_commit(coro, "background")
         t = asyncio.ensure_future(coro)
     except Exception as exc:  # no running loop — run inline best-effort
         logger.warning("_spawn_bg could not schedule task: %s", exc)
+        _ew.turn_release(held)
         return
     _BG_TASKS.add(t)
     t.add_done_callback(_BG_TASKS.discard)
+    t.add_done_callback(lambda _t: _ew.turn_release(held))
+
+
+def _member_turn(fn):
+    """Every voice turn is a member turn IN FLIGHT from its first line to its last write (``erase_watermark.voice_turn_begin``): the
+    member delete waits for it once the speaker is known (``turn_identify``), and every late write (the transcript rows, the clip
+    label, the exact-words entry) re-checks the member's erase mark against the turn's START. The binding lives in the task context,
+    so the stream body and the background tasks the turn starts inherit it and hold the turn open until they finish."""
+    import functools
+
+    @functools.wraps(fn)
+    async def call(*args, **kwargs):
+        import erase_watermark as _ew
+
+        bound = _ew.voice_turn_begin()
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            _ew.voice_turn_end(bound)
+    return call
+
+
+async def _label_member_clip(member: str) -> None:
+    """The speaker is known: the member delete waits for this turn from now on (``turn_identify``), and the clip this turn saved is
+    labelled theirs (``voice_clips.record``) - unless the member was deleted since the turn BEGAN (the late-write rule, asked before the
+    label and again after it): then the clip is DROPPED, neither labelled with nor kept for them (never kept unattributed)."""
+    import erase_watermark as _ew
+    import voice_clips as _vc
+
+    _ew.turn_identify(member)
+    if await _ew.turn_write_refused(None, "voice_clip", member):
+        _vc.drop_current()
+        return
+    _vc.record("member", member)
+    if await _ew.turn_write_refused(None, "voice_clip", member):
+        _vc.drop_current()
+
+
+async def _release_turn_after(gen, held):
+    try:
+        async for item in gen:
+            yield item
+    finally:
+        try:
+            await gen.aclose()
+        finally:
+            import erase_watermark as _ew
+
+            _ew.turn_release(held)
+
 
 def _stream_in_turn_context(agen):
     """``agen`` (a voice turn's lazy stream body) driven in a COPY of the CURRENT context, wherever it is iterated.
@@ -153,8 +207,12 @@ def _stream_in_turn_context(agen):
     ``/voice/turn_stream`` the body is pulled by the OUTER request task (and a ``_first_task`` copy of it for the filler
     race), not by the ``sub_task`` that ran ``voice_command`` - so none of those bindings were visible to the brain
     (2026-10-19: every panel stream turn read ``restraint.current_verdict() is None``, an unconfirmed voice read as a typed
-    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there."""
-    return _drive_in_context(agen, contextvars.copy_context())
+    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there. The body also holds the voice turn
+    open (``erase_watermark.turn_hold``) until it ends."""
+    import erase_watermark as _ew
+
+    held = _ew.turn_hold()
+    return _release_turn_after(_drive_in_context(agen, contextvars.copy_context()), held)
 
 
 async def _drive_in_context(agen, ctx: contextvars.Context):
@@ -3459,6 +3517,12 @@ async def _schedule_voice_chat_save(
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
 
         async def _persist() -> None:
+            import erase_watermark as _ew
+
+            # the late-write rule: a member deleted since the voice turn BEGAN gets no session row and no turn back (the rows'
+            # own writer, _save_chat_message, checks before and after each insert; the session row is checked here)
+            if await _ew.turn_write_refused(session_id, "voice_session", user_id):
+                return
             # Voice sessions are minted server-side and never go through
             # POST /sessions/, so the chat_sessions parent row must be created
             # here or every insert dies on the session FK (the silent zero-
@@ -3479,6 +3543,14 @@ async def _schedule_voice_chat_save(
                            **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
                 await _svc(session_id, "assistant", reply, user_id=user_id)
+            if await _ew.turn_write_refused(session_id, "voice_session", user_id):
+                # deleted while this ran: the session row this made for the member goes when nothing else is in it
+                from db_pool import get_db_ctx as _ctx
+
+                async with _ctx() as db:
+                    await db.execute("DELETE FROM chat_sessions WHERE id = ? AND user_id = ? AND NOT EXISTS "
+                                     "(SELECT 1 FROM chat_messages WHERE session_id = ?)", (session_id, user_id, session_id))
+                    await db.commit()
 
         _spawn_bg(_persist())
     except Exception as exc:
@@ -3631,6 +3703,7 @@ async def _run_voice_memory_passes(
 
 
 @router.post("/command")
+@_member_turn
 async def voice_command(
     payload: dict,
     caller: dict = Depends(_require_voice_auth),
@@ -3714,7 +3787,7 @@ async def voice_command(
     import voice_clips as _voice_clips
 
     if identified_user_id:
-        _voice_clips.record("member", identified_user_id)
+        await _label_member_clip(identified_user_id)
     elif (_clip_guest := _named_guests.current()) is not None:
         _voice_clips.record("guest", _clip_guest.person_id)
     elif _speaker_verified is False:
@@ -3955,6 +4028,10 @@ async def voice_command(
         # A voice the server matched to a NAMED GUEST is that guest, whatever member session the panel holds (a fresh PIN, a
         # binding): never member scope, member data or a member's attribution for their turn (review #2339).
         _scope_identity_user, _has_scope_identity, effective_user = None, False, "guest"
+    if effective_user and effective_user not in _GUEST_SENTINEL_USERS:
+        import erase_watermark as _ew_who
+
+        _ew_who.turn_identify(effective_user)     # the turn's member as attributed (re-keyed; its START is unchanged)
     # Home control: a turn whose member the server verified is a member's turn whatever the caller verdict said (a relayed panel).
     if _scope_identity_user and panel_principal.home_control_verdict() is False:
         panel_principal.record_home_control(True)

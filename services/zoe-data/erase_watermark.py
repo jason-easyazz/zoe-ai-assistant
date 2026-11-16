@@ -393,39 +393,109 @@ def delivery_began() -> Optional[datetime]:
 
 
 # -- in-flight member turns: the delete waits for them, and each late write re-checks the mark against the turn's start -------------
-#: session_id -> (member, when the turn began). One turn per session at a time (``routers/chat.locked_chat_stream`` holds the session lock).
+#: token -> {"session", "member", "began", "refs"}: every member turn in flight in this process. A chat turn is keyed by its session
+#: (``routers/chat.locked_chat_stream`` holds the session lock: one at a time); a VOICE turn (``routers/voice_tts.voice_command``) also
+#: binds its token in the task context (``_TURN_CTX``), which its stream body and its background tasks inherit, and is held open by
+#: them (``turn_hold`` / ``turn_release``) until its last write. The member is whatever is known at the start and RE-KEYED when the
+#: speaker is resolved (``turn_identify``); the START time never changes.
 _TURNS: dict = {}
+_TURN_CTX: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_turn", default=None)
+#: a turn older than this is not waited for (a stream nobody iterated never runs its ``finally``); the after-write check still holds
+TURN_STALE_S = 600.0
 
 
-def turn_open(session_id: str, user_id: str) -> datetime:
-    """A member's chat turn began on ``session_id`` (``routers/chat.locked_chat_stream``). Returns the start instant."""
-    began = _now()
-    if session_id:
-        _TURNS[str(session_id)] = (str(user_id or ""), began)
-    return began
+def turn_open(session_id: Optional[str], user_id: str) -> str:
+    """A member turn began (``session_id``: a chat turn's session; None for a voice turn, which is found through the context).
+    Returns its token."""
+    import uuid
+
+    token = uuid.uuid4().hex
+    _TURNS[token] = {"session": str(session_id) if session_id else None, "member": str(user_id or ""), "began": _now(), "refs": 1}
+    return token
 
 
-def turn_close(session_id: str) -> None:
-    _TURNS.pop(str(session_id or ""), None)
+def turn_close(token_or_session: str) -> None:
+    """Release a turn (its token), or every turn of a chat session (the session id)."""
+    key = str(token_or_session or "")
+    if key in _TURNS:
+        turn_release(key)
+        return
+    for t in [t for t, e in list(_TURNS.items()) if e["session"] == key]:
+        _TURNS.pop(t, None)
+
+
+def voice_turn_begin():
+    """``turn_open`` for a voice turn, bound in the CURRENT context (its stream body and background tasks inherit it). Returns the
+    context token for ``voice_turn_end``."""
+    token = turn_open(None, "")
+    return _TURN_CTX.set((token, _TURNS[token]["began"]))
+
+
+def voice_turn_end(ctx_token) -> None:
+    bound = _TURN_CTX.get()
+    if bound is not None:
+        turn_release(bound[0])
+    _TURN_CTX.reset(ctx_token)
+
+
+def turn_identify(user_id: str) -> None:
+    """The context's turn is now known to be ``user_id``'s (the speaker was resolved): the delete waits for it from here on. The
+    turn keeps the START it had."""
+    bound = _TURN_CTX.get()
+    if bound is not None and bound[0] in _TURNS and user_id:
+        _TURNS[bound[0]]["member"] = str(user_id)
+
+
+def turn_hold() -> Optional[str]:
+    """One more piece of work of the context's turn (a background task, a stream body): the turn stays in flight until it releases."""
+    bound = _TURN_CTX.get()
+    if bound is None or bound[0] not in _TURNS:
+        return None
+    _TURNS[bound[0]]["refs"] += 1
+    return bound[0]
+
+
+def turn_release(token: Optional[str]) -> None:
+    entry = _TURNS.get(str(token or ""))
+    if entry is None:
+        return
+    entry["refs"] -= 1
+    if entry["refs"] <= 0:
+        _TURNS.pop(str(token), None)
 
 
 def inflight_turns(user_id: str) -> int:
-    """How many chat turns of ``user_id`` are running in this process now (the member delete waits for them)."""
-    uid = str(user_id or "")
-    return sum(1 for member, _ in list(_TURNS.values()) if member == uid)
+    """How many turns of ``user_id`` are in flight in this process now (the member delete waits for them; stale ones excepted)."""
+    uid, cutoff = str(user_id or ""), _now().timestamp() - TURN_STALE_S
+    return sum(1 for e in list(_TURNS.values()) if e["member"] == uid and e["began"].timestamp() >= cutoff)
 
 
-async def turn_write_refused(session_id: str, lane: str, user_id: Optional[str] = None) -> bool:
-    """THE LATE-WRITE RULE for a turn's writes: True = drop (or undo) this write, because the turn's member (``user_id`` overrides) was
-    erased at or after the turn BEGAN. Asked twice by every writer: right before its write and right after it (undoing the write when
-    True) - a delete that lands between the two finds the row with its erase or is caught by the second check, since the mark is
-    recorded before anything is erased. No turn in flight on the session: False (nothing to compare with). An unreadable mark: False
-    (a turn's own save is never dropped on a guess; the erase itself fails closed on an unreadable store)."""
-    turn = _TURNS.get(str(session_id or ""))
-    if turn is None:
+def turn_began(session_id: Optional[str] = None) -> Optional[datetime]:
+    """When the turn this write belongs to began: the context's voice turn, else the chat turn in flight on ``session_id``."""
+    bound = _TURN_CTX.get()
+    if bound is not None:
+        return bound[1]
+    starts = [e["began"] for e in list(_TURNS.values()) if session_id and e["session"] == str(session_id)]
+    return min(starts) if starts else None
+
+
+async def turn_write_refused(session_id: Optional[str], lane: str, user_id: Optional[str] = None) -> bool:
+    """THE LATE-WRITE RULE for a turn's writes: True = drop (or undo) this write, because the member it is written AS (``user_id``,
+    else the turn's member) was erased at or after the turn BEGAN (its start, never the moment the speaker was resolved). Asked twice
+    by every writer: right before its write and right after it (undoing the write when True) - a delete that lands between the two
+    finds the row with its erase or is caught by the second check, since the mark is recorded before anything is erased, and the mark
+    is DURABLE, so this holds for a turn in any process. No turn known: False. An unreadable mark: False (a turn's own save is never
+    dropped on a guess; the erase itself fails closed on an unreadable store)."""
+    began = turn_began(session_id)
+    if began is None:
         return False
-    member, began = turn
+    uid = user_id
+    if not uid:
+        bound = _TURN_CTX.get()
+        entries = ([_TURNS.get(bound[0])] if bound is not None else
+                   [e for e in list(_TURNS.values()) if session_id and e["session"] == str(session_id)])
+        uid = next((e["member"] for e in entries if e and e["member"]), "")
     try:
-        return await send_refused(user_id or member, began, lane)
+        return await send_refused(uid, began, lane)
     except Unavailable:
         return False

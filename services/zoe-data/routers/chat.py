@@ -2368,12 +2368,12 @@ async def locked_chat_stream(
     # (bounded, then fails closed and is retried), and every write the turn makes re-checks the member's erase mark against this start.
     import erase_watermark as _ew
 
-    _ew.turn_open(session_id, str((user or {}).get("user_id") or ""))
+    _turn = _ew.turn_open(session_id, str((user or {}).get("user_id") or ""))
     try:
         async for chunk in chat_stream_generator(message, session_id, user, **kwargs):
             yield chunk
     finally:
-        _ew.turn_close(session_id)
+        _ew.turn_close(_turn)
         lock.release()
 
 
