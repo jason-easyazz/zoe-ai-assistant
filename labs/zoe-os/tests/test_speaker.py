@@ -279,7 +279,8 @@ def test_the_token_and_the_secret_reach_no_file_but_the_identity_file_and_no_log
         good = speaker.mint(key, A, "forget.person", generation=gen)
         tokens, texts = [good, speaker.mint(key, B, "forget.person", generation=gen),
                          speaker.mint(key, A, "grant", generation=gen)], []
-        for bad in (tokens[1], tokens[2], good[:-2] + "00", good[:40]):
+        forged = good[:-1] + ("0" if good[-1] != "0" else "1")             # a MAC that is certainly wrong (a fixed "00" tail
+        for bad in (tokens[1], tokens[2], forged, good[:40]):              # equalled the real one 1 time in 256: a flaky test)
             with pytest.raises(Refused) as exc:
                 panel.call("forget", subject=A, actor=A, speaker=bad)
             texts.append(str(exc.value))
