@@ -293,6 +293,15 @@ class SqlStore:
                 (uid, card_json, text, ver, built_on, built_at))
             await db.commit()
 
+    async def update(self, uid: str, card_json: str, text: str, ver: str, built_on: str, built_at: str) -> None:
+        """Rewrite an EXISTING card only: an erase in another process that removed it meanwhile is not undone by this write."""
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
+            await db.execute("UPDATE now_cards SET card_json = ?, card_text = ?, version = ?, built_on = ?, built_at = ? WHERE user_id = ?",
+                             (card_json, text, ver, built_on, built_at, uid))
+            await db.commit()
+
     async def remove(self, uid: str) -> int:
         from db_pool import get_db_ctx
 
@@ -361,7 +370,22 @@ async def rebuild(uid: str, *, today: Optional[_dt.date] = None, svc: Any = None
         lines = compose(inp, today)
         text = render(today.isoformat(), lines)
         card = json.dumps({"built_on": today.isoformat(), "lines": lines}, ensure_ascii=False, sort_keys=True)
-        await _store.write(uid, card, text, version(text), today.isoformat(), now.isoformat(timespec="seconds"))
+        import erase_watermark
+
+        async def write() -> list:    # CREATED keys only: an existing card is updated (never re-created), and never undone
+            args = (uid, card, text, version(text), today.isoformat(), now.isoformat(timespec="seconds"))
+            if await _store.read(uid) is None:
+                await _store.write(*args)
+                return [uid]
+            await (_store.update if callable(getattr(_store, "update", None)) else _store.write)(*args)
+            return []
+
+        async def undo(_uid):          # the card just written (keyed by the member)
+            await _store.remove(uid)
+            invalidate(uid)
+        # lines gathered before the member's erase (a night pass): checked right before and right after the write
+        if await erase_watermark.guarded_write(uid, "now_card", write, undo) is None:
+            return {"user_id": uid, "status": "erased_since_cycle"}
         invalidate(uid)
         kinds = [k for k, _t, _r in lines]
         out = {"status": "ok" if lines else "empty", "tokens": est_tokens(text), "lines": len(lines), "threads": kinds.count("thread"),

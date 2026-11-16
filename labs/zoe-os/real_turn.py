@@ -1,0 +1,808 @@
+#!/usr/bin/env python3
+"""The guarded runner for ONE real brain turn set through the Zoe OS kernel. LAB ONLY.
+
+    labs/zoe-os/run_real_turn.sh --i-own-the-slot [--dry-run] [--out DIR]
+
+It sends a small fixed set of synthetic turns (a handful, with a hard 5-minute wall clock and a hard
+per-call token cap) to a tiny lab Flue app whose ONLY tools are the kernel bridge's, which talks to
+the already-running llama server. The live brain's one slot is shared with the household, so this
+REFUSES unless every guard below passes; each refusal says why and exits 3 (the lock: exit 2).
+
+Guards, in order (``refusals``): the explicit flag; the local-time window 22:00-01:50 (and the repo's
+own ``harness_quiet`` hours, panel-yield and brain-window rules, and ``night_busy.sh``); the harness
+lock (taken by this process, not waited for); no python voice probe process; the speech service
+active; every llama slot idle; MemAvailable above the floor; no conversation turn in zoe-data's app log for N seconds
+(timestamps and logger names only, never a message). In ``--dry-run`` the window, panel and log-quiet guards are advisory
+(they cannot pass in daylight) and everything else is enforced; the model is replaced by a scripted
+mock llama on an ephemeral port, so no turn reaches the real brain.
+
+Whatever happens after the lock is taken, ``finally`` stops the lab app (its whole process group), the
+bridge, the kernel and releases the lock. Synthetic people and invented words only.
+"""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+import datetime as dt
+import fcntl
+import hashlib
+import importlib.util
+import ipaddress
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.request
+import urllib.parse
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+HERE = Path(__file__).parent
+REPO = HERE.parent.parent
+sys.path[:0] = [str(HERE), str(HERE / "tests")]
+
+STATE_DIR = HERE / ".state"
+PRIVATE_TOOLS_DIR = Path.home() / ".zoe/agent-tools/zoe-os"
+LOCK_PATH = str(STATE_DIR / "real-turn.lock")
+LIVE_PORTS = {3578, 3579, 3582, 8000, 11434, 11436, 10201}
+PROBE_RE = re.compile(r"^([^ ]*/)?python[0-9.]*( +-[^ ]+)* +[^ ]*(voice_regression_probe|measure_voice|"
+                      r"measure_tts|measure_cold_first_turn)\.py")
+WINDOW_OPEN, WINDOW_CLOSE = dt.time(22, 0), dt.time(1, 50)     # allowed: 22:00 -> 01:50 (wraps midnight)
+BUDGET_MIN = 10
+EXIT_LOCK, EXIT_REFUSED = 2, 3
+TURN_CAP_S = 90
+
+# (tag, member, utterance, expected tool or None, kernel outcome expected). All invented.
+SMALL = [("list", "alex", "add milk to the shopping list", "list_add", "done"),
+         ("remind", "alex", "remind me in ten minutes to call the dentist", "remind_set", "done"),
+         ("alarm", "alex", "set an alarm for seven", "alarm_set", "done"),
+         ("kid", "kid", "set an alarm for six", "alarm_set", "refused"),
+         ("chat", "alex", "what a lovely evening", None, None)]
+BIG = ([("list", "alex", t, "list_add", "done") for t in (
+            "add milk to the shopping list", "put two loaves of bread on the shopping list please",
+            "shopping list: eggs", "could you please add dishwasher tablets to my shopping list",
+            "um, add bananas to the shopping list", "add 3 tins of tomatoes to the shopping list",
+            "add batteries to the hardware list", "I need birthday candles, add them to the shopping list")] +
+       [("remind", "alex", t, "remind_set", "done") for t in (
+            "remind me in ten minutes to call the dentist", "remind me in half an hour to take the washing out",
+            "remind me in 2 hours to ring the plumber", "please remind me to water the plants in 20 minutes",
+            "reminder in 5 minutes: stretch", "remind me in an hour to check the oven",
+            "set a reminder for 45 minutes from now to move the car", "hey, remind me in 90 minutes about the parcel")] +
+       [("alarm", "alex", t, "alarm_set", "done") for t in (
+            "set an alarm for 07:00", "wake me up at 06:30", "set my alarm for quarter past six in the morning",
+            "set an alarm for 18:30", "please set my alarm to 07:15", "alarm 06:00 tomorrow")] +
+       [("kid", "kid", t, "alarm_set", "refused") for t in (
+            "set my alarm for 06:30", "wake me up at 07:00", "please set an alarm for 08:15")] +
+       [("inject", "alex", "add eggs to the shopping list for sam", "list_add", "own")] +
+       [("chat", "alex", t, None, None) for t in ("what a lovely evening", "how are you today", "tell me a short joke")])
+SETS = {"small": SMALL, "big": BIG}
+WALL_BY_SET = {"small": 300, "big": 480}
+TOOL_NAMES = ("list_add", "remind_set", "alarm_set")
+
+
+# ---- guards ------------------------------------------------------------------------------------------
+@dataclass
+class Probes:
+    """Every reading a guard takes, injectable. The defaults read the real box (read-only)."""
+    now: Callable[[], dt.datetime] = dt.datetime.now
+    cmdlines: Callable[[], list[str]] = lambda: _proc_cmdlines()
+    slots: Callable[[str], list[dict]] = lambda url: _http_json(url.rstrip("/") + "/slots")
+    mem_mb: Callable[[], int] = lambda: _mem_mb()
+    log_age_s: Callable[[], float | None] = lambda: _log_age()
+    speech_active: Callable[[], bool] = lambda: _speech_active()
+    panel_quiet: Callable[[], bool] | None = None          # None: harness_quiet's own (a bounded ssh read)
+    night_busy: Callable[[dt.datetime], str | None] | None = None
+    night_jobs: Callable[[], str | None] = lambda: _night_jobs()
+    voice_hold: Callable[[], str | None] = lambda: _voice_hold()
+
+
+def validate_llama_url(url: str) -> str:
+    """Strict origin only; no URL-parser normalization or alternate numeric encodings."""
+    error = "llama URL must be an http loopback origin with an explicit port"
+    if not re.fullmatch(r"http://(?:localhost|127(?:\.[0-9]{1,3}){3}|\[::1\]):[0-9]{1,5}/?", url):
+        raise ValueError(error)
+    parsed = urllib.parse.urlsplit(url)
+    try:
+        if not 1 <= int(parsed.port or 0) <= 65535:
+            raise ValueError(error)
+    except ValueError:
+        raise ValueError(error) from None
+    if parsed.hostname != "localhost":
+        try:
+            if not ipaddress.ip_address(parsed.hostname).is_loopback:
+                raise ValueError(error)
+        except ValueError:
+            raise ValueError(error) from None
+    return url.rstrip("/")
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError("lab HTTP redirect refused")
+
+
+def local_open(url, timeout=4.0):
+    raw = url.full_url if isinstance(url, urllib.request.Request) else url
+    parsed = urllib.parse.urlsplit(raw)
+    validate_llama_url(f"{parsed.scheme}://{parsed.netloc}")
+    # Explicitly disable environment proxies as well as all redirects.
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(url, timeout=timeout)
+
+
+def _http_json(url: str, timeout: float = 4.0):
+    return json.loads(local_open(url, timeout=timeout).read())
+
+
+def _proc_cmdlines(root: Path | None = None) -> list[str]:
+    """Safe identities, never full command lines. Inspect at most argv[0:2] for Python.
+
+    Python with interpreter options is conservatively busy: finding the script after
+    arbitrary options would require reading arguments that may carry credentials.
+    """
+    out = []
+    root = root or Path("/proc")
+    for p in root.glob("[0-9]*"):
+        if p.name == str(os.getpid()):
+            continue
+        try:
+            with open(p / "comm", "rb", buffering=0) as f:
+                comm = f.read(32).strip()
+            if not re.fullmatch(rb"python[0-9.]*", comm):
+                continue
+            with open(p / "cmdline", "rb", buffering=0) as f:
+                names = []
+                for arg_index in range(2):
+                    name = bytearray()
+                    for _ in range(4096):
+                        b = f.read(1)
+                        if b in (b"", b"\0"):
+                            break
+                        if arg_index == 1 and not name and b == b"-":
+                            name.extend(b"-unknown")
+                            break  # never read an option's possible credential value
+                        if b == b"/":
+                            name.clear()
+                        elif len(name) < 96:
+                            name.extend(b)
+                    else:
+                        name = bytearray(b"-unknown")
+                        break
+                    names.append(bytes(name))
+            # Return only recognized fixed identities, never arbitrary argv values.
+            scripts = {b"voice_regression_probe.py", b"measure_voice.py", b"measure_tts.py",
+                       b"measure_cold_first_turn.py"}
+            if len(names) == 2 and names[1] in scripts:
+                out.append("python3 " + names[1].decode("ascii"))
+            elif len(names) != 2 or names[1].startswith(b"-"):
+                out.append("python3 voice_regression_probe.py")  # unknown: refuse conservatively
+        except OSError:
+            out.append("python3 voice_regression_probe.py")      # unreadable: never assume idle
+    return out
+
+
+def _mem_mb() -> int:
+    for line in open("/proc/meminfo"):
+        if line.startswith("MemAvailable"):
+            return int(line.split()[1]) // 1024
+    return 0
+
+
+#: the loggers that write when someone is TALKING to Zoe (a voice or chat turn). Housekeeping loggers (the scheduler, the idle
+#: sweep, sync jobs) write every minute or two with nobody there, so "any write" was never quiet; these names are the signal.
+TURN_LOGGERS = frozenset({"routers.voice_tts", "routers.chat", "zoe_flue_client", "intent_router", "fast_tiers",
+                          "brain_dispatch", "distress_handoff", "medical_safety", "child_safety_floor"})
+
+
+def last_turn_age_s(tail: str, now: float) -> float | None:
+    """Seconds since the newest line in ``tail`` written by a conversation-turn logger, or the tail's whole span when it holds
+    none (so "no turn in this tail" reads as quiet for at least that long). Only each line's TIMESTAMP and LOGGER NAME are
+    looked at; the message is never read, kept or printed. None = nothing parseable (the caller refuses)."""
+    from datetime import datetime
+
+    newest_turn = oldest = None
+    for line in tail.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 3:
+            continue
+        try:
+            ts = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+        except ValueError:
+            continue
+        oldest = ts if oldest is None else min(oldest, ts)
+        if parts[2].rstrip(":") in TURN_LOGGERS:
+            newest_turn = ts if newest_turn is None else max(newest_turn, ts)
+    if oldest is None:
+        return None
+    return max(0.0, now - (newest_turn if newest_turn is not None else oldest))
+
+
+def _log_age() -> float | None:
+    """Seconds since the household last had a conversation turn, from the service log's last 256 KB (timestamps and logger
+    names only). Unreadable or unparseable = None = refuse."""
+    p = Path.home() / ".zoe-logs" / "zoe-data.app.log"
+    try:
+        with open(p, "rb", buffering=0) as f:
+            f.seek(0, 2)
+            end = f.tell()
+            start = max(0, end - 262144)
+            f.seek(start)
+            prefixes, prefix, fields = [], bytearray(), 0
+            discard = start > 0       # a partial first line is never a prefix
+            in_field = False
+            for _ in range(end - start):
+                b = f.read(1)
+                if not b:
+                    break
+                if b == b"\n":
+                    if not discard and fields >= 3:
+                        prefixes.append(prefix.decode("ascii", "ignore"))
+                    prefix, fields, in_field, discard = bytearray(), 0, False, False
+                elif not discard:
+                    if b in (b" ", b"\t", b"\r"):
+                        if in_field:
+                            fields += 1
+                            in_field = False
+                        if fields >= 3:
+                            prefixes.append(prefix.decode("ascii", "ignore"))
+                            discard = True    # message bytes are discarded individually, never buffered
+                        else:
+                            prefix.extend(b)
+                    else:
+                        in_field = True
+                        prefix.extend(b)
+                        if len(prefix) > 160:
+                            discard = True    # malformed/oversized prefix: refuse to retain it
+                            prefix.clear()
+        return last_turn_age_s("\n".join(prefixes), time.time())
+    except OSError:
+        return None
+
+
+def _speech_active() -> bool:
+    return subprocess.run(["systemctl", "--user", "is-active", "kokoro-tts"], capture_output=True, text=True,
+                          timeout=10).stdout.strip() == "active"
+
+
+def _voice_hold() -> str | None:
+    """The lander's hold file: exists and non-empty = a probe is about to run for the PR it names (never read further)."""
+    p = Path.home() / ".zoe/agent-tools/coord/voice-hold"
+    try:
+        return "the lander's voice-hold is set" if p.stat().st_size > 0 else None
+    except OSError:
+        return None
+
+
+def _night_jobs() -> str | None:
+    for unit in ("zoe-night-window.service", "zoe-voice-regression.service"):
+        st = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True, timeout=10).stdout.strip()
+        if st in ("active", "activating", "deactivating"):
+            return unit
+    return None
+
+
+def _harness_quiet():
+    spec = importlib.util.spec_from_file_location("harness_quiet", REPO / "scripts/maintenance/harness_quiet.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["harness_quiet"] = mod          # dataclasses resolve their module through sys.modules
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def in_window(t: dt.time) -> bool:
+    return t >= WINDOW_OPEN or t < WINDOW_CLOSE
+
+
+NIGHT_START, NIGHT_END = dt.time(1, 50), dt.time(4, 55)      # the brain window: NEVER overridable
+
+
+def window_reason(now: dt.datetime, probes: Probes, daytime_ok: bool = False) -> str | None:
+    """The night maintenance span 01:50-04:55 refuses always (and a run that would still be alive at 01:50).
+    Outside it, only 22:00-01:50 is allowed unless ``daytime_ok`` (--owner-approved-daytime) lifts the
+    07:00-22:00 refusal: the household's waking-hours rules, and nothing else."""
+    t = now.time()
+    if NIGHT_START <= t < NIGHT_END:
+        return f"inside the night maintenance span {NIGHT_START:%H:%M}-{NIGHT_END:%H:%M} (never overridable; it is {now:%H:%M})"
+    nxt = dt.datetime.combine(now.date() + (dt.timedelta(days=1) if t >= NIGHT_START else dt.timedelta(0)), NIGHT_START)
+    if now + dt.timedelta(minutes=BUDGET_MIN) > nxt:
+        return f"a {BUDGET_MIN}-minute run from {now:%H:%M} would still be alive at 01:50"
+    if not daytime_ok and not in_window(t):
+        return f"outside the allowed window 22:00-01:50 local (it is {now:%H:%M}); --owner-approved-daytime lifts this one rule"
+    hq = _harness_quiet()
+    if daytime_ok:
+        quiet = (probes.panel_quiet or (lambda: hq.panel_quiet(now)))()
+        if not quiet:
+            return "the panel was used in the last 10 min - yielding to the household"
+    else:
+        for verdict in (hq.check("real-turn", now=now, panel=probes.panel_quiet),):
+            if not verdict.allowed:
+                return verdict.reason
+    v = hq.brain_window_verdict("real-turn", budget_min=BUDGET_MIN, now=now)
+    if not v.allowed:
+        return v.reason
+    if not daytime_ok:                  # night_busy.sh pauses voice work all day by design; the override skips it
+        return (probes.night_busy or _night_busy)(now)
+    return None
+
+
+def night_jobs_reason(probes: Probes) -> str | None:
+    active = probes.night_jobs()
+    return f"{active} is active (the night window / nightly voice regression owns the box)" if active else None
+
+
+def _night_busy(now: dt.datetime) -> str | None:
+    v = _harness_quiet().night_pause_verdict("real-turn", budget_min=BUDGET_MIN, kind="voice", now=now)
+    return None if v.allowed else v.reason
+
+
+def refusals(args, probes: Probes, *, held_lock: bool) -> list[tuple[str, str]]:
+    """Every guard that says no: [(guard, reason)]. Empty means the run may start. ``held_lock`` is
+    whether this process holds the harness lock (checked by the caller, which takes it)."""
+    args.llama_url = validate_llama_url(args.llama_url)
+    out: list[tuple[str, str]] = []
+    advisory = args.dry_run
+
+    def no(guard: str, reason: str | None, *, soft: bool = False) -> None:
+        if reason:
+            out.append((guard + (" (dry-run: advisory)" if soft and advisory else ""), reason))
+
+    no("flag", None if args.i_own_the_slot else "pass --i-own-the-slot: this shares the household's one llama slot")
+    soft = [r for r in (window_reason(probes.now(), probes, args.owner_approved_daytime),) if r]
+    hold = probes.voice_hold()
+    if hold:
+        out.append(("voice-hold", hold))
+    night = night_jobs_reason(probes)
+    if night:
+        out.append(("night-jobs", night))
+    if soft and advisory:
+        print(f"[dry-run] advisory: window: {soft[0]}")
+    else:
+        no("window", soft[0] if soft else None)
+    no("lock", None if held_lock else f"could not take {args.lock}: another harness holds it")
+    live = [c for c in probes.cmdlines() if PROBE_RE.match(c)]
+    no("probe", f"a voice probe process is running ({len(live)})" if live else None)
+    no("speech", None if probes.speech_active() else "kokoro-tts is not active (a landing is between stop and restart)")
+    try:
+        busy = [s.get("id") for s in probes.slots(args.llama_url) if s.get("is_processing")]
+        no("slots", f"llama slot(s) {busy} are processing" if busy else None)
+    except Exception as exc:                                   # an unreadable slot is never "idle"
+        no("slots", f"cannot read {args.llama_url}/slots ({type(exc).__name__})")
+    mem = probes.mem_mb()
+    no("memory", f"MemAvailable {mem} MiB is below the {args.mem_floor} MiB floor" if mem < args.mem_floor else None)
+    age = probes.log_age_s()
+    if age is None or age < args.log_quiet_s:
+        if advisory:
+            print(f"[dry-run] advisory: zoe-data log: " + ("unreadable" if age is None else f"touched {age:.0f}s ago"))
+        else:
+            no("log-quiet", "zoe-data's app log is unreadable" if age is None else
+               f"a conversation turn was logged {age:.0f}s ago (< {args.log_quiet_s}s: the household is active)")
+    return out
+
+
+# ---- the run -------------------------------------------------------------------------------------------
+def take_lock(path: str):
+    path = lab_path(path)
+    with lab_directory(path.parent) as directory:
+        fd = os.open(path.name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600,
+                     dir_fd=directory)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def lab_path(path) -> Path:
+    raw = Path(path).expanduser()
+    if ".." in raw.parts:
+        raise ValueError("lab path traversal refused")
+    resolved = raw.resolve()
+    if not any(resolved.is_relative_to(base.resolve()) for base in (STATE_DIR, PRIVATE_TOOLS_DIR)):
+        raise ValueError("lab path outside allowed state directories")
+    return resolved
+
+
+@contextmanager
+def lab_directory(path):
+    """Pin each directory component; refuse a symlink swapped in after validation.
+
+    Lock and result opens use these descriptors. Temporary stack files still use
+    path-based APIs: this runner does not isolate them from a hostile same-user
+    directory rename. It is not a security boundary against that user.
+    """
+    path = lab_path(path)
+    fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in path.parts[1:]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def write_lab_text(path, text):
+    path = lab_path(path)
+    with lab_directory(path.parent) as directory:
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(text)
+
+
+def free_port(port: int) -> bool:
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def cache_state(llama_url: str, probes: Probes) -> dict:
+    """Numbers only: the slot's held-prompt size and the cumulative prompt counters."""
+    out: dict = {}
+    try:
+        slot = probes.slots(llama_url)[0]
+        out["slot_prompt_tokens"] = slot.get("n_prompt_tokens")
+    except Exception:
+        out["slot_prompt_tokens"] = None
+    try:
+        text = local_open(validate_llama_url(llama_url) + "/metrics", timeout=4).read().decode()
+        for key in ("prompt_tokens_total", "prompt_tokens_cached_total"):
+            m = re.search(rf"llamacpp:{key}\s+([\d.e+]+)", text)
+            out[key] = float(m.group(1)) if m else None
+    except Exception:
+        out["prompt_tokens_total"] = out["prompt_tokens_cached_total"] = None
+    return out
+
+
+def journal_numbers(since: dt.datetime) -> dict:
+    try:
+        spec = importlib.util.spec_from_file_location("bcr", REPO / "scripts/maintenance/brain_cache_report.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.journal(since.strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as exc:
+        return {"error": type(exc).__name__}
+
+
+def read_turn_stream(app_url: str, sid: str, text: str, timeout: float) -> dict:
+    """POST one turn (Seam-A NDJSON), read to the end. Returns the frames and timings."""
+    req = urllib.request.Request(
+        f"{app_url}/agents/lab/{sid}", data=json.dumps({"kind": "user", "body": text}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"})
+    frames, t0, first, error = [], time.perf_counter(), None, None
+    try:
+        with local_open(req, timeout=timeout) as r:
+            for raw in r:
+                line = raw.decode().strip()
+                if not line:
+                    continue
+                if first is None:
+                    first = (time.perf_counter() - t0) * 1000
+                chunk = json.loads(line)
+                if isinstance(chunk, dict):
+                    if chunk.get("error"):
+                        error = 'stream_error'
+                    if chunk.get("done") or chunk.get("error"):
+                        break
+                    continue
+                frames.append(chunk)
+    except Exception as exc:
+        error = error or type(exc).__name__
+    return {"frames": frames, "first_ms": first, "total_ms": (time.perf_counter() - t0) * 1000, "error": error}
+
+
+def reduce_frames(frames: list[str]) -> list[str]:
+    """Diagnostic frame counts/lengths and text hashes; never raw tool calls or replies."""
+    out, text = [], []
+    for f in frames:
+        if f.startswith("__TOOL__:"):
+            out.append(json.dumps({'tool_frame_bytes': len(f)}))
+        elif f.startswith("__THINKING__:"):
+            out.append(json.dumps(f"__THINKING__:len={len(f) - 13}"))     # never kept
+        else:
+            text.append(f)
+    joined = "".join(text)
+    if joined:
+        out.append(json.dumps(f"__TEXT__:len={len(joined)} sha256={hashlib.sha256(joined.encode()).hexdigest()[:16]}"))
+    return [o if o.startswith("{") or o.startswith('"') else json.dumps(o) for o in out]
+
+
+def tools_called(frames: list[str]) -> list[str]:
+    seen: list[str] = []
+    for f in frames:
+        if f.startswith("__TOOL__:"):
+            p = json.loads(f[len("__TOOL__:"):])
+            if p.get("phase") == "start" and p.get("name") not in seen:
+                from zoe_os.diagnostics import code
+                seen.append(code(p["name"], TOOL_NAMES))
+    return seen
+
+
+def diagnose(frames: list[str], props: list[dict], expect: str | None) -> dict:
+    """Classes, booleans and numbers only: never the model's text. For a turn with no tool call: reply length +
+    hash, whether the text looks like a tool call written as text, whether it ends with a question, and whether
+    the stream held any tool-call frames at all. For an invalid proposal: the reason code and argument NAMES."""
+    text = "".join(f for f in frames if not f.startswith(("__TOOL__:", "__THINKING__:")))
+    out: dict = {"tool_frames": sum(f.startswith("__TOOL__:") for f in frames),
+                 "thinking_frames": sum(f.startswith("__THINKING__:") for f in frames)}
+    if not props:
+        low = text.lower()
+        out.update({"reply_len": len(text), "reply_sha": hashlib.sha256(text.encode()).hexdigest()[:12],
+                    "looks_like_text_tool_call": bool(re.search(r"\{.*\}", text, re.S) and
+                                                       any(t in low for t in TOOL_NAMES)) or "tool_call" in low
+                                                  or any(t + "(" in low for t in TOOL_NAMES),
+                    "asks_a_question": text.rstrip().endswith("?"), "names_a_tool_word": any(t in low for t in TOOL_NAMES)})
+    for p in props:
+        if p["status"] in ("invalid", "refused"):
+            out.setdefault("rejections", []).append({"status": p["status"]})
+    return out
+
+
+def _pct(xs: list[float], q: float):
+    xs = sorted(xs)
+    return None if not xs else round(xs[min(len(xs) - 1, int(q * len(xs)))], 2)
+
+
+def summarize(rows: list[dict]) -> dict:
+    """Hit rate per skill (right tool AND valid args AND the expected kernel outcome), the refusal-path
+    rate, false tool calls on plain chat, and p50 / p90 of model and hop time."""
+    done = [r for r in rows if "skipped" not in r]
+    per: dict = {}
+    for r in done:
+        if r["tag"] in ("list", "remind", "alarm"):
+            ok = r["right_tool"] and r["args_valid"] and r["kernel"] == ["done"]
+            h = per.setdefault(r["tag"], [0, 0])
+            h[0] += bool(ok)
+            h[1] += 1
+    kid = [r for r in done if r["tag"] == "kid"]
+    chat = [r for r in done if r["tag"] == "chat"]
+    inj = [r for r in done if r["tag"] == "inject"]
+    return {"per_skill_hit": {k: f"{a}/{b}" for k, (a, b) in per.items()},
+            "refusal_path": f"{sum(r['kernel'] == ['refused'] for r in kid)}/{len(kid)}",
+            "false_tool_calls_on_chat": f"{sum(bool(r['called']) for r in chat)}/{len(chat)}",
+            "injected_calls_made": [r["called"] for r in inj],
+            "model_ms_p50_p90": [_pct([r["model_ms"] for r in done], .5), _pct([r["model_ms"] for r in done], .9)],
+            "hop_ms_p50_p90": [_pct([r["hop_ms"] for r in done if r["kernel"]], .5),
+                               _pct([r["hop_ms"] for r in done if r["kernel"]], .9)],
+            "turns": len(done), "skipped": len(rows) - len(done)}
+
+
+class Stack:
+    """Kernel process + bridge server + lab Flue app, torn down together."""
+
+    def __init__(self, args, tmp: Path) -> None:
+        self.args, self.tmp = args, tmp
+        self.box = self.bridge = self.server = self.app = None
+        self.app_log = tmp / "app.log"
+
+    def up(self, llama_url: str) -> str:
+        llama_url = validate_llama_url(llama_url)
+        from brain_rig import BrainBox
+        from zoe_os.brain.serve import BridgeServer
+        self.box = BrainBox()
+        self.box.household()
+        self.bridge = self.box.bridge()
+        self.token = os.urandom(16).hex()
+        self.server = BridgeServer(self.bridge, self.token).start()
+        tools_file = self.tmp / "tools.json"
+        tools_file.write_text(json.dumps(self.bridge.tools()))
+        port = self.args.app_port
+        if port in LIVE_PORTS or not free_port(port):
+            raise RuntimeError(f"app port {port} is a live port or already in use")
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp), "PORT": str(port), "HOST": "127.0.0.1",
+               "OSLAB_TOOLS_FILE": str(tools_file), "OSLAB_BRIDGE_URL": f"http://127.0.0.1:{self.server.port}",
+               "OSLAB_BRIDGE_TOKEN": self.server.app_token,
+               "OSLAB_LLAMA": llama_url.rstrip("/") + "/v1", "OSLAB_MAX_TOKENS": str(self.args.max_tokens), "OSLAB_POLICY": self.args.policy}
+        dist = HERE / "brain-lab-app" / "dist" / "server.mjs"
+        if not dist.exists():
+            raise RuntimeError("lab app not built: run labs/zoe-os/prep_real_turn.sh first (in daylight)")
+        self.app = subprocess.Popen(["node", str(dist)], cwd=HERE / "brain-lab-app", env=env, start_new_session=True,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        url = f"http://127.0.0.1:{port}"
+        for _ in range(80):
+            if self.app.poll() is not None:
+                raise RuntimeError(f"lab app exited early ({self.app.returncode})")
+            try:
+                local_open(url + "/health", timeout=1).read()
+                return url
+            except Exception:
+                time.sleep(0.5)
+        raise RuntimeError("lab app did not become healthy in 40 s")
+
+    def down(self) -> None:
+        if self.app is not None and self.app.poll() is None:
+            try:
+                os.killpg(self.app.pid, signal.SIGTERM)
+                self.app.wait(timeout=8)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(self.app.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        for obj, fn in ((self.server, "stop"), (self.bridge, "close"), (self.box, "close")):
+            try:
+                obj and getattr(obj, fn)()
+            except Exception:
+                pass
+
+
+def run(args, probes: Probes) -> int:
+    args.llama_url = validate_llama_url(args.llama_url)
+    stamp = probes.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = lab_path(args.out or STATE_DIR / f"real-turn-{stamp}")
+    args.lock = str(lab_path(args.lock))
+    fd = take_lock(args.lock)
+    harness_fd = None
+    stack = mock = None
+    tmp = None
+    try:
+        tmp = Path(tempfile.mkdtemp(prefix="zrt-", dir=lab_path(args.lock).parent))
+        if not args.dry_run:
+            # Cooperate with the household harness without creating/writing a file outside
+            # the lab. An absent shared lock requires operator provisioning, never bypass.
+            try:
+                harness_fd = os.open("/tmp/zoe-voice-harness.lock", os.O_RDONLY | os.O_NOFOLLOW)
+                fcntl.flock(harness_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                print("REFUSED [lock]: shared voice harness lock unavailable", file=sys.stderr)
+                return EXIT_LOCK
+        bad = refusals(args, probes, held_lock=fd is not None)
+        if bad:
+            for guard, why in bad:
+                print(f"REFUSED [{guard}]: {why}", file=sys.stderr)
+            return EXIT_LOCK if any(g == "lock" for g, _ in bad) and len(bad) == 1 else EXIT_REFUSED
+        with lab_directory(out_dir):
+            pass
+        before, t_start = cache_state(args.llama_url, probes), probes.now()
+        stack = Stack(args, tmp)
+        llama = args.llama_url
+        if args.dry_run:
+            from mock_llama import MockLlama
+            mock = MockLlama().start()
+            llama = mock.url
+            before = cache_state(llama, probes)
+        turns = SETS[args.set]
+        wall = args.wall_cap or WALL_BY_SET[args.set]
+        print(f"[real-turn] set={args.set} turns={len(turns)} policy={args.policy} wall-cap={wall}s "
+              f"token-cap={args.max_tokens}/call", flush=True)
+        app_url = stack.up(llama)
+        rows, fixture, deadline = [], [], time.monotonic() + wall
+        for n, (tag, member, text, expect, kernel_expect) in enumerate(turns):
+            left = deadline - time.monotonic()
+            if left <= 5:
+                rows.append({"n": n, "skipped": "wall-clock cap"})
+                continue
+            turn = stack.box.say(member, text)
+            tid = json.loads(local_open(urllib.request.Request(
+                f"http://127.0.0.1:{stack.server.port}/turn", method="POST", headers={"X-Runner": stack.token},
+                data=json.dumps({"member": member, "cause": turn.cause}).encode()), timeout=5).read())["turn"]
+            logged = len(stack.server.log)
+            # The bridge's turn id is the Flue instance id: the app's tools send it back with every call.
+            got = read_turn_stream(app_url, tid, text, min(TURN_CAP_S, left))
+            # Attributed by the id each record CARRIES, never by when it landed: a late call from an
+            # earlier turn that arrives now is that turn's (and refused stale), not this one's.
+            props = [p for p in stack.server.log[logged:] if p["turn_id"] == tid]
+            late = sum(p.get("code") == "stale_turn" for p in stack.server.log[logged:])
+            hop = sum(p["hop_ms"] for p in props)
+            called = tools_called(got["frames"])
+            diag = diagnose(got["frames"], props, expect)
+            rows.append({"n": n, "tag": tag, "member": member, "expect": expect, "called": called,
+                         "right_tool": called == ([expect] if expect else []),
+                         "args_valid": bool(props) and all(p["status"] in ("done", "refused", "unconfirmed") and
+                                                           p['status'] != 'invalid' for p in props) if props else None,
+                         "kernel": [p["status"] for p in props], "kernel_expected": kernel_expect,
+                         "model_ms": round(got["total_ms"] - hop), "hop_ms": round(hop, 2),
+                         "first_frame_ms": round(got["first_ms"] or 0), "error": got["error"], "diag": diag,
+                         "late_calls_refused": late})
+            fixture.append({"turn": n, "frames": reduce_frames(got["frames"]), "proposals": props})
+        verify = verify_kernel(stack, rows, turns)
+        after = cache_state(llama, probes)
+        write_lab_text(out_dir / "recorded_turns.json", json.dumps(
+            {"note": "synthetic members and words; model text reduced to length+hash", "turns": fixture}, indent=1))
+        write_lab_text(out_dir / "result.json", json.dumps({"rows": rows, "verify": verify, "before": before,
+                                                        "after": after, "dry_run": args.dry_run, "set": args.set,
+                                                        "policy": args.policy, "summary": summarize(rows)}, indent=1))
+        report(rows, verify, before, after, journal_numbers(t_start) if not args.dry_run else {}, args, out_dir)
+        return 0
+    finally:
+        if harness_fd is not None:
+            os.close(harness_fd)
+        if mock is not None:
+            mock.stop()
+        if stack is not None:
+            stack.down()
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def verify_kernel(stack: Stack, rows: list[dict], turns: list) -> dict:
+    """Receipts, why, undo, forget: the same checks the scripted test makes, on what really happened."""
+    box, panel, v = stack.box, stack.box.client("panel"), {}
+    state = box.sup("state")
+    v["alex_effects"] = {k: bool(state[k].get("alex")) for k in ("lists", "reminders", "alarms")}
+    v["kid_alarm_written"] = bool(state["alarms"].get("kid"))
+    v["sam_written"] = any(bool(state[k].get("sam")) for k in ("lists", "reminders", "alarms"))
+    try:
+        why = panel.explain(person="alex", last="action")
+        v["why_ok"] = "read-back confirmed" in why["sentence"]
+    except Exception as exc:
+        v["why_ok"] = False
+        v["why_error"] = type(exc).__name__
+    try:
+        v["undo_verified"] = bool(panel.undo("alex", actor="alex").verified)
+    except Exception as exc:
+        v["undo_verified"], v["undo_error"] = False, type(exc).__name__
+    first_text = turns[0][2].encode()
+    v["words_on_disk_before_forget"] = first_text in box_disk(box)
+    panel.forget("alex", actor="alex")
+    box.sup("pump")
+    after = box.sup("state")
+    v["alex_effects_after_forget"] = {k: bool(after[k].get("alex")) for k in ("lists", "reminders", "alarms")}
+    v["words_on_disk_after_forget"] = first_text in box_disk(box)
+    return v
+
+
+def box_disk(box) -> bytes:
+    import glob
+    return b"".join(open(p, "rb").read() for p in glob.glob(str(box.base / "kernel" / "zoe-os.db*")))
+
+
+def report(rows, verify, before, after, journal, args, out_dir) -> None:
+    from zoe_os.diagnostics import code, identifier, STATUSES
+
+    def number(value):
+        return value if type(value) in (int, float) else None
+
+    print('dry_run' if args.dry_run else 'real_run')
+    for r in rows:
+        print(json.dumps({'n': number(r.get('n')), 'member_id': identifier(r.get('member')),
+                          'skipped': 'skipped' in r, 'error': bool(r.get('error')),
+                          'called': [code(t, TOOL_NAMES) for t in r.get('called', [])],
+                          'kernel': [code(s, STATUSES) for s in r.get('kernel', [])],
+                          'model_ms': number(r.get('model_ms')), 'hop_ms': number(r.get('hop_ms')),
+                          'right_tool': r.get('right_tool') is True, 'args_valid': r.get('args_valid') is True}))
+    print(json.dumps({'turns': len(rows), 'checks': len(verify), 'journal_counters': len(journal)}))
+    for key in ('slot_prompt_tokens', 'prompt_tokens_total', 'prompt_tokens_cached_total'):
+        print(json.dumps({'counter': key, 'before': number(before.get(key)), 'after': number(after.get(key))}))
+
+
+def main(argv=None, probes: Probes | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--i-own-the-slot", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--owner-approved-daytime", action="store_true",
+                    help="lift ONLY the 07:00-22:00 refusal (never the 01:50-04:55 night span)")
+    ap.add_argument("--out")
+    ap.add_argument("--lock", default=LOCK_PATH)
+    ap.add_argument("--llama-url", default="http://127.0.0.1:11434")
+    ap.add_argument("--app-port", type=int, default=3591)
+    ap.add_argument("--mem-floor", type=int, default=1500)
+    ap.add_argument("--log-quiet-s", type=int, default=60)
+    ap.add_argument("--max-tokens", type=int, default=200)
+    ap.add_argument("--wall-cap", type=int, default=0, help="seconds; 0 = 300 (small set) or 480 (big set)")
+    ap.add_argument("--set", choices=sorted(SETS), default="small", dest="set")
+    ap.add_argument("--policy", choices=("plain", "sidecar"), default="plain",
+                    help="sidecar: the live sidecar's tool-use doctrine and text-tool-call recovery")
+    args = ap.parse_args(argv)
+    for s in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s, lambda *_: (_ for _ in ()).throw(SystemExit(130)))
+    return run(args, probes or Probes())
+
+
+if __name__ == "__main__":
+    sys.exit(main())
