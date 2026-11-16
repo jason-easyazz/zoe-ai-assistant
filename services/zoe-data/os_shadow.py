@@ -816,7 +816,8 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     forget returns its count; with the flag ``shadow`` anything unconfirmed raises ``ShadowForgetUnavailable`` (parked or not); with
     it off a parked forget returns 0 (deferred: replayed before the next job), and one that could not be parked raises."""
     strict = mode() == "shadow"
-    if not strict and not shadow_state_exists():
+    # the state check stats and lists a directory: in a thread, never on the event loop (a slow or hung disk would stall every turn)
+    if not strict and not await asyncio.to_thread(shadow_state_exists):
         return 0                      # certain nothing was ever recorded here (no state at all) and the shadow is off: nothing to forget
     # anything else goes to the kernel, and is PARKED if it cannot be confirmed there (a missing creds.json included: the kernel's
     # store may still hold the member): "cannot reach" is never "done"
