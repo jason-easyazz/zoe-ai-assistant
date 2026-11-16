@@ -941,6 +941,12 @@ _RUN_WORDS = {"failure": "failed", "cancelled": "was cancelled", "timed_out": "t
               "in_progress": "is still running", "queued": "is still waiting to start", "success": "finished"}
 
 
+def stale_words(after: timedelta) -> str:
+    """The stale threshold in words ("an hour", "2 hours", "90 minutes"): a CONFIGURED wait, never the time since anything."""
+    mins = int(after.total_seconds() // 60)
+    return ("an hour" if mins == 60 else f"{mins // 60} hours") if mins % 60 == 0 else f"{mins} minutes"
+
+
 def stuck_text(stuck: list[dict], after: timedelta, run: Optional[dict]) -> str:
     """Bad news, plainly and first: which changes did not go live, how long, and how the last deploy ended."""
     names = [f'"{subject(p.get("title", ""))}"' for p in stuck[:3]]
@@ -948,8 +954,7 @@ def stuck_text(stuck: list[dict], after: timedelta, run: Optional[dict]) -> str:
         what = f"{', '.join(names)} and {len(stuck) - 3} more"
     else:
         what = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
-    mins = int(after.total_seconds() // 60)
-    ago = (("an hour" if mins == 60 else f"{mins // 60} hours") if mins % 60 == 0 else f"{mins} minutes")
+    ago = stale_words(after)
     one = len(stuck) == 1
     word = _RUN_WORDS.get(str((run or {}).get("conclusion") or (run or {}).get("status") or "")) if run else None
     refs = ", ".join(f"#{p['number']}" for p in stuck[:12]) + (f" and {len(stuck) - 12} more" if len(stuck) > 12 else "")
