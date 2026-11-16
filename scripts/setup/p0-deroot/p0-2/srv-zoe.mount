@@ -1,0 +1,27 @@
+# P0-2 (docs/architecture/p0-deroot.md section 8). NOT installed by anything. Re-mounts /srv/zoe over itself
+# nosuid,nodev: a set-uid file or a device node that a ROOT container writes into its bind source is inert when
+# anything on the host runs or opens it (labs/p0-2-root-paths cell R3b-3). No noexec: Home Assistant and Music
+# Assistant load shared libraries from their config trees.
+# Install (zoe-admin):  sudo install -d -m 0755 -o root -g root /srv/zoe   (FIRST: the condition below skips the
+#                       mount when /srv/zoe is absent, which would leave the sources without nosuid,nodev)
+#                       && sudo install -m 0644 srv-zoe.mount /etc/systemd/system/ && sudo systemctl daemon-reload
+#                       && sudo systemctl enable --now srv-zoe.mount
+# Verify (read-only):   findmnt -no OPTIONS /srv/zoe     (must list nosuid and nodev)
+# Revert:               sudo systemctl disable --now srv-zoe.mount && sudo rm /etc/systemd/system/srv-zoe.mount
+#                       && sudo systemctl daemon-reload
+# Order: apply it BEFORE the containers whose sources live under /srv/zoe are recreated: a running container keeps
+# the mount it started with.
+[Unit]
+Description=Zoe P0-2: /srv/zoe without set-uid or device files
+DefaultDependencies=no
+Before=docker.service local-fs.target
+ConditionPathIsDirectory=/srv/zoe
+
+[Mount]
+What=/srv/zoe
+Where=/srv/zoe
+Type=none
+Options=bind,nosuid,nodev
+
+[Install]
+WantedBy=local-fs.target

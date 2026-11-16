@@ -1,0 +1,20 @@
+# P0-2 bind-source moves (docs/architecture/p0-deroot.md section 8), read by zoe-p0-2-paths.
+# kind name old new owner group mode. Owner = the uid the container runs as (root for every image below except
+# cloudflared, 65532). Modes: 0700 where only the container reads it (zoe cannot traverse, so nothing a root
+# container writes there is reachable from the host as zoe: lab cell R3b-1); 0755 / 0644 only for read-only
+# content (mounted :ro by the override example). Apply ONE line at a time (--only NAME), container stopped.
+# Box-specific extras (the tunnel credential file, root units' scripts) live in the owner's private manifest.
+dir  homeassistant            /home/zoe/assistant/homeassistant                    /srv/zoe/homeassistant                    root  root  0700
+# zoe-auth binds the WHOLE shared data dir today, which also holds other services' stores; it only uses its touch
+# cache there (its accounts are in Postgres), so the move NARROWS the bind: /srv/zoe/zoe-auth holds the cache only.
+dir  zoe-auth-touch-cache     /home/zoe/assistant/data/touch_cache                 /srv/zoe/zoe-auth/touch_cache             root  root  0700
+dir  zoe-ui-dist              /home/zoe/assistant/services/zoe-ui/dist             /srv/zoe/zoe-ui/dist                      root  root  0755
+file zoe-ui-nginx-conf        /home/zoe/assistant/services/zoe-ui/nginx.conf       /srv/zoe/zoe-ui/nginx.conf                root  root  0644
+dir  zoe-ui-nginx-d           /home/zoe/assistant/services/zoe-ui/nginx.d          /srv/zoe/zoe-ui/nginx.d                   root  root  0755
+dir  zoe-ui-ssl               /home/zoe/assistant/ssl                              /srv/zoe/zoe-ui/ssl                       root  root  0700
+file cloudflared-config       /home/zoe/assistant/config/cloudflared-config.yml    /srv/zoe/cloudflared/config.yml           65532 65532 0400
+file cloudflared-cert         /home/zoe/assistant/config/cert.pem                  /srv/zoe/cloudflared/cert.pem             65532 65532 0400
+dir  homeassistant-mcp-bridge /home/zoe/assistant/services/homeassistant-mcp-bridge /srv/zoe/homeassistant-mcp-bridge        root  root  0755
+file livekit-config           /home/zoe/assistant/services/livekit/config.yaml     /srv/zoe/livekit/config.yaml              root  root  0600
+dir  music-assistant          /home/zoe/.zoe/music-assistant                       /srv/zoe/music-assistant                  root  root  0700
+dir  smb-drop                 /home/zoe/smb-drop                                   /srv/zoe/smb-drop                         root  root  0700
