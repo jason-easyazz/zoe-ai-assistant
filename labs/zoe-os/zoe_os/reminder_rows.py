@@ -58,8 +58,9 @@ class DurableReminders(DurableRows):
     # ---- who may ---------------------------------------------------------------------------------------------------------------
     def _carer(self, adult: str, person: str) -> bool:
         """Owner rule (2026-11-16): a guardian is a CARER who may see and manage reminders for the person they care for, a child OR
-        an adult in care (an adult whose roster entry names guardians). That reach is for MANAGING rows only: forget, undo and
-        explain stay child-only (``capability.guards``), so a carer can never erase or read back an adult's record."""
+        an adult in care (an adult whose roster entry names guardians). That reach is for MANAGING rows only:
+        organising never includes forget, undo or explain; forgetting on someone's behalf is a separate named power, today offered only to a
+        child's guardian (``capability.guards``), to be replaced by memory care."""
         who, by = self.grants.people.get(person), self.grants.people.get(adult)
         return who is not None and by is not None and by.role == ADULT and adult in who.guardians
 
