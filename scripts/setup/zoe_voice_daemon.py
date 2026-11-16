@@ -3850,14 +3850,16 @@ class _MediaWatch:
         return self._parent_of(pid) == self._own
 
     def refresh(self) -> None:
-        """One read of the sink-inputs; the parse runs OUTSIDE the lock, which is held only to store the result."""
-        now = self._clock()
+        """One read of the sink-inputs; the parse runs OUTSIDE the lock, which is held only to store the result. The result is
+        stamped when the read COMPLETES: stamped before a slow listing, a first read already looked a second old, so the clean
+        hold and the gone hold were counted from before anything was known."""
         try:
             text = self._list()
             foreign = None if text is None else any(not corked and not self._is_ours(pid)
                                                     for corked, pid in _parse_sink_inputs(text))
         except Exception:
             foreign = None
+        now = self._clock()
         with self._lock:
             if foreign is None:
                 self._ok, self._clean_since = False, None
