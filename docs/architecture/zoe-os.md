@@ -1158,7 +1158,7 @@ alarm is left alone).
 
 **Who may.** A member's own alarms (production's `can_see` and `can_edit` for a personal alarm), and a CARER's reach (a
 guardian on the roster of a child or of an adult in care) over the person's alarms, except one its owner made `private`.
-Forget, undo and explain stay child-only. The `alarms` read is person-bound (a speaker assertion). The forget rule is the
+Organising never includes forget, undo or explain; forgetting on someone's behalf is a separate named power, today offered only to a child's guardian, to be replaced by memory care. Who set or last changed an alarm is never standing authority: the CURRENT care link decides at every use, including undoing or explaining one's own past change (`rows.DurableRows.may_reach`). The `alarms` read is person-bound (a speaker assertion). The forget rule is the
 reminders' (`Spine._row_source`): forgetting an alarm takes every later record of it; a delete is a reversal, so forgetting
 it takes the alarm too; an undo is refused once the alarm changed since.
 
