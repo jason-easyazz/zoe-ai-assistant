@@ -172,8 +172,20 @@ editing `ZOE_OS_SHADOW_VERBS`. Leave `~/.zoe/os-shadow/` so a later forget still
 | member being erased | old path, no socket | `fallback erasing` |
 | any unexpected error in the client | old path | `fallback error` |
 | asked outside an `all_or_none` unit (a grant nothing could take back) | old path, no socket | `fallback no_unit` |
+| the kernel verified the act after the turn's wait ran out | old path; the worker takes the grant back (`list.remove`), or records it | `fallback late` (and `late:taken_back` / `late:recorded`) |
 
-Refusal codes treated as REAL: `no_grant` and `forgotten` (`os_authority.REAL_REFUSALS`). The timeout: the healthy hop is about 1.4 ms p50
+Refusal codes treated as REAL: `no_grant` and `forgotten` (`os_authority.REAL_REFUSALS`).
+
+**The turn's budget is ONE deadline, and nothing blocks the loop.** `propose_add` does only in-memory checks on the event loop (the
+flag, empty input, the erase gate, the unit, the circuit); the roster file, every credential file and the kernel calls run on the
+authority's one worker thread, against the same deadline the turn waits on (health, publish and act together, never 150 ms each). The
+worker starts no `act` with less than `ACT_MIN_S` (20 ms) left. A grant is handed over under a lock: either the turn is still waiting
+(the grant joins its ledger) or the worker sees it abandoned and takes it back with `list.remove`, recording it ids-only
+(`authority-rollback-pending.json`, `why=late`) when that does not verify. **The window that remains**: an `act` already sent when the
+deadline passes mid-reply. The kernel may commit it and the client cannot know, so the worker records it (`why=uncertain`, member and
+count only) and the reconcile's `kernel_only` / `rollback_pending` show it; production has written the row by the old path, so the
+two sides hold the same item and only the kernel's record of who decided it differs [lab:
+`test_an_act_answered_past_the_deadline_is_recorded_and_the_old_path_result_stands`]. The timeout: the healthy hop is about 1.4 ms p50
 [live, shadow record] and about 1 ms in the lab [lab]; 150 ms is about 100 times that, and it is the most a kernel that accepts but
 never answers can add to one voice turn, once per 5 s circuit window [inferred: no voice-turn measurement was taken for this stage].
 
