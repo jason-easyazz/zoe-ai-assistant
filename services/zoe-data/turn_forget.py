@@ -376,13 +376,52 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
     return out
 
 
+# ── rows a forget hid but could not erase ────────────────────────────────────────────────────────────────────────────
+
+#: {user_id: [row ids]} - rows a forget already hid (rejected / archived) whose physical erase the Zoe OS shadow did not confirm.
+#: Ids only, never words; in-process like the turn notes (the retry target lives here too), bounded like them.
+_unerased: "OrderedDict[str, list]" = OrderedDict()
+_MAX_UNERASED = 512
+
+
+def unerased(user_id: Optional[str]) -> list:
+    with _LOCK:
+        return list(_unerased.get(user_id or "") or ())
+
+
+def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
+    """A forget's physical erase of ``ids`` (rows it had already hidden) failed with ``exc``. True when that is the Zoe OS shadow not
+    confirming (``os_shadow.unconfirmed``): the ids are remembered, and the caller must NOT say "forgotten" and must keep its target
+    - its repeat adds ``unerased`` to what it erases, because its own lookups (approved / pending rows) no longer find hidden rows.
+    False for any other failure: the rows stay hidden and the forget goes on, as it always did. Never raises."""
+    try:
+        import os_shadow
+
+        if not os_shadow.unconfirmed(exc):
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    with _LOCK:
+        _unerased[user_id] = list(dict.fromkeys(str(i) for i in ids if i))[-_MAX_UNERASED:]
+        _unerased.move_to_end(user_id)
+        while len(_unerased) > _MAX_USERS:
+            _unerased.popitem(last=False)
+    return True
+
+
+def clear_unerased(user_id: str) -> None:
+    with _LOCK:
+        _unerased.pop(user_id, None)
+
+
 def reset() -> None:  # tests
     with _LOCK:
         _turns.clear()
         _retracted.clear()
+        _unerased.clear()
 
 
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
-    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset",
+    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "unerased", "keep_unerased", "clear_unerased", "reset",
 ]

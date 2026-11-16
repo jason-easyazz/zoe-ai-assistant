@@ -177,13 +177,30 @@ async def _step(label: str, fn, res: Optional[CascadeResult] = None) -> int:
     return 0
 
 
+async def _shadow_first(user_id: str, name: Optional[str], res: CascadeResult) -> bool:
+    """The ``os_shadow`` step, run BEFORE any other store of a pass is touched: False (and the label in ``res.failed``) when the
+    kernel did not confirm, and the pass must then clear nothing else. A no-op (True) with no shadow state at all."""
+    async def os_shadow_() -> int:
+        import os_shadow
+
+        # the Zoe OS list shadow's kernel record (os_shadow.py): the kernel erases the member's events naming the entity and shields the
+        # name. The retry has no name (none is ever stored): it forgets the whole member in the kernel, the safe over-forget.
+        return await (os_shadow.erase_entity(user_id, name) if name else os_shadow.forget_user(user_id))
+
+    await _step("os_shadow", os_shadow_, res)
+    return "os_shadow" not in res.failed
+
+
 async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: Optional[frozenset] = None,
-                 recover_ids: bool = False, name: Optional[str] = None) -> None:
+                 recover_ids: bool = False, name: Optional[str] = None, shadow_done: bool = False) -> None:
     """One pass over the derived stores (or just the labels in ``only``). ``rx`` is a ``re.Pattern`` for the name or a
-    ``memory_forgotten.LedgerPattern`` (the retry: no name); ``mutes`` is the restraint-mutes eraser for the same."""
+    ``memory_forgotten.LedgerPattern`` (the retry: no name); ``mutes`` is the restraint-mutes eraser for the same.
+    ``shadow_done``: the caller (``cascade_forget``) already ran the ``os_shadow`` step, before its own first clear."""
     def want(label: str) -> bool:
         return only is None or label in only
 
+    if want("os_shadow") and not shadow_done and not await _shadow_first(user_id, name, res):
+        return
     db_only = None if (only is None or "database" in only) else frozenset(only.intersection(DB_STEPS))
     try:    # the in-process correction memory naming the entity (value_correction._REMEMBERED; in-process, never raises)
         import value_correction
@@ -248,13 +265,6 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # the shadow night pre-pass's proposed facts (~/.zoe/night-extract/): a fact of the member naming the entity is dropped
         return await night_extract.erase_entity(user_id, rx, strict=True)
 
-    async def os_shadow_() -> int:
-        import os_shadow
-
-        # the Zoe OS list shadow's kernel record (os_shadow.py): the kernel erases the member's events naming the entity and shields the
-        # name. The retry has no name (none is ever stored): it forgets the whole member in the kernel, the safe over-forget.
-        return await (os_shadow.erase_entity(user_id, name) if name else os_shadow.forget_user(user_id))
-
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
@@ -271,8 +281,6 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("self_review", self_review_, res)
     if want("night_extract"):
         await _step("night_extract", night_extract_, res)
-    if want("os_shadow"):
-        await _step("os_shadow", os_shadow_, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
@@ -282,6 +290,13 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     EARLIER forget left pending for this member."""
     res = CascadeResult()
     if not user_id or not (name or "").strip():
+        return res
+    # The Zoe OS shadow FIRST (os_shadow.py), before the first clear below: when the kernel cannot confirm, nothing derived is cleared,
+    # the result is incomplete, and EVERY step is left pending (not this one alone), so the next healthy pass redoes the whole cascade
+    # from the ledger - shadow first again - even if the member never repeats the forget.
+    if not await _shadow_first(user_id, name, res):
+        logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=os_shadow - nothing cleared, the forget is not confirmed", user_id)
+        await _mark_pending(user_id, [label for label in ALL_LABELS if label != VALUE_REGISTRY_TOPIC])
         return res
     rx = _name_re(name)
     import correction_marker
@@ -307,7 +322,7 @@ async def _cascade(user_id: str, name: str, rx, res: CascadeResult, db) -> Casca
 
         return await restraint.erase_entity(user_id, name, strict=True)
 
-    await _clear(user_id, rx, mutes, res, db=db, name=name)
+    await _clear(user_id, rx, mutes, res, db=db, name=name, shadow_done=True)
     if res.failed:
         logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=%s - the forget is not confirmed", user_id, ",".join(res.failed))
         await _mark_pending(user_id, res.failed)
@@ -377,6 +392,8 @@ async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
         db_failed = bool(failed.intersection(DB_LABELS))
         done = []
         for label in labels:
+            if "os_shadow" in failed:
+                break                       # the shadow step runs first and stops the pass: no other step was attempted, so none is done
             if label == "database":
                 ok = not db_failed
             elif label in DB_STEPS:

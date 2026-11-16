@@ -1458,7 +1458,20 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
             # the row was rejected already - possibly by an earlier "forget it" whose word erase failed: finish that job (idempotent)
             try:
-                left = await _erase_words(user_id, exp, ref.text or "")
+                # ... or one whose row erase the Zoe OS shadow did not confirm (turn_forget.keep_unerased): those rows (this one and
+                # its twins) are erased first; a failure of either step keeps the target
+                import turn_forget
+
+                left = 0
+                carried = turn_forget.unerased(user_id)
+                if carried and hasattr(svc, "erase_rows"):
+                    from memory_service import physical_erase_enabled
+
+                    if physical_erase_enabled():
+                        await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
+                        turn_forget.clear_unerased(user_id)
+                        left = len(carried)
+                left += await _erase_words(user_id, exp, ref.text or "")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
                 _rearm(user_id, exp)
@@ -1482,6 +1495,13 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                     await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)")
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
+                import turn_forget
+
+                if turn_forget.keep_unerased(user_id, gone, exc):
+                    # ... but NOT when the Zoe OS shadow could not confirm (os_shadow.py): nothing more is erased, the reply is not
+                    # "forgot", and "forget it" again (the row is rejected by then) erases these rows and the words
+                    _rearm(user_id, exp)
+                    return STORE_DOWN_REPLY
         try:
             await _erase_words(user_id, exp, ref.text or "")
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry

@@ -115,6 +115,18 @@ class ShadowForgetUnavailable(Exception):
     pool as "nothing to reach" and would swallow this as a success (``test_the_entity_cascade_step...`` pins it)."""
 
 
+def unconfirmed(exc: Optional[BaseException]) -> bool:
+    """Is ``exc`` (or anything it was raised from) a forget the kernel did not confirm? The shared erasers wrap it
+    (``MemoryService.erase_rows`` raises ``MemoryServiceError ... from`` it), and a caller that swallows an eraser's ordinary failure
+    (the rows stay hidden) must still NOT say "forgotten" for this one. Pure; never raises."""
+    seen = 0
+    while exc is not None and seen < 8:
+        if isinstance(exc, ShadowForgetUnavailable):
+            return True
+        exc, seen = exc.__cause__ or exc.__context__, seen + 1
+    return False
+
+
 # ---- settings -----------------------------------------------------------------------------------------------------------------------
 def mode() -> str:
     """``off`` | ``shadow``. Anything unlisted is off (typed_env warns once); ``on`` is not built."""
@@ -198,6 +210,12 @@ def _load_creds() -> tuple[str, dict]:
 _roster_cache: tuple = (0.0, None, frozenset())      # (checked_at, mtime, ids)
 
 
+def _roster_ids(entries) -> frozenset:
+    """Read plain ids and role-bearing entries; malformed entries confer no membership."""
+    ids = (entry.get("id") if isinstance(entry, dict) else entry for entry in entries)
+    return frozenset(value.strip() for value in ids if isinstance(value, str) and value.strip())
+
+
 def roster() -> frozenset:
     """Member ids the kernel was started with (``people.json`` beside the credentials). A member not in it is never proposed: the
     kernel could not forget what it recorded about them, and it would refuse them anyway."""
@@ -210,7 +228,7 @@ def roster() -> frozenset:
     try:
         st = path.stat().st_mtime
         if st != mtime:
-            ids = frozenset(str(p) for p in json.loads(path.read_text("utf-8"))["people"])
+            ids = _roster_ids(json.loads(path.read_text("utf-8"))["people"])
         _roster_cache = (now, st, ids)
     except (OSError, ValueError, KeyError, TypeError):
         _roster_cache = (now, None, frozenset())
@@ -1101,7 +1119,7 @@ async def erase_topic(user_id: str, topic: str) -> int:
 def write_roster(ids, dest: Optional[Path] = None) -> list:
     """Write ``people.json`` (the member ids) beside the kernel's credentials, 0600. The owner runs it once, and again when a member is
     added (the kernel reads it at start). Ids only; never printed."""
-    clean = sorted({str(i).strip() for i in ids if str(i).strip()})
+    clean = sorted(_roster_ids(ids))
     path = dest or (state_dir() / "people.json")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

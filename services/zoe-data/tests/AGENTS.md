@@ -64,3 +64,5 @@ Background + plan: `docs/architecture/brain-tool-selection-reliability.md`.
 ## Child DOX Index
 
 - [samantha_live/AGENTS.md](samantha_live/AGENTS.md) — LIVE-integration proofs for the Samantha memory engine (real Gemma + real store), gated off CI, demo-users only: core loop (`test_live_core.py`), dedup/durability (`test_live_dedup.py`), and cross-user isolation / owner resolution / idle timing (`test_live_isolation.py`).
+
+- `test_os_shadow_forget.py`, the forget-caller tests (`callers` / `entity` / `cascade_env` fixtures): behaviour only - each RUNS the caller over an in-memory store whose `erase_rows` forgets the shadow first, against the fake kernel (`forget_mode = "refuse_all"`, from the start or from the moment the eraser is entered), and each has a no-shadow-state or ordinary-failure control. Never prove a call, an order or an absence by reading source text; a structural (AST) check needs a mutation control. `STATE_CHECKS` pins what a forget costs with no shadow state.

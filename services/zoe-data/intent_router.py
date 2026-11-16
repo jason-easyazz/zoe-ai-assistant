@@ -4123,19 +4123,32 @@ async def _execute_forget_last(user_id: str) -> str:
         logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
     # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
     # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
-    if gone and hasattr(svc, "erase_rows"):
+    # The Zoe OS shadow (os_shadow.py) is forgotten first inside each shared eraser. When it cannot confirm, NOTHING more is erased and
+    # the reply is never "forgot": the rejected rows are remembered (turn_forget.keep_unerased) and the target stays, so "forget that"
+    # again finishes rows and words once the kernel answers. Any other physical-erase failure leaves the rows rejected, as before.
+    carried = turn_forget.unerased(user_id)      # rows an earlier, unconfirmed forget of this member already rejected
+    erase_ids = [r.id for r in gone] + carried
+    finished_earlier = False
+    if erase_ids and hasattr(svc, "erase_rows"):
         try:
             from memory_service import physical_erase_enabled
             if physical_erase_enabled():
-                await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
+                await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
+                turn_forget.clear_unerased(user_id)
+                finished_earlier = bool(carried)
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
+            if turn_forget.keep_unerased(user_id, erase_ids, exc):
+                return FORGET_STORE_DOWN_REPLY
     try:
         import exact_words
         await exact_words.erase_text(user_id, text)
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+        import os_shadow
+        if os_shadow.unconfirmed(exc):
+            return FORGET_STORE_DOWN_REPLY
     try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
         import value_correction
         value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
@@ -4165,7 +4178,9 @@ async def _execute_forget_last(user_id: str) -> str:
         more = len(gone) - 1
         tail = f" (and {more} more from what you said there)" if more > 0 else ""
         return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
-    if text.rstrip().endswith("?"):
+    if finished_earlier:
+        turn_forget.mark_forgotten(user_id, turn)     # an earlier, unconfirmed "forget that" already rejected this turn's rows: finished now
+    elif text.rstrip().endswith("?"):
         return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
     return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
 
@@ -4401,6 +4416,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                                        else memory_forgotten.SCOPE_ENTITY)
         except Exception as exc:
             logger.warning("memory_forget_entity: forgotten ledger failed (%s)", type(exc).__name__)
+        # The Zoe OS shadow's record naming the entity (os_shadow.py) goes BEFORE the first erase below: when the kernel cannot confirm,
+        # nothing here is erased and the forget is not confirmed (the tombstone and the ledger above shield the name meanwhile; the
+        # kernel forget is parked and saying it again redoes the whole forget). A no-op with no shadow state at all.
+        try:
+            import os_shadow
+            await os_shadow.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: Zoe OS shadow erase failed (%s) - nothing erased", type(exc).__name__)
+            return _FORGET_CASCADE_INCOMPLETE
         # ... and the owner's verbatim turns that name the entity (exact_words): deleted, not merely hidden - every exit path
         # below leaves them gone, and a count only is logged
         try:
@@ -4558,11 +4582,17 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             except Exception as exc:  # noqa: BLE001 - the rows are archived either way
                 logger.warning("memory_forget_entity: physical erase failed (%s) - rows stay archived",
                                type(exc).__name__)
+                import os_shadow
+                if os_shadow.unconfirmed(exc):   # the kernel stopped after the entry check: NOT confirmed; the repeat sweeps the archived rows
+                    raise
 
         if not matches:
             # nothing approved, but older versions / candidates may still hold the text; and a contact / summary
             # line / open loop may still name them
-            await _erase_named([])
+            try:
+                await _erase_named([])
+            except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
+                return _FORGET_CASCADE_INCOMPLETE
             _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
             if not _cascade_ok:
                 return _FORGET_CASCADE_INCOMPLETE
@@ -4580,7 +4610,10 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             except Exception as exc:
                 logger.warning("memory_forget_entity: archive failed id=%s: %s",
                                r.id, exc)
-        await _erase_named(archived_ids)
+        try:
+            await _erase_named(archived_ids)
+        except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
+            return _FORGET_CASCADE_INCOMPLETE
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")

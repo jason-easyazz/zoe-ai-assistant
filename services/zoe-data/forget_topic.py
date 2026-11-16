@@ -149,6 +149,7 @@ class Result:
     preview: str = ""
     words_erased: int = 0
     notes: list = field(default_factory=list)
+    finished_earlier: int = 0      # rows an earlier, unconfirmed forget had already hidden, erased by this one (turn_forget.unerased)
 
 
 def _preview(text: str) -> str:
@@ -212,12 +213,18 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
     backend = exact_words.get_backend()
     hits = await _index_hits(user_id, groups)
     if hits:
-        erased = int(await backend.delete(user_id, list(hits)) or 0)
+        # the transcript flag before the index delete: forget_transcript forgets the Zoe OS shadow first (os_shadow.py), and when the
+        # kernel does not confirm that, the indexed words must still be here for the member's repeat to find
         for text in hits.values():
             try:
                 await exact_words.forget_transcript(user_id, text)
-            except Exception as exc:  # noqa: BLE001 - the index row is gone; the transcript flag is the second line
+            except Exception as exc:  # noqa: BLE001 - the transcript flag is the second line (the index row goes below)
                 logger.warning("forget_topic: transcript flag failed (%s)", type(exc).__name__)
+                import os_shadow
+
+                if os_shadow.unconfirmed(exc):
+                    raise
+        erased = int(await backend.delete(user_id, list(hits)) or 0)
     return retracted, erased
 
 
@@ -298,6 +305,23 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         return res
     import turn_forget
 
+    # The Zoe OS list shadow's kernel record of the topic (os_shadow.py) FIRST, before the first step that removes anything (the
+    # pending offers, the value registry, the words, the rows): fail closed whenever shadow state exists (a no-op with none),
+    # retried by the marker. Nothing was erased, so the member's repeat finds the same turns and rows.
+    try:
+        import os_shadow
+
+        await os_shadow.erase_topic(user_id, topic)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: Zoe OS shadow erase failed (%s) - nothing erased, retry recorded", type(exc).__name__)
+        try:
+            import memory_forget_cascade
+
+            await memory_forget_cascade._mark_pending(user_id, ["os_shadow"])
+        except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
+            pass
+        res.store_down = True
+        return res
     said = [t.text for t in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))]
     # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
     # same turns and rows (and so the same names) again
@@ -359,20 +383,6 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
             pass
         res.store_down = True
         return res
-    try:     # the Zoe OS list shadow's kernel record of list items (os_shadow.py): fail closed while shadow is on, retried by the marker
-        import os_shadow
-
-        await os_shadow.erase_topic(user_id, topic)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forget_topic: Zoe OS shadow erase failed (%s) - nothing else erased, retry recorded", type(exc).__name__)
-        try:
-            import memory_forget_cascade
-
-            await memory_forget_cascade._mark_pending(user_id, ["os_shadow"])
-        except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
-            pass
-        res.store_down = True
-        return res
     try:
         # the words before the rows, like every forget: the in-flight capture of those turns cannot land
         res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
@@ -399,14 +409,23 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
             res.failed += 1            # never erased on top of a failed archive: it stays hidden-or-recalled, and is SAID
         else:
             archived.append(r)
-    if archived and hasattr(svc, "erase_rows"):
+    carried = turn_forget.unerased(user_id)      # rows an earlier, unconfirmed forget of this member already hid
+    erase_ids = [r.id for r in archived] + carried
+    if erase_ids and hasattr(svc, "erase_rows"):
         try:
             from memory_service import physical_erase_enabled
 
             if physical_erase_enabled():
-                await svc.erase_rows(user_id, [r.id for r in archived], actor=user_id, reason="forgotten by request (topic)")
+                await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)")
+                turn_forget.clear_unerased(user_id)
+                res.finished_earlier = len(carried)
         except Exception as exc:  # noqa: BLE001 - archived rows are hidden from every read either way
             logger.warning("forget_topic: physical erase failed (%s) - rows stay archived", type(exc).__name__)
+            if turn_forget.keep_unerased(user_id, erase_ids, exc):
+                # ... but NOT when the Zoe OS shadow could not confirm (os_shadow.py): the forget is not confirmed, and the member's
+                # repeat finishes these same rows
+                res.store_down = True
+                return res
     res.forgotten = len(archived)
     if archived:
         res.preview = _preview(archived[0].text)
@@ -424,7 +443,7 @@ def reply(res: Result, topic: str) -> str:
         return (f"That touches {res.found} things I've saved, so I haven't forgotten any of it. "
                 "Tell me which part (a few more words) and I'll forget just that.")
     if not res.found:
-        if res.turns_retracted or res.words_erased:
+        if res.turns_retracted or res.words_erased or res.finished_earlier:
             # it was said but not filed yet (the capture runs minutes behind): it is forgotten, never "nothing saved" (QA round 8)
             return "Done — I've forgotten what you told me about that, so it won't be kept. Nothing else was changed."
         return "I couldn't find anything saved about that, so nothing was changed."

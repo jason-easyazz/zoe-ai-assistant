@@ -2250,6 +2250,13 @@ class MemoryService:
             await _erase_watermark.record(user_id, actor=actor)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: erase watermark not recorded ({type(exc).__name__})") from exc
+        # The Zoe OS list shadow's kernel record (os_shadow.py): every list item proposed to it, in its events, receipts and driver. Fail
+        # closed whenever shadow state exists; a no-op when no kernel was ever installed. Outside the lock (it queues behind adds in flight).
+        try:
+            import os_shadow
+            await os_shadow.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
@@ -2286,13 +2293,6 @@ class MemoryService:
             await notifications_store.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: notification erasure failed ({type(exc).__name__})") from exc
-        # The Zoe OS list shadow's kernel record (os_shadow.py): every list item proposed to it, in its events, receipts and driver. Fail
-        # closed while ZOE_OS_LIST_SHADOW is on; a no-op when no kernel was ever installed. Outside the lock (it queues behind adds in flight).
-        try:
-            import os_shadow
-            await os_shadow.forget_user(user_id)
-        except Exception as exc:
-            raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         try:   # reminder phone-delivery ledger (reminder_delivery.py: app_settings claim rows, ids only). Fail closed.
             import reminder_delivery
             await reminder_delivery.forget_user(user_id)
@@ -3858,16 +3858,6 @@ class MemoryService:
         # erase_watermark.guarded_write). The lock is not re-entrant, and the registry step is SKIPPED: it takes the erase gate,
         # which must never be taken under the memory lock, and the member erase that triggered the undo clears the member's
         # whole registry itself (delete_user -> memory_value_registry.forget_user, fail closed).
-        if not lock_held:
-            try:
-                # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
-                # to these rows (migration 0080). Before the owned-rows check, so a retry whose rows already went still clears them.
-                # ``gate_held``: a caller INSIDE this member's erase gate (the pendant day review's person / name / recording forgets,
-                # via omi_review_apply.unwrite) says so - the gate is not reentrant, and taking it again here would hang that forget
-                import memory_value_registry
-                await memory_value_registry.erase_for_rows(user_id, want, gate_held=gate_held)
-            except Exception as exc:
-                raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
         if reach_shadow:
             # The Zoe OS shadow's record of this member (os_shadow.forget_for_erase): the turn behind these rows may have made shadowed
             # list adds / reminders / alarms, and the kernel cannot target one turn, so the member's whole shadow record goes. FAIL
@@ -3878,6 +3868,16 @@ class MemoryService:
                 await os_shadow.forget_for_erase(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"erase_rows failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
+        if not lock_held:
+            try:
+                # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
+                # to these rows (migration 0080). Before the owned-rows check, so a retry whose rows already went still clears them.
+                # ``gate_held``: a caller INSIDE this member's erase gate (the pendant day review's person / name / recording forgets,
+                # via omi_review_apply.unwrite) says so - the gate is not reentrant, and taking it again here would hang that forget
+                import memory_value_registry
+                await memory_value_registry.erase_for_rows(user_id, want, gate_held=gate_held)
+            except Exception as exc:
+                raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
         lock = contextlib.nullcontext() if lock_held else self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:

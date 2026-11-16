@@ -453,6 +453,8 @@ async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, s
         if old is None:
             raise
         rejected = True
+    import os_shadow
+    await os_shadow.forget_for_erase(pol.member.user_id)
     cat = str((old.metadata or dict()).get("curated_category") or "")
     await _audited(db, curator.user_id, pol.member.user_id, "forget", cat, old.id)
     ok = rejected or await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER,

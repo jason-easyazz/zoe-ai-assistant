@@ -262,6 +262,8 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
         return "gone"          # pending / disputed / archived rows are not on the screen: nothing here to forget
     if await curated_locked(user_id, ref.metadata):
         return "protected"
+    import os_shadow
+    await os_shadow.forget_for_erase(user_id)
     exp = _explained_for(rid, ref)
     twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
     if status == "approved":
@@ -317,6 +319,8 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
         return "gone"
     if not guardian_forget_open(ref.metadata or {}):
         return "gone"
+    import os_shadow
+    await os_shadow.forget_for_erase(owner)
     twins = await pa.twins_of(owner, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the forget
     gone = []
     for row in (ref, *twins):

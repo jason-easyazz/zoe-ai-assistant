@@ -366,6 +366,34 @@ def test_a_member_outside_the_roster_is_never_proposed(kernel):
     assert os_shadow.counters() == {"member_not_in_roster": 1} and kernel.calls == []
 
 
+@pytest.mark.parametrize("entries,expected", [
+    ([MEMBER], {MEMBER}),
+    ([{"id": MEMBER, "role": "adult"}], {MEMBER}),
+    ([{"id": MEMBER, "role": "adult"}, "member-b"], {MEMBER, "member-b"}),
+    ([{"id": MEMBER, "role": "adult"}, {}, {"role": "adult"}, {"id": None},
+      {"id": 12}, {"id": []}, {"id": "   "}, None, 12, ""], {MEMBER}),
+], ids=["plain-id", "object-id", "mixed", "malformed-ignored"])
+def test_roster_entries_are_ids_and_listed_members_are_proposed(kernel, entries, expected):
+    (kernel.state / "people.json").write_text(json.dumps({"people": entries}))
+    os_shadow._roster_cache = (0.0, None, frozenset())
+    assert os_shadow.roster() == frozenset(expected)
+    for member in sorted(expected):
+        add(user=member)
+    settle(len(expected))
+    assert os_shadow.counters() == {"match": len(expected)}
+    assert {args["on_behalf_of"] for _, op, args in kernel.calls if op == "act"} == expected
+
+
+def test_write_roster_extracts_ids_from_mixed_entries(tmp_path):
+    dest = tmp_path / "people.json"
+    assert os_shadow.write_roster([
+        {"id": MEMBER, "role": "adult"}, " member-b ", MEMBER, {}, {"id": None},
+        {"id": 12}, {"id": []}, "", None,
+    ], dest) == [MEMBER, "member-b"]
+    assert json.loads(dest.read_text()) == {"people": [MEMBER, "member-b"]}
+    assert dest.stat().st_mode & 0o777 == 0o600
+
+
 def test_a_member_erased_after_the_add_was_queued_is_dropped(kernel, monkeypatch):
     kernel.delay = 0.2                                # the first add holds the worker while the erase happens
     add()
