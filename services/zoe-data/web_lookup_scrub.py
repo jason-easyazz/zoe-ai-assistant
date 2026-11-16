@@ -264,7 +264,10 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     bare = [re.sub(r"\d", "", t) if t and not t.isdigit() else t for t in tokens]   # rose2 -> rose, blue4 -> blue
     for i, tok in enumerate(tokens):
         plain = plains[i]
-        if tok and (tok in singles or plain in singles or bare[i] in singles or _glued(tok, singles, rx)
+        # each part of a hyphenated or dotted word too ("rose-mary" for Rose: the parts are dictionary words)
+        # (fold() joins the parts, and "rosemary" is itself a dictionary word, so split the word as written)
+        parts = {f for x in re.split(r"[.\-'’]", words[i]) for f in (fold(x), fold(x.translate(_LOOKALIKE)), re.sub(r"\d", "", fold(x))) if f}
+        if tok and (tok in singles or plain in singles or bare[i] in singles or parts & singles or _glued(tok, singles, rx)
                     or _glued(plain, singles, rx) or _glued(bare[i], singles, rx)):
             drop[i] = "private"
         elif any(g in tok for g in glue):
@@ -345,7 +348,7 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     for view in (query, plain_query, re.sub(r"\d", "", query)):
         squeezed = fold(view)
         for s in singles:
-            if s in {fold(w) for w in view.split()} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \
+            if s in {fold(x) for w in view.split() for x in [w, *re.split(r"[.\-'’]", w)] if x} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \
                     or (len(s) < 4 and _split_exactly(view, s)):
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         for phrase in phrases:

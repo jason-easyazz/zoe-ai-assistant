@@ -337,3 +337,11 @@ def test_a_digit_padding_a_known_name_or_memory_never_hides_it(raw):
     r = scrub_query(raw, t)
     squeezed = "".join(ch for ch in r.query if not ch.isdigit()).replace(" ", "")
     assert not r.send or ("rosemary" not in squeezed and "blueplanter" not in squeezed), r
+
+
+@pytest.mark.parametrize("raw", ["rose-mary garden ideas", "rose.mary garden ideas", "mary-rose garden ideas"])
+def test_a_private_name_inside_a_hyphenated_dictionary_compound_is_stripped(raw):
+    # "rose" and "mary" are both dictionary words, so the allow-list alone passes "rose-mary"; the name is a part.
+    r = scrub_query(raw, PrivateTerms.of(names=["Rose"]))
+    assert "rose" not in r.query.replace("-", " ").replace(".", " ").split()
+    assert r.send and r.query.startswith("garden")
