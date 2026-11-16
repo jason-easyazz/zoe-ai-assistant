@@ -106,6 +106,11 @@ class DurableRows:
     def reach_of(self, person: str, payload: dict) -> bool | None:
         """For an explainer: may ``person`` see a receipt over one of these rows NOW? ``None``: not a receipt over these rows. The
         row as it stands, else as the receipt recorded it, decides; a receipt that touched no row is judged by who it was for."""
+        undone = payload.get("undoes") if payload.get("of") in self.actions else None
+        if type(undone) is int:                  # an undo is judged as the receipt it reversed (an undone create leaves no row)
+            ev = self.spine._get(undone)
+            if ev is not None:
+                return self.reach_of(person, ev.payload)
         proof = payload.get("proof") or {}
         snaps = [proof, proof.get("restored") or {}, (payload.get("undo") or {}).get("before") or {}]
         rid = next((s["id"] for s in snaps if isinstance(s, dict) and s.get("id") is not None), None)
