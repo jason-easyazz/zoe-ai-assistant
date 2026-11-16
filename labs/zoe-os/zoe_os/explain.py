@@ -41,7 +41,7 @@ class Explainer:
         who = self.people.get(asker)
         if who is None:
             return False
-        if ev.kind is Kind.ACTION_RECEIPT and any(reach(asker, ev.payload) is False for reach in self.reach):
+        if ev.kind is Kind.ACTION_RECEIPT and any(r(asker, ev.payload) is False for r in self.reach):
             return False
         if ev.visibility is Visibility.HOUSEHOLD:
             return who.role != GUEST

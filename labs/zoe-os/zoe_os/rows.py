@@ -111,9 +111,11 @@ class DurableRows:
         return args.get("for", person)
 
     def reach_of(self, person: str, payload: dict) -> bool | None:
-        """For an explainer: may ``person`` see a receipt over one of these rows NOW? ``None``: not a receipt over these rows. The
-        row as it stands, else as the receipt recorded it (its proof, an undo's restored snapshot, the snapshot before), else
-        whom it was for, decides. Nothing to judge by: NO (fail closed)."""
+        """For every reader of a receipt (a skill reading for its subject, a person asking "why"): may ``person`` see a receipt
+        over one of these rows NOW? ``None``: not a receipt over these rows, or one that shows no row (an action recovered as
+        uncertain), so the ordinary rules apply. An undo is judged as what it reversed while that is kept; otherwise the row as
+        it stands, else as the receipt recorded it (its proof, an undo's restored snapshot, the snapshot before), else whom it
+        was for. A row named but not attributable: NO (fail closed)."""
         undone = payload.get("undoes")
         if type(undone) is int and payload.get("of") in self.actions:     # an undo: judged as what it reversed, while kept
             ev = self.spine._get(undone)
@@ -128,8 +130,8 @@ class DurableRows:
         row = (self.rows.get(rid) if rid is not None else None) or next((s["row"] for s in snaps if s.get("row")), None)
         if row is None:
             owner = next((s["owner"] for s in snaps if s.get("owner") is not None), None)
-            if owner is None:
-                return False
+            if owner is None:            # a row named but not attributable: no. Nothing about a row at all (an action
+                return False if rid is not None else None   # recovered as uncertain): the ordinary rules, it shows no row
             row = {"owner": owner, "visibility": "personal", "private": 0}
         return self.may_reach(person, row)
 
@@ -138,9 +140,9 @@ class DurableRows:
         for action, (do, check, doc, params) in specs.items():
             kernel.actions.register(action, do, self.read_back, needs_accept=False, snapshot=self.snapshot_for(action),
                                     undo=self.put_back, doc=doc, params=params, check=check, undo_check=self.undo_check)
-        reach = getattr(getattr(kernel, "explainer", None), "reach", None)
-        if reach is not None and self.reach_of not in reach:
-            reach.append(self.reach_of)          # "why did you do that?" over a row: also by the CURRENT link
+        reach = kernel.enforcer.reach            # skills' reads and "why did you do that?": both by the CURRENT link
+        if self.reach_of not in reach:
+            reach.append(self.reach_of)
 
     # ---- the rebuild ------------------------------------------------------------------------------------------------------------
     def rebuild(self) -> int:

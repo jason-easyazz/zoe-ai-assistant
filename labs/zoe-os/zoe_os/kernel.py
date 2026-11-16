@@ -61,6 +61,7 @@ class Kernel:
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
         self.explainer = Explainer(self.spine, self.grants.people)
+        self.explainer.reach = self.enforcer.reach      # one current-link rule for every reader of a receipt
         self.retention = Retention(self.spine, POLICY)      # the chosen policy; sweeps only when called
         self._skills: list[tuple[object, object, Context]] = []
         self._store_purges: dict[str, tuple[Callable, Callable]] = {}
