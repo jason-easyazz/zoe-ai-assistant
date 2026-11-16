@@ -1,4 +1,12 @@
 ---
+type: architecture
+title: Zoe OS - where the kernel sits, what goes through it, and what never does
+date: 2026-11-15
+status: decision record from an architecture study. Nothing here is built or live. It decides the open engineering questions of
+  the cut-over plan and leaves the owner five household choices (section H).
+related: zoe-os-cutover-plan.md, zoe-os-implementation-map.md, zoe-os.md, zoe-os-brain-bridge.md, p0-deroot.md, credential-vault.md,
+  ../research/zoe-os-prior-art-2026-11-15.md
+---
 
 > **Status 2026-11-15: a proposal, reviewed, partly adopted.** An independent review (a different vendor's model, reading the code)
 > returned "adopt with changes; do not authorise the proposed rework as written". What is ADOPTED: the boundary (the kernel decides
@@ -18,14 +26,6 @@
 > down (only changes are refused); the kernel's file is NOT low-sensitivity (schedules and relationships are in it) and is backed
 > up and protected like any other household data; the one-millisecond figure is withdrawn for any design with a second call until
 > measured.
-type: architecture
-title: Zoe OS - where the kernel sits, what goes through it, and what never does
-date: 2026-11-15
-status: decision record from an architecture study. Nothing here is built or live. It decides the open engineering questions of
-  the cut-over plan and leaves the owner five household choices (section H).
-related: zoe-os-cutover-plan.md, zoe-os-implementation-map.md, zoe-os.md, zoe-os-brain-bridge.md, p0-deroot.md, credential-vault.md,
-  ../research/zoe-os-prior-art-2026-11-15.md
----
 
 # Zoe OS: the architecture decision
 
@@ -57,7 +57,7 @@ second copy of everything. That is how a "kernel" stops being trustworthy.
 | Language | Stay in Python, standard library only, with a size and dependency budget enforced by a test | the cost is the disk sync, not the language; 500+ proven tests would be thrown away |
 | Who may talk to it | Only the main service (proved by the operating system, not a password), plus a narrow maintenance key for backups and the night sweep. Not the brain app, not the panel, not coding agents | the component that reads web pages and messages should hold the fewest keys |
 | Text the model read | Anything that came from a web page, a message, a pendant recording or an imported calendar can only make a suggestion, never act, unless that person turned on "act on it" for that source | stops a web page from adding to your list or sending your data out |
-| Removing an account | Erase first, then delete the sign-in. Keep only items that sit in someone else's list or calendar, or that another member accepted (tapped "keep", replied yes, or added to it). With no record, delete | matches the owner's rule, and nothing is kept on a guess |
+| Removing an account | Put up the barrier, deactivate, erase, then delete the sign-in. Keep only items that sit in someone else's list or calendar, or that another member explicitly accepted (tapped "keep" or replied yes); a member who only added to it keeps their own additions. With no record, delete; if the record cannot be read, stop and retry. The administrator is asked whether to delete shared content | matches the owner's rule, and nothing is kept on a guess |
 | Who lives here | Read automatically from the sign-in accounts and the child settings Zoe already has, every minute and at once on changes Zoe makes. A missing account suspends; it never erases | the owner keeps no second list, and erasure is never triggered by an absence |
 | "Remove milk from the list" | Deletes, on every path. "Tick off milk" stays its own action and ticks | the owner's decision, applied to the two paths that tick today |
 | Timers | Reported to the kernel, not decided by it | a cooking timer must work even if the kernel is restarting; it shares nothing and is gone in minutes |
@@ -66,9 +66,10 @@ second copy of everything. That is how a "kernel" stops being trustworthy.
 
 **What changes in the plan, first three steps:** (1) fix account removal now: one "remove member" action that erases before it
 deletes the sign-in, with author and acceptance records added to the database; (2) finish joining the scattered write paths into
-one function per action (list add, list remove = delete), because every kernel step depends on it; (3) re-cut the authority kernel
-to keep decisions and fingerprints rather than words, with a "settle" step after the database write and an idempotency key, and
-move it to `services/zoe-os/` under its own user, before any action goes under its authority.
+one function per action (list add, list remove = delete), because every kernel step depends on it; (3) make the kernel fit the charter (A.7: people, care and sharing, with household words in a settings file) and move it to
+`services/zoe-os/` under its own user, before any action goes under its authority. Re-cutting it to keep decisions and
+fingerprints rather than words is the intended direction but is DEFERRED until its action protocol has been written and reviewed
+(status note above); it is not a prerequisite for the first cut-over.
 
 ---
 
@@ -455,8 +456,11 @@ account and never reaches the main service's erase (`services/zoe-ui/dist/settin
 `services/zoe-auth/api/admin.py:249-283`, [code]).
 
 **The rule, in one line.** An item of the removed person is kept only if it sits in someone else's container (another member's or
-the household's list or calendar), or it sits in the removed person's own container and another member accepted that container.
-Everything else goes. No record, no keep.
+the household's list or calendar), or it sits in the removed person's own container and another member EXPLICITLY accepted that
+container ("keep it", or a yes to an invitation). What a remaining member added to the removed person's container is that
+member's own material and stays theirs; it does not keep the rest of the container. Everything else goes. No record, no keep.
+**The administrator is asked at removal** (owner decision 2026-11-16): "Do you want to delete all shared content?" Keeping is an
+option he chooses, never something inferred.
 
 **Words used:**
 
@@ -464,31 +468,32 @@ Everything else goes. No record, no keep.
   contact card).
 - **Shared**: the container's owner made it visible to others, either the household or named members. Today that is
   `visibility = family`; named-member sharing becomes a kernel permission (B.4).
-- **Accepted**: a specific remaining member did one of three things with that container, and it was recorded with who and when:
+- **Accepted**: a specific remaining member did one of two EXPLICIT things with that container, recorded with who and when:
   1. tapped or said "keep it" / "add it to mine" on the heads-up;
-  2. answered yes to a calendar invitation (`partstat = accepted`);
-  3. contributed to it: added, edited, ticked or completed something in it.
+  2. answered yes to a calendar invitation (`partstat = accepted`).
 
-  Delivery is not acceptance. Viewing is not acceptance.
+  Delivery is not acceptance. Viewing is not acceptance. **Contributing is not acceptance of the container either:** a member
+  who added, edited, ticked or completed something in it keeps only their own material (their items, their edits as they wrote
+  them), moved to a container of theirs; the removed person's items in it still go unless the container was accepted.
 
 **Per type:**
 
 | Type | Shared means | Accepted means | Removed person's items in OTHERS' containers | Removed person's own containers |
 |---|---|---|---|---|
-| Lists and list items | list visibility family, or shared with named members | "keep it" on the heads-up, or a contribution by that member | kept (the container is theirs) | kept if accepted by at least one remaining member, then owned by that member (one) or by the household (more than one); otherwise deleted with every item |
+| Lists and list items | list visibility family, or shared with named members | "keep it" on the heads-up (a contribution keeps only that member's own items) | kept (the container is theirs) | kept if accepted by at least one remaining member, then owned by that member (one) or by the household (more than one); otherwise deleted with every item |
 | Reminders set for someone else | set by the author for another member (needs a new author field) | the recipient had granted "may remind me" (a guardian's standing permission for a child counts), or acknowledged, snoozed or completed it | a reminder the removed person set FOR a remaining member stays with that member | the removed person's own reminders, including ones others set for them, are deleted |
-| Calendar events | visibility family, or invitees | an invitee's RSVP accepted, or an edit by a remaining member | kept | kept if accepted; otherwise deleted. **This changes today's behaviour**: today the erase keeps every family event, whose title is the removed person's words |
-| Contacts | visibility family | "keep" or a contribution (an edit, a call, a link to a relationship) | n/a | the card and its fields kept if accepted; the removed person's private notes about the contact (rows with their author id) deleted |
-| Notes | visibility family | "keep" or an edit by a remaining member | n/a | kept if accepted, otherwise deleted |
+| Calendar events | visibility family, or invitees | an invitee's RSVP accepted (an edit by a remaining member keeps only that member's change, not the event) | kept | kept if accepted; otherwise deleted. **This changes today's behaviour**: today the erase keeps every family event, whose title is the removed person's words |
+| Contacts | visibility family | "keep" (a remaining member's own edits or links stay theirs; they do not keep the card) | n/a | the card and its fields kept if accepted; the removed person's private notes about the contact (rows with their author id) deleted |
+| Notes | visibility family | "keep" (a remaining member's own edit stays theirs) | n/a | kept if accepted, otherwise deleted |
 | Journal, money records | never shared (always personal, owner only) | n/a | n/a | deleted |
 
 **What makes it true: the minimal migration** (one migration, next free number after the reserved ones):
 
 1. `created_by` (nullable) on `list_items`, `reminders`, `notes` and `people_field_values`; set by every insert path through the
    converged write functions (WP-20, WP-26). `events` already has an owner and `event_attendees` already has per-attendee rows.
-2. One table, `share_acceptances(object_type, object_id, member_id, accepted_at, how)`, `how` in `keep`, `rsvp`, `contributed`.
-   Written by the heads-up's "keep" action, by an RSVP of accepted, and by the converged write functions on a member's first
-   contribution to a container they do not own.
+2. One table, `share_acceptances(object_type, object_id, member_id, accepted_at, how)`, `how` in `keep`, `rsvp`. Written by the
+   heads-up's "keep" action and by an RSVP of accepted, and by nothing else. A contribution writes no acceptance: `created_by`
+   (item 1) is what identifies a remaining member's own material in the removed person's container.
 3. The list heads-up gains a "keep it" action. `pending_suggestions` delivery state stays what it is: delivery.
 
 **Old rows.** Rows written before the migration have `created_by` empty. An old item in someone else's container is kept: where it
@@ -500,20 +505,27 @@ no acceptance record is deleted. The removal reports these counts to the adminis
 receipt for a kept item keeps the marker too. Text a person typed that happens to contain a name is content, and is not rewritten.
 The kernel's whole-member erase already removes the person's own records and leaves no name ([lab] `zoe-os.md` 2.4).
 
-**Missing record means delete.** If the database cannot say whether something was accepted (no table, no row, an unreadable
-row), it is deleted with the rest.
+**Missing record means delete; unreadable evidence means stop and retry.** No acceptance row (or no table yet) is a clear
+answer: not accepted, so it is deleted with the rest. A row or table that exists but cannot be READ (a failed query, a corrupt
+row, a timeout) is not an answer: the removal stops there, deletes nothing on that evidence, keeps its barrier up and retries.
+It never treats "could not read" as "not accepted", and it never reports done.
 
-**The button: three steps, in this order, run by the main service.** One "remove member" action in the main service replaces the
+**The button: four steps, in this order, run by the main service.** One "remove member" action in the main service replaces the
 direct call to the sign-in service (this replaces WP-24):
 
-1. **Stop new data:** deactivate the sign-in account (the sign-in service's existing non-permanent delete) and raise the erase
-   gate so no background writer adds anything mid-erase (`user_erase_gate`, [code]).
-2. **Erase:** the full erase in the main service, including the kernel's whole-member erase, failing closed. A failure leaves the
-   member deactivated, the job pending, and the administrator told "not finished, retrying"; it never says done.
-3. **Delete the sign-in:** the sign-in service's permanent delete, only after step 2 confirms.
+1. **Persist the barrier first:** the durable erase mark and the erase gate for that member (`erase_watermark`, `user_erase_gate`,
+   [code]) are written and confirmed before anything else, so no writer in any process adds data for them from this moment, and
+   a restart finds the removal already in force. The barrier is **kept afterwards**, not cleared when the job ends.
+2. **Deactivate the sign-in account** (the sign-in service's existing non-permanent delete). If the barrier could not be
+   persisted, this step does not run and the removal reports failure.
+3. **Erase:** the full erase in the main service, including the kernel's whole-member erase, failing closed. A failure, or
+   evidence that cannot be read, leaves the member deactivated, the barrier up, the job pending, and the administrator told
+   "not finished, retrying"; it never says done.
+4. **Delete the sign-in:** the sign-in service's permanent delete, only after step 3 confirms.
 
-Why this order: erasing after the account is gone leaves data with no account to retry against; erasing before the account is
-deactivated lets new data arrive during the erase. The job is a durable row, so a restart resumes it.
+Why this order: a barrier written after deactivation leaves a window in which a background writer, or a turn already running,
+adds data the erase then misses; erasing after the account is gone leaves data with no account to retry against. The job is a
+durable row, so a restart resumes it.
 
 ### D.2 How the kernel learns who lives in the house
 
@@ -700,13 +712,15 @@ kernel.
 
 **Edits to the cut-over plan and the work packages:**
 
-1. **Phase 3 item 1 changes:** "a durable list store in the kernel" becomes "a durable decision record keyed by the main database's
-   row id and a fingerprint". Add a `settle` operation: propose (decide, about 1 ms) → the main service writes the row → commit →
+1. **DEFERRED (see the status note at the top): Phase 3 item 1 would change** from "a durable list store in the kernel" to "a
+   durable decision record keyed by the main database's row id and a fingerprint", once the action protocol is written and
+   reviewed. The first cut-over keeps the stores already built. The intended shape, for that later rework: a `settle` operation: propose (decide, about 1 ms) → the main service writes the row → commit →
    settle with the row id and fingerprint. An unsettled receipt is "uncertain" and is resolved by the reconcile (closes map R3 and
    G18). The idempotency key (adopted) is the proposal's id, carried by settle and by the fallback.
-2. **Add a rework package for the authority kernel and the reminders-and-alarms branch:** drop item text, reminder notes and alarm
-   labels from kernel rows; keep the schedule maths and rules; add the "no free-text column" schema test. Do it before either lands
-   on `main`.
+2. **DEFERRED, not a prerequisite for landing:** the rework package for the authority kernel and the reminders-and-alarms
+   branch (drop item text, reminder notes and alarm labels from kernel rows; keep the schedule maths and rules; add the "no
+   free-text column" schema test). It waits for the reviewed action protocol; the lab stack lands with its current stores, and
+   the kernel's file is treated and backed up as household data meanwhile.
 3. **WP-03 is required before Phase 3, not optional.** Keep the os-kernel-production draft's single source-location setting; point
    it at `services/zoe-os/`. Replace that draft's section 13 ("retain labs") with B.2.
 4. **Add "kernel on its own user" (B.3 step 1) before Phase 3;** move "the main service on its own user" (de-root) before Phase 6.
