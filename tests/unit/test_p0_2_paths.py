@@ -309,8 +309,23 @@ def test_an_exec_item_swapped_for_a_symlink_is_refused(tmp_path):
     assert victim.stat().st_mode & 0o777 == 0o600, "apply changed the link target"
 
 
-def test_a_partial_single_file_copy_is_never_published(box, monkeypatch):
+def test_a_copy_that_fails_midway_is_never_published_and_the_retry_completes(box):
+    """A file-size limit makes the copy fail after its first kilobyte. The destination must not exist afterwards
+    (a direct write would leave a truncated file that the retry then takes as done), and the retry copies it all."""
+    import resource
+    import signal
     root, man, common = box
-    a = tool("apply", str(man), *common, "--only", "conf", "--container-stopped")
-    assert a.returncode == 0, a.stderr
-    assert not list((root / "srv/zoe/conf").glob("*.p0-2-partial"))
+    big = "x" * 8192 + "\n"
+    (root / "home/zoe/app.conf").write_text(big)
+
+    def small_files():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+
+    cut = subprocess.run([sys.executable, "-I", str(TOOL), "apply", str(man), *common, "--only", "conf",
+                          "--container-stopped"], capture_output=True, text=True, preexec_fn=small_files)
+    assert cut.returncode != 0, cut.stdout
+    assert not (root / "srv/zoe/conf/app.conf").exists(), "a half copy was published"
+    again = tool("apply", str(man), *common, "--only", "conf", "--container-stopped")
+    assert again.returncode == 0, again.stderr
+    assert (root / "srv/zoe/conf/app.conf").read_text() == big
