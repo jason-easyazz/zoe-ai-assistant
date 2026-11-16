@@ -26,29 +26,49 @@ A close-triggered reflex lands about 0.8-1.1 s after true speech end (the record
 - **Non-lexical only.** "Mm." / "Mm-hm.", low and falling. Never "Sure", "Of course", "Got it", "Okay" (dismissive after bad
   news), "Let me check" (no tool known), laughter, sighs, breath (Kokoro cannot render breath; a recorded breath is another
   voice), or "Hm?" (claims not understanding).
-- **Silent at night at first.** 22:00-07:00 is silent in S1 (`REFLEX_NIGHT`). A -6 dB night bank is a later owner decision.
+- **Silent at night at first.** 22:00-07:00 is silent in S1 (`REFLEX_NIGHT_START` / `REFLEX_NIGHT_END`). A -6 dB night bank is a later owner decision.
 - **One voice.** The bank's manifest voice must equal the household's current voice; an unknown voice counts as a mismatch.
   Any mismatch, tampered file or wrong format is no bank: silence, never the wrong voice.
-- **Silent when in doubt.** Each rule is one fixed skip reason, checked in this order (the first that applies is reported):
-  `disabled`; `error` (a numeric input that is not a finite real number, or any exception inside `decide`); `not_committed`
-  (the daemon must pass `committed=True`, exactly: the truthfulness rule in code); `not_wake` (S1
-  is wake turns only; a barge turn never); `capped` (hard cap / max_duration / unknown rule); `short` (no_speech, or under
-  480 ms of speech); `muted` (the Jabra ate audio); `busy` (another player, or unknown); `media` (music or video playing through the panel,
-  True OR unknown); `noisy` (pre-roll above the floor; provisional -40 dBFS until S0 data sets it); `night`; `idle_greeting`
-  (first turn after 4 h idle); `guest`; `low_confidence`; `prev_question` (windows only); `budget` (one per 30 s; the chain
-  rule for windows, flag-dark); `no_bank`; `voice_mismatch`.
-- **Unknown is silence.** `committed`, `guest`, `media_active` and `speaker_conf` default to unknown, and unknown is silence:
-  the daemon has to state the safe value. Every numeric input (`speech_ms`, `muted_ms`, `noise_dbfs`, `local_hour`, `idle_h`,
-  `since_last_s`, `chain_turns_since`) must be a finite real number (no bool, string, NaN or infinity; durations and counts
-  >= 0; `local_hour` a whole hour 0..23), else `error`. `decide` never raises.
-- **Guests (decided 2026-11-14, conservative).** The design called the reflex identity-neutral ("mm" is fine for a guest); the
-  review asked for an explicit guard. Rule: a guest OR an unknown speaker (`guest` not exactly False) is silent unless
-  `REFLEX_FOR_GUESTS=true` (default false). The daemon passes `guest=False` only when its local speaker claim names a household
-  member. `REFLEX_FOR_GUESTS=true` lifts this guard only; a guest still needs a speaker score (below). The claim gates only this
-  local sound, never what the server does.
-- **Speaker confidence.** A MISSING score (`speaker_conf=None`) is always `low_confidence`, and so is a score under
-  `REFLEX_MIN_SPEAKER_CONF` (0.70, the live claim threshold) or one that is not a finite number. There is no setting that
-  lets an unknown speaker through: until a pre-close speaker identity exists, the reflex stays silent.
+- **Silent when in doubt.** Each rule is one fixed skip reason (`SKIPS`), checked in this order (the first that applies is
+  reported): `disabled`; `error` (a numeric input that is not a finite real number, or any exception inside `decide`);
+  `not_committed` (`committed` must be exactly `True`: the truthfulness rule in code); `not_wake` (S1 is wake turns only; a barge
+  turn never); `capped` (hard cap / max_duration / unknown rule); `short` (no_speech, or under 480 ms of speech); `muted` (the
+  Jabra ate audio); `busy` (another player, or unknown); `media` (music or video playing through the panel, True OR unknown);
+  `noisy` (pre-roll above the floor; provisional -40 dBFS until S0 data sets it); `night` (`REFLEX_NIGHT_START` / `_END`);
+  `idle_greeting` (first turn after 4 h idle); `guest`; `low_confidence`; `late`; `prev_question` (windows only); `budget` (one per
+  30 s; the chain rule for windows, flag-dark); `no_bank`; `voice_mismatch`.
+- **The inputs, and where each comes from at this head.** `decide(ctx)` is stdlib-only and pure; the daemon states every input
+  (`_shadow_reflex_skip` in `zoe_voice_daemon.py` builds the `Ctx` from the close record `_turn_close` and the turn's
+  `_FirstSound`; an input it cannot state maps to the silent side):
+
+  | Input | Source | Silent when |
+  |---|---|---|
+  | `committed` | the endpointer's close record (`committed`, true only where `push(...)` returned True with stop reason `silence`) | not exactly `True` |
+  | `rule`, `capped`, `speech_ms`, `muted_ms`, `turn_kind` | the close record: the endpoint rule (cap becomes `max_duration`), speech chunks x 80 ms, the mic-mute run, the turn's window (wake, followup, conversation, barge) | unknown rule, capped, under 480 ms, muted, not a wake turn |
+  | `other_player` | the daemon's active-playback check at the close | not exactly `False` |
+  | `media_active` | the panel's media watcher snapshot (`_MediaWatch.snapshot`, needs `MEDIA_WATCH_ENABLED`) | `True` or unknown (no fresh read) |
+  | `noise_dbfs` | RMS of the pre-roll frames in the close record | above the floor; no pre-roll reads as 0 dBFS (noisy) |
+  | `local_hour`, `idle_h`, `prev_question` | the close record (`hour`, `idle_s`, `prev_q`) | night hours; 4 h or more idle; windows only after a question |
+  | `guest` | `_reflex_guest`: the turn's speaker claim scored by the trusted model, plus the `REFLEX_SILENT_MEMBERS` list | not exactly `False`: a guest, a named guest closer than the member, a scored no-match, a listed member, or no claim |
+  | `speaker_accept`, `speaker_model`, `verdict_ms` | `_spk_verdict`: the speaker model's OWN accept at the stricter FAR 0.1 % window bar, the model id, and the ms from the committed close until the verdict was ready | not exactly `True`, a model id outside `KNOWN_SPEAKER_MODELS`, or a verdict later than `REFLEX_SCORE_DEADLINE_MS` (250) or of unknown time |
+  | `since_last_s`, `chain_turns_since` | the daemon's reflex state (None = never) | inside `REFLEX_MIN_GAP_S`; chain rule for windows |
+  | `bank_voice`, `current_voice`, `takes` | the loaded bank and the household voice cached from the done frame | no bank, fewer than the minimum takes, or the voices differ or are unknown |
+
+  **What makes a turn eligible:** a wake turn whose recording the endpointer committed, with at least 480 ms of speech, no mute,
+  no other player, no media, a quiet room, not night, not the first turn after a long idle, a household member (not a guest, not a
+  listed-silent member) whom the speaker model accepted at its own FAR 0.1 % bar in time, a bank for the current voice, and the
+  30 s budget unspent.
+- **Unknown is silence.** `committed`, `guest`, `media_active`, `speaker_accept`, `speaker_model` and `verdict_ms` default to
+  unknown, and unknown is silence: the daemon has to state the safe value. A claim carried in from an earlier step was not scored
+  this turn, so its verdict is unknown (`spk=-1`), never accepted. Every numeric input (`speech_ms`, `muted_ms`, `noise_dbfs`,
+  `local_hour`, `idle_h`, `since_last_s`, `chain_turns_since`, `verdict_ms`) must be a finite real number (no bool, string, NaN or
+  infinity; durations and counts >= 0; `noise_dbfs` <= 0; `local_hour` a whole hour 0..23), else `error`. `decide` never raises.
+- **Guests (always silent).** A guest or unknown speaker (`guest` not exactly `False`) is silent, and **no setting opens this
+  guard** (the old `REFLEX_FOR_GUESTS` is gone). The claim gates only this local sound, never what the server does.
+- **Speaker acceptance is the model's, not the reflex's.** The reflex owns no raw score threshold. It needs the speaker model's
+  own accept (exactly `True`) from a model id in `KNOWN_SPEAKER_MODELS` (the current ResNet34 id; retired models are silence),
+  ready within `REFLEX_SCORE_DEADLINE_MS` of the committed close; an accept that comes later is skip `late`. A missing, refused
+  or under-bar verdict is `low_confidence`. There is no setting that lets an unknown speaker through.
 - **Not a tic.** 6-8 vetted takes; never the same take twice running; never one of the last two.
 - **Never registered as playback.** The reflex player is NOT `_register_tts_process`: a registered player would start the barge
   monitor's 800 ms grace before the reply's onset and bring back self-interruption.
@@ -57,7 +77,7 @@ A close-triggered reflex lands about 0.8-1.1 s after true speech end (the record
 
 | Piece | Where | State |
 |---|---|---|
-| Decision logic (gate, rotation, budget, handshake block, H3 ordering wait, bank loader, the daemon's trim rule) | `scripts/setup/zoe_voice_reflex.py` (stdlib only) | built, tested (`tests/unit/test_voice_reflex.py`), not imported by the daemon |
+| Decision logic (gate, rotation, budget, handshake block, H3 ordering wait, bank loader, the daemon's trim rule) | `scripts/setup/zoe_voice_reflex.py` (stdlib only) | built, tested (`tests/unit/test_voice_reflex.py`); the daemon runs it in shadow only |
 | Server side of the handshake | `services/zoe-data/voice_spacer.py` (`SpacerTurn.reflex`, `note_reflex`, `parse_reflex_block`, veto rules) | built, tested (`services/zoe-data/tests/test_voice_spacer_reflex.py`), not wired into `routers/voice_tts.py` |
 | Bank renderer | `scripts/setup/render_reflex_bank.py` (run on the Orin by the owner) | built, tested on a synthetic voice (`tests/unit/test_voice_reflex_bank_render.py`); never run against the live sidecar |
 
@@ -126,18 +146,13 @@ Rollback, cheapest first:
 
 ## NOT built yet
 
-- **Daemon wiring** (`scripts/setup/zoe_voice_daemon.py`): decide at the close in `record_command`, an unregistered
-  `_ReflexPlayer`, the payload block, the H3 wait before the first `_feed_pcm_chunk`, caching the voice from the done frame,
-  and adding `zoe_voice_reflex.py` to `deploy-pi-voice.sh` `SHIPPED_FILES`. What it passes for the explicit inputs:
-  `committed=True` only on the branch where `endpointer.push(...)` returned True (stop reason `silence`), never on the
-  max-duration path; `guest=False` only when the local voice claim names a household member, `True` for a named guest, `None`
-  when no claim exists; `speaker_conf` = that claim's raw score, or `None`. CAUTION: today the claim is scored AFTER
-  `record_command` returns (`_speaker_claim_to_attach(wav)` in `_do_single_turn_stream`), and in shadow mode
-  (`SPEAKER_ID_SHADOW`, default on) it returns None at once. So at the close the identity is unknown, and with the defaults the
-  `guest` and `low_confidence` guards silence EVERY turn. The reflex cannot play until the claim is scored before the reflex
-  (costs its latency; not possible in shadow mode, so shadow mode must end first). `REFLEX_FOR_GUESTS` does not help: a
-  missing score is silence on its own; `media_active` from the panel's own media state (the AirPlay / shairport and Music Assistant player state, which the
-  daemon does not read today: until it does, pass `None`, which is silence).
+- **Daemon wiring that plays.** At this head the daemon already imports the module, ships it in `SHIPPED_FILES`, stamps the
+  close record, scores the speaker claim and runs the decision in SHADOW (`REFLEX_MODE`, logged as `skip=` on `FIRST_SOUND`).
+  Not built: the player (an unregistered reflex player), the payload block, the H3 wait before the first `_feed_pcm_chunk`, and
+  caching the voice from the done frame. The speaker input is only usable when the verdict is ready inside
+  `REFLEX_SCORE_DEADLINE_MS` of the close, which on a turn whose claim is scored after the recording needs the score to run
+  before the reflex decides (shadow mode of the speaker scorer returns no claim, so it ends first); a claim scored late or carried
+  in is unknown, and unknown is silence.
 - **The two-line server wiring** in `services/zoe-data/routers/voice_tts.py`: `_spacer.note_reflex(payload.get("reflex"))`
   after the `SpacerTurn` is built in `voice_turn_stream`, `waited_s=` on the timer filler's `timer_line`, and the
   processing-ack audio check; plus the `reflex=` fields on VOICE TIMING and the done frame's `voice`.
