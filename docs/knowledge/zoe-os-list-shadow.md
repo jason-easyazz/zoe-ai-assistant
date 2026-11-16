@@ -79,12 +79,14 @@ The kernel record holds list items (household words) in the spine, in receipts (
   durable retry marker re-runs it as a WHOLE-MEMBER kernel forget (the name is never stored: the safe over-forget of a measuring store).
 * **Topic forget** (`forget_topic._forget`): `os_shadow.erase_topic` (kernel `forget(topic=...)`), failure = `store_down` + the same marker.
 * A scope the kernel refuses to match falls back to a whole-member forget (a scope that matches nothing never widens, but this store may).
-* **Flag off but a kernel was once installed** (`creds.json` exists): forget still tries; if it cannot reach the kernel it records the member
-  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. The park is a
-  locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
+* **A forget that cannot be confirmed in the kernel is PARKED, whatever the flag** (`pending-forgets.json`, replayed before the next
+  job): with the flag `shadow` the caller is still told it failed (`ShadowForgetUnavailable`), with it off it is deferred (0). The park
+  is a locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
   ran is kept; a park that cannot be made durable (disk, an unreadable file, which is never overwritten) FAILS the erase closed
-  (`ShadowForgetUnavailable`) instead of letting it say done. **Flag off and no
-  `creds.json`**: nothing was ever recorded, no socket is touched.
+  (`ShadowForgetUnavailable`) instead of letting it say done. **A missing `creds.json` is not proof of nothing to forget** (the kernel's
+  store can outlive it): the ONLY no-op is the flag off AND no shadow state at all, decided by `os_shadow.shadow_state_exists()`: the
+  state directory is absent, or holds none of `creds.json`, `people.json`, `known-people.json`, `kernel/`, `pending-forgets.json`; a
+  directory that cannot be read, or a state path that is not a directory, counts as state.
 * **A parked forget always reaches the kernel before any later add for that member** (`test_os_shadow_forget.py`, "forgotten means
   forever"): the worker replays the park file before EVERY job while anything is parked (an in-memory copy of the parked ids is kept in
   step with the file under its lock, so a known-empty park costs one global read per job and no file I/O; a new process reads the file

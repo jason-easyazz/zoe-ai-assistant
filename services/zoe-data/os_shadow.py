@@ -117,6 +117,27 @@ def provisioned() -> bool:
         return False
 
 
+#: every file or directory the shadow kernel or this client ever leaves in the state directory (``labs/zoe-os/shadow_daemon.py``):
+#: the credentials, the roster, the ids the kernel can still forget, the kernel's own store, and the parked forgets
+STATE_NAMES = ("creds.json", "people.json", "known-people.json", "kernel", "pending-forgets.json")
+
+
+def shadow_state_exists() -> bool:
+    """True unless it is CERTAIN nothing was ever recorded here: the state directory does not exist, or exists and holds none of
+    ``STATE_NAMES``. A missing credential is not that proof (the kernel's database can outlive it), and a directory that cannot be
+    read, or a path that is not a directory, counts as state (fail closed)."""
+    d = state_dir()
+    try:
+        if not d.exists():
+            return False
+        if not d.is_dir():
+            return True
+        names = {p.name for p in d.iterdir()}
+    except OSError:
+        return True
+    return bool(names & set(STATE_NAMES))
+
+
 def _load_creds() -> tuple[str, dict]:
     try:
         raw = json.loads(_creds_path().read_text("utf-8"))
@@ -794,9 +815,11 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     the forget durably (the blocking park runs in an executor) instead of waiting. What the caller is told stays honest: a confirmed
     forget returns its count; with the flag ``shadow`` anything unconfirmed raises ``ShadowForgetUnavailable`` (parked or not); with
     it off a parked forget returns 0 (deferred: replayed before the next job), and one that could not be parked raises."""
-    if not provisioned():
-        return 0                      # no kernel was ever installed here: nothing recorded, no socket touched
     strict = mode() == "shadow"
+    if not strict and not shadow_state_exists():
+        return 0                      # certain nothing was ever recorded here (no state at all) and the shadow is off: nothing to forget
+    # anything else goes to the kernel, and is PARKED if it cannot be confirmed there (a missing creds.json included: the kernel's
+    # store may still hold the member): "cannot reach" is never "done"
     fut: concurrent.futures.Future = concurrent.futures.Future()
     code = ""
     try:
@@ -809,16 +832,13 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
             return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=FORGET_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             code = type(exc).__name__
-            if strict:
-                logger.error("OS_SHADOW forget NOT confirmed code=%s", code)
-                raise ShadowForgetUnavailable(code) from exc
-    try:                              # not confirmed: never lose it - replayed before the next job
+    try:                              # not confirmed, either flag: never lose it - parked, replayed before the next job
         _forgotten_at[user_id] = time.perf_counter()     # on the loop, before the park: every add stamped before it is now stale
         await asyncio.get_running_loop().run_in_executor(None, _pending_add, user_id)
     except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
         logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
         raise ShadowForgetUnavailable(f"not parked ({type(park_exc).__name__})") from park_exc
-    if strict:                        # only a forget that never reached the queue gets here with the flag on
+    if strict:                        # the flag on: an unconfirmed forget is never "forgotten", parked or not
         logger.error("OS_SHADOW forget NOT confirmed, parked code=%s", code)
         raise ShadowForgetUnavailable(f"{code} (parked)")
     logger.warning("OS_SHADOW forget deferred (flag off) code=%s", code)
