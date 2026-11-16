@@ -17,11 +17,16 @@ more human, not like reading a log".
 - Plain sentences: what is wrong in household terms, what it means, since when, what to do and what Zoe is doing. A
   short technical code goes in brackets at the END (service name + `no-answer`, `error-reply`, `not-ready`, ...);
   never a port, an exception class, `DOWN:` or a path under home.
-- ONE message per run; several new problems become one list. ONE recovery, only for something alerted, saying how long
+- Usually ONE message per run (several new problems become one list); if a run's news would not fit the delivery
+  limit (1000 characters) it is split into complete messages, at most 4, and past that the last one ends "And N more to
+  tell you next time: <plain names>" and those stay pending. A transition counts as told only when its message was
+  DELIVERED. A message the outbox merely QUEUES is not delivered: sending stops, and while it stays queued later runs
+  send nothing new (the outbox keeps one entry per code, so a new message would replace it); once it leaves the outbox
+  its checks count as told and the rest follow. ONE recovery, only for something alerted, saying how long
   it lasted. Two consecutive failures still needed before any alert.
 - Dropping out: the 3rd alerted drop of a check within 6 h is said once as a summary; then only a drop longer than an
   hour is told, plus one closing line after 6 h with no new drop (state: `incidents`, `flap`, `flap_n`).
-- Deterministic English, no model call. Delivery (`send`, `undelivered`, the outbox) is unchanged; an undelivered
+- Deterministic English, no model call. Delivery goes through the same outbox (`send_run`, `undelivered`); an undelivered
   summary is retried like an undelivered outage alert. Exact texts: `tests/unit/test_zoe_health_alerts.py`.
 
 ## What each check means

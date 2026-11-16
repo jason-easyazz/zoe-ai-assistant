@@ -499,15 +499,59 @@ def test_a_failed_second_message_leaves_only_what_it_carried_pending(monkeypatch
     assert st2
 
 
-def test_a_queued_message_stops_the_sending_but_counts_as_handed_over():
-    checks = _every_check_failing()
-    before, items, new = _two_runs(checks)
-    msgs, _ = health.pack(items)
+def _cycle(checks, state, now, outcomes, pending):
+    """One alerting pass with scripted outcomes; returns (state, texts delivered by this pass, attempted texts, held)."""
     tried: list[str] = []
-    state, sent, ok = health.send_run(items, before, new, deliver=lambda t: tried.append(t) or "queued")
-    assert len(tried) == 1 and sent == tried and not ok
-    first = {n for it in msgs[0][1] for n in it["names"]}
-    assert {c.name for c in checks if state[c.name]["alerted"]} == first
+    it = iter(outcomes)
+
+    def deliver(text):
+        tried.append(text)
+        return next(it)
+    st, sent, _ok, held = health.run_cycle(checks, state, now, deliver=deliver, pending=lambda: pending[0])
+    return st, sent, tried, held
+
+
+def test_a_queued_batch_is_never_marked_told_nor_overwritten_and_lands_exactly_once():
+    checks = _every_check_failing()
+    _, st = health.plan(checks, {}, now=NOW)
+    pending = [True]
+    told: list[str] = []                                       # everything the owner actually receives, in order
+    # run 2: the first message is only QUEUED in the outbox
+    st, sent, tried, held = _cycle(checks, st, NOW + 300, ["queued"], pending)
+    assert len(tried) == 1 and sent == [] and not held
+    q = st[health.QUEUED_KEY]["after"]
+    assert q and all(not st[n]["alerted"] for n in q), "queued is not delivered: nothing in it is marked told"
+    queued_text = tried[0]
+    # run 3: new failure appears while the batch is still queued; nothing may be sent over the queued entry
+    extra = C("extra-check", False, "x", code="failing")
+    st3, sent, tried, held = _cycle(checks + [extra], st, NOW + 600, [], pending)
+    assert held and tried == [] and sent == [] and st3 == st, "held: no new message, state untouched"
+    # the outbox's own retries deliver the queued message; the next run releases it and sends only what is left
+    pending[0] = False
+    told.append(queued_text)
+    delivered_by_retry = set(q)
+    st4, sent, tried, held = _cycle(checks + [extra], st3, NOW + 900, ["delivered"] * 4, pending)
+    assert not held and health.QUEUED_KEY not in st4
+    assert all(st4[n]["alerted"] for n in delivered_by_retry), "marked told only once its message left the outbox"
+    told += sent
+    # nothing queued is lost and nothing is said twice
+    for c in checks:
+        assert sum(health.words(c)["headline"] in m for m in told) == 1, c.name
+    assert st4["extra-check"]["fails"] == 1 and not st4["extra-check"]["alerted"]       # first sight: not an outage yet
+    assert all(len(m) <= health.MSG_LIMIT for m in told)
+
+
+def test_a_queued_batch_that_is_delivered_on_the_retry_run_goes_through():
+    checks = _every_check_failing()
+    _, st = health.plan(checks, {}, now=NOW)
+    pending = [True]
+    st, _s, tried, _h = _cycle(checks, st, NOW + 300, ["queued"], pending)
+    first = tried[0]
+    pending[0] = False                                         # drained by the outbox's retry
+    st, sent, tried, held = _cycle(checks, st, NOW + 600, ["delivered"] * 4, pending)
+    assert not held and first not in sent
+    assert all(st[c.name]["alerted"] for c in checks if health.words(c)["headline"] in first + "\n".join(sent))
+    assert sum(health.words(c)["headline"] in first + "\n".join(sent) for c in checks) == len(checks)
 
 
 def test_past_the_message_cap_the_overflow_is_named_and_stays_pending(monkeypatch):

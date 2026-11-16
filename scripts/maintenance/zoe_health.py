@@ -22,7 +22,7 @@ are skipped, not failed. A valid PLANNED-window marker (``maintenance_window.sh`
 probes in ``WINDOW_TAKES`` the same way. docs/knowledge/health-alerts.md has the marker and wording contracts.
 
 Alerting is on TRANSITIONS only: two consecutive failures alert, one recovery message follows (only for something
-alerted), one message per run, plain sentences (``CHECK_WORDS`` + ``zoe_crash_loop_watch.PLAIN_WORDS``); a check that
+alerted), a run's news goes out as ONE message or, when it would not fit the delivery limit, a few (at most 4; a message the outbox only queues holds the run until it lands), plain sentences (``CHECK_WORDS`` + ``zoe_crash_loop_watch.PLAIN_WORDS``); a check that
 keeps dropping out is said once (``FLAP_*``). State: ``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the shared owner-alert helper
 (``zoe_crash_loop_watch.deliver``: retries + a durable outbox) - a process separate from zoe-data, so it can report
 zoe-data's death. The "owner alerts" check is red while that helper records alerting as broken (Telegram refused the
@@ -565,7 +565,7 @@ def send(lines: list[str]) -> bool:
     """True when the lines were delivered as ONE message (or there was nothing to send)."""
     if not lines:
         return True
-    return _deliver_one("\n\n".join(lines)) in ("delivered", "uncertain", "queued")   # queued: the shared outbox retries it
+    return _deliver_one("\n\n".join(lines)) in ("delivered", "uncertain")
 
 
 def pack(items: list[dict], limit: int = MSG_LIMIT, cap: int = MAX_MESSAGES) -> tuple[list[tuple[str, list]], list]:
@@ -606,32 +606,73 @@ def _revert(before: dict, after: dict, it: dict) -> dict:
     return out
 
 
-def send_run(items: list[dict], before: dict, after: dict,
-             deliver: Optional[Callable[[str], str]] = None) -> tuple[dict, list[str], bool]:
-    """Deliver this run's items as one or more messages, in order. Returns (state to keep, texts sent, all delivered).
-    A transition is kept as alerted ONLY if the message carrying it was delivered; a failure, or a message the outbox
-    only queued (it holds one entry per code, so a next message would replace it), stops the run's sending, and every
-    item not sent (or past the per-run cap) is put back so the next run sends it."""
+QUEUED_KEY = "__queued"   # state key: the message the outbox is holding (undelivered), and the state its checks reach once it lands
+
+
+def _health_pending() -> bool:
+    """True while the shared outbox still holds an undelivered "health" message (unreadable counts as still held)."""
+    try:
+        return "health" in _ops().outbox_status()["pending_codes"]
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def resolve_queued(state: dict, pending: Optional[Callable[[], bool]] = None) -> tuple[dict, bool]:
+    """(state, held). While a message from an earlier run is still queued in the outbox, the run is HELD: nothing new is
+    composed or sent (a later deliver() would REPLACE the queued entry, since the outbox keeps one entry per code) and the
+    state stays frozen. Once the entry has left the outbox (delivered by its retries) the checks it carried are marked as
+    told, and the run goes on normally."""
+    q = state.get(QUEUED_KEY)
+    if not q:
+        return state, False
+    if (pending or _health_pending)():
+        return state, True
+    out = {k: v for k, v in state.items() if k != QUEUED_KEY}
+    out.update(q.get("after") or {})
+    return out, False
+
+
+def send_run(items: list[dict], before: dict, after: dict, deliver: Optional[Callable[[str], str]] = None,
+             now: Optional[float] = None) -> tuple[dict, list[str], bool]:
+    """Deliver this run's items as one or more messages, in order. Returns (state to keep, texts delivered, all delivered).
+    A transition is kept as alerted ONLY if the message carrying it was DELIVERED. A message the outbox merely queued is
+    not delivered: its checks stay pending in the state, their would-be state is parked under ``QUEUED_KEY`` (see
+    ``resolve_queued``), and sending stops (the outbox keeps one entry per code; another message would overwrite it).
+    A failure stops sending too. Every item not delivered (or past the per-run cap) is put back for the next run."""
     deliver = deliver or _deliver_one
     msgs, left = pack(items)
     sent: list[str] = []
+    parked: dict = {}
     halted = False
     for text, its in msgs:
         if halted:
             left += its
             continue
         outcome = deliver(text)
-        if outcome in ("delivered", "uncertain", "queued"):
-            sent.append(text)
         if outcome in ("delivered", "uncertain"):
+            sent.append(text)
             continue
         halted = True
-        if outcome != "queued":
-            left += its
+        left += its
+        if outcome == "queued":
+            parked = {n: after[n] for it in its for n in it["names"] if n in after}
     state = after
     for it in left:
         state = _revert(before, state, it)
+    if parked:
+        state = {**state, QUEUED_KEY: {"after": parked, "ts": time.time() if now is None else now}}
     return state, sent, not left
+
+
+def run_cycle(checks: list[Check], state: dict, now: float, deliver: Optional[Callable[[str], str]] = None,
+              pending: Optional[Callable[[], bool]] = None) -> tuple[dict, list[str], bool, bool]:
+    """One alerting pass: (state to persist, texts delivered, all delivered, held)."""
+    state, held = resolve_queued(state, pending)
+    if held:
+        return state, [], False, True
+    items, new = plan(checks, state, now)
+    new, sent, ok = send_run(items, state, new, deliver, now)
+    return new, sent, ok, False
 
 
 def undelivered(state_before: dict, state_after: dict) -> dict:
@@ -668,11 +709,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         state = json.loads(STATE.read_text())
     except (OSError, ValueError):
         state = {}
-    items, new = plan(checks, state, now)
-    for it in items:
-        print(f"[{stamp}] ALERT {it['text']}")
-    new, _sent, all_sent = send_run(items, state, new)   # deliver FIRST; persist "alerted" only for what actually went out
-    if not all_sent:
+    new, sent, all_sent, held = run_cycle(checks, state, now)   # deliver FIRST; persist "alerted" only for what was delivered
+    for text in sent:
+        print(f"[{stamp}] ALERT {text}")
+    if held:
+        print(f"[{stamp}] an earlier alert is still queued in the outbox: nothing new is sent until it is delivered")
+    elif not all_sent:
         print(f"[{stamp}] some alerts NOT delivered - will retry next run", file=sys.stderr)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
