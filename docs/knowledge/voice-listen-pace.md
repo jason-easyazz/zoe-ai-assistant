@@ -38,9 +38,11 @@ panel or in the voice path calls it yet. Flag `ZOE_LISTEN_PACE` = `off` (default
   goes under 640 (480 measured 8.3 % false cuts against 3.6 % at 640, upper bounds). The quiet tail never exceeds 1200 ms.
 - **Who.** A subject is `(panel, verified member)` or `(panel, household)`. An unknown voice or a guest always gets the panel's
   household level. A verified member with no row yet starts at the household level. A child (by the member record's role,
-  never inferred from the voice) starts at L+1 and never goes below L0.
+  never inferred from the voice) starts at L+1 and never goes below L0: the CURRENT role is applied on every read, so a row
+  stored before a role correction cannot bypass it.
 - **The signal.** A *cut event* is `still_talking=1` on the daemon's `FIRST_SOUND` line (>= 3 speech chunks inside the fixed
-  1.5 s window after the close), weight 1; the server's trailing-"and" hold merging a continuation, weight 0.5.
+  1.5 s window after the close), weight 1; the server's trailing-"and" hold merging a continuation, weight 0.5. A turn whose
+  `still_talking` disagrees with its `talk_chunks` (that definition) is malformed and changes nothing.
 - **Lengthen fast.** Two cut events in the last 20 eligible turns: one level longer, at once. One cut right after a reflex
   sound: one level longer, at once. Never rate-limited.
 - **Shorten slow.** One level shorter after **40 consecutive clean eligible turns**; 80 after any lengthen; 120 to return to a

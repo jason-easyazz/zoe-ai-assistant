@@ -202,6 +202,21 @@ def test_a_missing_field_is_malformed(missing):
                                    "win": "wake", "rule": "deep"}) is None   # a bool is not a count
 
 
+@pytest.mark.parametrize("bad", [
+    {"still_talking": "0", "talk_chunks": "5"},     # 3+ chunks after the close IS still talking (the daemon's own definition)
+    {"still_talking": "0", "talk_chunks": "3"},
+    {"still_talking": "1", "talk_chunks": "2"},
+    {"still_talking": "1", "talk_chunks": "-1"},    # "talking" with no monitor listening
+])
+def test_still_talking_that_contradicts_the_chunk_count_is_malformed(bad):
+    assert lp.outcome_from_fields(dict(CLEAN, **bad)) is None
+    s = lp.State(level=0, run=39)                   # one clean turn from shortening
+    s2, ch = lp.step(s, lp.outcome_from_fields(dict(CLEAN, **bad)), T0)
+    assert s2 is s and ch.reason == "skip:malformed" and ch.after == 0
+    assert lp.outcome_from_fields(dict(CLEAN, talk_chunks="2")) is not None          # the consistent neighbours still parse
+    assert lp.outcome_from_fields(dict(CLEAN, still_talking="1", talk_chunks="3")) is not None
+
+
 def test_garbage_state_or_clock_never_raises_or_moves():
     s = lp.new_state()
     assert lp.step(s, out(), float("nan"))[0] is s
@@ -230,6 +245,14 @@ def test_household_level_is_used_when_the_speaker_is_unknown():
     assert lp.level_for(states, "panel-b", "member-1", T0)[0] == 1                                # per PANEL
     assert lp.level_for({}, "panel-c", None, T0) == (0, "panel-c|*", "default")
     assert lp.level_for(states, "bad|id", None, T0) == (0, "", "default")
+
+
+def test_a_stored_row_never_bypasses_the_current_child_floor():
+    """A row created before a role correction (with the adult floor) is read at the CURRENT role's floor."""
+    states = {"panel-a|member-1": lp.State(level=-2), "panel-a|member-2": lp.State(level=3)}
+    assert lp.level_for(states, "panel-a", "member-1", T0, child=True) == (lp.CHILD_FLOOR, "panel-a|member-1", "member")
+    assert lp.level_for(states, "panel-a", "member-1", T0) == (-2, "panel-a|member-1", "member")     # an adult: unchanged
+    assert lp.level_for(states, "panel-a", "member-2", T0, child=True)[0] == 3                       # longer is kept
 
 
 def test_a_child_never_goes_below_the_household_default():

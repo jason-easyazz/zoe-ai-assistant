@@ -52,6 +52,7 @@ PIN_DAYS = 90                # a spoken "give me more time" holds this long agai
 QUICKER_GUARD_TURNS = 20     # a cut inside this many eligible turns after "you can be quicker" undoes it silently
 MIN_SPEECH_MS = 480          # a shorter turn says nothing about the tail (the clean gate's own minimum)
 MIN_OBS_MS = 1200            # a CLEAN verdict needs the post-close window observed at least this long
+STILL_TALKING_CHUNKS = 3     # the daemon's still_talking=1 is exactly ">= this many speech chunks in the post-close window"
 HALF = 2                     # cut weights are stored in half-events: a still_talking cut = 2, a merged continuation = 1
 DAY_S = 86400.0
 
@@ -222,7 +223,7 @@ def outcome_from_fields(m: Mapping) -> Optional[Outcome]:
             reflex = False
         elif isinstance(reflex, str) and reflex.strip() == "heard":
             reflex = True
-        return Outcome(
+        o = Outcome(
             rule=rule, win=win,
             still_talking=_flag01(m["still_talking"]),
             talk_chunks=_int(m["talk_chunks"], lo=-1, hi=10000),
@@ -234,6 +235,9 @@ def outcome_from_fields(m: Mapping) -> Optional[Outcome]:
             speech_ms=None if sp in (None, "", "-1", -1) else _int(sp, lo=0, hi=600000),
             level_used=None if lvl in (None, "", "-") else _int(lvl, lo=LEVEL_MIN, hi=LEVEL_MAX),
         )
+        if (o.talk_chunks >= STILL_TALKING_CHUNKS) != o.still_talking:
+            return None                 # the daemon sets still_talking exactly when >= 3 chunks were heard: anything else contradicts
+        return o
     except (KeyError, ValueError, TypeError, AttributeError):
         return None
 
@@ -405,7 +409,8 @@ def level_for(states: Mapping[str, State], panel_id: str, member: Optional[str],
         return (CHILD_DEFAULT if child else DEFAULT_LEVEL), "", "default"
     mkey = subject_key(panel_id, member)
     if mkey != hkey and mkey in states:
-        return effective_level(states[mkey], now), mkey, "member"
+        lvl = effective_level(states[mkey], now)
+        return (max(CHILD_FLOOR, lvl) if child else lvl), mkey, "member"   # the CURRENT role's floor, whatever the row says
     if hkey in states:
         lvl = effective_level(states[hkey], now)
         if mkey != hkey:
