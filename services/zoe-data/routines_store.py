@@ -171,12 +171,24 @@ def _log(event: str, *, kind: str = "-", via: str = "-", verified: Optional[bool
 
 
 # -- the ONE write gate (every write path in this module goes through it; a structural test enumerates them) -----------------
-def _start() -> dict:
-    """Every member's erase generation NOW: taken at the START of a write, before its first read. A whole-member erase after this
-    point makes the write stale for good (``_guarded_write`` refuses it), however long it then waits."""
+@dataclass(frozen=True)
+class _Seen:
+    """When a write STARTED (before its first read): this process's erase generations, and the wall-clock instant (the durable
+    member-erase watermark is compared with it, so a member erased by ANOTHER process after this point also makes the write stale)."""
+    gen: dict
+    at: datetime
+
+
+def _wall() -> datetime:
+    return datetime.now(timezone.utc)                # the real clock (``_now_utc`` is the household-day seam the tests freeze)
+
+
+def _start() -> "_Seen":
+    """Taken at the START of a write, before its first read. A member erase after this point makes the write stale for good
+    (``_guarded_write`` refuses it), however long it then waits."""
     import user_erase_gate as erase_gate
 
-    return erase_gate.snapshot()
+    return _Seen(erase_gate.snapshot(), _wall())
 
 
 class _Write:
@@ -217,6 +229,36 @@ async def _forgotten_hashes(member: str) -> frozenset:
 
 
 @contextlib.asynccontextmanager
+async def _same(db):
+    yield db
+
+
+async def _durable_recheck(w: "_Write", seen: "_Seen", texts) -> None:
+    """INSIDE the transaction, after the advisory locks: the DURABLE marks, read on the gate's own connection (no cache, no second
+    connection), so a forget recorded by any process is seen. (a) a member's erase watermark (``erase_watermark``, written by
+    ``MemoryService.delete_user`` BEFORE it erases) at or after the write's start = ``erased``; (b) the forgotten-entity ledger
+    re-read (``memory_forgotten.active_hashes_on``) and ``texts`` checked again = ``names_forgotten``. Unreadable = fail closed."""
+    import erase_watermark
+    import memory_forgotten
+
+    wm_backend = erase_watermark.get_backend()
+    if isinstance(wm_backend, erase_watermark.SqlBackend):
+        wm_backend = erase_watermark.SqlBackend(ctx=lambda: _same(w.db))
+    try:
+        for m in w.members:
+            at = await erase_watermark.watermark(m, backend=wm_backend)
+            if at is not None and at >= seen.at:
+                raise StoreError("erased", 409)
+            if memory_forgotten.configured():
+                w._hashes[m] = await memory_forgotten.active_hashes_on(w.db, m)
+    except StoreError:
+        raise
+    except Exception:  # noqa: BLE001 - an unreadable mark is never "not erased"
+        raise StoreError("ledger_unavailable", 503) from None
+    w.refuse_forgotten(*texts)
+
+
+@contextlib.asynccontextmanager
 async def _txn(db, members):
     """ONE real transaction holding a per-member advisory lock (``list_service.list_write_txn``'s pattern), so an eraser and a writer
     serialise across PROCESSES too (``db_pool.AsyncpgCompat.commit`` is a no-op: without this every statement autocommits). Locks are
@@ -231,31 +273,38 @@ async def _txn(db, members):
         yield
 
 
-def _erased(seen: dict, member: str) -> bool:
+def _erased(seen: "_Seen", member: str) -> bool:
     import user_erase_gate as erase_gate
 
-    return erase_gate.generation(member) != seen.get(member, 0) or erase_gate.in_progress(member)
+    return erase_gate.generation(member) != seen.gen.get(member, 0) or erase_gate.in_progress(member)
 
 
 @contextlib.asynccontextmanager
-async def _guarded_write(seen: dict, *, subject: str, actors=(), texts=()):
+async def _guarded_write(seen: "_Seen", *, subject: str, actors=(), texts=()):
     """THE write gate. ``seen`` = ``_start()`` taken before the write's first read; ``subject`` = whose routine; ``actors`` = who is
     acting (a member id; None / a guest = a household tap); ``texts`` = the entity text the write carries.
 
     1. the erase gate of EVERY member involved (subject and actors), in sorted id order (the one global order: a writer never waits
        on a lower id while holding a higher one; an eraser holds one member's gate only, so no cycle can form);
     2. each member's erase mark: moved since ``seen`` or a whole-member erase running = ``StoreError("erased")`` (a stale write);
-    3. the entity shield (in-flight tombstone + the durable ``memory_forgotten`` ledger, exact words, fail closed) over ``texts``
-       for every member: a forgotten name is never written (``StoreError("names_forgotten")``);
-    4. the connection, ONE transaction, the per-member advisory locks (same order), then (2) again immediately before the write.
-    The erasers (``forget_user`` / ``erase_entity``) take the same gate and the same advisory lock, so a write lands wholly before
-    an erase (and is erased) or wholly after it (and is refused)."""
+    3. the entity shield (in-flight tombstone + the ``memory_forgotten`` ledger, exact words, fail closed) over ``texts`` for every
+       member, from the per-process cache: the cheap FAST PATH, before a connection is borrowed;
+    4. the connection, ONE transaction, the per-member advisory locks (same order), (2) again, then ``_durable_recheck``: each
+       member's durable erase watermark and the forgotten ledger RE-READ on this connection, inside this transaction, immediately
+       before the write. Steps 1-2 are per process; step 4 is what holds across processes.
+
+    Why both orders are safe across processes (the forget path writes its durable mark FIRST - the intent records the
+    ``memory_forgotten`` entry, ``delete_user`` records the erase watermark - and only then runs the eraser, which takes the same
+    advisory lock): a writer that gets the lock BEFORE the eraser either already sees the committed mark on its re-read (refused) or
+    commits first, and the eraser that follows deletes what it wrote; a writer that gets the lock AFTER the eraser re-reads a mark
+    committed before the eraser started (refused). A write that STARTED after a member's watermark is new activity (the
+    ``erase_watermark.keep_after`` rule) and proceeds; an entity forget whose ledger write failed shields only its own process."""
     import user_erase_gate as erase_gate
 
     members = sorted({m for m in (subject, *actors) if m and not _guest(m)})
     async with contextlib.AsyncExitStack() as stack:
         for m in members:
-            live = await stack.enter_async_context(erase_gate.writing(m, seen.get(m, 0)))
+            live = await stack.enter_async_context(erase_gate.writing(m, seen.gen.get(m, 0)))
             if not live or _erased(seen, m):
                 raise StoreError("erased", 409)
         w = _Write(members, {m: await _forgotten_hashes(m) for m in members})   # before a connection is borrowed (the ledger may borrow one)
@@ -264,6 +313,7 @@ async def _guarded_write(seen: dict, *, subject: str, actors=(), texts=()):
         await stack.enter_async_context(_txn(w.db, members))
         if any(_erased(seen, m) for m in members):
             raise StoreError("erased", 409)
+        await _durable_recheck(w, seen, texts)
         yield w
         await w.db.commit()
 

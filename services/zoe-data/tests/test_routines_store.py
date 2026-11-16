@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import re
 import sqlite3
 from pathlib import Path
@@ -252,6 +253,82 @@ def test_a_later_fresh_write_naming_a_forgotten_entity_is_refused(store):
     assert run(rs.add_step(ALEX, r["id"], "call Quincy"))["text"] == "call Quincy"   # control: whole words only
     assert run(rs.add_step(SAM, _mk(owner=SAM)["id"], "call Quinn"))                 # control: Sam forgot nobody
     assert _count(store, "routines") == 2
+
+
+def _as_another_process(monkeypatch):
+    """This process's erase gate sees nothing (no lock, no generation): what a SECOND process looks like to the gate. Only the
+    durable marks re-read inside the write's transaction can then stop a stale write."""
+    import user_erase_gate as eg
+
+    @contextlib.asynccontextmanager
+    async def writing(_m, _g):
+        yield True
+
+    @contextlib.asynccontextmanager
+    async def erasing(_m, *, bump=True):
+        yield
+
+    monkeypatch.setattr(eg, "writing", writing)
+    monkeypatch.setattr(eg, "erasing", erasing)
+    monkeypatch.setattr(eg, "generation", lambda _m: 0)
+    monkeypatch.setattr(eg, "in_progress", lambda _m: False)
+    monkeypatch.setattr(eg, "snapshot", dict)
+
+
+async def _ledger_row_from_another_process(member, name):
+    """The forget recorded by ANOTHER process: straight into the durable store, so this process's 30 s cache is NOT invalidated."""
+    await memory_forgotten.get_backend().upsert(member, memory_forgotten.key_hash(member, name), scope="entity", actor=member,
+                                                forgotten_at="2026-11-12T07:00:00Z", shield_until=memory_forgotten.PERMANENT_UNTIL)
+
+
+def test_a_forget_recorded_by_another_process_is_seen_by_the_re_read_under_the_lock(store, monkeypatch):
+    """The reviewer's case: this process's ledger view is cached (empty); another process records "forget Quinn" while the write
+    waits; the write then takes the lock. Old code decided from the stale cached view and inserted the line."""
+    r = _mk(steps=("bins",))
+    _as_another_process(monkeypatch)
+    assert run(memory_forgotten.active_hashes(ALEX)) == frozenset()            # the cached view: nothing forgotten yet
+
+    async def scenario():
+        _hook_rows(monkeypatch, "SELECT id, user_id, created_by", lambda: _ledger_row_from_another_process(ALEX, "Quinn"))
+        with pytest.raises(rs.StoreError) as e:
+            await rs.add_step(ALEX, r["id"], "call Quinn")
+        assert e.value.code == "names_forgotten"
+    run(scenario())
+    assert run(memory_forgotten.active_hashes(ALEX)) == frozenset()            # the cache really was stale throughout
+    assert [s["text"] for s in run(rs.get_routine(ALEX, r["id"]))["steps"]] == ["bins"]
+
+
+def test_a_member_erased_by_another_process_after_the_write_began_refuses_it(store, monkeypatch):
+    """The durable member mark (``erase_watermark``, recorded by ``delete_user`` before it erases) is re-read under the lock: a write
+    that STARTED before it is refused for every member involved; one that started after it is new activity and proceeds."""
+    import erase_watermark
+
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    _as_another_process(monkeypatch)
+    seen = rs._start()
+    run(erase_watermark.record(SAM))                                             # Sam (the ACTOR) erased elsewhere, meanwhile
+
+    async def write(seen_):
+        async with rs._guarded_write(seen_, subject=ALEX, actors=(SAM,)) as w:
+            await w.db.execute("UPDATE routines SET updated_at = 'x' WHERE id = ?", (fam["id"],))
+    with pytest.raises(rs.StoreError) as e:
+        run(write(seen))
+    assert e.value.code == "erased"
+    run(write(rs._start()))                                                      # control: started after the mark
+
+
+def test_an_unreadable_erase_watermark_refuses_the_write(store, monkeypatch):
+    import erase_watermark
+
+    r = _mk()
+
+    class Down(erase_watermark.MemoryBackend):
+        async def get(self, user_id):
+            raise RuntimeError("down")
+    erase_watermark.set_backend(Down())
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.add_step(ALEX, r["id"], "bins again"))
+    assert e.value.code == "ledger_unavailable"
 
 
 def test_the_ledger_being_down_refuses_the_write(store, monkeypatch):
@@ -601,3 +678,25 @@ def test_a_one_off_naming_a_forgotten_entity_is_refused(store):
         run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take Quinn's book"))
     assert e.value.code == "names_forgotten"
     assert run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take the book"))["text"] == "take the book"
+
+
+def test_an_actor_erased_by_another_process_mid_tick_writes_nothing_of_theirs(store, monkeypatch):
+    """The actor case across PROCESSES: Sam's delete runs elsewhere (its watermark first, then its eraser) between Sam's tick's read
+    and its write. This process's gate sees nothing; the durable watermark re-read under the lock refuses the tick."""
+    import erase_watermark
+
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    ds = _first(fam, SAM)
+    _as_another_process(monkeypatch)
+
+    async def delete_sam_elsewhere():
+        await erase_watermark.record(SAM)
+        await rs.forget_user(SAM)
+
+    async def scenario():
+        _hook_rows(monkeypatch, "SELECT ds.state", delete_sam_elsewhere)
+        with pytest.raises(rs.StoreError) as e:
+            await rs.act_tapped(SAM, ds, "done", verified=True)
+        assert e.value.code == "erased"
+    run(scenario())
+    assert store.q("SELECT state, actor_user_id FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending", None)]

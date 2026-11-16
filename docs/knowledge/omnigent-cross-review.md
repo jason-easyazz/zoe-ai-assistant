@@ -47,7 +47,21 @@ on shows its newer commits as reverted changes in your diff. Pinned by
 `tests/unit/test_cross_review_local.py`.
 
 `cross_review.sh` is a dispatcher with **automatic fallback** (2026-10-18). It tries, in
-order, and stops at the first cross-vendor report:
+order, and stops at the first cross-vendor report.
+
+**Default order since 2026-11-16: codex, then pi. polly is opt-in** (`CROSS_REVIEW_BACKENDS="polly codex pi"`).
+Two measured reasons. (1) polly's orchestrator runs on a metered Anthropic API workspace that hit its
+usage limit ("You have reached your specified workspace API usage limits", HTTP 400 in the runner log),
+so every polly session failed before the fallback ran, and the owner will not add credit. (2) codex
+inside the `zoe-omnigent` container cannot start its bwrap read-only sandbox: Docker's default seccomp
+profile blocks the user namespace it needs (`bwrap --unshare-user` fails in the container, passes on
+the host), so codex there could read the diff but run nothing. codex therefore runs on the HOST when a
+host codex is installed (`CROSS_REVIEW_CODEX_WHERE=auto|host|container`, default `auto`;
+`CROSS_REVIEW_CODEX_HOST_BIN` overrides the path), with `--ignore-user-config` so the operator's own
+codex plugins and MCP servers stay out of the review; its read-only sandbox was proven to refuse a write
+on the host. The container path stays as the fallback when no host codex exists. Pinned by
+`tests/unit/test_cross_review_fallback.py`. The numbered list below is the full order when polly is
+opted in:
 
 1. **polly** — `cross_review_polly.sh` (the original wrapper, lifecycle unchanged): creates a
    session, kicks it (docker-exec — REST cannot start claude-sdk sessions), polls to
