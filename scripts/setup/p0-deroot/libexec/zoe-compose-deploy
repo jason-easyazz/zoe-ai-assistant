@@ -147,6 +147,12 @@ def export_tree(mirror, sha):
     archive.stdout.close()
     if archive.wait() != 0 or untar.returncode != 0:
         fail(f"export of {sha[:12]} failed: {untar.stderr.strip()[-200:]}", 5)
+    # compose resolves the checked-in file's env_file entries (./.env) against the project directory, which is this
+    # export; point it at the root-owned env file the checks above verified, rather than copying secrets into the tree.
+    env_link = os.path.join(tmp, ".env")
+    if os.path.lexists(env_link):
+        os.unlink(env_link)
+    os.symlink(ENV_FILE, env_link)
     open(os.path.join(tmp, ".zoe-compose-deploy-complete"), "w").close()
     os.chmod(trees, 0o755)        # the daemon (root) reads it; the containers see only their binds
     os.rename(tmp, tree)
