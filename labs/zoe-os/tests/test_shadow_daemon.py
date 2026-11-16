@@ -120,7 +120,7 @@ def test_with_the_last_member_removed_or_an_unreadable_roster_the_daemon_starts_
     again = start(state)
     # loaded from the record, for forget only: A (their words) and B (B's grant record names them; main's forget reaches it)
     assert known(state[0]) == sorted([A, B])
-    said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
+    said = again.voice.publish("utterance", subject=A, payload={"text": f"synthetic {id(again)}"})
     with pytest.raises(Refused, match="no grant"):                     # nothing can be proposed or acted for anyone
         again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq},
                          caused_by=[said.seq])
@@ -157,11 +157,13 @@ def test_a_roster_file_that_is_there_but_cannot_be_read_starts_the_daemon_for_fo
         roster.mkdir()
     try:
         again = start(state)
-        said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
+        said = again.voice.publish("utterance", subject=A, payload={"text": f"synthetic {id(again)}"})
         with pytest.raises(Refused, match="no grant"):
             again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq},
                              caused_by=[said.seq])
         assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
+        assert known(state[0]) == [B]                                  # B's grant record still names them (main's forget reaches it)
+        assert again.panel.call("forget", subject=B, actor=B)["count"] >= 1
         assert "people.json is unreadable" in again.stop()
     finally:
         if roster.is_file():

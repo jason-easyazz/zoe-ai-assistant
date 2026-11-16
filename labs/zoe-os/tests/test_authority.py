@@ -23,6 +23,15 @@ from zoe_os.spine import Refused
 
 HERE = Path(__file__).parent
 A, B = "member-a", "member-b"
+_COUNTER = __import__("itertools").count()
+
+
+def _t(prefix: str) -> str:
+    """A fresh utterance text: main's kernel shields forgotten words for EVERY publisher, so a text repeated across requests would
+    be refused once one copy of it was forgotten."""
+    return f"{prefix} {next(_COUNTER)}"
+
+
 ASKED_FOR: dict = {}            # state dir -> {(member, item)} every add a test made there (survives the daemon's restarts)
 
 
@@ -51,7 +60,7 @@ class Daemon:
 
     def add(self, person: str, item: str) -> dict:
         ASKED_FOR.setdefault(str(self.state), set()).add((person, item))      # the "production rows" the reconciler matches against
-        said = self.voice.publish("utterance", subject=person, payload={"text": "synthetic list add"})
+        said = self.voice.publish("utterance", subject=person, payload={"text": _t("synthetic list add")})
         return self.brain.call("act", action="list.add", on_behalf_of=person,
                                args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
 
@@ -359,11 +368,13 @@ def test_with_the_last_member_removed_or_an_unreadable_roster_the_kernel_starts_
     (state[0] / "people.json").write_text(roster)                      # the last member left (or the file is damaged)
     again = start(state)
     assert again.brain.call("health")["roster"] == ("empty" if roster.startswith('{"people": []') else "unreadable")
-    said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})    # A is recorded: known, never granted
+    said = again.voice.publish("utterance", subject=A, payload={"text": _t("synthetic")})    # A is recorded: known, never granted
     with pytest.raises(Refused, match="no grant"):                     # nobody is granted anything: nothing can be acted
         again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq}, caused_by=[said.seq])
-    with pytest.raises(wire.WireError, match="malformed"):            # B was never recorded and is off the roster: unknown
-        again.voice.publish("utterance", subject=B, payload={"text": "synthetic"})
+    # B never said anything, but B's grant record names them (main's kernel links it): known, for forget only, never granted
+    said_b = again.voice.publish("utterance", subject=B, payload={"text": _t("synthetic")})
+    with pytest.raises(Refused, match="no grant"):
+        again.brain.call("act", action="list.add", on_behalf_of=B, args={"item": "x", "asked": said_b.seq}, caused_by=[said_b.seq])
     assert _members_bytes(state[0], b"synthetic quince marker")         # the control of the scan: the words are there
     assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2  # A, saying "forget everything about me"
     assert _members_bytes(state[0], b"synthetic quince marker") == []
@@ -379,7 +390,7 @@ def test_a_missing_roster_file_is_an_operator_error_and_refuses_the_start(state)
 
 # ---- undo of a remove survives a forget it does not touch -------------------------------------------------------------------------
 def _remove(d: Daemon, person: str, item: str) -> dict:
-    said = d.voice.publish("utterance", subject=person, payload={"text": "synthetic list remove"})
+    said = d.voice.publish("utterance", subject=person, payload={"text": _t("synthetic list remove")})
     return d.brain.call("act", action="list.remove", on_behalf_of=person,
                         args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
 
@@ -456,7 +467,7 @@ def test_a_roster_file_that_is_there_but_cannot_be_read_starts_the_kernel_for_fo
     try:
         again = start(state)
         assert again.brain.call("health")["roster"] == "unreadable"
-        said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
+        said = again.voice.publish("utterance", subject=A, payload={"text": _t("synthetic")})
         with pytest.raises(Refused, match="no grant"):
             again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq}, caused_by=[said.seq])
         assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
@@ -476,9 +487,9 @@ def test_a_roster_symlink_to_nothing_is_a_missing_roster_and_refuses_the_start(s
 
 
 # ---- a forget reaches every row derived from what it erased, and a rebuild never brings forgotten words back -------------------------
-def _say_add(d: Daemon, person: str, item: str, *, text: str = "synthetic list add", mentions=()) -> dict:
+def _say_add(d: Daemon, person: str, item: str, *, text: str = "", mentions=()) -> dict:
     ASKED_FOR.setdefault(str(d.state), set()).add((person, item))
-    said = d.voice.publish("utterance", subject=person, payload={"text": text}, mentions=list(mentions))
+    said = d.voice.publish("utterance", subject=person, payload={"text": text or _t("synthetic list add")}, mentions=list(mentions))
     out = d.brain.call("act", action="list.add", on_behalf_of=person,
                        args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
     return {**out, "said": said.seq}
@@ -530,7 +541,7 @@ def test_forgetting_the_add_by_seq_removes_its_row_and_a_later_undo_of_its_remov
     assert _gone_everywhere(d, state, marker)
     other = "synthetic marker loquat"
     _say_add(d, A, other)
-    said = d.voice.publish("utterance", subject=A, payload={"text": "synthetic list remove"})
+    said = d.voice.publish("utterance", subject=A, payload={"text": _t("synthetic list remove")})
     d.brain.call("act", action="list.remove", on_behalf_of=A, args={"item": other, "list": "shopping", "asked": said.seq},
                  caused_by=[said.seq])
     assert d.digests() == []                                                     # an ordinary add and remove still work after it
@@ -563,7 +574,7 @@ def test_a_removal_of_two_rows_loses_only_the_forgotten_one_and_goes_whole_when_
     d = start(state)
     one = _say_add(d, A, item, text=said_1)
     two = _say_add(d, A, item, text=said_2)
-    rm = d.voice.publish("utterance", subject=A, payload={"text": "synthetic list remove"})
+    rm = d.voice.publish("utterance", subject=A, payload={"text": _t("synthetic list remove")})
     removal = d.brain.call("act", action="list.remove", on_behalf_of=A,
                            args={"item": item, "list": "shopping", "asked": rm.seq}, caused_by=[rm.seq])
     assert removal["verified"] is True and d.digests() == []                     # one removal took both rows

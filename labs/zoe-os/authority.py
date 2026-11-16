@@ -308,10 +308,21 @@ class AuthorityServer(KernelServer):
                 seqs.extend(json.loads(db.execute("SELECT COALESCE(caused_by, '[]') FROM events WHERE seq = ?", (seq,)).fetchone()[0]))
         return seqs
 
+    def _erased(self, person: str) -> None:
+        """The member's brain grant goes, and does not come back at the next start, WITHOUT a record naming them: a revoke event
+        (a grant change, which names the person) would itself be a record a later forget erases, and it would keep their id on
+        disk. The grant leaves memory; the start-up grant skips them by a keyed hash (``erased_marks``), never by their id."""
+        self.kernel.grants._grants.get(SHADOW_BRAIN["skill"], {}).pop(person, None)
+        self.kernel.spine._db.execute("INSERT OR IGNORE INTO meta VALUES (?, x'01')",
+                                      (ERASED_MARK + self.kernel.spine._owner(person).hex(),))
+
     def _live_events(self, person: str) -> int:
+        """The member's live CONTENT: every record linked to them but the kernel's own bookkeeping. Main's kernel also links a member
+        to grant changes, refusals and forget notices; the erase itself writes one (the brain revoke that keeps them from being
+        re-granted at the next start), and counting it would make every erase read back as "not verified"."""
         return self.kernel.spine._db.execute(
-            "SELECT COUNT(*) FROM people p JOIN events e ON e.seq = p.seq WHERE p.person = ? AND e.tombstoned = 0",
-            (person,)).fetchone()[0]
+            "SELECT COUNT(*) FROM people p JOIN events e ON e.seq = p.seq WHERE p.person = ? AND e.tombstoned = 0"
+            " AND e.kind NOT IN ('grant_change', 'refusal', 'forget')", (person,)).fetchone()[0]
 
     def _op_erase_member(self, conn, a: dict) -> dict:
         """Everything of the member: their events (and what derives from them), their list rows, their reminder and alarm rows, and
@@ -325,7 +336,7 @@ class AuthorityServer(KernelServer):
         count = self.kernel.spine.forget(subject, actor=subject).count
         notice = self.kernel.spine.last_seq                                  # the FORGET event: the erase's durable receipt
         self.kernel.pump()                                                   # every member's rows the erase reached, now
-        self.kernel.grants.revoke(subject, SHADOW_BRAIN["skill"])
+        self._erased(subject)
         self.lists.rebuild(subject)
         for store in self.others:                                            # the lab reminder / alarm stores, in memory
             (store.at if isinstance(store, Alarms) else store.rows).pop(subject, None)
@@ -413,6 +424,14 @@ def convert_legacy(spine) -> int:
         raise
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     return changed
+
+
+ERASED_MARK = "authority_erased:"
+
+
+def erased_marks(k: Kernel) -> set[str]:
+    """The keyed hashes of members whose data the member-delete path erased: never granted again automatically at a start."""
+    return {key[len(ERASED_MARK):] for (key,) in k.spine._db.execute("SELECT key FROM meta WHERE key LIKE ?", (ERASED_MARK + "%",))}
 
 
 def revoked(k: Kernel, skill: str) -> set[str]:
@@ -537,9 +556,9 @@ def build(state: Path, db: str | None = None):
     for manifest in (*ADAPTERS, SHADOW_BRAIN, ERASER, RECONCILER):
         k.grants.install(manifest)
     k.install(DurableKeeper(lists, reminders, alarms))
-    no = revoked(k, SHADOW_BRAIN["skill"])
+    no, gone = revoked(k, SHADOW_BRAIN["skill"]), erased_marks(k)
     for person in people:
-        if person not in no:
+        if person not in no and k.spine._owner(person).hex() not in gone:
             k.grants.grant(person, SHADOW_BRAIN["skill"], acts=list(ACTS))
     srv = AuthorityServer(k, str(state / "k.sock"), lists, (reminders, alarms), roster=people)
     srv.roster_status = roster_status
