@@ -35,8 +35,8 @@ SWEEP_EVERY_S = 6 * 3600
 
 # The clip THIS transcription saved (a fresh holder per transcription, like ``_stt_raw_var``: never a previous turn's clip).
 _HOLDER: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar("voice_clip_holder", default=None)
-#: one writer of the pending-drop list at a time: an append never lands between the retry's read and its prune (zoe-data is ONE process;
-#: the append runs on the loop thread, the retry in an executor thread)
+#: one writer of the pending-drop list at a time (zoe-data is ONE process; both the append and the retry run in worker threads, never
+#: on the event loop): held only for a read, an append or a rewrite of that small file, never across the retry's clip removals
 _PENDING_LOCK = threading.Lock()
 
 
@@ -83,6 +83,19 @@ def drop_current(member: str = "") -> bool:
     clip = current_clip()
     if not clip:
         return False
+    drop_clip(clip, member)
+    _HOLDER.set({})
+    return True
+
+
+def clear_current() -> None:
+    """Forget the clip this turn saved (after ``drop_clip`` ran it off the event loop)."""
+    _HOLDER.set({})
+
+
+def drop_clip(clip: str, member: str = "") -> None:
+    """``drop_current``'s file work on a GIVEN clip path, with no context state: blocking (writes and unlinks), so a voice turn runs it in
+    a worker thread (``asyncio.to_thread``) and never on the event loop. RAISES as ``drop_current`` documents."""
     side = sidecar_path(clip)
     # the label says the clip is the member's AND that it must go (``pending_drop``): if the removal below fails, that marker on disk
     # is the durable retry (``retry_pending_drops``), even after the member's delete completed; a clip saved later is never marked
@@ -101,8 +114,6 @@ def drop_current(member: str = "") -> bool:
             except OSError as exc:
                 logger.error("VOICE_CLIP_DROP_UNRECORDED reason=%s", type(exc).__name__)
         raise
-    _HOLDER.set({})
-    return True
 
 
 def pending_file() -> str:
@@ -299,35 +310,45 @@ def newest_unknown_clip(directory: Optional[str] = None, valid=None) -> Optional
 
 def _retry_pending_file() -> int:
     """The clips listed in ``pending_file`` (a drop that could not even mark its clip): removed with any sidecar; the ones that still
-    cannot go stay listed for the next pass. Counts only. Read, removal and prune hold ``_PENDING_LOCK``: an append waits for them."""
+    cannot go stay listed for the next pass. Counts only. ``_PENDING_LOCK`` is held only to READ the list and, at the end, to REWRITE it
+    (re-read under the lock, so an append made while the clips were being removed is kept) - never across the removals themselves, so
+    an append (a voice turn's failed drop) waits at most for one small read or rewrite, never for the sweep."""
+    path = pending_file()
     with _PENDING_LOCK:
-        return _retry_pending_file_locked(pending_file())
-
-
-def _retry_pending_file_locked(path: str) -> int:
-    try:
-        with open(path) as f:
-            listed = [ln.strip() for ln in f if ln.strip()]
-    except FileNotFoundError:
+        listed = _read_lines(path)
+    if not listed:
         return 0
-    except OSError as exc:
-        logger.warning("VOICE_CLIPS pending-drop list unreadable (%s)", type(exc).__name__)
-        return 0
-    left, n = [], 0
+    removed, n = set(), 0
     for clip in dict.fromkeys(listed):
         try:
             _remove_strict(sidecar_path(clip), clip)
+            removed.add(clip)
             n += 1
         except OSError:
-            left.append(clip)
-    try:
-        if left:
-            _write_lines(path, left)
-        else:
-            os.unlink(path)
-    except OSError as exc:
-        logger.warning("VOICE_CLIPS pending-drop list not rewritten (%s)", type(exc).__name__)
+            pass
+    with _PENDING_LOCK:
+        now = _read_lines(path)
+        left = list(dict.fromkeys(c for c in (now or []) if c not in removed))
+        try:
+            if left:
+                _write_lines(path, left)
+            elif now is not None:
+                os.unlink(path)
+        except OSError as exc:
+            logger.warning("VOICE_CLIPS pending-drop list not rewritten (%s)", type(exc).__name__)
     return n
+
+
+def _read_lines(path: str) -> Optional[list]:
+    """The pending list's lines; None when there is no list (or it cannot be read: logged, retried next pass)."""
+    try:
+        with open(path) as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning("VOICE_CLIPS pending-drop list unreadable (%s)", type(exc).__name__)
+        return None
 
 
 def _write_lines(path: str, lines: list) -> None:
