@@ -338,7 +338,10 @@ def _low(s: str) -> str:
 
 
 def _trailer(body: str, name: str) -> str:
-    text = re.sub(r"```.*?```", "", re.sub(r"<!--.*?-->", "", body or "", flags=re.S), flags=re.S)
+    text = re.sub(r"<!--.*?-->", "", body or "", flags=re.S)
+    text = re.sub(r"^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$", "", text, flags=re.S | re.M)  # either fence kind
+    text = re.sub(r"^[ \t]*(?:```|~~~).*", "", text, flags=re.S | re.M)  # an unclosed fence runs to the end
+    # An indented (4-space) code line can never match: a trailer must start at column 0 (``_TRAILER`` is anchored).
     for m in _TRAILER.finditer(text):
         if m.group("key").lower() == name.lower():
             v = m.group("value").strip()
@@ -1023,21 +1026,48 @@ async def _deliver_instant(c: Ctx, r: Recipient) -> None:
     detail = "pointer" if "pointer" in details else "plain" if details == {"plain"} else "technical"
     items.sort(key=_priority)  # bad news first, then what waits on the owner (stable within each)
     batches = [items] if len(items) >= BATCH_AT else [[i] for i in items]
-    for batch in batches:
-        for _ in range(MAX_CHUNKS):  # a notice whose step did not fit follows at once; past 3, the next tick
+
+    def roll(left: list[dict], reason: str) -> None:  # exactly the over-cap path above: the next digest, audited
+        for i in left:
+            ds[f"{r.user_id}|{i['key']}"]["lane"] = "digest"
+            audit("rolled_to_digest", member=r.user_id, key=i["key"], reason=reason)
+
+    sent_now = 0  # instant messages to this member in this tick (design 6: at most MAX_CHUNKS a minute)
+    for b_idx, batch in enumerate(batches):
+        follow_up = False
+        while batch:
+            # Every limit is rechecked before EVERY message, the first and each follow-up (a notice whose step did
+            # not fit the message before): nothing a follow-up sends can step around them.
+            if killed():
+                return  # the kill switch appeared mid-tick: the rest stays queued, unsent
+            now_local = _local(c)
+            if comm_prefs.in_quiet_hours(r.prefs, now_local.hour * 60 + now_local.minute):
+                return  # quiet hours began: held, as at the start of a tick
+            if follow_up and not r.env_default:  # a follow-up is a new instant message: the spacing applies to it
+                spaced = [i for i in batch if c.now - (_parse(st["last_instant"].get(f"{r.user_id}|{i['category']}"))
+                                                       or c.now - SAME_KIND_SPACING) < SAME_KIND_SPACING]
+                roll(spaced, "spacing")
+                batch = [i for i in batch if i not in spaced]
+                if not batch:
+                    break
+            over = "cap" if len(sent_today) >= cap else "rate" if sent_now >= MAX_CHUNKS else ""
+            if over:
+                roll([i for b in [batch, *batches[b_idx + 1:]] for i in b], over)
+                return
             turn = int(st["opener"].get(r.user_id, -1)) + 1  # the digest's counter: two in a row never match
             st["opener"][r.user_id] = turn
             msg = render_instant(batch, detail, c.repo, turn=turn, local=local)
             outcome = await _send(c, r, msg)
             if outcome not in ("sent", "shadow", "uncertain"):
-                break
+                break  # not delivered: its notices retry with backoff, the unclaimed rest stays queued
+            sent_now += 1
+            sent_today.append(local.isoformat())
             st["instant_sent"].setdefault(r.user_id, []).append(local.isoformat())
             for i in batch:
                 if i["key"] in msg.keys:
                     st["last_instant"][f"{r.user_id}|{i['category']}"] = _iso(c.now)
             batch = [i for i in batch if i["key"] not in msg.keys]
-            if not batch:
-                break
+            follow_up = True
 
 
 def _due(c: Ctx, r: Recipient, lane: str) -> Optional[str]:
@@ -1083,8 +1113,13 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
     msgs = render_digest(items, uncertain, r.prefs, opener=idx, repo_name=c.repo, local=local,
                          period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
-    outcomes = [await _send(c, r, m) for m in msgs]
-    landed = {k for m in msgs for k in m.keys}
+    outcomes, sent_msgs = [], []
+    for m in msgs:
+        if killed():  # the kill switch appeared mid-tick: the rest stays queued, the period is not marked sent
+            return
+        outcomes.append(await _send(c, r, m))
+        sent_msgs.append(m)
+    landed = {k for m in sent_msgs for k in m.keys}
     if any(i["key"] not in landed for i in items):  # a step that did not fit: its notice follows next tick
         audit("digest_follow_up", member=r.user_id, keys=[i["key"] for i in items if i["key"] not in landed])
     elif all(o != "retry" for o in outcomes):

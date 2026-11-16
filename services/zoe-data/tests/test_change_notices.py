@@ -245,7 +245,8 @@ async def test_control_large_batch_threshold_sends_one_each(monkeypatch):
     for n in (31, 32, 33, 34):
         gh.raise_pr(n, f"fix: n{n}", labels=["needs-owner"])
     await run(gh, bot, at("13:00"))
-    assert len(bot.delivered) == 4
+    assert len(bot.delivered) == 3  # one each, and still at most MAX_CHUNKS a tick: the 4th rolls to the digest
+    assert [a["reason"] for a in _audit_events("rolled_to_digest")] == ["rate"]
 
 
 async def test_same_kind_within_30_min_and_the_daily_cap_roll_into_the_digest():
@@ -1247,3 +1248,117 @@ async def test_a_digest_whose_steps_overflow_follows_up_next_tick():
     before = len(bot.delivered)
     await run(gh, bot, at("20:20"))
     assert len(bot.delivered) == before  # nothing more once all landed
+
+
+# ── every instant limit is rechecked before each message, follow-ups included ──
+async def _six_long_steps(gh):
+    for n in range(1, 7):
+        it = _long(n, hh=400)
+        gh.merge(4300 + n, f"fix: item {n}",
+                 f"For-The-Household: {it['household']}\nOwner-Step: {it['owner_step']}", at=at("12:00"))
+
+
+def _audit_events(name):
+    return [json.loads(x) for x in (cn.state_dir() / "audit.jsonl").read_text().splitlines()
+            if f'"event": "{name}"' in x]
+
+
+async def test_cap_with_one_left_sends_one_and_the_rest_rolls_to_the_digest_with_steps():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner(cap=1)]
+    await run(gh, bot, at("09:00"), people=people)
+    await _six_long_steps(gh)
+    await run(gh, bot, at("12:05"), people=people)
+    assert len(bot.delivered) == 1  # the follow-ups would have gone over the cap
+    first = {k for k, d in cn.load_state()["deliveries"].items() if d["status"] == "sent"}
+    rolled = {a["key"] for a in _audit_events("rolled_to_digest")}
+    assert rolled and all(a["reason"] == "cap" for a in _audit_events("rolled_to_digest"))
+    assert {k.split("|", 1)[1] for k in first}.isdisjoint(rolled)
+    for when in ("19:30", "19:40", "19:50", "20:00"):
+        await run(gh, bot, at(when), people=people)
+    text = "\n".join(d["text"] for d in bot.delivered)
+    for n in range(1, 7):
+        assert text.count(f"Step {n} please") == 1  # every step intact, once
+    st = cn.load_state()
+    assert {d["status"] for k, d in st["deliveries"].items() if ":live" in k} == {"sent"}
+
+
+async def test_cap_with_none_left_sends_nothing_instant():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner(cap=0)]
+    await run(gh, bot, at("09:00"), people=people)
+    await _six_long_steps(gh)
+    await run(gh, bot, at("12:05"), people=people)
+    assert bot.delivered == [] and len(_audit_events("rolled_to_digest")) == 6
+
+
+async def test_the_kill_file_appearing_after_the_first_message_stops_the_rest():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner()]
+    await run(gh, bot, at("09:00"), people=people)
+    await _six_long_steps(gh)
+    send = bot.sender()
+
+    async def then_kill(tid, msg):
+        out = await send(tid, msg)
+        cn.set_killed(True)
+        return out
+
+    async def recipients():
+        return people
+
+    await cn.tick(gh=gh, sender=then_kill, recipients=recipients, now=at("12:05"), sleep=_noop_sleep, run_mode="on")
+    assert len(bot.delivered) == 1
+    st = cn.load_state()["deliveries"]
+    assert sorted(d["status"] for k, d in st.items() if ":live" in k).count("queued") >= 1
+    assert not _audit_events("rolled_to_digest")  # killed = stopped, not rerouted
+
+
+def test_trailers_inside_tilde_fences_or_indented_code_are_not_trailers():
+    assert cn.household("~~~\nFor-The-Household: an example\n~~~\nreal text") == ""
+    assert cn.household("```md\nFor-The-Household: an example\n```") == ""
+    assert cn.household("    For-The-Household: an indented code line") == ""
+    assert cn.household("~~~\nFor-The-Household: an unclosed fence") == ""
+    assert cn.household("~~~\nx\n~~~\nFor-The-Household: After the fence.") == "After the fence."  # control
+
+
+async def test_property_a_random_remaining_cap_is_never_exceeded():
+    rnd = random.Random(1116)
+    for trial in range(120):
+        cap = rnd.randint(0, 6)
+        used = rnd.randint(0, cap)
+        items = []
+        for n in range(rnd.randint(1, 8)):
+            num = 6000 + trial * 10 + n
+            step = ("Do " + "this " * rnd.randint(1, 45)).strip() if rnd.random() < 0.7 else ""
+            body = f"For-The-Household: {'word ' * rnd.randint(0, 70)}\n" + (f"Owner-Step: {step}" if step else "")
+            items.append({**_live(num, rnd.choice(("fix: a", 'Revert "feat: b"', "feat: c")), body),
+                          "key": f"pr:{num}:live"})
+        r = _env_owner(cap=cap)
+        st = cn.empty_state()
+        st["notices"] = {i["key"]: i for i in items}
+        st["deliveries"] = {f"u-owner|{i['key']}": {"status": "queued", "lane": "instant", "attempts": 0,
+                                                    "next_at": None, "at": "2026-10-19T04:00:00Z"} for i in items}
+        now = at("12:05")
+        today = now.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        st["instant_sent"]["u-owner"] = [f"{today}T08:00:00+08:00"] * used
+        sent: list[cn.Message] = []
+
+        async def sender(_tid, msg):
+            sent.append(msg)
+            return "sent"
+
+        c = cn.Ctx(st=st, now=now, mode="on", sender=sender, sleep=_noop_sleep, repo="o/r")
+        await cn._deliver_instant(c, r)
+        assert len(sent) <= min(cap - used, cn.MAX_CHUNKS), (trial, cap, used, len(sent))
+        landed = [k for m in sent for k in m.keys]
+        assert len(landed) == len(set(landed))
+        rolled = {k.split("|", 1)[1] for k, d in st["deliveries"].items() if d["lane"] == "digest"}
+        assert rolled.isdisjoint(landed)
+        assert set(landed) | rolled | {k.split("|", 1)[1] for k, d in st["deliveries"].items()
+                                       if d["status"] == "queued"} == {i["key"] for i in items}
+        for m in sent:
+            assert len(m.text) <= cn.CHUNK_CHARS
+            for k in m.keys:
+                step = st["notices"][k].get("owner_step")
+                assert not step or step in m.text
