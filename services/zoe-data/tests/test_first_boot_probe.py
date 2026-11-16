@@ -22,7 +22,7 @@ SCHEMA = (
     "is_active INTEGER DEFAULT 1)",
     "CREATE TABLE passcodes (user_id TEXT, is_active INTEGER DEFAULT 1)",
     "CREATE TABLE panels (panel_id TEXT PRIMARY KEY, name TEXT NOT NULL, room_id TEXT, is_active INTEGER DEFAULT 1)",
-    "CREATE TABLE device_tokens (panel_id TEXT, revoked INTEGER DEFAULT 0)",
+    "CREATE TABLE device_tokens (panel_id TEXT, revoked INTEGER DEFAULT 0, expires_at TEXT)",
     "CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT, slug TEXT)",
     "CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, sample_count INTEGER DEFAULT 0, enrolled_at TEXT, "
     "consent_at TEXT, model_id TEXT)",
@@ -94,7 +94,7 @@ def test_probe_a_set_up_household(store, tmp_path, monkeypatch):
         f"INSERT INTO passcodes VALUES ('{OWNER}', 1)",
         "INSERT INTO rooms VALUES ('r1', 'Kitchen', 'kitchen')",
         "INSERT INTO panels VALUES ('panel-x1', 'Kitchen panel', 'r1', 1)",
-        "INSERT INTO device_tokens VALUES ('panel-x1', 0)",
+        "INSERT INTO device_tokens VALUES ('panel-x1', 0, NULL)",
         ("INSERT INTO speaker_profiles VALUES ('s1', ?, 3, '2026-11-14 09:00:00', '2026-11-14 09:00:00', ?)",
          (OWNER, speaker_models.RESNET34_MODEL_ID)),
         f"INSERT INTO user_preferences VALUES ('{OWNER}', '{{\"telegram_id\": \"1\"}}')",
@@ -111,7 +111,7 @@ def test_probe_a_set_up_household(store, tmp_path, monkeypatch):
 
 def test_probe_default_panel_name_and_missing_room(store, tmp_path):
     base = [f"INSERT INTO auth_users VALUES ('{OWNER}', 'o', 'admin', 'hash', '1', 1)",
-            "INSERT INTO panels VALUES ('panel-ab12', 'Panel-AB12', NULL, 1)", "INSERT INTO device_tokens VALUES ('panel-ab12', 0)"]
+            "INSERT INTO panels VALUES ('panel-ab12', 'Panel-AB12', NULL, 1)", "INSERT INTO device_tokens VALUES ('panel-ab12', 0, NULL)"]
     f = gather(store, base, backup_dir=str(tmp_path))
     assert f.panel_paired is True and f.panel_named is False
     g = gather(store, ["UPDATE panels SET name = 'Hall', room_id = 'gone'"], backup_dir=str(tmp_path))
@@ -119,7 +119,7 @@ def test_probe_default_panel_name_and_missing_room(store, tmp_path):
 
 
 def test_probe_revoked_token_is_not_paired(store, tmp_path):
-    f = gather(store, ["INSERT INTO panels VALUES ('p1', 'Hall', NULL, 1)", "INSERT INTO device_tokens VALUES ('p1', 1)"],
+    f = gather(store, ["INSERT INTO panels VALUES ('p1', 'Hall', NULL, 1)", "INSERT INTO device_tokens VALUES ('p1', 1, NULL)"],
                backup_dir=str(tmp_path))
     assert f.panel_paired is False
 
@@ -157,3 +157,27 @@ def test_probe_defer_round_trip_and_expiry(store, tmp_path):
     inside, after, modalities = asyncio.run(go())
     assert inside.deferred == frozenset({"backup_target"}) and after.deferred == frozenset()
     assert modalities == ["setup:backup_target"]          # never 'voice': the enrolment offer policy cannot see it
+
+
+@pytest.mark.parametrize("panel_id", [None, "p1"])
+@pytest.mark.parametrize("tokens, paired", [
+    ([(0, (NOW - timedelta(seconds=1)).isoformat())], False),
+    ([(0, NOW.isoformat())], False),
+    ([(0, (NOW + timedelta(seconds=1)).isoformat())], True),
+    ([(0, None)], True),
+    ([(1, (NOW + timedelta(days=1)).isoformat())], False),
+    ([(0, (NOW - timedelta(days=1)).isoformat()), (0, (NOW + timedelta(days=1)).isoformat())], True),
+    ([(0, "unreadable")], False),
+    ([(0, "2026-11-14 10:00:01")], True),
+    ([(0, "2026-11-14T11:00:00+01:00")], False),
+], ids=["expired", "expires-now", "valid", "no-expiry", "revoked", "expired-and-valid", "unreadable",
+        "naive-utc", "offset-expires-now"])
+def test_probe_panel_requires_a_valid_token(store, tmp_path, panel_id, tokens, paired):
+    rows = ["INSERT INTO rooms VALUES ('r1', 'Hall', 'hall')",
+            "INSERT INTO panels VALUES ('p1', 'Hall', 'r1', 1)"]
+    rows.extend(("INSERT INTO device_tokens VALUES ('p1', ?, ?)", token) for token in tokens)
+    f = gather(store, rows, panel_id=panel_id, backup_dir=str(tmp_path))
+    assert f.panel_paired is paired
+    assert f.panel_named is paired
+    named = next(s for s in fb.evaluate(f) if s.id == "panel_named")
+    assert (named.state == fb.DONE) is paired

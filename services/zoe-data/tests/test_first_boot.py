@@ -131,3 +131,33 @@ def test_summary_counts():
     s = fb.summary(facts(owner_pin=False, owner_voice=False))
     assert s["ready"] is False and s["next"] == "owner_pin" and s["counts"][fb.WAITING] == 1  # owner_voice
 
+
+
+@pytest.mark.parametrize("surface", fb.SURFACES)
+@pytest.mark.parametrize("item_id", [i.id for i in fb.ITEMS if i.tier != fb.OPTIONAL])
+def test_unknown_required_item_prevents_optional_nudge(surface, item_id):
+    f = facts(**{item_id: None, "more_members": False})
+    assert fb.next_step(f) is None
+    assert fb.nudge(f, surface) is None
+
+
+@pytest.mark.parametrize("surface", fb.SURFACES)
+@pytest.mark.parametrize("item_id", [i.id for i in fb.ITEMS if i.tier == fb.BLOCKING])
+def test_deferred_blocking_item_prevents_optional_nudge(surface, item_id):
+    f = facts(**{item_id: False, "more_members": False, "deferred": frozenset({item_id})})
+    assert fb.next_step(f) is None
+    step = fb.nudge(f, surface)
+    if surface == "asked":
+        assert step.id == item_id and step.state == fb.DEFERRED
+    else:
+        assert step is None
+
+
+@pytest.mark.parametrize("surface", ["panel_card", "asked"])
+def test_all_required_done_allows_optional_nudge(surface):
+    assert fb.nudge(facts(more_members=False), surface).id == "more_members"
+
+
+def test_deferred_deferrable_still_allows_optional_panel_card():
+    f = facts(backup_target=False, more_members=False, deferred=frozenset({"backup_target"}))
+    assert fb.nudge(f, "panel_card").id == "more_members"

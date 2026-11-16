@@ -77,15 +77,25 @@ async def _owner(db) -> tuple:
     return None, False
 
 
-async def _panel(db, panel_id: Optional[str]) -> tuple:
+async def _panel(db, panel_id: Optional[str], now: datetime) -> tuple:
     """(paired?, named and placed?) for ``panel_id``, or for every paired panel when none is named."""
-    sql = ("SELECT p.panel_id, p.name, p.room_id FROM panels p WHERE COALESCE(p.is_active, 1) = 1 AND EXISTS "
-           "(SELECT 1 FROM device_tokens t WHERE t.panel_id = p.panel_id AND COALESCE(t.revoked, 0) = 0)")
+    from routers.panel_auth import parse_token_expiry
+
+    sql = ("SELECT p.panel_id, p.name, p.room_id, t.expires_at FROM panels p "
+           "JOIN device_tokens t ON t.panel_id = p.panel_id "
+           "WHERE COALESCE(p.is_active, 1) = 1 AND COALESCE(t.revoked, 0) = 0")
     params: tuple = ()
     if panel_id:
         sql += " AND p.panel_id = ?"
         params = (panel_id,)
-    rows = await _rows(db, sql, params)
+    rows = []
+    for row in await _rows(db, sql, params):
+        try:
+            if row[3] and parse_token_expiry(row[3]) <= now:
+                continue
+        except (TypeError, ValueError):
+            continue                                      # auth refuses an unreadable expiry too
+        rows.append(row)
     if not rows:
         return False, False
     for pid, name, room_id in ((str(r[0]), str(r[1] or "").strip(), r[2]) for r in rows):
@@ -182,7 +192,7 @@ async def gather(*, panel_id: Optional[str] = None, db=None, now: Optional[datet
         async with _conn(db) as conn:
             got = await _safe("owner", _owner(conn))
             owner, has_pw = got if got is not None else (None, None)
-            paired, named = (await _safe("panel", _panel(conn, panel_id))) or (None, None)
+            paired, named = (await _safe("panel", _panel(conn, panel_id, now))) or (None, None)
             members = child = pin = voice = phone = win = cal = music = None
             deferred: frozenset = frozenset()
             if owner:

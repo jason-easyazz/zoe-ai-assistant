@@ -55,7 +55,7 @@ ITEMS: tuple = (
     Item("forget_secret", BLOCKING, (),
          "memory_forgotten.configured(): ZOE_FORGET_LEDGER_SALT set, 16+ chars"),
     Item("panel_paired", BLOCKING, ("owner_account",),
-         "panels row with an unrevoked device_tokens row (routers/panel_provision.py provision_confirm)"),
+         "panels row with an unrevoked, unexpired device_tokens row (routers/panel_auth.py; NULL expiry never expires)"),
     Item("panel_named", BLOCKING, ("panel_paired",),
          "panels.name is not the default (the panel id / Panel-<code>) and panels.room_id resolves in rooms "
          "(routers/panel_config.py _load_room)"),
@@ -187,7 +187,7 @@ def nudge(facts: Facts, surface: str) -> Optional[Status]:
         for s in rows:
             if s.state == DEFERRED:
                 return s
-    if surface in ("asked", "panel_card"):
+    if surface in ("asked", "panel_card") and ready(facts):
         for s in rows:
             if s.tier == OPTIONAL and s.state == MISSING:
                 return s
