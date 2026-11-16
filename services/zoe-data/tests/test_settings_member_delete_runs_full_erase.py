@@ -91,6 +91,7 @@ class World:
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "CACHE_SETTLE_S", 0.0)          # the cache-settle wait is pinned by its own tests below
     w = World(tmp_path / "zoe.db", monkeypatch)
     yield w
     mr.set_store(None)
@@ -381,3 +382,57 @@ def test_settings_keeps_following_a_long_removal_instead_of_going_quiet():
     fn = src[src.index("async function watchRemoval("):]
     fn = fn[:fn.index("\n}\n")]
     assert "for (let i = 0; ; i++)" in fn and "20000" in fn and "Still deleting" in fn
+
+
+def test_a_lost_pool_fails_closed_and_only_a_process_that_never_had_one_reads_no_store(monkeypatch):
+    """#2669 review P1: a pool that existed and was lost raises the same "db_pool not initialised" text as a process that never had
+    one. Only the latter may read as "no member is being removed"; the lost pool must raise so get_current_user fails closed (503).
+    Negative control: the old text match returned False for both."""
+    import auth
+    import db_pool
+
+    class Lost:
+        async def get(self, _uid):
+            raise RuntimeError("db_pool not initialised — call init_pool() first")
+    monkeypatch.setattr(mr, "get_store", lambda: Lost())
+    auth._BARRED.discard(A)
+    monkeypatch.setattr(db_pool, "_ever_initialised", True)
+    with pytest.raises(RuntimeError):
+        asyncio.run(auth._under_removal(A))
+    monkeypatch.setattr(db_pool, "_ever_initialised", False)
+    assert asyncio.run(auth._under_removal(A)) is False
+
+
+@pytest.mark.parametrize("barrier_age_s,waits", [(0.0, True), (120.0, False)], ids=["fresh-barrier", "resumed-long-after"])
+def test_the_erase_waits_out_the_session_cache_after_the_barrier(monkeypatch, barrier_age_s, waits):
+    """#2669 review P1: another process's cached session is checked only against that process's own bar, for up to the cache TTL.
+    The erase therefore starts no sooner than CACHE_TTL + 1 s after the barrier, so every later request of the member is a cache miss
+    that reads the durable row and is refused. A removal resumed long after its barrier does not wait again."""
+    from datetime import datetime, timedelta, timezone
+
+    import auth
+    import erase_watermark
+
+    monkeypatch.setattr(mr, "CACHE_SETTLE_S", None)          # the real setting: auth.CACHE_TTL_SECONDS + 1
+    mark = datetime.now(timezone.utc) - timedelta(seconds=barrier_age_s)
+
+    async def watermark(_uid):
+        return mark
+    monkeypatch.setattr(erase_watermark, "watermark", watermark)
+    slept, erased = [], []
+
+    async def fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(mr.asyncio, "sleep", fake_sleep)
+
+    class Svc:
+        async def delete_user(self, uid, **_kw):
+            erased.append(uid)
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
+    asyncio.run(mr.full_erase(A, "test"))
+    assert erased == [A]
+    if waits:
+        assert slept and auth.CACHE_TTL_SECONDS < slept[0] <= auth.CACHE_TTL_SECONDS + 1.5, slept
+    else:
+        assert slept == []

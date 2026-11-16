@@ -201,9 +201,32 @@ async def deactivate_sign_in(user_id: str, session_id: str) -> None:
     await _auth_delete(user_id, session_id, permanent=False)
 
 
+#: how long the erase waits after the barrier went up: every zoe-data process caches a validated session for ``auth.CACHE_TTL_SECONDS``,
+#: and a cache hit checks only that process's own bar, so another process may still accept the member's requests until its cache
+#: entry expires. Waiting this long after the barrier means every such request after the erase is a cache miss, which reads the
+#: durable removal row and is refused. Measured from the barrier's own time, so a resumed removal does not wait twice.
+CACHE_SETTLE_S: float | None = None
+
+
+def _cache_settle_s() -> float:
+    if CACHE_SETTLE_S is not None:
+        return CACHE_SETTLE_S
+    import auth
+
+    return float(auth.CACHE_TTL_SECONDS) + 1.0
+
+
 async def full_erase(user_id: str, actor: str) -> None:
+    import erase_watermark
     from memory_service import get_memory_service
 
+    settle = _cache_settle_s()
+    if settle > 0:
+        mark = erase_watermark.instant(await erase_watermark.watermark(user_id))
+        if mark is not None:
+            wait = (mark - datetime.now(timezone.utc)).total_seconds() + settle
+            if wait > 0:
+                await asyncio.sleep(wait)
     await get_memory_service().delete_user(user_id, actor=actor or "member_removal", reason="settings_remove_member")
 
 

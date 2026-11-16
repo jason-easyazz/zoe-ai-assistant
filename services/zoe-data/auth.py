@@ -83,9 +83,18 @@ def bar_member(user_id: str) -> None:
 
 
 def _store_absent(exc: BaseException) -> bool:
-    """No database to read (no pool in this process, a store never migrated): nothing durable says the member is being removed."""
+    """No database to read: a store never migrated (no table), or a process that has NEVER had a pool. A pool that existed and was lost
+    is a FAULT (``db_pool.pool_ever_initialised``), so the caller fails closed - matching the error text alone would read a lost pool
+    as "no member is being removed" and let a member under removal through."""
     s = str(exc).lower()
-    return ("pool" in s and ("not" in s or "no " in s)) or "no such table" in s or ("relation" in s and "does not exist" in s)
+    if "no such table" in s or ("relation" in s and "does not exist" in s):
+        return True
+    try:
+        import db_pool
+
+        return "pool" in s and not db_pool.pool_ever_initialised()
+    except Exception:  # noqa: BLE001 - cannot tell: not absent (the caller fails closed)
+        return False
 
 
 async def _under_removal(user_id: str) -> bool:
