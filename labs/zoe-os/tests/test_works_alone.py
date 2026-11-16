@@ -54,3 +54,24 @@ def test_loopback_and_unix_sockets_still_work(works_alone):
         os.unlink(path)
         os.rmdir(d)
     assert works_alone == []
+
+
+def test_a_hostname_lookup_is_refused_before_any_socket_call(works_alone):
+    """``socket.create_connection`` resolves the name first; the resolver is the network, so the lookup itself is refused and recorded
+    (a numeric address never reaches the resolver, which is why the first control could not see this)."""
+    import socket
+
+    for call in (lambda: socket.create_connection(("example.invalid", 80), timeout=0.2),
+                 lambda: socket.getaddrinfo("example.invalid", 80),
+                 lambda: socket.gethostbyname("example.invalid")):
+        with pytest.raises(OSError):                  # NetworkRefused is an OSError: a caller that catches OSError swallows it
+            call()
+    assert len(works_alone) == 3 and all("example.invalid" in a for a in works_alone)
+    works_alone.clear()                               # consumed here; teardown would (rightly) fail the test otherwise
+
+
+def test_localhost_still_resolves(works_alone):
+    import socket
+
+    assert socket.getaddrinfo("localhost", 0) and socket.getaddrinfo("127.0.0.1", 0) and socket.getaddrinfo(None, 0)
+    assert works_alone == []

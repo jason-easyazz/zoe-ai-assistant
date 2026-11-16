@@ -45,6 +45,14 @@ def _loopback(address) -> bool:
     return ip.is_loopback or bool(getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback)
 
 
+def _literal(host) -> bool:
+    try:
+        ipaddress.ip_address(str(host).strip("[]").split("%")[0])
+        return True
+    except ValueError:
+        return False
+
+
 class Attempts(list):
     """Refused network attempts in one test; ``check`` (run at teardown) fails the test if there were any."""
 
@@ -68,5 +76,19 @@ def works_alone(monkeypatch):
 
     for name, addr_at in (("connect", 0), ("connect_ex", 0), ("sendto", -1)):
         monkeypatch.setattr(socket.socket, name, guarded(getattr(socket.socket, name), addr_at))
+
+    def resolver(real):
+        # A hostname is resolved BEFORE any socket method runs (socket.create_connection calls getaddrinfo first), and the system
+        # resolver is the network: refuse the lookup itself for anything that is not a loopback literal or "localhost".
+        def call(host, *args, **kwargs):
+            name = host.decode("ascii", "replace") if isinstance(host, bytes) else host
+            if name is not None and not _literal(name) and not _loopback((name, 0)):   # an address literal needs no lookup
+                attempts.append(f"{real.__name__} {name!r}")
+                raise NetworkRefused(f"labs/zoe-os works alone: refused {real.__name__} for {name!r}")
+            return real(host, *args, **kwargs)
+        return call
+
+    for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
+        monkeypatch.setattr(socket, name, resolver(getattr(socket, name)))
     yield attempts
     attempts.check()
