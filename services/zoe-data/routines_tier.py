@@ -244,15 +244,48 @@ def _summary(day: dict) -> str:
     return f"That's your {name} done." if not left else f"That's your {name} done, except {_listed(left)}."
 
 
-#: session -> (member, the lines "I'm off" listed, when): a "got it" right after a list of several is asked about, never ticked
-_LISTED: dict = {}
+#: session -> (member, the day-line IDS a reply just listed, when): a "got it" right after a list of several is asked about, never
+#: ticked. IDS ONLY, never text; bounded and aged on every write and read (``_prune``); cleared by both erasers (``forget_member``).
+_LISTED: "dict[str, tuple]" = {}
+_MAX_LISTED = 256
 
 
-def _which_line(session_id: str, member: str) -> Optional[str]:
+def _prune() -> None:
+    now = rs._mono()
+    for k in [k for k, v in _LISTED.items() if now - v[2] > rs.WALK_S]:
+        _LISTED.pop(k, None)
+    while len(_LISTED) > _MAX_LISTED:
+        _LISTED.pop(next(iter(_LISTED)), None)
+
+
+def _remember_listed(session_id: str, member: str, lines: list[dict]) -> None:
+    _prune()
+    _LISTED.pop(session_id, None)
+    _LISTED[session_id] = (member, [s["id"] for s in lines], rs._mono())
+    _prune()
+
+
+def listed_entries() -> dict:
+    """The live entries (aged first): what a forget or a test may inspect."""
+    _prune()
+    return dict(_LISTED)
+
+
+def forget_member(member: str) -> None:
+    """The erasers' hook (``routines_store._forget_caches``, member AND entity forget): nothing of ``member``'s stays listed."""
+    for k in [k for k, v in _LISTED.items() if v[0] == member]:
+        _LISTED.pop(k, None)
+
+
+async def _which_line(session_id: str, member: str) -> Optional[str]:
+    _prune()
     listed = _LISTED.pop(session_id or "", None)
-    if listed is None or listed[0] != member or rs._mono() - listed[2] > rs.WALK_S:
+    if listed is None or listed[0] != member:
         return None
-    texts = listed[1]
+    lines = await rs.live_lines(member, listed[1])        # re-read NOW, by id, under the gate, shielded: never a cached word
+    if len(lines) < 2:
+        return None
+    texts = [s["text"] for s in lines]
     return "Which one: " + ", ".join(texts[:-1]) + " or " + texts[-1] + "?"
 
 
@@ -267,7 +300,7 @@ async def _bare(kind: str, session_id: str, member: str, verified: bool) -> Opti
         return f"OK, it's back on the list: {text}."
     ds_id = rs.named_step(session_id, member)
     if ds_id is None:
-        return _which_line(session_id, member) if kind == "done" else None   # no walk: a bare "yep" is not a tick
+        return (await _which_line(session_id, member)) if kind == "done" else None   # no walk: a bare "yep" is not a tick
     if kind == "stop":
         rs.close_walk(session_id)
         return "OK."
@@ -306,10 +339,13 @@ async def _next(parts: dict, session_id: str, member: str) -> Optional[str]:
     todo = _open(day["steps"])
     if not todo:
         return _summary(day)
+    if parts.get("left") and len(todo) > 1:
+        rs.close_walk(session_id)                          # a list of several names NONE: a "done" is asked about, never ticked
+        _remember_listed(session_id, member, todo)
+        return f"{len(todo)} things left: {_listed([s['text'] for s in todo])}."
     await rs.note_named(session_id, member, todo[0]["id"])
     if parts.get("left"):
-        n = len(todo)
-        return f"{'One thing' if n == 1 else f'{n} things'} left: {_listed([s['text'] for s in todo])}."
+        return f"One thing left: {todo[0]['text']}."
     return f"Next: {todo[0]['text']}."
 
 
@@ -341,7 +377,7 @@ async def _leaving(session_id: str, member: str) -> Optional[str]:
         await rs.note_named(session_id, member, lines[0]["id"])
     else:
         rs.close_walk(session_id)                          # several lines: no single target, so a "got it" ticks nothing ...
-        _LISTED[session_id] = (member, [s["text"] for s in lines], rs._mono())   # ... and Zoe asks which
+        _remember_listed(session_id, member, lines)       # ... and Zoe asks which (ids only)
     return f"Before you go: {_listed([s['text'] for s in lines])}."
 
 
@@ -427,7 +463,7 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         sh = shape(text)
         if sh is None or sh[0] != "done":
             listed = _LISTED.get(session_id or "")
-            if listed is not None and (sh is None or sh[0] != "leaving"):
+            if listed is not None and (sh is None or sh[0] not in ("leaving", "next")):
                 _LISTED.pop(session_id or "", None)        # the list is answered only by the very next turn
         if sh is None:
             rs.close_walk(session_id)                      # any other turn ends the walk: a later "yes" answers THAT turn

@@ -615,6 +615,7 @@ def _bounded(d: OrderedDict, key: str, value) -> None:
 async def note_named(session_id: str, member: str, day_step_id: str, *, dry: bool = False) -> None:
     """Zoe's reply just named ``day_step_id`` to ``member`` in ``session_id``: the ONLY step a bare "done" can now tick, for
     ``WALK_S``. Counts the prompt (``prompts`` + 1, ``event=prompted``)."""
+    _prune_walks()
     if not session_id or not member:
         return
     seen = _start()
@@ -638,6 +639,7 @@ async def note_named(session_id: str, member: str, day_step_id: str, *, dry: boo
 
 def named_step(session_id: str, member: str) -> Optional[str]:
     """The step a bare reply in this session may act on: named within ``WALK_S``, to this same member. Else None."""
+    _prune_walks()
     n = _NAMED.get(session_id or "")
     if n is None or n.member != member or _mono() - n.at > WALK_S:
         return None
@@ -734,6 +736,54 @@ async def act_tapped(actor: Optional[str], day_step_id: str, action: str, *, ver
     return await _apply(day_step_id, action, actor, via="tapped", verified=verified)
 
 
+def _prune_walks() -> None:
+    """Walk entries older than ``WALK_S`` go on every write and read (ids and a member id only, never text)."""
+    now = _mono()
+    for k in [k for k, v in _NAMED.items() if now - v.at > WALK_S]:
+        _NAMED.pop(k, None)
+    for k in [k for k, v in _LAST.items() if now - v[2] > WALK_S]:
+        _LAST.pop(k, None)
+
+
+def _forget_caches(member: str) -> None:
+    """Both erasers end here: the member's walk entries go, and the tier's listed lines (``routines_tier.forget_member``) - only if
+    the tier was ever imported (it loads only with its flags on; looked up in ``sys.modules``, so no import and no cycle)."""
+    import sys
+
+    for k in [k for k, v in _NAMED.items() if v.member == member]:
+        _NAMED.pop(k, None)
+    for k in [k for k, v in _LAST.items() if v[1] == member]:
+        _LAST.pop(k, None)
+    tier = sys.modules.get("routines_tier")
+    if tier is not None:
+        tier.forget_member(member)
+
+
+async def live_lines(viewer: Optional[str], day_step_ids) -> list[dict]:
+    """The day lines ``day_step_ids`` as they are NOW, for a reply about to SPEAK them: each re-read by id under its subject's gate
+    and transaction (``_guarded_write``, the same gate the card's ``day_copy`` takes; nothing is written) and dropped when gone,
+    not visible to ``viewer``, settled, on a closed day, or naming a forgotten entity. ``[{"id", "text"}]`` in the given order."""
+    seen = _start()
+    out = []
+    for ds_id in day_step_ids:
+        async with _db() as db:
+            rows = await _rows(db, "SELECT d.routine_id FROM routine_day_steps ds JOIN routine_days d ON d.id = ds.day_id WHERE ds.id = ?",
+                               (ds_id,))
+            r = await _load(db, rows[0][0]) if rows else None
+        if r is None or not can_see(r, viewer):
+            continue
+        try:
+            async with _guarded_write(seen, subject=r["user_id"], actors=(viewer,)) as w:
+                cur = await _rows(w.db, "SELECT ds.text, ds.state, d.closed_at FROM routine_day_steps ds JOIN routine_days d "
+                                        "ON d.id = ds.day_id WHERE ds.id = ?", (ds_id,))
+                keep = bool(cur) and cur[0][1] in ("pending", "snoozed") and cur[0][2] is None and not w.forgotten(cur[0][0])
+        except StoreError:
+            continue
+        if keep:
+            out.append({"id": ds_id, "text": cur[0][0]})
+    return out
+
+
 def reset_walks() -> None:
     _NAMED.clear()
     _LAST.clear()
@@ -770,6 +820,7 @@ async def forget_user(user_id: str) -> int:
             return 0
         logger.error("ROUTINE event=forget_failed error=%s", type(exc).__name__)
         raise
+    _forget_caches(uid)
     logger.info("ROUTINE event=forget_user routines=%d", n)
     return n
 
@@ -796,6 +847,7 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                     if rx.search(text or ""):
                         await db.execute("DELETE FROM routine_day_steps WHERE id = ?", (dsid,))
                         n += 1
+        _forget_caches(user_id)                          # ids only, but nothing listed / named for the member survives a forget
         logger.info("ROUTINE event=erase_entity removed=%d", n)
         return n
     except Exception as exc:  # noqa: BLE001

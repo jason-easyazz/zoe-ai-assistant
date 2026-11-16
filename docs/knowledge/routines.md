@@ -103,7 +103,11 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
   clock time, number or repeat is said, and the routine runs that day. Otherwise None: "remind me at 7 to take the drill" stays a
   7:00 reminder. Reply: "Added to tomorrow's morning routine: take the drill."
 - **I'm off**: with an undone take-with line today, "Before you go: take the drill." (and "got it" then ticks it). Several lines
-  are listed and none is named: the next "got it" gets "Which one: ...?" and ticks nothing.
+  are listed and none is named: the next "got it" gets "Which one: ...?" and ticks nothing. "What's left?" with several lines
+  does the same. The tier's list cache (`routines_tier._LISTED`) and the store's walk tables (`_NAMED`, `_LAST`) hold ids and a
+  member id only, never text; they age out after 120 s on every write and read, and both erasers clear the member's entries
+  (`routines_store._forget_caches`, safe when the tier was never imported). Before a listed line is spoken it is re-read by id
+  under the gate and the forgotten shield (`routines_store.live_lines`): an erased or shielded line is never said.
 - **Safety**: `medical_safety.detect` runs before anything is claimed; when it fires the tier steps aside and the floor answers on
   the brain lane ("I took them twice by accident" is never a tick). The child safety floor is consulted the same way when it is
   present. A medicine line needs `speaker_verified is True` on voice (chat is the member's own session); otherwise Zoe says so and

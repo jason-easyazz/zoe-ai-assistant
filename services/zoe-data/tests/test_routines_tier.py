@@ -185,7 +185,10 @@ def test_skip_later_undo_and_the_summary(store, on):
     assert say("start my morning routine") == "Morning: 3 things. First, feed the cat."
     assert say("skip") == "Skipped. Next: bins."
     assert say("later") == "OK, I'll keep it on the list. Next: water."
-    assert say("what's left?") == "2 things left: water and bins."
+    assert say("what's left?") == "2 things left: water and bins."           # a list of several names NONE ...
+    assert say("done") == "Which one: water or bins?"                         # ... so "done" is asked about, never ticked
+    assert _states(store) == {"feed the cat": "skipped", "bins": "snoozed", "water": "pending"}
+    assert say("what's next?") == "Next: water."
     assert say("done") == "Ticked. Next: bins."
     assert say("untick that") == "OK, it's back on the list: water."
     assert say("done") == "Ticked. Next: bins."
@@ -247,6 +250,60 @@ def test_im_off_with_several_lines_names_none_and_a_got_it_ticks_nothing(store, 
     assert say("got it") == "Which one: take the drill or take the lunchbox?"     # ... is not what "got it" ticks
     assert say("got it") is None
     assert all(st == "pending" for st in _states(store).values())
+
+
+def _two_take_with_lines(monkeypatch):
+    _morning()
+    say("remind me to take the drill to work tomorrow")
+    say("remind me to take Quinn's book to work tomorrow")
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=1))
+    assert say("I'm off") == "Before you go: take the drill and take Quinn's book."
+    entry = rt.listed_entries()["s1"]
+    assert entry[0] == ALEX and all(":" in i for i in entry[1])                # ids only: no word of a line is cached
+    return entry
+
+
+def test_an_entity_forget_clears_the_list_and_a_surviving_entry_never_speaks_the_erased_line(store, on, monkeypatch):
+    import re
+
+    import memory_forgotten
+    entry = _two_take_with_lines(monkeypatch)
+    run(memory_forgotten.add(ALEX, "Quinn"))
+    run(rs.erase_entity(ALEX, re.compile(r"\bquinn\b", re.I), strict=True))
+    assert "s1" not in rt.listed_entries()                                     # the eraser's hook cleared it
+    assert say("got it") is None
+    rt._LISTED["s1"] = (entry[0], entry[1], rs._mono())                         # a cache entry that SURVIVED somehow
+    reply = say("got it")
+    assert reply is None or "Quinn" not in reply                               # re-read by id: the erased line is never spoken
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def test_a_shielded_line_is_never_spoken_from_the_list(store, on, monkeypatch):
+    import memory_forgotten
+    _two_take_with_lines(monkeypatch)
+    run(memory_forgotten.add(ALEX, "Quinn"))                                   # forgotten, not yet erased (the cascade runs next)
+    reply = say("got it")
+    assert reply is None or "Quinn" not in reply
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def test_a_member_forget_clears_everything_of_theirs_and_entries_age_out_alone(store, on, monkeypatch):
+    _two_take_with_lines(monkeypatch)
+    assert say("what's next?", session="s2") == "Next: feed the cat."
+    run(rs.forget_user(ALEX))
+    assert not [v for v in rt.listed_entries().values() if v[0] == ALEX]
+    assert not [v for v in rs._NAMED.values() if v.member == ALEX] and not [v for v in rs._LAST.values() if v[1] == ALEX]
+    rt._LISTED["s9"] = (SAM, ["x:2026-11-13:y"], rs._mono())
+    t0 = rs._mono()
+    monkeypatch.setattr(rs, "_mono", lambda: t0 + rs.WALK_S + 1)
+    assert rt.listed_entries() == {}                                           # past its time: gone with no other turn
+
+
+def test_the_erasers_are_safe_when_the_tier_was_never_loaded(store, monkeypatch):
+    import sys
+    monkeypatch.delitem(sys.modules, "routines_tier")
+    _morning()
+    assert run(rs.forget_user(ALEX)) == 1
 
 
 def test_another_speaker_never_ticks_the_first_speakers_step(store, on):

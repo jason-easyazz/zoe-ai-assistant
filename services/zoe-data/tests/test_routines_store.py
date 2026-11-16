@@ -498,11 +498,13 @@ def test_a_said_tick_ticks_only_the_step_just_named_for_that_person_in_that_sess
     monkeypatch.setattr(rs, "_mono", lambda: t0 + rs.WALK_S + 1)                   # the walk went stale
     with pytest.raises(rs.StoreError):
         run(rs.act_said("s1", ALEX, "done", verified=True))
+    assert not rs._NAMED                                                           # a stale walk is gone for good (aged on read)
     monkeypatch.setattr(rs, "_mono", lambda: t0 + 5)
+    run(rs.note_named("s1", ALEX, ds))                                             # named again
     out = run(rs.act_said("s1", ALEX, "done", verified=False))
     assert out["state"] == "done"
     assert store.q("SELECT state, known_by, actor_user_id, verified, prompts FROM routine_day_steps WHERE id = ?", (ds,)) == [
-        ("done", "said", ALEX, 0, 1)]
+        ("done", "said", ALEX, 0, 2)]
     assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE state = 'done'") == [(1,)]   # exactly one line changed
     with pytest.raises(rs.StoreError):                                             # the walk closed with the tick
         run(rs.act_said("s1", ALEX, "done", verified=False))
