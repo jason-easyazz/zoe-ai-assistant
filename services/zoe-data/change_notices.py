@@ -648,17 +648,24 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
     if raised and prefs.get("raised") != "list":
         lines.append((f"{_cap(_count(len(raised), 'new change'))} {'is' if len(raised) == 1 else 'are'} open and not "
                       f"merged yet{tail}.", [i["key"] for i in raised]))
-    if uncertain:
-        refs = ", ".join(f'"{subject(i.get("title", ""))}"{_ref(i, True)}' if i.get("number") else i["key"]
-                         for i in uncertain)
-        lines.append((f"This may not have reached you earlier: {refs}.", [i["key"] for i in uncertain]))
+    # An uncertain notice may never have been seen: one line each, carrying only its own key, and MUST-KEEP (held for
+    # the follow-up, never counted unseen), so a clipped or overflowing line can never mark another notice delivered.
+    def _was(i: dict) -> str:
+        return f'"{subject(i.get("title", ""))}"{_ref(i, True)}' if i.get("number") else i["key"]
+
+    if len(uncertain) == 1:
+        lines.append((f"This may not have reached you earlier: {_was(uncertain[0])}.", [uncertain[0]["key"]]))
+    elif uncertain:
+        lines.append(("These may not have reached you earlier:", []))
+        lines += [(f"• {_was(i)}", [i["key"]]) for i in uncertain]
     bad = [i for i in live if _is_bad(i)]
     good = [i for i in live if i["kind"] == "live" and not _is_bad(i)]
     steps = [i for i in bad + good if i.get("owner_step")]
-    # MUST-KEEP: a step, bad news (a revert, a stuck deploy) and a decision land only when their own line is shown,
-    # trailer or not; on overflow they are held for the follow-up, never inside "...and N more". Only ordinary good
-    # news and housekeeping may be counted without being shown.
-    hold = {i["key"] for i in steps} | {i["key"] for i in bad} | {i["key"] for i in live if i["category"] == "decision"}
+    # MUST-KEEP: a step, bad news (a revert, a stuck deploy), a decision and an uncertain mention land only when
+    # their own line is shown, trailer or not; on overflow they are held for the follow-up, never inside "...and N
+    # more". Only ordinary good news and housekeeping may be counted without being shown.
+    hold = ({i["key"] for i in steps} | {i["key"] for i in bad} | {i["key"] for i in uncertain}
+            | {i["key"] for i in live if i["category"] == "decision"})
 
     def own(i: dict) -> list[str]:  # the key rides on the item's own line unless its step line carries it
         return [] if i["key"] in hold else [i["key"]]
@@ -1165,8 +1172,13 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
     st["opener"][r.user_id] = idx
     outcomes = [await _send(c, r, m) for m in msgs]
     landed = {k for m, o in zip(msgs, outcomes) if o != "oversize" for k in m.keys}
-    if any(i["key"] not in landed for i in items):  # a step that did not fit: its notice follows next tick
-        audit("digest_follow_up", member=r.user_id, keys=[i["key"] for i in items if i["key"] not in landed])
+    for u in uncertain:  # not shown this time: it stays an "uncertain" mention for the next digest, never a resend
+        d = ds[f"{r.user_id}|{u['key']}"]
+        if u["key"] not in landed and d["status"] == "queued":
+            d["status"] = "uncertain"
+    left = [i["key"] for i in items + uncertain if i["key"] not in landed]
+    if left:  # a step or an uncertain mention that did not fit: it follows next tick
+        audit("digest_follow_up", member=r.user_id, keys=left)
     elif all(o != "retry" for o in outcomes):
         st["digest_sent"][f"{r.user_id}|{lane}"] = period
 
