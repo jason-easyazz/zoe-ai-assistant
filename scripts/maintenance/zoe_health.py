@@ -105,25 +105,44 @@ def read_planned_window(now: float, path: Optional[Path] = None) -> tuple[Option
     whose ``until`` passed less than OVERRUN_RECALL_S ago (the tooling never closed it, or the window ran long). A marker
     that is unreadable, has any key but ``until`` + ``kind``, an unknown kind, a non-number ``until`` or an ``until``
     more than WINDOW_MAX_S ahead is IGNORED (note says why, for the log): it silences nothing."""
-    p = path or MAINT_MARKER
     try:
-        raw = json.loads(p.read_text())
+        return _read_planned_window(now, path or MAINT_MARKER)
+    except Exception:  # noqa: BLE001 - whatever the file holds, the health check must still run: a marker never crashes it
+        return None, None, "planned-window marker ignored: malformed"
+
+
+MARKER_MAX_BYTES = 4096   # the writer's marker is ~40 bytes; anything bigger is not ours and is not parsed
+
+
+def _read_planned_window(now: float, p: Path) -> tuple[Optional[dict], Optional[dict], str]:
+    try:
+        with p.open("rb") as fh:
+            data = fh.read(MARKER_MAX_BYTES + 1)
     except FileNotFoundError:
         return None, None, ""
-    except (OSError, ValueError):
+    except OSError:               # a directory, no permission, ...
         return None, None, "planned-window marker ignored: unreadable"
-    if not isinstance(raw, dict) or set(raw) != {"until", "kind"} or raw["kind"] not in WINDOW_KINDS:
+    if len(data) > MARKER_MAX_BYTES:
+        return None, None, "planned-window marker ignored: malformed"
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (ValueError, RecursionError):   # not UTF-8, not JSON, or nested too deep
+        return None, None, "planned-window marker ignored: unreadable"
+    if not isinstance(raw, dict) or set(raw) != {"until", "kind"}:
+        return None, None, "planned-window marker ignored: malformed"
+    kind = raw["kind"]
+    if not isinstance(kind, str) or kind not in WINDOW_KINDS:
         return None, None, "planned-window marker ignored: malformed"
     until = raw["until"]
     if isinstance(until, bool) or not isinstance(until, (int, float)) or until != until:
         return None, None, "planned-window marker ignored: malformed"
     if until > now + WINDOW_MAX_S:
         return None, None, "planned-window marker ignored: too far ahead"
-    w = {"kind": raw["kind"], "until": float(until)}
+    w = {"kind": kind, "until": float(until)}
     if until > now:
-        return w, None, f"planned {raw['kind']} window open: {', '.join(WINDOW_TAKES)} probe skipped"
+        return w, None, f"planned {kind} window open: {', '.join(WINDOW_TAKES)} probe skipped"
     if now - until <= OVERRUN_RECALL_S:
-        return None, w, f"planned {raw['kind']} window ended {int(now - until)} s ago (marker not closed)"
+        return None, w, f"planned {kind} window ended {int(now - until)} s ago (marker not closed)"
     return None, None, "planned-window marker ignored: expired"
 
 
@@ -365,6 +384,16 @@ def _flap_line(w: dict, incidents: list, now: float) -> str:
             f"({w['tech']}: keeps dropping out)")
 
 
+def _several_extra(c: Check, w: dict, now: float) -> str:
+    """What one bullet of the several-at-once message adds to the headline: a planned window that overran says so and
+    that someone technical may need to start it again; otherwise any guidance that is not the generic "nothing to do"."""
+    if c.overrun:
+        kind = WINDOW_KINDS.get(c.overrun["kind"], "maintenance")
+        return (f" The planned {kind} window ended {say_duration(now - c.overrun['until'])} ago, "
+                f"but {w['noun']} has not come back. {TODO_OVERRUN}")
+    return "" if w["todo"] in (TODO_WAIT, TODO_SELF) else f" {w['todo']}"
+
+
 def _compose(downs: list, ups: list, others: list, now: float) -> list[str]:
     """ONE message's paragraphs for a run: the new problems (several at once become one paragraph), then what came
     back, then the dropping-out summaries."""
@@ -374,12 +403,12 @@ def _compose(downs: list, ups: list, others: list, now: float) -> list[str]:
     elif downs:
         first = min(since for _c, _w, since in downs)
         plain = (TODO_WAIT, TODO_SELF)
-        rows = [f"- {w['headline']} {w['means']}" + ("" if w["todo"] in plain else f" {w['todo']}")
-                for _c, w, _s in downs]
-        rest = " about the rest" if any(w["todo"] not in plain for _c, w, _s in downs) else ""
+        rows = [f"- {w['headline']} {w['means']}" + _several_extra(c, w, now) for c, w, _s in downs]
+        rest = " about the rest" if any(c.overrun or w["todo"] not in plain for c, w, _s in downs) else ""
         out.append("\n".join(["A few things went wrong at once:"] + rows + [
             f"It started about {say_duration(now - first)} ago. Nothing for you to do yet{rest}; "
-            f"I'll tell you as each one comes back. ({'; '.join(w['code'] for _c, w, _s in downs)})"]))
+            f"I'll tell you as each one comes back. "
+            f"({'; '.join(w['code'] + (', window overran' if c.overrun else '') for c, w, _s in downs)})"]))
     if len(ups) == 1:
         w, since = ups[0]
         tail = "" if since is None else (f" It was out for {say_duration(now - since)}." if w["outage"]
@@ -407,16 +436,16 @@ def transitions(checks: list[Check], state: dict, now: Optional[float] = None) -
         s = dict(new.get(c.name, {}))
         s.setdefault("fails", 0)
         s.setdefault("alerted", False)
-        incidents = [list(i) for i in s.get("incidents", []) if not i[1] or now - i[0] <= FLAP_WINDOW_S]
+        incidents = [list(i) for i in s.get("incidents", []) if i[1] is None or now - i[1] <= FLAP_WINDOW_S]   # kept until 6 h after the RECOVERY
         if c.skipped:
             if s["fails"] < FAILS_TO_ALERT:
                 s.update(fails=0, since=None)
         elif c.ok:
             for i in incidents:
-                i[1] = i[1] or now
+                i[1] = now if i[1] is None else i[1]
             if s["alerted"]:
                 ups.append((words(c), s.get("since")))
-            if s.get("flap") and not any(now - b < FLAP_WINDOW_S for b, _e in incidents):
+            if s.get("flap") and all(e is not None and now - e >= FLAP_WINDOW_S for _b, e in incidents):   # steady = 6 h since the last recovery
                 w = words(c)
                 others.append(f"{_cap(w['noun'])} has stayed steady for {say_duration(FLAP_WINDOW_S)} now, so I "
                               f"think the dropouts are over. It dropped out {s.get('flap_n', 0)} times in all.")
@@ -439,9 +468,10 @@ def transitions(checks: list[Check], state: dict, now: Optional[float] = None) -
                                       f"longer than the earlier ones. {w['means']} {w['todo']} ({w['code']})")
                         s["alerted"] = True
                 elif not s["alerted"]:
-                    if len(incidents) >= FLAP_COUNT:
-                        others.append(_flap_line(words(c), incidents, now))
-                        s.update(flap=True, flap_n=len(incidents))
+                    recent = [i for i in incidents if now - i[0] <= FLAP_WINDOW_S]   # drops BEGUN in the window
+                    if len(recent) >= FLAP_COUNT:
+                        others.append(_flap_line(words(c), recent, now))
+                        s.update(flap=True, flap_n=len(recent))
                     else:
                         downs.append((c, words(c), s["since"]))
                         s["alerted"] = True

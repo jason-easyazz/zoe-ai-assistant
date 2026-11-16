@@ -316,6 +316,60 @@ def test_a_failure_counted_before_the_window_starts_afresh():
     assert lines == ["My voice is back. It was out for 15 minutes."]
 
 
+def _hostile(tmp_path, kind):
+    p = tmp_path / "OPEN"
+    if kind == "dir":
+        p.mkdir()
+    elif kind == "perm":
+        p.write_text(json.dumps({"until": NOW + 900, "kind": "test"}))
+        p.chmod(0)
+    elif kind == "bytes":
+        p.write_bytes(b'{"until": 1800000900, "kind": "te\xff\xfe"}')
+    elif kind == "deep":
+        p.write_text("[" * 100000 + "]" * 100000)
+    elif kind == "big":
+        p.write_text('{"until": 1800000900, "kind": "test", "pad": "' + "x" * 100000 + '"}')
+    else:
+        p.write_text(kind)
+    return p
+
+
+HOSTILE = ['{"until":1800000900,"kind":[]}', '{"until":1800000900,"kind":{"a":{"b":[1]}}}', '{"until":1800000900,"kind":null}',
+           '{"until":1800000900,"kind":3}', '{"until":1800000900,"kind":true}', '[]', '[[[[]]]]', 'null', '7', '"test"',
+           '{"until":[],"kind":"test"}', '{"until":{"x":1},"kind":"test"}', '{"until":null,"kind":"test"}',
+           '{"until":"1800000900","kind":"test"}', '{"until":1e999,"kind":"test"}', '{"until":-1e999,"kind":"test"}',
+           '{"until":1' + "0" * 5000 + ',"kind":"test"}', '{"until":-1' + "0" * 400 + ',"kind":"test"}',
+           '{"until":1800000900,"kind":"test","kind":[]}', '', '\x00\x00', 'dir', 'perm', 'bytes', 'deep', 'big']
+
+
+@pytest.mark.parametrize("body", HOSTILE, ids=range(len(HOSTILE)))
+def test_a_hostile_marker_never_stops_the_check_and_silences_nothing(tmp_path, monkeypatch, body):
+    p = _hostile(tmp_path, body)
+    monkeypatch.setattr(health, "MAINT_MARKER", p)
+    try:
+        planned = health.read_planned_window(NOW)           # no path given: the real call site's route
+        assert planned[0] is None and planned[1] is None
+        st: dict = {}
+        sent = []
+        for i in range(2):
+            checks = health.probe(http=lambda port: (False, "URLError"), run=lambda a, timeout=5.0: (0, ""),
+                                  night_open=False, planned=planned)
+            speech = [c for c in checks if c.name.startswith("kokoro-tts")]
+            assert speech and not speech[0].skipped and not speech[0].ok and len(checks) >= len(health.SPINE)
+            lines, st = health.transitions(checks, st, now=NOW + 300 * i)
+            sent += lines
+        assert any("I've lost my voice." in ln for ln in sent)
+    finally:
+        if p.exists() and not p.is_dir():
+            p.chmod(0o600)
+
+
+def test_probe_reads_a_hostile_marker_itself_and_still_probes(tmp_path, monkeypatch):
+    monkeypatch.setattr(health, "MAINT_MARKER", _marker(tmp_path, '{"until":1800000900,"kind":[]}'))
+    checks = health.probe(http=lambda port: (False, "URLError"), run=lambda a, timeout=5.0: (0, ""), night_open=False)
+    assert [c for c in checks if c.name.startswith("kokoro-tts")][0].ok is False
+
+
 def test_a_window_that_overran_says_so_in_the_first_alert(tmp_path):
     marker = _marker(tmp_path, {"until": NOW, "kind": "test"})
     st: dict = {}
@@ -333,6 +387,67 @@ def test_a_window_that_overran_says_so_in_the_first_alert(tmp_path):
         "I've lost my voice. I can still hear you and answer on screen, but I can't speak. The planned test window "
         "ended 10 minutes ago, but my voice has not come back. It may have been left switched off; if it isn't back "
         "soon, someone technical needs to start it again. (kokoro-tts: no-answer, window overran)"]
+
+
+def test_several_failures_keep_each_ones_own_guidance_including_an_overrun():
+    over = C("kokoro-tts :10201", False, "x", code="no-answer", overrun={"kind": "test", "until": NOW})
+    db = C("postgres", False, "x", code="not-ready")
+    _, st = health.transitions([over, db], {}, now=NOW + 300)
+    lines, _ = health.transitions([over, db], st, now=NOW + 600)
+    assert lines == [
+        "A few things went wrong at once:\n"
+        "- I've lost my voice. I can still hear you and answer on screen, but I can't speak. The planned test window "
+        "ended 10 minutes ago, but my voice has not come back. It may have been left switched off; if it isn't back "
+        "soon, someone technical needs to start it again.\n"
+        "- I can't reach my memory. I can't remember or look anything up: lists, reminders and what I know are out "
+        "of reach.\n"
+        "It started about 5 minutes ago. Nothing for you to do yet about the rest; I'll tell you as each one comes "
+        "back. (kokoro-tts: no-answer, window overran; database: not-ready)"]
+
+
+def _steady_run(outage_h, extra_h):
+    """One long outage then recovery; returns (state after recovery, sent lines, t of recovery)."""
+    k = "kokoro-tts :10201"
+    down = C(k, False, "x", code="no-answer")
+    st: dict = {}
+    sent: list = []
+    t = 0.0
+    # two earlier drops make it "keeps dropping out"
+    for b, m in ((0, 10), (3600, 10), (7200, 10)):
+        for tt in range(0, m * 60 + 300, 300):
+            lines, st = health.transitions([down if tt < m * 60 else C(k, True, "x")], st, now=b + tt)
+            sent += lines
+    assert st[k]["flap"] is True
+    start = 4 * H
+    t = start
+    while t < start + outage_h * H:
+        lines, st = health.transitions([down], st, now=t)
+        sent += lines
+        t += 300
+    rec = t
+    lines, st = health.transitions([C(k, True, "x")], st, now=rec)
+    sent += lines
+    return st, sent, rec
+
+
+def test_steady_is_counted_from_the_last_recovery_not_the_outage_start():
+    k = "kokoro-tts :10201"
+    st, sent, rec = _steady_run(6, 0)
+    assert sent[-1].startswith("My voice is back. It was out for 6 hours.")
+    assert not any("the dropouts are over" in ln for ln in sent), "a 6-hour outage that just recovered is not steady"
+    assert st[k]["flap"] is True and st[k]["incidents"][-1][1] == rec, "the recovery time survives the pruning"
+    for dt in (60, 3 * H, 6 * H - 300):                      # still dropping-out mode: suppression is not reset early
+        lines, st = health.transitions([C(k, True, "x")], st, now=rec + dt)
+        assert lines == [] and st[k]["flap"] is True
+    lines, st = health.transitions([C(k, True, "x")], st, now=rec + 6 * H)
+    assert lines == ["My voice has stayed steady for 6 hours now, so I think the dropouts are over. It dropped out 4 "
+                     "times in all."]
+    assert st[k]["flap"] is False
+    # a drop right after a long one is still suppressed (not reset early): a new short drop stays in the summary
+    st2, _s, rec2 = _steady_run(6, 0)
+    _, st2 = health.transitions([C(k, False, "x", code="no-answer")], st2, now=rec2 + 300)
+    lines, _ = health.transitions([C(k, False, "x", code="no-answer")], st2, now=rec2 + 600)
+    assert lines == []
 
 
 # ── the writer ───────────────────────────────────────────────────────────────────────────────────────────────────
