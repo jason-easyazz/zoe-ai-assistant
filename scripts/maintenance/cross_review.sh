@@ -87,6 +87,15 @@ else REAPER=""; fi
 # (after sweeping orphans) polly is skipped and the direct codex fallback runs instead.
 MAX_APP_SERVERS="${CROSS_REVIEW_MAX_APP_SERVERS:-6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
+# P0-2 (docs/architecture/p0-deroot.md section 8, B4): exec into the omnigent container through the root helper
+# once it is installed AND sudo allows it, else `docker exec` exactly as before. The helper takes the docker-exec
+# argv minus `docker exec`, so only this prefix changes (pinned by tests/unit/test_omnigent_exec_routing.py).
+omnigent_exec_prefix() {
+  local helper="${OMNIGENT_EXEC_HELPER:-/usr/local/libexec/zoe-priv/zoe-omnigent-exec}"
+  if [ -x "$helper" ] && sudo -n -l "$helper" >/dev/null 2>&1; then OMNI_EXEC=(sudo -n "$helper")
+  else OMNI_EXEC=(docker exec); fi
+}
+omnigent_exec_prefix
 REPO_SLUG="${CROSS_REVIEW_REPO:-jason-easyazz/zoe-ai-assistant}"
 BACKENDS="${CROSS_REVIEW_BACKENDS:-codex pi}"
 # Canonicalise to ONE-space-separated words. The validation and dispatch loops below word-split
@@ -113,7 +122,7 @@ KILL_AFTER_S=10         # timeout -k: escalate to KILL when TERM is ignored
 MIN_REPORT_BYTES=40
 # Polly's own bounded phases (lock wait, create, register, kick, report fetch, teardown,
 # kill escalation) added on top of its poll window; mirrors the OVERHEAD_S sum in
-# cross_review_polly.sh (570 s) with a little slack. Polly's worst-case wall is
+# cross_review_polly.sh (596 s since the brief is staged on stdin) with a little slack. Polly's worst-case wall is
 # poll window + this, so the window is clamped to what the caller's timeout leaves.
 POLLY_OVERHEAD_S=600
 # Worst-case teardown after polly: cwd sweep (30 s + kill-after) + app-server sweep (90 s +
@@ -305,7 +314,7 @@ in_container() {  # <override-bin-or-empty> <binary> <host-budget-s> -> sets CMD
   local inner=$(( ${3:-0} - IN_CONTAINER_MARGIN_S ))
   [ "$inner" -ge 1 ] || inner=1
   if [ -n "$1" ]; then CMD=("$1")
-  else CONTAINER_RUN=1; CMD=(docker exec -i -w "$REVIEW_DIR" "$CONTAINER" timeout -k 5 "$inner" "$2"); fi
+  else CONTAINER_RUN=1; CMD=("${OMNI_EXEC[@]}" -i -w "$REVIEW_DIR" "$CONTAINER" timeout -k 5 "$inner" "$2"); fi
 }
 
 # Kill every process in the container whose cwd is the review dir (or under it): codex, its
@@ -319,7 +328,7 @@ kill_review_dir_procs() {
   # backend must not disable the sweep for the other, real, one.
   [ -n "$CONTAINER_RUN" ] || return 0
   # shellcheck disable=SC2016  # runs INSIDE the container: $d/$p/$$ must reach it unexpanded
-  timeout -k "$KILL_AFTER_S" 30 docker exec "$CONTAINER" sh -c \
+  timeout -k "$KILL_AFTER_S" 30 "${OMNI_EXEC[@]}" "$CONTAINER" sh -c \
     'd="$1"; for p in /proc/[0-9]*; do pid=${p#/proc/}; [ "$pid" = "$$" ] && continue
        c=$(readlink "$p/cwd" 2>/dev/null)
        case "$c" in "$d"|"$d"/*) kill -KILL "$pid" 2>/dev/null ;; esac

@@ -1050,6 +1050,9 @@ def _wrapper_budget():
         "stop-http": _sh_const("STOP_HTTP_TIMEOUT_S"),
         # `timeout -k` escalation, once per timeout-wrapped phase (kick, cleanup).
         "kill-after": 2 * _sh_const("TIMEOUT_KILL_AFTER_S"),
+        # P0-2: the brief is staged on stdin (one bounded exec) and removed again in cleanup (another), each with
+        # its own timeout -k escalation.
+        "brief": 2 * (_sh_const("BRIEF_MAX_S") + _sh_const("TIMEOUT_KILL_AFTER_S")),
     }
     return sum(phases.values()), _sh_const("CALLER_TIMEOUT_S"), phases
 
@@ -1092,7 +1095,7 @@ def test_wrapper_worst_case_wall_fits_inside_the_caller_timeout():
     assert phases["report-budget"] + phases["report-http"] == 150
     # Same rule for the teardown: budget AND request, or the sum under-counts.
     assert phases["stop-budget"] + phases["stop-http"] == 30
-    assert (worst, caller - worst) == (2370, 130), (
+    assert (worst, caller - worst) == (2366, 134), (
         f"shipped budget moved: {worst}s worst case, {caller - worst}s margin ({phases})"
     )
 
