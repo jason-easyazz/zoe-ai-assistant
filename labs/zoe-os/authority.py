@@ -45,10 +45,10 @@ from shadow_daemon import (ACTS, ADAPTERS, SHADOW_BRAIN, read_roster, recorded_p
                            write_creds, write_identity)
 from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person  # noqa: E402
-from zoe_os.events import Kind  # noqa: E402
+from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
-from zoe_os.spine import Refused  # noqa: E402
+from zoe_os.spine import KERNEL, Refused  # noqa: E402
 
 SCHEMA = 1          # the authority's own record shape (the rebuild rule below); bumped when it changes meaning
 _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0"
@@ -89,11 +89,37 @@ class DurableLists(Lists):
     never carries the person's whole list, so an add costs the same on the hundredth item as on the first. Both are versioned
     (``provenance: 1``, every row with its ``asked``): a forget then scrubs only the rows it reaches (``receipts.scrub_snapshot``) and
     the surviving action stays undoable; an unmarked snapshot would be treated as opaque and lose its undo on ANY forget of the
-    person's."""
+    person's. A removal's snapshot is also marked ``reverses``: forgetting the removal forgets the adds it reversed
+    (``Spine._closure``), so a rebuild can never replay them.
+
+    ``owner_of`` maps every list request (``asked``) and list receipt seq to the member whose row it is, so a forget finds the rows
+    it reached WHOEVER owns them (``affected``), in time proportional to the seqs it erased, not to all rows."""
 
     def __init__(self, spine) -> None:
         super().__init__()
         self.spine = spine
+        self.owner_of: dict[int, str] = {}
+
+    def note(self, seq, person) -> None:
+        if type(seq) is int and isinstance(person, str):
+            self.owner_of[seq] = person
+
+    def affected(self, seqs) -> set:
+        """The members whose rows a forget of ``seqs`` may have reached (their index entries go with it)."""
+        return {self.owner_of.pop(s) for s in seqs if s in self.owner_of}
+
+    def _forgotten(self, person, item) -> bool:
+        """The backstop, scoped to the row's OWNER: an item that names an entity ``person`` asked to forget never comes back as their
+        row. Not the global word shield: that would also drop ANOTHER member's own, still-live row of the same words, and make the
+        rebuilt rows differ from the running ones. Rows come only from live receipts, and ``Spine._closure`` erases what a
+        forgotten reversal reversed, so the ordinary replay cannot resurrect a forgotten add; this guards the entity scope."""
+        return isinstance(item, str) and self.spine._names_forgotten(
+            Event(Kind.ACTION_RECEIPT, KERNEL, subject=person, payload={"item": item}))
+
+    def add(self, person, args):
+        self.note(args.get("asked"), person)
+        if not self._forgotten(person, args.get("item")):
+            super().add(person, args)
 
     @staticmethod
     def key(row_or_args) -> tuple:
@@ -109,10 +135,11 @@ class DurableLists(Lists):
             rows.remove(mine[-1])
 
     def removed_snapshot(self, person, args):               # list.remove: the rows it is about to take
-        return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
+        return {"provenance": 1, "reverses": True,
+                "rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
 
     def put_back_removed(self, person, args, before):
-        self.rows.setdefault(person, []).extend(dict(r) for r in before["rows"])
+        self.rows.setdefault(person, []).extend(dict(r) for r in before["rows"] if not self._forgotten(person, r.get("item")))
 
     def remove(self, person, args):
         rows = self.rows.get(person, [])
@@ -162,6 +189,7 @@ class DurableLists(Lists):
         for seq, subject, raw in db.execute(sql, args).fetchall():
             payload = json.loads(raw) if raw else {}
             live[seq] = payload
+            self.note(seq, subject)
             if payload.get("action") not in ("list.add", "list.remove", "undo") or subject is None:
                 continue
             original = live.get(payload.get("undoes")) if payload.get("action") == "undo" else None
@@ -181,8 +209,14 @@ class DurableKeeper(Keeper):
 
     def on_event(self, ev, ctx) -> None:
         super().on_event(ev, ctx)
-        if ev.kind is Kind.FORGET and ev.payload.get("subject"):
-            self.lists.rebuild(ev.payload["subject"])
+        if ev.kind is Kind.FORGET:
+            # every member whose rows came from what this notice erased (a forget of B can erase A's row: A's utterance named B),
+            # plus the subject; each is rebuilt from what the log still holds
+            owners = self.lists.affected(ev.payload.get("seqs") or ())
+            if ev.payload.get("subject"):
+                owners.add(ev.payload["subject"])
+            for person in sorted(owners):
+                self.lists.rebuild(person)
 
 
 class AuthorityServer(KernelServer):
@@ -234,6 +268,13 @@ class AuthorityServer(KernelServer):
             self.last_write_ok = False
             raise
         self.last_write_ok = out.get("outcome") == "verified"
+        if a.get("action") in ("list.add", "list.remove"):
+            self.lists.note(out.get("seq"), a["on_behalf_of"])
+        return out
+
+    def _op_undo(self, conn, a: dict) -> dict:
+        out = super()._op_undo(conn, a)
+        self.lists.note(out.get("seq"), a["person"])
         return out
 
     def _op_health(self, conn, a: dict) -> dict:
@@ -280,6 +321,7 @@ class AuthorityServer(KernelServer):
             return {"erased": 0, "receipt_seq": None, "verified": left == 0, "known": False}
         count = self.kernel.spine.forget(subject, actor=subject).count
         notice = self.kernel.spine.last_seq                                  # the FORGET event: the erase's durable receipt
+        self.kernel.pump()                                                   # every member's rows the erase reached, now
         self.kernel.grants.revoke(subject, SHADOW_BRAIN["skill"])
         self.lists.rebuild(subject)
         for store in self.others:                                            # the lab reminder / alarm stores, in memory
@@ -301,6 +343,7 @@ class AuthorityServer(KernelServer):
             if seqs:
                 erased = self.kernel.spine.forget(subject, actor=subject, seqs=seqs).count
                 notice = self.kernel.spine.last_seq
+                self.kernel.pump()                                           # every member's rows the erase reached, now
             self.lists.rebuild(subject)
         left = sum(1 for r in self.lists.rows.get(subject, []) if digest(r["item"]) == want) + len(self._receipts_for(subject, want))
         return {"erased": erased, "receipt_seq": notice, "verified": left == 0}

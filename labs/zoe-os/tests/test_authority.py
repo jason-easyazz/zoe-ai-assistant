@@ -473,3 +473,142 @@ def test_a_roster_symlink_to_nothing_is_a_missing_roster_and_refuses_the_start(s
     p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0])],
                        capture_output=True, text=True, timeout=30, env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
     assert p.returncode != 0 and "people.json is missing" in p.stderr
+
+
+# ---- a forget reaches every row derived from what it erased, and a rebuild never brings forgotten words back -------------------------
+def _say_add(d: Daemon, person: str, item: str, *, text: str = "synthetic list add", mentions=()) -> dict:
+    ASKED_FOR.setdefault(str(d.state), set()).add((person, item))
+    said = d.voice.publish("utterance", subject=person, payload={"text": text}, mentions=list(mentions))
+    out = d.brain.call("act", action="list.add", on_behalf_of=person,
+                       args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
+    return {**out, "said": said.seq}
+
+
+def _gone_everywhere(d: Daemon, state, marker: str) -> bool:
+    return digest(marker) not in d.digests() and _members_bytes(state[0], marker.encode()) == []
+
+
+def test_a_forget_of_b_removes_as_row_that_derives_from_an_utterance_naming_b_and_keeps_as_others(state):
+    marker, kept = "synthetic marker kumquat-b", "synthetic marker damson-a"
+    d = start(state)
+    _say_add(d, A, marker, text="synthetic words that name the other member", mentions=[B])     # A's row, from words naming B
+    _say_add(d, A, kept)                                                                        # A's row, nothing to do with B
+    assert sorted(d.digests()) == sorted([digest(marker), digest(kept)]) and _members_bytes(state[0], marker.encode())
+    assert d.eraser.call("erase_member", subject=B)["verified"] is True                         # B: "forget everything about me"
+    assert _gone_everywhere(d, state, marker) and d.digests() == [digest(kept)]
+    d.kill()
+    again = start(state)
+    assert _gone_everywhere(again, state, marker) and again.digests() == [digest(kept)]         # and after a restart
+
+
+@pytest.mark.parametrize("reversal", ["remove", "undo"])
+def test_forgetting_the_action_that_reversed_an_add_also_forgets_the_add_and_the_word_never_returns(state, reversal):
+    marker = f"synthetic marker quince-{reversal}"
+    d = start(state)
+    _say_add(d, A, marker)
+    if reversal == "remove":
+        said = d.voice.publish("utterance", subject=A, payload={"text": f"take {marker} off"})
+        back = d.brain.call("act", action="list.remove", on_behalf_of=A,
+                            args={"item": marker, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
+        seq = said.seq                                                          # forget the removal's UTTERANCE
+    else:
+        back = d.panel.call("undo", person=A, actor=A)
+        seq = back["seq"]                                                       # forget the undo receipt itself
+    assert back["verified"] is True and d.digests() == []
+    assert d.panel.call("forget", subject=A, actor=A, seqs=[seq])["count"] >= 2
+    assert _gone_everywhere(d, state, marker)                                   # not replayed, not on disk
+    d.kill()
+    again = start(state)
+    assert _gone_everywhere(again, state, marker)                               # nor after a restart (the rebuild from the log)
+
+
+def test_forgetting_the_add_by_seq_removes_its_row_and_a_later_undo_of_its_removal_does_not_bring_it_back(state):
+    marker = "synthetic marker medlar"
+    d = start(state)
+    first = _say_add(d, A, marker)
+    assert d.panel.call("forget", subject=A, actor=A, seqs=[first["said"]])["count"] >= 2   # the ADD, by seq
+    assert _gone_everywhere(d, state, marker)
+    other = "synthetic marker loquat"
+    _say_add(d, A, other)
+    said = d.voice.publish("utterance", subject=A, payload={"text": "synthetic list remove"})
+    d.brain.call("act", action="list.remove", on_behalf_of=A, args={"item": other, "list": "shopping", "asked": said.seq},
+                 caused_by=[said.seq])
+    assert d.digests() == []                                                     # an ordinary add and remove still work after it
+    d.kill()
+    again = start(state)
+    assert _gone_everywhere(again, state, marker) and again.digests() == []
+
+
+def test_undoing_a_removal_whose_add_was_forgotten_does_not_bring_the_word_back(state):
+    marker = "synthetic marker sloe"
+    d = start(state)
+    first = _say_add(d, A, marker)
+    said = d.voice.publish("utterance", subject=A, payload={"text": "synthetic list remove"})
+    d.brain.call("act", action="list.remove", on_behalf_of=A, args={"item": marker, "list": "shopping", "asked": said.seq},
+                 caused_by=[said.seq])
+    assert d.panel.call("forget", subject=A, actor=A, seqs=[first["said"]])["count"] >= 2   # forget the ADD; the removal survives
+    try:
+        d.panel.call("undo", person=A, actor=A)                                 # refused by the shield, or a no-op: never X back
+    except Refused:
+        pass
+    assert digest(marker) not in d.digests()
+    d.kill()
+    assert digest(marker) not in start(state).digests()
+    # The REMOVAL survives (a forget by seq names the add, not the later removal), and its own receipt still records what it removed:
+    # the word stays shielded (nothing can be added or replayed with it) but its bytes are in that one surviving record.
+    assert _members_bytes(state[0], marker.encode())
+
+
+def test_property_random_list_histories_never_bring_a_forgotten_word_back_and_keep_what_survives(state):
+    """Random add / remove / undo / forget-by-seq over two members (an add's words sometimes name the other member), then a
+    whole-person erase of B and a restart. Every add has its own marker, so "forgotten" is exact: an add forgotten by its
+    utterance, a removal forgotten by its utterance (which takes the add it reversed), or anything that derived from words naming
+    B. Afterwards no forgotten marker is in any row or any file, and the rebuilt rows equal the running kernel's."""
+    import random
+    rnd = random.Random(20261119)
+    d = start(state)
+    live: dict = {}                                        # item -> (owner, said seq, names B)
+    removed: dict = {}                                     # item -> (owner, removal's said seq)
+    forgotten: set = set()
+    for n in range(36):
+        person = rnd.choice((A, B))
+        move = rnd.choice(("add", "add", "add", "remove", "undo", "forget_add", "forget_remove"))
+        try:
+            if move == "add":
+                item = f"synthetic marker p{n}"
+                names_b = person == A and rnd.random() < 0.3
+                out = _say_add(d, person, item, mentions=[B] if names_b else ())
+                live[item] = (person, out["said"], names_b)
+            elif move == "remove" and live:
+                item = rnd.choice(sorted(live))
+                owner = live[item][0]
+                said = d.voice.publish("utterance", subject=owner, payload={"text": "synthetic list remove"})
+                d.brain.call("act", action="list.remove", on_behalf_of=owner,
+                             args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
+                removed[item] = (owner, said.seq, live.pop(item))
+            elif move == "forget_add" and live:
+                item = rnd.choice(sorted(live))
+                owner, said, _ = live.pop(item)
+                d.panel.call("forget", subject=owner, actor=owner, seqs=[said])
+                forgotten.add(item)
+            elif move == "forget_remove" and removed:
+                item = rnd.choice(sorted(removed))
+                owner, said, _ = removed.pop(item)
+                d.panel.call("forget", subject=owner, actor=owner, seqs=[said])
+                forgotten.add(item)
+            elif move == "undo":
+                d.panel.call("undo", person=person, actor=person)
+        except Refused:
+            pass
+    d.eraser.call("erase_member", subject=B)
+    forgotten |= {i for i, (o, _, nb) in live.items() if o == B or nb} | {i for i, (o, _, (_, _, nb)) in removed.items()
+                                                                       if o == B or nb}
+    running = d.digests()                                                      # (keyed digests change with each start's key)
+    d.kill()
+    again = start(state)
+    held = again.digests()
+    assert held == running                                                     # the rebuild agrees with the running kernel
+    assert "unmatched" not in held
+    for item in forgotten:
+        assert digest(item) not in held and _members_bytes(state[0], item.encode()) == [], item
+    assert len(forgotten) >= 5                                                 # the property was exercised

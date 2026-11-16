@@ -492,17 +492,36 @@ class Spine:
             return True
 
     def _closure(self, seed: set[int]) -> set[int]:
-        """The seed plus every event that derives from it, to any depth."""
+        """The seed plus every event that derives from it, to any depth, plus what a forgotten REVERSAL reversed.
+
+        Forgetting an action that reversed earlier ones also forgets what it reversed, or a rebuild from the log would replay the
+        earlier action and its forgotten words would come back: an ``undo`` receipt takes the action it ``undoes``; a receipt
+        whose saved before-state is marked ``reverses`` (a removal: the rows it took, each with its ``asked`` request) takes
+        those requests, and so their receipts. Bounded by what is erased: each dead receipt is read once."""
         dead, frontier = set(seed), list(seed)
         while frontier:
             chunk, frontier = frontier[:500], frontier[500:]
             marks = ",".join("?" * len(chunk))
-            for (seq,) in self._db.execute(
-                    f"SELECT DISTINCT seq FROM causes WHERE cause IN ({marks})", chunk):
+            more = {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM causes WHERE cause IN ({marks})", chunk)}
+            more |= self._reversed(chunk)
+            for seq in more:
                 if seq not in dead:
                     dead.add(seq)
                     frontier.append(seq)
         return dead
+
+    def _reversed(self, seqs: list[int]) -> set[int]:
+        out: set[int] = set()
+        marks = ",".join("?" * len(seqs))
+        for (raw,) in self._db.execute(f"SELECT payload FROM events WHERE kind = ? AND tombstoned = 0 AND seq IN ({marks})",
+                                       [Kind.ACTION_RECEIPT.value, *seqs]):
+            p = json.loads(raw) if raw else {}
+            if type(p.get("undoes")) is int and p.get("action") == "undo":
+                out.add(p["undoes"])
+            before = (p.get("undo") or {}).get("before") if isinstance(p.get("undo"), dict) else None
+            if isinstance(before, dict) and before.get("provenance") == 1 and before.get("reverses") is True:
+                out.update(r["asked"] for r in before.get("rows", ()) if isinstance(r, dict) and type(r.get("asked")) is int)
+        return out
 
     def _tombstone(self, seqs: list[int]) -> None:
         """Erase the rows in place, remember a keyed hash of their free text: first-hand AND

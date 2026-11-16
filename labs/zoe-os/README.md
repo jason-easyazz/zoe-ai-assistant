@@ -196,7 +196,26 @@ can confirm a guessed item (the old unkeyed, member-less sha256 could be confirm
 **Why the rows are rebuilt from the log.** A row exists exactly when a live, verified `list.add` receipt says so (less the verified
 `list.remove` / `undo` receipts after it). The receipt is already durable and committed in one transaction with its write-ahead
 intent, and every forget already reaches it, so there is ONE copy of the words to erase and nothing here changes the spine's or the
-dispatcher's transaction code. The cost is a scan of the receipts at start (measured below) and after each forget (one person's).
+dispatcher's transaction code. The cost is a scan of the receipts at start (measured below) and after each forget (per member it
+reached).
+
+**What a forget rebuilds, and what it can never bring back.**
+* A forget rebuilds EVERY member whose rows came from what it erased, not just its subject (A's row from words that named B goes
+  when B forgets everything). `DurableLists.owner_of` maps each list request (`asked`) and list receipt seq to the row's owner, so
+  the members are found in time proportional to the notice's seqs; each is then rebuilt from its own live receipts.
+* Forgetting an action that REVERSED earlier ones forgets what it reversed (`Spine._closure`): an `undo` takes the action it
+  `undoes`; a removal (its snapshot is marked `reverses`) takes the adds whose rows it removed. Without this, forgetting "I removed X"
+  let the rebuild replay the add and X came back. Forgetting the ADD leaves the later removal (a forget by seq names the add, not the
+  removal): an undo of that removal cannot restore X (its snapshot was scrubbed, and X is shielded), but the removal's own receipt
+  still records X's words.
+* Backstop, scoped to the row's owner: a replayed or restored row that names an entity its owner asked to forget is dropped. The
+  plain word shield is GLOBAL in this kernel, so it is not used as a replay filter: it would drop another member's own live row of
+  the same words, and the rebuilt rows would differ from the running ones.
+* For the reminder and alarm rows on the branches above: when they become durable (rebuilt from receipts) they must (1) find the
+  affected owners from the notice's seqs the same way (an `asked`/receipt -> owner index), never just the subject; (2) mark a
+  snapshot `reverses` only for an action that takes rows away (a reminder cancel, an alarm clear), so forgetting it forgets what it
+  reversed; (3) never replay a row whose receipt is gone. Today's in-memory lab stores already purge cross-owner rows by seq
+  (`provenance.erased_request`).
 
 **Kill points** (`tests/test_authority.py`, real SIGKILL): after the intent, after the driver ran but before the receipt (absent after
 the restart, an `uncertain` receipt), after the receipt but before the reply (present and verified). Controls: `no_rebuild` (an
