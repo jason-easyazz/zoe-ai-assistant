@@ -12,7 +12,11 @@ from pathlib import Path
 import pytest
 
 import os_shadow
+from test_erase_outruns_digest import env  # noqa: F401  (a fixture: a MemoryService over a fake memory store)
 from test_os_shadow import ITEM, MEMBER, FakeKernel, add, kernel, settle  # noqa: F401  (kernel is a fixture)
+from test_value_correction_forget import A as TOPIC_MEMBER
+from test_value_correction_forget import _Svc as _TopicSvc
+from test_value_correction_forget import forget_env  # noqa: F401  (a fixture: the topic forget's stores, in memory)
 
 pytestmark = pytest.mark.ci_safe
 
@@ -201,16 +205,64 @@ def _calls_in(path: str, func: str, attr: str) -> list:
             and getattr(n.func.value, "id", "") == "os_shadow"]
 
 
-def test_delete_user_forgets_the_kernel_record_in_a_fail_closed_block():
-    assert _calls_in("memory_service.py", "delete_user", "forget_user")
-    src = (SVC / "memory_service.py").read_text("utf-8")
-    assert 'raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed' in src
+FAILURES = {
+    "unreachable": lambda k: _creds(k, str(k.dir / "gone.sock")),
+    "refusing": lambda k: setattr(k, "forget_mode", "refuse_all"),
+    "malformed": lambda k: setattr(k, "forget_mode", "reply:{}"),
+}
 
 
-def test_the_topic_forget_runs_before_the_first_destructive_step_and_marks_a_retry():
-    assert _calls_in("forget_topic.py", "_forget", "erase_topic")
-    src = (SVC / "forget_topic.py").read_text("utf-8")
-    assert src.index("os_shadow.erase_topic") < src.index("_erase_words(user_id, groups)") and '["os_shadow"]' in src
+def _recover(k, mode):
+    if mode == "unreachable":
+        _creds(k, k.path)
+    k.forget_mode = "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", sorted(FAILURES))
+async def test_a_member_delete_is_not_confirmed_while_the_shadow_kernel_fails_and_a_retry_completes(kernel, env, mode):  # noqa: F811
+    """RUNS the real MemoryService.delete_user (over the fake memory store of test_erase_outruns_digest) with the shadow on and its
+    kernel unreachable, refusing, or answering a reply that is not the documented one: the delete raises (not confirmed), and once the
+    kernel recovers the retry completes and nothing is left parked."""
+    import memory_service
+
+    svc, _col = env
+    FAILURES[mode](kernel)
+    with pytest.raises(memory_service.MemoryServiceError, match="Zoe OS shadow erasure failed"):
+        await svc.delete_user(MEMBER, actor=MEMBER)
+    assert _pending(kernel) == [MEMBER]
+    _recover(kernel, mode)
+    await svc.delete_user(MEMBER, actor=MEMBER)                          # the retry: confirmed
+    assert forgets(kernel)[-1] == ("panel", {"subject": MEMBER, "actor": MEMBER})
+    assert not (kernel.state / "pending-forgets.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", sorted(FAILURES))
+async def test_a_topic_forget_stops_before_any_destructive_step_while_the_shadow_kernel_fails(kernel, forget_env, monkeypatch, mode):  # noqa: F811
+    """RUNS forget_topic.forget: with the shadow's kernel failing, the topic forget reports store_down, erases no words (the step after
+    the shadow's), records the retry marker, and parks the shadow forget; after recovery the same forget completes."""
+    import forget_topic
+    import memory_forget_cascade
+
+    words, marks = [], []
+    real_erase = forget_topic._erase_words
+
+    async def erase_words(user_id, groups):
+        words.append(user_id)
+        return await real_erase(user_id, groups)
+
+    async def mark(user_id, labels):
+        marks.append(tuple(labels))
+
+    monkeypatch.setattr(forget_topic, "_erase_words", erase_words)
+    monkeypatch.setattr(memory_forget_cascade, "_mark_pending", mark)
+    FAILURES[mode](kernel)
+    res = await forget_topic.forget(_TopicSvc(("r1", "The book club meets at the library")), TOPIC_MEMBER, "the book club")
+    assert res.store_down and words == [] and marks == [("os_shadow",)] and _pending(kernel) == [TOPIC_MEMBER]
+    _recover(kernel, mode)
+    res = await forget_topic.forget(_TopicSvc(("r1", "The book club meets at the library")), TOPIC_MEMBER, "the book club")
+    assert not res.store_down and words == [TOPIC_MEMBER]
 
 
 @pytest.mark.asyncio
@@ -585,3 +637,69 @@ def test_forget_ack_reads_exactly_the_documented_shape():
                 {"count": float("nan"), "upto": 1}, {"count": 3, "upto": 1, "x": 0}):
         with pytest.raises(os_shadow.KernelProtocol):
             os_shadow.forget_ack(bad)
+
+
+# ---- no thread start, join, blocking lock, blocking put or file call on the turn's loop ---------------------------------------------
+TURN_FACING = ("note_add", "_door", "_finish", "_tally", "_worker_down", "_worker_alive", "list_class", "mode", "_forget", "forget_user",
+               "erase_entity", "erase_topic")
+FORBIDDEN_ON_LOOP = {"Thread", "start", "join", "put", "sleep", "_ensure_worker", "revive", "shadow_state_exists", "_pending_add",
+                     "_pending_read", "_pending_write", "_pending_done", "open", "read_text", "write_text", "stat", "iterdir", "exists",
+                     "is_dir", "flock", "fsync", "connect", "sendall", "recv"}
+
+
+def test_the_turn_facing_functions_never_block_the_loop():
+    """Structure: in every function a turn (intent_router, list_service, skybridge, the member delete) reaches synchronously, no call
+    that starts or joins a thread, takes a lock BLOCKING (``acquire()`` without ``blocking=False``), puts on a queue with a wait, or
+    touches a file or socket; those go through ``asyncio.to_thread`` / an executor (passed as an argument, never called here)."""
+    tree = ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
+    fns = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert set(TURN_FACING) <= set(fns)
+    for name in TURN_FACING:
+        for c in ast.walk(fns[name]):
+            if not isinstance(c, ast.Call):
+                continue
+            called = getattr(c.func, "attr", getattr(c.func, "id", ""))
+            assert called not in FORBIDDEN_ON_LOOP, (name, called)
+            if called == "acquire":
+                assert any(k.arg == "blocking" and getattr(k.value, "value", True) is False for k in c.keywords), (name, "blocking acquire")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["off", "shadow"])
+async def test_a_forget_that_has_to_start_the_worker_never_blocks_the_loop(kernel, monkeypatch, flag):
+    """NO pre-started worker (the fixture's is stopped): the forget must start it, and the start takes 250 ms. Ticks are counted
+    DURING the start; a start on the loop gets none. An add never starts a thread at all (it drops and counts worker_down)."""
+    import asyncio
+    import threading
+    import types
+
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", flag)
+    os_shadow._reset_for_tests()
+    spans = []
+
+    class SlowThread(threading.Thread):
+        def start(self):
+            t = time.perf_counter()
+            time.sleep(0.25)
+            super().start()
+            spans.append((t, time.perf_counter()))
+
+    monkeypatch.setattr(os_shadow, "threading", types.SimpleNamespace(Thread=SlowThread, Lock=threading.Lock,
+                                                                       get_ident=threading.get_ident))
+    await asyncio.to_thread(lambda: None)                                  # the default executor's thread exists already
+    ticks = []
+
+    async def ticker():
+        while True:
+            ticks.append(time.perf_counter())
+            await asyncio.sleep(0.005)
+
+    tk = asyncio.create_task(ticker())
+    await asyncio.sleep(0.02)
+    add()                                                                  # the add: no worker -> worker_down, no thread started
+    assert spans == [] and os_shadow.counters() == ({"worker_down": 1} if flag == "shadow" else {})
+    assert await os_shadow.forget_user(MEMBER) == 3                        # it starts the worker, which then confirms the forget
+    tk.cancel()
+    (a, b), = spans
+    during = sum(1 for x in ticks if a < x < b)
+    assert during >= 15, f"only {during} ticks during the worker start: it ran on the event loop"
