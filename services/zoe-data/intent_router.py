@@ -748,7 +748,8 @@ def detect_intent(
 ) -> Optional[Intent]:
     try:
         import local_text_logs as _ltl_epoch
-        _miss_epoch: Optional[int] = _ltl_epoch.erase_epoch()   # BEFORE detection: an erase finishing mid-detect drops the miss append
+        # the TURN's epoch (read before STT on a voice turn, at entry for typed text), else now: an erase finishing after it drops the miss
+        _miss_epoch: Optional[int] = _ltl_epoch.writer_epoch()
     except Exception:  # noqa: BLE001 - unreadable guard: append stays in-progress-guarded only
         _miss_epoch = None
     t = _normalize_chat_intent_text(text)
@@ -4146,6 +4147,12 @@ async def _execute_forget_last(user_id: str) -> str:
         await conversation_notes.erase_for_text(user_id, text, at=ts)
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
+        failed += 1
+    try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
+        import memory_value_registry
+        await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])
+    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
+        logger.warning("memory_forget_last: value registry erase failed (%s)", type(exc).__name__)
         failed += 1
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:

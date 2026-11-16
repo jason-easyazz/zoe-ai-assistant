@@ -1004,7 +1004,7 @@ async def _load_recent_user_messages(
     async with get_db_ctx() as db:
         rows = await (
             await db.execute(
-                "SELECT cm.content FROM chat_messages cm "
+                "SELECT cm.content, cm.created_at FROM chat_messages cm "
                 "JOIN chat_sessions cs ON cm.session_id = cs.id "
                 "WHERE cm.session_id = ? AND cm.role = 'user' "
                 f"AND {owner_expr} = ? AND {_off_record_sql('cm')} "
@@ -1012,6 +1012,10 @@ async def _load_recent_user_messages(
                 (session_id, user_id, limit),
             )
         ).fetchall()
+    # the pronoun anchor never comes from a turn at or before the member's erase watermark (erase_watermark; unreadable = no anchor)
+    import erase_watermark
+    rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r.get("created_at") if isinstance(r, dict) else r[1],
+                                            reader="prev_user_turn", strict=False)
     out: list[str] = []
     for r in rows:
         content = ((r[0] if not isinstance(r, dict) else r.get("content")) or "").strip()
@@ -1137,12 +1141,20 @@ async def extract_and_ingest(
         logger.debug("memory_extractor: exact-words index skipped (%s)", type(exc).__name__)
     # A spoken correction of a stored value ("Oliver is twenty-five, not twenty-four") supersedes the stored rows in ANY later
     # session, not just this one (value_correction; QA round 5). Evidence only, user-stated, bounded, never raises.
+    rewrote = 0
     try:
         import value_correction
 
-        await value_correction.apply(user_message, user_id, session_id, speaker_verified=speaker_verified)
+        rewrote = await value_correction.apply(user_message, user_id, session_id, speaker_verified=speaker_verified)
     except Exception as exc:  # noqa: BLE001 - a correction never costs the turn its other facts
         logger.debug("memory_extractor: value correction skipped (%s)", type(exc).__name__)
+    # The pending-correction marker (ZOE_CORRECTION_PENDING_MARKER, default OFF): a correction-shaped turn the rewrite above did not
+    # close is served, by turn id, in the member's next packets until a rewrite or a forget. Behind the same gates (identified,
+    # on the record, speaker not rejected); no words held; never raises.
+    import correction_marker
+
+    await correction_marker.note_turn(user_message, user_id, session_id, speaker_verified=speaker_verified,
+                                      rewrote=rewrote if isinstance(rewrote, int) else 0)
     try:
         candidates, guard_drops = _extract_with_drops(
             user_message, assistant_response, prev_user_message=prev_user_message

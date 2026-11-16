@@ -36,6 +36,12 @@ A store can be reached by one path and not the other; that asymmetry is what `st
 |---|---|---|---|
 | router shadow log | `services/zoe-data/data/router_head_shadow.jsonl` (+ `.N` segments) | **strips** `utt_text`; the hash and routing features stay | entity: the record naming the entity is dropped whole; member: the text layer of every record is cleared |
 | intent-miss log | `~/training/data/intent-misses.jsonl` | **drops** the record | same |
+| voice STT log (flag-dark) | `$ZOE_VOICE_STT_LOG` (`~/.zoe-voice/voice_stt.jsonl` + `.1`) | **drops** the record (ISO `ts`) | same; only while `ZOE_FORGET_REACH_EXTRA=on` (default off), which also reaches the opt-in Telegram STT capture dir (`erase_capture`: a pair naming the entity, every pair on a member erase) |
+
+STT rotation and append share the eraser's thread lock and file lock, covering the whole segment pass.
+The capture writer and eraser share one resolver: `ZOE_TELEGRAM_STT_CAPTURE_DIR` must expand to an absolute, non-root path without
+parent traversal (relative settings are refused). Capture operations open directory components without following symlinks and
+use the resulting directory descriptor for file operations, including deletes; a renamed directory cannot redirect the sweep.
 
 - **Retention:** `ZOE_TEXT_LOG_RETENTION_DAYS`, default **30** (`keep` = no limit, `0` = keep none). The hourly `zoe-log-rotate` job applies it
   (`scripts/maintenance/rotate_service_logs.py`); `scripts/maintenance/redact_router_shadow.py` does the same once, with a backup and
@@ -85,7 +91,7 @@ member column are therefore recorded here instead, each with why neither forget 
 
 Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for anything else): `reached` with the eraser(s), `out_of_scope` with a one-line
 reason, or `gap` with the reason AND the key in the `forget-reach gaps:` line of [open-problems.md](open-problems.md). A table that holds **words** cannot be
-`out_of_scope`. Then regenerate the table below.
+`out_of_scope`. Then regenerate the table below. A store of words also needs its row (and its writer's `WRITE_SITES` line) in the [household-text inventory](household-text-inventory.md), whose test fails otherwise.
 
 ## Forget completeness (what a layer SERVES after a forget, 2026-11-05)
 
@@ -104,13 +110,35 @@ answer both ways), and **control** (the layer's hooks off: the name IS served, s
 - Adding a derived layer: a `Layer` row + a `Probe` class (seed / erase / served / disable). A new layer that is erase-only goes in the open-problems
   line; one the probe cannot drive goes in `UNPROBED` and that line.
 
+## Forget commands are never mined (QA round 10a, 2026-11-14)
+
+What happened, by shape: a member taught a fact about a relative ("my brother <name> lives in <place>"), then said "forget that I
+told you about my brother". That is a TOPIC forget (`forget_topic.py`): it erases the rows, words, notes and offers holding the
+topic, but writes no `memory_forgotten` entry. The command's own saved turn was on the record, so idle consolidation (and the
+nightly digest, inside its lookback) re-read it, the extractor paraphrased it ("the user told Zoe about their brother"), and in a
+fresh session the household recall block served that row: "I do have a record of a past conversation about him". The fix is at the
+source: `turn_forget.is_forget_instruction` (the union of the existing detectors: `forget_topic.parse`, `turn_forget.is_forget_turn`,
+the entity-forget pattern) makes `routers/chat._save_chat_message` save a forget command `off_record` (every off-record-honouring
+reader leaves it out: idle consolidation, the digest loaders, the fast-path context, exact words, the pronoun lookback) and
+`memory_digest._skip_forgotten_turns` skip one saved before the fix (`services/zoe-data/tests/test_qa10_forget_command_leak.py`).
+Rows already minted that way are found by `scripts/maintenance/forget_command_rows_audit.py` (read-only, counts per member index
+and writer, row ids only to a 0600 file; a row is cleaned only when its own provenance - `source_excerpt` or `user_turn_id` - links
+it to an ACTUAL forget-command turn of that member (turn id, or the excerpt equal to that turn as saved) AND every source turn in the member's full on-the-record transcript is a forget command (a re-teach keeps it;
+an unreadable transcript makes it `unclear`; a row the member's own word or an operator stands behind is an `owner decision`; both are
+reported, never erased); unlinked idle / digest rows in the same session are reported as unproven "window" rows, never erased; turns are read over the whole history):
+`python3 scripts/maintenance/forget_command_rows_audit.py --ids-out ~/.zoe/forget-command-rows.json`, then, with zoe-data stopped,
+`~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/forget_command_rows_audit.py --erase-from ~/.zoe/forget-command-rows.json`
+(dry run) and the same with `--confirm --i-stopped-zoe-data`, which re-verifies every planned row from the palace and the turns (the plan file is a hint: an unlinked id is refused and left alone) and forgets the verified ones through the owner-forget path
+(`MemoryService.review(archive)` then `erase_rows`). Still open: a topic forget reaches less than an entity forget
+([open-problems.md](open-problems.md)).
+
 ## The inventory
 
 Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-132 stores: 58 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+135 stores: 67 reached, 30 out of scope, 38 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -140,6 +168,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `omi_day_reviews` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |
 | `omi_day_candidates` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |
 | `conversation_notes` | pg_table | words | reached | member: `conversation_notes.forget_user` / entity: `conversation_notes.erase_entity` | - |
+| `memory_value_registry` | pg_table | words | reached | member: `memory_value_registry.forget_user` / entity: `memory_value_registry.erase_entity` | - |
 | `contact_fields` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `contact_sources` | pg_table | metadata | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `source_contacts` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
@@ -151,20 +180,20 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `panel_voice_clusters` | pg_table | biometric | gap | - | Passive named guests (0073): unknown panel voices held for the household owner. Erased by expiry (14 days, hourly sweep), by naming (the voice becomes a guest's print), and by the owner's DELETE /api/voice/unknown-voices; a member erase does not reach them and they hold no name an entity forget could match. Never in the dumps (BIOMETRIC_TABLES). |
 | `panel_voice_samples` | pg_table | biometric | gap | - | The embeddings behind panel_voice_clusters (never audio), erased with their voice. Never in the dumps (BIOMETRIC_TABLES). |
 | `learned_voiceprints_0071` | pg_table | metadata | out_of_scope | - | Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the same migration; it never exists on the Postgres box the dumps read. |
-| `user_portraits` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes a portrait that names the entity; delete_user does not remove it. |
-| `user_model_cards` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes a card that names the entity; delete_user does not remove it. |
-| `open_loops` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget resolves a loop that names the entity; delete_user does not touch the rows. |
-| `proactive_candidates` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes candidates naming the entity; delete_user does not. |
+| `user_portraits` | pg_table | derived | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
+| `user_model_cards` | pg_table | derived | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
+| `open_loops` | pg_table | words | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
+| `proactive_candidates` | pg_table | derived | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
 | `people` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget soft-deletes the person row (kept with deleted=1); delete_user does not touch people. |
 | `person_relationships` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget closes the edges (valid_to); delete_user does not. |
 | `event_attendees` | pg_table | words | gap | member: `calendar_forget.forget_user` / entity: `memory_forget_cascade._run` | Entity forget anonymises the attendee row; delete_user removes the attendees of the member's synced and in-calendar events (calendar_forget.forget_user), not of their calendar-less local events (owner decision: household-visible items). |
 | `events` | pg_table | words | gap | member: `calendar_forget.forget_user` / entity: `memory_forget_cascade._run` | delete_user removes the member's synced events and every event in their calendars (calendar_forget.forget_user); their calendar-less local events (household-visible by default) stay until the owner decides delete vs keep for the household. The entity forget scrubs only legacy metadata.attendees. |
-| `memory_forgotten` | pg_table | metadata | out_of_scope | - | The forget LEDGER itself: salted hashes, no names. It must survive a forget to keep the forget enforced. |
+| `memory_forgotten` | pg_table | metadata | out_of_scope | - | The forget LEDGER itself: salted hashes, no names, plus one erase WATERMARK per erased member (erase_watermark: an id and a time). It must survive a forget to keep the forget enforced. |
 | `chat_sessions` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts titles in place (forget_redact.on_forget); delete_user does not delete sessions. |
-| `chat_messages` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages. |
+| `chat_messages` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages (owner decision pending), but every background transcript miner skips the member's turns at or before their erase watermark (erase_watermark.keep_after). |
 | `chat_feedback` | pg_table | words | gap | - | Holds a corrected_response (words); neither path reaches it. |
 | `background_tasks` | pg_table | words | gap | - | Holds the task text and its result; neither path reaches it. |
-| `pending_suggestions` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Offer text naming people can outlive the forget (person offers are withdrawn by name; anticipation offers naming the entity are deleted by the cascade; a TOPIC forget withdraws the offers holding the topic or a name from the forgotten words: forget_topic._withdraw_offers); delete_user does not reach the table. |
+| `pending_suggestions` | pg_table | words | reached | member: `member_derived_forget.forget_user` / entity: `memory_forget_cascade._run` | - |
 | `notes` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `journal_entries` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `lists` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. List items name people and places. |
@@ -185,11 +214,11 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `ambient_memory` | pg_table | words | gap | - | Ambient captured memory text; neither path reaches it. |
 | `notifications` | pg_table | words | reached | member: `notifications_store.forget_user` | - |
 | `music_listening_events` | pg_table | metadata | out_of_scope | - | Listening history: titles/artists, no household words; the music journal has its own controls. |
-| `proactive_deliveries` | pg_table | derived | gap | - | Delivery ledger rows keyed by candidate; text is in the candidate, not here. |
+| `proactive_deliveries` | pg_table | derived | reached | member: `member_derived_forget.forget_user` | - |
 | `proactive_outcome_edges` | pg_table | derived | reached | member: `outcome_edges.erase_user` | - |
-| `proactive_ledger_lines` | pg_table | words | gap | - | Holds the spoken line (words); neither path reaches it. |
-| `proactive_pending` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
-| `proactive_scheduled` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
+| `proactive_ledger_lines` | pg_table | words | reached | member: `member_derived_forget.forget_user` | - |
+| `proactive_pending` | pg_table | words | gap | - | Holds the message text of a queued send (reminders the member set); owner decision with reminders. |
+| `proactive_scheduled` | pg_table | words | gap | - | Holds the message text of a scheduled send (reminders the member set); owner decision with reminders. |
 | `proactive_responses` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `voice_announcements` | pg_table | words | gap | - | Holds the announcement message; short-lived (expires_at) but not erased on forget. |
 | `speaker_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
@@ -223,7 +252,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `intent_miss_log` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | Same module and rules as the router shadow log (records are dropped, not stripped). |
 | `recall_gate_trace` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | ~/.zoe/recall-gate-trace/: the owner's opt-in trace (ZOE_RECALL_GATE_TRACE, default off) - the owner's words + row text per gate decision, 0600, 7-day retention, never off-box. A member erase clears it household-wide (via local_text_logs.erase_all_text), an entity forget drops every line naming the entity (via local_text_logs.erase_entity, cascade step text_logs); both inside that module's erase barrier, which the trace's appends honour. |
 | `production_feedback_log` | file | words | out_of_scope | - | Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in. |
-| `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
+| `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on. |
 | `flue_session_log` | file | words | gap | - | The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget cascade (conversation_notes.erase_entity); the log itself is outside the cascade. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py). |
 | `flue_session_store` | db | words | out_of_scope | - | labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own. |
@@ -233,6 +262,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `self_review_records` | file | words | reached | member: `struggle_detector.delete_user` / entity: `self_review.erase_entity` | ~/.zoe/self-review/: the nightly self-review (self_review.py, ZOE_SELF_REVIEW). <night>.self-review.jsonl + <night>.md hold the OWNER's flagged turns verbatim (0600, never off-box; other members are ids and classes only); the summary is counts, ids and utterance hashes. An entity forget drops the member's records naming it (cascade step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger. |
 | `night_extract_facts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `night_extract.erase_entity` | ~/.zoe/night-extract/: the SHADOW night pre-pass (night_extract.py, ZOE_NIGHT_EXTRACT). <night>.night-extract.jsonl holds the facts the GLiNEREL extractor PROPOSED from the member's day (person names, ages, places, pet and kin words; 0600, never off-box, never a turn's text) and <night>.night-extract-summary.json counts only. An entity forget drops the member's facts naming it (cascade step night_extract); a member erase (struggle_detector.delete_user calls night_extract.delete_user) drops all of the member's facts and summary line; load_facts re-checks the ledger. |
 | `self_improver_candidates` | file | derived | reached | entity: `self_review.erase_entity` | ~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate. |
+| `pending_correction_markers` | memory | metadata | reached | member: `correction_marker.forget_user` / entity: `correction_marker.forget_user` | correction_marker.py (ZOE_CORRECTION_PENDING_MARKER): in process only, member id + chat turn id + time + hashed subject keys, NO words (the packet fetches the turn's text from chat_messages by id). TTL 2 h, lost on restart; every forget path drops the member's markers (turn, topic, entity, delete_user). |
 | `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
 | `account_secrets` | vault | config | reached | member: `connected_accounts.forget_user` | Connected-account credentials (account_secrets.py seam). No backend is configured yet, so nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user. |
 | `reminder_phone_ledger` | db | metadata | reached | member: `reminder_delivery.forget_user` | app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows. |
@@ -245,6 +275,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `backup_postgres` | backup | words | gap | - | Nightly dumps: 7 daily + 4 weekly, so a row is gone from every dump within BACKUP_MAX_AGE_DAYS (35) - WHILE the nightly job succeeds: it prunes by count after a new dump, so a job that keeps failing keeps its old dumps (an age alarm is the fix; a time prune must never delete the last good copy). Forget cannot rewrite a dump; biometric table data is excluded from them. Restore => re-issue the forget. |
 | `backup_palace_tar` | backup | words | gap | - | Nightly MemPalace tarball, 7 kept (<= 7 days WHILE the nightly job succeeds: it prunes by count after a new tarball, so a failing job keeps its old ones). Not rewritten; the JSON exports beside it are redacted by the ledger (redact_backups.py). |
 | `backup_json_exports` | backup | words | reached | entity: `forget_redact.redact_export` | Palace JSON exports and compaction backups are redacted by the forget ledger (forget_redact.redact_export, scripts/maintenance/redact_backups.py). |
-| `backup_adhoc` | backup | words | out_of_scope | - | One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep (local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup. |
+| `backup_legacy_db` | backup | words | gap | - | Neither forget path reaches the legacy SQLite snapshots a setup or migration script leaves beside the old databases (data/*.backup.<stamp>.db, <db>.pre-panel-migration.<stamp>.db): whole copies, never rewritten and never aged out. Listed by household_text.py as a kept copy; removing them is an owner cleanup. |
+| `backup_adhoc` | backup | words | gap | - | Neither forget path reaches one-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep (local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup. |
 
 <!-- END GENERATED -->

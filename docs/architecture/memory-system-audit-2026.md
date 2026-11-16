@@ -129,13 +129,21 @@ conflicting high-confidence memories."**
    > **`run_weekly_consolidation_for_all` has three triggers — the primary is default-on:**
    > 1. **In-process background loop (primary, default ON)** —
    >    `_memory_consolidation_loop` in `routers/system.py`, started at app startup by
-   >    `main.py:930` (`start_memory_consolidation_background`). It waits until the next
+   >    `main.py:1216` (`start_memory_consolidation_background`). It waits until the next
    >    **Sunday 04:00** and calls `run_weekly_consolidation_for_all`. Gated by
    >    `MEMORY_CONSOLIDATION_ENABLED` (**default `"true"`**), so this runs unless
    >    explicitly disabled — it depends on the `zoe-data` process staying up across
    >    Sunday 04:00.
-   > 2. **Cron (secondary)** — `daily_consolidation.py:56` Sunday branch
-   >    (`weekday()==6`), installed by `scripts/setup/setup_overnight_training*.sh`.
+   > 2. **Cron (retired)**: the scripts that installed it
+   >    (`scripts/setup/setup_overnight_training*.sh`) were removed on 2026-11-14 with
+   >    the retired nightly training job, and it was not in the live crontab. Nothing
+   >    is lost: the daily digest runs in-process at 03:00 (`routers/system.py:461,512`,
+   >    started at `main.py:1215`) and the weekly consolidation in-process on Sunday at
+   >    04:00 (`routers/system.py:521,560`, started at `main.py:1216`). The same scripts
+   >    also listed a weekly preference update; it has no other schedule, and its worker
+   >    (`scripts/maintenance/weekly_preference_update.py`) imported a `preference_learner`
+   >    module that no longer exists, so it could not have run. That worker was removed with
+   >    the scripts (2026-11-15).
    > 3. **Admin route** — `POST /memories/consolidate` (`routers/system.py`).
    >
    > **Don't confuse this with the dream cycle.** The nightly dream timers
