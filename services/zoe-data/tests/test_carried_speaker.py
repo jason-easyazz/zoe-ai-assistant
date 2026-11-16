@@ -55,6 +55,30 @@ def test_a_clock_that_ran_backwards_drops_it():
     assert cs.current("panel-a", now=0.0) is None
 
 
+def test_a_small_backward_step_drops_it_even_when_the_entry_is_shorter_than_the_session(monkeypatch):
+    """Review of #2606: the check compared the time left with the SESSION's ttl, so an entry recorded at 1000 for 30 s and
+    read at 999 (session ttl 120) still named the member, with 31 s "left"."""
+    monkeypatch.setattr(cs, "_session_ttl", lambda: 120.0)
+    cs.note_verified("panel-a", "member-1", ttl_s=30, now=1000.0)
+    assert cs.frame_field("panel-a", now=999.0) == {"v": 1, "verified": False, "ttl_s": 0}
+    assert cs.current("panel-a", now=1001.0) is None          # dropped, not merely hidden for that one read
+
+
+def test_a_backward_step_between_two_reads_drops_it(monkeypatch):
+    monkeypatch.setattr(cs, "_session_ttl", lambda: 120.0)
+    cs.note_verified("panel-a", "member-1", ttl_s=30, now=1000.0)
+    assert cs.current("panel-a", now=1010.0) == "member-1"
+    assert cs.current("panel-a", now=1005.0) is None           # later than the record, earlier than the last read
+    assert cs.current("panel-a", now=1011.0) is None
+
+
+def test_a_forward_clock_still_carries_and_reports_the_entrys_own_time_left(monkeypatch):
+    monkeypatch.setattr(cs, "_session_ttl", lambda: 120.0)
+    cs.note_verified("panel-a", "member-1", ttl_s=30, now=1000.0)
+    assert cs.frame_field("panel-a", now=1010.0) == {"v": 1, "verified": True, "ttl_s": 20}
+    assert cs.current("panel-a", now=1030.0) is None
+
+
 def test_the_frame_field_is_a_boolean_and_a_ttl_never_a_name():
     assert cs.frame_field("panel-a", now=0.0) == {"v": 1, "verified": False, "ttl_s": 0}
     cs.note_verified("panel-a", "member-1", ttl_s=30, now=0.0)

@@ -27,7 +27,7 @@ DEFAULT_TTL_S = 30          # a follow-up / conversation window, not a session
 _FALLBACK_SESSION_TTL_S = 120
 
 _lock = threading.Lock()
-_mem: "dict[str, tuple[str, float]]" = {}     # panel -> (member, expires_at monotonic)
+_mem: "dict[str, list]" = {}     # panel -> [member, expires_at, last_seen] (monotonic seconds)
 _clock = time.monotonic                        # monkeypatchable
 
 
@@ -62,7 +62,7 @@ def note_verified(panel_id: str, member: str, *, ttl_s: float = DEFAULT_TTL_S, n
         ttl = min(float(ttl_s), float(_session_ttl()))
         with _lock:
             _mem.pop(panel_id, None)
-            _mem[panel_id] = (member.strip(), t + ttl)
+            _mem[panel_id] = [member.strip(), t + ttl, t]   # member, this entry's own expiry, the last time seen
             while len(_mem) > MAX_PANELS:
                 _mem.pop(next(iter(_mem)))
         return True
@@ -88,9 +88,13 @@ def current(panel_id: str, *, now: Optional[float] = None) -> Optional[str]:
             ent = _mem.get(panel_id)
             if ent is None:
                 return None
-            if not t < ent[1] or ent[1] - t > _session_ttl():
+            # ANY backward step of the clock ends the carry: against the time the entry was recorded and against every later
+            # read (comparing the time left with the session's TTL missed a small step on an entry shorter than the session:
+            # recorded at 1000 for 30 s, read at 999, it still answered with 31 s left)
+            if not t < ent[1] or t < ent[2]:
                 _mem.pop(panel_id, None)
                 return None
+            ent[2] = t
             return ent[0]
     except Exception:  # noqa: BLE001
         return None
@@ -113,7 +117,7 @@ def forget_user(member_id: str) -> int:
     try:
         m = (member_id or "").strip()
         with _lock:
-            gone = [k for k, (u, _) in _mem.items() if u == m]
+            gone = [k for k, ent in _mem.items() if ent[0] == m]
             for k in gone:
                 _mem.pop(k, None)
         return len(gone)
