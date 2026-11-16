@@ -50,6 +50,22 @@ def guards(actor: str, who: Person | None) -> bool:
     return who is not None and who.role == CHILD and actor in who.guardians
 
 
+def person_from_entry(entry, *, extra_keys=frozenset()) -> Person:
+    """The ONE reader of a stated principal (``{"id", "role", "guardians"}``, or a plain id). Least access unless the entry FULLY
+    says otherwise: a plain id, a missing or unknown role, a key it does not know (beyond ``extra_keys``, e.g. a twin member's
+    habits), or guardians that are not a list of ids give ``Person(id)`` (``LEAST``, no guardians). Raises ``ValueError`` only
+    when there is no id at all."""
+    if isinstance(entry, str) and entry:
+        return Person(entry)
+    if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]:
+        raise ValueError("a principal without an id")
+    guardians = entry.get("guardians", [])
+    if set(entry) - {"id", "role", "guardians"} - set(extra_keys) or entry.get("role") not in ROLES \
+            or not isinstance(guardians, list) or not all(isinstance(g, str) and g for g in guardians):
+        return Person(entry["id"])
+    return Person(entry["id"], entry["role"], tuple(guardians))
+
+
 @dataclass(frozen=True)
 class Manifest:
     skill: str

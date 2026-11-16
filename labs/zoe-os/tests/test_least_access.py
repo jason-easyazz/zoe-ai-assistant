@@ -78,3 +78,18 @@ def test_the_shadow_still_records_a_least_access_members_add():
         srv.shutdown()
         k.close()
         shutil.rmtree(state, ignore_errors=True)
+
+
+@pytest.mark.parametrize("load", ["replay", "twin"])
+def test_the_replay_and_twin_loaders_give_least_access_to_an_entry_they_cannot_fully_read(load):
+    bad = {"id": "member-u", "role": "adult", "guardians": "member-a", "unrecognised": True}
+    if load == "replay":
+        from zoe_os.replay import Recording
+        rec = Recording.loads(json.dumps({"recording": __import__("zoe_os.replay", fromlist=["FORMAT"]).FORMAT,
+                                          "people": [bad, {"id": "member-a", "role": "adult"}]}))
+        people = {p.id: p for p in rec.people}
+    else:
+        from zoe_os.twin.days import household_from
+        people = {m.id: m for m in household_from({"members": [bad, {"id": "member-a", "role": "adult"}]}).members}
+    assert people["member-u"].role == LEAST and tuple(people["member-u"].guardians) == ()
+    assert people["member-a"].role == ADULT
