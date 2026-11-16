@@ -83,6 +83,10 @@ A close-triggered reflex lands about 0.8-1.1 s after true speech end (the record
 
 ### The handshake
 
+**Design, not built anywhere in this stack yet.** The payload block, the server-side parse and the two names below
+(`ZOE_VOICE_REFLEX_AWARE`, `REFLEX_FILLER_HOLD_S`) do not exist in the code at this head or in the later parts of this stack;
+they are the plan for the server half, which is its own later change. Nothing in this section can be switched on today.
+
 The daemon puts one block on the `/api/voice/turn_stream` payload: `{"kind": "heard", "take": "mm_03", "bank": "<sha8>",
 "voice": "<id>", "at_ms": <close to reflex write>, "dur_ms": <clip ms>}`, or `{"kind": "none", "skip": "<enum>"}`. Never text,
 never audio. The server parses it strictly (unknown keys dropped, enums checked, ints clamped) and, while
