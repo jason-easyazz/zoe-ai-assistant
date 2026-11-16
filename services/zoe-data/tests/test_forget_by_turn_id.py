@@ -498,6 +498,96 @@ def test_a_legacy_fact_of_a_backfilled_turn_is_forgotten_with_it(world, path):
     assert planted["unrelated"].id in approved                                                # a legacy row that does not match
 
 
+BACKFILLED_CONTACT = "My plumber works from 9 Example Street"
+
+
+def _legacy_as_said(svc, text, excerpt):
+    """A fact written before the ids AND before the wider scrub: no provenance, its excerpt stored as said (contact intact)."""
+    ref = run(svc.ingest(text, user_id=UID, source="turn_digest", status="approved", source_excerpt=excerpt))
+    meta = svc._collection().rows[ref.id][1]
+    for k in ("source_turn", "source_kind", "source_excerpt_said"):
+        meta.pop(k, None)
+    meta["source_excerpt"] = excerpt
+    return ref
+
+
+@pytest.mark.parametrize("path", ["forget_it_after_why", "forget_last", "memory_space"])
+def test_a_legacy_fact_with_an_unredacted_excerpt_goes_with_its_redacted_quote(world, path):
+    """Review P1 (PR #2574, thread ...vNit): a fact written BEFORE the wider scrub keeps its excerpt as said (the contact intact),
+    while the backfilled exact-words entry of the same turn holds the contact REDACTED. The legacy excerpt must be compared in the
+    same form as the quote (through the same scrubber), or forgetting the quote confirms "Done" with the fact still approved.
+    Fails on bd7d62ff9 for forget-it after "why" (it compared the as-said excerpt against redacted keys only)."""
+    from routers.chat import _save_chat_message
+
+    svc, chat = world
+    with chat.patch.context() as scoped:
+        scoped.setattr(chat.db_pool, "get_db_ctx", chat.ctx)
+        assert run(_save_chat_message("s-1", "user", BACKFILLED_CONTACT, user_id=UID)) is True
+    mid = next(m for m, (c, _meta) in chat.rows.items() if c == BACKFILLED_CONTACT)
+    old = _legacy_as_said(svc, "User's plumber works from 9 Example Street", BACKFILLED_CONTACT)
+    mine = run(svc.ingest("User has a plumber on Example Street", user_id=UID, source="turn_digest", status="approved",
+                          source_excerpt=BACKFILLED_CONTACT, metadata={"source_turn": mid}))
+    # the same contact under another topic: its redacted form differs from the quote's, so it stays
+    unrelated = _legacy_as_said(svc, "User's dentist works from 9 Example Street", "My dentist works from 9 Example Street")
+    assert run(xw.index_turn(UID, BACKFILLED_CONTACT, message_id=mid)) is True   # the backfill: the entry carries the id
+    tid = next(k[1] for k in xw.get_backend().rows)
+    stored = xw.get_backend().rows[(UID, tid)]["text"]
+    assert "9 example street" not in stored.lower(), "precondition: the indexed quote is redacted"
+    if path == "forget_it_after_why":
+        exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id=tid)
+        reply = run(pa._forget_turn(UID, exp, svc=svc))
+    elif path == "forget_last":
+        reply = run(intent_router.execute_intent(intent_router.Intent("memory_forget_last", {}), UID))
+    else:
+        import memory_space
+
+        reply = "Done" if run(memory_space.forget_row(UID, mine.id, svc=svc)) == "forgotten" else "not done"
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert reply.startswith("Done"), reply
+    assert old.id not in approved, "the pre-upgrade fact of the forgotten turn is still approved"
+    assert mine.id not in approved
+    assert unrelated.id in approved, "a legacy fact of another topic (same contact) was forgotten too"
+
+
+@pytest.mark.parametrize("path", ["memory_space", "guardian"])
+def test_a_screen_retry_of_a_legacy_row_still_reaches_the_facts_bound_to_its_turn(world, path):
+    """Review P1 (PR #2574, thread ...vNix): a LEGACY screen row's words resolve to its saved turn, and a fact BOUND to that turn
+    goes with it. When that fact's reject fails once, the first attempt is not confirmed - and the retry must still reach the
+    bound fact, although the first attempt already flagged the transcript turn (which no longer resolves the words). Fails on
+    d5f13332d (the retry re-resolved from the words and found nothing); the forget record (bd7d62ff9) keeps the resolved ids."""
+    import memory_space
+
+    svc, chat = world
+    planted = _plant_backfilled(svc, chat)
+    review = svc.review
+    left = {"n": 1}
+
+    async def flaky(mem_id, **kw):
+        if mem_id == planted["mine"].id and kw.get("decision") == "reject" and left["n"] > 0:
+            left["n"] -= 1
+            raise RuntimeError("store unavailable")
+        return await review(mem_id, **kw)
+    svc.review = flaky
+
+    def attempt():
+        try:
+            if path == "memory_space":
+                return run(memory_space.forget_row(UID, planted["old"].id, svc=svc))
+            return run(memory_space.guardian_forget(UID, planted["old"].id, actor="demo_adm_0000id02", svc=svc))
+        except Exception:  # noqa: BLE001 - the route turns a raise into "not forgotten, try again"
+            return "not done"
+
+    first = attempt()
+    assert left["n"] == 0, "precondition: the bound fact's reject failed once"
+    assert first != "forgotten", "confirmed although the bound fact's reject failed"
+    second = attempt()
+    approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert second == "forgotten", second
+    assert planted["mine"].id not in approved, "the retry confirmed with the fact bound to the forgotten turn still approved"
+    assert planted["old"].id not in approved
+    assert planted["other"].id in approved and planted["unrelated"].id in approved
+
+
 # ── THREE ROW KINDS x EVERY FORGET PATH (turn_forget.classify): @<id> by id only; @src:<kind> only itself; legacy by words ──────
 
 KW = "My kayak paddles live in the blue shed behind the garage"
@@ -1212,3 +1302,30 @@ def test_a_thread_repair_that_fails_once_is_finished_by_the_retry(world, monkeyp
     assert _night() == ["hose"]
     t = _thread()
     assert not {"pottery", "odalys", "cousin", "tuesday"} & set(re.findall(r"[a-z]+", (t["title"] + " " + t["anchors"]).lower())), t
+
+
+def test_the_scrubbed_excerpt_match_never_widens_a_bound_or_non_turn_twin():
+    """Cross-review of the ...vNit fix: comparing excerpts through the scrubber is for a LEGACY candidate only. A legacy row whose
+    excerpt keeps one contact must not take, as its twin, a NON-TURN (``source_kind``) row whose redacted excerpt names another
+    contact, nor a row bound to another saved turn; a legacy candidate in the same position still is one (the accepted legacy
+    look-alike)."""
+    from types import SimpleNamespace
+
+    scrubbed = memory_service.scrub_source_excerpt("My plumber works from 2 Example Street")
+    assert "2 example street" not in scrubbed.lower(), "precondition: the candidates' excerpt is redacted"
+
+    def row(rid, ex, **prov):
+        return SimpleNamespace(id=rid, text="User's plumber works from 2 Example Street",
+                               metadata={"user_id": UID, "status": "approved", "source_excerpt": ex, **prov})
+    target = SimpleNamespace(id="legacy", text="User's plumber works from 9 Example Street",
+                             metadata={"user_id": UID, "status": "approved",
+                                       "source_excerpt": "My plumber works from 9 Example Street"})
+    rows = [target, row("kind", scrubbed, source_kind="omi_recording"), row("bound", scrubbed, source_turn="m-another-turn"),
+            row("old", scrubbed)]
+
+    class _Svc:
+        async def list_by_status(self, **_kw):
+            return rows
+    twins = {t.id for t in run(pa.twins_of(UID, target, svc=_Svc(), strict=True))}
+    assert "kind" not in twins and "bound" not in twins, twins
+    assert "old" in twins, twins

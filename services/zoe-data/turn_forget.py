@@ -480,6 +480,22 @@ def scrubbed_form(text: str) -> str:
         return ""
 
 
+def excerpt_forms(text: str) -> tuple:
+    """An excerpt in BOTH forms a comparison may meet: as stored (lower-case, whitespace collapsed) and as the write boundary would
+    store it now (``scrubbed_form``). A row written before the wider scrub kept its contact as said, while a quote or a newer row's
+    excerpt holds it redacted: compared in one form only, the same words never match."""
+    raw = re.sub(r"\s+", " ", text or "").strip().lower()
+    if not raw:
+        return ()
+    scrubbed = scrubbed_form(text)
+    return (raw, scrubbed) if scrubbed and scrubbed != raw else (raw,)
+
+
+def forms_overlap(a: tuple, b: tuple) -> bool:
+    """One of the ``excerpt_forms`` of ``a`` lies inside one of ``b``'s, or the other way round."""
+    return any(x and y and (x in y or y in x) for x in a for y in b)
+
+
 def _legacy_row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float], turn_ids: frozenset) -> bool:
     """The TEXT matcher, for a LEGACY row only (``partition``): its ``user_turn_id`` is the turn's hash or one of ``turn_ids``
     (the ask-to-remember id), or its excerpt is exactly the turn's words as said - or, an excerpt the boundary redacted, exactly

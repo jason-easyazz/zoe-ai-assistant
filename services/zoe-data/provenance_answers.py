@@ -1387,6 +1387,12 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         # by a store-wide words match
         kind, src = turn_forget.classify(meta)
         src = src if kind == turn_forget.TURN else ""
+        _ref_forms: list = []
+
+        def ref_forms() -> tuple:           # the target's excerpt forms, scrubbed once (only if a legacy candidate needs them)
+            if not _ref_forms:
+                _ref_forms.append(turn_forget.excerpt_forms(str(meta.get("source_excerpt") or "")))
+            return _ref_forms[0]
         for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
@@ -1398,12 +1404,18 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
                 continue                                     # PER ROW: a row of ANOTHER saved turn is never a twin, however alike
             r_src = r_src if r_kind == turn_forget.TURN else ""
             by_id = bool(src) and r_src == src               # the same saved turn: no text needed to say so
+            # one excerpt inside the other as stored; for a LEGACY candidate only, also as the boundary scrubs it now (a pre-upgrade
+            # row kept its contact as said while a newer excerpt holds it redacted) - never widens a bound or non-turn candidate
+            ex_overlap = not by_id and bool(excerpt and r_ex) and (
+                excerpt in r_ex or r_ex in excerpt
+                or (r_kind == turn_forget.LEGACY and turn_forget.forms_overlap(ref_forms(), turn_forget.excerpt_forms(
+                    str(m.get("source_excerpt") or "")))))
             if not by_id:                                    # the candidate has no saved turn (legacy / non-turn): the words decide
                 if turn and r_turn and r_turn != turn:
                     continue                                 # two different saved turns: a different fact, however alike the words
-                if excerpt and r_ex and excerpt not in r_ex and r_ex not in excerpt:
+                if excerpt and r_ex and not ex_overlap:
                     continue
-            same_turn = by_id or bool(turn and r_turn == turn) or bool(excerpt and r_ex and (excerpt in r_ex or r_ex in excerpt))
+            same_turn = by_id or bool(turn and r_turn == turn) or ex_overlap
             r_ep = _row_epoch(m)
             near = ep is not None and r_ep is not None and abs(r_ep - ep) <= _TWIN_WINDOW_S
             if not (same_turn or near):
@@ -1525,13 +1537,14 @@ async def _resolve_turn_target(svc: Any, user_id: str, exp: "mp.Explained") -> A
     key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
     # the rows of the quoted turn (``turn_forget.partition``): a bound row by its saved-turn id only (a non-turn row is no turn's);
     # a LEGACY row by its excerpt holding the quote - as said, or as redacted (over-inclusive, legacy only); a target bound to a
-    # NON-TURN source takes nothing but its own entry
+    # NON-TURN source takes nothing but its own entry. The excerpt is compared in BOTH forms too: a row written before the wider
+    # scrub kept its excerpt as said, while the (backfilled) quote is redacted - so the excerpt also goes through the same scrubber
     bound, legacy = turn_forget.partition(rows)
     mine = [r for r in bound if turn_forget.classify(r) in {(turn_forget.TURN, m) for m in mids}]
     keys = [k for k in {key, turn_forget.scrubbed_form(exp.text or exp.quote)} if k] if not source_only else []
     for r in legacy:
-        ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
-        if ex and any(ex == k or k in ex for k in keys):
+        forms = turn_forget.excerpt_forms(str((r.metadata or {}).get("source_excerpt") or "")) if keys else ()
+        if any(f == k or k in f for f in forms for k in keys):
             mine.append(r)
     plan.rows = [r.id for r in mine]
     return plan
