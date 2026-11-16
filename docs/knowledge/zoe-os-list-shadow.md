@@ -100,6 +100,12 @@ The kernel record holds list items (household words) in the spine, in receipts (
   PARKED forget (queue full): it is replayed before the next job, ahead of adds still queued that were stamped before it. Those are
   now dropped as `dropped_erased reason=forgotten_before` (the park records when it happened; each add carries its door time). An
   add made after the forget completed is shadowed as usual (`test_os_shadow_forget.py`).
+* **Only the kernel's documented forget reply is "forgotten"**: exactly `{"count": int, "upto": int}`, both non-negative ints, never a
+  bool (`labs/zoe-os/zoe_os/server.py` `_op_forget`, `spine.ForgetResult`; the same for a whole, entity, topic or seqs forget). Anything
+  else in an `ok:true` envelope (null, `{}`, wrong keys, wrong types, extra keys) is `kernel_malformed`: the delete is NOT confirmed (with
+  the flag on the caller is told it failed) and the forget STAYS parked. `os_shadow.forget_ack` is the one reader; every path that confirms
+  a forget or drops its marker (`_do_forget`: delete, entity / topic erase, the cascade step and its retry; `_replay_pending`) goes
+  through it. "Never knew them" is the kernel's refusal, read as nothing to forget.
 * **A forget never blocks the event loop**: the job goes on the queue with `put_nowait`; a full queue parks the forget durably instead
   (the park's `flock` + fsync run in an executor thread). Honest to the caller: flag `shadow` and not confirmed (parked or not) raises
   `ShadowForgetUnavailable`; flag off and parked returns 0 (deferred); not parkable raises.
