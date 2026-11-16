@@ -748,7 +748,8 @@ def detect_intent(
 ) -> Optional[Intent]:
     try:
         import local_text_logs as _ltl_epoch
-        _miss_epoch: Optional[int] = _ltl_epoch.erase_epoch()   # BEFORE detection: an erase finishing mid-detect drops the miss append
+        # the TURN's epoch (read before STT on a voice turn, at entry for typed text), else now: an erase finishing after it drops the miss
+        _miss_epoch: Optional[int] = _ltl_epoch.writer_epoch()
     except Exception:  # noqa: BLE001 - unreadable guard: append stays in-progress-guarded only
         _miss_epoch = None
     t = _normalize_chat_intent_text(text)

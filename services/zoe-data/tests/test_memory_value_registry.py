@@ -1071,7 +1071,7 @@ def test_every_eraser_is_a_no_op_on_a_store_that_was_never_migrated(tmp_path, mo
 CALL_SITES = (
     ("memory_service.py", "delete_user", "forget_user"),
     ("memory_forget_cascade.py", "_run", "erase_entity"),
-    ("forget_topic.py", "forget", "erase_topic"),
+    ("forget_topic.py", "_forget", "erase_topic"),   # forget is a thin wrapper (marker clear in its finally); the body is _forget
     ("intent_router.py", "_execute_forget_last", "erase_for_turn"),
     ("memory_service.py", "erase_rows", "erase_for_rows"),
 )
