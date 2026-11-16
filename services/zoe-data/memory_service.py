@@ -3833,10 +3833,11 @@ class MemoryService:
         """A night write that raced a member erase (``erase_watermark.guarded_write``) is removed through the audited erase, under the
         member's lock this caller already holds. RAISES when it cannot (the row must not quietly stay)."""
         await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
-                              lock_held=True)
+                              lock_held=True, reach_shadow=False)   # the night's own fresh rows, never shadowed; under the memory lock
 
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
-                         reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False) -> dict[str, Any]:
+                         reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False,
+                         reach_shadow: bool = True) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
@@ -3867,6 +3868,16 @@ class MemoryService:
                 await memory_value_registry.erase_for_rows(user_id, want, gate_held=gate_held)
             except Exception as exc:
                 raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+        if reach_shadow:
+            # The Zoe OS shadow's record of this member (os_shadow.forget_for_erase): the turn behind these rows may have made shadowed
+            # list adds / reminders / alarms, and the kernel cannot target one turn, so the member's whole shadow record goes. FAIL
+            # CLOSED, flag on or off (a no-op only with no shadow state at all), OUTSIDE the memory lock like the registry step.
+            # ``reach_shadow=False`` only for a system undo of rows the night itself just wrote (never shadowed): see the pin.
+            try:
+                import os_shadow
+                await os_shadow.forget_for_erase(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"erase_rows failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         lock = contextlib.nullcontext() if lock_held else self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:

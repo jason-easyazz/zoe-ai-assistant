@@ -3195,7 +3195,8 @@ async def _synthesis_pass(user_id: str) -> dict:
                             if created_ids:
                                 # Outside the memory lock: erase_rows takes the erase gate before its memory lock.
                                 await svc.erase_rows(user_id, created_ids, actor="synthesis_undo",
-                                                     reason="synthesis source no longer live")
+                                                     reason="synthesis source no longer live",
+                                                     reach_shadow=False)   # rows synthesis just wrote, never shadowed
                                 logger.info("SYNTHESIS_SOURCE_COMPENSATED n=%d", len(created_ids))
                             continue
                     # Link synthesized memory back to source cluster

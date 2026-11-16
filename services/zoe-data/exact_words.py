@@ -528,11 +528,20 @@ async def erase_entity(user_id: str, name: str) -> int:
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 
+async def _shadow_first(user_id: str) -> None:
+    """The Zoe OS shadow step of a words erase (os_shadow.forget_for_erase): before the words go, the member's shadow record goes too,
+    confirmed or this RAISES (the forget must not be confirmed). A no-op with no shadow state at all."""
+    import os_shadow
+
+    await os_shadow.forget_for_erase(user_id)
+
+
 async def erase_turn(user_id: str, turn_id: str) -> int:
     """Delete ONE indexed turn by its id (the precise form of ``erase_text``: a displayed quote can be shortened). Store failures
     are RAISED. 0 = no such turn."""
     if not (user_id or "").strip() or not (turn_id or "").strip():
         return 0
+    await _shadow_first(user_id)
     return int(await get_backend().delete(user_id, [turn_id]) or 0)
 
 
@@ -543,6 +552,7 @@ async def erase_text(user_id: str, text: str) -> int:
     key = _squash(text or "").lower().strip(" .!?\"'")
     if not (user_id or "").strip() or len(key) < 6:
         return 0
+    await _shadow_first(user_id)
     backend = get_backend()
     needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
     if not needle:
@@ -579,6 +589,7 @@ async def forget_transcript(user_id: str, text: str) -> int:
     key = _squash(text or "").lower().strip(" .!?\"'")
     if not (user_id or "").strip() or len(key) < 6 or not isinstance(get_backend(), SqlBackend):
         return 0
+    await _shadow_first(user_id)
     needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
     if not needle:
         return 0

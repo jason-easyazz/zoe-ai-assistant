@@ -1068,6 +1068,21 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     raise ShadowForgetUnavailable(f"{code} (parked)")
 
 
+async def forget_for_erase(user_id: str) -> int:
+    """THE shadow step of every row- and turn-scoped erase (``MemoryService.erase_rows`` and ``exact_words``' erasers: "forget that",
+    "forget it", the memories-screen row forget, a guardian forget, curation, the day-review unwrite...), same contract as
+    ``forget_user``: confirmed or it RAISES (``ShadowForgetUnavailable``, parked), whatever the flag; a no-op only with no shadow
+    state at all.
+
+    What the kernel's ``forget`` can target today (``labs/zoe-os/zoe_os/server.py`` ``_op_forget`` -> ``spine.forget``): a whole
+    member (``subject``), event sequence numbers (``seqs``), an ``entity`` name (also shielded), a ``topic``'s words. NOT a request,
+    turn or production row: zoe-data keeps no map from a turn to the kernel events its writes produced (the cause event carries fixed
+    text, never a turn id). So a row- or turn-scoped forget cannot name the turn's shadow records; the nearest CORRECT op is the
+    member's whole shadow record (the documented safe over-forget: a shadow copy is disposable). Narrowing it needs the shadow to
+    record its seqs per turn first (an open item)."""
+    return await _forget(user_id, None, None)
+
+
 async def forget_user(user_id: str) -> int:
     """Whole-member forget in the kernel (``MemoryService.delete_user``). Raises ``ShadowForgetUnavailable`` while shadow is on."""
     return await _forget(user_id, None, None)

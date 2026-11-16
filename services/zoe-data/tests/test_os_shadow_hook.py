@@ -641,3 +641,23 @@ def test_find_list_id_is_unchanged_and_find_list_adds_the_name():
     db = _GroceriesDB()
     assert asyncio.run(list_service.find_list_id(db, user_id=MEMBER, list_type="shopping", name="Shopping")) == "L1"
     assert asyncio.run(list_service.find_list(db, user_id=MEMBER, list_type="shopping", name="Shopping")) == ("L1", "Groceries")
+
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_suggestion_is_proposed_against_the_list_row_it_wrote_to(kernel, monkeypatch):
+    """The suggestion path (``_execute_action``) finds its list by the EXACT name ``list_type.capitalize()`` (``name=$2``) or creates
+    it with that name, so the row's name IS that value: the hook passes the same expression (the train review's third finding is
+    not a mismatch; this pins the invariant it relies on)."""
+    import inspect
+
+    import pending_suggestions
+
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    conn = _Conn()
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    out = await pending_suggestions.execute_suggestion("s1", MEMBER)
+    settle(1)
+    assert out["ok"] and [a["args"]["list"] for _, op, a in kernel.calls if op == "act"] == ["Shopping"]
+    src = inspect.getsource(pending_suggestions._execute_action)
+    assert "ln = lt.capitalize()" in src and "name=$2" in src

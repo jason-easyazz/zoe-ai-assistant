@@ -798,3 +798,118 @@ def test_a_newer_park_of_the_same_member_during_a_replay_stays_parked(kernel, mo
     monkeypatch.setattr(os_shadow, "_kernel_forget", again)
     assert os_shadow._replay_pending(os_shadow._Kernel()) is False
     assert _pending(kernel) == ["member-a"]                               # the confirmed request cleared, the newer one kept
+
+
+# ---- EVERY erase entry point reaches the shadow (train review): the choke points and the registry --------------------------------
+#: every member-data forget entry point -> the choke it goes through. A NEW forget entry point must reach one of CHOKES or be named
+#: here; the scan below proves each named one does.
+FORGET_ENTRY_POINTS = {
+    "memory_service.py::delete_user": "os_shadow.forget_user (member delete, fail closed)",
+    "memory_forget_cascade.py::_clear": "os_shadow.erase_entity / forget_user (entity forget and its retry)",
+    "forget_topic.py::_forget": "os_shadow.erase_topic, then erase_rows / exact_words",
+    "memory_space.py::forget_row": "erase_rows (the memories-screen row forget)",
+    "memory_space.py::guardian_forget": "erase_rows (a guardian's forget)",
+    "provenance_answers.py::forget_it": "erase_rows + exact_words (\"forget it\")",
+    "intent_router.py::_execute_forget_last": "erase_rows + exact_words (\"forget that\")",
+    "intent_router.py::execute_intent": "erase_rows (the list-correction forget)",
+    "memory_curation.py::_forget_locked": "erase_rows (a curator's forget)",
+    "omi_review_apply.py::unwrite": "erase_rows (the day-review unwrite)",
+}
+CHOKES = {"erase_rows", "erase_turn", "erase_text", "forget_transcript", "forget_user", "erase_entity", "erase_topic", "forget_for_erase"}
+#: erase_rows callers allowed to skip the shadow, with the reason
+NO_SHADOW_OK = {
+    "memory_service.py::_undo_night_write": "the night's own fresh rows, never shadowed, under the memory lock",
+    "memory_digest.py::*": "synthesis undo of rows it just wrote, never shadowed",
+}
+
+
+def _fn_calls(path, name):
+    tree = ast.parse((SVC / path).read_text("utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    return [c for c in ast.walk(fn) if isinstance(c, ast.Call)], fn
+
+
+def _called(c):
+    return getattr(c.func, "attr", getattr(c.func, "id", ""))
+
+
+@pytest.mark.parametrize("site", sorted(FORGET_ENTRY_POINTS))
+def test_every_forget_entry_point_reaches_a_shadow_choke(site):
+    path, name = site.split("::")
+    calls, _ = _fn_calls(path, name)
+    assert {_called(c) for c in calls} & CHOKES, f"{site} erases member data without reaching the Zoe OS shadow"
+
+
+def test_the_row_choke_reaches_the_shadow_before_deleting_and_the_word_chokes_too():
+    calls, fn = _fn_calls("memory_service.py", "erase_rows")
+    src = ast.get_source_segment((SVC / "memory_service.py").read_text("utf-8"), fn)
+    assert src.index("os_shadow.forget_for_erase") < src.index("self._delete_ids")
+    for name in ("erase_turn", "erase_text", "forget_transcript"):
+        calls, fn = _fn_calls("exact_words.py", name)
+        src = ast.get_source_segment((SVC / "exact_words.py").read_text("utf-8"), fn)
+        assert "await _shadow_first(user_id)" in src and src.index("_shadow_first") < max(src.find(".delete("), src.find("UPDATE"),
+                                                                                             src.find("_transcript_candidates")), name
+
+
+def _no_shadow_sites(source_by_path: dict) -> set:
+    found = set()
+    for path, src in source_by_path.items():
+        for fn in [n for n in ast.walk(ast.parse(src)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            for c in ast.walk(fn):
+                if (isinstance(c, ast.Call) and _called(c) == "erase_rows"
+                        and any(k.arg == "reach_shadow" and getattr(k.value, "value", True) is False for k in c.keywords)):
+                    found.add(f"{path}::{fn.name}")
+    return found
+
+
+def _allowed(site):
+    return site in NO_SHADOW_OK or f"{site.split('::')[0]}::*" in NO_SHADOW_OK
+
+
+def test_only_the_named_system_undos_skip_the_shadow_and_a_rogue_skip_is_caught():
+    sources = {p.relative_to(SVC).as_posix(): p.read_text("utf-8") for p in SVC.rglob("*.py")
+               if "tests" not in p.relative_to(SVC).parts and "erase_rows" in p.read_text("utf-8")}
+    sites = _no_shadow_sites(sources)
+    assert sites and all(_allowed(s) for s in sites), sorted(s for s in sites if not _allowed(s))
+    rogue = {"rogue.py": "async def wipe(svc, u, ids):\n    await svc.erase_rows(u, ids, actor=u, reach_shadow=False)\n"}
+    assert not all(_allowed(s) for s in _no_shadow_sites(rogue))            # negative control: a new skip is flagged
+    calls, _ = _fn_calls("memory_space.py", "forget_row")
+    assert "erase_rows" in {_called(c) for c in calls}
+    rogue_entry = "async def forget_everything(u):\n    import exact_words\n    await exact_words.get_backend().delete(u, ['t1'])\n"
+    called = {_called(c) for c in ast.walk(ast.parse(rogue_entry)) if isinstance(c, ast.Call)}
+    assert not called & CHOKES                                                # negative control: a rogue eraser reaches no choke
+
+
+@pytest.mark.asyncio
+async def test_a_row_forget_with_shadow_records_and_its_kernel_stopped_is_not_confirmed(kernel, env, monkeypatch):  # noqa: F811
+    import memory_service
+
+    svc, _col = env
+    _stop_kernel_with_records(kernel, monkeypatch)
+    with pytest.raises(memory_service.MemoryServiceError, match="Zoe OS shadow erasure failed"):
+        await svc.erase_rows(MEMBER, ["r1"], actor=MEMBER)
+    assert _pending(kernel) == [MEMBER]
+    await svc.erase_rows(MEMBER, ["r1"], actor="night_undo:x", lock_held=False, reach_shadow=False)   # a system undo: not blocked
+
+
+@pytest.mark.asyncio
+async def test_a_words_forget_with_shadow_records_and_its_kernel_stopped_raises(kernel, monkeypatch):
+    import exact_words
+
+    exact_words.set_backend(exact_words.MemoryBackend())
+    _stop_kernel_with_records(kernel, monkeypatch)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await exact_words.erase_text(MEMBER, "the book club meets on tuesday")
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await exact_words.erase_turn(MEMBER, "t1")
+
+
+@pytest.mark.asyncio
+async def test_with_no_shadow_state_a_row_and_a_words_forget_touch_nothing(env, tmp_path):  # noqa: F811
+    import exact_words
+
+    svc, _col = env
+    exact_words.set_backend(exact_words.MemoryBackend())
+    assert (await svc.erase_rows(MEMBER, ["r1"], actor=MEMBER))["rows_removed"] == 0
+    assert await exact_words.erase_text(MEMBER, "the book club meets on tuesday") == 0
+    assert not (tmp_path / "os-shadow").exists()

@@ -34,6 +34,7 @@ import math
 import re
 import sys
 from collections import Counter
+from typing import Optional
 
 #: the marker followed by its payload, OR the marker alone (a line cut right after it, with or without a newline): every marker line
 #: is read, and one whose payload is missing or cut short is ``rejected`` (counted), never skipped
@@ -157,9 +158,11 @@ PASS_P90_MS = 10.0               # hop p90 UNDER 10 ms
 UNNAMED_REASONS = (UNKNOWN, "other")
 
 
-def verdict(agree: int, disagree: int, unavailable: int, unexplained: int, hop_p90: float) -> dict:
+def verdict(agree: int, disagree: int, unavailable: int, unexplained: int, hop_p90: float, answered: Optional[int] = None) -> dict:
     """The five numbers of the pass mark, each checked exactly (no rounding), and which ones fail. ``unexplained`` == 0 is the part a
-    machine can check; every listed disagreement still has to be explained by a person before the flip."""
+    machine can check; every listed disagreement still has to be explained by a person before the flip. ``answered``: how many of the
+    judged writes carry an ANSWERED hop (a kernel state and a hop): the p90 is evidence only over at least ``PASS_MIN_COMPARED`` of
+    them, so lines without hop evidence can never pass the latency number by default."""
     judged, asked = agree + disagree, agree + disagree + unavailable
     fails = []
     if judged < PASS_MIN_COMPARED:
@@ -170,7 +173,9 @@ def verdict(agree: int, disagree: int, unavailable: int, unexplained: int, hop_p
         fails.append(f"{unexplained} disagreement(s) with no known code or reason")
     if asked and unavailable * PASS_UNAVAILABLE[1] >= PASS_UNAVAILABLE[0] * asked:
         fails.append(f"unavailable {unavailable / asked * 100:.2f}% >= 1%")
-    if not judged or hop_p90 >= PASS_P90_MS:
+    if answered is not None and judged >= PASS_MIN_COMPARED and answered < PASS_MIN_COMPARED:
+        fails.append(f"answered hops {answered} < {PASS_MIN_COMPARED}")   # enough lines, but not enough of them carry hop evidence
+    elif not judged or hop_p90 >= PASS_P90_MS:
         fails.append(f"hop p90 {hop_p90:.2f} ms >= {PASS_P90_MS:g} ms" if judged else "no answered hop")
     return {"pass": not fails, "fails": fails}
 
@@ -179,7 +184,7 @@ def verdict(agree: int, disagree: int, unavailable: int, unexplained: int, hop_p
 NOT_COMPARABLE = ("schedule_unproven",)
 
 
-def _verb_verdict(recs: list[dict], b: Counter, unexplained: int, hop_p90: float) -> dict:
+def _verb_verdict(recs: list[dict], b: Counter, unexplained: int, hop_p90: float, answered: Optional[int] = None) -> dict:
     """The pass line. One rule before the five numbers: when there IS at least one disagreement and EVERY disagreement is
     ``schedule_unproven`` (the kernel's read-back does not say when a reminder is due), the verb is ``not_comparable``: its agree rate
     measures the kernel's missing field, not a disagreement, and is not reported as a failure. One real disagreement of any other code
@@ -187,7 +192,7 @@ def _verb_verdict(recs: list[dict], b: Counter, unexplained: int, hop_p90: float
     dis = Counter(r["result"] for r in recs if bucket(r["result"]) == "disagree")
     if dis and set(dis) <= set(NOT_COMPARABLE):
         return {"pass": False, "status": "not_comparable", "fails": [f"{code}: {n}" for code, n in sorted(dis.items())]}
-    out = verdict(b["agree"], b["disagree"], b["unavailable"], unexplained, hop_p90)
+    out = verdict(b["agree"], b["disagree"], b["unavailable"], unexplained, hop_p90, answered)
     return {**out, "status": "pass" if out["pass"] else "not_yet"}
 
 
@@ -210,7 +215,7 @@ def verb_summary(recs: list[dict]) -> dict:
     return {
         "compared": judged, "unexplained": unexplained, "old_kernel": sum(1 for r in recs if r.get("reason") == "old_kernel"),
         "unavailable_rate": round(b["unavailable"] / asked, 4) if asked else None,
-        "verdict": _verb_verdict(recs, b, unexplained, pct(hops, 90)),
+        "verdict": _verb_verdict(recs, b, unexplained, pct(hops, 90), len(hops)),
         "seen": len(recs), "agree": b["agree"], "disagree": b["disagree"], "unavailable": b["unavailable"],
         "not_compared": b["not_compared"], "agree_rate": round(b["agree"] / judged, 4) if judged else None,
         "unknown": sum(1 for r in recs if r["result"] == UNKNOWN), "shadow_errors": sum(1 for r in recs if r["result"] == "shadow_error"),
