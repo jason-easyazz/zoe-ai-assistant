@@ -3121,8 +3121,8 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
         )
     except HouseholdListUnavailable:
         return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
-    except os_authority.ListAddRefused:     # the Zoe OS kernel refused for the person's own reason: honoured, nothing written
-        return os_authority.REFUSAL_REPLY
+    except os_authority.ListAddRefused as refused:     # the Zoe OS kernel refused for the person's own reason: honoured, nothing written
+        return os_authority.refusal_reply(refused.code)
     except Exception as exc:
         logger.warning("list_add direct execution unavailable: %s", exc)
         return None

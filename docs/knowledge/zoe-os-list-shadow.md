@@ -26,7 +26,8 @@ One live write core is two functions and a REST route. Every path below ends in 
 | Pendant day review applying an approved list item | `omi_review_apply.py:148` | `list_service.add_item_to_list` (`list_service.py:534`), no receipts list | `list_service.py:609` / `:655`, `source=single` |
 | Skybridge voice resolver ("add X to the shopping list" at the panel) | `routers/voice_tts.py:4623` `resolve_skybridge_request` -> `skybridge_service.py:3569` -> `_resolve_list_add_item` (`:4882`) and the "this list" path `:4626` | its own inline INSERT in `_add_spoken_items` (`skybridge_service.py:4786`) | `skybridge_service.py:4871`, `source=skybridge` |
 | UI / REST "add an item" | `routers/lists.py` `POST /{list_type}/{list_id}/items` | `create_item_record` directly | `routers/lists.py:389`, `source=rest` |
-| Zoe's own accepted offer (`pending_suggestions.py:887`), the trip packing list (`anticipation.py:620`) | an offer the member accepted | inline INSERT / `create_item_record` | **not shadowed**, with a reason each in `tests/test_os_shadow_hook.py` `NOT_SHADOWED` |
+| a suggestion the member accepted (`pending_suggestions._execute_action`, inside the transaction) | the member's yes | inline INSERT | **shadowed** by its only caller `execute_suggestion`, after the commit (`src=suggestion`; `HOOKED_BY_CALLER` in `tests/test_os_shadow_hook.py`) |
+| the trip packing list (`anticipation._do`) | Zoe starts it from one offer, many items | `create_item_record` | **not shadowed**: system-generated, no member add to compare (`NOT_SHADOWED`) |
 
 **The seam.** There is no single function all four share: `write_receipts.record(user, "list", row_id, why)` is called by all of them but
 carries no item, no list and no outcome. So the hook is four one-line calls, and a static test
@@ -63,7 +64,7 @@ without the lab stack and the contract test starts running the day both are pres
 | what runs | `labs/zoe-os/shadow_daemon.py`: the lab kernel + the lab `Lists` driver + the `Keeper` that erases the driver's rows when the kernel forgets. The driver's rows are **in memory**; the durable record is the spine (events + receipts) |
 | when it is down | the shadow logs ONE line per add with `result=kernel_unavailable` and carries on; a 5 s circuit stops it reconnecting per add; the live add is untouched. `Restart=on-failure` brings it back; the client re-reads `creds.json` on every reconnect, so a re-issued credential needs no zoe-data restart |
 | supervision | systemd only. There is no watchdog: a dead shadow is visible in the report (`kernel_unavailable` count), by design not an alarm |
-| roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json` and restart the unit |
+| roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json` and restart the unit. A FORGET never consults the roster: it is sent by the member's id whatever `people.json` says now (a member taken off it may still have records); only the kernel's own "never knew them" refusal reads as nothing to forget, which is sound because the daemon keeps every id it was ever started with |
 
 ## 4. Privacy and forget [code; lab for the kernel's own forget]
 
@@ -78,8 +79,26 @@ The kernel record holds list items (household words) in the spine, in receipts (
 * **Topic forget** (`forget_topic._forget`): `os_shadow.erase_topic` (kernel `forget(topic=...)`), failure = `store_down` + the same marker.
 * A scope the kernel refuses to match falls back to a whole-member forget (a scope that matches nothing never widens, but this store may).
 * **Flag off but a kernel was once installed** (`creds.json` exists): forget still tries; if it cannot reach the kernel it records the member
-  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. **Flag off and no
+  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. The park is a
+  locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
+  ran is kept; a park that cannot be made durable (disk, an unreadable file, which is never overwritten) FAILS the erase closed
+  (`ShadowForgetUnavailable`) instead of letting it say done. **Flag off and no
   `creds.json`**: nothing was ever recorded, no socket is touched.
+* **A parked forget always reaches the kernel before any later add for that member** (`test_os_shadow_forget.py`, "forgotten means
+  forever"): the worker replays the park file before EVERY job while anything is parked (an in-memory copy of the parked ids is kept in
+  step with the file under its lock, so a known-empty park costs one global read per job and no file I/O; a new process reads the file
+  before its first job, so a park survives a restart). While a member's forget is still parked (kernel down, refused, file unreadable)
+  that member's adds are dropped as `dropped_erased reason=pending_forget`, never sent ahead of it. A replay ahead of an add respects the
+  5 s circuit (no connect per add to a dead kernel); a forget job always tries.
+* **An add stamped before a forget never reaches the kernel after it.** Queued forgets need nothing extra: one FIFO worker sends
+  every add stamped (and queued) before the forget first, an add in flight finishes first, and the forget then removes them. A
+  whole-member erase also moves `user_erase_gate`'s generation (`erase_span`), which drops queued adds as before. The hole was the
+  PARKED forget (queue full): it is replayed before the next job, ahead of adds still queued that were stamped before it. Those are
+  now dropped as `dropped_erased reason=forgotten_before` (the park records when it happened; each add carries its door time). An
+  add made after the forget completed is shadowed as usual (`test_os_shadow_forget.py`).
+* **A forget never blocks the event loop**: the job goes on the queue with `put_nowait`; a full queue parks the forget durably instead
+  (the park's `flock` + fsync run in an executor thread). Honest to the caller: flag `shadow` and not confirmed (parked or not) raises
+  `ShadowForgetUnavailable`; flag off and parked returns 0 (deferred); not parkable raises.
 * Erase ordering: forget jobs and proposals share ONE FIFO queue and one worker, so a proposal queued before an erase is sent before the
   forget and removed by it; one queued after is dropped (`user_erase_gate` generation moved / erase in progress: `dropped_erased`).
 * `forget_reach.py` lists the kernel store (`zoe_os_shadow_kernel`: reached, member + entity erasers); `docs/knowledge/forget-reach.md` is regenerated.
@@ -97,8 +116,13 @@ The comparison is made for each list add that really landed (`os_shadow.compare`
 | outcome class | `added` | `verified` / `unverified` / `uncertain` / `refused` |
 
 Result codes (the closed set; one per add): `match`, `kernel_refused_live_did` (with `reason=` `no_grant|manifest|params|cause|forgotten|other`),
-`kernel_unverified_live_did`, `item_differs`, `list_differs`, `kernel_malformed`, `kernel_unavailable`, `timeout`,
-and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop`. `kernel_did_live_refused` exists in the comparator
+`kernel_unverified_live_did`, `item_differs`, `list_differs`, `member_differs` (a verified receipt for ANOTHER member) and `member_unproven` (a receipt
+that names no member), `kernel_malformed` (`reason=crossed` when the reply's `v` / `id` is not this request's: a stale or crossed reply is never the answer),
+`kernel_unavailable`, `timeout`,
+and not-compared codes `member_not_in_roster`, `dropped_erased`, `queue_full`, `live_noop` (`live=noop`), `worker_down`, `no_input` (no member
+or no item) and `shadow_error` (the shadow's OWN failure: `reason=hook` at the door, `worker` in the worker, `code` for a code outside the set).
+With the switch on and the verb listed, EVERY `note_*` call writes exactly one line, with the same nine fields, through the one emitter `_finish`; `RESULTS` in
+`os_shadow.py` is exactly the set that can be written (both pinned in `tests/test_os_shadow.py`). `kernel_did_live_refused` exists in the comparator
 and is tested, but **no call site feeds a live refusal yet** [code]: only landed adds are proposed, so the "kernel did it, live refused" row of
 the week's table will read zero by construction, not by evidence. `list_differs` is likewise **not measurable with the lab driver**: it is told
 the list, it does not resolve one, and its read-back is `{"item"}` only. Both become meaningful when a kernel driver owns list resolution.
@@ -107,8 +131,13 @@ The log line (INFO, logger `os_shadow`, in `~/.zoe-logs/zoe-data.*`) carries **n
 
     OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=0.9 q_ms=0.1
 
-`src` is one of `spoken|single|skybridge|rest`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
-`q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table.
+Every field is from a closed set (`os_shadow.SOURCES`, `CLASSES`, `LIVE`, `KERNEL_STATES`, `REASONS`, `RESULTS`) or a number; `_finish`
+maps anything else to `other` / `none`, so no caller argument can put text in the line or a counter key. `src` is one of
+`spoken|single|skybridge|rest|suggestion|service|other`; `cls` is `shopping|todo|personal|other`. `hop_ms` is the kernel round trip (publish + act);
+`q_ms` the wait in the queue. `scripts/maintenance/os_shadow_report.py` turns a week of these lines into the table. It drops nothing: a result code it does not know is
+counted as `unknown` (a compared add that is not a match), a marker line it cannot read as `rejected` (a repeated key, no result, or a
+`hop_ms` / `q_ms` that is missing, empty, not a number, nan / inf, negative or over a day), an unknown KEY is counted by an 8-hex tag of
+its name (never the name: it is caller text in principle), and the totals always add up to the lines read (`tests/unit/test_os_shadow_report.py::test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted`).
 
 ## 6. Speed and safety of the hook [lab]
 
@@ -119,7 +148,9 @@ worker thread's GIL share while it talks to the socket [not measured] and was no
 
 With the REAL lab kernel (`labs/zoe-os/shadow_daemon.py`, one process, 200 adds paced 10 ms apart, system python 3.10, box under normal builder load; a one-off scratch script, not committed) [lab, 2026-11-15, before the worker moved to import time]: the hook cost on the caller was **p50 0.06 ms, p95 0.14 ms** (max 7 ms: the very first add started the worker thread; the worker now starts at import while the switch is `shadow`, not re-measured), and the kernel round trip (publish + act, on the worker thread) was **p50 1.6 ms, p95 2.2 ms, max 11 ms**, all 200 `match`. The hop is paid by the worker, never by the turn. A burst of 300 adds in a tight loop overflowed the 64-slot queue (236 `queue_full`, nothing blocked).
 
-A slow kernel is cut off per operation (0.5 s) and per add (1.5 s); a full queue (64) drops and counts; nothing the worker does can raise
+A slow kernel is cut off by ONE budget per shadowed write (1.5 s from its first kernel call): every connect, handshake, publish, act and read draws
+on what is left, each also capped at 0.5 s, so a stall at any stage ends the add as `timeout` within the budget
+(`test_one_deadline_per_add_covers_every_socket_stage`, `test_every_verb_runs_on_one_deadline`); a full queue (64) drops and counts; nothing the worker does can raise
 into a turn (`test_the_live_add_is_identical_with_the_shadow_off_dead_or_on`: the rows the live path writes and the outcome it returns are identical
 with the flag off, with the kernel dead, refusing, closing the connection mid-call, or answering garbage).
 

@@ -1086,6 +1086,18 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                 )
                 if action == "forget_alias":
                     await _scrub_forget_alias(suggestion_id, conn)
+        if action == "list_add" and isinstance(result, dict):
+            # The member said yes: a real list add, so the Zoe OS shadow (os_shadow.py) hears it, AFTER the transaction committed (the row
+            # is written inside it, by _execute_action). Never raises; a flag read with the shadow off.
+            import os_shadow
+
+            os_shadow.note_add(user_id, source="suggestion", list_type=slots.get("list_type", "shopping"),
+                               list_name=str(slots.get("list_type", "shopping")).capitalize(), item=result.get("text"))
+        elif action == "reminder_create" and isinstance(result, dict):
+            import os_shadow      # the member's yes is a real reminder: shadowed after the commit (no due time: the kernel cannot say it)
+
+            os_shadow.note_reminder_create(user_id, source="suggestion", note=result.get("title"), due_date=None, due_time=None,
+                                           recurring=False)
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}

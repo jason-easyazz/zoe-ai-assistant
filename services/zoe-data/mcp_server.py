@@ -1542,8 +1542,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 category=args.get("category"),
                 new_list_visibility=default_visibility(lt),
             )
-        except os_authority.ListAddRefused:      # the Zoe OS kernel refused for the person's own reason: nothing was written
-            return {"error": os_authority.REFUSAL_REPLY + " Nothing was added - tell the user exactly that."}
+        except os_authority.ListAddRefused as refused:      # the Zoe OS kernel refused for the person's own reason: nothing was written
+            return {"error": os_authority.refusal_reply(refused.code) + " Nothing was added - tell the user exactly that."}
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
         result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"],
