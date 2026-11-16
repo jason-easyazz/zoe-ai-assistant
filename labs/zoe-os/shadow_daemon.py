@@ -186,17 +186,23 @@ def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
     """The CURRENT roster and how it read: ``ok``, ``empty`` or ``unreadable``. Forget never depends on it: the kernel loads every
     id its record names whatever this says, and only roster members are granted anything.
 
-    * MISSING people.json: an operator error (the owner never exported a roster): refuse to start;
+    * MISSING people.json (no file, or a symlink to nothing: ``FileNotFoundError``): an operator error (the owner never exported a
+      roster): refuse to start;
     * EMPTY (``{"people": []}``, the last member removed): a valid household state. Nobody can be proposed for or acted for; the
       recorded people can still be forgotten;
-    * UNREADABLE (not JSON, wrong shape, a non-string id): treated as EMPTY for grants (nothing is granted on a roster nobody can
-      read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line).
+    * UNREADABLE: a file that is there but cannot be read (``EACCES``, ``EIO``, a directory in its place: any other ``OSError``),
+      or is not JSON, has the wrong shape or a non-string id. Treated as EMPTY for grants (nothing is granted on a roster nobody
+      can read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line).
     ONE rule for both daemons: ``authority.py`` imports this (``daemon`` names which one in the stderr line)."""
     path = state / "people.json"
-    if not path.exists():
-        raise SystemExit("people.json is missing: export the household roster first (see README)")
     try:
-        people = json.loads(path.read_text("utf-8"))["people"]
+        raw = path.read_text("utf-8")
+    except FileNotFoundError:
+        raise SystemExit("people.json is missing: export the household roster first (see README)") from None
+    except (OSError, UnicodeDecodeError):
+        raw = None                                 # there, but unreadable: never a reason to stop serving forget
+    try:
+        people = json.loads(raw)["people"] if raw is not None else None
     except (ValueError, KeyError, TypeError, UnicodeDecodeError):
         people = None
     if not isinstance(people, list) or not all(isinstance(p, str) and p for p in people):

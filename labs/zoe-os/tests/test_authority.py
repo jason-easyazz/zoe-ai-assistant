@@ -16,13 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from authority import digest
+from authority import digest, keyed_digest
 from zoe_os import wire
 from zoe_os.client import Client
 from zoe_os.spine import Refused
 
 HERE = Path(__file__).parent
 A, B = "member-a", "member-b"
+ASKED_FOR: dict = {}            # state dir -> {(member, item)} every add a test made there (survives the daemon's restarts)
 
 
 class Daemon:
@@ -42,14 +43,24 @@ class Daemon:
         self.bare_panel = Client(self.sock, "panel", self.creds["panel"], timeout=5)                          # the surface's word alone
         erase = json.loads((state / "erase-creds.json").read_text())["creds"]["eraser"]
         self.eraser = Client(self.sock, "eraser", bytes.fromhex(erase), timeout=5)       # the member-delete path's own credential
+        rec = json.loads((state / "reconcile-creds.json").read_text())
+        self.digest_key = bytes.fromhex(rec["digest_key"])
+        self.reconciler = Client(self.sock, "reconciler", bytes.fromhex(rec["creds"]["reconciler"]), timeout=5)
 
     def add(self, person: str, item: str) -> dict:
+        ASKED_FOR.setdefault(str(self.state), set()).add((person, item))      # the "production rows" the reconciler matches against
         said = self.voice.publish("utterance", subject=person, payload={"text": "synthetic list add"})
         return self.brain.call("act", action="list.add", on_behalf_of=person,
                                args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
 
+    def keyed(self) -> list:
+        return self.reconciler.call("list_digest")["digests"]
+
     def digests(self) -> list:
-        return self.panel.call("list_digest")["digests"]
+        """What the kernel holds, as the plain item digests the assertions read: each KEYED digest the reconciler gets is matched,
+        the way the reconcile tool does, against the keyed digest of every row this state directory's test ever asked for."""
+        known = {keyed_digest(self.digest_key, m, "shopping", i): digest(i) for m, i in ASKED_FOR.get(str(self.state), ())}
+        return sorted(known.get(k, "unmatched") for k in self.keyed())
 
     def kill(self) -> None:
         self.proc.kill()
@@ -334,7 +345,7 @@ def test_a_copy_that_does_not_match_the_old_record_refuses_the_start_and_keeps_b
 # ---- the roster at start: an empty one is a household, never a reason to stop serving forget ---------------------------------------
 def _members_bytes(state: Path, word: bytes) -> list:
     """Every file of the state directory but the credential files, scanned for ``word`` (the contract test's byte-scan pattern)."""
-    skip = {"creds.json", "erase-creds.json", "identity-creds.json"}
+    skip = {"creds.json", "erase-creds.json", "identity-creds.json", "reconcile-creds.json"}
     return [f.name for f in state.rglob("*") if f.is_file() and f.name not in skip and word in f.read_bytes()]
 
 
@@ -399,3 +410,64 @@ def test_undo_of_a_remove_after_a_forget_restores_exactly_the_rows_the_forget_di
     assert d.digests() == want
     d.kill()
     assert start(state).digests() == want                             # the rebuild replays the scrubbed snapshot too
+
+
+# ---- list_digest: keyed, and only for the reconciler ------------------------------------------------------------------------------
+def test_a_surface_cannot_confirm_any_members_item_and_the_reconciler_gets_keyed_digests_it_can_match(state):
+    import hashlib
+    d = start(state)
+    for who, item in ((A, "oat milk"), (B, "eggs"), (B, "oat milk")):
+        d.add(who, item)
+    for who in (d.panel, d.bare_panel, d.brain, d.voice, d.eraser):
+        with pytest.raises(Refused, match="only the reconciler"):
+            who.call("list_digest")                                   # a surface, even with a speaker key, a skill, the eraser
+    got = d.keyed()
+    assert len(got) == len(set(got)) == 3                             # the same item for two members: two different digests
+    guesses = set()
+    for item in ("oat milk", "eggs", "bread", "Oat Milk", " oat milk "):
+        for text in {item, item.strip(), item.strip().lower()}:       # every way the old unkeyed digest could be guessed
+            for msg in (text, f"{A}{text}", f"{B}{text}", f"{A}:shopping:{text}", json.dumps([A, "shopping", text]),
+                        json.dumps([B, "shopping", text], separators=(",", ":"))):
+                h = hashlib.sha256(msg.encode()).hexdigest()
+                guesses.update({h, h[:16], h[:32]})
+    assert guesses.isdisjoint(got)                                    # the dictionary attack confirms nothing
+    assert sorted(keyed_digest(d.digest_key, m, "shopping", i) for m, i in ((A, "oat milk"), (B, "eggs"), (B, "Oat Milk"))) == \
+        sorted(got)                                                   # the reconciler, holding the key, matches every row
+    assert (state[0] / "reconcile-creds.json").stat().st_mode & 0o777 == 0o600
+    others = "".join((state[0] / f).read_text() for f in ("creds.json", "erase-creds.json", "identity-creds.json"))
+    assert d.digest_key.hex() not in others and "reconciler" not in others
+
+
+@pytest.mark.parametrize("damage", ["unreadable_mode", "a_directory"])
+def test_a_roster_file_that_is_there_but_cannot_be_read_starts_the_kernel_for_forget_only(state, damage):
+    if damage == "unreadable_mode" and os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file: the permission case cannot be shown as root")
+    d = start(state)
+    d.add(A, "synthetic quince marker")
+    d.kill()
+    roster = state[0] / "people.json"
+    if damage == "unreadable_mode":
+        roster.chmod(0o000)
+    else:
+        roster.unlink()
+        roster.mkdir()
+    try:
+        again = start(state)
+        assert again.brain.call("health")["roster"] == "unreadable"
+        said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
+        with pytest.raises(Refused, match="no grant"):
+            again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq}, caused_by=[said.seq])
+        assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
+    finally:
+        if roster.is_file():
+            roster.chmod(0o600)                                       # (so the scan below can read every file)
+    assert _members_bytes(state[0], b"synthetic quince marker") == []
+
+
+def test_a_roster_symlink_to_nothing_is_a_missing_roster_and_refuses_the_start(state):
+    roster = state[0] / "people.json"
+    roster.unlink()
+    roster.symlink_to(state[0] / "no-such-roster.json")
+    p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0])],
+                       capture_output=True, text=True, timeout=30, env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
+    assert p.returncode != 0 and "people.json is missing" in p.stderr

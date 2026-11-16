@@ -136,3 +136,39 @@ def test_a_missing_roster_file_is_an_operator_error_and_refuses_the_start(state)
     p = subprocess.run([sys.executable, "-B", str(DAEMON), "--dir", str(state[0])], capture_output=True, text=True, timeout=30,
                        env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
     assert p.returncode != 0 and "people.json is missing" in p.stderr
+
+
+@pytest.mark.parametrize("damage", ["unreadable_mode", "a_directory"])
+def test_a_roster_file_that_is_there_but_cannot_be_read_starts_the_daemon_for_forget_only(state, damage):
+    if damage == "unreadable_mode" and os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file: the permission case cannot be shown as root")
+    d = start(state)
+    d.add(A, MARK.decode())
+    d.stop()
+    roster = state[0] / "people.json"
+    if damage == "unreadable_mode":
+        roster.chmod(0o000)
+    else:
+        roster.unlink()
+        roster.mkdir()
+    try:
+        again = start(state)
+        said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
+        with pytest.raises(Refused, match="no grant"):
+            again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq},
+                             caused_by=[said.seq])
+        assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
+        assert "people.json is unreadable" in again.stop()
+    finally:
+        if roster.is_file():
+            roster.chmod(0o600)
+    assert holding(state[0], MARK) == [] and known(state[0]) == []
+
+
+def test_a_roster_symlink_to_nothing_is_a_missing_roster_and_refuses_the_start(state):
+    roster = state[0] / "people.json"
+    roster.unlink()
+    roster.symlink_to(state[0] / "no-such-roster.json")
+    p = subprocess.run([sys.executable, "-B", str(DAEMON), "--dir", str(state[0])], capture_output=True, text=True, timeout=30,
+                       env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
+    assert p.returncode != 0 and "people.json is missing" in p.stderr

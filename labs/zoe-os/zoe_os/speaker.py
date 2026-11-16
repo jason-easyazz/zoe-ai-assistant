@@ -7,8 +7,12 @@ panel session). The surface can pass it along; without the identity secret it ca
 
 A token is ``<body>.<mac>``: ``body`` = unpadded base64url of ``{"p": person, "t": issued_ms, "n": nonce_hex, "a": audience}``,
 ``mac`` = hex HMAC-SHA256(secret, DOMAIN + body). The kernel accepts it only when the MAC is right (constant-time compare), the
-person and the audience are what the request needs, it was issued after this kernel started, no more than ``TTL_S`` ago and no more
-than ``SKEW_S`` ahead, and its nonce has not been used. Every failure is the same refusal (``UNPROVEN``); the reason is counted
+person and the audience are what the request needs, it was issued after this kernel started, LESS than ``TTL_S`` ago and no more
+than ``SKEW_S`` ahead, and its nonce has not been used.
+
+THE INVARIANT (``Verifier._why``): a token issued at ``t`` (ms) can be accepted only while ``now < t + TTL``, and its nonce, once
+used, is kept until ``now >= t + TTL + SKEW``: keyed to the token's OWN issue time, never to when it was accepted. So a used
+nonce always outlives every instant at which its token could be accepted, and a second presentation is never accepted. Every failure is the same refusal (``UNPROVEN``); the reason is counted
 by a fixed name and never logged with the token. Stdlib only; verification is O(1) (the nonce store prunes from its oldest end).
 """
 from __future__ import annotations
@@ -17,6 +21,7 @@ import base64
 import binascii
 import collections
 import hashlib
+import heapq
 import hmac
 import json
 import secrets
@@ -64,6 +69,10 @@ def binding(op: str, args: dict, is_child: Callable[[str], bool] | None = None) 
     return None
 
 
+def _ms(seconds: float) -> int:
+    return int(round(seconds * 1000))           # round, not truncate: a float clock must not lose a millisecond at a boundary
+
+
 def _mac(key: bytes, body: bytes) -> bytes:
     return hmac.new(key, _DOMAIN + body, hashlib.sha256).hexdigest().encode()
 
@@ -72,7 +81,7 @@ def mint(key: bytes, person: str, audience: str, *, now: float | None = None, no
     """What the speaker-verifier hands the surface after it verified ``person``. Never logged."""
     if audience not in AUDIENCES:
         raise ValueError("unknown audience")
-    claims = {"p": person, "t": int((time.time() if now is None else now) * 1000), "n": nonce or secrets.token_hex(16),
+    claims = {"p": person, "t": _ms(time.time() if now is None else now), "n": nonce or secrets.token_hex(16),
               "a": audience}
     body = base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     return (body + b"." + _mac(key, body)).decode()
@@ -97,9 +106,9 @@ class Verifier:
             raise ValueError("a speaker secret is at least 32 bytes")
         self._key, self._clock = key, clock
         self._ttl_ms, self._skew_ms, self._max = int(ttl * 1000), int(SKEW_S * 1000), max_live
-        self.started_ms = int(clock() * 1000)
-        self._used: dict[str, int] = {}                     # nonce -> keep until (ms)
-        self._order: collections.deque[tuple[int, str]] = collections.deque()
+        self.started_ms = _ms(clock())
+        self._used: dict[str, int] = {}                     # nonce -> keep until (ms) = its token's issue time + TTL + skew
+        self._expiry: list[tuple[int, str]] = []            # a heap on keep-until: pruning is O(log n) per nonce
         self.refused: collections.Counter[str] = collections.Counter()    # fixed reason names only
         self.accepted = 0
 
@@ -112,8 +121,8 @@ class Verifier:
         return True
 
     def _prune(self, now_ms: int) -> None:
-        while self._order and self._order[0][0] <= now_ms:
-            _, nonce = self._order.popleft()
+        while self._expiry and self._expiry[0][0] <= now_ms:
+            _, nonce = heapq.heappop(self._expiry)
             self._used.pop(nonce, None)
 
     def _why(self, token: object, person: str, audience: str) -> str:
@@ -139,19 +148,19 @@ class Verifier:
             return "audience"
         if claims["p"] != person:
             return "person"
-        now_ms = int(self._clock() * 1000)
-        if claims["t"] < self.started_ms:
+        now_ms, t = _ms(self._clock()), claims["t"]
+        if t < self.started_ms:
             return "before start"
-        if claims["t"] > now_ms + self._skew_ms:
+        if t > now_ms + self._skew_ms:
             return "future"
-        if now_ms - claims["t"] > self._ttl_ms:
+        if now_ms - t >= self._ttl_ms:                     # acceptable only while now < t + TTL
             return "expired"
         self._prune(now_ms)
         if claims["n"] in self._used:
             return "replay"
         if len(self._used) >= self._max:
             return "busy"
-        keep = now_ms + self._ttl_ms + self._skew_ms      # past this the token is expired whatever its issue time
+        keep = t + self._ttl_ms + self._skew_ms           # > every instant the token is acceptable (t + TTL), whatever "now" was
         self._used[claims["n"]] = keep
-        self._order.append((keep, claims["n"]))
+        heapq.heappush(self._expiry, (keep, claims["n"]))
         return ""

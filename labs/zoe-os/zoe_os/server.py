@@ -265,11 +265,6 @@ class KernelServer:
             out.append(wire.event_to_wire(ev))
         return {"events": out}
 
-    def _person_op(self, conn: _Conn, what: str) -> None:
-        """Surface-only, NOT person-bound (``list_digest``). A person's decision goes through ``_prove_speaker``."""
-        if conn.name not in self._surfaces:
-            self.kernel.spine._refuse(conn.name, what, "only a person, through a trusted surface")
-
     def _is_child(self, person) -> bool:
         who = self.kernel.grants.people.get(person) if isinstance(person, str) else None
         return who is not None and who.role == CHILD

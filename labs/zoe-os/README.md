@@ -155,7 +155,9 @@ the hex HMAC-SHA256 of `"zoe-os speaker assertion v1\0" + body` under the speake
 
 * **The secret**: `STATE/identity-creds.json`, `{"socket", "creds": {"speaker-verifier": hex}, "ttl_s": 60}`, 0600, atomic, written
   by both daemons at every start (a fresh secret each time). Never in `creds.json`, never readable through any op, never printed.
-* **The TTL**: 60 s, 2 s skew. An assertion issued before the kernel started is refused; used nonces are kept in memory for their TTL.
+* **The TTL**: accepted only while `now < issued + 60 s` and `issued <= now + 2 s`, and never if issued before the kernel started. A
+  used nonce is kept (in memory, a heap on its keep-until) until `issued + 60 s + 2 s`: keyed to the token's OWN issue time, so it
+  outlives every instant the token could be accepted (a property test and millisecond-boundary tests in `test_speaker.py`).
 * **In the lab**, the test is the component that verifies people: `Box.client("panel")`, `BrainBox.client("panel")` and the
   authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=)`); `Box.assertion()`
   mints one for a raw frame. Skills' clients get no key.
@@ -163,6 +165,15 @@ the hex HMAC-SHA256 of `"zoe-os speaker assertion v1\0" + body` under the speake
   kernel restart), mint one assertion per request ONLY after it has itself verified the person who is deciding, with the audience
   that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
 * **Not additive**: a surface client that sends no `speaker` is refused `speaker unproven` (code `refused`), a real refusal.
+
+## The reconcile digest (`list_digest`)
+
+`list_digest` answers ONLY the reconcile tool's own credential (`reconciler`, in `STATE/reconcile-creds.json`, 0600, written at every
+start: `{"socket", "creds": {"reconciler": hex}, "digest_key": hex}`); a surface, a skill and the eraser are refused
+`only the reconciler`. It returns `authority.keyed_digest(digest_key, member, list, item)` for every row: HMAC-SHA256 under a key
+fresh at each start, over the JSON array `[member id, list name, item.strip().lower()]` (compact separators, `ensure_ascii=False`)
+after the domain `"zoe-os list digest v1\0"`, as 64 hex. Equal items of two members or two lists differ, and nobody without the key
+can confirm a guessed item (the old unkeyed, member-less sha256 could be confirmed by hashing a list of common items).
 
 ## Authority kernel (`authority.py`)
 

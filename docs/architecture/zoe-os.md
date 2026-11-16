@@ -388,7 +388,10 @@ checks it in ONE place (`KernelServer._prove_speaker`, at the dispatch, so the s
 inherit it): the MAC (constant time), the person (the request's speaking field: `actor` for forget and undo,
 the guardian for a child's grant, else the named person; the kernel's own rule then links that speaker to the
 subject), the audience (`forget.person`, `forget.scoped`, `grant`, `revoke`, `undo`, `explain`: "forget that"
-cannot become "forget me"), age under 60 s (2 s skew), issued after this kernel started, and a nonce used once.
+cannot become "forget me"), age under 60 s (2 s skew), issued after this kernel started, and a nonce used once
+(kept until its token's own issue time + 60 s + 2 s, so it outlives the token's acceptance window). The authority's
+`list_digest` (every member's list rows, for the reconcile tool) answers only a dedicated `reconciler` credential, with
+digests keyed by a per-start secret over member, list and item, so no surface can confirm a guess at anyone's list.
 Every failure is one refusal, `speaker unproven`, counted by a fixed reason name; the token is never logged.
 The member-delete path's `eraser` credential needs no assertion, for the forget family only. The secret is in
 `identity-creds.json` (0600, apart from `creds.json` and `erase-creds.json`), fresh at every start. Used

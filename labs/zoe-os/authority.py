@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import signal
 import sqlite3
 import sys
@@ -53,6 +55,10 @@ _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_recei
 #: the member-delete path's identity: the forget family without a speaker assertion, nothing else. No reads, no emits, no acts.
 ERASER = {"skill": "eraser"}
 ERASER_CREDS = "erase-creds.json"
+#: the reconcile tool's identity: the ONLY credential ``list_digest`` answers. No reads, no emits, no acts, never a surface.
+RECONCILER = {"skill": "reconciler"}
+RECONCILE_CREDS = "reconcile-creds.json"     # {"socket", "creds": {"reconciler": hex}, "digest_key": hex}, 0600, every start
+_DIGEST_DOMAIN = b"zoe-os list digest v1\0"
 
 
 def write_secret(path: Path, payload: dict) -> None:
@@ -65,8 +71,17 @@ def write_secret(path: Path, payload: dict) -> None:
 
 
 def digest(item: str) -> str:
-    """What the reconcile compares: never the words. zoe-data computes the same over its own stored text."""
+    """An item named by its caller for ``erase_item`` ("forget that", on the caller's OWN proven list): never the words. NOT what
+    ``list_digest`` returns: an unkeyed hash of a short item is a dictionary lookup away from the words."""
     return hashlib.sha256(item.strip().lower().encode()).hexdigest()[:16]
+
+
+def keyed_digest(key: bytes, member: str, list_name: str, item: str) -> str:
+    """What ``list_digest`` returns and the reconciler computes over production's rows: HMAC-SHA256 under the kernel's per-start
+    digest key (``reconcile-creds.json``) over (member, list, normalised item), so equal items of different members or lists never
+    collide, and nobody without the key can test a guess."""
+    msg = json.dumps([member, list_name, item.strip().lower()], separators=(",", ":"), ensure_ascii=False).encode()
+    return hmac.new(key, _DIGEST_DOMAIN + msg, hashlib.sha256).hexdigest()
 
 
 class DurableLists(Lists):
@@ -178,6 +193,7 @@ class AuthorityServer(KernelServer):
         self.lists, self.others = lists, tuple(others)
         self.roster = frozenset(roster)
         self.last_write_ok: bool | None = None     # None: no write since start
+        self._digest_key = secrets.token_bytes(32)  # fresh per start: handed only to the reconciler's file (``digest_secret``)
         self.roster_status = "ok"                  # set by ``build`` from ``read_roster``
 
     def _held(self, person: str) -> bool:
@@ -289,9 +305,17 @@ class AuthorityServer(KernelServer):
         left = sum(1 for r in self.lists.rows.get(subject, []) if digest(r["item"]) == want) + len(self._receipts_for(subject, want))
         return {"erased": erased, "receipt_seq": notice, "verified": left == 0}
 
+    def digest_secret(self) -> bytes:
+        """For the supervisor only (never a verb): the key ``list_digest`` digests are made with."""
+        return self._digest_key
+
     def _op_list_digest(self, conn, a: dict) -> dict:
-        self._person_op(conn, "read the list digest")
-        return {"digests": sorted(digest(r["item"]) for rows in self.lists.rows.values() for r in rows)}
+        """Every member's rows as KEYED digests (``keyed_digest``), for the reconcile tool's own credential only: a surface, a skill
+        and the eraser are refused ``only the reconciler``. Never the words, never a value anyone without the key can confirm."""
+        if conn.name != RECONCILER["skill"]:
+            self.kernel.spine._refuse(conn.name, "read the list digest", "only the reconciler")
+        return {"digests": sorted(keyed_digest(self._digest_key, person, r.get("list", "shopping"), r["item"])
+                                  for person, rows in self.lists.rows.items() for r in rows)}
 
 
 def revoked(k: Kernel, skill: str) -> set[str]:
@@ -412,7 +436,7 @@ def build(state: Path, db: str | None = None):
     lists = DurableLists(k.spine).register(k)
     lists.rebuild()
     reminders, alarms = Reminders(lambda: k.clock()).register(k), Alarms().register(k)
-    for manifest in (*ADAPTERS, SHADOW_BRAIN, ERASER):
+    for manifest in (*ADAPTERS, SHADOW_BRAIN, ERASER, RECONCILER):
         k.grants.install(manifest)
     k.install(DurableKeeper(lists, reminders, alarms))
     no = revoked(k, SHADOW_BRAIN["skill"])
@@ -423,6 +447,8 @@ def build(state: Path, db: str | None = None):
     srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     write_secret(state / ERASER_CREDS, {"socket": srv.path, "creds": {ERASER["skill"]: srv.issue(ERASER["skill"], eraser=True).hex()}})
+    write_secret(state / RECONCILE_CREDS, {"socket": srv.path, "creds": {RECONCILER["skill"]: srv.issue(RECONCILER["skill"]).hex()},
+                                           "digest_key": srv.digest_secret().hex()})
     return k, srv, creds
 
 

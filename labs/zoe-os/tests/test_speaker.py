@@ -38,7 +38,7 @@ NOT_PERSON_BOUND = {
     "subscribe": "reads are filtered by grants", "poll": "reads are filtered by grants",
     "act": "a skill acts under a person's grant; the dispatcher decides",
     "describe": "the caller's own manifest", "health": "no person",
-    "list_digest": "digests of every row, surface-only (see the report: not person-bound)",
+    "list_digest": "keyed digests for the reconciler's own credential only (authority.py): no surface reads it",
 }
 #: the least each person-bound op takes, all naming SAM as the one who decides
 MINIMAL = {
@@ -283,8 +283,10 @@ def test_the_token_and_the_secret_reach_no_file_but_the_identity_file_and_no_log
     finally:
         proc.kill()
         out, err = proc.communicate(timeout=10)
-    needles = [key, key.hex().encode(), *(t.encode() for t in tokens), *(t.split(".")[1].encode() for t in tokens)]
-    credential_files = {"creds.json", "erase-creds.json", speaker.IDENTITY_CREDS}
+    dkey = bytes.fromhex(json.loads((state / "reconcile-creds.json").read_text())["digest_key"])
+    needles = [key, key.hex().encode(), dkey, dkey.hex().encode(), *(t.encode() for t in tokens),
+               *(t.split(".")[1].encode() for t in tokens)]
+    credential_files = {"creds.json", "erase-creds.json", speaker.IDENTITY_CREDS, "reconcile-creds.json"}
     scanned = [f for f in state.rglob("*") if f.is_file() and f.name not in credential_files]
     assert any(f.name.startswith("zoe-os.db") for f in scanned)
     for f in scanned:
@@ -292,6 +294,95 @@ def test_the_token_and_the_secret_reach_no_file_but_the_identity_file_and_no_log
         assert not [n for n in needles if n in data], f.name
     for n in needles:
         assert n.decode("latin-1") not in out + err + "".join(texts)
-    assert key.hex() not in (state / "creds.json").read_text() + (state / "erase-creds.json").read_text()
+    for other in ("creds.json", "erase-creds.json", speaker.IDENTITY_CREDS, "reconcile-creds.json"):
+        text = (state / other).read_text()
+        assert (key.hex() in text) is (other == speaker.IDENTITY_CREDS) and (dkey.hex() in text) is (other == "reconcile-creds.json")
     assert all(t.endswith(speaker.UNPROVEN) for t in texts)
     shutil.rmtree(state, ignore_errors=True)
+
+
+# ---- the acceptance window, to the millisecond -------------------------------------------------------------------------------------
+TTL_MS, SKEW_MS = int(speaker.TTL_S * 1000), int(speaker.SKEW_S * 1000)
+
+
+def _at(v: speaker.Verifier, clock: Clock, key: bytes, *, issued_ms: int, at_ms: int, nonce: str | None = None) -> bool:
+    clock.t = at_ms / 1000
+    return v.check(speaker.mint(key, SAM, "undo", now=issued_ms / 1000, nonce=nonce), SAM, "undo")
+
+
+@pytest.mark.parametrize("edge, ok_at, bad_at", [
+    ("expiry", TTL_MS - 1, TTL_MS),                    # age TTL-1 ms: accepted; age exactly TTL: expired
+    ("future", -SKEW_MS, -SKEW_MS - 1),                # issued SKEW ahead: accepted; SKEW + 1 ms ahead: refused
+])
+def test_the_acceptance_window_on_both_sides_of_the_millisecond(edge, ok_at, bad_at):
+    key, t0 = secrets.token_bytes(32), int(T0 * 1000)
+    clock = Clock(T0)
+    v = speaker.Verifier(key, clock=clock)
+    issued = t0 + 10_000
+    assert _at(v, clock, key, issued_ms=issued, at_ms=issued + ok_at)
+    assert not _at(v, clock, key, issued_ms=issued, at_ms=issued + bad_at)
+    assert v.refused == {"expired" if edge == "expiry" else "future": 1}
+
+
+def test_the_kernel_start_on_both_sides_of_the_millisecond():
+    key, clock = secrets.token_bytes(32), Clock(T0)
+    v = speaker.Verifier(key, clock=clock)
+    assert _at(v, clock, key, issued_ms=v.started_ms, at_ms=v.started_ms + 5)
+    assert not _at(v, clock, key, issued_ms=v.started_ms - 1, at_ms=v.started_ms + 5)
+    assert v.refused == {"before start": 1}
+
+
+def test_the_reviewers_replay_a_token_from_the_edge_of_the_skew_presented_again_as_its_nonce_would_have_been_pruned():
+    key, clock = secrets.token_bytes(32), Clock(T0)
+    v = speaker.Verifier(key, clock=clock)
+    accept = int(T0 * 1000) + 1000
+    issued, nonce = accept + SKEW_MS, "a" * 32                      # issued 2 s ahead: inside the skew
+    assert _at(v, clock, key, issued_ms=issued, at_ms=accept, nonce=nonce)
+    # the old code pruned the nonce at accept + TTL + SKEW, when the token's age is exactly TTL and the old "> TTL" let it in
+    for at in (accept + TTL_MS + SKEW_MS - 1, accept + TTL_MS + SKEW_MS, accept + TTL_MS + SKEW_MS + 1):
+        assert not _at(v, clock, key, issued_ms=issued, at_ms=at, nonce=nonce)
+    assert v.accepted == 1
+
+
+def test_a_used_nonce_is_kept_to_the_millisecond_its_token_can_no_longer_be_accepted_and_no_longer():
+    key, clock = secrets.token_bytes(32), Clock(T0)
+    v = speaker.Verifier(key, clock=clock)
+    issued = int(T0 * 1000) + 1000
+    assert _at(v, clock, key, issued_ms=issued, at_ms=issued + 5, nonce="b" * 32)
+    for at, held in ((issued + TTL_MS + SKEW_MS - 1, True), (issued + TTL_MS + SKEW_MS, False)):
+        clock.t = at / 1000
+        v._prune(at)
+        assert ("b" * 32 in v._used) is held
+    assert not _at(v, clock, key, issued_ms=issued, at_ms=issued + TTL_MS + SKEW_MS, nonce="b" * 32)   # pruned, and expired
+
+
+def test_property_for_any_issue_time_inside_the_skew_and_any_two_presentations_the_second_is_never_accepted():
+    import random
+    rnd = random.Random(20261116)
+    key, accepted = secrets.token_bytes(32), 0
+    for _ in range(3000):
+        clock = Clock(T0)
+        v = speaker.Verifier(key, clock=clock, max_live=8)
+        first = v.started_ms + TTL_MS + rnd.randrange(0, 5000)            # the first presentation
+        # the issue time, anywhere a token could be accepted at ``first`` (and a few ms outside), often exactly at the skew edge
+        issued = first + (SKEW_MS if rnd.random() < 0.3 else rnd.randrange(-TTL_MS - 5, SKEW_MS + 6))
+        edges = (issued + TTL_MS, first + TTL_MS + SKEW_MS, issued + TTL_MS + SKEW_MS)     # where an off-by-one would live
+        second = rnd.choice(edges) + rnd.randrange(-3, 4) if rnd.random() < 0.5 else first + rnd.randrange(0, TTL_MS + SKEW_MS + 10)
+        first, second = min(first, second), max(first, second)
+        nonce = secrets.token_hex(16)
+        once = _at(v, clock, key, issued_ms=issued, at_ms=max(first, v.started_ms), nonce=nonce)
+        twice = _at(v, clock, key, issued_ms=issued, at_ms=max(second, v.started_ms), nonce=nonce)
+        assert not (once and twice)
+        accepted += once
+    assert accepted > 1000                                               # the property was exercised, not vacuous
+
+
+def test_the_cap_holds_under_the_issue_time_retention_and_frees_by_issue_time_not_arrival():
+    key, clock = secrets.token_bytes(32), Clock(T0)
+    v = speaker.Verifier(key, clock=clock, max_live=2)
+    t = v.started_ms
+    assert _at(v, clock, key, issued_ms=t + 2000, at_ms=t + 100)        # issued later (inside the skew): kept longer
+    assert _at(v, clock, key, issued_ms=t + 50, at_ms=t + 100)
+    assert not _at(v, clock, key, issued_ms=t + 100, at_ms=t + 100) and v.refused == {"busy": 1}
+    assert _at(v, clock, key, issued_ms=t + 50 + TTL_MS - 1, at_ms=t + 50 + TTL_MS + SKEW_MS)   # the t+50 nonce freed first
+    assert len(v._used) == 2
