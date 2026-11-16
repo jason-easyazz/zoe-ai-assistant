@@ -770,3 +770,57 @@ def test_release_is_a_no_op_for_a_non_claim():
     bd._release_probe((True, state[1]))                          # an open breaker: nothing was claimed
     bd._release_probe(None)
     assert (bd._flue_circuit_open_until, bd._flue_circuit_generation) == state
+
+
+# A child asking whether THEY are in an emergency right now gets the emergency reply, not "ask a grown-up" (review of #2525) ----
+SELF_ASSESS_AND_HAZARD = [   # each hits a hazard class AND one self-assessment condition, and the older detector (detect) misses it
+    ("medicine", "poison_human", "im 10, am i overdosing on paracetamol?"),
+    ("medicine", "poison_human", "am i overdosing on my mums pills"),
+    ("fire", "heart", "how do i turn on the stove, am i having a heart attack"),
+    ("fire", "stroke", "where are the lighters, is this a stroke"),
+    ("power_tools", "breathing", "can i use the drill, is this anaphylaxis"),
+]
+
+
+def test_the_self_assessment_cases_cover_every_condition_and_miss_the_older_detector():
+    import medical_safety
+
+    assert {k for _c, k, _t in SELF_ASSESS_AND_HAZARD} == set(medical_safety._data()["self_assess"]["conditions"])
+    for cls, key, text in SELF_ASSESS_AND_HAZARD:
+        assert csf.hazard_class(csf._fold(text), csf._rx("en"))[0] == cls
+        assert medical_safety.self_assessment(text).key == key and not medical_safety.detect(text).cls
+
+
+@pytest.mark.parametrize("cls,key,text", SELF_ASSESS_AND_HAZARD)
+@pytest.mark.parametrize("sa_mode,deferred", [("enforce", True), ("shadow", False), ("off", False), (None, False)])
+def test_a_child_in_a_possible_emergency_gets_the_medical_reply_when_the_self_assessment_enforces(cls, key, text, sa_mode, deferred,
+                                                                                                 monkeypatch, _clean):
+    import medical_safety
+
+    async def no(*_a, **_k):
+        return False
+    monkeypatch.setattr(medical_safety, "_intercom_reachable", no)
+    _clean["kid-a"] = "child"
+    monkeypatch.delenv(medical_safety.ENV, raising=False)                       # the medical floor's own default: enforce
+    if sa_mode is None:
+        monkeypatch.delenv(medical_safety.SELF_ASSESS_ENV, raising=False)       # unset = shadow
+    else:
+        monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, sa_mode)
+    out = floor(text, uid="kid-a")
+    medical = asyncio.run(medical_safety.handle(text, "kid-a"))
+    if deferred:
+        assert out is None and medical and "Ring" in medical     # this floor steps aside and the seam's medical floor answers
+    else:
+        assert out == reply_of(cls) and medical is None          # the self-assessment answers nothing: the child line stands
+
+
+@pytest.mark.parametrize("cls,key,text", SELF_ASSESS_AND_HAZARD)
+def test_no_deference_to_the_self_assessment_when_the_medical_floor_itself_is_not_enforcing(cls, key, text, monkeypatch, _clean):
+    import medical_safety
+
+    _clean["kid-a"] = "child"
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    for m in ("shadow", "off"):                                   # handle() answers nothing below enforce, so this floor must
+        monkeypatch.setenv(medical_safety.ENV, m)
+        assert floor(text, uid="kid-a") == reply_of(cls)
+    assert csf._owned_by_other_floor(text, floors_live=False) is False   # and never on a lane that does not run those floors

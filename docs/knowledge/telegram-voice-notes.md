@@ -22,8 +22,8 @@ loop and ignored; `/talk` falls through to the brain as text).
 | 2 | `src/voice.ts` `handleVoiceNote` | identity first (same linked-member gate as text); then refusals **before** `getFile`: forwarded (unless `ZOE_TELEGRAM_ALLOW_FORWARDED`), duration > `ZOE_TELEGRAM_VOICE_MAX_S`, size > 8 MiB |
 | 3 | `src/telegram.ts` `downloadTelegramFile` | `getFile` → `<api>/file/bot<token>/<path>`; the URL embeds the token and is never logged (errors carry sizes/statuses/names only; `redactToken` strips `bot<token>` from anything logged) |
 | 4 | `src/brain.ts` `transcribeTelegramAudio` | `POST /api/system/telegram/transcribe` (raw OGG, internal token) |
-| 5 | `services/zoe-data/routers/telegram_media.py` | ffmpeg `-ac 1 -ar 16000 -sample_fmt s16 -f wav` (clipped at max+1 s) → `routers.voice_tts._transcribe_audio(path, capture=False)` → `{ok, text, duration_s}` — **no `voice:transcript` broadcast, no panel corpus** |
-| 6 | `src/brain.ts` `askZoeAs` | the SAME `/api/chat?stream=false` turn as text: `X-Zoe-User-Id` + `X-Internal-Token`, `channel: 'telegram'`, the chat's session id |
+| 5 | `services/zoe-data/routers/telegram_media.py` | ffmpeg `-ac 1 -ar 16000 -sample_fmt s16 -f wav` (clipped at max+1 s) → `routers.voice_tts._transcribe_audio(path, capture=False)` → `{ok, text, duration_s, erase_token}` — **no `voice:transcript` broadcast, no panel corpus**. `erase_token`: the forget epoch read before decode + STT (opaque) |
+| 6 | `src/brain.ts` `askZoeAs` | the SAME `/api/chat?stream=false` turn as text: `X-Zoe-User-Id` + `X-Internal-Token`, `channel: 'telegram'`, the chat's session id, and the note's `erase_token` (the chat route holds it as the turn's epoch: an erase since the transcription refuses the turn's erasable logs) |
 | 7 | `src/voice.ts` `deliverReply` | per `ZOE_TELEGRAM_VOICE_REPLY`: `voice` (default) → `POST /api/system/telegram/synthesize` (Kokoro WAV → ffmpeg `libopus 32k 48 kHz mono voip` → `audio/ogg`) → `sendVoice`; `both` adds the text; `text` sends text only. A 503 (Kokoro down, ffmpeg missing, router off) falls back to text — Zoe is never silent |
 | `/talk` | `src/voice.ts` `handleTalk` | when `ZOE_PUBLIC_URL` (or `ZOE_BASE_URL`) is set: one inline URL button "Talk to Zoe" → `<base>/voice.html`, the existing push-to-talk page (VISION principle 8, zero new infrastructure). Linked senders only |
 
@@ -50,7 +50,7 @@ bot (its unit is `MemoryMax=1G`).
 | `ZOE_TELEGRAM_MEDIA` | zoe-data | off | mount the `telegram_media` router (off = 404) |
 | `ZOE_TELEGRAM_FFMPEG` | zoe-data | auto | ffmpeg path; auto = PATH → `~/.local/bin/ffmpeg` (the box's static libopus build; the unit's PATH does not include it) |
 | `ZOE_TELEGRAM_FFMPEG_TIMEOUT_S` | zoe-data | 20 | per ffmpeg run; a timeout kills it and answers 504 |
-| `ZOE_TELEGRAM_STT_CAPTURE_DIR` | zoe-data | unset | copy phone-mic clips + transcripts into a SEPARATE corpus. Never `~/.zoe-voice-samples` |
+| `ZOE_TELEGRAM_STT_CAPTURE_DIR` | zoe-data | unset | copy phone-mic clips + transcripts into a SEPARATE corpus. Must expand to an absolute, non-root directory without parent traversal or symlinks; relative paths are refused by writer and sweep. Never `~/.zoe-voice-samples` |
 
 The bot reads its flags from `labs/flue-zoe-telegram-2x/.env` (the unit's `EnvironmentFile`);
 zoe-data from its own env. Two processes, two files. The bot's token is `TELEGRAM_BOT_TOKEN` in

@@ -1,0 +1,47 @@
+#!/bin/sh
+# P0-2 root helper (docs/architecture/p0-deroot.md section 8, blocker B4). NOT installed by anything: the owner
+# installs it root:root 0755 at /usr/local/libexec/zoe-priv/zoe-omnigent-exec, and sudoers.d/60-zoe-deroot lets
+# `zoe` run it. After P0-3 `zoe` has no Docker socket, and the proxy refuses exec into this container (it has
+# zoe-writable binds), so the agent-orchestrator callers (omnigent_issue_executor.py, cross_review.sh,
+# cross_review_polly.sh, omnigent_claude_auth_mode.py) exec through here instead.
+#
+# The argv is the `docker exec` argv with `docker exec` removed, so callers swap only the prefix:
+#   zoe-omnigent-exec [-i] [-d] [-w /ABS/DIR] zoe-omnigent PROGRAM [ARGS...]
+# What it pins (labs/p0-2-root-paths cells O*): ONE container; the uid:gid 1000:1000 the container already runs
+# as (so an exec can never be root in a container whose binds zoe can reach); only the flags -i, -d, -w; a -w
+# that is an absolute path without `..`; PROGRAM from a fixed list of bare names. The ARGS are not filtered:
+# `sh -c` as 1000:1000 is exactly what the container's own processes already are, so the security property is
+# the identity and the container, not the argument text. Exit 2 = refused before Docker is called.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+CONTAINER=zoe-omnigent
+EXEC_USER=1000:1000
+usage() { echo "usage: zoe-omnigent-exec [-i] [-d] [-w /abs/dir] $CONTAINER sh|timeout|python3|omnigent|tail|cat [args...]  ($1)" >&2; exit 2; }
+set -- "$@" ""   # sentinel so the flag loop can look one ahead without running off the end
+flags=""; wdir=""
+while :; do
+  case "$1" in
+    -i|-d) flags="$flags $1"; shift ;;
+    -w) [ -n "${2:-}" ] || usage "-w needs a directory"
+        case "$2" in /*) ;; *) usage "-w must be absolute" ;; esac
+        case "/$2/" in */../*) usage "-w must not contain .." ;; esac
+        wdir="$2"; shift 2 ;;
+    -*) usage "flag $1 is not allowed" ;;
+    *) break ;;
+  esac
+done
+[ "$1" = "$CONTAINER" ] || usage "container must be $CONTAINER"
+shift
+case "${1:-}" in
+  sh|timeout|python3|omnigent|tail|cat) ;;
+  *) usage "program '${1:-}' is not allowed" ;;
+esac
+# Drop the sentinel, keep every remaining argument exactly as given (including empty ones).
+n=$#; i=1
+for a in "$@"; do
+  [ "$i" -lt "$n" ] && set -- "$@" "$a"
+  i=$((i + 1))
+done
+shift "$n"
+# shellcheck disable=SC2086  # $flags is a word list of fixed, validated tokens
+exec docker exec -u "$EXEC_USER" $flags ${wdir:+-w "$wdir"} "$CONTAINER" "$@"
