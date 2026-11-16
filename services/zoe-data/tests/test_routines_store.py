@@ -399,13 +399,13 @@ def test_the_migration_chain_has_one_head_and_this_revision_hangs_off_a_real_par
     assert "on 0080" in Path(me.path).read_text()                                    # the docstring tells the same chain
 
 
-def test_the_forget_inventory_reaches_every_routine_table_and_would_catch_a_missing_entry():
+def test_the_forget_inventory_reaches_every_routine_table_and_would_catch_a_missing_entry(monkeypatch):
     found = fr.discover_user_tables([rs.__file__.replace("routines_store.py", "alembic/versions/0081_routines.py")])
     assert TABLES == set(found)                                                     # the discovery sees all four (children too)
     assert not set(fr.uncovered_tables(found)) & TABLES
     assert all(fr.BY_KEY[k].status == fr.REACHED and fr.BY_KEY[k].member == "routines_store.forget_user" for k in TABLES)
-    stripped = {s.key for s in fr.TABLES if s.key not in TABLES}                   # negative control: drop the entries
-    assert set(found) - stripped == TABLES
+    monkeypatch.setattr(fr, "TABLES", tuple(s for s in fr.TABLES if s.key not in TABLES))   # negative control: drop the entries
+    assert set(fr.uncovered_tables(found)) == TABLES                                # ... and the checker itself reports all four
 
 
 # == the day: copies, one-off lines, the walk and the ticks (1b) ===================================================================
@@ -702,3 +702,13 @@ def test_an_actor_erased_by_another_process_mid_tick_writes_nothing_of_theirs(st
         assert e.value.code == "erased"
     run(scenario())
     assert store.q("SELECT state, actor_user_id FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending", None)]
+
+
+def test_a_line_naming_a_forgotten_entity_is_withheld_from_the_day_copy_while_its_erase_is_pending(store):
+    r = _mk(steps=("call Quinn", "bins"))
+    named = run(rs.create_routine(ALEX, "Quinn visit", "window", steps=("tidy",)))
+    run(rs.day_copy(ALEX, r["id"]))
+    _forget(ALEX, "Quinn")                                                       # recorded; the cascade has not run yet
+    assert [s["text"] for s in run(rs.day_copy(ALEX, r["id"]))["steps"]] == ["bins"]
+    assert run(rs.day_copy(ALEX, named["id"])) is None
+    assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE text = 'call Quinn'") == [(1,)]   # withheld, not erased: the cascade erases

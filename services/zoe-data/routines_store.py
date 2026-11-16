@@ -525,7 +525,8 @@ async def _settle_before(db, r: dict, day: date) -> None:
 
 async def day_copy(viewer: Optional[str], routine_id: str, day: Optional[date] = None, *, now: Optional[datetime] = None) -> Optional[dict]:
     """``viewer``'s view of one routine's copy for ``day`` (default today), made on first need. None = not visible / not found / the
-    routine does not run that day. ``{"routine", "day", "day_id", "steps": [...]}``, steps in order with their states."""
+    routine does not run that day / its name names a forgotten entity. ``{"routine", "day", "day_id", "steps": [...]}``, steps in
+    order with their states; a line naming a forgotten entity is withheld (the shield on read: callers speak these lines)."""
     seen = _start()
     today = household_today(now)
     day = day or today
@@ -535,11 +536,15 @@ async def day_copy(viewer: Optional[str], routine_id: str, day: Optional[date] =
         return None
     try:
         async with _guarded_write(seen, subject=r["user_id"], actors=(viewer,)) as w:
-            if await _load(w.db, routine_id) is None:
-                return None
+            r = await _load(w.db, routine_id)
+            if r is None or w.forgotten(r["name"]):
+                return None                               # gone, or named for a forgotten entity whose erase is still pending
             did = await _ensure_day(w, r, day, today)
             rows = await _rows(w.db, f"SELECT {', '.join(_DS_COLS)} FROM routine_day_steps WHERE day_id = ? ORDER BY position",
                                (did,))
+            # the shield on READ too: every caller (the voice tier, the card) speaks or shows these lines, so a line naming a
+            # forgotten entity is withheld even while its erase is still pending (checked against the marks re-read under the lock)
+            rows = [x for x in rows if not w.forgotten(x[_DS_COLS.index("text")])]
     except StoreError as exc:
         if exc.code == "erased":
             return None                                   # the subject or the viewer is being forgotten: nothing to show
