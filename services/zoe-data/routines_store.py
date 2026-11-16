@@ -1,8 +1,7 @@
 """Routines, stage 1: the store (alembic 0081; record ``docs/knowledge/routines.md``).
 
 A routine is a named, ordered checklist for ONE person (the subject), tied to a moment of the day, that starts fresh each day. This
-module owns the four tables and every rule that keeps a tick honest. (This first slice holds routines, steps and both erasers; the
-day copies, one-off lines and ticks follow in the next commit of the stack.) It speaks nothing and prompts nothing: the voice tier
+module owns the four tables and every rule that keeps a tick honest. It speaks nothing and prompts nothing: the voice tier
 (``routines_tier``) and the panel card routes call it.
 
 FLAG ``ZOE_ROUTINES`` = off (default) | on, read per call by the callers. The store itself does not check it: the erasers must run
@@ -105,6 +104,34 @@ def household_today(now: Optional[datetime] = None) -> date:
 
 def _iso(now: Optional[datetime] = None) -> str:
     return (now or _now_utc()).astimezone(timezone.utc).isoformat()
+
+
+def window_of(routine: dict) -> tuple[str, str]:
+    d = DEFAULT_WINDOWS.get(routine.get("anchor") or "window", ("00:00", "23:59"))
+    return (routine.get("window_start") or d[0], routine.get("window_end") or d[1])
+
+
+def in_window(routine: dict, now: Optional[datetime] = None) -> bool:
+    hm = household_now(now).strftime("%H:%M")
+    a, b = window_of(routine)
+    return a <= hm <= b
+
+
+def runs_on(routine: dict, day: date) -> bool:
+    """Does the routine run on ``day``? NULL rule = every day; an unparseable rule = never (fail closed: no wrong day copy)."""
+    rule = routine.get("days_rule")
+    if not rule:
+        return True
+    from reminder_recurrence import occurs_on, parse_rrule
+
+    parsed = parse_rrule(rule)
+    if parsed is None:
+        return False
+    try:
+        anchor = date.fromisoformat(str(routine.get("created_at") or "")[:10])
+    except ValueError:
+        anchor = day
+    return occurs_on(parsed, min(anchor, day), day)
 
 
 # -- the store plumbing ------------------------------------------------------------------------------------------------------------
@@ -344,6 +371,17 @@ def can_edit(routine: dict, actor: Optional[str]) -> bool:
     return actor in (routine.get("user_id"), routine.get("created_by"))
 
 
+def can_tick(routine: dict, kind: str, actor: Optional[str], *, verified: bool) -> Optional[str]:
+    """None when ``actor`` may tick / skip / snooze a line of ``kind``; else the refusal code."""
+    if kind == "medicine":
+        if _guest(actor) or actor != routine.get("user_id"):
+            return "not_the_subject"
+        return None if verified else "unverified"
+    if routine.get("visibility") == "family":
+        return None                                  # the fridge rule: anyone at the panel, a household tap included
+    return None if (not _guest(actor) and actor == routine.get("user_id")) else "not_the_subject"
+
+
 # -- routines and steps ------------------------------------------------------------------------------------------------------------
 async def create_routine(owner: str, name: str, anchor: str, *, created_by: Optional[str] = None, visibility: str = "personal",
                          window_start: Optional[str] = None, window_end: Optional[str] = None, days_rule: Optional[str] = None,
@@ -442,6 +480,268 @@ async def add_step(actor: str, routine_id: str, text: str, kind: str = "check") 
                            "VALUES (?, ?, ?, ?, ?, 0, ?, ?)", (sid, routine_id, int(top[0][0]) + 1, text, kind, now, now))
     _log("step_added", kind=kind, member=r["user_id"], routine=routine_id)
     return {"id": sid, "text": text, "kind": kind}
+
+
+# -- day copies --------------------------------------------------------------------------------------------------------------------
+def _day_id(routine_id: str, day: date) -> str:
+    return f"{routine_id}:{day.isoformat()}"
+
+
+async def _ensure_day(w, r: dict, day: date, today: date) -> str:
+    """The (routine, day) row, made if missing (deterministic id + ON CONFLICT: two racing callers make ONE). Template steps are
+    copied in once the day has come; earlier days of the routine still open are settled (``missed``) on the way. Runs INSIDE the
+    caller's ``_guarded_write``: the template is read and copied under the same gate and transaction the erasers take, so an entity
+    erase lands wholly before the read (nothing to copy) or wholly after the copy (and erases it); a line naming a forgotten entity
+    is never copied (the shield)."""
+    db = w.db
+    did, now = _day_id(r["id"], day), _iso()
+    await db.execute("INSERT INTO routine_days (id, routine_id, user_id, day, created_at) VALUES (?, ?, ?, ?, ?) "
+                     "ON CONFLICT DO NOTHING", (did, r["id"], r["user_id"], day.isoformat(), now))
+    if day <= today:
+        snap = await _rows(db, "SELECT snapshot_at FROM routine_days WHERE id = ?", (did,))
+        if snap and snap[0][0] is None:
+            for s in await _steps(db, r["id"]):
+                if w.forgotten(s["text"]):
+                    continue
+                await db.execute(
+                    "INSERT INTO routine_day_steps (id, day_id, step_id, origin, text, kind, position, state, prompts, created_via, "
+                    "created_at, updated_at) VALUES (?, ?, ?, 'template', ?, ?, ?, 'pending', 0, NULL, ?, ?) ON CONFLICT DO NOTHING",
+                    (f"{did}:{s['id']}", did, s["id"], s["text"], s["kind"], s["position"], now, now))
+            await db.execute("UPDATE routine_days SET snapshot_at = ? WHERE id = ? AND snapshot_at IS NULL", (now, did))
+        await _settle_before(db, r, day)
+    return did
+
+
+async def _settle_before(db, r: dict, day: date) -> None:
+    """Close the routine's earlier open days: every line still pending there is ``missed`` (logged), the day is closed."""
+    for (did,) in await _rows(db, "SELECT id FROM routine_days WHERE routine_id = ? AND day < ? AND closed_at IS NULL "
+                                  "AND snapshot_at IS NOT NULL", (r["id"], day.isoformat())):
+        for kind, n in await _rows(db, "SELECT kind, COUNT(*) FROM routine_day_steps WHERE day_id = ? AND state IN ('pending', 'snoozed') "
+                                       "GROUP BY kind", (did,)):
+            _log("missed", kind=kind, member=r["user_id"], routine=r["id"], n=int(n))
+        await db.execute("UPDATE routine_days SET closed_at = ?, close_reason = 'window_end' WHERE id = ? AND closed_at IS NULL",
+                         (_iso(), did))
+
+
+async def day_copy(viewer: Optional[str], routine_id: str, day: Optional[date] = None, *, now: Optional[datetime] = None) -> Optional[dict]:
+    """``viewer``'s view of one routine's copy for ``day`` (default today), made on first need. None = not visible / not found / the
+    routine does not run that day / its name names a forgotten entity. ``{"routine", "day", "day_id", "steps": [...]}``, steps in
+    order with their states; a line naming a forgotten entity is withheld (the shield on read: callers speak these lines)."""
+    seen = _start()
+    today = household_today(now)
+    day = day or today
+    async with _db() as db:
+        r = await _load(db, routine_id)
+    if r is None or not can_see(r, viewer) or not r["enabled"] or not runs_on(r, day):
+        return None
+    try:
+        async with _guarded_write(seen, subject=r["user_id"], actors=(viewer,)) as w:
+            r = await _load(w.db, routine_id)
+            if r is None or w.forgotten(r["name"]):
+                return None                               # gone, or named for a forgotten entity whose erase is still pending
+            did = await _ensure_day(w, r, day, today)
+            rows = await _rows(w.db, f"SELECT {', '.join(_DS_COLS)} FROM routine_day_steps WHERE day_id = ? ORDER BY position",
+                               (did,))
+            # the shield on READ too: every caller (the voice tier, the card) speaks or shows these lines, so a line naming a
+            # forgotten entity is withheld even while its erase is still pending (checked against the marks re-read under the lock)
+            rows = [x for x in rows if not w.forgotten(x[_DS_COLS.index("text")])]
+    except StoreError as exc:
+        if exc.code == "erased":
+            return None                                   # the subject or the viewer is being forgotten: nothing to show
+        raise
+    steps = [dict(zip(_DS_COLS, x)) for x in rows]
+    for s in steps:
+        s["today_only"] = s["origin"] == "one_off"
+    return {"routine": r, "day": day.isoformat(), "day_id": did, "steps": steps}
+
+
+async def add_one_off(actor: str, routine_id: str, day: date, text: str, *, kind: str = "take_with", created_via: str = "voice",
+                      now: Optional[datetime] = None) -> dict:
+    """One extra line on ONE day's copy ("take the drill", tomorrow's morning). Refused for a past day, a day the routine does not run,
+    a medicine kind (a medicine line is a template step, never a one-off), or someone who may not edit the routine."""
+    seen = _start()
+    _check_text(text)
+    if kind not in ONE_OFF_KINDS:
+        raise StoreError("bad_kind")
+    today = household_today(now)
+    if day < today:
+        raise StoreError("past_day")
+    async with _db() as db:
+        r = await _load(db, routine_id)
+    if r is None or not can_see(r, actor):
+        raise StoreError("not_found", 404)
+    if not can_edit(r, actor):
+        raise StoreError("not_allowed", 403)
+    if not r["enabled"] or not runs_on(r, day):
+        raise StoreError("not_that_day")
+    stamp = _iso()
+    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
+        if await _load(w.db, routine_id) is None:
+            raise StoreError("not_found", 404)
+        did = await _ensure_day(w, r, day, today)
+        if (await _rows(w.db, "SELECT closed_at FROM routine_days WHERE id = ?", (did,)))[0][0] is not None:
+            raise StoreError("day_closed", 409)
+        n = (await _rows(w.db, "SELECT COUNT(*) FROM routine_day_steps WHERE day_id = ? AND origin = 'one_off'", (did,)))[0][0]
+        if int(n) >= MAX_STEPS:
+            raise StoreError("too_many_steps")
+        dsid = f"{did}:o{uuid.uuid4().hex[:12]}"
+        await w.db.execute(
+            "INSERT INTO routine_day_steps (id, day_id, step_id, origin, text, kind, position, state, prompts, created_via, created_at, "
+            "updated_at) VALUES (?, ?, NULL, 'one_off', ?, ?, ?, 'pending', 0, ?, ?, ?)",
+            (dsid, did, text, kind, ONE_OFF_BASE + int(n) + 1, created_via, stamp, stamp))
+    _log("one_off", kind=kind, member=r["user_id"], routine=routine_id, via=created_via)
+    return {"id": dsid, "day_id": did, "day": day.isoformat(), "text": text, "kind": kind}
+
+
+# -- the walk: what Zoe just named -------------------------------------------------------------------------------------------------
+@dataclass
+class Named:
+    member: str
+    day_step_id: str
+    at: float
+
+
+_NAMED: "OrderedDict[str, Named]" = OrderedDict()      # session -> the step Zoe named last
+_LAST: "OrderedDict[str, tuple]" = OrderedDict()       # session -> (day_step_id, member, at, previous state) of the last said change
+_MAX_SESSIONS = 1024
+
+
+def _mono() -> float:
+    return time.monotonic()
+
+
+def _bounded(d: OrderedDict, key: str, value) -> None:
+    d[key] = value
+    d.move_to_end(key)
+    while len(d) > _MAX_SESSIONS:
+        d.popitem(last=False)
+
+
+async def note_named(session_id: str, member: str, day_step_id: str, *, dry: bool = False) -> None:
+    """Zoe's reply just named ``day_step_id`` to ``member`` in ``session_id``: the ONLY step a bare "done" can now tick, for
+    ``WALK_S``. Counts the prompt (``prompts`` + 1, ``event=prompted``)."""
+    if not session_id or not member:
+        return
+    seen = _start()
+    _bounded(_NAMED, session_id, Named(member, day_step_id, _mono()))
+    if dry:
+        return
+    async with _db() as db:
+        rows = await _rows(db, "SELECT ds.kind, d.routine_id, d.user_id FROM routine_day_steps ds JOIN routine_days d ON d.id = ds.day_id "
+                               "WHERE ds.id = ?", (day_step_id,))
+    if not rows:
+        return
+    try:
+        async with _guarded_write(seen, subject=rows[0][2], actors=(member,)) as w:
+            await w.db.execute("UPDATE routine_day_steps SET prompts = prompts + 1, last_prompt_at = ? WHERE id = ?",
+                               (_iso(), day_step_id))
+    except StoreError:
+        close_walk(session_id)                            # erased meanwhile: nothing is counted and nothing stays named
+        return
+    _log("prompted", kind=rows[0][0], member=rows[0][2], routine=rows[0][1])
+
+
+def named_step(session_id: str, member: str) -> Optional[str]:
+    """The step a bare reply in this session may act on: named within ``WALK_S``, to this same member. Else None."""
+    n = _NAMED.get(session_id or "")
+    if n is None or n.member != member or _mono() - n.at > WALK_S:
+        return None
+    parts = n.day_step_id.split(":")
+    if len(parts) < 2 or parts[1] != household_today().isoformat():
+        return None                                       # named on another household day (a walk across midnight): stale
+    return n.day_step_id
+
+
+def walk_entry(session_id: str) -> Optional["Named"]:
+    """The session's current walk entry (identity only: a caller compares it before / after a turn to see whether that turn named a
+    step)."""
+    return _NAMED.get(session_id or "")
+
+
+def walk_open(session_id: str, member: str) -> bool:
+    return named_step(session_id, member) is not None
+
+
+def close_walk(session_id: str) -> None:
+    _NAMED.pop(session_id or "", None)
+
+
+async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, verified: bool) -> dict:
+    """Change one day line: done | skip | snooze (from pending / snoozed) or undo (back to pending). Every visibility and medicine
+    rule is checked HERE, so neither the voice tier nor a card route can skip them. A closed day is settled: nothing on it changes
+    (``day_closed``). The write is gated on the SUBJECT's and the ACTOR's erasure (``_guarded_write``)."""
+    seen = _start()
+    async with _db() as db:
+        rows = await _rows(db, "SELECT ds.state, ds.kind, d.routine_id, d.closed_at FROM routine_day_steps ds "
+                               "JOIN routine_days d ON d.id = ds.day_id WHERE ds.id = ?", (ds_id,))
+        r = await _load(db, rows[0][2]) if rows else None
+    if not rows or r is None or not can_see(r, actor):
+        raise StoreError("not_found", 404)
+    state, kind = rows[0][0], rows[0][1]
+    if rows[0][3] is not None:
+        raise StoreError("day_closed", 409)
+    refusal = can_tick(r, kind, actor, verified=verified)
+    if refusal:
+        _log("refused", kind=kind, via=via, verified=verified, member=r["user_id"], routine=r["id"], reason=refusal)
+        raise StoreError(refusal, 403)
+    if action == "undo":
+        if state not in ("done", "skipped", "snoozed"):
+            raise StoreError("nothing_to_undo", 409)
+        new = "pending"
+    else:
+        if state not in ("pending", "snoozed"):
+            raise StoreError("already_" + state, 409)
+        new = {"done": "done", "skip": "skipped", "snooze": "snoozed"}.get(action)
+        if new is None:
+            raise StoreError("bad_action")
+    until = _iso(_now_utc() + timedelta(minutes=SNOOZE_MIN)) if new == "snoozed" else None
+    known = None if new == "pending" else via
+    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,)) as w:
+        cur = await w.db.execute(
+            "UPDATE routine_day_steps SET state = ?, snooze_until = ?, known_by = ?, actor_user_id = ?, verified = ?, updated_at = ? "
+            "WHERE id = ? AND state = ? AND day_id IN (SELECT id FROM routine_days WHERE closed_at IS NULL)",
+            (new, until, known, None if _guest(actor) else actor, int(bool(verified)), _iso(), ds_id, state))
+        if int(getattr(cur, "rowcount", 1) or 0) == 0:
+            raise StoreError("changed_meanwhile", 409)       # a tap and a voice raced (or the day closed): never a double act
+    event = {"done": "ticked", "skipped": "skipped", "snoozed": "snoozed", "pending": "undo"}[new]
+    _log(event, kind=kind, via=via, verified=verified, member=r["user_id"], routine=r["id"],
+         **({"was": state} if new == "pending" else {}))
+    return {"id": ds_id, "state": new, "previous": state, "kind": kind, "routine_id": r["id"]}
+
+
+async def act_said(session_id: str, member: str, action: str, *, verified: bool) -> dict:
+    """A bare spoken reply ("done" / "skip" / "later") inside a walk: acts on the step Zoe JUST named, nothing else. No step was
+    named (or it was > ``WALK_S`` ago, another person, another session) = ``StoreError("nothing_named")``: nothing is ticked."""
+    ds_id = named_step(session_id, member)
+    if ds_id is None:
+        raise StoreError("nothing_named", 409)
+    out = await _apply(ds_id, action, member, via="said", verified=verified)
+    _bounded(_LAST, session_id, (ds_id, member, _mono(), out["previous"]))
+    close_walk(session_id)
+    return out
+
+
+async def undo_said(session_id: str, member: str, *, verified: bool) -> dict:
+    """"No, I haven't" / "untick that" right after a said change: put that one line back. ``quick=1`` = within ``QUICK_UNDO_S``."""
+    last = _LAST.get(session_id or "")
+    if last is None or last[1] != member or _mono() - last[2] > WALK_S:
+        raise StoreError("nothing_to_undo", 409)
+    out = await _apply(last[0], "undo", member, via="said", verified=verified)
+    _LAST.pop(session_id, None)
+    _bounded(_NAMED, session_id, Named(member, last[0], _mono()))     # the line is named again: "done" can redo it
+    logger.info("ROUTINE event=undo_window quick=%d", int(_mono() - last[2] <= QUICK_UNDO_S))
+    return out
+
+
+async def act_tapped(actor: Optional[str], day_step_id: str, action: str, *, verified: bool) -> dict:
+    """A tap on a card row. ``actor`` None = a household tap at the panel (nobody identified). ``verified`` = the subject's own member
+    session or voice session holds the card."""
+    return await _apply(day_step_id, action, actor, via="tapped", verified=verified)
+
+
+def reset_walks() -> None:
+    _NAMED.clear()
+    _LAST.clear()
 
 
 # -- forget ------------------------------------------------------------------------------------------------------------------------

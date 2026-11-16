@@ -375,7 +375,7 @@ def test_every_write_path_goes_through_the_one_gate():
     assert _ungated_writers(src) == []
     tree = ast.parse(src)
     fns = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    assert {"create_routine", "add_step", "forget_user", "erase_entity"} <= fns          # the enumeration is not vacuous
+    assert {"create_routine", "add_step", "forget_user", "erase_entity", "day_copy", "add_one_off", "note_named", "_apply"} <= fns
     # negative control: a writer that skips the gate is caught, directly or through a db helper
     rogue = src + (
         "\n\nasync def rename_routine(actor, rid, name):\n    async with _db() as db:\n"
@@ -399,10 +399,314 @@ def test_the_migration_chain_has_one_head_and_this_revision_hangs_off_a_real_par
     assert "on 0080" in Path(me.path).read_text()                                    # the docstring tells the same chain
 
 
-def test_the_forget_inventory_reaches_every_routine_table_and_would_catch_a_missing_entry():
+def test_the_forget_inventory_reaches_every_routine_table_and_would_catch_a_missing_entry(monkeypatch):
     found = fr.discover_user_tables([rs.__file__.replace("routines_store.py", "alembic/versions/0081_routines.py")])
     assert TABLES == set(found)                                                     # the discovery sees all four (children too)
     assert not set(fr.uncovered_tables(found)) & TABLES
     assert all(fr.BY_KEY[k].status == fr.REACHED and fr.BY_KEY[k].member == "routines_store.forget_user" for k in TABLES)
-    stripped = {s.key for s in fr.TABLES if s.key not in TABLES}                   # negative control: drop the entries
-    assert set(found) - stripped == TABLES
+    monkeypatch.setattr(fr, "TABLES", tuple(s for s in fr.TABLES if s.key not in TABLES))   # negative control: drop the entries
+    assert set(fr.uncovered_tables(found)) == TABLES                                # ... and the checker itself reports all four
+
+
+# == the day: copies, one-off lines, the walk and the ticks (1b) ===================================================================
+import logging  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+from routines_support import THU  # noqa: E402
+
+TODAY = THU.date()
+TOMORROW = TODAY + timedelta(days=1)
+
+
+def test_odd_text_round_trips_exactly_through_the_day_copy_and_a_one_off(store):
+    r = _mk(steps=(ODD,))
+    assert run(rs.day_copy(ALEX, r["id"]))["steps"][0]["text"] == ODD
+    off = run(rs.add_one_off(ALEX, r["id"], TOMORROW, ODD))
+    assert off["text"] == ODD
+    assert store.q("SELECT text FROM routine_day_steps WHERE id = ?", (off["id"],)) == [(ODD,)]
+
+
+# -- day copies --------------------------------------------------------------------------------------------------------------------
+def test_the_day_copy_is_lazy_idempotent_and_frozen_once_made(store):
+    r = _mk()
+    assert store.q("SELECT COUNT(*) FROM routine_days") == [(0,)]                 # nothing until first need
+    a = run(rs.day_copy(ALEX, r["id"]))
+    b = run(rs.day_copy(ALEX, r["id"]))
+    assert [s["id"] for s in a["steps"]] == [s["id"] for s in b["steps"]] and len(a["steps"]) == 2
+    assert store.q("SELECT COUNT(*) FROM routine_days") == [(1,)]
+    run(rs.add_step(ALEX, r["id"], "water the plants"))
+    assert len(run(rs.day_copy(ALEX, r["id"]))["steps"]) == 2                     # today's copy is not rewritten
+    assert len(run(rs.day_copy(ALEX, r["id"], TOMORROW))["steps"]) == 0           # a future day snapshots nothing yet
+
+
+def test_a_one_off_joins_exactly_one_day(store, monkeypatch):
+    r = _mk()
+    off = run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take the drill"))
+    assert store.q("SELECT snapshot_at FROM routine_days WHERE id = ?", (off["day_id"],)) == [(None,)]
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=1))
+    tom = run(rs.day_copy(ALEX, r["id"]))
+    assert [(s["text"], s["today_only"]) for s in tom["steps"]] == [("feed the cat", False), ("bins", False), ("take the drill", True)]
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=2))
+    assert "take the drill" not in [s["text"] for s in run(rs.day_copy(ALEX, r["id"]))["steps"]]
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.add_one_off(ALEX, r["id"], TODAY, "too late"))                     # now in the past
+    assert e.value.code == "past_day"
+    with pytest.raises(rs.StoreError):
+        run(rs.add_one_off(ALEX, r["id"], THU.date() + timedelta(days=3), "tablets", kind="medicine"))
+    with pytest.raises(rs.StoreError):
+        run(rs.add_one_off(SAM, r["id"], THU.date() + timedelta(days=3), "x"))    # not Sam's routine: not even visible
+
+
+def test_a_day_the_routine_does_not_run_gets_no_copy_and_no_one_off(store):
+    r = _mk(days_rule="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR")
+    sat = TODAY + timedelta(days=(5 - TODAY.weekday()) % 7)
+    assert sat.weekday() == 5
+    assert run(rs.day_copy(ALEX, r["id"], sat)) is None
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.add_one_off(ALEX, r["id"], sat, "take the drill"))
+    assert e.value.code == "not_that_day"
+    assert run(rs.day_copy(ALEX, r["id"], TOMORROW)) is not None                  # control: a Friday runs
+
+
+def test_a_missed_line_is_counted_when_the_next_day_is_opened(store, monkeypatch, caplog):
+    r = _mk()
+    run(rs.day_copy(ALEX, r["id"]))
+    caplog.set_level(logging.INFO, logger="routines_store")
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=1))
+    run(rs.day_copy(ALEX, r["id"]))
+    missed = [m.getMessage() for m in caplog.records if "event=missed" in m.getMessage()]
+    assert missed and "n=2" in missed[0]
+    assert store.q("SELECT close_reason FROM routine_days WHERE day = ?", (TODAY.isoformat(),)) == [("window_end",)]
+
+
+# -- ticks -------------------------------------------------------------------------------------------------------------------------
+def _first(r, who=ALEX):
+    return run(rs.day_copy(who, r["id"]))["steps"][0]["id"]
+
+
+def test_a_said_tick_ticks_only_the_step_just_named_for_that_person_in_that_session(store, monkeypatch):
+    r = _mk()
+    ds = _first(r)
+    with pytest.raises(rs.StoreError) as e:                                        # nothing named: "yep" ticks nothing
+        run(rs.act_said("s1", ALEX, "done", verified=False))
+    assert e.value.code == "nothing_named"
+    run(rs.note_named("s1", ALEX, ds))
+    for sess, who in (("s2", ALEX), ("s1", SAM)):                                  # another session, another person
+        with pytest.raises(rs.StoreError):
+            run(rs.act_said(sess, who, "done", verified=True))
+    t0 = rs._mono()
+    monkeypatch.setattr(rs, "_mono", lambda: t0 + rs.WALK_S + 1)                   # the walk went stale
+    with pytest.raises(rs.StoreError):
+        run(rs.act_said("s1", ALEX, "done", verified=True))
+    monkeypatch.setattr(rs, "_mono", lambda: t0 + 5)
+    out = run(rs.act_said("s1", ALEX, "done", verified=False))
+    assert out["state"] == "done"
+    assert store.q("SELECT state, known_by, actor_user_id, verified, prompts FROM routine_day_steps WHERE id = ?", (ds,)) == [
+        ("done", "said", ALEX, 0, 1)]
+    assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE state = 'done'") == [(1,)]   # exactly one line changed
+    with pytest.raises(rs.StoreError):                                             # the walk closed with the tick
+        run(rs.act_said("s1", ALEX, "done", verified=False))
+
+
+def test_skip_snooze_and_undo(store):
+    r = _mk()
+    ds = _first(r)
+    run(rs.note_named("s1", ALEX, ds))
+    assert run(rs.act_said("s1", ALEX, "snooze", verified=False))["state"] == "snoozed"
+    run(rs.note_named("s1", ALEX, ds))
+    assert run(rs.act_said("s1", ALEX, "skip", verified=False))["state"] == "skipped"
+    assert run(rs.undo_said("s1", ALEX, verified=False))["state"] == "pending"
+    with pytest.raises(rs.StoreError):
+        run(rs.undo_said("s1", ALEX, verified=False))                              # one undo per change
+    assert run(rs.act_said("s1", ALEX, "done", verified=False))["state"] == "done"  # undo re-names the line
+
+
+def test_a_medicine_step_needs_its_subject_verified(store):
+    r = run(rs.create_routine(SAM, "Morning", "waking", steps=(("tablets", "medicine"),)))
+    ds = _first(r, SAM)
+    run(rs.note_named("s1", SAM, ds))
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.act_said("s1", SAM, "done", verified=False))
+    assert e.value.code == "unverified"
+    assert store.q("SELECT state FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending",)]
+    with pytest.raises(rs.StoreError):
+        run(rs.act_tapped(None, ds, "done", verified=False))                       # a household tap: not even visible
+    with pytest.raises(rs.StoreError):
+        run(rs.act_tapped(ALEX, ds, "done", verified=True))                        # another member
+    run(rs.note_named("s1", SAM, ds))
+    assert run(rs.act_said("s1", SAM, "done", verified=True))["state"] == "done"
+    # the wrong-tick invariant as a database check: no medicine line is ever done unverified by voice
+    assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE kind = 'medicine' AND state = 'done' AND verified = 0") == [(0,)]
+
+
+def test_the_fridge_rule_on_a_family_routine_and_never_on_a_personal_one(store):
+    fam = run(rs.create_routine(SAM, "Feed the dog", "dinner", visibility="family", steps=("feed the dog",)))
+    assert run(rs.act_tapped(None, _first(fam, None), "done", verified=False))["state"] == "done"
+    mine = _mk()
+    with pytest.raises(rs.StoreError):
+        run(rs.act_tapped(None, _first(mine), "done", verified=False))
+    with pytest.raises(rs.StoreError):
+        run(rs.act_tapped(SAM, _first(mine), "done", verified=True))
+    assert run(rs.act_tapped(ALEX, _first(mine), "done", verified=True))["state"] == "done"
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.act_tapped(ALEX, _first(mine), "done", verified=True))               # a second tap never double-acts
+    assert e.value.code == "already_done"
+
+
+def test_logs_carry_codes_and_counts_never_the_words(store, caplog):
+    caplog.set_level(logging.INFO, logger="routines_store")
+    r = run(rs.create_routine(SAM, "Sunrise", "waking", steps=(("blue tablets", "medicine"),)))
+    ds = _first(r, SAM)
+    run(rs.add_one_off(SAM, r["id"], TOMORROW, "take the orange umbrella"))
+    run(rs.note_named("s1", SAM, ds))
+    with pytest.raises(rs.StoreError):
+        run(rs.act_said("s1", SAM, "done", verified=False))
+    text = " ".join(m.getMessage() for m in caplog.records)
+    for event in ("created", "one_off", "prompted", "refused"):
+        assert f"event={event}" in text
+    for word in ("tablets", "umbrella", "Sunrise", SAM):
+        assert word not in text
+
+
+
+def test_forget_user_also_erases_the_days_and_lines_and_blanks_the_actor(store):
+    r = run(rs.create_routine(SAM, "Morning", "waking", steps=(("tablets", "medicine"), "stretch")))
+    run(rs.day_copy(SAM, r["id"]))
+    run(rs.add_one_off(SAM, r["id"], TOMORROW, "take the drill"))
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    run(rs.act_tapped(SAM, _first(fam, SAM), "done", verified=True))
+    keep = _mk(owner=RILEY)
+    assert run(rs.forget_user(SAM)) == 1
+    for t in ("routines", "routine_days"):
+        assert store.q(f"SELECT COUNT(*) FROM {t} WHERE user_id = ?", (SAM,)) == [(0,)]
+    assert store.q("SELECT COUNT(*) FROM routine_steps WHERE routine_id = ?", (r["id"],)) == [(0,)]
+    assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE day_id LIKE ?", (r["id"] + "%",)) == [(0,)]
+    assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE actor_user_id = ?", (SAM,)) == [(0,)]
+    assert store.q("SELECT state FROM routine_day_steps WHERE day_id LIKE ?", (fam["id"] + "%",)) == [("done",)]  # Alex's stays
+    assert run(rs.get_routine(RILEY, keep["id"])) is not None                      # control: nobody else's routine went
+
+
+
+def test_erase_entity_also_deletes_day_lines_that_name_the_entity(store):
+    named = run(rs.create_routine(ALEX, "Quinn visit", "window"))
+    r = _mk(steps=("call Quinn", "bins"))
+    run(rs.day_copy(ALEX, r["id"]))
+    run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take Quinn's book"))
+    rx = re.compile(r"\bquinn\b", re.I)
+    assert run(rs.erase_entity(ALEX, rx, strict=True)) >= 4
+    assert run(rs.get_routine(ALEX, named["id"])) is None
+    left = " ".join(t for (t,) in store.q("SELECT text FROM routine_steps") + store.q("SELECT text FROM routine_day_steps"))
+    assert "Quinn" not in left and "bins" in left                                  # control: the other line stays
+
+
+
+
+# -- the day under the one gate (1b) ------------------------------------------------------------------------------------------------
+def test_an_entity_erase_between_the_template_read_and_the_copy_leaves_no_line_naming_it(store, monkeypatch):
+    """The snapshot reads the template, then inserts the day lines. Old code: the erase did not share the snapshot's gate, ran whole
+    in that gap (template step deleted, nothing on the day yet), and the copy then inserted the text it had already read."""
+    r = _mk(steps=("call Quinn", "bins"))
+    rx = re.compile(r"\bquinn\b", re.I)
+    real, task = rs._steps, []
+
+    async def steps(db, rid):
+        out = await real(db, rid)
+        if not task:
+            async def forget():
+                await memory_forgotten.add(ALEX, "Quinn")
+                await rs.erase_entity(ALEX, rx, strict=True)
+            task.append(asyncio.ensure_future(forget()))
+            for _ in range(60):
+                await asyncio.sleep(0)
+        return out
+    monkeypatch.setattr(rs, "_steps", steps)
+
+    async def scenario():
+        await rs.day_copy(ALEX, r["id"])
+        await task[0]
+    run(scenario())
+    for table, col in (("routine_steps", "text"), ("routine_day_steps", "text")):
+        assert not [t for (t,) in store.q(f"SELECT {col} FROM {table}") if rx.search(t)], table
+    assert [t for (t,) in store.q("SELECT text FROM routine_day_steps")] == ["bins"]
+
+
+def test_an_actors_own_delete_between_their_tick_and_its_write_writes_nothing_of_theirs(store, monkeypatch):
+    """Sam ticks Alex's family routine; Sam's member delete runs between the tick's read and its write. Old code took only Alex's
+    gate, so the pending tick wrote Sam's id back after Sam's erase had blanked it."""
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    ds = _first(fam, SAM)
+
+    async def scenario():
+        _hook_rows(monkeypatch, "SELECT ds.state", lambda: rs.forget_user(SAM))
+        with pytest.raises(rs.StoreError) as e:
+            await rs.act_tapped(SAM, ds, "done", verified=True)
+        assert e.value.code == "erased"
+    run(scenario())
+    assert store.q("SELECT state, actor_user_id FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending", None)]
+    assert _count(store, "routine_day_steps", "actor_user_id = ?", (SAM,)) == 0
+
+
+def test_a_closed_day_is_settled_nothing_on_it_changes(store, monkeypatch):
+    r = _mk()
+    ds = _first(r)
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=1))
+    run(rs.day_copy(ALEX, r["id"]))                                                # opening tomorrow closes today
+    for action in ("done", "skip", "snooze", "undo"):
+        with pytest.raises(rs.StoreError) as e:
+            run(rs.act_tapped(ALEX, ds, action, verified=True))
+        assert e.value.code == "day_closed"
+    assert store.q("SELECT state FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending",)]
+    assert run(rs.act_tapped(ALEX, _first(r), "done", verified=True))["state"] == "done"   # control: the open day still ticks
+
+
+def test_a_walk_named_yesterday_ticks_nothing_today(store, monkeypatch):
+    r = _mk()
+    ds = _first(r)
+    run(rs.note_named("s1", ALEX, ds))
+    t0 = rs._mono()
+    monkeypatch.setattr(rs, "_mono", lambda: t0 + 5)                               # well inside WALK_S ...
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(hours=17))         # ... but past household midnight
+    assert rs.named_step("s1", ALEX) is None
+    with pytest.raises(rs.StoreError):
+        run(rs.act_said("s1", ALEX, "done", verified=True))
+
+
+def test_a_one_off_naming_a_forgotten_entity_is_refused(store):
+    r = _mk()
+    _forget(ALEX, "Quinn")
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take Quinn's book"))
+    assert e.value.code == "names_forgotten"
+    assert run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take the book"))["text"] == "take the book"
+
+
+def test_an_actor_erased_by_another_process_mid_tick_writes_nothing_of_theirs(store, monkeypatch):
+    """The actor case across PROCESSES: Sam's delete runs elsewhere (its watermark first, then its eraser) between Sam's tick's read
+    and its write. This process's gate sees nothing; the durable watermark re-read under the lock refuses the tick."""
+    import erase_watermark
+
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    ds = _first(fam, SAM)
+    _as_another_process(monkeypatch)
+
+    async def delete_sam_elsewhere():
+        await erase_watermark.record(SAM)
+        await rs.forget_user(SAM)
+
+    async def scenario():
+        _hook_rows(monkeypatch, "SELECT ds.state", delete_sam_elsewhere)
+        with pytest.raises(rs.StoreError) as e:
+            await rs.act_tapped(SAM, ds, "done", verified=True)
+        assert e.value.code == "erased"
+    run(scenario())
+    assert store.q("SELECT state, actor_user_id FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending", None)]
+
+
+def test_a_line_naming_a_forgotten_entity_is_withheld_from_the_day_copy_while_its_erase_is_pending(store):
+    r = _mk(steps=("call Quinn", "bins"))
+    named = run(rs.create_routine(ALEX, "Quinn visit", "window", steps=("tidy",)))
+    run(rs.day_copy(ALEX, r["id"]))
+    _forget(ALEX, "Quinn")                                                       # recorded; the cascade has not run yet
+    assert [s["text"] for s in run(rs.day_copy(ALEX, r["id"]))["steps"]] == ["bins"]
+    assert run(rs.day_copy(ALEX, named["id"])) is None
+    assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE text = 'call Quinn'") == [(1,)]   # withheld, not erased: the cascade erases
