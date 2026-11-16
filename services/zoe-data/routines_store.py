@@ -450,12 +450,41 @@ async def get_routine(viewer: Optional[str], routine_id: str) -> Optional[dict]:
 
 
 async def list_routines(viewer: Optional[str]) -> list[dict]:
-    """Every routine ``viewer`` may see, the same filter as lists: ``visibility = 'family' OR user_id = viewer``."""
+    """Every routine ``viewer`` may see, the same filter as lists: ``visibility = 'family' OR user_id = viewer``; a routine whose
+    NAME names an entity its subject or the viewer has forgotten is withheld (its erase may still be pending; callers speak names)."""
     me = None if _guest(viewer) else viewer
     async with _db() as db:
         rows = await _rows(db, f"SELECT {', '.join(_R_COLS)} FROM routines WHERE deleted = 0 AND (visibility = 'family' OR user_id = ?) "
                                "ORDER BY created_at", (me,))
-    return [_routine(r) for r in rows]
+    out = []
+    for r in (_routine(x) for x in rows):
+        if not await names_forgotten({r["user_id"], me}, r["name"]):
+            out.append(r)
+    return out
+
+
+async def names_forgotten(members, text) -> bool:
+    """Does ``text`` name an entity any of ``members`` has forgotten (tombstone, then the DURABLE ledger read uncached on a connection
+    of its own, so a forget recorded by another process is seen)? A READ check for what is about to be shown or said; an unreadable
+    ledger counts as forgotten (withhold, never leak). Never called while the caller holds a connection."""
+    import memory_forgotten
+    import memory_tombstones
+
+    who = {m for m in members if m and not _guest(m)}
+    for m in who:
+        if memory_tombstones.matching_tombstone(m, str(text or "")):
+            return True
+    if not text or not who or not memory_forgotten.configured():
+        return False
+    try:
+        async with _db() as db:
+            for m in who:
+                wanted = await memory_forgotten.active_hashes_on(db, m)
+                if wanted and memory_forgotten.spans_in(m, str(text), wanted, near=False)[0]:
+                    return True
+    except Exception:  # noqa: BLE001 - unreadable: withhold
+        return True
+    return False
 
 
 async def add_step(actor: str, routine_id: str, text: str, kind: str = "check") -> dict:
@@ -589,7 +618,8 @@ async def add_one_off(actor: str, routine_id: str, day: date, text: str, *, kind
             "INSERT INTO routine_day_steps (id, day_id, step_id, origin, text, kind, position, state, prompts, created_via, created_at, "
             "updated_at) VALUES (?, ?, NULL, 'one_off', ?, ?, ?, 'pending', 0, ?, ?, ?)",
             (dsid, did, text, kind, ONE_OFF_BASE + int(n) + 1, created_via, stamp, stamp))
-    _log("one_off", kind=kind, member=r["user_id"], routine=routine_id, via=created_via)
+    _log("one_off", kind=kind, member=r["user_id"], routine=routine_id,
+         via=created_via if created_via in ("voice", "chat", "card", "panel", "shadow") else "-")   # fixed codes only
     return {"id": dsid, "day_id": did, "day": day.isoformat(), "text": text, "kind": kind}
 
 
@@ -617,29 +647,36 @@ def _bounded(d: OrderedDict, key: str, value) -> None:
         d.popitem(last=False)
 
 
-async def note_named(session_id: str, member: str, day_step_id: str, *, dry: bool = False) -> None:
-    """Zoe's reply just named ``day_step_id`` to ``member`` in ``session_id``: the ONLY step a bare "done" can now tick, for
-    ``WALK_S``. Counts the prompt (``prompts`` + 1, ``event=prompted``)."""
+async def note_named(session_id: str, member: str, day_step_id: str) -> Optional[str]:
+    """Zoe's reply is about to name ``day_step_id`` to ``member`` in ``session_id``: the ONLY step a bare "done" can now tick, for
+    ``WALK_S``. Counts the prompt (``prompts`` + 1, ``event=prompted``). Returns the line's text AS IT IS NOW - re-read under the
+    gate, and None (nothing named) when the line is gone, settled or names a forgotten entity: the caller speaks only what this
+    returns, never the text it read earlier."""
     _prune_walks()
     if not session_id or not member:
-        return
+        return None
     seen = _start()
-    _bounded(_NAMED, session_id, Named(member, day_step_id, _mono()))
-    if dry:
-        return
     async with _db() as db:
         rows = await _rows(db, "SELECT ds.kind, d.routine_id, d.user_id FROM routine_day_steps ds JOIN routine_days d ON d.id = ds.day_id "
                                "WHERE ds.id = ?", (day_step_id,))
     if not rows:
-        return
+        close_walk(session_id)
+        return None
     try:
         async with _guarded_write(seen, subject=rows[0][2], actors=(member,)) as w:
+            now = await _rows(w.db, "SELECT ds.text, ds.state, d.closed_at FROM routine_day_steps ds JOIN routine_days d "
+                                    "ON d.id = ds.day_id WHERE ds.id = ?", (day_step_id,))
+            if not now or now[0][1] not in ("pending", "snoozed") or now[0][2] is not None or w.forgotten(now[0][0]):
+                close_walk(session_id)
+                return None
             await w.db.execute("UPDATE routine_day_steps SET prompts = prompts + 1, last_prompt_at = ? WHERE id = ?",
                                (_iso(), day_step_id))
     except StoreError:
         close_walk(session_id)                            # erased meanwhile: nothing is counted and nothing stays named
-        return
+        return None
+    _bounded(_NAMED, session_id, Named(member, day_step_id, _mono()))
     _log("prompted", kind=rows[0][0], member=rows[0][2], routine=rows[0][1])
+    return now[0][0]
 
 
 def named_step(session_id: str, member: str) -> Optional[str]:
@@ -730,7 +767,7 @@ async def undo_said(session_id: str, member: str, *, verified: bool) -> dict:
         raise StoreError("nothing_to_undo", 409)
     out = await _apply(last[0], "undo", member, via="said", verified=verified)
     _LAST.pop(session_id, None)
-    _bounded(_NAMED, session_id, Named(member, last[0], _mono()))     # the line is named again: "done" can redo it
+    out["text"] = await note_named(session_id, member, last[0])   # named again ONLY through note_named: its current text, or None
     logger.info("ROUTINE event=undo_window quick=%d", int(_mono() - last[2] <= QUICK_UNDO_S))
     return out
 

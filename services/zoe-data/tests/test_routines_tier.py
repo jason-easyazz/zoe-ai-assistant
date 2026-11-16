@@ -126,14 +126,13 @@ def test_a_member_without_routines_gets_every_utterance_back_untouched(store, on
 
 # -- one-offs ----------------------------------------------------------------------------------------------------------------------
 def test_remind_me_to_take_the_drill_to_work_tomorrow(store, on):
-    r = _morning()
+    _morning()
     assert say("remind me to take the drill to work tomorrow") == "Added to tomorrow's morning routine: take the drill."
     assert store.q("SELECT text, origin, kind, created_via FROM routine_day_steps") == [("take the drill", "one_off", "take_with", "voice")]
     assert store.q("SELECT day FROM routine_days") == [((THU.date() + timedelta(days=1)).isoformat(),)]
     assert say("remind me at 7 to take the drill") is None                  # the clock reminder path answers, unchanged
     assert say("remind me to take the drill to work at 7 tomorrow") is None
     assert store.q("SELECT COUNT(*) FROM routine_day_steps") == [(1,)]
-    assert r["id"]
 
 
 def test_a_one_off_steps_aside_when_no_single_routine_fits_or_it_does_not_run_that_day(store, on):
@@ -199,8 +198,9 @@ def test_skip_later_undo_and_the_summary(store, on):
 def test_a_medicine_line_needs_a_verified_voice(store, on):
     _morning(owner=SAM, steps=(("tablets", "medicine"),))
     assert say("what's next", SAM, verified=None) == "Next: tablets."
-    assert say("done", SAM, verified=None) == rt.MEDICINE_UNVERIFIED
-    assert say("done", SAM, verified=False) == rt.MEDICINE_UNVERIFIED
+    named = rt.MEDICINE_UNVERIFIED_NAMED.format(text="tablets")
+    assert say("done", SAM, verified=None) == named                           # the reply re-names the line it refused ...
+    assert say("done", SAM, verified=False) == named                          # ... so the next "done" acts on what was just named
     assert _states(store) == {"tablets": "pending"}
     assert say("done", SAM, verified=True) == "Ticked. That's your morning routine done."
     assert store.q("SELECT verified, known_by FROM routine_day_steps") == [(1, "said")]
@@ -306,6 +306,129 @@ def test_the_erasers_are_safe_when_the_tier_was_never_loaded(store, monkeypatch)
     assert run(rs.forget_user(ALEX)) == 1
 
 
+def test_a_forgotten_routine_name_is_never_spoken_and_a_step_forgotten_after_the_read_is_not_named(store, on):
+    import memory_forgotten
+    run(rs.create_routine(ALEX, "Quinn visit", "leaving", steps=("tidy",)))
+    wake = run(rs.create_routine(ALEX, "Wake up", "waking", steps=("call Quinn", "water")))
+    stale = run(rs.day_copy(ALEX, wake["id"]))                                  # read BEFORE the forget: holds "call Quinn"
+    assert stale["steps"][0]["text"] == "call Quinn"
+    run(memory_forgotten.add(ALEX, "Quinn"))                                   # recorded; the cascade has not run yet
+    reply = say("remind me to take the drill to work tomorrow")
+    assert reply == "Added to tomorrow's wake up routine: take the drill."      # old code asked "Which routine: Quinn visit or ..."
+    assert run(rt._name_next("s1", ALEX, stale)) is None                       # the text read earlier is never the one spoken
+    assert rs.named_step("s1", ALEX) is None
+
+
+def test_an_undo_never_names_or_arms_a_line_forgotten_meanwhile(store, on):
+    import memory_forgotten
+    _morning(steps=("call Quinn", "bins"))
+    assert say("what's next?") == "Next: call Quinn."
+    assert say("done") == "Ticked. Next: bins."
+    run(memory_forgotten.add(ALEX, "Quinn"))                                   # recorded; the cascade has not run yet
+    assert say("untick that") == "OK, it's back on the list."                  # the line is not said ...
+    assert say("done") is None                                                # ... and not armed: "done" ticks nothing
+    assert _states(store) == {"call Quinn": "pending", "bins": "pending"}
+
+
+def test_a_routine_name_forgotten_after_the_read_is_not_said(store, on):
+    import memory_forgotten
+    r = run(rs.create_routine(ALEX, "Quinn visit", "waking", steps=("tidy",)))
+    day = run(rs.day_copy(ALEX, r["id"]))                                       # read BEFORE the forget
+    run(memory_forgotten.add(ALEX, "Quinn"))
+    out = run(rt._summary(ALEX, day))
+    assert "Quinn" not in out and out.startswith("That's that done")
+
+
+def test_a_routine_name_forgotten_by_another_process_is_not_offered(store, on):
+    import memory_forgotten
+    run(rs.create_routine(ALEX, "Quinn visit", "leaving", steps=("tidy",)))
+    run(rs.create_routine(ALEX, "Wake up", "waking", steps=("water",)))
+    assert run(memory_forgotten.active_hashes(ALEX)) == frozenset()           # this process's cache: nothing forgotten
+    run(memory_forgotten.get_backend().upsert(ALEX, memory_forgotten.key_hash(ALEX, "Quinn"), scope="entity", actor=ALEX,
+                                              forgotten_at="2026-11-12T07:00:00Z", shield_until=memory_forgotten.PERMANENT_UNTIL))
+    reply = say("remind me to take the drill to work tomorrow")                # the other process's forget, not in our cache
+    assert reply == "Added to tomorrow's wake up routine: take the drill."
+
+
+def test_a_turn_with_the_flags_off_still_ends_a_walk(store, on, monkeypatch):
+    import fast_tiers
+    _morning()
+    rt.turn_begins("s1")
+    assert say("what's next?") == "Next: feed the cat."
+    monkeypatch.setenv("ZOE_ROUTINE_VOICE", "off")
+    fast_tiers._routines_turn_begins("s1")                                     # a turn answered with the flag off
+    monkeypatch.setenv("ZOE_ROUTINE_VOICE", "on")
+    rt.turn_begins("s1")
+    assert say("done") is None
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def test_a_shadow_turn_in_between_ends_the_walk(store, on, monkeypatch):
+    _morning()
+    rt.turn_begins("s1")
+    assert say("what's next?") == "Next: feed the cat."
+    monkeypatch.setenv("ZOE_ROUTINE_VOICE", "shadow")
+    rt.turn_begins("s1")
+    assert say("what's next?") is None                                        # routines in shadow claims nothing; another lane answers
+    monkeypatch.setenv("ZOE_ROUTINE_VOICE", "on")
+    rt.turn_begins("s1")
+    assert say("done") is None
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def test_a_forget_landing_while_the_reply_is_built_is_caught_by_the_last_check(store, on, monkeypatch):
+    import memory_forgotten
+    run(rs.create_routine(ALEX, "Morning", "waking", steps=("call Quinn", "bins")))
+    real = rt._said_name
+
+    async def forget_meanwhile(member, routine):                               # the forget lands after the step text was checked
+        await memory_forgotten.get_backend().upsert(ALEX, memory_forgotten.key_hash(ALEX, "Quinn"), scope="entity", actor=ALEX,
+                                                    forgotten_at="2026-11-12T07:00:00Z", shield_until=memory_forgotten.PERMANENT_UNTIL)
+        return await real(member, routine)
+    monkeypatch.setattr(rt, "_said_name", forget_meanwhile)
+    reply = say("start my morning routine")
+    assert reply is None                                                      # suppressed whole: nothing of it is said
+    assert rs.named_step("s1", ALEX) is None and say("done") is None
+
+
+def test_a_failed_routines_turn_leaves_no_older_step_tickable(store, on, monkeypatch):
+    _morning()
+    assert say("what's next?") == "Next: feed the cat."
+    real = rs.day_copy
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("db blip")
+    monkeypatch.setattr(rs, "day_copy", boom)
+    assert say("what's next?") is None                                        # the routines turn failed (another lane answers)
+    monkeypatch.setattr(rs, "day_copy", real)
+    assert say("yes") is None
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def _turn(text, *, session="s1", **kw):
+    """A whole turn as fast_tiers runs it: the turn starts (``turn_begins``), then the tier sees it."""
+    rt.turn_begins(session)
+    return say(text, session=session, **kw)
+
+
+def test_a_turn_answered_by_another_tier_ends_the_walk(store, on):
+    _morning()
+    assert _turn("what's next?") == "Next: feed the cat."
+    rt.turn_begins("s1")                                                       # a tier ABOVE routines answered this turn
+    assert _turn("yes") is None                                               # ... so "yes" no longer ticks the old step
+    assert all(st == "pending" for st in _states(store).values())
+    assert _turn("what's next?") == "Next: feed the cat."                      # control: nothing in between
+    assert _turn("yes") == "Ticked. Next: bins."
+
+
+def test_an_unidentified_speaker_ends_the_walk(store, on):
+    _morning()
+    assert say("what's next?") == "Next: feed the cat."
+    assert say("what's next?", member=None) is None                           # someone Zoe cannot identify speaks
+    assert say("done") is None                                                # the earlier step is no longer tickable
+    assert all(st == "pending" for st in _states(store).values())
+
+
 def test_another_speaker_never_ticks_the_first_speakers_step(store, on):
     _morning()
     assert say("what's next?") == "Next: feed the cat."
@@ -323,6 +446,7 @@ def test_a_flag_off_turn_never_loads_the_routines_modules():
 
     code = ("import asyncio, sys\n"
             "import fast_tiers as ft\n"
+            "ft._routines_turn_begins('s1')\n"
             "assert asyncio.run(ft._routines_tier('done', 'm-alex', 's1', {'channel': 'voice'})) is None\n"
             "bad = [m for m in ('routines_tier', 'routines_store') if m in sys.modules]\n"
             "assert not bad, bad\n"

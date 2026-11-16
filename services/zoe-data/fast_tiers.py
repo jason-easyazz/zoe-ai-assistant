@@ -1012,6 +1012,26 @@ def _routines_wanted() -> bool:
         return False
 
 
+def _routines_turn_begins(session_id: str) -> None:
+    """Every turn's start (flags on only, nothing imported otherwise): the routines walk survives only when the routines tier itself
+    sees the next turn (``routines_tier.turn_begins``), so a turn answered by a tier above it ends the walk."""
+    if not _routines_wanted():
+        import sys                                    # flags off: never import; but a tier loaded earlier still sees the turn pass
+        loaded = sys.modules.get("routines_tier")
+        if loaded is not None:
+            try:
+                loaded.turn_begins(session_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return
+    try:
+        import routines_tier as _rt
+
+        _rt.turn_begins(session_id)
+    except Exception:  # noqa: BLE001 - never breaks a turn
+        pass
+
+
 async def _routines_tier(text: str, user_id: str, session_id: str, kwargs: dict):
     """The routines tier, imported only when its flags are on (see ``_routines_wanted``). Never raises."""
     if not _routines_wanted():
@@ -1044,6 +1064,7 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":
+        _routines_turn_begins(session_id)
         answered = await _distress_tier(text, user_id, kwargs)
         if answered is not None:
             return answered

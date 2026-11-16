@@ -95,8 +95,12 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
 - **Walk**: "done / yep / had them" ticks the step Zoe just named, "skip", "later / not now" (snooze), "stop", "no I haven't /
   untick that" (undo). The walk is keyed by session and holds the member and the day copy's id (which carries the household date):
   it is honoured only for that member, on that day, within 120 s, and it survives only a turn that named exactly one step just
-  now (any other reply, a list of several lines, a one-off, a different speaker's turn closes it). Residual: a turn
-  answered by a tier ABOVE this one (distress, feedback, provenance, enrolment, ...) does not close it; the 120 s cap bounds it.
+  now (any other reply, a list of several lines, a one-off, a different or unidentified speaker's turn closes it). A turn
+  answered by a tier ABOVE routines also ends it: `fast_tiers` calls `routines_tier.turn_begins` at every turn's start (flags on
+  only) and the walk closes when the previous turn never reached the routines tier; a failed routines turn closes it too.
+  Residual: a turn that never enters `fast_tiers._resolve_tiers` at all is not seen; the 120 s cap bounds it. Every line Zoe
+  SAYS is re-read at that moment (`note_named` returns the line's current text, `live_lines` for lists and summaries), and a
+  routine whose name names a forgotten entity is withheld from `list_routines`.
 - **What's next**: "what's next? / what's left?" names the next line of the walk or of the member's routine whose window is open
   now; a bare "next" outside a walk is left alone (it is a music skip). "start my <name> routine" opens a walk.
 - **One-off**: claimed only when the member has exactly one enabled routine of their own matching the cue (several = "Which routine:

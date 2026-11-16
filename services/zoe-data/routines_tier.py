@@ -23,7 +23,7 @@ WHAT IT TAKES (whole utterances only; everything else is None, so the reminder, 
 
 THE WALK (``routines_store.note_named``) is keyed by the session, holds the member it was named to and the day copy's id (which
 carries the household date), and is honoured only for that member, that day and ``WALK_S``. It survives only a turn that named
-exactly one step in that turn (or asked the same speaker to say it again in a known voice): any other reply, a step-aside, a list
+exactly one step in that turn (an unverified medicine "done" re-names its line in the reply): any other reply, a step-aside, a list
 of several lines or a different speaker's turn closes it.
 
 SAFETY. ``medical_safety.detect`` runs before anything is claimed: when it fires (an ingestion - "I took them twice by accident" -, a
@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 TIER = "routines"
 ENV_VOICE = "ZOE_ROUTINE_VOICE"
 MEDICINE_UNVERIFIED = "I can only tick that one when I know it's you. Say it again so I know your voice, or tap it on the panel."
+#: the same answer when it RE-NAMES the line (through ``note_named``): the next "done" then acts on the step this reply named
+MEDICINE_UNVERIFIED_NAMED = "I can only tick {text} when I know it's you. Say it again so I know your voice, or tap it on the panel."
 
 _FILLER = r"(?:(?:ok|okay|right|yes|yep|so|and|um|uh|oh|zoe|hey|please)[\s,]+)*"
 _TAIL = r"(?:[\s,]+(?:zoe|please|thanks|thank you|then|now))*"
@@ -234,14 +236,33 @@ async def _name_next(session_id: str, member: str, day: dict, *, after: Optional
     todo = _open(day["steps"], after)
     if not todo:
         return None
-    await rs.note_named(session_id, member, todo[0]["id"])
-    return f"{lead}{todo[0]['text']}."
+    text = await rs.note_named(session_id, member, todo[0]["id"])   # the text AS IT IS NOW, or None (gone / forgotten)
+    return f"{lead}{text}." if text else None
 
 
-def _summary(day: dict) -> str:
-    left = [s["text"] for s in day["steps"] if s["state"] in ("pending", "snoozed")]
-    name = _spoken_name(day["routine"]["name"])
-    return f"That's your {name} done." if not left else f"That's your {name} done, except {_listed(left)}."
+async def _said_name(member: str, routine: dict) -> Optional[str]:
+    """The routine's name to SAY, re-checked against the forgotten shield at this moment (None = do not say it)."""
+    name = routine.get("name") or ""
+    return None if not name or await rs.names_forgotten({member, routine.get("user_id")}, name) else name
+
+
+async def _summary(member: str, day: dict) -> str:
+    left = [s["text"] for s in await rs.live_lines(member, [s["id"] for s in _open(day["steps"])])]   # re-read before speaking
+    raw = await _said_name(member, day["routine"])
+    name = f"your {_spoken_name(raw)}" if raw else "that"
+    return f"That's {name} done." if not left else f"That's {name} done, except {_listed(left)}."
+
+
+async def _speak_many(session_id: str, member: str, steps: list[dict]):
+    """``(lines re-read NOW, the one text named or None)``: several fresh lines are listed and none is named; exactly one is
+    named (by ``note_named``, which returns its text as it is now)."""
+    fresh = await rs.live_lines(member, [s["id"] for s in steps])
+    if len(fresh) == 1:
+        return fresh, await rs.note_named(session_id, member, fresh[0]["id"])
+    rs.close_walk(session_id)
+    if len(fresh) > 1:
+        _remember_listed(session_id, member, fresh)
+    return fresh, None
 
 
 #: session -> (member, the day-line IDS a reply just listed, when): a "got it" right after a list of several is asked about, never
@@ -295,9 +316,8 @@ async def _bare(kind: str, session_id: str, member: str, verified: bool) -> Opti
             out = await rs.undo_said(session_id, member, verified=verified)
         except rs.StoreError as exc:
             return None if exc.code == "nothing_to_undo" else MEDICINE_UNVERIFIED if exc.code == "unverified" else None
-        day = await _day_of_step(member, out["id"])
-        text = next((s["text"] for s in (day or {}).get("steps", []) if s["id"] == out["id"]), "that")
-        return f"OK, it's back on the list: {text}."
+        text = out.get("text")                             # re-read and shielded by note_named; None = not named, not said
+        return f"OK, it's back on the list: {text}." if text else "OK, it's back on the list."
     ds_id = rs.named_step(session_id, member)
     if ds_id is None:
         return (await _which_line(session_id, member)) if kind == "done" else None   # no walk: a bare "yep" is not a tick
@@ -308,7 +328,8 @@ async def _bare(kind: str, session_id: str, member: str, verified: bool) -> Opti
         out = await rs.act_said(session_id, member, kind, verified=verified)
     except rs.StoreError as exc:
         if exc.code == "unverified":
-            return MEDICINE_UNVERIFIED
+            text = await rs.note_named(session_id, member, ds_id)     # re-named by THIS reply, or not at all
+            return MEDICINE_UNVERIFIED_NAMED.format(text=text) if text else MEDICINE_UNVERIFIED
         rs.close_walk(session_id)
         return None if exc.code in ("nothing_named", "not_found") else "That one's already sorted."
     day = await _day_of_step(member, out["id"])
@@ -316,7 +337,7 @@ async def _bare(kind: str, session_id: str, member: str, verified: bool) -> Opti
         return "Done."
     head = {"done": "Ticked.", "skip": "Skipped.", "snooze": "OK, I'll keep it on the list."}[kind]
     nxt = await _name_next(session_id, member, day, after=out["id"], lead=" Next: ")
-    return head + nxt if nxt else f"{head} {_summary(day)}" if kind != "snooze" else head
+    return head + nxt if nxt else f"{head} {await _summary(member, day)}" if kind != "snooze" else head
 
 
 async def _current(member: str) -> Optional[dict]:
@@ -338,15 +359,16 @@ async def _next(parts: dict, session_id: str, member: str) -> Optional[str]:
         return None
     todo = _open(day["steps"])
     if not todo:
-        return _summary(day)
+        return await _summary(member, day)
     if parts.get("left") and len(todo) > 1:
-        rs.close_walk(session_id)                          # a list of several names NONE: a "done" is asked about, never ticked
-        _remember_listed(session_id, member, todo)
-        return f"{len(todo)} things left: {_listed([s['text'] for s in todo])}."
-    await rs.note_named(session_id, member, todo[0]["id"])
-    if parts.get("left"):
-        return f"One thing left: {todo[0]['text']}."
-    return f"Next: {todo[0]['text']}."
+        fresh, one = await _speak_many(session_id, member, todo)   # a list of several names NONE: "done" is asked about
+        if len(fresh) > 1:
+            return f"{len(fresh)} things left: {_listed([s['text'] for s in fresh])}."
+        return f"One thing left: {one}." if one else None
+    text = await rs.note_named(session_id, member, todo[0]["id"])
+    if not text:
+        return None
+    return f"One thing left: {text}." if parts.get("left") else f"Next: {text}."
 
 
 async def _start(parts: dict, session_id: str, member: str) -> Optional[str]:
@@ -359,10 +381,13 @@ async def _start(parts: dict, session_id: str, member: str) -> Optional[str]:
         return None
     todo = _open(day["steps"])
     if not todo:
-        return _summary(day)
-    await rs.note_named(session_id, member, todo[0]["id"])
+        return await _summary(member, day)
+    text = await rs.note_named(session_id, member, todo[0]["id"])
+    if not text:
+        return None
     n = len(todo)
-    return f"{hits[0]['name']}: {'one thing' if n == 1 else f'{n} things'}. First, {todo[0]['text']}."
+    raw = await _said_name(member, hits[0])
+    return f"{raw + ': ' if raw else ''}{'one thing' if n == 1 else f'{n} things'}. First, {text}."
 
 
 async def _leaving(session_id: str, member: str) -> Optional[str]:
@@ -373,12 +398,10 @@ async def _leaving(session_id: str, member: str) -> Optional[str]:
             lines += [s for s in _open(day["steps"]) if s["kind"] == "take_with"]
     if not lines:
         return None
-    if len(lines) == 1:
-        await rs.note_named(session_id, member, lines[0]["id"])
-    else:
-        rs.close_walk(session_id)                          # several lines: no single target, so a "got it" ticks nothing ...
-        _remember_listed(session_id, member, lines)       # ... and Zoe asks which (ids only)
-    return f"Before you go: {_listed([s['text'] for s in lines])}."
+    fresh, one = await _speak_many(session_id, member, lines)   # several: none named, "got it" is asked about (ids only)
+    if len(fresh) > 1:
+        return f"Before you go: {_listed([s['text'] for s in fresh])}."
+    return f"Before you go: {one}." if one else None
 
 
 async def _pick_routine(member: str, cue: tuple, today: date):
@@ -415,15 +438,21 @@ async def _one_off(parts: dict, member: str, *, channel: str, write: bool) -> Op
     if picked is None:
         return None
     if picked[0] == "ask":
-        return "would" if not write else _which(picked[1])     # nothing is added until the person names one
+        if not write:
+            return "would"
+        names = [r for r in picked[1] if not await rs.names_forgotten({member}, r["name"])]   # re-checked just before saying them
+        return _which(names) if len(names) > 1 else None   # nothing is added until the person names one
     r, day = picked
     if not write:
         return "would"
     try:
-        await rs.add_one_off(member, r["id"], day, parts["line"], created_via=channel)
+        out = await rs.add_one_off(member, r["id"], day, parts["line"], created_via=channel)
     except rs.StoreError:
         return None                                        # refused (past day, too many lines): today's reminder path answers
-    return f"Added to {_day_label(day, today)} {_spoken_name(r['name'])}: {parts['line']}."
+    saved = await rs.live_lines(member, [out["id"]])       # the line and the routine's name re-checked just before saying them
+    if not saved or await rs.names_forgotten({member}, r["name"]):
+        return "Added."
+    return f"Added to {_day_label(day, today)} {_spoken_name(r['name'])}: {saved[0]['text']}."
 
 
 async def answer(kind: str, parts: dict, session_id: str, member: str, *, verified: bool, channel: str) -> Optional[str]:
@@ -450,6 +479,24 @@ async def _would(kind: str, parts: dict, session_id: str, member: str) -> bool:
     return any(rs.in_window(r) for r in mine)
 
 
+#: session -> did THIS tier see the session's latest turn? (session ids only). A turn answered by a tier ABOVE this one never reaches
+#: ``tier``, so ``turn_begins`` (called by ``fast_tiers`` at the start of every turn, flags on) closes the walk when the previous turn
+#: was not ours: a step stays tickable only by the very next turn after Zoe named it.
+_SEEN: "dict[str, bool]" = {}
+_MAX_SEEN = 1024
+
+
+def turn_begins(session_id: str) -> None:
+    sid = session_id or ""
+    if _SEEN.get(sid) is False:
+        rs.close_walk(sid)                                 # another tier answered the last turn: what Zoe named is no longer current
+        _LISTED.pop(sid, None)
+    _SEEN.pop(sid, None)
+    _SEEN[sid] = False
+    while len(_SEEN) > _MAX_SEEN:
+        _SEEN.pop(next(iter(_SEEN)), None)
+
+
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
                extra_ctx: Optional[dict[str, Any]] = None, allow_writes: bool = True):
     """The fast-tier hook: a ``DispatchResult`` or None. Off = None before any work. NEVER raises."""
@@ -474,6 +521,8 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
             return None
         member = _member(user_id, ch, extra_ctx)
         if member is None:
+            rs.close_walk(session_id)                      # an unidentified speaker: nobody's earlier step stays tickable
+            _LISTED.pop(session_id or "", None)
             return None
         kind, parts = sh
         if m == "shadow":
@@ -483,8 +532,17 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         verified = ch == "chat" or (extra_ctx or {}).get("speaker_verified") is True
         before = rs.walk_entry(session_id)
         reply = await answer(kind, parts, session_id, member, verified=verified, channel=ch)
-        if not reply or (rs.walk_entry(session_id) is before and reply != MEDICINE_UNVERIFIED):
-            rs.close_walk(session_id)      # THE walk rule: it survives only a turn that named ONE step just now (or asked to retry it)
+        if not reply or rs.walk_entry(session_id) is before:
+            rs.close_walk(session_id)      # THE walk rule: it survives only a turn whose reply named ONE step just now
+        if reply and await rs.names_forgotten({member}, reply):
+            # THE last word: the whole reply, exactly as it will be said, against the uncached durable ledger. Whatever was
+            # checked earlier (a line, a name) and whatever was forgotten during the reads since, a forgotten name is not said.
+            rs.close_walk(session_id)
+            _LISTED.pop(session_id or "", None)
+            reply = None                                   # suppressed: nothing of this reply is said (fails closed on an outage)
+        if (session_id or "") in _SEEN:
+            _SEEN[session_id or ""] = True                 # ONLY an "on" turn that applied the walk rule counts as seen: a shadow, dry,
+                                                           # unidentified or stepped-aside turn leaves it False, so the walk closes
         if not reply:
             return None
         import expert_dispatch as _xd
@@ -492,5 +550,7 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         logger.info("ROUTINE_TIER claimed=%s channel=%s verified=%d", kind, ch, int(verified))
         return _xd.DispatchResult(domain="routines", reply=reply, intent=f"routine_{kind}", tier=TIER)
     except Exception as exc:  # noqa: BLE001
+        rs.close_walk(session_id)                          # a failed turn never leaves an older step tickable
+        _LISTED.pop(session_id or "", None)
         logger.warning("ROUTINE_TIER failed (non-fatal): %s", type(exc).__name__)
         return None
