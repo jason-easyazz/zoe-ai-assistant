@@ -647,6 +647,13 @@ needs no install step. The first unit install is an owner step.
   words become unreadable at once, or a backup-aware forget that rewrites or drops the affected backups. Which of the two is an
   owner choice. The one chosen is written in the kernel's store entry in `forget_reach.py`, and a restore always re-issues every
   forget recorded since the backup was taken before the kernel serves a read.
+- **Which comes first, stated.** The shadow (Phase 1) already puts real member content in the kernel's database, so the gap would
+  open the day the shadow is switched on if that database were backed up. The rule chosen here: **the kernel's state directory
+  stays out of every backup until the backup-safe forget is built.** It is in no backup today (above); WP-09a pins that with a
+  test, so the shadow can be switched on without creating a copy a forget cannot reach. Under shadow that costs nothing: production
+  is still the authority and a lost kernel database is rebuilt. WP-09 (which adds the kernel to the backup) therefore **depends on
+  WP-09b, the backup-safe forget**, and both must be done before Phase 3, because an authoritative kernel must be backed up. Shadow
+  code keeps landing flag-dark meanwhile.
 - **Open PRs on the same files:** #2516 (off-box backup) and #2514 both touch `zoe_offbox.py` and `zoe_restore_drill.py`. Build this
   after them.
 
@@ -800,7 +807,9 @@ The open-PR list was read 2026-11-15 (102 open). Every PR that touches a seam ab
 | WP-06 | Voice-gate and Greptile patterns for the kernel tree and unit; drift pin | `scripts/maintenance/voice_gate_check.py`, `.github/workflows/greptile-gate.yml`, `tests/unit/test_greptile_gate_workflow.py` | WP-03 (path) | all | T; must **deploy one landing before** shadow is on | no (it is the gate) | S | 1 | C + L |
 | WP-07 | A scratch kernel in the regression probe; off/kernel run pair; said-vs-did row for kernel-decided adds | `scripts/maintenance/voice_regression_probe.py`, `zd/tests/replay_samples.py`, `scripts/perf/measure_voice.py` | #2632, WP-01 | WP-20 | a probe run with the kernel present (harness lock) | yes (harness) | M | before 3 | G |
 | WP-08 | Ground truth, health spine and crash-loop watch know the kernel | `scripts/maintenance/zoe_ground_truth.sh`, `zoe_health.py`, `zoe_crash_loop_watch.py` | WP-04 | all | T; one ground-truth run on the box | no | S | 1 | C |
-| WP-09 | Kernel `backup` op (SQLite online backup); add it to the host archive; restore-drill check | `services/zoe-os/...` (op), `scripts/maintenance/zoe_offbox.py`, `zoe_restore_drill.py`, `tests/unit/test_zoe_offbox.py`, `test_restore_drill.py` | WP-03, #2516 | WP-07, WP-20 | T; a drill run | no | M | 1 | K (op) + G |
+| WP-09 | Kernel `backup` op (SQLite online backup); add it to the host archive; restore-drill check | `services/zoe-os/...` (op), `scripts/maintenance/zoe_offbox.py`, `zoe_restore_drill.py`, `tests/unit/test_zoe_offbox.py`, `test_restore_drill.py` | WP-03, #2516, WP-09b | WP-07, WP-20 | T; a drill run | no | M | 1 | K (op) + G |
+| WP-09a | **Pin: the kernel state directory is in no backup** (host archive sources, Postgres and MemPalace dumps, off-box copy) until WP-09b lands. Required before the shadow flag is switched on | a test over `scripts/maintenance/zoe_offbox.py` sources and `zoe-backup.service` | none | shadow activation | T | no | S | 1 | G |
+| WP-09b | **Backup-safe forget** (owner picks: per-member backup keys a forget destroys, or a backup-aware forget), for Postgres backups and the kernel's alike. Erase is not complete without it | `scripts/maintenance/zoe_offbox.py`, the backup units, `zd/forget_reach.py` | owner choice | WP-09, Phase 3 | T; restore drill proves a forgotten member's words cannot be read back | no | L | 1 | G |
 | WP-10 | Forget-reach entries per kernel store; widen the drift scan roots; household-text entries | `zd/forget_reach.py`, `zd/tests/test_forget_reach_inventory.py`, `zd/household_text.py` | #2513, WP-03 | all | T | no | S | 1 | G |
 | WP-11 | Scorecard rows for agreement, fallback, refusal, why, undo, forget | `labs/felt-scorecard/scorecard.py`, its test | #2519, #2631 | all | T | no | S | 1 | C |
 | WP-12 | CANONICAL spine bullet and invariants pin (unit exists, authority flags default off, client never opens the DB) | `docs/CANONICAL.md`, `zd/tests/test_canonical_invariants.py` | first authority flag live | — | T | no | S | 3 | G |
@@ -867,12 +876,13 @@ entry layer (REST / MCP / voice).
    - WP-20 (G1) → WP-22 (G1);
    - WP-24 (G);
    - WP-64 (G).
-3. **Infrastructure:** WP-06 lands and **deploys first** (one landing ahead). Then WP-04 and WP-05 (L), WP-02 (L), WP-08, WP-09,
+3. **Infrastructure:** WP-06 lands and **deploys first** (one landing ahead). Then WP-04 and WP-05 (L), WP-02 (L), WP-08, WP-09a,
    WP-10 and WP-11.
-4. **Shadow:** land the stack (#2622 to #2625, #2631, #2632); owner installs the unit and turns shadow on (Phase 1).
+4. **Shadow:** land the stack (#2622 to #2625, #2631, #2632). **Activation gate:** WP-09a is green (the kernel's state is in no
+   backup), then the owner installs the unit and turns shadow on (Phase 1). Landing the code flag-dark does not wait for this.
 5. **Prove agreement:** WP-07 with #2642, the synthetic day and the corpus replay with shadow on, until the D1 pass mark is met for
    list add (Phase 2).
-6. **Authority:** #2637 (rebased by WP-01), WP-22 (reshaped #2638), #2639 reconcile, WP-26 `created_by`, WP-65 why/undo. Then a
+6. **Authority:** WP-09b (backup-safe forget) then WP-09 (the kernel joins the backup); #2637 (rebased by WP-01), WP-22 (reshaped #2638), #2639 reconcile, WP-26 `created_by`, WP-65 why/undo. Then a
    replay with the scratch kernel, and the owner flips `ZOE_OS_LIST_ADD_AUTHORITY=kernel` (Phase 3).
 
 **Longest chain:**
