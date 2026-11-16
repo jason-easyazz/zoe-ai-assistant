@@ -242,11 +242,9 @@ OTHER: tuple[Store, ...] = (
     Store("flue_session_log", "file", WORDS, GAP, "No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
-    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: a clip without a verdict sidecar names nobody. ~/.zoe-voice-samples: the owner's regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). A clip is located "
-          "only by its verdict sidecar (written while ZOE_VOICE_CLIP_VERDICT is on): a member delete removes every clip whose sidecar names the member "
-          "(voice_clips.erase_member, via member_owned_forget), a guest forget every clip labelled as that guest (voice_clips.erase_guests), and with "
-          "ZOE_VOICE_CLIP_RETENTION on, guest / unknown clips older than 30 days go (voice_clips.sweep). What stays: a clip with no sidecar (saved "
-          "before or without ZOE_VOICE_CLIP_VERDICT): no forget can find it.",
+    Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "No member id: On this test unit, unlabelled saved recordings are kept: they are the "
+          "voice test corpus and are tied to no member. A shipped unit deletes unlabelled recordings after 30 days by default (owner decision "
+          "2026-11-16); that default is a shipping requirement to be built with the sold-unit settings, with a test.",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
     Store("voice_clip_pending_drops", "file", METADATA, OUT_OF_SCOPE, "~/.zoe/voice-clip-pending-drops.txt (ZOE_VOICE_CLIP_PENDING_FILE), "
           "0600: the PATHS of clips a drop for a deleted member could neither mark nor remove (a capture-time file name each, no member "

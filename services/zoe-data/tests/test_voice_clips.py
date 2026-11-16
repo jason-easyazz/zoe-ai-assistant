@@ -145,7 +145,9 @@ def test_voice_command_labels_the_clip_member_guest_or_unknown():
     assert body.count("_voice_clips.record(") == 2                                    # no verdict (gate off) = no label = legacy
     helper = src[src.index("async def _label_member_clip("):]
     helper = helper[:helper.index("\nasync def ")]
-    assert '_vc.record("member", member)' in helper, "the member label goes through the late-write rule (member delete)"
+    assert 'asyncio.to_thread(_vc.record, "member", member)' in helper, "the member label goes through the late-write rule (member delete)"
+    assert "asyncio.to_thread(_vc.drop_clip, clip, member)" in helper and "drop_current(" not in helper, \
+        "the clip's file work runs in a worker thread, never on the event loop"
 
 
 # ── a member delete's clip erase is STRICT: nothing it cannot read or remove is swallowed ───────────────────────────────────────
@@ -317,26 +319,80 @@ def test_a_drop_that_can_neither_mark_nor_remove_its_clip_is_listed_and_the_next
     assert not os.path.exists(clip) and not os.path.exists(vc.pending_file())
 
 
-def test_an_append_never_lands_between_the_retrys_read_and_its_prune(corpus):
-    """The retry holds the pending-list lock from its read to its prune; an append made meanwhile waits and survives."""
+def test_an_append_does_not_wait_for_the_sweeps_removals_and_survives_its_prune(corpus):
+    """The retry holds the pending-list lock only to read and to rewrite the list, never across its clip removals: an append made
+    while a (slow) removal runs returns at once, and the rewrite (which re-reads the list under the lock) keeps it."""
     import threading
 
     first = wav(corpus / "turn-a.wav")
     Path(vc.pending_file()).write_text(first + "\n")
     late = str(corpus / "turn-b.wav")
-    started, real = threading.Event(), vc._remove_strict
+    started, release, real = threading.Event(), threading.Event(), vc._remove_strict
 
     def slow_remove(side, clip):
         started.set()
-        time.sleep(0.2)
+        release.wait(5)                             # the sweep is mid-removal for as long as the test wants
         real(side, clip)
     vc._remove_strict = slow_remove
     try:
         t = threading.Thread(target=vc.retry_pending_drops)
         t.start()
         started.wait(2)
-        vc._note_pending(late)                      # blocks until the retry's prune is done
+        t0 = time.monotonic()
+        vc._note_pending(late)                      # a voice turn's failed drop: must not wait for the sweep
+        waited = time.monotonic() - t0
+        release.set()
         t.join(5)
     finally:
         vc._remove_strict = real
+    assert waited < 0.5, f"the append waited {waited:.2f}s for the sweep"
     assert not os.path.exists(first) and Path(vc.pending_file()).read_text().split() == [late]
+
+
+def test_a_voice_turns_clip_drop_never_blocks_the_event_loop(corpus, monkeypatch):
+    """The drop's file work (and, on a double failure, the pending list's lock) runs in a worker thread: while it is held up, the event
+    loop keeps serving other work (a ticker keeps ticking), and the turn's await returns once the drop is done."""
+    import threading
+
+    import erase_watermark as ew
+    import routers.voice_tts as vt
+
+    ew.set_backend(ew.MemoryBackend())
+    clip = wav(corpus / "turn-slow.wav")
+    held = threading.Event()
+    real = vc._remove_strict
+
+    def slow_remove(side, wav_path):
+        held.wait(0.6)                              # a slow disk, or a sweep the drop would have waited for
+        real(side, wav_path)
+    monkeypatch.setattr(vc, "_remove_strict", slow_remove)
+
+    async def go():
+        bound = ew.voice_turn_begin()
+        try:
+            vc.begin()
+            vc.note_saved(clip)
+            await ew.record("ann")                   # deleted after the turn began: the clip must be dropped
+            gaps, last, stop = [], [asyncio.get_running_loop().time()], [False]
+
+            async def ticker():
+                while not stop[0]:
+                    await asyncio.sleep(0.01)
+                    now = asyncio.get_running_loop().time()
+                    gaps.append(now - last[0])
+                    last[0] = now
+            tick = asyncio.ensure_future(ticker())
+            t0 = asyncio.get_running_loop().time()
+            await asyncio.wait_for(vt._label_member_clip("ann"), timeout=5)
+            took = asyncio.get_running_loop().time() - t0
+            stop[0] = True
+            await tick
+            return gaps, took
+        finally:
+            ew.voice_turn_end(bound)
+    try:
+        gaps, took = asyncio.run(go())
+    finally:
+        ew.set_backend(None)
+    assert took >= 0.5 and max(gaps) < 0.2, f"the loop stalled {max(gaps):.2f}s during the drop"
+    assert not os.path.exists(clip) and not (corpus / "turn-slow.verdict.json").exists()

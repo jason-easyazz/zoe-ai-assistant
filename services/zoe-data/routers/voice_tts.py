@@ -177,13 +177,18 @@ async def _label_member_clip(member: str) -> None:
     import voice_clips as _vc
 
     _ew.turn_identify(member)
+    clip = _vc.current_clip()
     refused = await _ew.turn_write_refused(None, "voice_clip", member)
     if not refused:
-        _vc.record("member", member)
+        # the sidecar write is blocking file I/O: a worker thread (a copy of this context, so ``record`` finds this turn's clip)
+        await asyncio.to_thread(_vc.record, "member", member)
         refused = await _ew.turn_write_refused(None, "voice_clip", member)
-    if refused:
+    if refused and clip:
         try:
-            _vc.drop_current(member)       # labelled as theirs first, then WAV first and the label last: a failure keeps the label
+            # labelled as theirs first, then WAV first and the label last: a failure keeps the label. Blocking writes and unlinks
+            # (and, on a double failure, the pending list's short lock): a worker thread, never the event loop
+            await asyncio.to_thread(_vc.drop_clip, clip, member)
+            _vc.clear_current()
         except OSError as exc:
             # the turn goes on (a reply never fails on a clip); the clip stays LABELLED as the deleted member's with a pending-drop
             # marker, which is the durable retry even when their delete already completed: the clip loop's
