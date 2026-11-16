@@ -83,15 +83,23 @@ def _lognormal(p50: float, p95: float):
     return mu, sigma
 
 
-def parse_turns(reduced: Iterable[str], since: Optional[dt.datetime] = None, until: Optional[dt.datetime] = None) -> "list[Turn]":
-    """Pair each TTFA with the closest preceding Recorded line within 60 s (the scorecard's pairing), keeping the timestamp."""
+def parse_turns(reduced: Iterable[str], since: Optional[dt.datetime] = None, until: Optional[dt.datetime] = None,
+                skipped: Optional[dict] = None) -> "list[Turn]":
+    """Pair each TTFA with the closest preceding Recorded line within 60 s (the scorecard's pairing), keeping the timestamp.
+    A row whose timestamp matches the shape but is not a real time (month 99, 30 February, hour 25) is skipped, never a crash;
+    when ``skipped`` is a dict, ``skipped["bad_timestamp"]`` counts them."""
     out: "list[Turn]" = []
     last = None
     for line in reduced:
         m = LINE_RE.match(line.strip())
         if not m:
             continue
-        ts = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        try:
+            ts = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            if skipped is not None:
+                skipped["bad_timestamp"] = skipped.get("bad_timestamp", 0) + 1
+            continue
         ttfa, close, tail, rec = m.group(2), m.group(3), m.group(4), m.group(5)
         if close is not None:
             last = (ts, int(close))
@@ -329,7 +337,10 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     else:
         lines = Path(a.lines).read_text().splitlines()
         label = "saved extract"
-    print(report(parse_turns(lines), label))
+    skipped: dict = {}
+    print(report(parse_turns(lines, skipped=skipped), label))
+    if skipped:
+        print(f"\nskipped rows (a timestamp that is not a real time): {skipped.get('bad_timestamp', 0)}")
     return 0
 
 

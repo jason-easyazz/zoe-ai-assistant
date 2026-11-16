@@ -99,10 +99,11 @@ def _words(text: str) -> "set[str]":
     return set(re.findall(r"[A-Za-z][A-Za-z_]+", text))
 
 
-def test_no_free_text_from_a_log_line_ever_reaches_the_output():
-    """The privacy property, tested for real: free text planted in every field of a REFLEX_DECISION line (the skip, the take,
-    the bank, around the line), in a would-be marker line and in a would-be turn line never appears in any output. The
-    output's words are only the fixed vocabulary: the skip enum, would_play / other, and the report's own wording."""
+def _assert_no_free_text(lab) -> None:
+    """The privacy property, as ONE helper run against any lab-shaped object (the real module, or a leaking stand-in).
+    Free text planted in every field of a REFLEX_DECISION line (the skip, the take, the bank, around the line), in a would-be
+    marker line and in a would-be turn line never appears in any output. The output's words are only the fixed vocabulary:
+    the skip enum, would_play / other, and the report's own wording."""
     planted = [
         "pineapple REFLEX_DECISION mode=shadow kind=none skip=zebracrossing take=pineapple decided_ms=190 talk_obs_ms=4 "
         "noise_db=-70 spk=1 media=0 win=wake bank=Zebra trailing PINEAPPLE",
@@ -111,22 +112,67 @@ def test_no_free_text_from_a_log_line_ever_reaches_the_output():
         "REFLEX_DECISION mode=shadow kind=none skip=talking take=- decided_ms=250 talk_obs_ms=0 noise_db=-70 spk=1 media=0 "
         "win=zebracrossing bank=-",
     ]
-    out = SIM.summarise_decisions(planted)
+    out = lab.summarise_decisions(planted)
     assert not (_words(out) & set(FREE)), out
     assert "other: 1" in out and "would_play: 1" in out           # the forged skip is counted, as "other", never echoed
     allowed = set(SIM.RX.LOG_SKIPS) | {"would_play", "other", "decisions", "decided_ms"}
     assert _words(out) <= allowed, _words(out) - allowed
     marks = ["2026-01-01 12:00:20 DISTRESS_HANDOFF pineapple", "2026-01-01 12:00:20 Zebra", "zebracrossing"]
-    assert not (_words(repr(SIM.join_safety(planted, marks))) & set(FREE))
-    turns = SIM.parse_turns(["2026-01-01 12:00:00 C 640 pineapple", "2026-01-01 12:00:00 C 640",
+    assert not (_words(repr(lab.join_safety(planted, marks))) & set(FREE))
+    turns = lab.parse_turns(["2026-01-01 12:00:00 C 640 pineapple", "2026-01-01 12:00:00 C 640",
                              "2026-01-01 12:00:02 T 2.1", "Zebra 2026-01-01 12:00:03 T 1.0"])
     assert len(turns) == 1
-    assert not (_words(SIM.report(turns, "saved extract")) & set(FREE))
+    assert not (_words(lab.report(turns, "saved extract")) & set(FREE))
+    assert not (_words(lab.summarise_safety(planted + ["x REFLEX_SAFETY mode=shadow would_play=1 class=pineapple"])) & set(FREE))
 
 
-def test_the_free_text_check_can_fail():
-    """NEGATIVE CONTROL for the test above: the same check flags an output that echoes a planted word."""
-    assert _words("- zebracrossing: 1 (100.0%)") & set(FREE)
+def test_no_free_text_from_a_log_line_ever_reaches_the_output():
+    _assert_no_free_text(SIM)
+
+
+class _Leaking:
+    """The real lab with ONE output channel deliberately made to echo a planted marker utterance."""
+
+    def __init__(self, channel: str):
+        self._channel = channel
+
+    def __getattr__(self, name):
+        real = getattr(SIM, name)
+        if name != self._channel:
+            return real
+        if name == "join_safety":
+            return lambda *a, **k: {**real(*a, **k), "echo": "zebracrossing"}
+        return lambda *a, **k: str(real(*a, **k)) + "\nzebracrossing"
+
+
+@pytest.mark.parametrize("channel", ["summarise_decisions", "join_safety", "report", "summarise_safety"])
+def test_the_free_text_check_fails_on_a_leaking_lab(channel):
+    """NEGATIVE CONTROL for the test above, for real: the SAME helper, fed the lab with one channel leaking a planted word,
+    must fail. (The previous version asserted on a literal and never ran the lab.)"""
+    _assert_no_free_text(SIM)                                   # positive control: the unpatched lab passes
+    with pytest.raises(AssertionError):
+        _assert_no_free_text(_Leaking(channel))
+
+
+@pytest.mark.parametrize("bad", ["2026-99-01 12:00:00", "2026-01-32 12:00:00", "2026-01-01 25:00:00", "2026-01-01 12:61:00",
+                                 "2025-02-29 12:00:00"])           # invalid month, day, hour, minute, leap day in a non-leap year
+def test_a_row_with_an_impossible_timestamp_is_skipped_and_counted_not_a_crash(bad):
+    day = bad.split()[0]
+    rows = [f"{bad} C 640", f"{bad} T 2.0", "2026-01-01 12:00:00 C 640", "2026-01-01 12:00:02 T 2.1"]
+    skipped: dict = {}
+    got = SIM.parse_turns(rows, skipped=skipped)
+    assert [(t.close_ms, t.ttfa_ms) for t in got] == [(640, 2100)], day
+    assert skipped == {"bad_timestamp": 2}
+    ok: dict = {}
+    assert len(SIM.parse_turns(["2024-02-29 12:00:00 C 640", "2024-02-29 12:00:02 T 2.1"], skipped=ok)) == 1 and ok == {}   # leap day in a leap year is real
+    assert len(SIM.parse_turns(rows)) == 1                       # and without the counter it still does not raise
+
+
+def test_main_reports_skipped_rows(tmp_path, capsys):
+    f = tmp_path / "x.txt"
+    f.write_text("2026-99-01 12:00:00 C 640\n2026-01-01 12:00:00 C 640\n2026-01-01 12:00:02 T 2.1\n")
+    assert SIM.main(["--lines", str(f)]) == 0
+    assert "skipped rows (a timestamp that is not a real time): 1" in capsys.readouterr().out
 
 
 def test_the_safety_count_is_the_shadows_own_and_says_unavailable_while_the_server_is_silent():
