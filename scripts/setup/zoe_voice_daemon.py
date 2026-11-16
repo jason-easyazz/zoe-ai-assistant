@@ -4012,6 +4012,17 @@ def _fs_now() -> float:
     return time.monotonic()
 
 
+def _close_hour() -> "int | None":
+    """The local hour at the close, for the reflex only: REFLEX_MODE off reads no clock, and a clock that cannot be read is None
+    (the decision then uses its midday default) - the close itself never fails on it."""
+    if REFLEX_MODE == "off":
+        return None
+    try:
+        return int(time.localtime().tm_hour)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason: str, frames: "list | None" = None,
                  skip: int = 0) -> None:
     """The recording just closed: remember when, by which rule, the endpointer's own quiet run and fall type at the
@@ -4035,7 +4046,7 @@ def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason
                        speech_ms=int(round(int(speech) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
                        if isinstance(speech, int) and not isinstance(speech, bool) else None,
                        idle_s=(t - prev_t) if isinstance(prev_t, (int, float)) else None,
-                       prev_q=bool(_prev_reply_asked), hour=time.localtime().tm_hour)
+                       prev_q=bool(_prev_reply_asked), hour=_close_hour())
     _turn_close.update(t=t, rule=rule, media=media, media_age_ms=int(media_age),
                        ms=int(endpointer.close_ms) if closed else 0,
                        quiet_ms=int(round(int(endpointer._quiet) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE)) if closed else -1,

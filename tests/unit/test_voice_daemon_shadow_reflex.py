@@ -295,3 +295,13 @@ def test_the_close_polls_the_player_only_when_the_reflex_is_switched_on(daemon, 
     daemon._stamp_close(None, daemon._Endpointer(), "max_duration", [])
     assert len(calls) == polls
     assert daemon._turn_close.get("busy") is (None if mode == "off" else False)
+
+
+def test_the_close_reads_no_clock_when_off_and_survives_a_clock_it_cannot_read(daemon, monkeypatch):
+    """Other suites stub the daemon's ``time`` with only what they use: the close must not need ``localtime`` (off), nor fail on it."""
+    monkeypatch.setattr(daemon, "time", types.SimpleNamespace(monotonic=lambda: 5.0))
+    monkeypatch.setattr(daemon, "_active_playback", lambda: None)
+    for mode in ("off", "shadow"):
+        monkeypatch.setattr(daemon, "REFLEX_MODE", mode)
+        daemon._stamp_close(None, daemon._Endpointer(), "max_duration", [])
+        assert daemon._turn_close.get("hour") is None
