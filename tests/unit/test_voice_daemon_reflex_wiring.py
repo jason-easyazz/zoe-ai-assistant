@@ -450,14 +450,20 @@ def test_budget_one_reflex_per_gap(daemon, monkeypatch, caplog, bank):
 
 
 def test_a_speculative_turn_never_gets_a_reflex(daemon, monkeypatch):
-    fs = daemon._FirstSound(speculative=True)
+    # both turns see the SAME valid close snapshot, so the only difference between them is ``speculative`` (review of #2611:
+    # the speculative record used to have no close snapshot, so it returned early even without the speculative guard)
     monkeypatch.setattr(daemon, "REFLEX_MODE", "on")
+    monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=lambda *a: pytest.fail("player")))
+    monkeypatch.setattr(daemon._ReflexTurn, "start", lambda self: None)
+    fs = daemon._FirstSound(speculative=True)
+    # a speculative stream owns only a close stamped AFTER it started: stamp one and take it, as a real turn does
+    daemon._turn_close.update(t=5.0, rule="deep", ms=640, seq=fs._seq0 + 1)
+    fs._take_close()
+    assert fs._close is not None
     daemon._reflex_begin(fs)
     assert fs.reflex is None and daemon._REFLEX_CUR is None
-    daemon._turn_close.update(t=5.0, rule="deep", ms=640, seq=9)
-    plain = daemon._FirstSound(speculative=False)
-    monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=lambda *a: pytest.fail("player")))
-    monkeypatch.setattr(daemon._ReflexTurn, "start", lambda self: None)      # control: a plain turn DOES get a controller
+    plain = daemon._FirstSound(speculative=False)                            # control: a plain turn DOES get a controller
+    assert plain._close is not None
     daemon._reflex_begin(plain)
     assert plain.reflex is not None
     daemon._reflex_end(plain)
