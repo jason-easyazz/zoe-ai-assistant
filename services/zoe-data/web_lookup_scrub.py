@@ -252,8 +252,10 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     glue = _memory_glue(terms, lex)
     rx = _glue_rx(singles)
     drop: dict[int, str] = {}
+    plains = [fold(words[i].translate(_LOOKALIKE)) if any(c.isdigit() or c in "$@" for c in words[i]) and not tok.isdigit()
+              else tok for i, tok in enumerate(tokens)]
     for i, tok in enumerate(tokens):
-        plain = fold(words[i].translate(_LOOKALIKE)) if any(c.isdigit() or c in "$@" for c in words[i]) and not tok.isdigit() else tok
+        plain = plains[i]
         if tok and (tok in singles or plain in singles or _glued(tok, singles, rx) or _glued(plain, singles, rx)):
             drop[i] = "private"
         elif any(g in tok for g in glue):
@@ -261,7 +263,7 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     for phrase in phrases:
         n = len(phrase)
         for i in range(len(tokens) - n + 1):
-            if tuple(tokens[i:i + n]) == phrase:
+            if tuple(tokens[i:i + n]) == phrase or tuple(plains[i:i + n]) == phrase:   # "l4rkspur hollow" too
                 drop.update({k: "private" for k in range(i, i + n)})
     for i, tok in enumerate(tokens[:-1]):  # "my friend Dana", "our dog called Biscuit"
         if tok not in lex["relation_words"]:
@@ -279,7 +281,8 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
                 and (named or owned or words[j][:1].isupper()):
             drop.setdefault(j, "relation_name")
             k = j + 1
-            if not named and owned and k < len(tokens) and tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"] \
+            # a surname: after "my friend dana", "my friend called dana" or "friend Dana Smith"
+            if (owned or named or words[j][:1].isupper()) and k < len(tokens) and tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"] \
                     and tokens[k] not in lex["relation_words"]:
                 drop.setdefault(k, "relation_name")
     for i in _memory_runs(tokens, terms, lex):
@@ -310,13 +313,16 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
             out.append(w)
     query = " ".join(out[:MAX_WORDS])[:MAX_CHARS].strip()
     # Belt and braces: the query that is about to leave is checked again, whole and with spaces removed.
-    squeezed = fold(query)
-    for s in singles:
-        if s in {fold(w) for w in out} or (len(s) >= 4 and s in squeezed and _glued_span(query, s)):
-            return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-    for phrase in phrases:
-        if "".join(phrase) in squeezed:
-            return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
+    # ...and once more with look-alike digits read as letters ("m1 ra bel").
+    plain_query = query.translate(_LOOKALIKE)
+    for view in (query, plain_query):
+        squeezed = fold(view)
+        for s in singles:
+            if s in {fold(w) for w in view.split()} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)):
+                return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
+        for phrase in phrases:
+            if "".join(phrase) in squeezed:
+                return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if "@" in query or not query or any(g in squeezed for g in glue):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)

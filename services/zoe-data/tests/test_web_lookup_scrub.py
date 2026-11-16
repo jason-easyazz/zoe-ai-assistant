@@ -72,7 +72,7 @@ STRIPPED = [
     ("is MIRABEL QUILLFEATHER's shellfish allergy dangerous", "shellfish allergy dangerous", {"private"}),
     ("cheap flights from Wrenfield to Tokyo in June", "cheap flights tokyo june", {"private"}),
     ("jazz festivals 2026 for my friend Dana", "jazz festivals 2026 friend", {"relation_name"}),
-    ("dog food recall for our dog called biscuit brand list", "dog food recall dog called brand list", {"relation_name"}),
+    ("dog food recall for our dog called biscuit brand list", "dog food recall dog called list", {"relation_name"}),  # the word after a named one is dropped as a possible surname: privacy over query quality
     ("best pizza delivery call 0491 570 006 tonight", "best pizza delivery call tonight", {"number"}),
     ("is tobiah@example.com a known scam sender address", "known scam sender address", {"email"}),
     ("pollen count today at -31.9523, 115.8613 forecast", "pollen count today forecast", {"coordinates"}),
@@ -228,3 +228,19 @@ def test_a_lowercase_name_after_my_relation_is_stripped(raw):
 
 def test_a_relation_word_used_as_a_plain_noun_keeps_the_query():
     assert scrub_query("dog food recall brands australia").query == "dog food recall brands australia"
+
+
+@pytest.mark.parametrize("raw,gone", [
+    ("weather l4rkspur hollow forecast today", {"larkspur", "l4rkspur", "hollow"}),
+    ("jazz festivals my friend called dana smith tonight", {"dana", "smith"}),
+    ("jazz festivals for friend Dana Smith", {"dana", "smith"}),
+])
+def test_digit_spelled_places_and_relation_surnames_never_leave(raw, gone):
+    r = scrub_query(raw, PrivateTerms.of(names=["Mirabel"], places=["Larkspur Hollow"]))
+    assert r.send, r
+    assert not gone.intersection(r.query.split()), r
+
+
+def test_a_split_name_with_lookalike_digits_never_leaves():
+    r = scrub_query("m1 ra bel shellfish allergy symptoms", PrivateTerms.of(names=["Mirabel"]))
+    assert (not r.send) or ("mirabel" not in r.query.replace(" ", "").translate(str.maketrans("1", "i"))), r
