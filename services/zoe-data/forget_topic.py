@@ -264,6 +264,18 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
 
 async def forget(svc: Any, user_id: str, topic: str) -> Result:
     """Forget the topic. Never raises: a failure is a ``Result`` that says what was and was not done."""
+    try:
+        return await _forget(svc, user_id, topic)
+    finally:   # any forget drops the member's pending corrections - AFTER their transcript turns went off the record
+        try:   # never raises: a failing clear must not replace the forget's own result or exception
+            import correction_marker
+
+            correction_marker.forget_user(user_id, reason="forget_topic")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PENDING_CORRECTION clear_failed reason=forget_topic user=%s err=%s", user_id, type(exc).__name__)
+
+
+async def _forget(svc: Any, user_id: str, topic: str) -> Result:
     res = Result()
     groups = topic_groups(topic)
     if not groups:

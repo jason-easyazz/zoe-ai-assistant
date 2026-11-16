@@ -332,6 +332,7 @@ PINNED = {
     "pending_suggestions.py": {"name"},
     "zoe_agent.py": {"raw_streaming_args", "tool_result", "tool_args"},   # ``raw`` is also a URL there (kept)
     "zoe_flue_client.py": {"line"},   # SEAM_CONTINUITY_DEBUG reply= is harness-ids only (test_/demo_), kept
+    "correction_marker.py": {"user_message", "words", "content", "text", "texts", "found", "keys", "out"},   # PENDING_CORRECTION: ids + counts only
     "routers/ui_actions.py": {"result_text"},
     "routers/voice_tts.py": {"_skybridge_reply"},
     "stt_snap.py": set(),
@@ -426,3 +427,41 @@ def test_kind_refusal_tag_is_a_safe_reducer():
     assert tag.startswith("KIND_FLIP_REFUSED code=kind_flip") and "fact=" in tag
     src = (Path(__file__).resolve().parents[1] / "person_extractor.py").read_text(encoding="utf-8")
     assert src.count('logger.info("person_extractor: %s", kind_refusal_tag(text))') == 2
+
+
+#: os_shadow.py: an ALLOWLIST, not a denylist. Every argument of every logger call there is one of these names, each mapped onto a
+#: closed set (or a number) by ``os_shadow._finish`` before the line is written, or ``type(exc).__name__`` (a program identifier).
+OS_SHADOW_LOG_FIELDS = {"source", "cls", "live", "kernel_state", "result", "reason", "hop_ms", "q_ms"}
+
+
+def _os_shadow_log_args(src: str) -> list:
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in LOG_METHODS
+                and getattr(node.func.value, "id", "") == "logger"):
+            out += [(node.lineno, a) for a in node.args[1:]] + [(node.lineno, k.value) for k in node.keywords]
+    return out
+
+
+def _closed(arg) -> bool:
+    if isinstance(arg, ast.Name):
+        return arg.id in OS_SHADOW_LOG_FIELDS
+    return (isinstance(arg, ast.Attribute) and arg.attr == "__name__" and isinstance(arg.value, ast.Call)
+            and getattr(arg.value.func, "id", "") == "type")
+
+
+def test_os_shadow_logs_only_closed_code_fields():
+    bad = [ln for ln, a in _os_shadow_log_args((ROOT / "os_shadow.py").read_text("utf-8")) if not _closed(a)]
+    assert bad == [], f"os_shadow.py lines {bad}: a logger argument that is not a closed-code field"
+    planted = 'logger.info("x %s %s", item, list_name)\nlogger.info("y %s", str(exc))\nlogger.info("z %s", result)\n'
+    assert [ln for ln, a in _os_shadow_log_args(planted) if not _closed(a)] == [1, 1, 2]
+
+
+def test_os_shadow_maps_every_logged_field_onto_its_closed_set():
+    import os_shadow
+
+    src = (ROOT / "os_shadow.py").read_text("utf-8")
+    for name, closed in (("source", "SOURCES"), ("cls", "CLASSES"), ("live", "LIVE"), ("kernel_state", "KERNEL_STATES"),
+                         ("reason", "REASONS")):
+        assert f"{name} if {name} in {closed}" in src or f"in {closed} else" in src, name
+        assert isinstance(getattr(os_shadow, closed), tuple)

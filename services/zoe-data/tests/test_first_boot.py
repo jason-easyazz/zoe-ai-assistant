@@ -161,3 +161,12 @@ def test_all_required_done_allows_optional_nudge(surface):
 def test_deferred_deferrable_still_allows_optional_panel_card():
     f = facts(backup_target=False, more_members=False, deferred=frozenset({"backup_target"}))
     assert fb.nudge(f, "panel_card").id == "more_members"
+
+
+def test_optional_setup_waits_until_required_setup_is_settled():
+    """Required setup that is unsettled but has no actionable step (voice unknown, or the blocking voice step
+    deferred) must not be passed over for an optional item."""
+    for f in (facts(owner_voice=None, music=False), facts(owner_voice=False, music=False, deferred=frozenset({"owner_voice"}))):
+        assert not fb.ready(f)
+        assert fb.nudge(f, "panel_card") is None or fb.nudge(f, "panel_card").tier != fb.OPTIONAL
+        assert fb.nudge(f, "asked") is None or fb.nudge(f, "asked").tier != fb.OPTIONAL
