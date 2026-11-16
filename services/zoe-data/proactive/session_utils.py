@@ -48,23 +48,35 @@ async def create_pending(
     item_id: str = "",
     context: dict | None = None,
     ttl_hours: int = 4,
+    created_at: datetime | None = None,
 ) -> str:
     """
     Insert a proactive_pending row and return its id.
     The push notification's deep link will point to /chat.html?p={id}.
+    ``created_at``: when the DELIVERY began (``erase_watermark.delivery_began()``), not the insert time - a delivery that stalls
+    before this insert and resumes after a member delete then makes a row the claim check (``_erased_member``) refuses.
     """
     pid = str(uuid.uuid4())
     expires = (
         datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     async with _get_compat_db() as db:
-        await db.execute(
-            """INSERT INTO proactive_pending
-               (id, user_id, message, trigger_type, item_id, trigger_context, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (pid, user_id, message, trigger_type, item_id,
-             dumps_context(context), expires),
-        )
+        if created_at is not None:
+            await db.execute(
+                """INSERT INTO proactive_pending
+                   (id, user_id, message, trigger_type, item_id, trigger_context, expires_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (pid, user_id, message, trigger_type, item_id,
+                 dumps_context(context), expires, created_at.isoformat()),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO proactive_pending
+                   (id, user_id, message, trigger_type, item_id, trigger_context, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (pid, user_id, message, trigger_type, item_id,
+                 dumps_context(context), expires),
+            )
         await db.commit()
     log.debug("Created pending %s for user %s", pid, user_id)
     return pid
