@@ -70,6 +70,9 @@ update from an assistant". The rules, all in `change_notices.py` and pinned by e
   `MAX_CHUNKS` (3) instant messages a tick. What does not fit rolls into the next digest with the same
   `rolled_to_digest` event (`reason` `spacing`, `cap` or `rate`). Within a tick the single messages now go bad news
   first; the set of messages is the same.
+- **"May not have reached you" mentions are one line each and must-keep.** Each uncertain notice has its own line
+  carrying only its own key, so clipping or overflow can never mark another one delivered; one that does not fit
+  stays `uncertain` and is mentioned in the next digest's follow-up (once in all), never resent as itself.
 - **No message can exceed the route's limit.** When the last allowed digest message overflows, the whole suffix
   it will carry ("...and N more on GitHub.", "The rest of what needs you follows shortly." and the closing line,
   with the real count) is computed first and lines move out of that message until message plus suffix fits 990

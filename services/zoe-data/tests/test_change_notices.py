@@ -1562,17 +1562,25 @@ def test_property_no_message_exceeds_the_route_limit():
         rnd.shuffle(items)
         prefs = rnd.choice((comm_prefs.normalise(None, "admin"), plain))
         period = rnd.choice(("today", "this week"))
-        rest, sent = list(items), []
+        unc = [i for i in items if i["kind"] != "stuck" and rnd.random() < 0.25]  # "may not have reached you"
+        rest, rest_unc, sent = [i for i in items if i not in unc], list(unc), []
         for _round in range(len(items) + 1):  # the digest and its follow-ups on later ticks
-            if not rest:
+            if not rest and not rest_unc:
                 break
-            msgs = cn.render_digest(rest, [], prefs, opener=trial, repo_name="o/r", local=EVENING, period=period)
+            msgs = cn.render_digest(rest, rest_unc, prefs, opener=trial, repo_name="o/r", local=EVENING,
+                                    period=period)
             got = {k for m in msgs for k in m.keys}
             assert got and len(msgs) <= cn.MAX_CHUNKS
+            for m in msgs:  # an uncertain notice is marked only in a message that shows it
+                for u in rest_unc:
+                    if u["key"] in m.keys:
+                        assert _uncertain_line(u) in m.text, (trial, u["key"])
             sent += msgs
             rest = [i for i in rest if i["key"] not in got]
-        assert not rest
+            rest_unc = [i for i in rest_unc if i["key"] not in got]
+        assert not rest and not rest_unc
         assert sorted(k for m in sent for k in m.keys) == sorted(i["key"] for i in items)  # each key exactly once
+        digest_sent = list(sent)
         for detail in ("technical", "plain"):
             drained = _drain_instant(items, detail)
             assert sorted(k for m in drained for k in m.keys) == sorted(i["key"] for i in items)
@@ -1580,7 +1588,58 @@ def test_property_no_message_exceeds_the_route_limit():
         for m in sent:
             assert len(m.text) <= telegram_notify.MAX_TEXT, (trial, len(m.text))
         by_key = {i["key"]: i for i in items}
+        unc_keys = {i["key"] for i in unc}
         for m in sent:
             for k in m.keys:
+                if k in unc_keys and m in digest_sent:
+                    continue  # a digest mention of an uncertain notice is its subject line, checked above
                 step = by_key[k].get("owner_step")
                 assert not step or step in m.text, (trial, k)
+
+
+# ── uncertain notices: one line each, must-keep ───────────────────────────────
+def _uncertain_line(item):
+    subj = cn.subject(item.get("title", ""))
+    return f'"{subj}"' if len(subj) <= 60 else f'"{subj[:60]}'
+
+
+def test_twenty_uncertain_notices_with_long_subjects_are_each_shown_before_they_count():
+    unc = [_live(9500 + k, f"fix: a long subject number {k} " + "that goes on and on " * 8) for k in range(20)]
+    by_key = {i["key"]: i for i in unc}
+    rest, sent = list(unc), []
+    for _round in range(25):
+        if not rest:
+            break
+        msgs = cn.render_digest([], rest, comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r")
+        got = {k for m in msgs for k in m.keys}
+        assert got and len(msgs) <= cn.MAX_CHUNKS
+        sent += msgs
+        rest = [i for i in rest if i["key"] not in got]
+    assert not rest
+    assert sorted(k for m in sent for k in m.keys) == sorted(by_key)  # each exactly once
+    for m in sent:
+        assert len(m.text) <= telegram_notify.MAX_TEXT
+        assert "more on GitHub" not in m.text  # none counted unseen
+        for k in m.keys:
+            line = next(x for x in m.text.split("\n") if f"(#{by_key[k]['number']})" in x)
+            assert line.startswith(("• \"", "This may not")) and _uncertain_line(by_key[k]) in line  # its own line
+
+
+async def test_an_uncertain_mention_that_did_not_fit_stays_uncertain_for_the_next_digest():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    st = cn.load_state()
+    for k in range(20):
+        key = f"pr:{9600 + k}:decision"
+        st["notices"][key] = {**_live(9600 + k, f"fix: a long subject number {k} " + "that goes on and on " * 8),
+                              "key": key, "kind": "raised", "category": "decision", "at": "2026-10-19T03:00:00Z"}
+        st["deliveries"][f"u-owner|{key}"] = {"status": "uncertain", "lane": "instant", "attempts": 0,
+                                              "next_at": None, "at": "2026-10-19T03:00:00Z"}
+    cn.save_state(st)
+    for when in ("19:30", "19:40", "19:50", "20:00"):
+        await run(gh, bot, at(when))
+    text = "\n".join(d["text"] for d in bot.delivered)
+    for k in range(20):
+        assert text.count(f"(#{9600 + k})") == 1  # mentioned once, over the digest and its follow-up
+    ds = cn.load_state()["deliveries"]
+    assert {ds[f"u-owner|pr:{9600 + k}:decision"]["status"] for k in range(20)} == {"uncertain_reported"}
