@@ -70,6 +70,14 @@ update from an assistant". The rules, all in `change_notices.py` and pinned by e
   `MAX_CHUNKS` (3) instant messages a tick. What does not fit rolls into the next digest with the same
   `rolled_to_digest` event (`reason` `spacing`, `cap` or `rate`). Within a tick the single messages now go bad news
   first; the set of messages is the same.
+- **No message can exceed the route's limit.** When the last allowed digest message overflows, the whole suffix
+  it will carry ("...and N more on GitHub.", "The rest of what needs you follows shortly." and the closing line,
+  with the real count) is computed first and lines move out of that message until message plus suffix fits 990
+  characters; a single line is at most 880 (`LINE_CHARS`), so even the longest suffix fits after it. The instant
+  batch reserves its exact count line the same way. Bad news with a step carries the step on its own line in the
+  digest, so its notice lands with it. As a second guard, `_send` never sends a message over 990 characters: it
+  writes `oversize_held` (code `over_chunk_chars`, keys and length only, never text) and leaves the notices queued
+  for the next tick, so a length bug can never mark them refused for good.
 - **Trailers in code are not trailers.** A trailer inside a ``` or ~~~ fence (closed or not) or an HTML comment is
   ignored; a 4-space indented line never matches, because a trailer must start at column 0.
 - **Notices stored before this change** (with only the old `summary`, no `household` field) use that summary as

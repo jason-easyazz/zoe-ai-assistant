@@ -50,8 +50,7 @@ MODES = ("off", "shadow", "on")
 STATE_VERSION = 1
 MAX_CHUNKS = 3  # design 6: at most 3 messages a minute to one chat
 CHUNK_CHARS = 990  # the notify route caps text at 1000
-LINE_CHARS = 900  # one digest line, so a line plus the "...and N more" tail always fits a chunk
-MORE_RESERVE = 80  # "...and N more on GitHub." plus the closing line or FOLLOWS (LINE_CHARS + this <= CHUNK_CHARS)
+LINE_CHARS = 880  # one digest line: a line plus the longest possible suffix (``SUFFIX_MAX``) always fits a chunk
 SAME_KIND_SPACING = timedelta(minutes=30)
 BATCH_AT = 3  # this many instant notices ready at once go out as ONE message
 MAX_ATTEMPTS = 8
@@ -426,6 +425,15 @@ _DIGEST_OPENERS = ("Here's {period}:", "Here's how {period} went:", "Here's the 
 NOTHING_TO_DO = "Nothing for you to do."
 NOTHING_ELSE = "Nothing else for you to do."
 FOLLOWS = "The rest of what needs you follows shortly."
+
+
+def _more(n: int) -> str:
+    return f"…and {n} more on GitHub."
+
+
+# The most text ever appended to a packed chunk: the count line, the follow-up line and the closing line.
+SUFFIX_MAX = len("\n" + _more(99999)) + len("\n" + FOLLOWS) + len("\n" + NOTHING_ELSE)
+assert LINE_CHARS + SUFFIX_MAX <= CHUNK_CHARS
 POINTER_TEXT = "There's an update from Zoe for you. Ask me \"what's new?\" or look on the desktop."
 
 
@@ -523,7 +531,8 @@ def _single(item: dict, detail: str, turn: int) -> str:
 def _fit(lines: list[tuple[str, int, bool]], limit: int = CHUNK_CHARS) -> Optional[str]:
     """Fit by dropping only droppable lines (counted as "...and N more"); ``must`` lines (bad news, decisions, the
     owner's steps) are never dropped. ``None`` = the must lines alone do not fit."""
-    room = limit - MORE_RESERVE - sum(len(t) + 1 for t, _, must in lines if must)
+    reserve = len("\n" + _more(sum(n for _, n, _ in lines)))  # the longest count line this message could need
+    room = limit + 1 - reserve - sum(len(t) + 1 for t, _, must in lines if must)  # +1: n lines have n-1 joins
     if room < 0:
         return None
     out: list[str] = []
@@ -536,7 +545,7 @@ def _fit(lines: list[tuple[str, int, bool]], limit: int = CHUNK_CHARS) -> Option
         out.append(t)
         room -= 0 if must else len(t) + 1
     if dropped:
-        out.insert(at, f"…and {dropped} more on GitHub.")
+        out.insert(at, _more(dropped))
     return "\n".join(out)
 
 
@@ -651,16 +660,18 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
     def own(i: dict) -> list[str]:  # the key rides on the item's own line unless its step line carries it
         return [] if i["key"] in hold else [i["key"]]
 
-    for i in bad:
-        lines.append((_story(i, opener, lead=False) + _ref(i, tech(i) and i["kind"] != "stuck"), own(i)))
+    for i in bad:  # bad news with a step carries it inline, so its key lands with its own (first) line
+        step = f"\n   For you: {i['owner_step']}" if i.get("owner_step") else ""
+        lines.append((_story(i, opener, lead=False) + _ref(i, tech(i) and i["kind"] != "stuck") + step, [i["key"]]))
     waiting = [i for i in live if i["category"] == "decision"]
     if waiting:
         lines.append(("\nWaiting on you:", []))
         lines += [("• " + _decision_line(i) + _ref(i, tech(i)), [i["key"]]) for i in waiting]
         hold |= {i["key"] for i in waiting if i.get("owner_step")}  # a decision's step is its question
-    if steps:
+    good_steps = [i for i in good if i.get("owner_step")]
+    if good_steps:
         lines.append(("\nFor you to do:", []))
-        lines += [(f"• {i['owner_step']}", [i["key"]]) for i in steps]  # its number is on the item's line
+        lines += [(f"• {i['owner_step']}", [i["key"]]) for i in good_steps]  # its number is on the item's line
     stories = [i for i in good if _hh(i)]
     if stories and len(lines) > 1:
         lines.append(("\nWhat went in:", []))
@@ -685,33 +696,49 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
                  hold=hold)
 
 
+def _suffix(rest: list[tuple[str, list[str]]], tail: str, hold: frozenset | set) -> str:
+    """Exactly what the last chunk gets appended when ``rest`` does not fit: the count of what is left (held keys
+    excluded: they follow up instead), the follow-up line when any held key is left, and the closing line."""
+    n = sum(1 for _, ks in rest for k in ks if k not in hold)
+    held = any(k in hold for _, ks in rest for k in ks)
+    return ((f"\n{_more(n)}" if n else "") + (f"\n{FOLLOWS}" if held else "") + (f"\n{tail}" if tail else ""))
+
+
 def _pack(lines: list[tuple[str, list[str]]], url: str, label: str, tail: str = "",
           hold: frozenset | set = frozenset()) -> list[Message]:
-    """Lines into at most ``MAX_CHUNKS`` messages; the last one ends "...and N more" (and ``tail``) on overflow.
-    A ``hold`` key (one with an owner step) lands only if its line is shown: on overflow it is left out of every
-    message, so the caller sends it in a follow-up instead of losing the step."""
+    """Lines into at most ``MAX_CHUNKS`` messages of at most ``CHUNK_CHARS``. When the last allowed message cannot
+    take everything, the WHOLE suffix (count, follow-up line, closing line, with their real numbers) is computed
+    first and lines are moved out of that message until message plus suffix fits. A ``hold`` key (one with an
+    owner step) lands only if its line is shown: left over, it is in no message and the caller follows up."""
+    lines = [(_clip(t, LINE_CHARS), ks) for t, ks in lines] + ([(tail, [])] if tail else [])
     chunks: list[Message] = []
-    cur, keys = "", []
-    if tail:
-        lines = [*lines, (tail, [])]
-    for idx, (text, lkeys) in enumerate(lines):
-        text = _clip(text, LINE_CHARS)
-        last = len(chunks) == MAX_CHUNKS - 1
-        if cur and len(cur) + 1 + len(text) > CHUNK_CHARS - (MORE_RESERVE if last else 0):
-            if last:  # the last allowed message: everything left becomes one count line
-                rest = [k for _, ks in lines[idx:] for k in ks if k not in hold]
-                held = any(k in hold for _, ks in lines[idx:] for k in ks)
-                more = (f"\n…and {len(rest)} more on GitHub." if rest else "") + (
-                    f"\n{FOLLOWS}" if held else "")
-                chunks.append(Message(f"{cur}{more}{chr(10) + tail if tail else ''}", keys + rest, url, label))
-                return chunks
-            chunks.append(Message(cur, keys))
-            cur, keys = text.lstrip("\n"), list(lkeys)
-            continue
-        cur = f"{cur}\n{text}" if cur else text
-        keys.extend(lkeys)
-    if cur:
-        chunks.append(Message(cur, keys, url, label))
+    i = 0
+    while i < len(lines):
+        take: list[int] = []
+        size = 0
+        for j in range(i, len(lines)):
+            t = lines[j][0] if take else lines[j][0].lstrip("\n")
+            if take and size + 1 + len(t) > CHUNK_CHARS:
+                break
+            size += len(t) + (1 if take else 0)
+            take.append(j)
+        end = take[-1] + 1
+        if end < len(lines) and len(chunks) == MAX_CHUNKS - 1:  # the last allowed message overflows
+            while True:
+                suffix = _suffix(lines[end:], tail, hold)
+                body = "\n".join(lines[k][0] if n else lines[k][0].lstrip("\n") for n, k in enumerate(range(i, end)))
+                if len(body) + len(suffix) <= CHUNK_CHARS or end == i:
+                    break
+                end -= 1  # this line moves into the count (or, if held, into the follow-up)
+            text = (body + suffix) if body else suffix.lstrip("\n")
+            keys = [k for _, ks in lines[i:end] for k in ks] + [k for _, ks in lines[end:] for k in ks
+                                                                 if k not in hold]
+            chunks.append(Message(text, keys, url, label))
+            return chunks
+        body = "\n".join(lines[k][0] if n else lines[k][0].lstrip("\n") for n, k in enumerate(range(i, end)))
+        keys = [k for _, ks in lines[i:end] for k in ks]
+        chunks.append(Message(body, keys, url if end == len(lines) else None, label if end == len(lines) else None))
+        i = end
     return chunks
 
 
@@ -962,6 +989,9 @@ async def _send(c: Ctx, r: Recipient, msg: Message) -> str:
     """Claim -> persist -> send -> record. A crash between claim and record leaves ``sending``, which the next
     tick turns into ``uncertain`` (listed once in the next digest), never into a second send."""
     ds = c.st["deliveries"]
+    if len(msg.text) > CHUNK_CHARS:  # our own bug, never the member's loss: not sent, not claimed, not refused
+        audit("oversize_held", member=r.user_id, keys=msg.keys, chars=len(msg.text), code="over_chunk_chars")
+        return "oversize"  # the keys stay queued for the next tick
     for k in msg.keys:
         ds[f"{r.user_id}|{k}"]["status"] = "sending"
     c.persist()
@@ -1125,7 +1155,7 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
                          period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
     outcomes = [await _send(c, r, m) for m in msgs]
-    landed = {k for m in msgs for k in m.keys}
+    landed = {k for m, o in zip(msgs, outcomes) if o != "oversize" for k in m.keys}
     if any(i["key"] not in landed for i in items):  # a step that did not fit: its notice follows next tick
         audit("digest_follow_up", member=r.user_id, keys=[i["key"] for i in items if i["key"] not in landed])
     elif all(o != "retry" for o in outcomes):

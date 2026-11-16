@@ -1113,7 +1113,7 @@ def test_a_revert_step_shows_in_every_form():
                   comm_prefs.normalise({"categories": {c: {"detail": "plain"} for c in comm_prefs.CATEGORIES}},
                                        "admin")):
         text = "\n".join(m.text for m in cn.render_digest([REVERT_STEP, CHORE], [], prefs, opener=0, repo_name="o/r"))
-        assert f"For you to do:\n• {STEP}" in text and cn.NOTHING_TO_DO not in text
+        assert f"before.{' (#2030)' if '#' in text else ''}\n   For you: {STEP}" in text and cn.NOTHING_TO_DO not in text  # inline with the bad news
 
 
 def _long(n, step=True, hh=240):
@@ -1485,3 +1485,96 @@ async def test_a_legacy_pending_merge_going_live_keeps_its_summary():
     await run(gh, bot, at("12:05"), people=people)
     assert [d["text"] for d in bot.delivered] == ["A fix is in and running. Music resumes after a call.\n"
                                                   "Nothing for you to do."]
+
+
+# ── no message ever exceeds the route's limit, whatever gets appended ─────────
+def _ask(n, hw, aw):
+    body = (f"For-The-Household: Q{n - 7000} " + "word " * hw + "\nOwner-Step: A " + "this " * aw
+            + "\nIf-No-Answer: It stays as it is.")
+    return {"key": f"pr:{n}:decision", "kind": "raised", "category": "decision", "number": n, "title": "feat: ask",
+            "url": f"https://x/{n}", **cn.pr_fields("", body)}
+
+
+# (decisions, news items, step words, household words, news words): each made a 1004-character last chunk on
+# 742df7879 (found by a seeded search there), carrying the count, the follow-up AND the closing sentence.
+REVIEWER_SHAPES = ((16, 15, 41, 11, 32), (15, 12, 29, 21, 14), (14, 20, 36, 14, 56))
+
+
+@pytest.mark.parametrize("shape", REVIEWER_SHAPES)
+def test_a_last_chunk_carrying_count_follow_up_and_closing_stays_under_the_limit(shape):
+    asks, news, aw, hw, nw = shape
+    items = [_ask(7000 + n, hw, aw) for n in range(asks)] + [
+        _live(7100 + n, "fix: t", "For-The-Household: N " + "here " * nw) for n in range(news)]
+    msgs = cn.render_digest(items, [], comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r")
+    last = msgs[-1].text
+    assert len(msgs) == cn.MAX_CHUNKS
+    assert cn.FOLLOWS in last and "more on GitHub." in last and last.endswith(cn.NOTHING_ELSE)
+    assert all(len(m.text) <= cn.CHUNK_CHARS for m in msgs), [len(m.text) for m in msgs]
+
+
+async def test_an_oversize_message_is_never_sent_nor_refused_and_its_keys_wait(monkeypatch):
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.raise_pr(900, "fix: x", labels=["needs-owner"])
+    real = cn.render_instant
+
+    def too_long(items, *a, **kw):
+        m = real(items, *a, **kw)
+        return cn.Message("x" * (cn.CHUNK_CHARS + 1), m.keys, m.url, m.label)
+
+    monkeypatch.setattr(cn, "render_instant", too_long)
+    await run(gh, bot, at("12:00"))
+    monkeypatch.setattr(cn, "render_instant", real)
+    assert bot.calls == 0
+    assert cn.load_state()["deliveries"]["u-owner|pr:900:decision"]["status"] == "queued"
+    held = _audit_events("oversize_held")
+    assert held and held[0]["code"] == "over_chunk_chars" and "text" not in held[0]
+    await run(gh, bot, at("12:10"))
+    assert len(bot.delivered) == 1  # sent on the next tick, once the renderer behaves
+
+
+def test_property_no_message_exceeds_the_route_limit():
+    rnd = random.Random(1117)
+    plain = comm_prefs.normalise({"categories": {c: {"detail": "plain"} for c in comm_prefs.CATEGORIES}}, "admin")
+    for trial in range(250):
+        items = []
+        for n in range(rnd.randint(1, 40)):
+            num = 8000 + trial * 50 + n
+            kind = rnd.choice(("live", "revert", "chore", "decision", "stuck"))
+            step = ("Do " + "this " * rnd.randint(1, 45)).strip() if rnd.random() < 0.5 else ""
+            body = (f"For-The-Household: {'word ' * rnd.randint(0, 70)}\n" + (f"Owner-Step: {step}\n" if step else "")
+                    + "Numbers: " + "; ".join(f"m{k} {'y' * rnd.randint(0, 80)} {k} -> {k + 1}"
+                                              for k in range(rnd.randint(0, 4))))
+            if kind == "stuck":
+                items.append({**_stuck_item(), "key": f"deploy:stuck:{num}"})
+            elif kind == "decision":
+                items.append({**_live(num, "feat: ask", body), "kind": "raised", "category": "decision",
+                              "key": f"pr:{num}:decision"})
+            else:
+                title = {"live": "fix: thing", "revert": 'Revert "feat: thing"', "chore": "chore: thing"}[kind]
+                items.append(_live(num, title + " " + "t" * rnd.randint(0, 200), body))
+        rnd.shuffle(items)
+        prefs = rnd.choice((comm_prefs.normalise(None, "admin"), plain))
+        period = rnd.choice(("today", "this week"))
+        rest, sent = list(items), []
+        for _round in range(len(items) + 1):  # the digest and its follow-ups on later ticks
+            if not rest:
+                break
+            msgs = cn.render_digest(rest, [], prefs, opener=trial, repo_name="o/r", local=EVENING, period=period)
+            got = {k for m in msgs for k in m.keys}
+            assert got and len(msgs) <= cn.MAX_CHUNKS
+            sent += msgs
+            rest = [i for i in rest if i["key"] not in got]
+        assert not rest
+        assert sorted(k for m in sent for k in m.keys) == sorted(i["key"] for i in items)  # each key exactly once
+        for detail in ("technical", "plain"):
+            drained = _drain_instant(items, detail)
+            assert sorted(k for m in drained for k in m.keys) == sorted(i["key"] for i in items)
+            sent += drained
+        for m in sent:
+            assert len(m.text) <= telegram_notify.MAX_TEXT, (trial, len(m.text))
+        by_key = {i["key"]: i for i in items}
+        for m in sent:
+            for k in m.keys:
+                step = by_key[k].get("owner_step")
+                assert not step or step in m.text, (trial, k)
