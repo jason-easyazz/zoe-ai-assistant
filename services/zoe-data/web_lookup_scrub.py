@@ -261,16 +261,18 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     drop: dict[int, str] = {}
     plains = [fold(words[i].translate(_LOOKALIKE)) if any(c.isdigit() or c in "$@" for c in words[i]) and not tok.isdigit()
               else tok for i, tok in enumerate(tokens)]
+    bare = [re.sub(r"\d", "", t) if t and not t.isdigit() else t for t in tokens]   # rose2 -> rose, blue4 -> blue
     for i, tok in enumerate(tokens):
         plain = plains[i]
-        if tok and (tok in singles or plain in singles or _glued(tok, singles, rx) or _glued(plain, singles, rx)):
+        if tok and (tok in singles or plain in singles or bare[i] in singles or _glued(tok, singles, rx)
+                    or _glued(plain, singles, rx) or _glued(bare[i], singles, rx)):
             drop[i] = "private"
         elif any(g in tok for g in glue):
             drop[i] = "memory"
     for phrase in phrases:
         n = len(phrase)
         for i in range(len(tokens) - n + 1):
-            if tuple(tokens[i:i + n]) == phrase or tuple(plains[i:i + n]) == phrase:   # "l4rkspur hollow" too
+            if phrase in (tuple(tokens[i:i + n]), tuple(plains[i:i + n]), tuple(bare[i:i + n])):   # l4rkspur, blue4
                 drop.update({k: "private" for k in range(i, i + n)})
     for i, tok in enumerate(tokens[:-1]):  # "my friend Dana", "our dog called Biscuit"
         if tok not in lex["relation_words"]:
@@ -338,8 +340,9 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
         query = f"{query} {w}" if query else w
     # Belt and braces: the query that is about to leave is checked again, whole and with spaces removed.
     # ...and once more with look-alike digits read as letters ("m1 ra bel").
+    # ...and with digits removed altogether ("rose2 mary" padding a known name, "blue4 planter" a memory span).
     plain_query = query.translate(_LOOKALIKE)
-    for view in (query, plain_query):
+    for view in (query, plain_query, re.sub(r"\d", "", query)):
         squeezed = fold(view)
         for s in singles:
             if s in {fold(w) for w in view.split()} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \

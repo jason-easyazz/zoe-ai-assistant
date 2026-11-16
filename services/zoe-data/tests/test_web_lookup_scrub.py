@@ -329,3 +329,11 @@ def test_a_missing_allow_list_refuses_even_numbers(monkeypatch, raw):
     monkeypatch.setattr(ws, "allow_words", lambda: frozenset())
     r = scrub_query(raw)
     assert not r.send and r.reason == ws.REASON_NO_ALLOW_LIST, r
+
+
+@pytest.mark.parametrize("raw", ["rose2 mary violin lessons price", "blue4 planter replacement prices"])
+def test_a_digit_padding_a_known_name_or_memory_never_hides_it(raw):
+    t = PrivateTerms.of(names=["Rosemary"], memory=["the spare key is under the blue planter"])
+    r = scrub_query(raw, t)
+    squeezed = "".join(ch for ch in r.query if not ch.isdigit()).replace(" ", "")
+    assert not r.send or ("rosemary" not in squeezed and "blueplanter" not in squeezed), r
