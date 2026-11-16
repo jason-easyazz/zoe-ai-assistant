@@ -904,6 +904,11 @@ def _fsync_dir(directory: Path) -> None:
         os.close(dfd)
 
 
+#: member -> ``time.perf_counter()`` of its LATEST park in this process (a newer request for the same member): ``_pending_done`` keeps a
+#: member whose park is newer than the replay's send. A park by another process is older by definition (seen at this worker's start).
+_parked_at: dict = {}
+
+
 def _pending_add(member: str) -> None:
     """Park a forget for a later replay. RAISES if it cannot be made durable: the caller then fails the erase closed. Blocking (an
     ``flock`` wait and two fsyncs): never call it on the event loop (``_forget`` hands it to an executor)."""
@@ -912,12 +917,16 @@ def _pending_add(member: str) -> None:
         members = _pending_read() + [member]
         _pending_write(members)
         _pending_members = frozenset(members)
+        _parked_at[member] = time.perf_counter()
 
 
-def _pending_done(members: set) -> None:
-    """Drop the members a replay confirmed; re-read under the lock so a forget parked WHILE the replay ran is kept."""
+def _pending_done(members) -> None:
+    """Drop the members a replay confirmed; re-read under the lock so a forget parked WHILE the replay ran is kept. ``members``: a
+    set, or a ``{member: time the replay SENT its forget}`` map, so a member parked AGAIN after that send (a newer unconfirmed forget
+    of the same member) stays parked: only the request the kernel confirmed is cleared."""
+    sent = members if isinstance(members, dict) else {m: float("inf") for m in members}
     with _pending_locked():
-        _pending_write([m for m in _pending_read() if m not in members])
+        _pending_write([m for m in _pending_read() if m not in sent or _parked_at.get(m, float("-inf")) > sent[m]])
 
 
 def _replay_pending(kernel: _Kernel, force: bool = True) -> bool:
@@ -938,11 +947,12 @@ def _replay_pending(kernel: _Kernel, force: bool = True) -> bool:
     if not force and time.monotonic() < kernel.down_until:
         return False
     kernel.down_until = 0.0           # a forget never waits out the circuit an earlier failed add opened
-    done = set()
+    done: dict = {}
     for member in todo:
+        sent = time.perf_counter()
         try:
             _kernel_forget(kernel, member, None, None)
-            done.add(member)
+            done[member] = sent
         except Exception:  # noqa: BLE001
             pass
     try:
@@ -1033,7 +1043,18 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
         code = "queue_full" if isinstance(exc, queue.Full) else type(exc).__name__
     if not code:
         try:
-            return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=FORGET_TIMEOUT_S)
+            # shielded: a timeout or a cancelled caller never cancels the worker's own future (it still sets its result)
+            return await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)), timeout=FORGET_TIMEOUT_S)
+        except asyncio.CancelledError:
+            # the CALLER was cancelled (a request gone, a shutdown) before the kernel confirmed: park durably all the same, off the
+            # loop and shielded so a second cancel cannot stop it, then let the cancellation go on. An unconfirmed forget is never lost.
+            _forgotten_at[user_id] = time.perf_counter()
+            park = asyncio.get_running_loop().run_in_executor(None, _pending_add, user_id)
+            try:
+                await asyncio.shield(park)
+            except BaseException:  # noqa: BLE001 - the park carries on in its thread; the cancellation is what the caller gets
+                pass
+            raise
         except Exception as exc:  # noqa: BLE001
             code = type(exc).__name__
     try:                              # not confirmed, either flag: never lose it - parked, replayed before the next job
@@ -1092,6 +1113,7 @@ def _reset_for_tests() -> None:
     _down_logged = False
     _pending_members = None           # a restart: the next worker reads the park file before its first job
     _forgotten_at.clear()
+    _parked_at.clear()
     if _worker is not None and _worker.is_alive():
         _q.put(("stop",))
         _worker.join(timeout=5)

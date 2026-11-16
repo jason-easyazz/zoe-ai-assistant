@@ -647,7 +647,9 @@ FORBIDDEN_ON_LOOP = {"Thread", "start", "join", "put", "sleep", "_ensure_worker"
 def test_the_turn_facing_functions_never_block_the_loop():
     """Structure: in every function a turn (intent_router, list_service, skybridge, the member delete) reaches synchronously, no call
     that starts or joins a thread, takes a lock BLOCKING (``acquire()`` without ``blocking=False``), puts on a queue with a wait, or
-    touches a file or socket; those go through ``asyncio.to_thread`` / an executor (passed as an argument, never called here)."""
+    touches a file or socket; those go through ``asyncio.to_thread`` / an executor (passed as an argument, never called here).
+    NOT checked here: a ``with <lock>:`` block. The one such lock on these paths is ``_lock`` (``_tally`` / ``counters``), held by
+    every holder for in-memory counter updates only, never across I/O."""
     tree = ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
     fns = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     assert set(TURN_FACING) <= set(fns)
@@ -767,3 +769,32 @@ async def test_a_topic_forget_with_the_shadow_off_and_its_kernel_stopped_reports
     _stop_kernel_with_records(kernel, monkeypatch)
     res = await forget_topic.forget(_TopicSvc(("r1", "The book club meets at the library")), TOPIC_MEMBER, "the book club")
     assert res.store_down                                                 # not "forgotten" while the kernel's record may remain
+
+
+# ---- second train review: a cancelled caller, and a newer park of the same member during a replay ----------------------------------
+@pytest.mark.asyncio
+async def test_a_cancelled_forget_is_still_parked_and_the_cancellation_goes_on(kernel):
+    import asyncio
+
+    kernel.stall[("forget", 1)] = 1.0                                    # the kernel sits on the forget: the caller is cancelled first
+    kernel.stall[("forget", 2)] = 1.0
+    task = asyncio.create_task(os_shadow.forget_user(MEMBER))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _pending(kernel) == [MEMBER]                                   # never lost: replayed before the next job
+
+
+def test_a_newer_park_of_the_same_member_during_a_replay_stays_parked(kernel, monkeypatch):
+    os_shadow._pending_add("member-a")
+    real = os_shadow._kernel_forget
+
+    def again(k, member, entity, topic):
+        out = real(k, member, entity, topic)
+        os_shadow._pending_add("member-a")                                # a NEWER unconfirmed forget of the same member, mid-replay
+        return out
+
+    monkeypatch.setattr(os_shadow, "_kernel_forget", again)
+    assert os_shadow._replay_pending(os_shadow._Kernel()) is False
+    assert _pending(kernel) == ["member-a"]                               # the confirmed request cleared, the newer one kept
