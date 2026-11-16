@@ -540,75 +540,131 @@ def test_forgetting_the_add_by_seq_removes_its_row_and_a_later_undo_of_its_remov
 
 
 def test_undoing_a_removal_whose_add_was_forgotten_does_not_bring_the_word_back(state):
+    """Forgetting the ADD also erases the removal that took that row (it named only that row), and the removal's request: its words
+    are X's words. So nothing holds X afterwards, not the row, not the removal, not the bytes on disk."""
     marker = "synthetic marker sloe"
     d = start(state)
     first = _say_add(d, A, marker)
-    said = d.voice.publish("utterance", subject=A, payload={"text": "synthetic list remove"})
+    said = d.voice.publish("utterance", subject=A, payload={"text": f"take {marker} off the list"})
     d.brain.call("act", action="list.remove", on_behalf_of=A, args={"item": marker, "list": "shopping", "asked": said.seq},
                  caused_by=[said.seq])
-    assert d.panel.call("forget", subject=A, actor=A, seqs=[first["said"]])["count"] >= 2   # forget the ADD; the removal survives
+    assert d.panel.call("forget", subject=A, actor=A, seqs=[first["said"]])["count"] >= 4   # the add, its receipt, the removal, its request
     try:
-        d.panel.call("undo", person=A, actor=A)                                 # refused by the shield, or a no-op: never X back
+        d.panel.call("undo", person=A, actor=A)                                 # nothing of A's is left to undo, or it is refused
     except Refused:
         pass
-    assert digest(marker) not in d.digests()
+    assert _gone_everywhere(d, state, marker)
     d.kill()
-    assert digest(marker) not in start(state).digests()
-    # The REMOVAL survives (a forget by seq names the add, not the later removal), and its own receipt still records what it removed:
-    # the word stays shielded (nothing can be added or replayed with it) but its bytes are in that one surviving record.
-    assert _members_bytes(state[0], marker.encode())
+    assert _gone_everywhere(start(state), state, marker)                        # the bytes are ABSENT, also after a restart
 
 
-def test_property_random_list_histories_never_bring_a_forgotten_word_back_and_keep_what_survives(state):
-    """Random add / remove / undo / forget-by-seq over two members (an add's words sometimes name the other member), then a
-    whole-person erase of B and a restart. Every add has its own marker, so "forgotten" is exact: an add forgotten by its
-    utterance, a removal forgotten by its utterance (which takes the add it reversed), or anything that derived from words naming
-    B. Afterwards no forgotten marker is in any row or any file, and the rebuilt rows equal the running kernel's."""
-    import random
-    rnd = random.Random(20261119)
+def test_a_removal_of_two_rows_loses_only_the_forgotten_one_and_goes_whole_when_both_are_forgotten(state):
+    item, said_1, said_2 = "synthetic marker rowan", "synthetic marker first-request", "synthetic marker second-request"
     d = start(state)
-    live: dict = {}                                        # item -> (owner, said seq, names B)
-    removed: dict = {}                                     # item -> (owner, removal's said seq)
-    forgotten: set = set()
-    for n in range(36):
+    one = _say_add(d, A, item, text=said_1)
+    two = _say_add(d, A, item, text=said_2)
+    rm = d.voice.publish("utterance", subject=A, payload={"text": "synthetic list remove"})
+    removal = d.brain.call("act", action="list.remove", on_behalf_of=A,
+                           args={"item": item, "list": "shopping", "asked": rm.seq}, caused_by=[rm.seq])
+    assert removal["verified"] is True and d.digests() == []                     # one removal took both rows
+    d.panel.call("forget", subject=A, actor=A, seqs=[one["said"]])
+    db = sqlite3.connect(f"file:{state[0] / 'kernel' / 'zoe-os.db'}?mode=ro", uri=True)
+    (raw,) = db.execute("SELECT payload FROM events WHERE seq = ?", (removal["seq"],)).fetchone()
+    db.close()
+    assert [r["asked"] for r in json.loads(raw)["undo"]["before"]["rows"]] == [two["said"]]   # kept, scrubbed of the first row
+    assert _members_bytes(state[0], said_1.encode()) == []                         # the forgotten request is nowhere
+    assert _members_bytes(state[0], item.encode())                                 # the item's words: still the second row's own
+    d.panel.call("forget", subject=A, actor=A, seqs=[two["said"]])                 # now every row it removed is forgotten
+    for word in (item, said_1, said_2):
+        assert _members_bytes(state[0], word.encode()) == []
+    d.kill()
+    again = start(state)
+    assert again.digests() == [] and all(_members_bytes(state[0], w.encode()) == [] for w in (item, said_1, said_2))
+
+
+def _undone_item(state, undo_seq: int):
+    """The item of the action an undo receipt undid, read from the record (read-only)."""
+    db = sqlite3.connect(f"file:{state[0] / 'kernel' / 'zoe-os.db'}?mode=ro", uri=True)
+    try:
+        (raw,) = db.execute("SELECT payload FROM events WHERE seq = ?", (undo_seq,)).fetchone()
+        row = db.execute("SELECT payload FROM events WHERE seq = ?", (json.loads(raw)["undoes"],)).fetchone()
+        return ((json.loads(row[0]) if row and row[0] else {}).get("undo") or {}).get("args", {}).get("item")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("seed", [20261120, 7, 4242, 99, 31337])
+def test_property_after_any_history_no_live_record_holds_forgotten_content_and_every_surviving_row_is_there(state, seed):
+    """Random add / remove / undo / forget-add / forget-remove / forget-undo moves over two members (an add sometimes names the
+    other member; a removal's request repeats the item's words), then a whole-person erase of B and a restart. Every add has its
+    own marker. Afterwards: no forgotten marker in ANY file of the state directory or any row, every surviving row present, every
+    removed row absent, and the rebuilt rows equal the running kernel's."""
+    import random
+    rnd = random.Random(seed)
+    d = start(state)
+    items: dict = {}                                   # item -> {"owner", "said", "names_b", "status"}
+    removals: dict = {}                                # item -> its removal's request seq
+    undos: list = []                                   # (undo receipt seq, item it reached)
+
+    def forgotten(item):
+        if item in items:
+            items[item]["status"] = "forgotten"
+
+    for n in range(40):
         person = rnd.choice((A, B))
-        move = rnd.choice(("add", "add", "add", "remove", "undo", "forget_add", "forget_remove"))
+        move = rnd.choice(("add", "add", "add", "remove", "remove", "undo", "forget_add", "forget_remove", "forget_undo"))
+        mine = sorted(i for i, v in items.items() if v["owner"] == person and v["status"] == "present")
         try:
             if move == "add":
-                item = f"synthetic marker p{n}"
+                item = f"synthetic marker <q{n}>"                    # delimited: no marker is a substring of another
                 names_b = person == A and rnd.random() < 0.3
                 out = _say_add(d, person, item, mentions=[B] if names_b else ())
-                live[item] = (person, out["said"], names_b)
-            elif move == "remove" and live:
-                item = rnd.choice(sorted(live))
-                owner = live[item][0]
-                said = d.voice.publish("utterance", subject=owner, payload={"text": "synthetic list remove"})
-                d.brain.call("act", action="list.remove", on_behalf_of=owner,
+                items[item] = {"owner": person, "said": out["said"], "names_b": names_b, "status": "present"}
+            elif move == "remove" and mine:
+                item = rnd.choice(mine)
+                said = d.voice.publish("utterance", subject=person, payload={"text": f"take {item} off"})
+                d.brain.call("act", action="list.remove", on_behalf_of=person,
                              args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
-                removed[item] = (owner, said.seq, live.pop(item))
-            elif move == "forget_add" and live:
-                item = rnd.choice(sorted(live))
-                owner, said, _ = live.pop(item)
-                d.panel.call("forget", subject=owner, actor=owner, seqs=[said])
-                forgotten.add(item)
-            elif move == "forget_remove" and removed:
-                item = rnd.choice(sorted(removed))
-                owner, said, _ = removed.pop(item)
-                d.panel.call("forget", subject=owner, actor=owner, seqs=[said])
-                forgotten.add(item)
+                items[item]["status"], removals[item] = "removed", said.seq
             elif move == "undo":
-                d.panel.call("undo", person=person, actor=person)
+                out = d.panel.call("undo", person=person, actor=person)
+                item = _undone_item(state, out["seq"])                 # read from the record: which action it undid
+                if item in items and items[item]["status"] != "forgotten":
+                    items[item]["status"] = "unknown"                  # undone: present or not, the comparison below decides
+                undos.append((out["seq"], person, item))
+            elif move == "forget_add":
+                pick = sorted(i for i, v in items.items() if v["owner"] == person and v["status"] != "forgotten")
+                if pick:
+                    item = rnd.choice(pick)
+                    d.panel.call("forget", subject=person, actor=person, seqs=[items[item]["said"]])
+                    forgotten(item)
+            elif move == "forget_remove":
+                pick = sorted(i for i in removals if items[i]["owner"] == person and items[i]["status"] != "forgotten")
+                if pick:
+                    item = rnd.choice(pick)
+                    d.panel.call("forget", subject=person, actor=person, seqs=[removals.pop(item)])
+                    forgotten(item)
+            elif move == "forget_undo" and undos:
+                seq, who, item = undos.pop(rnd.randrange(len(undos)))
+                d.panel.call("forget", subject=who, actor=who, seqs=[seq])
+                forgotten(item)
         except Refused:
             pass
     d.eraser.call("erase_member", subject=B)
-    forgotten |= {i for i, (o, _, nb) in live.items() if o == B or nb} | {i for i, (o, _, (_, _, nb)) in removed.items()
-                                                                       if o == B or nb}
-    running = d.digests()                                                      # (keyed digests change with each start's key)
+    for item, v in items.items():
+        if v["owner"] == B or v["names_b"]:
+            forgotten(item)
+    running = d.digests()
     d.kill()
     again = start(state)
     held = again.digests()
-    assert held == running                                                     # the rebuild agrees with the running kernel
-    assert "unmatched" not in held
-    for item in forgotten:
+    assert held == running and "unmatched" not in held
+    gone = [i for i, v in items.items() if v["status"] == "forgotten"]
+    for item in gone:
         assert digest(item) not in held and _members_bytes(state[0], item.encode()) == [], item
-    assert len(forgotten) >= 5                                                 # the property was exercised
+    for item, v in items.items():
+        if v["status"] == "present":
+            assert digest(item) in held, item
+        elif v["status"] == "removed":
+            assert digest(item) not in held, item
+    assert len(gone) >= 3 and sum(v["status"] in ("present", "removed") for v in items.values()) >= 1   # both sides exercised

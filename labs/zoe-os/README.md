@@ -203,18 +203,24 @@ reached).
 * A forget rebuilds EVERY member whose rows came from what it erased, not just its subject (A's row from words that named B goes
   when B forgets everything). `DurableLists.owner_of` maps each list request (`asked`) and list receipt seq to the row's owner, so
   the members are found in time proportional to the notice's seqs; each is then rebuilt from its own live receipts.
-* Forgetting an action that REVERSED earlier ones forgets what it reversed (`Spine._closure`): an `undo` takes the action it
-  `undoes`; a removal (its snapshot is marked `reverses`) takes the adds whose rows it removed. Without this, forgetting "I removed X"
-  let the rebuild replay the add and X came back. Forgetting the ADD leaves the later removal (a forget by seq names the add, not the
-  removal): an undo of that removal cannot restore X (its snapshot was scrubbed, and X is shielded), but the removal's own receipt
-  still records X's words.
+* THE RULE (`Spine._closure`): after a forget, NO live record holds the forgotten content: not the action that created it, not an
+  action that reversed or restored it, not their snapshots, arguments, proofs or receipts.
+  BACKWARD, a forgotten reversal takes what it reversed: an `undo` takes the action it `undoes`; a removal (its snapshot is marked
+  `reverses`, and each removed row's request is indexed in the spine's `reversals` table) takes the adds whose rows it removed.
+  FORWARD, a forgotten row takes the removals of it: a removal whose removed rows are ALL forgotten is erased whole, with its request
+  ("remove X" is X's words); an undo of it derives from it and goes too. A removal that also took rows that survive (the
+  authority's remove takes every copy of the item on that list, so two adds of the same item, one forgotten) keeps its receipt, which
+  the surviving row's history needs, and loses the forgotten row from its snapshot; its arguments and proof name the item, which the
+  surviving row still holds in its own records. Erasure reaches the bytes: `secure_delete`, then a WAL checkpoint after the forget.
 * Backstop, scoped to the row's owner: a replayed or restored row that names an entity its owner asked to forget is dropped. The
   plain word shield is GLOBAL in this kernel, so it is not used as a replay filter: it would drop another member's own live row of
   the same words, and the rebuilt rows would differ from the running ones.
-* For the reminder and alarm rows on the branches above: when they become durable (rebuilt from receipts) they must (1) find the
-  affected owners from the notice's seqs the same way (an `asked`/receipt -> owner index), never just the subject; (2) mark a
-  snapshot `reverses` only for an action that takes rows away (a reminder cancel, an alarm clear), so forgetting it forgets what it
-  reversed; (3) never replay a row whose receipt is gone. Today's in-memory lab stores already purge cross-owner rows by seq
+* For the reminder and alarm rows on the branches above: the SAME RULE. When they become durable (rebuilt from receipts) they must
+  (1) find the affected owners from the notice's seqs the same way (an `asked`/receipt -> owner index), never just the subject;
+  (2) mark a snapshot `reverses` (provenance 1, rows with their `asked`) for any action that takes rows away (a reminder cancel, an
+  alarm clear or move), so the spine indexes it: forgetting that action forgets what it reversed, and forgetting the rows it took
+  erases it (whole, or scrubbed when other rows survive); (3) never replay a row whose receipt is gone; (4) keep an alarm's
+  "before" (the time it replaced) as a row with its `asked`, or the forward rule cannot reach it. Today's in-memory lab stores already purge cross-owner rows by seq
   (`provenance.erased_request`).
 
 **Kill points** (`tests/test_authority.py`, real SIGKILL): after the intent, after the driver ran but before the receipt (absent after

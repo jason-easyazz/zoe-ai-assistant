@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS people (seq INTEGER NOT NULL, person TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
 CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
+CREATE TABLE IF NOT EXISTS reversals (seq INTEGER NOT NULL, target INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS reversals_target ON reversals(target);
+CREATE INDEX IF NOT EXISTS reversals_seq ON reversals(seq);
 CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS consumed_receipts (
   receipt_seq INTEGER PRIMARY KEY, claim_seq INTEGER NOT NULL
@@ -152,6 +155,15 @@ def forget_affects(notice: Event, seq: int) -> bool:
     return True
 
 
+def _reversal_targets(payload: dict) -> list[int]:
+    """The requests of the rows a receipt REMOVED: its saved before-state marked ``reverses`` (provenance 1), each row's ``asked``."""
+    undo = payload.get("undo") if isinstance(payload, dict) else None
+    before = undo.get("before") if isinstance(undo, dict) else None
+    if not (isinstance(before, dict) and before.get("provenance") == 1 and before.get("reverses") is True):
+        return []
+    return sorted({r["asked"] for r in before.get("rows", ()) if isinstance(r, dict) and type(r.get("asked")) is int})
+
+
 def _strings(node):
     """Every string value in a payload, at any depth."""
     if isinstance(node, str):
@@ -222,6 +234,15 @@ class Spine:
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
+        if self._db.execute("SELECT 1 FROM meta WHERE key = 'reversals_v1'").fetchone() is None:
+            # an older record: index the removals it already holds, once (the rows each one took, by their requests)
+            self._db.execute("BEGIN IMMEDIATE")
+            for seq, raw in self._db.execute("SELECT seq, payload FROM events WHERE kind = ? AND tombstoned = 0",
+                                             (Kind.ACTION_RECEIPT.value,)).fetchall():
+                self._db.executemany("INSERT INTO reversals VALUES (?,?)",
+                                     [(seq, t) for t in _reversal_targets(json.loads(raw) if raw else {})])
+            self._db.execute("INSERT INTO meta VALUES ('reversals_v1', x'01')")
+            self._db.execute("COMMIT")
         # Upgrade extant claims without retaining any person or payload in bookkeeping.
         self._db.execute("""
             INSERT OR IGNORE INTO consumed_receipts
@@ -354,6 +375,9 @@ class Spine:
                 if ev.caused_by:
                     self._db.executemany("INSERT INTO causes VALUES (?,?)",
                                          [(seq, c) for c in ev.caused_by])
+                if ev.kind is Kind.ACTION_RECEIPT:
+                    self._db.executemany("INSERT INTO reversals VALUES (?,?)",
+                                         [(seq, t) for t in _reversal_targets(ev.payload)])
                 out.append(Event(ev.kind, ev.source, ev.subject, ev.visibility, ev.payload,
                                  ev.mentions, ev.caused_by, seq=seq, ts=now))
             if then is not None:
@@ -492,35 +516,64 @@ class Spine:
             return True
 
     def _closure(self, seed: set[int]) -> set[int]:
-        """The seed plus every event that derives from it, to any depth, plus what a forgotten REVERSAL reversed.
+        """The seed plus every event that derives from it, to any depth, plus the REVERSAL links both ways.
 
-        Forgetting an action that reversed earlier ones also forgets what it reversed, or a rebuild from the log would replay the
-        earlier action and its forgotten words would come back: an ``undo`` receipt takes the action it ``undoes``; a receipt
-        whose saved before-state is marked ``reverses`` (a removal: the rows it took, each with its ``asked`` request) takes
-        those requests, and so their receipts. Bounded by what is erased: each dead receipt is read once."""
-        dead, frontier = set(seed), list(seed)
-        while frontier:
-            chunk, frontier = frontier[:500], frontier[500:]
+        THE RULE: after a forget, no live record holds the forgotten content: not the action that created it, not an action that
+        reversed or restored it, not their snapshots, arguments, proofs or receipts. So, beyond what derives by ``caused_by``:
+
+        * BACKWARD: a forgotten reversal takes what it reversed. An ``undo`` receipt takes the action it ``undoes``; a removal
+          (its receipt's before-state marked ``reverses``, indexed in ``reversals``) takes the requests of the rows it removed, and
+          so their receipts. Otherwise a rebuild would replay the earlier action and its words would come back.
+        * FORWARD: a forgotten row takes the removals of it. A removal whose removed rows are ALL forgotten is erased whole, with
+          its request (the words "remove X" are X's words); one that also removed rows that survive keeps its receipt (their
+          history depends on it) and loses only the forgotten rows from its snapshot (``_scrub_snapshots``): its arguments and
+          proof name the item, which those surviving rows still hold in their own records. An undo of an erased action derives
+          from it (``caused_by``) and goes with it.
+        * REQUEST: a dead action takes the utterance that asked for it (it carries the same words).
+        Bounded by what is erased: indexed lookups per erased seq (``reversals_target``, ``reversals_seq``, ``causes_cause``)."""
+        dead, frontier, pending = set(seed), list(seed), set()
+        while frontier or pending:
+            if not frontier:                                   # a removal may only become wholly forgotten later in the walk
+                done = {r for r in pending if self._all_rows_dead(r, dead)}
+                pending -= done
+                if not done:
+                    break
+                frontier = [r for r in done if r not in dead]
+                for r in frontier:
+                    dead.add(r)
+                frontier += [c for r in done for (c,) in self._db.execute("SELECT cause FROM causes WHERE seq = ?", (r,))
+                             if c not in dead]
+                dead.update(frontier)
+                continue
+            chunk, frontier = frontier[:300], frontier[300:]
             marks = ",".join("?" * len(chunk))
             more = {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM causes WHERE cause IN ({marks})", chunk)}
             more |= self._reversed(chunk)
+            pending |= {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM reversals WHERE target IN ({marks})", chunk)
+                        if seq not in dead}
             for seq in more:
                 if seq not in dead:
                     dead.add(seq)
                     frontier.append(seq)
         return dead
 
+    def _all_rows_dead(self, removal: int, dead: set[int]) -> bool:
+        return all(t in dead for (t,) in self._db.execute("SELECT target FROM reversals WHERE seq = ?", (removal,)))
+
     def _reversed(self, seqs: list[int]) -> set[int]:
-        out: set[int] = set()
+        """What these (dead) receipts reversed: an undo's original; a removal's rows' requests (``reversals``). And the REQUEST of
+        a dead action: the utterance it was caused by holds the same words ("add X", "take X off"), so it goes with it."""
         marks = ",".join("?" * len(seqs))
+        out = {t for (t,) in self._db.execute(f"SELECT target FROM reversals WHERE seq IN ({marks})", seqs)}
+        out |= {c for (c,) in self._db.execute(
+            f"SELECT c.cause FROM causes c JOIN events r ON r.seq = c.seq JOIN events u ON u.seq = c.cause"
+            f" WHERE c.seq IN ({marks}) AND r.kind = ? AND u.kind = ?",
+            [*seqs, Kind.ACTION_RECEIPT.value, Kind.UTTERANCE.value])}
         for (raw,) in self._db.execute(f"SELECT payload FROM events WHERE kind = ? AND tombstoned = 0 AND seq IN ({marks})",
                                        [Kind.ACTION_RECEIPT.value, *seqs]):
             p = json.loads(raw) if raw else {}
             if type(p.get("undoes")) is int and p.get("action") == "undo":
                 out.add(p["undoes"])
-            before = (p.get("undo") or {}).get("before") if isinstance(p.get("undo"), dict) else None
-            if isinstance(before, dict) and before.get("provenance") == 1 and before.get("reverses") is True:
-                out.update(r["asked"] for r in before.get("rows", ()) if isinstance(r, dict) and type(r.get("asked")) is int)
         return out
 
     def _tombstone(self, seqs: list[int]) -> None:
@@ -552,6 +605,7 @@ class Spine:
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM reversals WHERE seq IN ({marks}) OR target IN ({marks})", chunk * 2)
             self._scrub_intents(set(seqs))
             self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
             if not outer:
