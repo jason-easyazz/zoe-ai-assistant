@@ -118,6 +118,9 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     _pg("openclaw_approvals", "old OpenClaw request text (retired, no writer)", "none (retired; read by routers/chat.py)"),
     _pg("openclaw_run_state", "old OpenClaw request/response text (retired)", "routers/chat.py (retired lane)"),
     TextStore("palace_sqlite", "~/.mempalace/**/chroma.sqlite3", "the memory palace: every remembered fact", KEPT, "memory_service.py"),
+    TextStore("zoe_os_shadow_kernel", "$ZOE_OS_SHADOW_DIR (~/.zoe/os-shadow/kernel/zoe-os.db)",
+              "the Zoe OS shadow kernel's spine: an event and a receipt per shadowed write (the item, note or "
+              "time)", KEPT, "os_shadow.py (the kernel writes it; zoe-data only proposes)"),
     TextStore("chroma_collections", "chroma:mempalace_drawers, chroma:mempalace_audit", "the palace's collections (same store)", KEPT,
               "memory_service.py"),
     TextStore("router_shadow_log", "services/zoe-data/data/router_head_shadow.jsonl(.N)", "utterance text beside its hash",
