@@ -239,9 +239,13 @@ left household-shaped nor turned into a general policy engine. It takes the midd
 
 1. A "no" beats a "yes"; an unknown principal, attribute or scope gets the least access. (Today an unlabelled person defaults
    to a full adult, [code] `zoe_os/capability.py:30`; that is fixed with this.)
-2. A care link's organising actions never include forgetting, undoing or explaining someone's data. Acting on those for another
-   person is a separate, narrower permission, offered today only for a principal who needs a co-signer (H3), and the settings
-   loader refuses any file that gives it over a principal who decides for themselves.
+2. Organising and memory care are two separate powers of a care link, and neither is ever implied by the other. **Organising**
+   (reminders, alarms, lists, routines, calendar) never includes forgetting, undoing or explaining someone's data. **Memory
+   care** (owner decision 2026-11-16) lets a carer correct or remove what Zoe has learned about the person they care for, and
+   fix a fact in place so the person's later statements do not replace it: a small child's story should not become a fact,
+   and someone unwell may say things their carer has to put right. Memory care is a named action set on the link, never a
+   default of every link; it never opens private notes or a journal; every use is recorded with who did it and why; and it is
+   never model-proposable (C.5). The settings loader refuses a file that gives memory care over a principal with no care link.
 3. An item marked private shuts out every care link.
 4. At least one principal who decides for themselves and may grant always exists; the last one cannot be removed or narrowed.
 5. A grant never exceeds its parent, and withdrawing a parent withdraws its children.
@@ -758,11 +762,18 @@ Recommendation: **door locks, garage doors, the security alarm, and anything tha
 media and fans act on the request and keep working. Cost: one extra "yes" for the listed devices; benefit: a web page, a message or
 a misheard phrase can never unlock the door.
 
-**H3. What may a guardian do? DECIDED (owner, 2026-11-16).** A guardian is a carer, for a child **or an adult in care**: they
-can see and manage that person's reminders, alarms, lists, routines and calendar, unless an item is marked private. They do not
-read private notes or a journal. In the kernel this is the care link of A.7, not a parent-of-a-child rule. **Still open:**
-whether anyone may forget things on another person's behalf. The lab allows it for a child's guardian only, and A.7's rule 2
-keeps it impossible over an adult; say if a child's guardian should lose it too.
+**H3. What may a guardian do? DECIDED (owner, 2026-11-16).** A guardian is a carer, for a child **or an adult in care**.
+- **Organising:** they can see and manage that person's reminders, alarms, lists, routines and calendar, unless an item is marked
+  private. They do not read private notes or a journal.
+- **Memory care:** they can correct or remove what Zoe has remembered about that person, and fix certain facts in place. The
+  owner's reasons: a small child telling Zoe a story that is not true, and a person who is unwell saying things their carer needs
+  to put right. A fact a carer has fixed outranks what the person in care says later.
+- **An unrecognised voice** is treated as a guest and let through the child-safety floor: Zoe cannot tell it is a child, so it is
+  not refused (owner, same day).
+
+In the kernel both are the care link of A.7, not a parent-of-a-child rule. **Still to settle (proposed, not yet the owner's
+words):** memory care comes with a child's guardian link by default and is switched on explicitly for an adult in care; the
+person in care can see that a carer changed something unless the carer marks why it should not be shown.
 
 **H4. Should changes to the rule-keeper's own code need your approval, even when the reviews are clean?**
 Recommendation: **yes, a one-tap approval** for changes to the kernel's code, its "what it owns" table or its budgets; everything
