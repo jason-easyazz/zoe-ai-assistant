@@ -8,7 +8,9 @@ receipt beside it, in its OWN store. Read ``docs/knowledge/zoe-os-list-shadow.md
 
 State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no ``ZOE_`` name), else ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
 
-    people.json   {"people": [member ids]}   REQUIRED, written by the owner (``os_shadow.export_roster``); read at start
+    people.json   {"people": [member ids]}   REQUIRED, written by the owner (``os_shadow.export_roster``); read at start. Missing:
+                  the start is refused. EMPTY (the last member removed) or unreadable: the daemon starts, nobody is granted
+                  anything, and the recorded people can still be forgotten (``read_roster``)
     known-people.json  the roster plus every id the kernel still holds a record for: who it can still FORGET. Derived from the
                   kernel's own record at each start, and rewritten (atomic, mode kept) after a whole-person forget succeeds
     creds.json    {"socket": path, "creds": {"voice": hex, "brain": hex, "panel": hex}}   written here, 0600, on every start
@@ -175,11 +177,33 @@ class ShadowServer(KernelServer):
         people.pop(subject, None)
 
 
+def read_roster(state: Path) -> tuple[list, str]:
+    """The CURRENT roster and how it read: ``ok``, ``empty`` or ``unreadable``. Forget never depends on it: the kernel loads every
+    id its record names whatever this says, and only roster members are granted anything.
+
+    * MISSING people.json: an operator error (the owner never exported a roster): refuse to start;
+    * EMPTY (``{"people": []}``, the last member removed): a valid household state. Nobody can be proposed for or acted for; the
+      recorded people can still be forgotten;
+    * UNREADABLE (not JSON, wrong shape, a non-string id): treated as EMPTY for grants (nothing is granted on a roster nobody can
+      read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line).
+    The same rule as ``authority.read_roster`` (kept textually close; neither imports the other)."""
+    path = state / "people.json"
+    if not path.exists():
+        raise SystemExit("people.json is missing: export the household roster first (see README)")
+    try:
+        people = json.loads(path.read_text("utf-8"))["people"]
+    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+        people = None
+    if not isinstance(people, list) or not all(isinstance(p, str) and p for p in people):
+        print("zoe-os shadow kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
+              file=sys.stderr, flush=True)
+        return [], "unreadable"
+    return people, "ok" if people else "empty"
+
+
 def build(state: Path):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
-    people = json.loads((state / "people.json").read_text("utf-8"))["people"]
-    if not people or not all(isinstance(p, str) and p for p in people):
-        raise SystemExit("people.json has no members: the shadow kernel records nothing for a household it does not know")
+    people, roster_status = read_roster(state)
     known = remember_people(state, people)
     (state / "kernel").mkdir(mode=0o700, exist_ok=True)
     # Every id the kernel holds a record for stays a person it knows, so a member taken off people.json can still be forgotten
@@ -195,6 +219,7 @@ def build(state: Path):
     for person in people:
         k.grants.grant(person, "brain", acts=list(ACTS))       # the shadow records what already happened: see the module docstring
     srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people)
+    srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
