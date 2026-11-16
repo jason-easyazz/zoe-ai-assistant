@@ -239,7 +239,9 @@ def test_shadow_decide_never_plays_and_never_loads_a_bank(daemon, monkeypatch, c
 
 
 def _effects(daemon, monkeypatch, caplog, mode):
-    if mode == "no_module":
+    if mode == "off":
+        monkeypatch.setattr(daemon, "REFLEX_MODE", "off")
+    elif mode == "no_module":
         monkeypatch.setattr(daemon, "_reflex", None)
     elif mode == "raising":
         monkeypatch.setattr(REFLEX, "decide", lambda *a, **k: 1 / 0)
@@ -253,10 +255,10 @@ def _effects(daemon, monkeypatch, caplog, mode):
 
 def test_playback_posts_and_flags_identical_with_the_shadow_on_off_or_broken(daemon, monkeypatch, caplog):
     out = {}
-    for mode in ("on", "no_module", "raising"):
+    for mode in ("on", "off", "no_module", "raising"):
         with monkeypatch.context() as m:
             out[mode] = _effects(daemon, m, caplog, mode)
-    assert out["on"] == out["no_module"] == out["raising"]
+    assert out["on"] == out["off"] == out["no_module"] == out["raising"]
     assert out["on"][0] is True and len(out["on"][1]) == 3 and len(out["on"][3]) == 1
 
 
@@ -269,12 +271,27 @@ def test_no_text_or_id_reaches_the_new_fields(daemon, monkeypatch, caplog):
 def test_a_carried_claim_logs_an_unknown_verdict_and_never_counts_as_accepted(daemon, monkeypatch, caplog):
     """A claim carried in (scored on an earlier step) was not scored this turn: spk=-1 and spk_ms=-1, whatever its value, and the
     reflex decision treats the unknown verdict as silence. A claim scored this turn still logs its verdict and time."""
+    rescored = []                                    # counted HERE: the daemon swallows an exception raised in the scorer
+
     def never():
-        raise AssertionError("a carried claim must not be re-scored")
+        rescored.append(1)
+        return _claim(daemon, 0.40)
 
     for value in (0.40, 0.05):                                    # a claim that WOULD clear the bar, and one under it
         _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=never, carried=_claim(daemon, value))
+        assert rescored == [], "a carried claim must not be re-scored"
         assert (_f(line, "spk"), _f(line, "spk_ms")) == ("-1", "-1"), line
         assert _f(line, "skip") != "-" and _f(line, "skip") != "no_bank"      # never "every guard passed"
     _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))   # CONTROL: scored this turn
     assert (_f(line, "spk"), _f(line, "spk_ms"), _f(line, "skip")) == ("1", "190", "no_bank")
+
+
+@pytest.mark.parametrize("mode,polls", [("off", 0), ("shadow", 1), ("on", 1)])
+def test_the_close_polls_the_player_only_when_the_reflex_is_switched_on(daemon, monkeypatch, mode, polls):
+    """REFLEX_MODE off keeps the flag-off contract at the close: no lock, no player poll on the recording thread."""
+    calls = []
+    monkeypatch.setattr(daemon, "REFLEX_MODE", mode)
+    monkeypatch.setattr(daemon, "_active_playback", lambda: calls.append(1))
+    daemon._stamp_close(None, daemon._Endpointer(), "max_duration", [])
+    assert len(calls) == polls
+    assert daemon._turn_close.get("busy") is (None if mode == "off" else False)

@@ -4024,10 +4024,12 @@ def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason
     t = _fs_now() if t_close is None else t_close
     media, media_age = _media_at_close(t)  # a READ of the watcher's cached snapshot: no pactl at the close
     prev_t = _turn_close.get("t")
-    try:
-        busy = _active_playback() is not None  # a lock and a poll(): another player at the close
-    except Exception:  # noqa: BLE001
-        busy = None
+    busy = None  # reflex-only: with REFLEX_MODE off the close takes no lock and polls no player
+    if REFLEX_MODE != "off":
+        try:
+            busy = _active_playback() is not None  # a lock and a poll(): another player at the close
+        except Exception:  # noqa: BLE001
+            busy = None
     speech = getattr(endpointer, "_speech_chunks", None)
     _turn_close.update(committed=t_close is not None and stop_reason == "silence", busy=busy,
                        speech_ms=int(round(int(speech) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
