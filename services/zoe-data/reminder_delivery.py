@@ -232,7 +232,13 @@ async def _channel(ch: str, uid: str, gen: int, text: str, url: str, dedupe_id: 
         return "skipped:erased", 0
     try:
         if ch == "telegram":
-            outcome = await _send_telegram(tid, text)
+            delivery_tally.begin()
+            try:
+                outcome = await _send_telegram(tid, text)
+            except Exception:
+                delivery_tally.settle()   # a clean failure; a CANCEL leaves the send unsettled = possibly delivered
+                raise
+            delivery_tally.settle()
             sent = 1 if outcome == "sent" else 0
             if sent:
                 delivery_tally.note()   # (web push is counted per subscription inside send_push_to_user)

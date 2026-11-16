@@ -190,6 +190,7 @@ async def send_push_to_user(
             "keys": {"p256dh": row["keys_p256dh"], "auth": row["keys_auth"]},
         }
         payload = json.dumps(payload_data)
+        delivery_tally.begin()  # handed off: a cancel from here until it resolves counts as possibly delivered (at most once)
         try:
             await loop.run_in_executor(
                 None,
@@ -224,6 +225,7 @@ async def send_push_to_user(
                 dead_endpoints.append(row["endpoint"])
         except Exception as e:  # noqa: BLE001 - one subscription's unexpected error must not discard the sends already made
             logger.warning("Push failed for one subscription (%s); continuing", type(e).__name__)
+        delivery_tally.settle()  # reached only on success or a handled failure: a cancellation leaves the send unsettled
 
     # Step 3: fresh short-lived connection only if there's cleanup to do.
     # Scope by user_id too: uniqueness is (user_id, endpoint), so the same

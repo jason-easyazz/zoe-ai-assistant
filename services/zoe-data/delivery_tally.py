@@ -15,16 +15,20 @@ _current: "contextvars.ContextVar[Optional[Tally]]" = contextvars.ContextVar("de
 
 
 class Tally:
-    __slots__ = ("n",)
+    __slots__ = ("n", "inflight")
 
     def __init__(self) -> None:
-        self.n = 0
+        self.n = 0          # deliveries that succeeded
+        self.inflight = 0   # sends handed off whose outcome is not known yet
 
     def add(self) -> None:
         self.n += 1
 
     def __bool__(self) -> bool:
-        return self.n > 0
+        """Something got through, OR a send was handed off and has not resolved (a cancel arrived mid-send). UNCERTAIN COUNTS AS
+        DELIVERED: at most once, the same rule ``reminder_delivery`` applies to a transport that failed mid-send. An unprompted nudge
+        said twice is worse than one that might have been missed."""
+        return self.n > 0 or self.inflight > 0
 
 
 def start() -> "tuple[Tally, contextvars.Token]":
@@ -34,6 +38,21 @@ def start() -> "tuple[Tally, contextvars.Token]":
 
 def stop(token: "contextvars.Token") -> None:
     _current.reset(token)
+
+
+def begin() -> None:
+    """A send is being handed off (called right BEFORE it, e.g. to the push executor). Pair with ``settle()`` once its outcome is
+    known; a cancellation that arrives in between leaves it unsettled, which ``Tally.__bool__`` reads as uncertain = delivered."""
+    tally = _current.get()
+    if tally is not None:
+        tally.inflight += 1
+
+
+def settle() -> None:
+    """The handed-off send's outcome is now known (it succeeded and was ``note()``d, or it failed cleanly)."""
+    tally = _current.get()
+    if tally is not None and tally.inflight > 0:
+        tally.inflight -= 1
 
 
 def note() -> None:

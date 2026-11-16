@@ -1245,10 +1245,37 @@ async def test_a_cancel_during_the_second_subscription_keeps_the_claim_and_the_r
 
 
 @pytest.mark.asyncio
-async def test_a_cancel_before_anything_was_delivered_releases_the_claim(monkeypatch, claims):
+async def test_a_cancel_while_the_first_push_is_in_flight_keeps_the_claim_at_most_once(monkeypatch, claims):
+    """Handed to the executor, outcome unknown when the cancel arrives: UNCERTAIN COUNTS AS DELIVERED (at most once, as
+    ``reminder_delivery`` treats a transport that failed mid-send): the row and claim stay and the next tick does not repeat."""
     ph, nine, db, world = await _fire_then_cancel(monkeypatch, claims, block_on="a")
-    assert world.sent == []
-    assert db.pending == [] and claims.rows == {}                          # nothing got through: as before, retried next tick
+    assert world.sent == []                                                # nothing was confirmed ...
+    assert len(db.pending) == 1 and len(claims.rows) == 1                  # ... but the send was started: keep the mark
+    assert await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5)) == []
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_before_any_send_started_releases_the_claim(monkeypatch, claims):
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=0)
+    gate = asyncio.Event()
+
+    async def stuck_speech(**_k):                          # the first lane is still waiting: no send has been handed off yet
+        await gate.wait()
+
+    monkeypatch.setattr(engine, "_maybe_speak_notification", stuck_speech)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    task = asyncio.ensure_future(engine.fire_notification(
+        user_id=result.user_id, message=result.message, trigger_type=result.trigger_type, item_id=result.item_id,
+        context=result.context, retract_if_undelivered=True))
+    for _ in range(100):
+        if db.pending:                                     # the pending row is written, the lanes have not started
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert db.pending == [] and claims.rows == {}          # nothing started: retried on the next tick, as before
     assert len(await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))) == 1
 
 
@@ -1259,6 +1286,9 @@ async def test_the_tally_is_per_send_and_a_lane_outside_one_counts_nothing():
     delivery_tally.note()                                  # no tally open: a no-op
     t1, tok1 = delivery_tally.start()
     delivery_tally.note()
+    delivery_tally.begin()
+    assert t1                                                 # a send handed off and unresolved counts (at most once)
+    delivery_tally.settle()
     t2, tok2 = delivery_tally.start()                      # a nested / concurrent send has its OWN count
     assert t2.n == 0
     delivery_tally.stop(tok2)
