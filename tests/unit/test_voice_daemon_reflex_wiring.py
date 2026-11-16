@@ -140,7 +140,7 @@ def _talk(daemon, *, chunks=0, first=99.9, last=100.3):
 
 
 def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True, claim=0.40, claim_s=0.09,
-          before="join", wire=None, hour=12, wake=True, on_allowed=None, stamps=None):
+          before="join", wire=None, hour=12, wake=True, on_allowed=None, safety_out=None, stamps=None):
     """One streamed wake turn. Returns (ok, FIRST_SOUND line, reply writes, reflex players, reply-start clock, registered).
     ``mode="on"`` exercises the GATED player: it sets ``_REFLEX_ON_ALLOWED`` on this test module's daemon copy (production is
     False, pinned below) unless ``on_allowed`` says otherwise."""
@@ -216,6 +216,8 @@ def _turn(daemon, monkeypatch, caplog, *, mode, bank=None, hold=False, talk=True
             assert not ctl._thread.is_alive()
     (line,) = FS._msgs(caplog, "FIRST_SOUND")
     dec = FS._msgs(caplog, "REFLEX_DECISION")
+    if safety_out is not None:
+        safety_out.extend(FS._msgs(caplog, "REFLEX_SAFETY"))
     caplog.clear()
     return ok, line, writes, players, reply_first_at, registered, dec
 
@@ -235,7 +237,8 @@ def test_off_is_the_default_and_changes_nothing(daemon, monkeypatch, caplog, ban
     monkeypatch.delenv("REFLEX_MODE", raising=False)
     fresh = FS._load("zoe_voice_daemon_reflex_default_test")  # importlib loader; never reload the shared fixture
     assert fresh.REFLEX_MODE == "off"
-    for name in ("_reflex_begin", "_reflex_end", "_reflex_note_reply", "_reflex_note_voice"):
+    for name in ("_reflex_begin", "_reflex_end", "_reflex_note_reply", "_reflex_note_voice",
+                 "_reflex_note_safety", "_reflex_safety_line"):
         monkeypatch.setattr(fresh, name, lambda *a: pytest.fail("reflex work with default off"))
     monkeypatch.setattr(fresh._FirstSound, "shadow_reflex", lambda self: pytest.fail("shadow work with default off"))
     ok, line, writes, players, first, _, dec = _turn(fresh, monkeypatch, caplog, mode=fresh.REFLEX_MODE, bank=bank)
@@ -279,6 +282,47 @@ def test_the_blocked_on_mode_says_so_at_start(daemon, monkeypatch, caplog):
     assert any("REFLEX_MODE=on is BLOCKED" in r.getMessage() for r in caplog.records)
     assert daemon._reflex_effective_mode("on") == "shadow" and daemon._reflex_effective_mode("shadow") == "shadow"
     assert daemon._reflex_effective_mode("off") == "off" and daemon._reflex_effective_mode("loud") == "off"
+
+
+# ── the shadow's SAFETY COUNT (contract: shadow must COUNT crisis / medical / refusal turns it would have played on) ──────
+
+def _wire_with_safety(value):
+    items = list(FS._wire())
+    done = json.loads(items[-1][1])
+    if value is not None:
+        done["safety"] = value
+    items[-1] = (items[-1][0], json.dumps(done).encode())
+    return items
+
+
+@pytest.mark.parametrize("value,cls", [("distress", "distress"), ("medical", "medical"), ("refusal", "refusal"),
+                                       ("child_floor", "child_floor"), ("none", "none"),
+                                       (None, "unknown"), ("Help me please", "unknown"), (7, "unknown")])
+def test_shadow_counts_a_would_play_turn_by_the_servers_safety_class(daemon, monkeypatch, caplog, bank, value, cls):
+    """A would-play shadow turn logs ONE REFLEX_SAFETY line carrying the done frame's class (closed enum; anything else,
+    including free text, is ``unknown``). Today's server sends no ``safety`` key, so live lines say ``unknown``."""
+    out = []
+    _, line, _, players, _, _, dec = _turn(daemon, monkeypatch, caplog, mode="shadow", bank=bank,
+                                           wire=_wire_with_safety(value), safety_out=out)
+    assert players == [] and "kind=heard" in dec[0]
+    assert out == [f"REFLEX_SAFETY mode=shadow would_play=1 class={cls}"], out
+    assert "Help" not in " ".join(out)
+
+
+def test_the_safety_count_also_runs_when_on_is_blocked_and_never_plays(daemon, monkeypatch, caplog, bank):
+    out = []
+    _, _, _, players, _, _, _ = _turn(daemon, monkeypatch, caplog, mode="on", bank=bank, on_allowed=False,
+                                      wire=_wire_with_safety("distress"), safety_out=out)
+    assert players == [] and out == ["REFLEX_SAFETY mode=shadow would_play=1 class=distress"]
+
+
+def test_a_suppressed_turn_is_counted_with_would_play_0_and_off_logs_nothing(daemon, monkeypatch, caplog, bank):
+    out = []
+    _turn(daemon, monkeypatch, caplog, mode="shadow", bank=bank, hour=23, wire=_wire_with_safety("medical"), safety_out=out)
+    assert out == ["REFLEX_SAFETY mode=shadow would_play=0 class=medical"]
+    out2 = []
+    _turn(daemon, monkeypatch, caplog, mode="off", bank=bank, wire=_wire_with_safety("medical"), safety_out=out2)
+    assert out2 == []                                              # off: nothing reflex-related runs
 
 
 def test_an_unknown_mode_value_is_off(daemon):
@@ -537,6 +581,7 @@ def test_turn_end_never_waits_for_a_slow_reflex(daemon, monkeypatch, caplog, ban
             def stream(pa, wav, fs, **kw):
                 ctl = daemon._ReflexTurn(fs, "shadow", bank)
                 fs.reflex = ctl
+                daemon._reflex_note_safety(fs, "medical")
                 controllers.append(ctl)
                 ctl.start()
                 assert entered.wait(1)
@@ -559,6 +604,8 @@ def test_turn_end_never_waits_for_a_slow_reflex(daemon, monkeypatch, caplog, ban
                     assert ctl._thread.daemon and ctl._over.is_set() and ctl._thread.is_alive()
                     (line,) = FS._msgs(caplog, "FIRST_SOUND")
                     assert "reflex_pending=1" in line and _f(line, "reflex_cut") == "-1"
+                    assert FS._msgs(caplog, "REFLEX_SAFETY") == [
+                        "REFLEX_SAFETY mode=shadow would_play=pending class=medical"]
                     assert elapsed >= 0.2 if join_back else elapsed < 0.05
                     release.set()
                     ctl._thread.join(timeout=1)   # cleanup is outside the measured turn
@@ -566,6 +613,8 @@ def test_turn_end_never_waits_for_a_slow_reflex(daemon, monkeypatch, caplog, ban
                     assert len(FS._msgs(caplog, "FIRST_SOUND")) == 1
                     (decision,) = FS._msgs(caplog, "REFLEX_DECISION")
                     assert "skip=late" in decision
+                    assert FS._msgs(caplog, "REFLEX_SAFETY") == [
+                        "REFLEX_SAFETY mode=shadow would_play=pending class=medical"]  # no second line after settling
             finally:
                 release.set()
                 for ctl in controllers:
