@@ -783,6 +783,7 @@ def _panel_files(daemon, monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(shadow))
     monkeypatch.setattr(daemon, "_PROFILE_CACHE_PATH", str(voice))
     monkeypatch.setattr(daemon, "_applied_roster", {})
+    monkeypatch.setattr(daemon, "_SHADOW_FORGOTTEN", set(), raising=False)
     face.write_text(json.dumps({"profiles": [{"user_id": "ann", "embedding_base64": "AA=="}, {"user_id": "bob", "embedding_base64": "BB=="}]}))
     shadow.write_text("".join(json.dumps({"boot": "b", "seq": i, "user_id": u, "score": 0.5}) + "\n"
                               for i, u in enumerate(["ann", "bob", None, "ann"])))
@@ -839,3 +840,30 @@ def test_the_voice_forget_drops_the_members_shadow_rows_and_keeps_a_torn_line_on
     assert '"user_id": "ann"' not in text and '"seq": 10' not in text and '"seq": 11' not in text
     assert '"seq": 9' in text and '"annabel"' in text and '"bob"' in text
     assert oct(os.stat(shadow).st_mode & 0o777) == "0o640"
+
+
+def test_a_shadow_append_scored_before_a_voice_forget_and_landing_after_it_is_dropped(daemon, monkeypatch, tmp_path):
+    """A scoring thread matched ``ann`` and is blocked before its append; the panel forgets ann's voice (purge + prune); the thread
+    resumes: its row must not land. An append for someone else still does."""
+    face, shadow = _panel_files(daemon, monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon, "_SHADOW_FORGOTTEN", set())
+    monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: None)
+    gate, entered = threading.Event(), threading.Event()
+    real_makedirs = os.makedirs
+
+    def blocking_makedirs(path, *a, **k):                    # the append's first step, before it takes the log's lock
+        if threading.current_thread().name == "scorer":
+            entered.set()
+            gate.wait(5)
+        return real_makedirs(path, *a, **k)
+    monkeypatch.setattr(daemon.os, "makedirs", blocking_makedirs)
+    results = {}
+    t = threading.Thread(target=lambda: results.update(ann=daemon._record_speaker_shadow(("ann", 0.91))), name="scorer")
+    t.start()
+    assert entered.wait(5)
+    assert daemon._handle_server_command({"command": {"kind": "voice_profile_forget", "user_id": "ann"}}) is True
+    gate.set()
+    t.join(5)
+    assert results == {"ann": False}, "the late row was dropped, not logged"
+    assert '"user_id": "ann"' not in shadow.read_text()
+    assert daemon._record_speaker_shadow(("bob", 0.9)) is True and '"bob"' in shadow.read_text()

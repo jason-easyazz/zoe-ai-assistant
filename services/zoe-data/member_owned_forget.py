@@ -213,6 +213,25 @@ async def _committed(db):
     await db.commit()
 
 
+async def _await_inflight_work(user_id: str) -> None:
+    """THE CLASS RULE, part (i): before anything is erased, wait (at most ``INFLIGHT_WAIT_S``, then FAIL closed so the delete is
+    retried) for the member's in-flight work this process can enumerate: chat turns (``erase_watermark.inflight_turns``) and panel
+    announcement claims (``voice_announce.inflight_claims``). Reminder fires are waited for in ``_await_inflight_fires``. Part (ii),
+    the unconditional half, is in every late writer: it re-checks the member's erase mark against its own start right before and
+    right after its write (``erase_watermark.turn_write_refused``; the claim's post-check in ``claim_announcements``)."""
+    import asyncio
+    import time
+
+    import erase_watermark
+    import voice_announce
+
+    deadline = time.monotonic() + INFLIGHT_WAIT_S
+    while erase_watermark.inflight_turns(user_id) or voice_announce.inflight_claims(user_id):
+        if time.monotonic() > deadline:
+            raise RuntimeError("member_owned_forget: a turn or an announcement claim of the member is still in flight")
+        await asyncio.sleep(_POLL_S)
+
+
 async def _consume_scheduled_sends(user_id: str) -> int:
     """The member's scheduled reminder sends are CONSUMED (``fired = 1``: the delivery claim, ``reminders._claim_scheduled_for_fire``,
     matches only ``fired = 0``) on their OWN connection and COMMITTED before the erase transaction opens, so a fire running now sees it
@@ -533,6 +552,7 @@ async def forget_user(user_id: str) -> int:
     if not uid:
         return 0
     try:
+        await _await_inflight_work(uid)                  # the member's turns and announcement claims in flight (bounded)
         consumed = await _consume_scheduled_sends(uid)   # its OWN connection, committed before the erase opens: a fire sees it at once
         async with _db() as db:
             r = _Run(db)

@@ -864,16 +864,25 @@ async def _persist_ag_ui_run(session_id: str, run_id: str, events: list) -> None
     """Best-effort persistence of the wire-format event list for debugging / future resume."""
     if not events:
         return
+    import erase_watermark as _ew
+
+    if await _ew.turn_write_refused(session_id, "ag_ui_run"):   # the late-write rule (member delete): before and after the write
+        return
     try:
         # get_db_ctx, not `async for db in get_db()`: exiting the generator
         # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+        rid = uuid.uuid4().hex[:16]
         async with get_db_ctx() as db:
             await db.execute(
                 """INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events)
                    VALUES (?, ?, ?, ?)""",
-                (uuid.uuid4().hex[:16], session_id, run_id, json.dumps(events)),
+                (rid, session_id, run_id, json.dumps(events)),
             )
             await db.commit()
+        if await _ew.turn_write_refused(session_id, "ag_ui_run"):
+            async with get_db_ctx() as db:
+                await db.execute("DELETE FROM chat_ag_ui_runs WHERE id = ?", (rid,))
+                await db.commit()
     except Exception as e:
         logger.warning("chat_ag_ui_runs persist failed (non-fatal): %s", e)
 
@@ -1236,16 +1245,27 @@ async def _save_chat_message(
     # at the yield when broken out of, so the connection isn't returned to the
     # pool until GC — under fire-and-forget concurrency that produced the
     # asyncpg "another operation is in progress" errors that dropped saves.
+    # Member delete (erase_watermark's late-write rule): a turn that began before its member was erased writes nothing of them after
+    # it - checked right before the insert and again right after it (the row is removed when the second check refuses).
+    import erase_watermark as _ew
+
+    mid = message_id or uuid.uuid4().hex
+    if await _ew.turn_write_refused(session_id, "chat_message", user_id or None):
+        return True                                  # nothing to recover: the member is gone
     try:
         from db_pool import get_db_ctx
         async with get_db_ctx() as db:
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content, metadata) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                ((message_id or uuid.uuid4().hex), session_id, role, clean_content, metadata),
+                (mid, session_id, role, clean_content, metadata),
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
+        if await _ew.turn_write_refused(session_id, "chat_message", user_id or None):
+            async with get_db_ctx() as db:
+                await db.execute("DELETE FROM chat_messages WHERE id = ?", (mid,))
+                await db.commit()
         return True
     except Exception as _sme:
         # Warning, not debug: a dropped save means the reply the user saw is
@@ -1439,6 +1459,20 @@ async def _resolve_approval(user_id: str, approval_id: str) -> dict | None:
 
 
 async def _record_run_state(run_id: str, session_id: str, user_id: str, mode: str, status: str, request_text: str, response_text: str | None = None, metadata: dict | None = None):
+    # Member delete (erase_watermark's late-write rule): a turn that began before the member was erased neither writes its run state
+    # after it nor leaves it behind (checked before the upsert and again after it, which removes the row).
+    import erase_watermark as _ew
+
+    if await _ew.turn_write_refused(session_id, "run_state", user_id or None):
+        return
+    await _upsert_run_state(run_id, session_id, user_id, mode, status, request_text, response_text, metadata)
+    if await _ew.turn_write_refused(session_id, "run_state", user_id or None):
+        async with get_db_ctx() as db:
+            await db.execute("DELETE FROM openclaw_run_state WHERE id = ?", (run_id,))
+            await db.commit()
+
+
+async def _upsert_run_state(run_id, session_id, user_id, mode, status, request_text, response_text, metadata):
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
     async with get_db_ctx() as db:
@@ -2330,10 +2364,16 @@ async def locked_chat_stream(
             )
         )
         return
+    # Member delete: the turn is IN FLIGHT from here to its last write (``erase_watermark.turn_open``): the delete waits for it
+    # (bounded, then fails closed and is retried), and every write the turn makes re-checks the member's erase mark against this start.
+    import erase_watermark as _ew
+
+    _ew.turn_open(session_id, str((user or {}).get("user_id") or ""))
     try:
         async for chunk in chat_stream_generator(message, session_id, user, **kwargs):
             yield chunk
     finally:
+        _ew.turn_close(session_id)
         lock.release()
 
 

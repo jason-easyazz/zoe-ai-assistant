@@ -390,3 +390,42 @@ def delivery_began() -> Optional[datetime]:
     """When the enclosing ``delivery`` began, or None outside one. A row a delivery QUEUES is stamped with it (not with the insert
     time), so a delete that lands at any moment after the delivery began refuses the row where it is consumed."""
     return instant(_delivery.get())
+
+
+# -- in-flight member turns: the delete waits for them, and each late write re-checks the mark against the turn's start -------------
+#: session_id -> (member, when the turn began). One turn per session at a time (``routers/chat.locked_chat_stream`` holds the session lock).
+_TURNS: dict = {}
+
+
+def turn_open(session_id: str, user_id: str) -> datetime:
+    """A member's chat turn began on ``session_id`` (``routers/chat.locked_chat_stream``). Returns the start instant."""
+    began = _now()
+    if session_id:
+        _TURNS[str(session_id)] = (str(user_id or ""), began)
+    return began
+
+
+def turn_close(session_id: str) -> None:
+    _TURNS.pop(str(session_id or ""), None)
+
+
+def inflight_turns(user_id: str) -> int:
+    """How many chat turns of ``user_id`` are running in this process now (the member delete waits for them)."""
+    uid = str(user_id or "")
+    return sum(1 for member, _ in list(_TURNS.values()) if member == uid)
+
+
+async def turn_write_refused(session_id: str, lane: str, user_id: Optional[str] = None) -> bool:
+    """THE LATE-WRITE RULE for a turn's writes: True = drop (or undo) this write, because the turn's member (``user_id`` overrides) was
+    erased at or after the turn BEGAN. Asked twice by every writer: right before its write and right after it (undoing the write when
+    True) - a delete that lands between the two finds the row with its erase or is caught by the second check, since the mark is
+    recorded before anything is erased. No turn in flight on the session: False (nothing to compare with). An unreadable mark: False
+    (a turn's own save is never dropped on a guess; the erase itself fails closed on an unreadable store)."""
+    turn = _TURNS.get(str(session_id or ""))
+    if turn is None:
+        return False
+    member, began = turn
+    try:
+        return await send_refused(user_id or member, began, lane)
+    except Unavailable:
+        return False

@@ -301,9 +301,35 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
         )
     rows = await cursor.fetchall()
 
-    # 3) Atomic per-row claim — the poll-overlap guard.
-    claimed: list[dict] = []
+    # 3) Atomic per-row claim — the poll-overlap guard. The members whose rows are being claimed are IN FLIGHT until the claimed list
+    # is returned (``inflight_claims``: a member delete waits for them), and every claimed line is re-checked AFTER the claim commits.
+    members = sorted({str(r["user_id"] or "") for r in rows})
+    for m in members:
+        _IN_CLAIM[m] = _IN_CLAIM.get(m, 0) + 1
+    try:
+        return await _claim_rows(db, rows, panel_id=panel_id, now=now, now_s=now_s)
+    finally:
+        for m in members:
+            left = _IN_CLAIM.get(m, 0) - 1
+            if left > 0:
+                _IN_CLAIM[m] = left
+            else:
+                _IN_CLAIM.pop(m, None)
+
+
+#: member -> claims of their rows in progress in this process (``claim_announcements``); the member delete waits for none to be left
+_IN_CLAIM: dict = {}
+
+
+def inflight_claims(user_id: str) -> int:
+    return _IN_CLAIM.get(str(user_id or ""), 0)
+
+
+async def _claim_rows(db, rows, *, panel_id: str, now, now_s: str) -> list[dict]:
     import erase_watermark
+
+    claimed: list[dict] = []
+    owners: list[tuple] = []
     for row in rows:
         # The last step before a spoken line leaves for the panel: a line queued for a member who was deleted at or after it was queued
         # is never spoken (marked expired), whoever queued it and however it raced the delete. An unreadable mark: not now (it stays
@@ -341,7 +367,20 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
             if getattr(cur, "rowcount", 0) != 1:
                 continue  # another poller won this row
         claimed.append(_claimed_item(row, now))
+        owners.append((row["user_id"], row["created_at"], row["trigger_type"] or ""))
     await db.commit()
+    # AFTER the claim committed (the late-write rule): a member deleted since the line was queued - also one whose delete landed
+    # between the check above and this point - is handed nothing; an unreadable mark hands nothing either (never spoken on a guess).
+    kept = []
+    for item, (uid, made, trigger) in zip(claimed, owners):
+        if trigger not in COMMAND_TRIGGERS:
+            try:
+                if await erase_watermark.send_refused(uid, made, "voice_announcement_claimed"):
+                    continue
+            except erase_watermark.Unavailable:
+                continue
+        kept.append(item)
+    claimed = kept
     if claimed:
         log.info(
             "voice_announce: claimed %d announcement(s) for panel=%s",

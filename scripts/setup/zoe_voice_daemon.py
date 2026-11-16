@@ -3336,6 +3336,10 @@ def _record_speaker_shadow(claim: tuple[str, float] | None, secondary: dict | No
                     row["secondary"] = secondary
                 if role:
                     row["role"] = role
+            # Member delete: a turn scored BEFORE a purge can reach this append AFTER it. Under the same lock the prune swaps the file
+            # under, a row naming a member who was just forgotten (voice_profile_forget) or is off the applied roster is dropped.
+            if _shadow_row_gone(row):
+                return False
             # Heal a torn tail before appending. If a previous write was cut
             # short (power loss, SIGKILL) the file can end without a newline;
             # appending straight onto it would fuse the partial record and the
@@ -5284,6 +5288,8 @@ def _purge_speaker_profile(user_id: str) -> bool:
         _profile_cache["guests"] = [g for g in (_profile_cache.get("guests") or []) if str(g.get("guest_id") or "") != uid]
     _persist_profile_cache()
     log.info("voice profile purge: removed %d cached profile(s)", removed)
+    with _shadow_log_lock:                      # FIRST: an append still in flight for this member is dropped from now on
+        _SHADOW_FORGOTTEN.add(uid)
     _prune_shadow_log(gone=uid)                 # the per-turn predictions that name the member go too
     try:
         _sync_speaker_profiles(force=True)      # the authoritative list (a failed sync keeps what we just trimmed)
@@ -5419,6 +5425,15 @@ def _prune_shadow_log(*, gone: str = "", keep=None) -> "int | None":
 
 
 _applied_roster: dict = {}
+#: ids whose voice this panel was told to forget (voice_profile_forget) since it started; a member the roster lists again is cleared
+_SHADOW_FORGOTTEN: set = set()
+
+
+def _shadow_row_gone(row: dict) -> bool:
+    """A shadow-log row about to be appended names a member who is gone: just forgotten here, or off the voice roster this panel last
+    applied (named guests count as on it). Called under ``_shadow_log_lock``."""
+    keep = _applied_roster.get("keep")
+    return any(i in _SHADOW_FORGOTTEN or (keep is not None and i not in keep) for i in _row_ids(row))
 
 
 def _apply_roster(roster, guests=None) -> None:
@@ -5438,6 +5453,9 @@ def _apply_roster(roster, guests=None) -> None:
         if isinstance(voice, list):
             keep = {str(x) for x in voice} | {str(g.get("guest_id")) for g in (guests or []) if isinstance(g, dict) and g.get("guest_id")}
             key = tuple(sorted(keep))
+            with _shadow_log_lock:                      # appends from now on are checked against THIS roster (``_shadow_row_gone``)
+                _applied_roster["keep"] = keep
+                _SHADOW_FORGOTTEN.difference_update(keep)
             if _applied_roster.get("shadow") != key and _prune_shadow_log(keep=keep) is not None:
                 _applied_roster["shadow"] = key
     except Exception as exc:  # noqa: BLE001
