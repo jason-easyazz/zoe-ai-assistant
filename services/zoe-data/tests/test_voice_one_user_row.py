@@ -250,6 +250,54 @@ def test_when_both_inserts_fail_there_is_no_row_no_id_and_the_turns_writes_are_u
     assert memory_service.UNBOUND["no_source_turn"] == before + 2
 
 
+SNAPPED = "Turn off the garden tap light"
+
+
+@pytest.mark.parametrize("arrival_lands", [True, False], ids=["arrival_committed", "arrival_failed"])
+def test_an_stt_snap_that_rewrites_the_words_keeps_the_turns_one_row_and_one_count(world, monkeypatch, arrival_lands):
+    """Review P2 (PR #2658, thread ...uZ_S): an STT snap (acted on, or a confirmed "Did you mean ...?") rewrites the turn's words
+    after the arrival row was minted; the reply's save then carries the REWRITTEN words. It must still name the arrival row: one
+    user row (the words as said, under the minted id), counted once - not a second row for the snapped command, counted again (a
+    later "forget that" would bind to the synthetic command, not the spoken turn). Fails on 785f91c35 (the text-matching guard
+    dropped the arrival and minted a new, counted row)."""
+    _svc, chat = world
+    from routers import voice_tts as vt
+
+    async def scenario():
+        async def before(n):
+            if n == 1 and not arrival_lands:
+                raise RuntimeError("transient insert failure")
+
+        real_save = vt._schedule_voice_chat_save
+
+        async def save_after_snap(sid, _text, reply, uid, *a, **k):
+            rewritten = getattr(vt, "_turn_words_rewritten", None)   # the snap site's call (absent on 785f91c35)
+            if rewritten is not None:
+                rewritten(SNAPPED)
+            return await real_save(sid, SNAPPED, reply, uid, *a, **k)
+        monkeypatch.setattr(vt, "_schedule_voice_chat_save", save_after_snap)
+        arrival, arrival_task, spawned, noted = await _turn(chat, monkeypatch, before)
+        await asyncio.gather(arrival_task, *spawned, return_exceptions=True)
+        return arrival, noted
+
+    arrival, noted = run(scenario())
+    assert [c for _m, c in _rows(chat)] == [WORDS, REPLY], _rows(chat)    # one user row, the words as said; no snapped-command row
+    assert _users(chat) == [arrival.mid]
+    assert noted == [WORDS]                                               # counted once
+    turn = turn_forget.previous_turn(UID)
+    assert turn is not None and turn.mids == (arrival.mid,)               # "forget that" binds to the spoken turn
+
+
+def test_both_stt_snap_rewrites_in_voice_command_keep_the_turn_identity():
+    """Each place ``voice_command`` rewrites ``text`` to a snapped command also tells the arrival row (``_turn_words_rewritten``)."""
+    src = VOICE_TTS.read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.AsyncFunctionDef) and n.name == "voice_command")
+    body = ast.unparse(fn)
+    for rewrite in ("text = str(pending['stt_snap_text'])", "text = _snap.text"):
+        at = body.index(rewrite)
+        assert "_turn_words_rewritten(text)" in body[at:at + 200], f"{rewrite!r} does not keep the turn identity"
+
+
 # ── structural: a voice turn's user row is written ONLY under the turn's minted id ─────────────────────────────────────────────
 
 def _save_aliases(tree) -> set:

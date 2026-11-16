@@ -3407,9 +3407,12 @@ class _ArrivalRow:
     through ``write`` under that id (``chat_messages.id`` is the primary key and the insert is ``ON CONFLICT DO NOTHING``), so an
     arrival insert that commits after the reply's recovery save gave up on it is a no-op instead of a second row. The row's
     content (session, words, user, speaker verdict) is fixed here too, so it is the same whichever insert wins. The turn is
-    COUNTED (``count_turn``: provenance numbering + the "forget that" turn note) by whichever writer reaches the save first."""
+    COUNTED (``count_turn``: provenance numbering + the "forget that" turn note) by whichever writer reaches the save first.
 
-    __slots__ = ("session_id", "text", "saved", "settled", "mid", "user_id", "speaker_verified", "counted")
+    The turn KEEPS this identity when its words are rewritten mid-turn (an STT snap acted on, or a confirmed "Did you mean ...?"):
+    ``also_said`` records the rewritten words, so the reply's save still names this row instead of minting a second one."""
+
+    __slots__ = ("session_id", "text", "saved", "settled", "mid", "user_id", "speaker_verified", "counted", "aliases")
 
     def __init__(self, session_id: str, text: str, user_id: Optional[str] = None,
                  speaker_verified: Optional[bool] = None) -> None:
@@ -3418,6 +3421,16 @@ class _ArrivalRow:
         self.mid = uuid.uuid4().hex                   # the turn's ONE user-row id (in-memory mint, no I/O)
         self.user_id, self.speaker_verified = user_id, speaker_verified
         self.counted = False
+        self.aliases: set = set()                     # the words this turn was rewritten to (``also_said``)
+
+    def also_said(self, text: str) -> None:
+        """The turn's words were rewritten to ``text`` (the row keeps the words as said; the identity and the count stay)."""
+        if text and text != self.text:
+            self.aliases.add(text)
+
+    def names(self, text: str) -> bool:
+        """True when ``text`` is this turn's words, as said or as rewritten mid-turn."""
+        return text == self.text or text in self.aliases
 
     async def write(self, save, user_id: Optional[str] = None) -> bool:
         """Insert the turn's user row under its minted id through ``save`` (``routers.chat._save_chat_message``). True when the row
@@ -3438,6 +3451,13 @@ class _ArrivalRow:
 #: plain calls inside the same task; ``voice_command`` resets it at the start of every turn.
 _USER_TURN_SAVED: "contextvars.ContextVar[Optional[_ArrivalRow]]" = contextvars.ContextVar(
     "voice_user_turn_saved", default=None)
+def _turn_words_rewritten(text: str) -> None:
+    """This turn's words were rewritten (STT snap): the arrival row keeps naming the turn (``_ArrivalRow.also_said``)."""
+    arrival = _USER_TURN_SAVED.get()
+    if arrival is not None:
+        arrival.also_said(text)
+
+
 #: how long the reply's save waits for the arrival insert to settle before it writes the user row itself (never lose a row).
 _ARRIVAL_SETTLE_TIMEOUT_S = 10.0
 
@@ -3479,8 +3499,8 @@ async def _schedule_voice_chat_save(
         return
     arrival = _USER_TURN_SAVED.get()
     # An EMPTY user_text is intentional (the streaming finalizer: the user turn was saved pre-stream), so it names the turn by
-    # session alone; a non-empty one must also match the arrival's text.
-    if arrival is None or arrival.session_id != session_id or (user_text and arrival.text != user_text):
+    # session alone; a non-empty one must also be the arrival's words, as said or as an STT snap rewrote them (``names``).
+    if arrival is None or arrival.session_id != session_id or (user_text and not arrival.names(user_text)):
         arrival = None
     user_text = user_text or (arrival.text if arrival is not None else "")   # the row to recover when the arrival insert failed
     # ZOE_VOICE_SESSION_BRIDGE (default OFF): hold a CONFIRMED speaker's exchange in memory for the bridge a session rollover
@@ -4319,6 +4339,7 @@ async def voice_command(
                 del _PENDING_CONFIRMATIONS[panel_id]
                 text = str(pending["stt_snap_text"])
                 _spacer.text = text
+                _turn_words_rewritten(text)   # still this spoken turn: one user row, counted once
                 try:
                     import stt_snap as _stt_snap_yes
 
@@ -4510,6 +4531,7 @@ async def voice_command(
                     _stt_snap.log_line(_snap, "acted", guest=_snap_guest)
                     text = _snap.text
                     _spacer.text = text
+                    _turn_words_rewritten(text)   # still this spoken turn: one user row, counted once
                     _router_decision = await _stt_snap.route_for(text)
                     _stt_snap.note_struggle(_snap, "acted", turn_text=text)
     except Exception as _snap_exc:
