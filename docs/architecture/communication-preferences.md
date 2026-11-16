@@ -225,6 +225,10 @@ For-The-Household: <one plain sentence, or "nothing visible">
 For-Children: <one plain sentence, only if it affects them>
 ```
 
+Built in P1 (2026-11-16), read by the owner feed only and documented with examples in
+[change-notices.md](../knowledge/change-notices.md#pr-body-trailers-it-reads): `Numbers: <before -> after; ...>`
+(layer 2: shown at `technical` detail only), `Owner-Step: <one sentence>` and `If-No-Answer: <one sentence>`.
+
 - `Zoe-Notice` is the category for non-owners, chosen by the author, never inferred from the diff or the commit type.
   Missing, `none`, or contradicted by `For-The-Household: nothing visible` = owner only (fail closed).
 
