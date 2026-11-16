@@ -179,6 +179,7 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
         trigger_type=trigger_type,
         item_id=item_id,
         context=ctx,
+        created_at=erase_watermark.delivery_began(),   # when the delivery began: a delete since then refuses the row at its claim
     )
 
     # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
@@ -190,7 +191,11 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
     )
     # a pending row made just before a member delete removed the member's rows is the delete's; one made after it is withdrawn here
     async def withdrawn(lane: str) -> bool:
-        if not await refused(lane):
+        try:
+            gone = await refused(lane)
+        except erase_watermark.Unavailable:
+            gone = True      # the mark cannot be read: withdraw the row rather than leave possibly-erased content claimable (fail closed)
+        if not gone:
             return False
         async with _get_compat_db() as db:
             await db.execute("DELETE FROM proactive_pending WHERE id = ?", (pid,))

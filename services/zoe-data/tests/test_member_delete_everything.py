@@ -14,6 +14,7 @@ import json
 
 import aiosqlite
 import pytest
+from datetime import datetime, timezone
 
 import member_owned_forget as mof
 import memory_service
@@ -1367,3 +1368,73 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
     left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
     assert left == {"pre-b", "pre-old", "pre-old-b", "pre-fresh"}, left
     assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old", "l-pre-old-b", "l-pre-fresh"}
+
+
+def _stalled_fire_across_a_delete(env, store, monkeypatch, push_check):
+    """A notification passes its early erase check, stalls making its pending row, the member delete completes meanwhile, then the
+    post-insert check answers ``push_check`` (a callable for the "push" lane). Returns the pending rows left for A."""
+    from proactive import engine
+    import erase_watermark
+
+    svc, _col = env
+    real_pending, gate = engine.create_pending, {}
+
+    async def held_pending(**kw):
+        gate["held"].set()
+        await gate["release"].wait()
+        return await real_pending(**kw)
+    monkeypatch.setattr(engine, "create_pending", held_pending)
+    monkeypatch.setattr("proactive.session_utils._get_compat_db", lambda: _ctx(store))
+    real_refused = erase_watermark.send_refused
+
+    async def refused(uid, since, lane):
+        if lane == "push" and gate.get("deleted"):
+            return await push_check()
+        return await real_refused(uid, since, lane)
+    monkeypatch.setattr(erase_watermark, "send_refused", refused)
+
+    async def go():
+        gate["held"], gate["release"] = asyncio.Event(), asyncio.Event()
+        fire = asyncio.ensure_future(engine.fire_notification(A, "take the bins out", trigger_type="reminder"))
+        await asyncio.wait_for(gate["held"].wait(), 10)
+        gate["delete_started"] = datetime.now(timezone.utc)
+        await asyncio.wait_for(svc.delete_user(A, actor="test", reason="synthetic member delete"), 10)
+        gate["deleted"] = True
+        await asyncio.sleep(1.2)   # past CURRENT_TIMESTAMP's one-second grain: an insert-time stamp is then clearly after the mark
+        gate["release"].set()
+        await asyncio.wait_for(fire, 10)
+
+    asyncio.run(go())
+    return _q(store, "SELECT id, created_at FROM proactive_pending WHERE user_id = ?", (A,)), gate["delete_started"]
+
+
+def test_an_unreadable_mark_after_a_stalled_pending_insert_withdraws_the_row(env, store, monkeypatch, push_lane):
+    """#2598 review P1: the post-insert erase check cannot be read (``Unavailable``). The row made across the delete must be withdrawn
+    (fail closed) and nothing sent - it used to be left behind, claimable later. Negative control: the old ``withdrawn`` let the
+    exception escape with the row in place."""
+    import erase_watermark
+
+    async def unreadable():
+        raise erase_watermark.Unavailable("mark unreadable")
+    left, _started = _stalled_fire_across_a_delete(env, store, monkeypatch, unreadable)
+    assert left == [], "the pending row made across the delete is withdrawn when the mark cannot be read"
+    assert push_lane.sent == [], "nothing reached the deleted member"
+
+
+def test_a_row_made_across_the_delete_carries_the_delivery_start_and_its_claim_refuses_it(env, store, monkeypatch, push_lane):
+    """#2598 review P1, second half: even if the post-insert check is missed (here: it answers 'not erased'), the row is stamped with
+    when the DELIVERY began, not the insert time, so the claim check (``_erased_member``) sees it was made before the delete and
+    refuses to seed a session from it. Negative control: stamped with the insert time it would be after the mark, and claimable."""
+    from proactive import session_utils
+
+    async def missed():
+        return False
+    left, delete_started = _stalled_fire_across_a_delete(env, store, monkeypatch, missed)
+    assert len(left) == 1, "the missed check leaves the row (the case the stamp exists for)"
+    # The stamp itself, read UNAMBIGUOUSLY: a naive value is taken at its LATEST reading (UTC here), so only a stamp that really is
+    # the delivery start passes. (The claim below is refused either way in this SQLite store, because erase_watermark.instant reads a
+    # naive time at its EARLIEST reading; Postgres writes an offset, so production depends on the stamp, which is what this pins.)
+    made = datetime.fromisoformat(str(left[0][1]).replace("Z", "+00:00"))
+    made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
+    assert made <= delete_started, "the row is stamped with when the delivery began, before the delete - not with the insert time"
+    assert asyncio.run(session_utils.claim_pending(left[0][0])) is None, "the claim refuses a row whose delivery began before the delete"
