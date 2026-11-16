@@ -197,11 +197,16 @@ No child AGENTS.md files yet.
 
 ### cross_review.sh (maintenance)
 
-`scripts/maintenance/cross_review.sh <PR#> "<contract>"` is the DISPATCHER: it runs
-`cross_review_polly.sh` (the polly lifecycle below), and when polly cannot produce a
-provably cross-vendor report (non-zero exit, empty report, no non-Anthropic
-`REVIEWER-VENDOR:` attestation, or the `CROSS-VENDOR-REVIEW-UNAVAILABLE` sentinel) it falls
-back to `codex exec` run directly in the `zoe-omnigent` container, then to ONE tool-less,
+`scripts/maintenance/cross_review.sh <PR#> "<contract>"` is the DISPATCHER. Default order
+(since 2026-11-16) is `codex exec` first, then the pi pass. codex runs on the HOST with
+`-s read-only --ignore-user-config` when a host codex is installed
+(`CROSS_REVIEW_CODEX_WHERE=auto|host|container`, default `auto`), and in the `zoe-omnigent`
+container otherwise; there, Docker's seccomp blocks codex's bwrap sandbox. polly is OPT-IN
+(`CROSS_REVIEW_BACKENDS="polly codex pi"`) because its orchestrator needs metered Anthropic API
+credit, which the owner does not fund. When opted in, it runs `cross_review_polly.sh` (the polly
+lifecycle below), and when polly cannot produce a provably cross-vendor report (non-zero exit,
+empty report, no non-Anthropic `REVIEWER-VENDOR:` attestation, or the
+`CROSS-VENDOR-REVIEW-UNAVAILABLE` sentinel) it falls back to codex, then to ONE tool-less,
 diff-capped `pi` pass (only when codex is unavailable; model `openai/gpt-6.1-sol`, diff cap
 600 KB, per `docs/knowledge/reviewer-bakeoff-2026-10-19.md`; `CROSS_REVIEW_PI_MODEL` must be
 one concrete non-Anthropic model id — router/alias slugs are refused because the served model

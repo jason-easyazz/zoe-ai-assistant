@@ -53,6 +53,7 @@ def rig(tmp_path):
         "STUB_LOG": str(log), "STUB_DIR": str(tmp_path), "STUB_LIVE": str(live),
         "CROSS_REVIEW_POLLY_SCRIPT": str(stub("polly.sh", _STUB_POLLY)),
         "CROSS_REVIEW_CODEX_BIN": str(stub("codex", _STUB_CODEX)),
+        "CROSS_REVIEW_BACKENDS": "polly codex pi",  # polly is opt-in; pin that --local still skips it
         "CROSS_REVIEW_PI_BIN": str(stub("pi", _STUB_PI)),
         "CROSS_REVIEW_GH_BIN": str(stub("gh", _STUB_GH)),
         "CROSS_REVIEW_LIVE_CHECKOUT": str(live),
