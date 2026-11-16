@@ -34,7 +34,8 @@ SERVE (flag ``on`` only; ``shadow`` logs what it would inject and returns ""):
   * named guests - ``guest_lines`` (``named_guests.brain_block``): that guest's notes, theirs only.
 
 FORGET (forgotten means forever): ``forget_user`` (member erase), ``erase_entity`` (the entity-forget cascade), ``erase_topic``
-("forget what I told you about ..."), ``erase_for_turns`` ("forget that", via ``turn_forget.erase_turn_words``; ``erase_for_text`` is its older words-only form), ``erase_people`` (a guest's erase / "forget Quinn"), and a
+("forget what I told you about ..."), ``erase_for_turns`` + ``erase_ids`` (a forget record's notes step: bound notes by the turn ids,
+legacy ones by the ids ``ids_for_turn_words`` / ``ids_for_topic`` resolved first; ``erase_for_text`` is the older words-only form), ``erase_people`` (a guest's erase / "forget Quinn"), and a
 STRICT serve-time ledger filter on every read. Nothing about a note ever enters a log: counts and 8-char ids only.
 
 CHILDREN. A minor's note carries no mood (no emotional profile of a child) and its summary is asked to be neutral; a guest child the same.
@@ -1111,9 +1112,10 @@ async def _source_text(db, owner: str, s: "Stored") -> Optional[str]:
 
 
 async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *, people_id: Optional[str] = None,
-                        strict: bool = True) -> int:
+                        strict: bool = True, dry: Optional[list] = None) -> int:
     """Delete the layer's notes for which ``doomed(note, text)`` is true; ``text`` = the note's words plus its source turns' words (a
-    note that paraphrases a forgotten name still rests on the turn that said it). Reads the layer's rows (a handful)."""
+    note that paraphrases a forgotten name still rests on the turn that said it). Reads the layer's rows (a handful). ``dry``: a
+    list to collect the ids into instead of deleting (a forget record's resolution)."""
     _partial_bump(user_id)         # a note being written right now (model call in flight) sees this and is dropped, not saved
     try:
         async with _db() as db:
@@ -1128,6 +1130,9 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
             for s in rows:
                 src = await _source_text(db, user_id, s)
                 if src is None or doomed(s, f"{s.text} {src}"):          # None: a backfilled note whose source cannot be read back goes
+                    if dry is not None:
+                        dry.append(s.id)
+                        continue
                     await db.execute("DELETE FROM conversation_notes WHERE id = ?", (s.id,))
                     n += 1
             await db.commit()
@@ -1184,8 +1189,46 @@ async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None)
     return await _delete_where(user_id, doomed, people_id="", strict=True)
 
 
+async def ids_for_turn_words(user_id: str, texts: Iterable[str] = (), *, at: Optional[float] = None) -> list:
+    """The ids of the member's own LEGACY notes (no chat turn ids, or a backfill) a forgotten turn's words or time ``at`` name
+    (``erase_for_turns``' legacy rule): resolved by a forget record BEFORE anything is erased. RAISES on a store failure."""
+    words = [w for w in (_tokens(t) for t in (texts or ()) if t) if len(w) >= 2]
+    if not words and at is None:
+        return []
+    pad = 2700.0
+
+    def legacy(s: "Stored", all_text: str) -> bool:
+        if {str(t) for t in s.turn_ids if t} and s.source != "backfill":
+            return False                                       # bound: by its saved-turn ids only (the record's step)
+        if at is not None:
+            a, b = _epoch_of(s.started_at), _epoch_of(s.ended_at)
+            if a is not None and b is not None and a - pad <= at <= b + pad:
+                return True
+        toks = _tokens(all_text)
+        return any(len(toks & w) >= 2 for w in words)
+
+    out: list = []
+    await _delete_where(user_id, legacy, people_id="", strict=True, dry=out)
+    return out
+
+
+async def ids_for_topic(user_id: str, matches: Callable[[str], bool]) -> list:
+    """The ids of the member's own notes about a topic (``erase_topic``'s rule), resolved before anything is erased. RAISES."""
+    out: list = []
+    await _delete_where(user_id, lambda _s, text: bool(matches(text)), people_id="", strict=True, dry=out)
+    return out
+
+
+async def erase_ids(user_id: str, ids: Iterable[str]) -> int:
+    """Delete these notes of the member by id (a forget record's resolved notes). Idempotent; RAISES on a store failure."""
+    want = {str(i) for i in (ids or ()) if i}
+    if not want:
+        return 0
+    return await _delete_where(user_id, lambda s, _text: s.id in want, strict=True)
+
+
 async def erase_for_turns(user_id: str, mids: Iterable[str] = (), texts: Iterable[str] = (), *, at: Optional[float] = None) -> int:
-    """A forgotten TURN's notes, per row (``turn_forget.erase_turn_words``, the one dispatcher every turn forget uses). A note that
+    """A forgotten TURN's notes, per row (the notes step of a forget record, ``forget_record._notes``). A note that
     records its source turns (``turn_ids``: chat_messages ids) is bound: it goes only when one of them is one of ``mids``, however
     alike its words. A note with no chat turn ids (written before they were recorded, or a backfilled one whose ids are event-log
     ids) is legacy: the old rule - its words share >= 2 content words with the turn (``texts``), or its time span covers ``at``.

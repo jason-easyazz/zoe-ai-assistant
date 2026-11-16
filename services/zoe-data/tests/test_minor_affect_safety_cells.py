@@ -423,11 +423,13 @@ def test_c_a_guardian_forget_erases_the_childs_verbatim_words_by_the_rows_proven
     a, _b = _child(env, monkeypatch)
     seen = []
 
-    async def record(user_id, exp, *extra, **_kw):       # the real seam also takes mids= (the row's saved-turn ids)
-        seen.append(exp)
-        return 0
+    real = pa._target_plan                                # the forget record's resolution of the target (its words -> ids)
 
-    monkeypatch.setattr(pa, "_erase_words", record)
+    async def record(user_id, exp, *extra, **kw):
+        seen.append(exp)
+        return await real(user_id, exp, *extra, **kw)
+
+    monkeypatch.setattr(pa, "_target_plan", record)
     assert run(memory_space.guardian_forget(OTHER, a.id, actor=ME)) == "forgotten"
     assert seen and seen[0].quote == EXCERPT                                # the verbatim words, not just the extracted text
     seen.clear()

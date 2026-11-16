@@ -327,7 +327,6 @@ def mark_forgotten(user_id: str, turn: Turn) -> None:
         for tr in _turns.get(user_id) or ():
             if tr.tid == turn.tid:
                 tr.text = ""
-        _PENDING_ROWS.pop((user_id or "", turn.tid), None)
     try:  # the rows are flagged off the record by now: clear the pending corrections AGAIN, after the flagging (retract
         import correction_marker  # cleared them before it; a marker set in between must not outlive the forget)
 
@@ -557,126 +556,82 @@ async def resolve_legacy_ids(user_id: str, texts: Any) -> tuple:
     return tuple(out)
 
 
-async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, resolved: bool = False, row_ids: Any = (),
-                           at: Optional[float] = None) -> int:
-    """Erase what a forgotten turn's WORDS left outside the memory rows - the saved transcript turn (flagged ``off_record``), the
-    night mind's observations, the exact-words entries - and return how much. THE one dispatcher every turn forget uses:
-
-    Bound versus legacy is decided PER ROW, never per target:
-
-    * BOUND rows (a transcript turn named by id, an observation / entry carrying a saved-turn id) are erased by the ids ``mids``
-      only - their words are never compared, however alike.
-    * LEGACY rows (an observation / entry written with no id) are matched by the turn's words ``texts`` whether or not the target
-      has ids (a turn backfilled after the upgrade has an id while its older rows still do not); over-inclusive there by design.
-    * With no ids at all, the words also resolve to the saved turns holding them (``legacy_transcript_ids``), which are then erased
-      by id. Logged ``TURN_FORGET code=legacy_text``.
-
-    Also, so no forget path can skip them: the conversation notes made from the turn (``conversation_notes.erase_for_turns``: by
-    the note's own turn ids, a legacy note by these words or the turn's time ``at``), and for the memory rows the forget rejected
-    (``row_ids``) the stored user-model card that cites them (``user_model_card.invalidate_for_rows``) and the superseded-value
-    registry entries tied to them (``memory_value_registry.erase_for_rows``).
-
-    The transcript and the night mind FIRST, the exact-words entries last: a failure part-way RAISES with the entries still there,
-    so a retry reaches everything again. RAISES on a store failure (the caller must not confirm)."""
+async def legacy_targets(user_id: str, texts: Any, *, at: Optional[float] = None) -> dict:
+    """What a forgotten turn's WORDS name among the LEGACY rows (written before saved-turn ids: no id to erase them by), resolved to
+    THEIR ids before anything is erased (``forget_record.Plan`` fields): exact-words entries, night-mind observations, conversation
+    notes (by the words or the turn's time ``at``). Over-inclusive by design, legacy rows only. RAISES on a store failure."""
+    import conversation_notes
     import exact_words
     import night_mind
 
-    ids = [str(m) for m in dict.fromkeys(mids or ()) if m]
-    # no ids, or ids the caller RESOLVED from a legacy target's words (``resolve_legacy_ids``): the transcript is flagged from the
-    # words' own read (``forget_transcript``), exactly the rows those ids came from
-    resolve = not ids or resolved
-    words = [w for w in dict.fromkeys(texts or ()) if w and w.strip()]
-    rows = [str(r) for r in dict.fromkeys(row_ids or ()) if r]
-    if not ids and not words and not rows:
-        return 0
+    words = [w for w in dict.fromkeys(texts or ()) if w and str(w).strip()]
+    out: dict = {"entries": [], "obs": [], "notes": []}
+    for w in words:
+        out["entries"] += [e for e in await exact_words.legacy_entry_ids(user_id, w) if e not in out["entries"]]
     if words:
+        out["obs"] = await night_mind.legacy_observation_ids(user_id, *words)
         logger.info("TURN_FORGET code=legacy_text texts=%d", len(words))
-    n, failure = 0, None
-
-    async def step(coro_fn, *args):
-        # fail closed AND erase everything reachable: a store that fails does not stop the erasers after it; the first
-        # failure is re-raised once all of them ran, so the caller still does not confirm
-        nonlocal n, failure
-        try:
-            n += int(await coro_fn(*args) or 0)
-        except Exception as exc:  # noqa: BLE001
-            failure = failure or exc
-            logger.warning("TURN_FORGET code=eraser_failed step=%s (%s)", getattr(coro_fn, "__name__", "?"), type(exc).__name__)
-
-    if ids and not resolve:
-        try:   # every committed copy of those turns (the durable link: same session + words): a forget by ANY id takes them all
-            ids = await exact_words.turn_copies(user_id, ids)
-        except Exception as exc:  # noqa: BLE001
-            failure = failure or exc
-            logger.warning("TURN_FORGET code=eraser_failed step=turn_copies (%s)", type(exc).__name__)
-    if resolve:
-        # the words resolve to saved turns through the TRANSCRIPT, so it is flagged LAST (below): a failure part-way leaves it
-        # readable, and the retry resolves the same turns again
-        for w in words:
-            try:
-                ids += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in ids]
-            except Exception as exc:  # noqa: BLE001
-                failure = failure or exc
-                logger.warning("TURN_FORGET code=eraser_failed step=legacy_transcript_ids (%s)", type(exc).__name__)
-    else:
-        await step(exact_words.flag_transcript_turns, user_id, ids)
-    for mid in ids:
-        await step(night_mind.erase_words, user_id, mid)
-    if words:
-        await step(night_mind.erase_words, user_id, "", *words)              # LEGACY observations (no turn id), by their words
-    if ids or words or at is not None:
-        import conversation_notes
-
-        async def erase_conversation_notes():                                # the notes made from the turn
-            return await conversation_notes.erase_for_turns(user_id, ids, words, at=at)
-        await step(erase_conversation_notes)
-    if rows:
-        import memory_value_registry
-        import user_model_card
-
-        await step(user_model_card.invalidate_for_rows, user_id, rows)        # the stored card citing a rejected row
-        await step(memory_value_registry.erase_for_rows, user_id, rows)       # registry entries tied to them
-    # the exact-words entries LAST, and only when everything before held: an entry left behind keeps the retry able to find them
-    if failure is None and ids:
-        await step(exact_words.erase_turns, user_id, ids)
-    if failure is None:
-        for w in words:
-            await step(exact_words.erase_text, user_id, w)                    # LEGACY entries (no id), by their words
-    if failure is None and resolve:
-        for w in words:
-            await step(exact_words.forget_transcript, user_id, w)             # the transcript flag, LAST for a legacy target
-    if failure is not None:
-        raise failure
-    return n
+    if words or at is not None:
+        out["notes"] = await conversation_notes.ids_for_turn_words(user_id, words, at=at)
+    return out
 
 
-#: (user, turn instance) -> memory row ids a forget of that turn could not finish (a refused reject, a failed card step): the retry
-#: carries them - they may no longer be findable through the turn once their source row is rejected and erased. In process, like
-#: the turn notes themselves; cleared when the turn is forgotten.
-_PENDING_ROWS: "dict[tuple, set]" = {}
+async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, at: Optional[float] = None) -> int:
+    """Erase what a turn's WORDS left outside the memory rows - its saved transcript turn (flagged ``off_record``), the night mind's
+    observations, the conversation notes, the exact-words entries: BOUND rows by the saved-turn ids ``mids`` only, LEGACY rows by
+    ``texts`` (resolved to their ids first, ``legacy_targets``); with no ids, the words also resolve to the saved turns holding
+    them. The same step functions a forget record runs (``forget_record.run_plan``), without the record: a caller that hides rows
+    too uses ``forget_record.forget``. RAISES on a store failure."""
+    import exact_words
+    import forget_record
+
+    ids = [str(m) for m in dict.fromkeys(mids or ()) if m]
+    ids = await exact_words.turn_copies(user_id, ids) if ids else list(await resolve_legacy_ids(user_id, texts))
+    plan = forget_record.Plan(mids=ids, **await legacy_targets(user_id, texts, at=at))
+    return await forget_record.run_plan(user_id, plan)
 
 
-def note_pending_rows(user_id: str, turn: Any, row_ids: Any) -> None:
-    ids = {str(r) for r in (row_ids or ()) if r}
-    if ids and turn is not None:
-        with _LOCK:
-            _PENDING_ROWS.setdefault((user_id or "", getattr(turn, "tid", 0)), set()).update(ids)
+def record_key(turn: "Turn") -> str:
+    """The forget record of THIS turn instance: by its saved-turn ids (stable across a restart), else by the in-process instance."""
+    return "turn:" + ",".join(sorted(turn.mids)) if turn.mids else f"tid:{_BOOT}:{turn.tid}"
 
 
-def pending_rows(user_id: str, turn: Any) -> "set[str]":
-    with _LOCK:
-        return set(_PENDING_ROWS.get((user_id or "", getattr(turn, "tid", 0)), ()))
+_BOOT = hashlib.sha1(f"{time.time()}:{id(_LOCK)}".encode()).hexdigest()[:12]
+
+
+async def resolve_turn(svc: Any, user_id: str, turn: "Turn") -> Any:
+    """"forget that": the whole target set of the turn, as ids (``forget_record.Plan``), BEFORE anything is erased: its saved turns
+    (every committed copy; a turn noted with none, the saved turns its words resolve to), the rows written from it (``rows_from_turn``)
+    and their "remember that X" twins (``ask_to_remember.siblings_of``), the legacy rows its words name (``legacy_targets``) and the
+    value registry's content id of it. RAISES on a store failure (nothing destroyed: not confirmed)."""
+    import ask_to_remember
+    import exact_words
+    import forget_record
+    import value_correction
+
+    text, ts = turn.text, turn.ts
+    mids = tuple(await exact_words.turn_copies(user_id, turn.mids)) if turn.mids else await resolve_legacy_ids(user_id, (text,))
+    rows = await rows_from_turn(svc, user_id, text, ts, mids=mids)
+    have = {r.id for r in rows}
+    for r in list(rows):
+        for sib in await ask_to_remember.siblings_of(svc, user_id, r):
+            if sib.id not in have:
+                have.add(sib.id)
+                rows.append(sib)
+    tid = value_correction.turn_id_of(user_id, text)
+    plan = forget_record.Plan(rows=[r.id for r in rows], mids=list(mids), reg_turns=[tid] if tid else [],
+                              **await legacy_targets(user_id, (text,), at=ts))
+    return plan, rows
 
 
 def reset() -> None:  # tests
     with _LOCK:
         _turns.clear()
         _retracted.clear()
-        _PENDING_ROWS.clear()
 
 
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
     "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset", "provenance", "partition", "erase_turn_words", "classify",
-    "split", "target_of", "resolve_legacy_ids",
+    "split", "target_of", "resolve_legacy_ids", "resolve_turn", "record_key", "legacy_targets",
 ]

@@ -940,7 +940,9 @@ def test_the_agreeing_row_goes_when_an_opposite_one_sits_beside_it(env):
 
 
 def test_a_retry_after_a_half_done_untapped_forget_finishes_the_same_row(seeded, monkeypatch):
-    real, state = pa._erase_words, {"down": True, "ran": 0}
+    import exact_words
+
+    real, state = exact_words.erase_turns, {"down": True, "ran": 0}      # the forget record's exact-words step
 
     async def flaky(*a, **kw):
         state["ran"] += 1
@@ -948,7 +950,7 @@ def test_a_retry_after_a_half_done_untapped_forget_finishes_the_same_row(seeded,
             raise RuntimeError("cleanup failed")    # the row is already rejected when the cleanup step fails
         return await real(*a, **kw)
 
-    monkeypatch.setattr(pa, "_erase_words", flaky)
+    monkeypatch.setattr(exact_words, "erase_turns", flaky)
     assert say("forget that I like dark roast coffee", ME) == pa.STORE_DOWN_REPLY
     assert not any("dark roast" in t for t in approved(seeded)), "the row is already rejected: a fresh search cannot see it"
     state["down"] = False

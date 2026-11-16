@@ -21,6 +21,7 @@ import time
 import pytest
 
 import exact_words as xw
+import forget_record
 import forget_topic
 import intent_router
 import memory_provenance as mp
@@ -428,7 +429,7 @@ def test_a_failing_words_eraser_fails_forget_that_and_the_retry_finishes(world, 
     caplog.set_level(logging.INFO)
     first = _forget_last(svc, chat, "b", None)
     assert not first.startswith("Done"), first
-    assert "b" in _xw_rows(), "the words entry stays until the transcript is flagged (nothing left unfindable)"
+    assert run(forget_record.get_backend().open_records(UID)), "the open record keeps every target findable (forget_record)"
     monkeypatch.setattr(xw, "flag_transcript_turns", real)
     before = _left(svc, chat)
     second = _forget_last(svc, chat, "b", None)
@@ -1075,8 +1076,8 @@ def test_a_failing_card_invalidation_fails_the_forget_and_the_retry_finishes(wor
 
 
 def test_a_topic_forget_whose_card_step_fails_is_not_confirmed_and_the_retry_finishes(world, monkeypatch):
-    """The card step runs BEFORE the archive (the archive makes the rows undiscoverable by topic). It fails once: the forget is not
-    confirmed and nothing was archived; the same topic forget again finds the rows, invalidates the card and archives them. On
+    """The card step fails once: the forget is not confirmed; the same topic forget again finishes its open RECORD (forget_record:
+    the rows' ids were written down before anything was archived), invalidates the card and archives them. On
     eb71415d7 the rows were archived first, so the retry found nothing and the stored card kept the words."""
     import user_model_card
 
@@ -1093,7 +1094,8 @@ def test_a_topic_forget_whose_card_step_fails_is_not_confirmed_and_the_retry_fin
     monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
     first = run(forget_topic.forget(svc, UID, "my kayak paddles"))
     assert first.store_down and not first.forgotten
-    assert w["fact"] in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}   # nothing archived yet
+    # the archive may already have landed (forget_record: hide first): the retry finds its targets in the open RECORD, not by topic
+    assert run(forget_record.get_backend().open_records(UID))
     second = run(forget_topic.forget(svc, UID, "my kayak paddles"))
     assert not (second.store_down or second.failed) and second.forgotten
     assert any(w["fact"] in rows for rows in seen)
@@ -1151,8 +1153,8 @@ def test_with_physical_erase_on_a_refused_bound_reject_is_finished_by_the_retry(
 
 def test_forget_that_invalidates_the_card_for_a_sibling_before_any_reject_and_the_retry_finishes(world, monkeypatch):
     """"forget that": the capture's sibling of the turn's row is found BEFORE any reject, so the stored card is invalidated for
-    the WHOLE set in one step. That step fails once (on the sibling): nothing is rejected, the forget is not confirmed; the retry
-    invalidates the card for the sibling and rejects it. On 17493da8d the sibling was found only after the rejects, its card
+    the WHOLE set in one step. That step fails once (on the sibling): the forget is not confirmed; the retry finishes the open
+    record - invalidates the card for the sibling and rejects it. On 17493da8d the sibling was found only after the rejects, its card
     step failed with no way back, and the retry could not find it."""
     import ask_to_remember
     import user_model_card
@@ -1179,7 +1181,8 @@ def test_forget_that_invalidates_the_card_for_a_sibling_before_any_reject_and_th
     monkeypatch.setattr(user_model_card, "invalidate_for_rows", card)
     first = _forget_last(svc, chat, "a", None)
     approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
-    assert not first.startswith("Done") and sib.id in approved and w["fact"] in approved, first   # nothing rejected yet
+    # the rows may already be hidden (forget_record: hide first); the sibling is IN the open record, so the retry still reaches it
+    assert not first.startswith("Done") and run(forget_record.get_backend().open_records(UID)), first
     second = _forget_last(svc, chat, "a", None)
     assert second.startswith("Done"), second
     approved = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}

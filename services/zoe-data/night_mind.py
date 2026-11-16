@@ -2051,6 +2051,29 @@ async def _rederive_threads(backend: Any, user_id: str, thread_ids: "dict[str, i
     return n
 
 
+def _words_hit(user_id: str, bound: list, legacy: list, tid: str, wanted: list) -> list:
+    hit = [o for o in bound if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
+    old = [o for o in legacy if (o["quote"] or "").strip() and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+    if old:
+        logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(old))
+    return hit + old
+
+
+async def legacy_observation_ids(user_id: str, *texts: str) -> list:
+    """The ids of this user's LEGACY observations (saved with no turn id) whose quote sits inside - or contains - any of ``texts``:
+    what a forget of those words resolves to BEFORE it erases anything (``forget_record``). A store failure is RAISED."""
+    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    if not (user_id or "").strip() or not wanted:
+        return []
+    try:
+        _bound, legacy = partition_observations(await night_store.get_backend().observations(user_id))
+    except Exception as exc:  # noqa: BLE001
+        if _no_table(exc):
+            return []
+        raise
+    return [str(o["id"]) for o in _words_hit(user_id, [], legacy, "", wanted)]
+
+
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. PER ROW
     (``partition_observations``): a BOUND observation (saved with a turn id) goes only when its id is ``turn_id`` - another turn's
@@ -2063,16 +2086,24 @@ async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
     if not wanted and not tid:
         return 0
+    return await _erase_observations(user_id, lambda bound, legacy: _words_hit(user_id, bound, legacy, tid, wanted))
+
+
+async def erase_observations(user_id: str, ids) -> int:
+    """Delete these observations by id (a forget record's resolved legacy observations) and re-derive their threads. Idempotent;
+    a store failure is RAISED."""
+    want = {str(i) for i in (ids or ()) if i}
+    if not (user_id or "").strip() or not want:
+        return 0
+    return await _erase_observations(user_id, lambda bound, legacy: [o for o in bound + legacy if str(o["id"]) in want])
+
+
+async def _erase_observations(user_id: str, pick) -> int:
     async with _user_lock(user_id):
         try:
             backend = night_store.get_backend()
-            bound, legacy = partition_observations(await backend.observations(user_id))
-            hit = [o for o in bound if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
-            old = [o for o in legacy if (o["quote"] or "").strip()
-                   and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
-            if old:
-                logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(old))
-            hit += old
+            hit = pick(*partition_observations(await backend.observations(user_id)))
+            hit = [o for o in hit if (o["quote"] or "").strip()]
             if not hit:
                 return 0
             pattern = re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in hit}, key=len, reverse=True)))

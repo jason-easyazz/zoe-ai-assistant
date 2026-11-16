@@ -666,42 +666,44 @@ def test_a_failed_registry_erase_then_a_healthy_retry_leaves_nothing(db, forget_
     _flaky_erase_topic(monkeypatch)
     first = run(forget_topic.forget(_registry_svc(), A, "my sister"))
     assert first.store_down
-    assert turn_forget.turns_matching(A, lambda t: "sister" in t)          # the evidence is intact (nothing erased before it)
-    assert cascade.VALUE_REGISTRY_TOPIC in run(ledger.pending_labels(A, cascade.ALL_LABELS))   # and the retry is durable
+    import forget_record
+
+    # the retry is durable: the forget RECORD holds what the topic resolved to (ids only), written before anything was erased
+    assert run(forget_record.get_backend().open_records(A))
     second = run(forget_topic.forget(_registry_svc(), A, "my sister"))
     assert not second.store_down
     assert _subjects(db, A) == [] and _subjects(db, B) == [OTHER_JUNO]
-    assert run(ledger.pending_labels(A, cascade.ALL_LABELS)) == []
+    assert run(ledger.pending_labels(A, cascade.ALL_LABELS)) == [] and not run(forget_record.get_backend().open_records(A))
 
 
 def test_the_durable_marker_drains_even_if_nobody_repeats_the_forget(db, forget_env, ledger, monkeypatch):
-    """The next healthy pass (the nightly pre-read, the next forget of any kind) finishes it from the marker alone - no turn id,
-    row id or name is needed: the member's registry entries are over-forgotten."""
+    """The next healthy pass (the nightly pre-read ``retry_pending``, the next topic / entity forget) finishes it from the open forget
+    RECORD alone (forget_record.resume_open) - the turn notes, the topic words, a name: none is needed."""
     import forget_topic
     import memory_forget_cascade as cascade
+    import turn_forget
 
     _sister_seed(db)
     _flaky_erase_topic(monkeypatch)
     assert run(forget_topic.forget(_registry_svc(), A, "my sister")).store_down
-    run(forget_topic._erase_words(A, forget_topic.topic_groups("my sister")))   # even with every turn note gone
+    turn_forget.reset()                                                          # even with every turn note gone
     run(cascade.retry_pending(A))
     assert _subjects(db, A) == [] and _subjects(db, B) == [OTHER_JUNO]
 
 
 def test_the_old_ordering_leaks_the_entry(db, forget_env, ledger, monkeypatch):
-    """Negative control: the order before this fix (the words erased first, no marker) - the retry finds no turn id, row id or
-    name, and the registry entry outlives a forget that then reports success."""
+    """Negative control: WITHOUT the write-ahead record (dropped here) and with the evidence already gone (the turn notes, as the
+    old order had already erased them), the retry finds no turn id, row id or name, and the registry entry outlives a forget that
+    then reports success."""
+    import forget_record
     import forget_topic
-    import memory_forget_cascade as cascade
+    import turn_forget
 
     _sister_seed(db)
     _flaky_erase_topic(monkeypatch)
-
-    async def no_marker(*_a, **_k):
-        return False
-    monkeypatch.setattr(cascade, "_mark_pending", no_marker)
     assert run(forget_topic.forget(_registry_svc(), A, "my sister")).store_down
-    run(forget_topic._erase_words(A, forget_topic.topic_groups("my sister")))   # what the old order had already done
+    forget_record.reset()                                                        # no record
+    turn_forget.reset()                                                          # what the old order had already done
     second = run(forget_topic.forget(_registry_svc(), A, "my sister"))
     assert not second.store_down and _subjects(db, A) == [JUNO]
 
@@ -729,10 +731,12 @@ def test_a_failed_destructive_step_leaves_neither_store_holding_the_correction(d
             return await real(*a, **k)
         return flaky
     svc = _registry_svc((R(A, "r9"), "User's sister has a new job"))
-    if step == "words":
-        monkeypatch.setattr(forget_topic, "_erase_words", once(forget_topic._erase_words))
+    import exact_words
+
+    if step == "words":       # the forget record's steps: the words = the transcript flag, the notes = the notes erase by id
+        monkeypatch.setattr(exact_words, "flag_transcript_turns", once(exact_words.flag_transcript_turns))
     elif step == "notes":
-        monkeypatch.setattr(conversation_notes, "erase_topic", once(conversation_notes.erase_topic))
+        monkeypatch.setattr(conversation_notes, "erase_ids", once(conversation_notes.erase_ids))
     else:
         monkeypatch.setattr(type(svc), "review", once(type(svc).review))
     run(forget_topic.forget(svc, A, "my sister"))
@@ -811,7 +815,7 @@ def test_forget_that_is_not_done_when_the_registry_cannot_be_reached(db, monkeyp
 
     async def down(*_a, **_k):
         raise ConnectionError("pool lost")
-    monkeypatch.setattr(reg, "erase_for_turn", down)
+    monkeypatch.setattr(reg, "erase_for_turn_ids", down)           # the forget record's registry step for "forget that"
     assert _forget_last(monkeypatch, "juno is 8 not 7") == ir.FORGET_STORE_DOWN_REPLY
 
 
@@ -1071,8 +1075,9 @@ def test_every_eraser_is_a_no_op_on_a_store_that_was_never_migrated(tmp_path, mo
 CALL_SITES = (
     ("memory_service.py", "delete_user", "forget_user"),
     ("memory_forget_cascade.py", "_run", "erase_entity"),
-    ("forget_topic.py", "_forget", "erase_topic"),   # forget is a thin wrapper (marker clear in its finally); the body is _forget
-    ("intent_router.py", "_execute_forget_last", "erase_for_turn"),
+    # the topic and "forget that" paths run their registry erase as the forget record's registry step (forget_record._registry)
+    ("forget_record.py", "_registry", "erase_topic"),
+    ("forget_record.py", "_registry", "erase_for_turn_ids"),
     ("memory_service.py", "erase_rows", "erase_for_rows"),
 )
 

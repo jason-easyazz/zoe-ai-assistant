@@ -322,13 +322,23 @@ async def _mark_pending(user_id: str, labels) -> bool:
     return ok
 
 
-async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
+async def retry_pending(user_id: str, *, db=None, skip_records: tuple = ()) -> Optional[CascadeResult]:
     """Finish the cascade steps an earlier forget left pending for ``user_id``, from the forget ledger's hashes alone (no name was
     ever stored). Re-runs only the steps that have a marker, deletes the markers of the ones that succeeded, leaves (and adds) the
     markers of the ones that did not. None when nothing is pending. Idempotent and safe to call from any healthy pass; never raises.
 
     Does NOT record a contact undo and never touches contacts of a step that was not pending: a member who said "keep the
-    contact" after a COMPLETE forget keeps it."""
+    contact" after a COMPLETE forget keeps it.
+
+    Also finishes the member's open forget RECORDS (``forget_record.resume_open``: a turn / row / topic forget whose step failed
+    and was never repeated) - this is their sweeper, so no forget is silently dropped. ``skip_records``: the caller's OWN record
+    (a forget that is about to finish it itself, and answer for it)."""
+    try:
+        import forget_record
+
+        await forget_record.resume_open(user_id, skip=skip_records)  # never raises
+    except Exception:  # noqa: BLE001 - guards the import
+        pass
     try:
         import memory_forgotten
         labels = await memory_forgotten.pending_labels(user_id, ALL_LABELS)

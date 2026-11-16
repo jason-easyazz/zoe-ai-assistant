@@ -333,9 +333,11 @@ _REMOVERS = {
     # every forget that knows the turn's saved-turn ids (forget-last, provenance "forget it", PR 2574) erases that turn's entries of
     # the same index by those ids: Postgres ``exact_turns``, never palace rows, the owner's own forget of their own turn
     ("exact_words.py", "erase_turns"),
-    # topic forget ("forget everything about X"): the same exact_turns index (Postgres, never palace rows) through its backend -
-    # the owner's own words about the topic. The palace rows go through MemoryService.review (archive) / erase_rows, not here.
-    ("forget_topic.py", "_erase_words"),
+    # a forget record's resolved entries (forget_record: "forget that", "forget it", the memories screen, a topic forget): the same
+    # exact_turns index by entry id (Postgres, never palace rows); the palace rows go through MemoryService.review / erase_rows
+    ("exact_words.py", "erase_entries"),
+    # a forget record CLOSES: its own app_settings row (ids only, never palace rows) is deleted once every step is done
+    ("forget_record.py", "_run"),
 }
 
 

@@ -349,8 +349,8 @@ def test_a_topic_forget_withdraws_offers_naming_it(monkeypatch):
         yield db
 
     monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
-    gone = run(forget_topic._withdraw_offers(UID, forget_topic.topic_groups("my sister"),
-                                             ["my sister wynne lives down south, we talk most sundays"]))
+    gone = run(pending_suggestions.withdraw_matching(UID, forget_topic._offer_matcher(
+        forget_topic.topic_groups("my sister"), ["my sister wynne lives down south, we talk most sundays"])))
     assert gone == 2 and [o["id"] for o in db.offers] == ["o3", "o4"]
 
 
@@ -455,7 +455,7 @@ def test_decorated_names_are_withdrawn_both_ways(offer_name, forgotten, monkeypa
         yield db
 
     monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
-    run(forget_topic._withdraw_offers(UID, forget_topic.topic_groups("my sister"), [forgotten]))
+    run(pending_suggestions.withdraw_matching(UID, forget_topic._offer_matcher(forget_topic.topic_groups("my sister"), [forgotten])))
     assert [o["id"] for o in db.offers] == ["o2"]                        # the forgotten person's offer goes; an unrelated one stays
 
 
