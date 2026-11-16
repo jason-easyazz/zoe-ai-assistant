@@ -131,3 +131,12 @@ def test_summary_counts():
     s = fb.summary(facts(owner_pin=False, owner_voice=False))
     assert s["ready"] is False and s["next"] == "owner_pin" and s["counts"][fb.WAITING] == 1  # owner_voice
 
+
+
+def test_optional_setup_waits_until_required_setup_is_settled():
+    """Required setup that is unsettled but has no actionable step (voice unknown, or the blocking voice step
+    deferred) must not be passed over for an optional item."""
+    for f in (facts(owner_voice=None, music=False), facts(owner_voice=False, music=False, deferred=frozenset({"owner_voice"}))):
+        assert not fb.ready(f)
+        assert fb.nudge(f, "panel_card") is None or fb.nudge(f, "panel_card").tier != fb.OPTIONAL
+        assert fb.nudge(f, "asked") is None or fb.nudge(f, "asked").tier != fb.OPTIONAL

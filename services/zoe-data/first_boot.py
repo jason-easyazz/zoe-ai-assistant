@@ -187,7 +187,7 @@ def nudge(facts: Facts, surface: str) -> Optional[Status]:
         for s in rows:
             if s.state == DEFERRED:
                 return s
-    if surface in ("asked", "panel_card"):
+    if surface in ("asked", "panel_card") and ready(facts):   # optional only once required setup is settled
         for s in rows:
             if s.tier == OPTIONAL and s.state == MISSING:
                 return s
