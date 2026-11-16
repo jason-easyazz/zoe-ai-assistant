@@ -222,3 +222,14 @@ def test_join_safety_skips_and_counts_a_timestamp_that_is_not_a_real_time():
     assert (r["would_play"], r["near_marker"], r["by_marker"]) == (1, 1, {"MEDICAL_SAFETY": 1})
     assert r["skipped_bad_timestamp"] == 3
     assert "skipped_bad_timestamp" not in SIM.join_safety(dec[:1], marks[1:2])      # nothing skipped: the result is unchanged
+
+
+@pytest.mark.parametrize("bad", ["0", "-3", "abc", "2.5"])
+def test_synthetic_count_must_be_a_positive_whole_number(bad, capsys):
+    """``--synthetic`` is the only numeric option. 0 used to fall through to ``Path(None)`` and raise TypeError."""
+    with pytest.raises(SystemExit) as e:
+        SIM.main(["--synthetic", bad])
+    assert e.value.code == 2
+    assert "expected a whole number of 1 or more" in capsys.readouterr().err
+    assert SIM.main(["--synthetic", "5"]) == 0                      # CONTROL: a positive count still runs
+    assert "Voice reflex projection" in capsys.readouterr().out

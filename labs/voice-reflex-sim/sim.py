@@ -314,12 +314,23 @@ def join_safety(decision_lines: Iterable[str], marker_lines: Iterable[str], wind
     return out
 
 
+def _positive_int(text: str) -> int:
+    """argparse type: a whole number of at least 1 (0, a negative or a non-number is refused with a clear message)."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number of 1 or more, got {text!r}") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of 1 or more, got {n}")
+    return n
+
+
 def main(argv: "Optional[Sequence[str]]" = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--panel", action="store_true", help="read the allowlisted extract of the panel log over ssh (read-only)")
     g.add_argument("--lines", help="a saved allowlisted extract")
-    g.add_argument("--synthetic", type=int, help="N invented turns (a self-check)")
+    g.add_argument("--synthetic", type=_positive_int, help="N invented turns (a self-check)")
     g.add_argument("--decisions", help="a file of REFLEX_DECISION lines: summarise the shadow week")
     ap.add_argument("--panel-host", default="zoe-pi")
     ap.add_argument("--markers", help="with --decisions: the allowlisted '<timestamp> <MARKER>' extract of the server log")
@@ -332,7 +343,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
             print("\nLAB measure (a time correlation, not the shadow's count; blind to refusals): would-play turns with a "
                   "server safety marker within 45 s:", join_safety(dec, Path(a.markers).read_text().splitlines()))
         return 0
-    if a.synthetic:
+    if a.synthetic is not None:
         print(report(synthetic_turns(a.synthetic), "synthetic, invented turns"))
         return 0
     if a.panel:
