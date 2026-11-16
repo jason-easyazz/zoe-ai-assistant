@@ -224,12 +224,13 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
             import uuid as _uuid
             import datetime as _dt
             from push import broadcaster as _broadcaster  # deferred to avoid circular imports
-            _new_id = str(_uuid.uuid4())
+            # ONE row per scheduled send: a retry of the same row (its claim released after a failure below) re-inserts nothing
+            _new_id = f"reminder-{pending_id}" if pending_id else str(_uuid.uuid4())
             async with _get_compat_db() as db:
                 await db.execute(
                     """INSERT INTO notifications
                        (id, user_id, type, title, message, delivered, created_at)
-                       VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
+                       VALUES (?, ?, 'reminder', ?, ?, 0, ?) ON CONFLICT (id) DO NOTHING""",
                     (
                         _new_id,
                         user_id,
@@ -239,11 +240,20 @@ async def _dispatch(user_id: str, message: str, trigger_type: str, pending_id: s
                     ),
                 )
                 await db.commit()
-            # the insert's connection and commit can stall: a member deleted since then keeps no row and is shown nothing
-            if await refused("in_app_broadcast"):
+
+            async def _withdraw_in_app() -> None:
                 async with _get_compat_db() as db:
                     await db.execute("DELETE FROM notifications WHERE id = ?", (_new_id,))
                     await db.commit()
+            # the insert's connection and commit can stall: a member deleted since then keeps no row and is shown nothing. An
+            # unreadable mark: the row is withdrawn too (nothing shown on a guess), then the error is raised (claim released, retried)
+            try:
+                gone = await refused("in_app_broadcast")
+            except erase_watermark.Unavailable:
+                await _withdraw_in_app()
+                raise
+            if gone:
+                await _withdraw_in_app()
                 return
             await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
             in_app_fallback_ok = True
@@ -301,7 +311,8 @@ async def _speak_on_panel(
     import erase_watermark
 
     async def refused(lane: str) -> bool:
-        # the last step before a lane sends (the toast is broadcast on enqueue): a member deleted since the enclosing delivery began
+        # the last step before a lane sends (the toast: before its queue write AND before its push): a member deleted since the
+        # enclosing delivery began
         # (erase_watermark.delivery) hears nothing;
         # an unreadable mark sends nothing on that lane (fail closed). The daemon queue is re-checked when the panel claims the row
         # (voice_announce.claim_announcements), so a row queued across a delete is never spoken either.
@@ -317,18 +328,27 @@ async def _speak_on_panel(
     try:
         import ui_orchestrator as _ui_orchestrator
         async with _get_compat_db() as db:
-            await _ui_orchestrator.enqueue_ui_action(
+            queued_action = await _ui_orchestrator.enqueue_ui_action(
                 db,
                 user_id=user_id,
                 action_type="panel_announce",
                 payload={"message": message},
                 requested_by="proactive",
                 panel_id=panel_id,
+                broadcast=False,
             )
+            # the queue write can stall: re-checked right before the push leaves; a refused toast is withdrawn (the panel's poll of
+            # its queue refuses a row of an erased member too, routers/ui_actions.get_pending_ui_actions)
+            if await refused("panel_announce_push"):
+                await _ui_orchestrator.withdraw_ui_action(db, queued_action["action_id"])
+                panel_outcome = "refused:erased"
+            else:
+                await _ui_orchestrator.broadcast_ui_action(queued_action)
     except Exception as exc:
         panel_outcome = f"error:{exc}"
     # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
-    # connection so a failed lane-1 transaction can't poison this insert.
+    # connection so a failed lane-1 transaction can't poison this insert. The queued row is stamped with when the delivery BEGAN
+    # (voice_announce.enqueue_announcement), so the panel's claim refuses it for a member deleted at any moment after that.
     daemon_outcome = "queued"
     if await refused("daemon_queue"):
         return panel_outcome, "refused:erased", None

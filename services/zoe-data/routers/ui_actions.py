@@ -322,6 +322,26 @@ async def get_pending_ui_actions(
         (panel_user_id, panel_id, limit),
     )
     rows = await cursor.fetchall()
+    # The panel's last step before it shows a queued action: an action queued for a member who was deleted at or after it was queued
+    # (``erase_watermark``; a proactive toast is also withdrawn by its sender, ``engine._speak_on_panel``) is never served - it is
+    # marked skipped. An unreadable mark serves nothing now (the actions stay queued).
+    import erase_watermark
+
+    try:
+        mark = await erase_watermark.watermark(panel_user_id)
+    except erase_watermark.Unavailable:
+        return {"actions": [], "count": 0}
+    if mark is not None:
+        kept = []
+        for r in rows:
+            made = erase_watermark.instant(r["created_at"])
+            if made is None or made <= mark:
+                await db.execute("UPDATE ui_actions SET status = 'skipped', error_code = 'erased', updated_at = NOW() WHERE id = ?",
+                                 (r["id"],))
+            else:
+                kept.append(r)
+        await db.commit()
+        rows = kept
     actions = []
     for r in rows:
         item = dict(r)

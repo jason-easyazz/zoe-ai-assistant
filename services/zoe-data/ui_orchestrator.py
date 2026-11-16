@@ -194,8 +194,22 @@ async def enqueue_ui_action(
         "confirmation_token": confirmation_token if requires_confirmation else None,
     }
     if broadcast:
-        if panel_id:
-            await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
-        else:
-            await broadcaster.broadcast("all", "ui_action", message)
+        await broadcast_ui_action(message)
     return message
+
+
+async def broadcast_ui_action(message: Dict[str, Any]) -> None:
+    """Push one queued action (``enqueue_ui_action``'s return) to its panel, or to every client when it names none. A caller that
+    must re-check something between the queue write and the push enqueues with ``broadcast=False`` and calls this itself."""
+    panel_id = message.get("panel_id")
+    if panel_id:
+        await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
+    else:
+        await broadcaster.broadcast("all", "ui_action", message)
+
+
+async def withdraw_ui_action(db, action_id: str) -> None:
+    """Remove a queued action and its ledger rows (a delivery refused between the queue write and the push)."""
+    await db.execute("DELETE FROM ui_action_ledger WHERE action_id = ?", (action_id,))
+    await db.execute("DELETE FROM ui_actions WHERE id = ?", (action_id,))
+    await db.commit()

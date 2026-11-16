@@ -169,7 +169,8 @@ TABLES: tuple[Store, ...] = (
     _t("speaker_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows (and the adapted vector on them) and tells every panel to drop its copy; "
        "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),   # voice embeddings (+ the adapted vector on the same row); panels told at once (voice_profile_forget)
     _t("face_profiles", BIOMETRIC, REACHED, "delete_user removes the member's rows and tells every panel to drop its copy (face_profile_forget: the "
-       "voice daemon trims ~/.zoe-voice/face_profiles.json, which only an enrolment run re-syncs; 24 h on the queue); "
+       "voice daemon trims ~/.zoe-voice/face_profiles.json, which only an enrolment run re-syncs; 24 h on the queue) and, for a panel that missed "
+       "it, drops them at its next start or hourly profile sync (the sync's face roster); "
        "present in Postgres dumps (age out in <= 35 days).", member=_OWNED_M),      # face embeddings; panels told at once (face_profile_forget)
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("member_register", WORDS, REACHED, member="member_register.forget_user"),   # liked topics are the member's words
@@ -221,6 +222,16 @@ OTHER: tuple[Store, ...] = (
           member="local_text_logs.erase_all_text", entity="local_text_logs.erase_entity", markers=("trace.jsonl",)),
     Store("production_feedback_log", "file", WORDS, OUT_OF_SCOPE, "Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and "
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
+    Store("panel_speaker_shadow_log", "file", BIOMETRIC, REACHED, "On each PANEL: ~/.zoe-voice/speaker_shadow_metrics.jsonl (SPEAKER_ID_SHADOW_LOG), one "
+          "speaker-ID prediction per turn naming the claimed member (id + score, never audio or a vector), 0600, no retention of its own. A member "
+          "delete reaches it twice: the queued voice_profile_forget drops every row naming the member, and every profile sync (start + hourly) "
+          "drops the rows of anyone no longer on the server's voice roster, so a panel that missed the command (offline > 24 h, an older daemon) "
+          "still drops them on its next start. Needs the panel daemon deployed.",
+          member="member_owned_forget.forget_user", markers=("speaker_shadow_metrics.jsonl",)),
+    Store("panel_face_cache", "file", BIOMETRIC, REACHED, "On each PANEL: ~/.zoe-voice/face_profiles.json, the face embeddings zoe_face_id.py matches "
+          "against (re-synced only by an enrolment run). A member delete reaches it twice: the queued face_profile_forget, and every profile sync "
+          "(start + hourly) drops the rows of anyone no longer on the server's face roster. Needs the panel daemon deployed.",
+          member="member_owned_forget.forget_user", markers=("face_profiles.json",)),
     Store("voice_stt_log", "file", WORDS, GAP, "No member id: ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
           "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
     Store("flue_session_log", "file", WORDS, GAP, "No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "

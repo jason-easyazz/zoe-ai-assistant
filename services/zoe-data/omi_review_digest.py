@@ -165,10 +165,12 @@ async def _newest_pending(uid: str) -> str:
 async def send_for(member: str, now: datetime) -> str:
     """``sent`` | ``uncertain`` | ``skipped:<why>`` for one member. The day is claimed only when the message may have left
     (``sent`` / ``uncertain``); a retry-safe failure leaves it open for the next poll."""
+    import erase_watermark
     import omi_day_review as dr
     import telegram_notify
     from day_review_raise import _phone_url
 
+    began = erase_watermark._now()          # a member deleted after this gets nothing (the last-step check below)
     if not _account(member):
         return "skipped:not_an_account"
     tid = await _telegram_id(member)
@@ -194,6 +196,16 @@ async def send_for(member: str, now: datetime) -> str:
     # Claim the day BEFORE the network call (at-most-once, like change_notices._send): a failed claim write sends nothing; a crash or
     # failed final write after the message left leaves the claim, so the next poll cannot repeat it.
     await _save(member, {**st, "day": today, "unanswered": unanswered, "claim": "sending"})
+    # the LAST step before the message leaves (after the claim write): a member deleted since ``began`` gets nothing, and the claim
+    # written for them is removed again (an unreadable mark sends nothing; the claim is released so a later poll may retry)
+    if await erase_watermark.refuse_send(member, began, "omi_review_digest"):
+        try:
+            from user_prefs import delete_pref
+
+            await delete_pref(member, STATE_KEY)
+        except Exception as exc:  # noqa: BLE001 - nothing was sent; the member's erase removes the state anyway
+            logger.warning("omi_review_digest: claim removal failed (%s)", type(exc).__name__)
+        return "skipped:erased"
     outcome = await telegram_notify.send(tid, compose(cands, total), url=url, label="Review your day" if url else None)
     if outcome in ("sent", "uncertain"):
         await _save(member, {"day": today, "sent_at": now.strftime(_TS), "unanswered": unanswered + 1})

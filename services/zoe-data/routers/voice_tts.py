@@ -7836,6 +7836,18 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
         logger.error("voice/profiles/sync DB error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc
 
+    # THE ROSTER (ids only, never a vector): every member who still holds a consented voice profile of ANY model, and every member
+    # with an active face profile. The panel drops whatever it holds for anyone else - its face cache file and its speaker-ID shadow
+    # log (scripts/setup/zoe_voice_daemon.py ``_apply_roster``) - at start and every sync, so a member delete (or "forget my voice")
+    # reaches a panel that missed its purge command (offline past the command's 24 h, or a daemon that predated it). A list that could
+    # not be read is LEFT OUT (the panel then drops nothing for it), never sent empty.
+    roster = dict(voice=sorted({str(r[0]) for r in rows if r[0]}))
+    try:
+        async with _get_compat_db() as db:
+            async with db.execute("SELECT DISTINCT user_id FROM face_profiles WHERE active = 1") as cur:
+                roster["face"] = sorted({str(r[0]) for r in await cur.fetchall() if r[0]})
+    except Exception as exc:  # noqa: BLE001 - no face table (never migrated) or a read failure: no face roster this sync
+        logger.debug("voice/profiles/sync: face roster unavailable: %s", type(exc).__name__)
     served = speaker_models.visible_models() & _parse_models_param(models)
     rows = [r for r in rows if speaker_models.row_model_id(r, 4) in served]
     rows = await speaker_adaptation.serve_adapted_profiles(rows, user_idx=0, blob_idx=2, model_idx=4)  # ZOE_SPEAKER_ADAPT=on only
@@ -7854,6 +7866,7 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
         extra["learn_unknown"] = True      # the panel then attaches an unmatched turn's embedding (never audio) for learning
     return dict(
         **extra,
+        roster=roster,
         ok=True,
         threshold=_speaker_id_threshold(),
         mode=speaker_models.speaker_mode(),

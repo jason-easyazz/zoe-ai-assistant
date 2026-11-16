@@ -503,6 +503,9 @@ async def send_to_phone(member: str, counts: dict) -> str:
     """``sent`` | ``uncertain`` (may have been delivered) | ``recent`` (sent less than ``PHONE_GAP_S`` ago: not sent again) |
     ``none`` (no linked phone, the bot not configured, refused). The count only; the link opens the member's own Pendant page,
     which asks for their sign-in."""
+    import erase_watermark
+
+    began = erase_watermark._now()          # a member deleted after this gets nothing (the last-step check below)
     now = _clock()
     if now - _PHONE_AT.get(member, -1e9) < PHONE_GAP_S:
         return "recent"
@@ -513,6 +516,8 @@ async def send_to_phone(member: str, counts: dict) -> str:
         if not tid or not telegram_notify.available():
             return "none"
         url = _phone_url()
+        if await erase_watermark.refuse_send(member, began, "day_review_phone"):   # after the last await; unreadable = nothing
+            return "none"
         outcome = await telegram_notify.send(tid, phone_text(counts), url=url, label="Review your day" if url else None)
     except Exception as exc:  # noqa: BLE001
         logger.info("day_review_raise: phone send failed: %s", type(exc).__name__)

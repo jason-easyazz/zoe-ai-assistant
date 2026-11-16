@@ -269,7 +269,17 @@ async def schedule_reminder(
     The row is stamped with the reminder's CURRENT schedule_generation so a later
     update/snooze (which bumps that generation) makes this job self-void at fire
     time instead of delivering at the now-stale time.
+
+    Member delete: the row's ``created_at`` is when THIS call began (or when the enclosing ``erase_watermark.delivery`` began, e.g. a
+    quiet-hours follow-up), not the insert time, so the fire-time check (``_member_erased_since_row``: a row made at or before the
+    member's erase mark never delivers) refuses it for a delete that lands at ANY moment after that - also one that lands between a
+    caller's own check and this insert. After the insert the mark is asked once more: a refused row is removed and no job is
+    registered (returns ""), so nothing names the member afterwards. An unreadable mark keeps the row: the fire-time check (which
+    fails closed) decides. Every proactive_scheduled row is made here.
     """
+    import erase_watermark
+
+    began = erase_watermark.delivery_began() or erase_watermark._now()
     row_id = str(uuid.uuid4())
     job_id = f"reminder-{row_id}"
 
@@ -281,11 +291,21 @@ async def schedule_reminder(
         await db.execute(
             """INSERT INTO proactive_scheduled
                (id, user_id, message, trigger_type, send_at, apscheduler_job_id,
-                fired, item_id, schedule_generation)
-               VALUES (?, ?, ?, 'reminder', ?, ?, 0, ?, ?)""",
-            (row_id, user_id, message, send_str, job_id, item_id, generation),
+                fired, item_id, schedule_generation, created_at)
+               VALUES (?, ?, ?, 'reminder', ?, ?, 0, ?, ?, ?)""",
+            (row_id, user_id, message, send_str, job_id, item_id, generation, erase_watermark._iso(began)),
         )
         await db.commit()
+    try:
+        erased = await erase_watermark.send_refused(user_id, began, "schedule")
+    except erase_watermark.Unavailable:
+        erased = False                       # the fire-time check reads the mark again, and refuses on an unreadable one
+    if erased:
+        async with _get_compat_db() as db:
+            await db.execute("DELETE FROM proactive_scheduled WHERE id = ?", (row_id,))
+            await db.commit()
+        log.info("schedule_reminder: its member was deleted - nothing scheduled")
+        return ""
 
     # Register the scheduler job AFTER the row exists. If registration fails the
     # row would otherwise linger as a "scheduled" reminder that can never fire,

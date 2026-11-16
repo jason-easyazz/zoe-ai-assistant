@@ -257,3 +257,27 @@ async def test_waits_for_a_decision_after_repeated_unanswered_digests(env):
     env.db.conn.execute("UPDATE omi_day_candidates SET status='dismissed', decided_at='2026-10-22T00:00:00Z' WHERE id='c1'")
     env.db.conn.commit()
     assert await dig.send_for(OWNER, NOW) == "sent"
+
+
+@pytest.mark.asyncio
+async def test_a_member_deleted_while_the_claim_is_written_gets_no_digest_and_keeps_no_claim(env, monkeypatch):
+    """The last await before the Telegram send is the day's claim write: a member delete that lands there (its durable erase mark)
+    sends nothing, and the claim written for the deleted member is removed again."""
+    import erase_watermark
+    import user_prefs
+
+    add(env, "c1", "reminder", {"title": "Send the invoice", "date": "2026-10-30", "time": "09:00"})
+    removed = []
+
+    async def save(uid, st):
+        env.prefs[uid] = dict(st)
+        if st.get("claim") == "sending":
+            await erase_watermark.record(uid)              # the delete lands while the claim is written
+
+    async def delete_pref(uid, key, **_k):
+        removed.append((uid, key))
+        env.prefs.pop(uid, None)
+    monkeypatch.setattr(dig, "_save", save)
+    monkeypatch.setattr(user_prefs, "delete_pref", delete_pref)
+    assert await dig.send_for(OWNER, NOW) == "skipped:erased"
+    assert env.sent == [] and removed == [(OWNER, dig.STATE_KEY)] and OWNER not in env.prefs

@@ -2907,6 +2907,7 @@ def _sync_speaker_profiles(force: bool = False) -> None:
         except Exception as exc:
             log.debug("speaker profile cache persist failed: %s", exc)
         log.info("Speaker profiles synced: %d", len(profiles))
+        _apply_roster(data.get("roster"), guests)
     except Exception as exc:
         with _profile_cache_lock:
             cached_count = len(_profile_cache["profiles"])
@@ -5283,6 +5284,7 @@ def _purge_speaker_profile(user_id: str) -> bool:
         _profile_cache["guests"] = [g for g in (_profile_cache.get("guests") or []) if str(g.get("guest_id") or "") != uid]
     _persist_profile_cache()
     log.info("voice profile purge: removed %d cached profile(s)", removed)
+    _prune_shadow_log(gone=uid)                 # the per-turn predictions that name the member go too
     try:
         _sync_speaker_profiles(force=True)      # the authoritative list (a failed sync keeps what we just trimmed)
     except Exception as exc:  # noqa: BLE001
@@ -5296,12 +5298,17 @@ _FACE_CACHE_PATH = os.path.expanduser("~/.zoe-voice/face_profiles.json")
 
 
 def _purge_face_profile(user_id: str) -> bool:
-    """Drop `user_id`'s face embeddings from the face-profile cache file (0600, rewritten atomically). No file: nothing held, True. A
-    file that cannot be read as a profile list is REMOVED (it is a cache: the next enrolment run re-syncs it). False only when the
-    member's rows could not be removed."""
+    """Drop `user_id`'s face embeddings from the face-profile cache file (``face_profile_forget``). True when none of them is left."""
     uid = user_id.strip()
     if not uid:
         return False
+    return _rewrite_face_cache(lambda owner: owner == uid, "purge")
+
+
+def _rewrite_face_cache(drop, why: str) -> bool:
+    """Rewrite the face-profile cache without every row whose ``user_id`` ``drop`` names (0600, atomically). No file: nothing held,
+    True. A file that cannot be read as a profile list is REMOVED (it is a cache: the next enrolment run re-syncs it). False only when
+    the rows could not be removed."""
     try:
         with open(_FACE_CACHE_PATH, encoding="utf-8") as f:
             data = json.load(f)
@@ -5309,17 +5316,18 @@ def _purge_face_profile(user_id: str) -> bool:
         if not isinstance(profiles, list):
             raise ValueError("not a profile list")
     except FileNotFoundError:
-        log.info("face profile purge: no face cache on this panel")
         return True
     except (OSError, ValueError) as exc:
         try:
             os.unlink(_FACE_CACHE_PATH)
         except OSError as exc2:
-            log.warning("face profile purge: unreadable cache could not be removed: %s", exc2)
+            log.warning("face cache %s: unreadable cache could not be removed: %s", why, exc2)
             return False
-        log.info("face profile purge: unreadable cache removed (%s)", type(exc).__name__)
+        log.info("face cache %s: unreadable cache removed (%s)", why, type(exc).__name__)
         return True
-    kept = [p for p in profiles if not (isinstance(p, dict) and str(p.get("user_id") or "") == uid)]
+    kept = [p for p in profiles if not (isinstance(p, dict) and drop(str(p.get("user_id") or "")))]
+    if len(kept) == len(profiles):
+        return True
     tmp = _FACE_CACHE_PATH + ".tmp"
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -5327,10 +5335,113 @@ def _purge_face_profile(user_id: str) -> bool:
             json.dump({**data, "profiles": kept}, f)
         os.replace(tmp, _FACE_CACHE_PATH)
     except OSError as exc:
-        log.warning("face profile purge: cache rewrite failed: %s", exc)
+        log.warning("face cache %s: rewrite failed: %s", why, exc)
         return False
-    log.info("face profile purge: removed %d cached face profile(s)", len(profiles) - len(kept))
+    log.info("face cache %s: removed %d cached face profile(s)", why, len(profiles) - len(kept))
     return True
+
+
+def _row_ids(value) -> list:
+    """Every string held under a ``user_id`` key anywhere in a shadow row (the acting claim, and in ``dual`` the other model's)."""
+    out = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "user_id" and isinstance(v, str) and v:
+                out.append(v)
+            else:
+                out.extend(_row_ids(v))
+    elif isinstance(value, list):
+        for v in value:
+            out.extend(_row_ids(v))
+    return out
+
+
+def _prune_shadow_log(*, gone: str = "", keep=None) -> "int | None":
+    """Rewrite the speaker-ID shadow log (``SPEAKER_ID_SHADOW_LOG``: one prediction per turn, naming the claimed member) without the
+    rows of member ``gone``, or (``keep``, a set: the server's roster) of every member not in ``keep``. Streamed line by line (bounded
+    memory on a large file), mode kept, replaced atomically; rows a turn appends meanwhile are carried over under the log's lock, so
+    none is lost. A line that cannot be parsed is kept only when it cannot hold an id (``gone``: the id is not in it; ``keep``: it has no
+    ``user_id`` key - a torn row holds the key before the value). Returns rows dropped, None when the log could not be rewritten."""
+    path = SPEAKER_ID_SHADOW_LOG
+    if not gone and keep is None:
+        return 0
+
+    def dropped(line: str) -> bool:
+        if gone and gone not in line:
+            return False                    # cannot name the member: kept without a parse (the fast path)
+        try:
+            row = json.loads(line)
+        except ValueError:
+            return (gone in line) if gone else ('"user_id"' in line)
+        ids = _row_ids(row)
+        return (gone in ids) if gone else any(i not in keep for i in ids)
+
+    tmp = path + ".prune"
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        log.warning("shadow log prune: %s", exc)
+        return None
+    removed = 0
+    try:
+        with open(path, encoding="utf-8", errors="replace") as src:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                for line in src:
+                    if line.strip() and dropped(line):
+                        removed += 1
+                    else:
+                        out.write(line)
+                with _shadow_log_lock:          # rows appended while we streamed: carried over, then the swap
+                    for line in src:
+                        if line.strip() and dropped(line):
+                            removed += 1
+                        else:
+                            out.write(line)
+                    out.flush()
+                    os.fchmod(out.fileno(), mode or 0o600)
+                    if removed:
+                        os.replace(tmp, path)
+        if not removed:
+            os.unlink(tmp)
+    except OSError as exc:
+        log.warning("shadow log prune failed: %s", exc)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return None
+    if removed:
+        log.info("shadow log prune: removed %d row(s)", removed)
+    return removed
+
+
+_applied_roster: dict = {}
+
+
+def _apply_roster(roster, guests=None) -> None:
+    """The server's ROSTER (``/api/voice/profiles/sync``: the ids that still hold a voice / face profile; ids only) applied to what
+    this panel keeps outside the speaker cache: the face cache file loses every row of anyone not on the face roster, the shadow log
+    every row naming anyone not on the voice roster (named guests count as on it). Run after EVERY successful sync - at start and
+    hourly - so a member delete reaches a panel that never received its purge commands (offline past their 24 h, or a daemon that
+    predated them). A list the server left out is not applied. The shadow log is rescanned only when its roster changed. Never raises."""
+    if not isinstance(roster, dict):
+        return
+    try:
+        face = roster.get("face")
+        if isinstance(face, list):
+            face_keep = {str(x) for x in face}
+            _rewrite_face_cache(lambda owner: bool(owner) and owner not in face_keep, "roster")
+        voice = roster.get("voice")
+        if isinstance(voice, list):
+            keep = {str(x) for x in voice} | {str(g.get("guest_id")) for g in (guests or []) if isinstance(g, dict) and g.get("guest_id")}
+            key = tuple(sorted(keep))
+            if _applied_roster.get("shadow") != key and _prune_shadow_log(keep=keep) is not None:
+                _applied_roster["shadow"] = key
+    except Exception as exc:  # noqa: BLE001
+        log.warning("roster apply failed: %s", exc)
 
 
 def _enroll_stop_reason() -> str:

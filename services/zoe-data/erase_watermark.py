@@ -374,3 +374,19 @@ async def send_refused(user_id: Any, since: Any, lane: str) -> bool:
         logger.info("ERASE_WATERMARK_SEND_REFUSED lane=%s", lane)
         return True
     return False
+
+
+async def refuse_send(user_id: Any, since: Any, lane: str) -> bool:
+    """``send_refused`` that FAILS CLOSED: an unreadable mark also refuses (the caller sends nothing on a guess, and retries later where
+    it can). For the senders that have no claim to release and no caller to raise into (the phone digests)."""
+    try:
+        return await send_refused(user_id, since, lane)
+    except Unavailable:
+        logger.warning("ERASE_WATERMARK_SEND_UNREADABLE lane=%s", lane)
+        return True
+
+
+def delivery_began() -> Optional[datetime]:
+    """When the enclosing ``delivery`` began, or None outside one. A row a delivery QUEUES is stamped with it (not with the insert
+    time), so a delete that lands at any moment after the delivery began refuses the row where it is consumed."""
+    return instant(_delivery.get())

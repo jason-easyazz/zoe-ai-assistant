@@ -358,3 +358,51 @@ async def test_reenroll_consent_stamp_revoke_untouched(monkeypatch, consent, exp
 def _member_signed_in_at_the_panel(jason_signed_in_at_the_panel):
     """A device-token enrolment writes ONLY a member the server verified at the panel (biometric_scope, 2026-10-19); these tests
     are about the payload, so "jason" is PIN-signed-in. The identity rule itself: test_biometric_ownership_scope.py."""
+
+
+# ── 4. the ROSTER: ids only, so a panel that missed a purge command still drops a deleted member at its next sync ────────────
+
+class _RosterDB(_FakeDB):
+    """Speaker rows for the profile query; face rows (or a failure) for the face roster query."""
+
+    def __init__(self, rows, faces):
+        super().__init__(rows)
+        self.faces = faces
+
+    def execute(self, sql, params=()):
+        self.queries.append(sql)
+        if "FROM face_profiles" in sql:
+            if isinstance(self.faces, Exception):
+                raise self.faces
+            return _FakeCursor(self.faces)
+        return _FakeCursor(self.rows)
+
+
+def _install_roster_db(monkeypatch, rows, faces):
+    db = _RosterDB(rows, faces)
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield db
+
+    mod = types.ModuleType("db_compat")
+    mod.get_compat_db = fake_ctx
+    monkeypatch.setitem(sys.modules, "db_compat", mod)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_sync_sends_the_roster_of_every_consented_voice_and_active_face_and_never_a_vector(monkeypatch):
+    _install_roster_db(monkeypatch, [("jason", "Jason", EMB_JASON, 3, R34), ("old-voice", "Old", EMB_ZOE, 3, "resemblyzer")],
+                       [("jason",), ("face-only",)])
+    out = await voice_profiles_sync(models=R34, caller=dict(DEVICE_CALLER))
+    assert out["roster"] == {"voice": ["jason", "old-voice"], "face": ["face-only", "jason"]}, \
+        "the voice roster is every member still holding a consented profile of ANY model (a row not served still counts)"
+    assert all(isinstance(x, str) for ids in out["roster"].values() for x in ids)
+
+
+@pytest.mark.asyncio
+async def test_a_face_roster_that_cannot_be_read_is_left_out_never_sent_empty(monkeypatch):
+    _install_roster_db(monkeypatch, [("jason", "Jason", EMB_JASON, 3, R34)], RuntimeError("relation face_profiles does not exist"))
+    out = await voice_profiles_sync(models=R34, caller=dict(DEVICE_CALLER))
+    assert out["roster"] == {"voice": ["jason"]}, "the panel then drops no face at all"

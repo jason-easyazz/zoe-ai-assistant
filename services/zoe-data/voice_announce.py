@@ -148,6 +148,13 @@ async def enqueue_announcement(
         raise ValueError("announcement message is empty")
     ttl = max(1, int(ttl_s)) if ttl_s else _ttl_s()
     now = _now()
+    # ``created_at`` is when the enclosing delivery BEGAN when there is one (``erase_watermark.delivery``), so the claim's erase check
+    # (``claim_announcements``: a row made at or before the member's erase mark is never spoken) refuses a line for a member deleted at
+    # ANY moment after the delivery began, even one whose delete landed between the sender's last check and this insert
+    import erase_watermark
+
+    began = erase_watermark.delivery_began()
+    made = began if began is not None and began < now else now
     if dedupe_key:
         ann_id = dedupe_id(dedupe_key)
     else:
@@ -162,7 +169,7 @@ async def enqueue_announcement(
             panel_id,
             text,
             trigger_type or "",
-            _fmt(now),
+            _fmt(made),
             _fmt(datetime.fromtimestamp(now.timestamp() + ttl, tz=timezone.utc)),
         ),
     )

@@ -848,3 +848,21 @@ async def test_quiet_hours_still_hold_overnight_with_the_env_default():
     assert bot.delivered == []
     await run(gh, bot, at("07:05", day=20), people=people)
     assert len(bot.delivered) == 1
+
+
+async def test_an_owner_deleted_during_the_tick_is_sent_nothing():
+    """The durable erase mark lands after the tick began (here: while the recipients are read): the last-step check right before the
+    send refuses, nothing reaches the bot, and the delivery stays queued (not burnt as failed)."""
+    import erase_watermark
+
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.raise_pr(30, "fix: one", "Needs a look.", labels=["needs-owner"])
+
+    async def recipients():
+        await erase_watermark.record("u-owner")
+        return [owner()]
+    await cn.tick(gh=gh, sender=bot.sender(), recipients=recipients, now=at("12:00"), sleep=_noop_sleep, run_mode="on")
+    assert bot.calls == 0 and bot.delivered == []
+    st = cn.load_state()
+    assert {d["status"] for k, d in st["deliveries"].items() if k.startswith("u-owner|")} == {"queued"}
