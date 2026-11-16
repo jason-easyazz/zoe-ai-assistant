@@ -399,9 +399,46 @@ def test_a_clip_that_cannot_be_removed_fails_the_delete(env, store, monkeypatch)
     import voice_clips
 
     svc, _col = env
-    monkeypatch.setattr(voice_clips, "_remove", lambda *_a: False)
+
+    def cannot(*_a):
+        raise PermissionError("clip locked")
+    monkeypatch.setattr(voice_clips, "_remove_strict", cannot)
     with pytest.raises(memory_service.MemoryServiceError, match="member-owned store erasure failed"):
         _delete(svc)
+
+
+def test_the_clip_erase_runs_off_the_event_loop_so_it_stays_responsive_during_a_slow_scan(env, store, monkeypatch):
+    """The corpus scan (list, read every sidecar, unlink) is file work: it runs in a thread, so the loop keeps ticking WHILE it runs
+    (ticks are counted between the scan's start and its end, inside the scan). On the loop it would freeze everything for its length."""
+    import time as _time
+
+    import voice_clips
+
+    svc, _col = env
+    ticks, seen = [0], []
+
+    def slow_scan(member_id, directory=None):
+        start = ticks[0]
+        _time.sleep(0.6)
+        seen.append(ticks[0] - start)
+        return 0
+    monkeypatch.setattr(voice_clips, "erase_member", slow_scan)
+
+    async def go():
+        done = asyncio.Event()
+
+        async def ticker():
+            while not done.is_set():
+                ticks[0] += 1
+                await asyncio.sleep(0.02)
+        t = asyncio.ensure_future(ticker())
+        try:
+            await svc.delete_user(A, actor="test", reason="synthetic member delete")
+        finally:
+            done.set()
+            await t
+    asyncio.run(go())
+    assert seen and seen[0] >= 5, f"the loop ticked {seen} times during the scan"
 
 
 def test_a_stale_panel_claim_cannot_verify_the_deleted_member(env, store, monkeypatch):

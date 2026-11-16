@@ -142,3 +142,70 @@ def test_voice_command_labels_the_clip_member_guest_or_unknown():
                  '_voice_clips.record("unknown", "", _learned_cluster)'):
         assert line in body
     assert body.count("_voice_clips.record(") == 3                                    # no verdict (gate off) = no label = legacy
+
+
+# ── a member delete's clip erase is STRICT: nothing it cannot read or remove is swallowed ───────────────────────────────────────
+
+needs_permissions = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file permissions")
+
+
+@needs_permissions
+def test_a_corpus_that_cannot_be_listed_fails_the_member_erase_and_a_retry_finishes(corpus):
+    clip = label(corpus, "turn-1", "member", ident="ann")
+    os.chmod(corpus, 0o000)
+    try:
+        with pytest.raises(OSError):
+            vc.erase_member("ann")
+    finally:
+        os.chmod(corpus, 0o700)
+    assert os.path.exists(clip), "nothing was removed on a guess"
+    assert vc.erase_member("ann") == 1 and not os.path.exists(clip)
+
+
+@needs_permissions
+def test_a_sidecar_that_cannot_be_read_fails_the_member_erase(corpus):
+    label(corpus, "turn-1", "member", ident="ann")
+    side = corpus / "turn-1.verdict.json"
+    os.chmod(side, 0o000)
+    try:
+        with pytest.raises(OSError):
+            vc.erase_member("ann")
+    finally:
+        os.chmod(side, 0o600)
+    assert vc.erase_member("ann") == 1
+
+
+def test_a_corrupt_sidecar_is_erased_only_when_it_can_name_the_member_and_unlabelled_clips_stay(corpus):
+    """Strict mode does not fail on a corrupt label (that would block the delete forever) and does not skip it either: a label that
+    carries the member's id as a JSON string may be theirs, so it goes with its clip; one that cannot name them stays. A clip with no
+    sidecar at all (genuinely unattributed: the owner's open question) is untouched."""
+    named = wav(corpus / "turn-1.wav")
+    (corpus / "turn-1.verdict.json").write_text('{"v": 1, "kind": "member", "id": "ann", "ts": 1')        # torn write
+    other = wav(corpus / "turn-2.wav")
+    (corpus / "turn-2.verdict.json").write_text('{"v": 1, "kind": "member", "id": "annabel"')            # another member, torn
+    legacy = wav(corpus / "turn-3.wav")
+    assert vc.erase_member("ann") == 1
+    assert not os.path.exists(named) and not (corpus / "turn-1.verdict.json").exists()
+    assert os.path.exists(other) and os.path.exists(legacy)
+
+
+@needs_permissions
+def test_a_clip_that_cannot_be_removed_fails_the_member_erase_and_keeps_its_label(corpus):
+    clip = label(corpus, "turn-1", "member", ident="ann")
+    os.chmod(corpus, 0o500)                                          # listable and readable, nothing can be unlinked
+    try:
+        with pytest.raises(OSError):
+            vc.erase_member("ann")
+    finally:
+        os.chmod(corpus, 0o700)
+    assert os.path.exists(clip) and (corpus / "turn-1.verdict.json").exists(), "the label stays, so the retry finds the clip"
+
+
+@needs_permissions
+def test_the_lenient_readers_still_skip_what_they_cannot_read(corpus):
+    label(corpus, "turn-1", "guest", ident="g1")
+    os.chmod(corpus, 0o000)
+    try:
+        assert vc.erase_guests(["g1"]) == 0 and vc.sweep(days=0) == dict(removed=0, kept=0)
+    finally:
+        os.chmod(corpus, 0o700)

@@ -409,11 +409,13 @@ async def _after_commit(user_id: str) -> None:
     reads the store). Each panel is also told to drop the member's face embeddings (``face_profile_forget``, same queue, same 24 h TTL, same
 fail-closed retry): the panel's face cache file is refreshed only when an enrolment flow runs there, so without the command it would keep
 them; the server also refuses a stale face corroboration (speaker_adaptation)."""
+    import asyncio
+
     import voice_clips
 
     failure = None
     try:
-        voice_clips.erase_member(user_id)
+        await asyncio.to_thread(voice_clips.erase_member, user_id)   # list + read every sidecar + unlink: off the event loop
     except Exception as exc:  # noqa: BLE001 - the sessions and the panels below are still reached, then this is raised
         failure = exc
     try:

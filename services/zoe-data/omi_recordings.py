@@ -734,7 +734,7 @@ async def get_recording(user_id: str, rid: str) -> Optional[dict]:
 async def _tombstone(db, row: Any, now: datetime) -> None:
     import omi_voices            # FIRST: its segments, held voice embeddings and voiceprint contributions go with it (voiceprints rebuilt).
     await omi_voices.drop_recording(db, row["id"])    # A failure here leaves the row NOT deleted, so the owner's retry runs it again
-    _unlink(row["audio_path"] or "")
+    await asyncio.to_thread(_unlink, row["audio_path"] or "")      # file work off the event loop (a member delete tombstones many)
     await db.execute(
         "UPDATE omi_recordings SET status = 'deleted', transcript = '', audio_path = '', audio_bytes = 0, started_at = '', ended_at = '', "
         "duration_s = 0, keep_audio = 0, audio_expires_at = NULL, reviewed = 0, deleted_at = ? WHERE id = ?", (_iso(now), row["id"]))
@@ -813,7 +813,7 @@ async def forget_user(user_id: str) -> int:
             try:        # the night re-pass's per-chunk hypotheses (words, private files), swept INSIDE the gate the hypothesis writer also takes: a failure is LOUD, raised below after the rest has run
                 import omi_repass
                 import omi_repass_eval
-                omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+                await asyncio.to_thread(omi_repass_eval.forget_user, omi_repass.home_dir(), user_id)   # file rewrite off the loop
             except Exception as exc:  # noqa: BLE001
                 logger.error("OMI_REPASS_HYPS_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
                 hyps_failure = exc

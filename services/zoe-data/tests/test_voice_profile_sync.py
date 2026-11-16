@@ -393,16 +393,16 @@ def _install_roster_db(monkeypatch, rows, faces):
 
 @pytest.mark.asyncio
 async def test_sync_sends_the_roster_of_every_consented_voice_and_active_face_and_never_a_vector(monkeypatch):
-    _install_roster_db(monkeypatch, [("jason", "Jason", EMB_JASON, 3, R34), ("old-voice", "Old", EMB_ZOE, 3, "resemblyzer")],
-                       [("jason",), ("face-only",)])
+    _install_roster_db(monkeypatch, [("ann", "Ann", EMB_ZOE, 3, R34), ("old-voice", "Old", EMB_ZOE, 3, "resemblyzer")],
+                       [("ann",), ("face-only",)])
     out = await voice_profiles_sync(models=R34, caller=dict(DEVICE_CALLER))
-    assert out["roster"] == {"voice": ["jason", "old-voice"], "face": ["face-only", "jason"]}, \
+    assert out["roster"] == {"voice": ["ann", "old-voice"], "face": ["ann", "face-only"]}, \
         "the voice roster is every member still holding a consented profile of ANY model (a row not served still counts)"
     assert all(isinstance(x, str) for ids in out["roster"].values() for x in ids)
 
 
 @pytest.mark.asyncio
 async def test_a_face_roster_that_cannot_be_read_is_left_out_never_sent_empty(monkeypatch):
-    _install_roster_db(monkeypatch, [("jason", "Jason", EMB_JASON, 3, R34)], RuntimeError("relation face_profiles does not exist"))
+    _install_roster_db(monkeypatch, [("ann", "Ann", EMB_ZOE, 3, R34)], RuntimeError("relation face_profiles does not exist"))
     out = await voice_profiles_sync(models=R34, caller=dict(DEVICE_CALLER))
-    assert out["roster"] == {"voice": ["jason"]}, "the panel then drops no face at all"
+    assert out["roster"] == {"voice": ["ann"]}, "the panel then drops no face at all"

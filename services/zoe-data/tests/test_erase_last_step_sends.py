@@ -10,6 +10,7 @@ No database, no network: reads files only.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -213,21 +214,56 @@ def test_every_telegram_send_in_the_service_is_preceded_by_the_erase_check():
     assert not problems, problems
     assert {("day_review_raise.py", "send_to_phone"), ("omi_review_digest.py", "send_for"), ("change_notices.py", "_send"),
             ("reminder_delivery.py", "_channel"), ("auth_handoff.py", "send_to_phone")} <= set(checked), checked
+    for rel, fname in TELEGRAM_WRAPPERS:                     # a stale allow-list entry hides nothing and must go
+        assert any(f.name == fname for f in _functions(ast.parse((SVC / rel).read_text(encoding="utf-8")))), (rel, fname)
+
+
+#: what a delivering call is named like (a call of this shape that is neither proven checked nor ROW_CHECKED fails the test)
+_DELIVERY_SHAPE = re.compile(r"send|push|broadcast|enqueue|deliver|announce|speak|notify|create_pending|schedule_reminder|run_in_executor")
+
+
+def _lane_problems(fn, calls) -> tuple[list, list]:
+    """(delivering sites proven checked, problems): every awaited call of a delivering SHAPE must be either one of ``calls`` with the
+    erase check as its last await, or listed in ``ROW_CHECKED`` (its delivered row is refused where it is consumed)."""
+    sites, problems = _violations(fn, calls)
+    for aw in _own_awaits(fn):
+        if not isinstance(aw.value, ast.Call):
+            continue
+        name = _name(aw.value.func)
+        if name.split(".")[-1] in CHECKS or name in calls or name in ROW_CHECKED or not _DELIVERY_SHAPE.search(name):
+            continue
+        problems.append(f"{fn.name}:{aw.lineno} {name}: delivers but is neither checked nor listed in ROW_CHECKED")
+    return sites, problems
 
 
 def test_every_engine_lane_and_phone_channel_checks_after_its_last_await():
-    problems, seen = [], []
+    problems, seen, awaited = [], [], set()
     for (rel, fname), calls in LANE_CALLS.items():
         tree = ast.parse((SVC / rel).read_text(encoding="utf-8"))
         fn = next(f for f in _functions(tree) if f.name == fname)
-        sites, bad = _violations(fn, calls)
+        sites, bad = _lane_problems(fn, calls)
         seen += sites
         problems += [f"{rel} {b}" for b in bad]
-        unlisted = {_name(a.value.func) for a in _own_awaits(fn) if isinstance(a.value, ast.Call)} & set(ROW_CHECKED)
-        assert unlisted <= set(ROW_CHECKED)
+        awaited |= {_name(a.value.func) for a in _own_awaits(fn) if isinstance(a.value, ast.Call)}
     assert not problems, problems
     for (rel, fname), calls in LANE_CALLS.items():
         assert calls & set(seen), f"{rel}:{fname}: no delivering call found (renamed?)"
+    assert set(ROW_CHECKED) <= awaited, f"stale ROW_CHECKED entries: {set(ROW_CHECKED) - awaited}"
+
+
+def test_control_a_planted_unlisted_delivery_fails_the_lane_check():
+    src = '''
+async def lane(x):
+    if await refused("l"):
+        return
+    await enqueue_something_new(x)
+    if await refused("l"):
+        return
+    await send(x)
+'''
+    fn = next(f for f in _functions(ast.parse(src)) if f.name == "lane")
+    _sites, problems = _lane_problems(fn, {"send"})
+    assert problems and "enqueue_something_new" in problems[0], problems
 
 
 _SRC = '''

@@ -134,6 +134,45 @@ def _remove(side: str, wav: str) -> bool:
         return False
 
 
+def _labelled_strict(d: str, ident: str):
+    """The ERASE enumeration: like ``_labelled`` but nothing is swallowed. A corpus directory that does not exist holds nothing; one
+    that cannot be listed RAISES, and so does a sidecar that cannot be read (a permission or I/O failure must fail the member delete,
+    which is then retried, never read as done). A sidecar that is read but is not a verdict object (corrupt JSON, a torn write) yields
+    ``meta = None`` with ``named`` = whether its raw text carries ``ident`` as a JSON string: such a label may be the member's, so the
+    erase removes it only when it can name them (the clip behind a label that cannot name them is not theirs to delete here)."""
+    try:
+        names = [e for e in os.listdir(d) if e.endswith(SUFFIX) and not e.startswith(".")]
+    except FileNotFoundError:
+        return
+    for name in sorted(names):
+        side = os.path.join(d, name)
+        try:
+            raw = Path(side).read_bytes().decode("utf-8", errors="replace")
+        except FileNotFoundError:
+            continue                                    # removed meanwhile (a sweep): nothing left to erase
+        wav = os.path.join(d, name[: -len(SUFFIX)] + ".wav")
+        try:
+            meta = json.loads(raw)
+        except ValueError:
+            meta = None
+        if isinstance(meta, dict):
+            yield side, wav, meta, False
+        else:
+            yield side, wav, None, json.dumps(ident) in raw
+
+
+def _remove_strict(side: str, wav: str) -> None:
+    """Remove a clip and then its sidecar; RAISES on any failure but "already gone" (the label goes last, so a retry still finds it)."""
+    try:
+        os.unlink(wav)
+    except FileNotFoundError:
+        pass
+    try:
+        os.unlink(side)
+    except FileNotFoundError:
+        pass
+
+
 def sweep(directory: Optional[str] = None, *, now: Optional[float] = None, days: Optional[int] = None) -> dict:
     """Delete guest / unknown clips older than the retention (and their sidecars). Counts only. Member and legacy clips (no sidecar) are
     never touched."""
@@ -177,16 +216,17 @@ def erase_guests(person_ids, directory: Optional[str] = None) -> int:
 
 def erase_member(member_id: str, directory: Optional[str] = None) -> int:
     """A member delete: every saved clip whose verdict sidecar says it was THIS member (and the sidecar). Located by the label the server
-    wrote, never by a file name. RAISES when one cannot be removed (the member delete fails closed and is retried). Legacy clips with no
-    sidecar name nobody and stay. Counts only."""
+    wrote, never by a file name. STRICT (``_labelled_strict``): a corpus that cannot be listed, a sidecar that cannot be read, or a clip
+    that cannot be removed RAISES (the member delete fails closed and is retried); a sidecar that is not a valid verdict is removed with
+    its clip only when its text names the member. Legacy clips with no sidecar name nobody and stay. Counts only. Blocking file work:
+    callers on the event loop run it in a thread."""
     ident = str(member_id or "")
     if not ident:
         return 0
     n = 0
-    for side, wav, meta in _labelled(directory or sample_dir()):
-        if meta.get("kind") == "member" and str(meta.get("id")) == ident:
-            if not _remove(side, wav):
-                raise OSError("voice_clips: a member clip could not be removed")
+    for side, wav, meta, named in _labelled_strict(directory or sample_dir(), ident):
+        if (meta is not None and meta.get("kind") == "member" and str(meta.get("id")) == ident) or (meta is None and named):
+            _remove_strict(side, wav)
             n += 1
     if n:
         logger.info("VOICE_CLIPS member erase removed=%d", n)
