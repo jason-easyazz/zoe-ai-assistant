@@ -373,3 +373,15 @@ def test_lines_with_no_hop_evidence_never_pass_the_latency_number():
     assert "answered hops 0 < 200" in v["verdict"]["fails"]
     good = rep.summarize(rep.parse([act("alarm_create", hop=2.0)] * 200))["verbs"]["alarm_create"]["verdict"]
     assert good["pass"]                                                  # 200 answered hops under 10 ms: still a pass
+
+
+@pytest.mark.parametrize("state", ["unknown", "verified", "unverified", "uncertain", "refused"])
+def test_only_recognised_kernel_answers_supply_hop_evidence(state):
+    lines = [f"OS_SHADOW_ACT verb=alarm_create result=match kernel={state} hop_ms=0 q_ms=0"] * 200
+    v = rep.summarize(rep.parse(lines))["verbs"]["alarm_create"]
+    if state == "unknown":
+        assert v["hop_answered"] == 0 and not v["verdict"]["pass"]
+        assert "answered hops 0 < 200" in v["verdict"]["fails"]
+    else:
+        assert v["hop_answered"] == 200 and v["verdict"]["pass"]
+    assert rep.ANSWERED_KERNEL_STATES == {"verified", "unverified", "uncertain", "refused"}

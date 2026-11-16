@@ -431,13 +431,22 @@ def _service_files():
     return [p for p in SVC.rglob("*.py") if not skip.intersection(p.relative_to(SVC).parts)]
 
 
+def _lab_imports(source, *, forbid_labs=False, forbid_path=False):
+    tree = ast.parse(source)
+    imports = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    imports |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+    path = any(isinstance(n, ast.Attribute) and n.attr == "path" and isinstance(n.value, ast.Name)
+               and n.value.id == "sys" for n in ast.walk(tree))
+    return bool(imports & ({"zoe_os", "labs"} if forbid_labs else {"zoe_os"}) or forbid_path and path)
+
+
 def test_zoe_data_never_imports_the_lab_kernel():
-    src = (SVC / "os_shadow.py").read_text("utf-8")
-    imports = {a.name.split(".")[0] for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Import) for a in n.names}
-    imports |= {n.module.split(".")[0] for n in ast.walk(ast.parse(src)) if isinstance(n, ast.ImportFrom) and n.module}
-    assert not ({"zoe_os", "labs"} & imports) and "sys.path" not in src
+    assert not _lab_imports((SVC / "os_shadow.py").read_text("utf-8"), forbid_labs=True, forbid_path=True)
     for p in _service_files():
-        assert "from zoe_os" not in p.read_text("utf-8") and "import zoe_os" not in p.read_text("utf-8"), p.name
+        assert not _lab_imports(p.read_text("utf-8")), p.name
+    for statement in ("import zoe_os", "from zoe_os import Kernel", "import zoe_os as k", "import labs", "sys.path.append('lab')"):
+        assert _lab_imports(statement, forbid_labs=True, forbid_path=True)
+        assert not _lab_imports("# " + statement + "\n" + repr(statement), forbid_labs=True, forbid_path=True)
 
 
 def test_the_worker_is_the_only_thread_and_it_is_a_daemon(kernel):
@@ -494,13 +503,38 @@ def test_no_turn_path_calls_the_worker_start():
         assert not called & {"_ensure_worker", "revive", "Thread", "start"}, fn.name
 
 
+def _import_start_stmt(source):
+    """The statement that runs when the module is IMPORTED and is the last thing it does: the module's last statement, or, when
+    that is the ``if __name__ == "__main__": ... else: ...`` guard, the single statement of its ``else`` (the import branch)."""
+    last = ast.parse(source).body[-1]
+    if (isinstance(last, ast.If) and isinstance(last.test, ast.Compare) and isinstance(last.test.left, ast.Name)
+            and last.test.left.id == "__name__" and len(last.orelse) == 1):
+        return last.orelse[0]
+    return last
+
+
+def _ends_with_import_start(source):
+    last = _import_start_stmt(source)
+    return (isinstance(last, ast.Expr) and isinstance(last.value, ast.Call)
+            and isinstance(last.value.func, ast.Name) and last.value.func.id == "_start_at_import"
+            and not last.value.args and not last.value.keywords)
+
+
 def test_the_worker_starts_at_import_while_shadow_so_no_turn_starts_it(kernel):
     os_shadow._reset_for_tests()
     assert os_shadow._worker is None
     os_shadow._start_at_import()
     assert os_shadow._worker is not None and os_shadow._worker.is_alive()
     src = (SVC / "os_shadow.py").read_text("utf-8")
-    assert src.rstrip().endswith("_start_at_import()        # service start-up, never a turn (see _ensure_worker)")
+    assert _ends_with_import_start(src)
+    lines = src.splitlines(keepends=True)
+    last = _import_start_stmt(src)
+    pad = " " * last.col_offset
+    for replacement in ("pass  # _start_at_import()", repr("_start_at_import()")):       # the call gone, its name kept in text
+        mutated = ("".join(lines[:last.lineno - 1]) + pad + replacement
+                   + "  # service start-up, never a turn (see _ensure_worker)\n" + "".join(lines[last.end_lineno:]))
+        ast.parse(mutated)                                    # the mutation is valid Python, so the check below is a real refusal
+        assert not _ends_with_import_start(mutated)
 
 
 def test_the_import_start_is_a_no_op_with_the_flag_off(kernel, monkeypatch):

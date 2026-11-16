@@ -145,8 +145,11 @@ def pct(values: list[float], p: float) -> float:
     return v[min(len(v) - 1, max(0, int(round(p / 100 * (len(v) - 1)))))]
 
 
+ANSWERED_KERNEL_STATES = frozenset({"verified", "unverified", "uncertain", "refused"})
+
+
 def _answered(recs: list[dict]) -> list[float]:
-    return [r["hop_ms"] for r in recs if bucket(r["result"]) in ("agree", "disagree") and r.get("kernel") not in (None, "none")]
+    return [r["hop_ms"] for r in recs if bucket(r["result"]) in ("agree", "disagree") and r.get("kernel") in ANSWERED_KERNEL_STATES]
 
 
 #: the owner's pass mark for handing a verb to the kernel (docs/knowledge/zoe-os-integration.md), per verb
@@ -236,7 +239,7 @@ def summarize(recs: list[dict], rejected: int = 0) -> dict:
     recs = [r for r in every if r["verb"] == "list_add"]
     results = Counter(r["result"] for r in recs)
     compared = [r for r in recs if r["result"] not in NOT_COMPARED]
-    answered = [r["hop_ms"] for r in compared if r.get("kernel") not in (None, "none")]
+    answered = [r["hop_ms"] for r in compared if r.get("kernel") in ANSWERED_KERNEL_STATES]
     n = len(compared)
     verbs = sorted({r["verb"] for r in every}, key=lambda v: (VERB_ORDER.index(v) if v in VERB_ORDER else 99, v))
     every_results = Counter(r["result"] for r in every)

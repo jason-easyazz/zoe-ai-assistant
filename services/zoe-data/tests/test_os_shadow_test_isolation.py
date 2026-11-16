@@ -2,6 +2,7 @@
 per test, and guarded on every test's teardown. These are the guard's own checks, with its negative controls."""
 from __future__ import annotations
 
+import ast
 import os
 from pathlib import Path
 
@@ -34,10 +35,36 @@ def test_the_guard_flags_a_home_path_negative_control(monkeypatch, tmp_path, val
     monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path / "os-shadow"))      # the teardown guard must not fire for this test
 
 
+def _pin_before_import(source):
+    tree = ast.parse(source)
+    pins = [n for n in tree.body if isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute)
+        and isinstance(t.value.value, ast.Name) and t.value.value.id == "os"
+        and t.value.attr == "environ" and isinstance(t.slice, ast.Constant)
+        and t.slice.value == "ZOE_OS_SHADOW_DIR" for t in n.targets)]
+    imports = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
+               and any(a.name == "pytest" for a in n.names)]
+    return bool(pins and imports and min(n.lineno for n in pins) < min(n.lineno for n in imports))
+
+
+def _without_pin(source, replacement):
+    tree = ast.parse(source)
+    pin = next(n for n in tree.body if isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+        and t.slice.value == "ZOE_OS_SHADOW_DIR" for t in n.targets))
+    lines = source.splitlines(keepends=True)
+    lines[pin.lineno - 1:pin.end_lineno] = [replacement + "\n"]
+    return "".join(lines)
+
+
 def test_the_collection_time_pin_precedes_the_import():
-    src = (Path(__file__).parent / "conftest.py").read_text("utf-8")
-    pin = src.index('os.environ["ZOE_OS_SHADOW_DIR"]')
-    assert pin < src.index("import pytest  # noqa: E402")             # before conftest imports anything that imports the service
+    source = (Path(__file__).parent / "conftest.py").read_text("utf-8")
+    assert _pin_before_import(source)
+    for replacement in ('# os.environ["ZOE_OS_SHADOW_DIR"] = "safe"',
+                        repr('os.environ["ZOE_OS_SHADOW_DIR"] = "safe"')):
+        assert not _pin_before_import(_without_pin(source, replacement))
+    moved = _without_pin(source, "pass") + '\nos.environ["ZOE_OS_SHADOW_DIR"] = "safe"\n'
+    assert not _pin_before_import(moved)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -70,11 +97,26 @@ def test_an_inherited_live_or_empty_shadow_dir_never_survives_the_pin(conftest, 
     assert not os.path.realpath(env["ZOE_OS_SHADOW_DIR"]).startswith(live)
 
 
+def _assignment_not_setdefault(source):
+    tree = ast.parse(source)
+    has_pin = any(isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute)
+        and isinstance(t.value.value, ast.Name) and t.value.value.id == "os"
+        and t.value.attr == "environ" and isinstance(t.slice, ast.Constant)
+        and t.slice.value == "ZOE_OS_SHADOW_DIR" for t in n.targets) for n in tree.body)
+    return has_pin and not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                              and n.func.attr == "setdefault" for n in ast.walk(tree))
+
+
 def test_the_pin_is_an_assignment_never_a_setdefault():
     for conftest in CONFTESTS:
-        src = conftest.read_text("utf-8")
-        block = src[src.index("# shadow-pin-start"):src.index("# shadow-pin-end")]
-        assert "setdefault" not in block and 'os.environ["ZOE_OS_SHADOW_DIR"] =' in block, conftest
+        source = conftest.read_text("utf-8")
+        block = source[source.index("# shadow-pin-start"):source.index("# shadow-pin-end")]
+        assert _assignment_not_setdefault(block), conftest
+        for replacement in ('# os.environ["ZOE_OS_SHADOW_DIR"] = "safe"',
+                            repr('os.environ["ZOE_OS_SHADOW_DIR"] = "safe"'),
+                            'os.environ.setdefault("ZOE_OS_SHADOW_DIR", "safe")'):
+            assert not _assignment_not_setdefault(_without_pin(block, replacement))
 
 
 

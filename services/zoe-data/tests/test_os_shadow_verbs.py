@@ -484,6 +484,18 @@ def test_with_the_feature_on_a_builder_that_raises_is_one_counted_shadow_error_n
     assert os_shadow.counters() == {"shadow_error": 1}
 
 
+def _door_flags_before_build(source):
+    import ast
+
+    tree = ast.parse(source)
+    door = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_door")
+    body = door.body[1:] if isinstance(door.body[0], ast.Expr) and isinstance(door.body[0].value, ast.Constant) else door.body
+    first = body[0]
+    return (isinstance(first, ast.If)
+            and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "wants" for n in ast.walk(first.test))
+            and not any(isinstance(n, ast.Name) and n.id == "build" for n in ast.walk(first)))
+
+
 def test_every_note_function_checks_the_flags_before_it_touches_an_argument():
     """Structure: in every ``note_*`` function the arguments that carry the write (everything but who, the source code and the
     verb) are used ONLY inside the lambda handed to ``_note``, and ``_door`` reads ``wants(verb)`` before it calls ``build()``."""
@@ -500,10 +512,20 @@ def test_every_note_function_checks_the_flags_before_it_touches_an_argument():
         (call,) = [c for c in fn.body if isinstance(c, ast.Expr) and isinstance(c.value, ast.Call)]
         assert len(fn.body) <= 2, fn.name                               # a docstring and the one call: nothing runs before the flags
         assert getattr(call.value.func, "id", "") == "_note", fn.name
+    source = (SVC / "os_shadow.py").read_text("utf-8")
+    assert _door_flags_before_build(source)
     door = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_door")
-    body = door.body[1:] if isinstance(door.body[0], ast.Expr) and isinstance(door.body[0].value, ast.Constant) else door.body
-    first = body[0]
-    assert isinstance(first, ast.If) and "wants" in ast.dump(first.test) and "build" not in ast.dump(first)
+    call = next(n for n in ast.walk(door) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "wants")
+    lines = source.splitlines(keepends=True)
+    start = sum(map(len, lines[:call.lineno - 1])) + call.col_offset
+    end = sum(map(len, lines[:call.end_lineno - 1])) + call.end_col_offset
+    for replacement in ("False", repr("wants(verb)")):
+        mutated = source[:start] + replacement + source[end:]
+        mutated += "\n# wants(verb): the removed flag call\n"
+        assert not _door_flags_before_build(mutated)
+    mutated = source[:start] + "wants(verb) and build()" + source[end:]
+    assert not _door_flags_before_build(mutated)
+
 
 
 # ---- a reminder is compared on its ABSOLUTE due instant, so a queue delay cannot shift it -------------------------------------------

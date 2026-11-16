@@ -660,7 +660,7 @@ def test_the_turn_facing_functions_never_block_the_loop():
             called = getattr(c.func, "attr", getattr(c.func, "id", ""))
             assert called not in FORBIDDEN_ON_LOOP, (name, called)
             if called == "acquire":
-                assert any(k.arg == "blocking" and getattr(k.value, "value", True) is False for k in c.keywords), (name, "blocking acquire")
+                assert any(k.arg == "blocking" and isinstance(k.value, ast.Constant) and k.value.value is False for k in c.keywords), (name, "blocking acquire")
 
 
 @pytest.mark.asyncio
@@ -819,7 +819,7 @@ CHOKES = {"erase_rows", "erase_turn", "erase_text", "forget_transcript", "forget
 #: erase_rows callers allowed to skip the shadow, with the reason
 NO_SHADOW_OK = {
     "memory_service.py::_undo_night_write": "the night's own fresh rows, never shadowed, under the memory lock",
-    "memory_digest.py::*": "synthesis undo of rows it just wrote, never shadowed",
+    "memory_digest.py::_synthesis_pass": "synthesis undo of rows it just wrote, never shadowed",
 }
 
 
@@ -833,22 +833,115 @@ def _called(c):
     return getattr(c.func, "attr", getattr(c.func, "id", ""))
 
 
+def _reaches_choke(source, name):
+    fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    # ast.walk, not _own_walk: an entry point may reach the choke from a helper it defines inside itself (the cascade's per-store
+    # closures); a call that exists only in a comment or a string is still no call.
+    return bool({_called(c) for c in ast.walk(fn) if isinstance(c, ast.Call)} & CHOKES)
+
+
 @pytest.mark.parametrize("site", sorted(FORGET_ENTRY_POINTS))
 def test_every_forget_entry_point_reaches_a_shadow_choke(site):
     path, name = site.split("::")
-    calls, _ = _fn_calls(path, name)
-    assert {_called(c) for c in calls} & CHOKES, f"{site} erases member data without reaching the Zoe OS shadow"
+    source = (SVC / path).read_text("utf-8")
+    assert _reaches_choke(source, name), f"{site} erases member data without reaching the Zoe OS shadow"
+    # Keep real comments, replacing all choke calls with strings containing their source.
+    tree = ast.parse(source)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    lines = source.splitlines(keepends=True)
+    spans = [(sum(map(len, lines[:n.lineno-1])) + n.col_offset,
+              sum(map(len, lines[:n.end_lineno-1])) + n.end_col_offset)
+             for n in ast.walk(fn) if isinstance(n, ast.Call) and _called(n) in CHOKES]
+    assert spans
+    for start, end in sorted(spans, reverse=True):
+        source = source[:start] + repr(source[start:end]) + source[end:]
+    assert not _reaches_choke(source, name)
 
 
-def test_the_row_choke_reaches_the_shadow_before_deleting_and_the_word_chokes_too():
-    calls, fn = _fn_calls("memory_service.py", "erase_rows")
-    src = ast.get_source_segment((SVC / "memory_service.py").read_text("utf-8"), fn)
-    assert src.index("os_shadow.forget_for_erase") < src.index("self._delete_ids")
-    for name in ("erase_turn", "erase_text", "forget_transcript"):
-        calls, fn = _fn_calls("exact_words.py", name)
-        src = ast.get_source_segment((SVC / "exact_words.py").read_text("utf-8"), fn)
-        assert "await _shadow_first(user_id)" in src and src.index("_shadow_first") < max(src.find(".delete("), src.find("UPDATE"),
-                                                                                             src.find("_transcript_candidates")), name
+def _own_walk(node):
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            yield from _own_walk(child)
+
+
+def _shadow_before_delete(source, name, delete_names):
+    """Check executable awaits, including the words helper; comments/literals cannot count.
+
+    Delete callbacks passed to _run_sync count as deletes too. Ignore nested function
+    definitions and reject awaits under branches reachable only with reach_shadow false.
+    """
+    tree = ast.parse(source)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    aliases = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+               and n.module == "os_shadow" for a in n.names if a.name == "forget_for_erase"}
+
+    def shadow(call):
+        return (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "os_shadow" and call.func.attr == "forget_for_erase"
+                or isinstance(call.func, ast.Name) and call.func.id in aliases)
+
+    parents = {child: n for n in ast.walk(fn) for child in ast.iter_child_nodes(n)}
+
+    def reachable(n):
+        child = n
+        while child in parents:
+            parent = parents[child]
+            if isinstance(parent, (ast.If, ast.IfExp)):
+                # Evaluate this condition with reach_shadow=True where it has no other names.
+                names = {v.id for v in ast.walk(parent.test) if isinstance(v, ast.Name)}
+                if names <= {"reach_shadow"}:
+                    condition = eval(compile(ast.Expression(parent.test), "<guard>", "eval"),
+                                     {"__builtins__": {}}, {"reach_shadow": True})
+                    blocked = parent.orelse if condition else parent.body
+                    if child in (blocked if isinstance(blocked, list) else [blocked]):
+                        return False
+            child = parent
+        return True
+
+    nodes = list(_own_walk(fn))
+    deletes = [c.lineno for c in nodes if isinstance(c, ast.Call)
+               and (_called(c) in delete_names or any(isinstance(a, (ast.Name, ast.Attribute))
+                    and getattr(a, "attr", getattr(a, "id", "")) in delete_names for a in c.args))]
+    awaits = [n for n in nodes if isinstance(n, ast.Await) and isinstance(n.value, ast.Call) and reachable(n)]
+    for n in awaits:
+        if shadow(n.value) and (not delete_names or deletes and n.lineno < min(deletes)):
+            return True
+        if _called(n.value) == "_shadow_first" and deletes and n.lineno < min(deletes):
+            return _shadow_before_delete(source, "_shadow_first", set())
+    return False
+
+
+def _replace_await(source, name, called, replacement):
+    """Replace only the executable await span, leaving the original comments intact."""
+    tree = ast.parse(source)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    node = next(n for n in _own_walk(fn) if isinstance(n, ast.Await) and isinstance(n.value, ast.Call)
+                and _called(n.value) == called)
+    lines = source.splitlines(keepends=True)
+    start = sum(map(len, lines[:node.lineno - 1])) + node.col_offset
+    end = sum(map(len, lines[:node.end_lineno - 1])) + node.end_col_offset
+    return source[:start] + replacement + source[end:]
+
+
+@pytest.mark.parametrize("path,name,deletes,call", [
+    ("memory_service.py", "erase_rows", {"_delete_ids"}, "forget_for_erase"),
+    ("exact_words.py", "erase_turn", {"delete"}, "_shadow_first"),
+    ("exact_words.py", "erase_text", {"delete"}, "_shadow_first"),
+    ("exact_words.py", "forget_transcript", {"_transcript_candidates", "_set_transcript_metadata"}, "_shadow_first"),
+])
+def test_the_row_choke_reaches_the_shadow_before_deleting_and_the_word_chokes_too(path, name, deletes, call):
+    source = (SVC / path).read_text("utf-8")
+    assert _shadow_before_delete(source, name, deletes)
+    for replacement in ("None", repr("await os_shadow.forget_for_erase(user_id); await _shadow_first(user_id)"),
+                        "(await os_shadow.forget_for_erase(user_id) if not reach_shadow else None)"):
+        mutated = _replace_await(source, name, call, replacement)
+        mutated += f"\n# await {call}(user_id): removed executable call\n"
+        # The false-guard mutation contains an Await inside an IfExp: it must not count.
+        assert not _shadow_before_delete(mutated, name, deletes), (name, replacement)
+    if call == "_shadow_first":
+        for replacement in ("None", repr("await os_shadow.forget_for_erase(user_id)")):
+            assert not _shadow_before_delete(_replace_await(source, "_shadow_first", "forget_for_erase", replacement), name, deletes)
 
 
 def _no_shadow_sites(source_by_path: dict) -> set:
@@ -857,22 +950,32 @@ def _no_shadow_sites(source_by_path: dict) -> set:
         for fn in [n for n in ast.walk(ast.parse(src)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             for c in ast.walk(fn):
                 if (isinstance(c, ast.Call) and _called(c) == "erase_rows"
-                        and any(k.arg == "reach_shadow" and getattr(k.value, "value", True) is False for k in c.keywords)):
+                        and any(k.arg == "reach_shadow" and isinstance(k.value, ast.Constant) and k.value.value is False for k in c.keywords)):
                     found.add(f"{path}::{fn.name}")
     return found
 
 
 def _allowed(site):
-    return site in NO_SHADOW_OK or f"{site.split('::')[0]}::*" in NO_SHADOW_OK
+    return site in NO_SHADOW_OK
 
 
 def test_only_the_named_system_undos_skip_the_shadow_and_a_rogue_skip_is_caught():
     sources = {p.relative_to(SVC).as_posix(): p.read_text("utf-8") for p in SVC.rglob("*.py")
-               if "tests" not in p.relative_to(SVC).parts and "erase_rows" in p.read_text("utf-8")}
+               if "tests" not in p.relative_to(SVC).parts}
     sites = _no_shadow_sites(sources)
-    assert sites and all(_allowed(s) for s in sites), sorted(s for s in sites if not _allowed(s))
+    assert sites == set(NO_SHADOW_OK) and all(_allowed(s) for s in sites), sorted(s for s in sites if not _allowed(s))
+    for site in NO_SHADOW_OK:
+        path, name = site.split("::")
+        mutated = dict(sources)
+        mutated[path] = _replace_await(sources[path], name, "erase_rows",
+                                      repr("svc.erase_rows(u, ids, reach_shadow=False)"))
+        assert _no_shadow_sites(mutated) == sites - {site}     # real call removed, original comments kept
     rogue = {"rogue.py": "async def wipe(svc, u, ids):\n    await svc.erase_rows(u, ids, actor=u, reach_shadow=False)\n"}
     assert not all(_allowed(s) for s in _no_shadow_sites(rogue))            # negative control: a new skip is flagged
+    for decoy in ("# await svc.erase_rows(u, ids, reach_shadow=False)\n    pass", repr("svc.erase_rows(u, ids, reach_shadow=False)")):
+        assert _no_shadow_sites({"rogue.py": "async def wipe():\n    " + decoy + "\n"}) == set()
+    renamed = {"memory_digest.py": sources["memory_digest.py"].replace("async def _synthesis_pass(", "async def rogue(")}
+    assert not all(_allowed(s) for s in _no_shadow_sites(renamed))
     calls, _ = _fn_calls("memory_space.py", "forget_row")
     assert "erase_rows" in {_called(c) for c in calls}
     rogue_entry = "async def forget_everything(u):\n    import exact_words\n    await exact_words.get_backend().delete(u, ['t1'])\n"
@@ -913,3 +1016,115 @@ async def test_with_no_shadow_state_a_row_and_a_words_forget_touch_nothing(env, 
     assert (await svc.erase_rows(MEMBER, ["r1"], actor=MEMBER))["rows_removed"] == 0
     assert await exact_words.erase_text(MEMBER, "the book club meets on tuesday") == 0
     assert not (tmp_path / "os-shadow").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True], ids=["confirmed", "refused"])
+async def test_row_erase_waits_for_shadow_and_failure_preserves_rows(env, monkeypatch, fails):  # noqa: F811
+    import memory_service
+    import memory_value_registry
+
+    svc, col = env
+    col.rows["r1"] = ("a synthetic garden fact", {"user_id": MEMBER})
+    order = []
+
+    async def forget(user_id):
+        assert user_id == MEMBER
+        order.append("shadow")
+        if fails:
+            raise os_shadow.ShadowForgetUnavailable("refused")
+
+    async def registry(*args, **kwargs):
+        pass
+
+    real_delete = svc._delete_ids
+
+    def delete(ids):
+        order.append("delete")
+        return real_delete(ids)
+
+    monkeypatch.setattr(os_shadow, "forget_for_erase", forget)
+    monkeypatch.setattr(memory_value_registry, "erase_for_rows", registry)
+    monkeypatch.setattr(svc, "_delete_ids", delete)
+    if fails:
+        with pytest.raises(memory_service.MemoryServiceError, match="shadow erasure failed"):
+            await svc.erase_rows(MEMBER, ["r1"], actor=MEMBER)
+        assert order == ["shadow"] and "r1" in col.rows
+    else:
+        assert (await svc.erase_rows(MEMBER, ["r1"], actor=MEMBER))["rows_removed"] == 1
+        assert order == ["shadow", "delete"] and "r1" not in col.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["erase_turn", "erase_text", "forget_transcript"])
+@pytest.mark.parametrize("fails", [False, True], ids=["confirmed", "refused"])
+async def test_word_erasers_wait_for_shadow_and_failure_preserves_words(monkeypatch, name, fails):
+    import exact_words
+
+    order = []
+    text = "the synthetic garden grows lavender"
+    backend = exact_words.MemoryBackend()
+    await backend.add(MEMBER, "t1", 1, text, " lavender ", "test")
+    real_delete = backend.delete
+    metadata = {"t1": "{}"}
+
+    async def forget(user_id):
+        assert user_id == MEMBER
+        order.append("shadow")
+        if fails:
+            raise os_shadow.ShadowForgetUnavailable("refused")
+
+    async def delete(user_id, ids):
+        order.append("delete")
+        return await real_delete(user_id, ids)
+
+    async def candidates(user_id, needle):
+        assert user_id == MEMBER
+        order.append("candidates")
+        return [("t1", text, metadata["t1"])]
+
+    async def update(row_id, value):
+        order.append("delete")
+        metadata[row_id] = value
+
+    monkeypatch.setattr(os_shadow, "forget_for_erase", forget)
+    monkeypatch.setattr(backend, "delete", delete)
+    if name == "forget_transcript":
+        monkeypatch.setattr(exact_words, "get_backend", lambda: exact_words.SqlBackend())
+        monkeypatch.setattr(exact_words, "_transcript_candidates", candidates)
+        monkeypatch.setattr(exact_words, "_set_transcript_metadata", update)
+    else:
+        monkeypatch.setattr(exact_words, "get_backend", lambda: backend)
+    call = getattr(exact_words, name)
+    if fails:
+        with pytest.raises(os_shadow.ShadowForgetUnavailable, match="refused"):
+            await call(MEMBER, "t1" if name == "erase_turn" else text)
+        assert order == ["shadow"]
+        assert (MEMBER, "t1") in backend.rows and metadata == {"t1": "{}"}
+    else:
+        assert await call(MEMBER, "t1" if name == "erase_turn" else text) == 1
+        assert order == (["shadow", "candidates", "delete"] if name == "forget_transcript" else ["shadow", "delete"])
+        if name == "forget_transcript":
+            assert json.loads(metadata["t1"])["off_record"] is True
+        else:
+            assert (MEMBER, "t1") not in backend.rows
+
+
+@pytest.mark.parametrize("statement", [
+    "os_shadow.forget_for_erase(user_id)",
+    "if not reach_shadow:\n        await os_shadow.forget_for_erase(user_id)",
+    "if reach_shadow is False:\n        await os_shadow.forget_for_erase(user_id)",
+    "async def unused():\n        await os_shadow.forget_for_erase(user_id)",
+    repr("await os_shadow.forget_for_erase(user_id)"),
+])
+def test_shadow_order_checker_rejects_unawaited_false_only_nested_and_string_decoys(statement):
+    source = ("async def erase_rows(user_id, reach_shadow=True):\n"
+              "    # os_shadow.forget_for_erase must precede the delete\n"
+              f"    {statement}\n    self._delete_ids([])\n")
+    assert not _shadow_before_delete(source, "erase_rows", {"_delete_ids"})
+
+
+def test_shadow_order_checker_accepts_imported_alias_but_rejects_late_calls():
+    head = "from os_shadow import forget_for_erase as forget\nasync def erase_rows(user_id):\n"
+    assert _shadow_before_delete(head + "    await forget(user_id)\n    self._delete_ids([])\n", "erase_rows", {"_delete_ids"})
+    assert not _shadow_before_delete(head + "    self._delete_ids([])\n    await forget(user_id)\n", "erase_rows", {"_delete_ids"})

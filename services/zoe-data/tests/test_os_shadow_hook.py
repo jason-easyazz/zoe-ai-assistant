@@ -202,6 +202,16 @@ class _Pool:
         return _A()
 
 
+def _suggestion_list_name_contract(source):
+    tree = ast.parse(source)
+    assigned = any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "ln" for t in n.targets)
+                   and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Attribute)
+                   and isinstance(n.value.func.value, ast.Name) and n.value.func.value.id == "lt"
+                   and n.value.func.attr == "capitalize" and not n.value.args and not n.value.keywords for n in ast.walk(tree))
+    sql = any(isinstance(n, ast.Constant) and isinstance(n.value, str) and "name=$2" in n.value for n in ast.walk(tree))
+    return assigned and sql
+
+
 @pytest.mark.asyncio
 async def test_an_accepted_suggestion_add_is_shadowed_after_its_commit_and_a_failed_one_is_not(kernel, monkeypatch):
     import pending_suggestions
@@ -660,4 +670,11 @@ async def test_an_accepted_suggestion_is_proposed_against_the_list_row_it_wrote_
     settle(1)
     assert out["ok"] and [a["args"]["list"] for _, op, a in kernel.calls if op == "act"] == ["Shopping"]
     src = inspect.getsource(pending_suggestions._execute_action)
-    assert "ln = lt.capitalize()" in src and "name=$2" in src
+    assert _suggestion_list_name_contract(src)
+    # Remove the assignment, leaving a comment and a string naming the old call.
+    assignment = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "ln" for t in n.targets))
+    lines = src.splitlines(keepends=True)
+    for replacement in ("# ln = lt.capitalize()\n        pass", repr("ln = lt.capitalize()")):
+        changed = lines[:assignment.lineno - 1] + ["        " + replacement + "\n"] + lines[assignment.end_lineno:]
+        assert not _suggestion_list_name_contract("".join(changed))
