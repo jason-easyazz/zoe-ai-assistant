@@ -222,7 +222,8 @@ OTHER: tuple[Store, ...] = (
     Store("production_feedback_log", "file", WORDS, OUT_OF_SCOPE, "Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and "
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
-          "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
+          "no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into "
+          "retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on.", markers=("voice_stt.jsonl",)),
     Store("flue_session_log", "file", WORDS, GAP, "The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
@@ -306,7 +307,10 @@ OTHER: tuple[Store, ...] = (
     Store("backup_json_exports", "backup", WORDS, REACHED, "Palace JSON exports and compaction backups are redacted by the forget ledger "
           "(forget_redact.redact_export, scripts/maintenance/redact_backups.py).", entity="forget_redact.redact_export",
           markers=("memory-exports", "palace-backups")),
-    Store("backup_adhoc", "backup", WORDS, OUT_OF_SCOPE, "One-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, "
+    Store("backup_legacy_db", "backup", WORDS, GAP, "Neither forget path reaches the legacy SQLite snapshots a setup or migration script leaves beside "
+          "the old databases (data/*.backup.<stamp>.db, <db>.pre-panel-migration.<stamp>.db): whole copies, never rewritten and never aged out. "
+          "Listed by household_text.py as a kept copy; removing them is an owner cleanup.", markers=("pre-panel-migration",)),
+    Store("backup_adhoc", "backup", WORDS, GAP, "Neither forget path reaches one-off backups an owner script makes (~/.zoe/backups/<tool>-<ts>/, mode 0700; the router-shadow one holds raw text, "
           "the env one holds secrets): ENFORCED deletion after ADHOC_BACKUP_MAX_AGE_DAYS (14) by the hourly sweep "
           "(local_text_logs.prune_adhoc_backups, fails the job if it cannot). Older hand-made dumps in ~/.zoe-backups are a ledgered cleanup.",
           markers=("migrate-hermes-env-", "router-shadow-", "dead-units-")),

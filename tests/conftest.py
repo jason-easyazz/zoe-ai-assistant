@@ -61,6 +61,25 @@ os.environ["ZOE_ROUTER_HEAD_LOG"] = os.path.join(_text_dir, "router_head_shadow.
 os.environ["ZOE_INTENT_MISS_LOG"] = os.path.join(_text_dir, "intent-misses.jsonl")
 os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(_text_dir, "adhoc-backups")
 
+_ERASE_PATHS = {
+    "ZOE_ROUTER_HEAD_LOG": "router_head_shadow.jsonl",
+    "ZOE_INTENT_MISS_LOG": "intent-misses.jsonl",
+    "ZOE_VOICE_STT_LOG": "voice_stt.jsonl",
+    "ZOE_TELEGRAM_STT_CAPTURE_DIR": "telegram-capture",
+    "ZOE_RECALL_GATE_TRACE_DIR": "recall-gate-trace",
+    "ZOE_ADHOC_BACKUP_DIR": "adhoc-backups",
+}
+_erase_dir = tempfile.mkdtemp(prefix="zoe-test-stores-erase-")
+atexit.register(shutil.rmtree, _erase_dir, ignore_errors=True)
+for _var, _leaf in _ERASE_PATHS.items():
+    os.environ[_var] = os.path.join(_erase_dir, _leaf)
+
+
+@pytest.fixture(autouse=True)
+def _local_erase_paths_are_per_test(monkeypatch, tmp_path):
+    for name, leaf in _ERASE_PATHS.items():
+        monkeypatch.setenv(name, str(tmp_path / "zoe-test-stores-local" / leaf))
+
 
 @pytest.fixture(scope="session")
 def event_loop():
