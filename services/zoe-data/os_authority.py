@@ -159,17 +159,21 @@ def _kernel() -> "os_shadow._Kernel":
 
 
 def _call(skill: str, op: str, timeout: float, **args):
+    return _call_until(skill, op, time.monotonic() + timeout, **args)
+
+
+def _call_until(skill: str, op: str, until: float, **args):
+    """One kernel call that may not run past ``until`` (``time.monotonic()``): connect, handshake, request and reply all draw on it."""
     k = _kernel()
     k.down_until = 0.0                     # this module keeps its own circuit
-    # ONE deadline for the whole call (connect, handshake, request, reply): the shadow client's ``until`` budget
-    return k.call(skill, op, time.monotonic() + timeout, **args)
+    return k.call(skill, op, until, **args)
 
 
-def _healthy() -> str:
+def _healthy(until: float) -> str:
     """'' when the kernel answered health inside the TTL window, else the fallback code."""
     if time.monotonic() - _state["health_at"] < HEALTH_TTL_S:
         return ""
-    h = _call(os_shadow.SKILL_BRAIN, "health", TIMEOUT_S)
+    h = _call_until(os_shadow.SKILL_BRAIN, "health", until)
     if not isinstance(h, dict) or h.get("alive") is not True or h.get("schema") != SCHEMA:
         return "unhealthy"
     if h.get("last_write_ok") is False:
@@ -178,35 +182,92 @@ def _healthy() -> str:
     return ""
 
 
-def _propose(user_id: str, item: str, list_name: str) -> Decision:
+class _Handoff:
+    """Who owns a verified grant: the waiting turn or nobody. Set under ``lock`` on both sides, so a grant is either DELIVERED to a
+    turn that is still waiting (it joins that turn's ledger) or seen by the worker as ABANDONED (the turn already fell back), never
+    both and never neither."""
+
+    __slots__ = ("lock", "gone", "delivered")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.gone = False
+        self.delivered = False
+
+
+#: the least budget an ``act`` is started with: an act begun closer to the deadline would mostly finish after the turn gave up
+ACT_MIN_S = 0.02
+
+
+def _propose(user_id: str, item: str, list_name: str, until: float, hand: _Handoff) -> Decision:
+    """The whole proposal on the worker thread, against ONE deadline (``until``): the roster read (a file), health, publish and act
+    together, never 150 ms each. No act is started without ``ACT_MIN_S`` of the budget left. A grant the kernel verified after the
+    turn gave up is taken back here (``list.remove``) and, if that does not verify, recorded ids-only; an act whose answer never came
+    (the deadline passed mid-act: the kernel may have committed it) is recorded the same way, for the reconcile."""
+    acting = False
     try:
-        bad = _healthy()
+        if user_id not in os_shadow.roster():   # a guest, the household, or a member added after the roster was written
+            return Decision("fallback", "not_in_roster")
+        bad = _healthy(until)
         if bad:
             return Decision("fallback", bad)
-        ev = _call(os_shadow.SKILL_VOICE, "publish", TIMEOUT_S, kind="utterance", subject=user_id,
-                   payload={"text": "authority list add"})
+        ev = _call_until(os_shadow.SKILL_VOICE, "publish", until, kind="utterance", subject=user_id,
+                         payload={"text": "authority list add"})
         seq = ev.get("seq") if isinstance(ev, dict) else None
         if not isinstance(seq, int) or isinstance(seq, bool):
             return Decision("fallback", "protocol")
-        rec = _call(os_shadow.SKILL_BRAIN, "act", TIMEOUT_S, action="list.add", on_behalf_of=user_id,
-                    args={"item": item, "list": list_name, "asked": seq}, caused_by=[seq])
+        if until - time.monotonic() < ACT_MIN_S:
+            return Decision("fallback", "timeout")         # never act past (or at the edge of) the turn's deadline
+        acting = True
+        rec = _call_until(os_shadow.SKILL_BRAIN, "act", until, action="list.add", on_behalf_of=user_id,
+                          args={"item": item, "list": list_name, "asked": seq}, caused_by=[seq])
+        acting = False
         proof = rec.get("proof") if isinstance(rec, dict) else None
-        if rec.get("verified") is True and rec.get("outcome") == "verified" and isinstance(proof, dict) and proof.get("item") == item:
-            return Decision("kernel", "verified")
-        return Decision("fallback", "unverified")
+        if not (rec.get("verified") is True and rec.get("outcome") == "verified" and isinstance(proof, dict)
+                and proof.get("item") == item):
+            return Decision("fallback", "unverified")
+        with hand.lock:
+            if not hand.gone:
+                hand.delivered = True
+                return Decision("kernel", "verified")
+        _abandoned(user_id, list_name, item)               # the turn fell back: production writes it the old way
+        return Decision("fallback", "late")
     except os_shadow.KernelRefused as exc:
         code = os_shadow.reason_code(exc.reason)
         return Decision("refused", code) if code in REAL_REFUSALS else Decision("fallback", "refused_" + code)
-    except (socket.timeout, TimeoutError):
-        return Decision("fallback", "timeout")
-    except (os_shadow.KernelUnavailable, FileNotFoundError, ConnectionError):     # not provisioned, no socket, refused, closed
-        return Decision("fallback", "unavailable")
-    except os_shadow.KernelProtocol:
-        return Decision("fallback", "protocol")
-    except OSError:
-        return Decision("fallback", "socket")
-    except Exception:  # noqa: BLE001 - nothing the kernel does may break the add
+    except Exception as exc:  # noqa: BLE001 - nothing the kernel does may break the add
+        if acting:
+            _record_late(user_id, "uncertain")             # sent, no answer: the kernel may hold it
+        if isinstance(exc, (socket.timeout, TimeoutError)):
+            return Decision("fallback", "timeout")
+        if isinstance(exc, (os_shadow.KernelUnavailable, FileNotFoundError, ConnectionError)):   # not provisioned, no socket, closed
+            return Decision("fallback", "unavailable")
+        if isinstance(exc, os_shadow.KernelProtocol):
+            return Decision("fallback", "protocol")
+        if isinstance(exc, OSError):
+            return Decision("fallback", "socket")
         return Decision("fallback", "error")
+
+
+def _abandoned(member: str, list_name: str, item: str) -> None:
+    """A verified grant nobody is waiting for: take it back now; if that does not verify, record it."""
+    try:
+        ok = _take_back_one(member, list_name, item)
+    except Exception:  # noqa: BLE001
+        ok = False
+    with _lock:
+        _counts["late:" + ("taken_back" if ok else "recorded")] += 1
+    if not ok:
+        _record_late(member, "late")
+
+
+def _record_late(member: str, why: str) -> None:
+    with _lock:
+        _counts["late:" + why] += 1
+    try:
+        _pending_add([member], why)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("OS_AUTHORITY late grant NOT recorded code=%s", type(exc).__name__)
 
 
 async def propose_add(user_id: Optional[str], *, list_type: Optional[str], list_name: Optional[str], item: str) -> Decision:
@@ -220,8 +281,6 @@ async def propose_add(user_id: Optional[str], *, list_type: Optional[str], list_
     try:
         if not uid or not text:
             return _note(Decision("fallback", "empty"), 0.0)
-        if uid not in os_shadow.roster():           # a guest, the household, or a member added after the roster was written
-            return _note(Decision("fallback", "not_in_roster"), 0.0)
         if user_erase_gate.in_progress(uid):
             return _note(Decision("fallback", "erasing"), 0.0)
         if _ledger.get() is None:                   # outside an all_or_none unit a grant could not be taken back: never asked
@@ -229,12 +288,17 @@ async def propose_add(user_id: Optional[str], *, list_type: Optional[str], list_
         if time.monotonic() < _state["down_until"]:
             return _note(Decision("fallback", "circuit"), 0.0)
         name = kernel_list_name(list_type, list_name)
-        fut = asyncio.get_running_loop().run_in_executor(_pool, _propose, uid, text, name)
+        until = time.monotonic() + TIMEOUT_S          # ONE deadline: the turn's wait and the worker's whole proposal share it
+        hand = _Handoff()
+        fut = asyncio.get_running_loop().run_in_executor(_pool, _propose, uid, text, name, until, hand)
         try:
             d = await asyncio.wait_for(fut, timeout=TIMEOUT_S)
         except asyncio.TimeoutError:
-            d = Decision("fallback", "timeout")
-        if d.code in ("timeout", "unavailable", "socket", "protocol", "unhealthy", "write_failed"):
+            with hand.lock:                           # in memory, a few instructions: the worker holds it as briefly
+                late = hand.delivered                 # verified in the instant the wait ran out: still this turn's
+                hand.gone = not late
+            d = Decision("kernel", "verified") if late else Decision("fallback", "timeout")
+        if d.code in ("timeout", "unavailable", "socket", "protocol", "unhealthy", "write_failed", "late"):
             _state["down_until"] = time.monotonic() + CIRCUIT_S
             _state["health_at"] = -1e9
         if d.verdict == "kernel":
@@ -350,11 +414,16 @@ def _pending_write(rows: list) -> None:
     os.replace(tmp, path)
 
 
-def _pending_add(members: list) -> None:
+#: why a row is in ``ROLLBACK_PENDING`` (closed codes): a take-back after a rollback that did not verify, a grant verified after the
+#: turn gave up that could not be taken back, an act whose answer never came
+PENDING_WHY = ("rollback", "late", "uncertain")
+
+
+def _pending_add(members: list, why: str = "rollback") -> None:
     with _pending_lock:
         rows = pending_rollbacks()
         for member, n in Counter(members).items():
-            rows.append({"member": member, "n": n, "at": int(time.time())})
+            rows.append({"member": member, "n": n, "at": int(time.time()), "why": why})
         _pending_write(rows)
 
 
@@ -370,7 +439,10 @@ def _pending_drop(member: str) -> None:
 # ---- erase reach ----------------------------------------------------------------------------------------------------------------
 def _erase_sync(skill: str, op: str, audience: Optional[str], args: dict) -> dict:
     """One erase op. Through the panel it carries a speaker assertion for ``args["subject"]`` (minted fresh per request); a
-    ``speaker unproven`` answer is retried ONCE with the secret read again (a kernel restart mints a new one)."""
+    ``speaker unproven`` answer is retried ONCE with the secret and generation read again (a restart, or a generation rolled mid-run).
+    Runs on the worker: every file it reads (creds, the identity secret) is read off the event loop."""
+    if not os_shadow.provisioned():
+        raise AuthorityEraseFailed("not_provisioned")          # kernel mode, no kernel credentials: the record cannot be reached
     for attempt in (0, 1):
         extra = os_speaker.speaker_arg(args["subject"], audience) if audience else {}
         try:
@@ -382,8 +454,6 @@ def _erase_sync(skill: str, op: str, audience: Optional[str], args: dict) -> dic
 
 
 async def _erase(skill: str, op: str, audience: Optional[str], **args) -> dict:
-    if not os_shadow.provisioned():
-        raise AuthorityEraseFailed("not_provisioned")          # kernel mode, no kernel credentials: the record cannot be reached
     loop = asyncio.get_running_loop()
     try:
         out = await asyncio.wait_for(loop.run_in_executor(_pool, _erase_sync, skill, op, audience, args), timeout=ERASE_TIMEOUT_S + 1)

@@ -55,6 +55,10 @@ class AuthorityFake(FakeKernel):
         self.remove_mode = "ok"                # "refuse": every list.remove is refused (a take-back that cannot verify)
         self.rows: Counter = Counter()         # (member, list, item) -> count
         self.used_nonces: set = set()
+        self.op_delay: dict = {}               # op -> seconds this kernel sits on it before answering
+
+    def acted(self):
+        return [a["action"] for _, op, a in self.calls if op == "act"]
 
     def unproven(self, a, person, audience):
         tok = a.get("speaker")
@@ -73,6 +77,8 @@ class AuthorityFake(FakeKernel):
 
     def _answer(self, conn, skill, req):
         op, a = req["op"], req["args"]
+        if self.op_delay.get(op):
+            time.sleep(self.op_delay[op])
         if op == "health":
             return self._ok(conn, req, self.health)
         if op == "erase_member":
@@ -248,6 +254,111 @@ async def test_the_decision_logs_codes_only(ak, caplog):
     lines = [r.getMessage() for r in caplog.records if "OS_AUTHORITY" in r.getMessage()]
     assert len(lines) == 1 and "secret" not in lines[0] and "result=kernel code=verified" in lines[0]
     assert os_authority.counters() == {"kernel:verified": 1}
+
+
+# ---- the turn's budget: nothing blocks the loop, ONE deadline for the whole proposal -------------------------------------------------
+def drain():
+    """Wait for the worker to finish what the last proposal left running on it (the pool has one thread)."""
+    os_authority._pool.submit(lambda: None).result(5)
+
+
+@pytest.mark.asyncio
+async def test_a_slow_roster_read_never_stalls_the_event_loop_and_the_budget_holds(ak, monkeypatch):
+    """Review item: the roster (people.json) was read ON the loop before the wait began. A 250 ms read now runs on the worker:
+    the loop keeps ticking through it and the turn falls back inside its budget."""
+    import asyncio
+    real = os_shadow.roster
+
+    def slow_roster():
+        time.sleep(0.25)
+        return real()
+    monkeypatch.setattr(os_shadow, "roster", slow_roster)
+    ticks = 0
+    stop = False
+
+    async def ticker():
+        nonlocal ticks
+        while not stop:
+            await asyncio.sleep(0.005)
+            ticks += 1
+    t = asyncio.ensure_future(ticker())
+    t0 = time.perf_counter()
+    d = await propose()
+    took = time.perf_counter() - t0
+    stop = True
+    await t
+    assert d == ("fallback", "timeout") and took < os_authority.TIMEOUT_S + 0.05
+    assert ticks >= 10, ticks                                  # the loop ran all through the read (about 30 ticks of 5 ms)
+    drain()
+    assert ak.acted() == []                                    # the worker found its deadline spent: it never acted
+
+
+def test_no_file_stat_or_credential_read_inside_this_modules_coroutines():
+    """Structure pin, like the shadow module's: every file the authority touches is read in a function the worker runs."""
+    import ast
+    tree = ast.parse((SVC / "os_authority.py").read_text("utf-8"))
+    banned = {"open", "roster", "provisioned", "pending_rollbacks", "_pending_add", "_pending_drop", "_pending_write", "read_text",
+              "write_text", "stat", "exists", "is_file", "unlink", "state_dir", "_load_creds", "eraser_creds", "reconciler_creds",
+              "identity", "speaker_arg", "mint", "_record_late", "_abandoned"}
+    bad = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.AsyncFunctionDef):
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Call):
+                    name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+                    if name in banned:
+                        bad.append((fn.name, name, n.lineno))
+    assert bad == []
+
+
+@pytest.mark.asyncio
+async def test_no_act_is_started_at_the_edge_of_the_deadline(ak):
+    ak.op_delay["publish"] = 0.14                              # health fast, publish answers ~10 ms before the deadline
+    assert await propose() == ("fallback", "timeout")
+    drain()
+    assert "publish" in ak.ops() and ak.acted() == []
+
+
+@pytest.mark.asyncio
+async def test_slow_health_and_slow_publish_share_one_deadline_not_one_each(ak):
+    ak.op_delay.update(health=0.09, publish=0.09)              # each inside 150 ms, together past it
+    t0 = time.perf_counter()
+    assert await propose() == ("fallback", "timeout")
+    drain()
+    assert time.perf_counter() - t0 < os_authority.TIMEOUT_S + 0.06       # the worker too stopped at the one deadline
+    assert ak.acted() == []
+
+
+@pytest.mark.asyncio
+async def test_an_act_answered_past_the_deadline_is_recorded_and_the_old_path_result_stands(ak):
+    """The kernel commits the add after the turn gave up (its answer arrives at 300 ms). Production falls back and writes the row;
+    the grant is in no ledger, so it is recorded ids-only for the reconcile (the kernel may hold it), and a later rollback of the
+    turn does not pretend to take it back."""
+    ak.op_delay["act"] = 0.3
+    db = _TxDB()
+    out = await add_many(db, "oat milk")
+    assert out["added"] == ["oat milk"] and [w[0] for w in db.writes] == ["INSERT INTO list_items"]
+    assert not out["outcomes"][0]["kernel"]
+    drain()
+    time.sleep(0.3)
+    assert ak.rows[(MEMBER, "Shopping", "oat milk")] == 1                  # the kernel did commit it, late
+    (row,) = os_authority.pending_rollbacks()
+    assert row["member"] == MEMBER and row["n"] == 1 and row["why"] == "uncertain"
+    assert os_authority.counters()["late:uncertain"] == 1
+
+
+def test_a_grant_verified_after_the_turn_left_is_taken_back_or_recorded(ak):
+    gone = os_authority._Handoff()
+    gone.gone = True
+    d = os_authority._propose(MEMBER, ITEM, "Shopping", time.monotonic() + 1.0, gone)
+    assert d == ("fallback", "late") and ak.acted() == ["list.add", "list.remove"] and +ak.rows == Counter()
+    assert os_authority.pending_rollbacks() == [] and os_authority.counters()["late:taken_back"] == 1
+    ak.remove_mode = "refuse"
+    gone = os_authority._Handoff()
+    gone.gone = True
+    assert os_authority._propose(MEMBER, ITEM, "Shopping", time.monotonic() + 1.0, gone) == ("fallback", "late")
+    (row,) = os_authority.pending_rollbacks()
+    assert row["why"] == "late" and row["n"] == 1 and ITEM not in json.dumps(row)
 
 
 # ---- the add path (list_service.add_items_to_list) ---------------------------------------------------------------------------------
