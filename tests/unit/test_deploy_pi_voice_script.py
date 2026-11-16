@@ -431,3 +431,77 @@ def test_a_bank_tree_the_panel_loader_would_refuse_is_refused_before_anything_sh
 def test_dry_run_names_the_bank_step_and_ships_nothing(harness, tmp_path):
     r = harness(REFLEX_BANK_DIR=_bank(tmp_path), DRY_RUN=1)
     assert r.returncode == 0 and "reflex bank" in r.stdout and not (harness.rec / "rsync.all").exists()
+
+
+# ── the bank preflight as a function: the directory's EXACT entry set must equal the manifest's ─────────────────────────────
+
+def _preflight(root: Path, tmp_path: Path):
+    """Source the real function and run it on ``root`` (never the deploy script). Returns (rc, stdout, files-from list)."""
+    lst = tmp_path / "ship.list"
+    lst.unlink(missing_ok=True)
+    r = subprocess.run(
+        ["bash", "-c", '. "$1"; reflex_bank_preflight "$2" "$3" "$4"', "x", str(SETUP / "reflex_bank_preflight.sh"),
+         str(root), str(SETUP / "zoe_voice_reflex.py"), str(lst)],
+        capture_output=True, text=True, timeout=60)
+    return r.returncode, r.stdout.strip(), (lst.read_text().splitlines() if lst.exists() else None)
+
+
+def test_preflight_scripts_are_valid_bash():
+    assert subprocess.run(["bash", "-n", str(SETUP / "reflex_bank_preflight.sh")]).returncode == 0
+
+
+def test_the_exact_entry_set_passes_and_the_list_is_exactly_the_manifest(tmp_path):
+    root = _bank(tmp_path)
+    rc, out, files = _preflight(root, tmp_path)
+    b = _the_bank_dir(root)
+    assert (rc, out) == (0, "ok")
+    assert files == sorted(f"{b.parent.name}/{b.name}/{n}" for n in ("manifest.json", "mm_01.wav", "mm_02.wav", "mm_03.wav"))
+
+
+@pytest.mark.parametrize("fault", ["stray_file", "stray_symlink", "listed_symlink", "subdirectory", "missing", "hidden", "fifo"])
+def test_a_bank_directory_that_differs_from_the_manifest_is_refused(tmp_path, fault):
+    root = _bank(tmp_path / "ok")
+    assert _preflight(root, tmp_path)[0] == 0                        # positive control: the same builder passes untouched
+    root = _bank(tmp_path / fault)
+    b = _the_bank_dir(root)
+    if fault == "stray_file":
+        (b / "notes.txt").write_text("x")
+    elif fault == "stray_symlink":
+        os.symlink(tmp_path, b / "link")
+    elif fault == "listed_symlink":
+        raw = (b / "mm_02.wav").read_bytes()
+        (b / "mm_02.wav").unlink()
+        (tmp_path / "elsewhere.wav").write_bytes(raw)
+        os.symlink(tmp_path / "elsewhere.wav", b / "mm_02.wav")
+    elif fault == "subdirectory":
+        (b / "sub").mkdir()
+    elif fault == "missing":
+        (b / "mm_03.wav").unlink()
+    elif fault == "hidden":
+        (b / ".hidden").write_text("x")
+    elif fault == "fifo":
+        os.mkfifo(b / "pipe")
+    rc, out, files = _preflight(root, tmp_path)
+    assert rc == 1 and files is None, (fault, out)
+    assert out != "ok" and (out.startswith("entry_set_mismatch") or out == "missing"), (fault, out)
+
+
+def test_the_refusal_names_counts_and_kind_never_contents(tmp_path):
+    root = _bank(tmp_path)
+    b = _the_bank_dir(root)
+    (b / "secret-name.txt").write_text("PLANTED-CONTENT")
+    rc, out, _ = _preflight(root, tmp_path)
+    assert rc == 1 and out == "entry_set_mismatch extra=1 missing=0 not_regular=0"
+    assert "secret-name" not in out and "PLANTED" not in out
+
+
+def test_the_bank_rsync_ships_only_the_verified_list(harness, tmp_path):
+    root = _bank(tmp_path)
+    r = harness(REFLEX_BANK_DIR=root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    last = (harness.rec / "rsync.all").read_text().splitlines()[-1]
+    assert "--files-from=" in last and "--checksum" in last and "--delete" not in last
+    (_the_bank_dir(root) / "stray.bin").write_bytes(b"x")                 # a stray entry now stops the deploy before any rsync
+    (harness.rec / "rsync.all").unlink()
+    r = harness(REFLEX_BANK_DIR=root)
+    assert r.returncode == 5 and not (harness.rec / "rsync.all").exists() and "entry_set_mismatch" in r.stderr

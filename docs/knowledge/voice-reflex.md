@@ -143,13 +143,16 @@ one of them: it is blocked in code (above), and setting `REFLEX_MODE=on` only pr
 4. **Panel deploy with the bank:** `REFLEX_BANK_DIR=~/reflex-bank bash scripts/setup/deploy-pi-voice.sh` (rsync `--checksum`,
    never `--delete`). Before anything ships, the script runs the PANEL'S OWN loader over the tree: every entry must be
    `<voice>/<sha8>/` with valid names, each manifest must parse and match `manifest_sha8` and its directory name, and every
-   take it lists must be a regular file with the right sha256 and format; anything else (or no bank) exits 5. Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
+   take it lists must be a regular file with the right sha256 and format, and each bank directory's entries (read without following
+   symlinks) must be EXACTLY the manifest plus the takes it lists: an extra file, subdirectory, symlink, hidden or special file, a
+   listed file that is a symlink or not regular, or a missing one exits 5 (message: counts and kind of fault only). The rsync then
+   ships only that verified list (`--files-from`), so the check and the transfer cannot disagree; anything else (or no bank) exits 5. Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
 5. **Shadow.** In the panel's `.env.voice` set `REFLEX_MODE=shadow`, `REFLEX_VOICE=<voice>`, `MEDIA_WATCH_ENABLED=true`
    (and `REFLEX_SILENT_MEMBERS=` for the children); `systemctl --user restart zoe-voice`. Expect, within a minute,
    `grep REFLEX_BANK` to say `result=ok ... takes=6..8`. Anything else: fix before going on.
 6. **Read the shadow for at least 7 days AND 100 turns** (whichever is longer):
    `ssh zoe-pi "grep -E 'REFLEX_DECISION|REFLEX_SAFETY|FIRST_SOUND' /home/pi/.zoe-voice/voice.log" > decisions.txt`, then
-   `python3 labs/voice-reflex-sim/sim.py --decisions decisions.txt` (the per-rule distribution) and, with the server's
+   `python3 labs/voice-reflex-sim/sim.py --decisions decisions.txt` (the per-rule distribution; the tool arrives with part 4/4 of this stack, #2613) and, with the server's
    allowlisted marker extract, `--markers markers.txt`:
    `grep -E 'DISTRESS_HANDOFF|MEDICAL_SAFETY |CHILD_SAFETY_FLOOR' ~/.zoe-logs/zoe-data.app.log | sed -E 's/^([0-9-]+ [0-9:]+).*(DISTRESS_HANDOFF|MEDICAL_SAFETY|CHILD_SAFETY_FLOOR).*/\1 \2/' > markers.txt`.
 7. **Numbers the shadow week must show** (any miss: stay in shadow, fix, repeat; all of them holding still does NOT unblock `on`):
