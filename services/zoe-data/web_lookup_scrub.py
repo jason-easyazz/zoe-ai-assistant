@@ -54,7 +54,10 @@ REASON_TRIPWIRE = "tripwire"
 
 _LEXICON_DIR = Path(__file__).resolve().parent / "lexicons_data"
 _WORD_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
-_LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+\.(?:com|net|org|io|au|uk|co)\b/")
+# A link: a scheme, www., or a domain (any top-level domain) followed by a path, query, fragment or port, which
+# is what lets a link carry data ("example.com?token=..."). A bare domain alone ("sites like reddit.com") is a
+# word, not a link.
+_LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,24}[/?#:]")
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
 _PHONE_RE = re.compile(r"(?<![^\W_])\+?\d[\d\s().\-]{5,}\d(?![^\W_])")

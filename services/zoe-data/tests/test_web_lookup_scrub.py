@@ -254,3 +254,14 @@ def test_a_short_known_name_split_into_pieces_never_leaves(raw, name):
 @pytest.mark.parametrize("raw", ["pizza lasagna recipe", "real estate prices"])
 def test_a_short_name_is_not_found_across_ordinary_words(raw):
     assert scrub_query(raw, PrivateTerms.of(names=["Al"])).query == raw
+
+
+@pytest.mark.parametrize("raw", ["example.com?token=syntheticsecret reviews", "shop.example.org#ref=abc review",
+                                 "example.net:8080 status", "local.example.io/path?x=1 hours"])
+def test_a_schemeless_link_that_can_carry_data_is_refused(raw):
+    r = scrub_query(raw)
+    assert not r.send and r.reason == "link", r
+
+
+def test_a_bare_domain_alone_is_still_a_word():
+    assert scrub_query("best sites like reddit.com").send
