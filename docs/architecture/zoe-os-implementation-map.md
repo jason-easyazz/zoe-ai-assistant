@@ -558,9 +558,11 @@ Recommendation [inferred]:
 - The twin, the benches and `brain-lab-app` stay in `labs/zoe-os/` and import the service package.
 - Do not copy the brain's lab-hosted exception: it was named temporary, and a trust kernel run from an experiment folder contradicts
   D2's reason for being.
-- **One wording clash to settle:** `services/AGENTS.md:25` says "No `home`/`family`/`household` concepts in kernel code". That rule
-  means Zoe's core router and schema. A Zoe OS kernel that models household-owned lists (G2, G3) would read as a violation. The
-  child `AGENTS.md` must state the scope (Q5).
+- **The household rule applies to this kernel too (owner decision 2026-11-16).** `services/AGENTS.md:25` and section 6 of the
+  design charter say "No `home`/`family`/`household` concepts in kernel code". Neither is amended and Zoe OS gets no local
+  exception: a child `AGENTS.md` cannot authorise what the charter forbids. The kernel is reworked before this move so it knows
+  people, care links and sharing scopes, with the household's words in a settings file (the architecture study's A.7 and its
+  package G-generic). That rework is a prerequisite of WP-03.
 
 ### 4.3 Deploy
 
