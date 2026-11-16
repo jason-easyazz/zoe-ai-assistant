@@ -1061,7 +1061,7 @@ PANEL_SED = (
     r"server_first_ms=(-?[0-9]{1,6}) server_kind=[a-z_]{1,10} gap_ms=-?[0-9]{1,6} still_talking=([01]) "
     r"talk_chunks=(-?[0-9]{1,6}) chunks=[0-9]{1,6} underrun_max_ms=([0-9]{1,6}) underrun_sum_ms=([0-9]{1,7}) "
     r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6}) first_end_ms=-?[0-9]{1,6}"
-    r"( media=(-1|0|1) media_age_ms=-?[0-9]{1,6})?$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
+    r"( media=(-1|0|1) media_age_ms=-?[0-9]{1,6}( spk=(-1|0|1) spk_ms=-?[0-9]{1,6})?)?$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
     "t",
     r"s/^" + _PTS + r".*$/\1 E/p",  # any other timestamped line: its timestamp only, to prove how far the log reaches
 )

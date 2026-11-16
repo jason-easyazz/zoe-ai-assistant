@@ -40,11 +40,11 @@ DEEP = 0.02
 
 FIRST_SOUND_RE = re.compile(
     r"^FIRST_SOUND close=(deep|quiet|clean|hesitation|no_speech|cap|other|none)=(\d+)ms post_ms=(-?\d+) "
-    r"reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0 reflex_wait_ms=0 "
+    r"reflex=none skip=[a-z_-]+ reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0 reflex_wait_ms=0 "
     r"server_first_ms=(-?\d+) server_kind=(content|filler|tool_ack|greeting|canned|unknown|none) gap_ms=-1 "
     r"still_talking=([01]) talk_chunks=(-?\d+) chunks=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+) "
     r"obs_ms=(\d+) win=(wake|followup|conversation|barge) quiet_ms=(-?\d+) fall=(clean|hesitating|none) "
-    r"muted_ms=(-?\d+) first_end_ms=(-?\d+) media=(-1|0|1) media_age_ms=(-?\d+)$")
+    r"muted_ms=(-?\d+) first_end_ms=(-?\d+) media=(-1|0|1) media_age_ms=(-?\d+) spk=(-1|0|1) spk_ms=(-?\d+)$")
 PCM_WRITE_RE = re.compile(r"^PCM_WRITE n=(\d+) first_ms=(-?\d+) last_ms=(-?\d+) dur_ms=(\d+) gap_max_ms=(\d+) "
                           r"starved=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+) first_end_ms=(-?\d+)$")
 
@@ -83,7 +83,10 @@ def daemon():
 
 
 @pytest.fixture(autouse=True)
-def _fresh(daemon):
+def _fresh(daemon, monkeypatch):
+    # The shadow reflex decision (skip=) is pinned in test_voice_daemon_shadow_reflex.py; here it is absent, whatever
+    # sys.path holds, so the exact lines below stay exact.
+    monkeypatch.setattr(daemon, "_reflex", None)
     daemon._turn_close.clear()
     daemon._TALK.begin()
     daemon._TALK.armed = False
@@ -121,7 +124,7 @@ def test_line_with_nothing_known_is_all_sentinels(daemon):
     assert line == ("FIRST_SOUND close=none=0ms post_ms=-1 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=-1 server_kind=none gap_ms=-1 still_talking=0 "
                     "talk_chunks=-1 chunks=0 underrun_max_ms=0 underrun_sum_ms=0 obs_ms=0 win=barge quiet_ms=-1 fall=none "
-                    "muted_ms=-1 first_end_ms=-1 media=-1 media_age_ms=-1")
+                    "muted_ms=-1 first_end_ms=-1 media=-1 media_age_ms=-1 spk=-1 spk_ms=-1")
     assert FIRST_SOUND_RE.match(line)
 
 
@@ -140,7 +143,7 @@ def test_field_order_is_fixed(daemon, monkeypatch):
     assert keys == ["close", "post_ms", "reflex", "skip", "reflex_at_ms", "reflex_dur_ms", "reflex_cut",
                     "reflex_wait_ms", "server_first_ms", "server_kind", "gap_ms", "still_talking", "talk_chunks",
                     "chunks", "underrun_max_ms", "underrun_sum_ms", "obs_ms", "win", "quiet_ms", "fall", "muted_ms",
-                    "first_end_ms", "media", "media_age_ms"]
+                    "first_end_ms", "media", "media_age_ms", "spk", "spk_ms"]
     m = FIRST_SOUND_RE.match(line)
     assert m and m.group(1, 2, 3, 4, 5, 6, 7, 8) == ("deep", "640", "210", "1500", "greeting", "1", "4", "1")
     # the four appended fields: the observed window, the turn kind, the endpointer's own state at the commit, muted ms
@@ -369,7 +372,7 @@ def test_turn_lines_are_relative_to_the_carried_close(daemon, monkeypatch, caplo
     assert line == ("FIRST_SOUND close=deep=640ms post_ms=100 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=600 server_kind=greeting gap_ms=-1 still_talking=0 "
                     "talk_chunks=-1 chunks=3 underrun_max_ms=500 underrun_sum_ms=500 obs_ms=0 win=wake quiet_ms=-1 fall=none "
-                    "muted_ms=-1 first_end_ms=600 media=-1 media_age_ms=-1")   # the hand-stamped close carries no quiet run, fall or frames: sentinels
+                    "muted_ms=-1 first_end_ms=600 media=-1 media_age_ms=-1 spk=-1 spk_ms=-1")   # the hand-stamped close carries no quiet run, fall or frames: sentinels
 
 
 def test_followup_window_turn_is_relative_to_its_carried_close(daemon, monkeypatch, caplog):

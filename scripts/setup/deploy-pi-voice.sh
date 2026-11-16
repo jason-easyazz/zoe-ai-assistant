@@ -61,7 +61,7 @@ REMOTE_UNIT_DIR='$HOME/.config/systemd/user'
 REMOTE_UNIT="${REMOTE_UNIT_DIR}/zoe-voice.service"
 # The daemon's only local import is `zoe_voice_announce` (scripts/setup); ship
 # exactly the daemon + what it imports + the pip manifest.
-SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py zoe_speaker_resnet34.py zoe_speaker_resnet34_artifacts.json fetch_speaker_models.sh pi-requirements.txt)
+SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_reflex.py zoe_voice_enroll_mode.py zoe_enroll_flow.py zoe_speaker_resnet34.py zoe_speaker_resnet34_artifacts.json fetch_speaker_models.sh pi-requirements.txt)
 
 INSTALL_UNIT=0
 FORCE_UNIT=0
