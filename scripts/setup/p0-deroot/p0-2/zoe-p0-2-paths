@@ -13,7 +13,8 @@ Manifest lines: `kind name old new owner group mode` (# comments). kind is
   dir   a container's bind-source directory: copied from `old` on first apply (stamp `.p0-2-moved`), owner/group
         applied recursively once, then only the top directory is re-asserted (the container owns its contents);
   file  a single-file bind source (copied once, then re-asserted);
-  exec  a file a ROOT-run unit or executor runs IN PLACE (`old` and `new` are the same path): chown/chmod only.
+  exec  a file a ROOT-run unit or executor runs IN PLACE (`old` and `new` are the same path): replaced by a fresh
+        copy with the final owner and mode (a descriptor the service user already holds keeps only the old inode).
 The rule verify enforces (p0-deroot.md section 2.6): every component from the item up to `/` is a real directory
 (no symlink), and none is writable by the service user (owner, group-writable through one of its groups, or
 other-writable without the sticky bit). A source the service user can rename is re-resolved, as root, at the next
@@ -205,18 +206,43 @@ def apply_item(it, root, state):
     uid, gid = uid_of(it["owner"]), gid_of(it["group"])
     if it["kind"] == "exec":
         # The service user owns this script today, so it may swap it for a link to a protected file just before the
-        # owner runs apply. Open it pinned without following a link and change it only through that descriptor.
+        # owner runs apply: open it pinned without following a link and read it only through that descriptor. And it
+        # may already hold the file open for WRITING: chown/chmod does not revoke that descriptor, so hardening the
+        # same inode would leave a writable handle on the code a root unit runs. So publish a FRESH inode instead:
+        # copy the bytes to a new file created exclusively in the same directory (through a pinned directory fd),
+        # give it the final owner and mode, then rename it over the name. A held descriptor keeps only the old,
+        # now unlinked inode, which nothing executes.
         fd = open_nofollow(new, directory=False)
+        pfd = open_nofollow(os.path.dirname(new), directory=True)
+        name = os.path.basename(new)
+        tmp = f".{name}.p0-2-exec"
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
                 raise RuntimeError(f"{new} is not a regular file; refusing")
             state.setdefault(it["name"], {"owner": st.st_uid, "group": st.st_gid, "mode": stat.S_IMODE(st.st_mode)})
-            os.fchown(fd, uid, gid)
-            os.fchmod(fd, it["mode"])
+            try:
+                os.unlink(tmp, dir_fd=pfd)
+            except FileNotFoundError:
+                pass
+            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=pfd)
+            try:
+                while chunk := os.read(fd, 1 << 20):
+                    os.write(out, chunk)
+                os.fchown(out, uid, gid)
+                os.fchmod(out, it["mode"])
+                os.fsync(out)
+            finally:
+                os.close(out)
+            os.rename(tmp, name, src_dir_fd=pfd, dst_dir_fd=pfd)
         finally:
+            try:
+                os.unlink(tmp, dir_fd=pfd)
+            except FileNotFoundError:
+                pass
+            os.close(pfd)
             os.close(fd)
-        return "fixed in place"
+        return "replaced with a fresh root-owned copy"
     parent = os.path.dirname(new)
     if not os.path.isdir(parent):  # the /srv/zoe chain: root-owned, 0755, created only when absent
         os.makedirs(parent, mode=0o755)

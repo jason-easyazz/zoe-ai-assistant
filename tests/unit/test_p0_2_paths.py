@@ -147,6 +147,31 @@ def test_exec_item_fixed_in_place_and_reverted(tmp_path):
     assert "no apply record" in tool("revert", str(man), *common).stdout
 
 
+def test_a_writable_descriptor_held_across_apply_cannot_change_the_hardened_exec(tmp_path):
+    # Codex P1 on #2628: chown/chmod does not revoke a descriptor the service user opened for writing before apply.
+    # Apply publishes a FRESH inode, so a write through the held descriptor lands on the old, unlinked one.
+    root = tmp_path / "root"
+    f = root / "opt/run.sh"
+    f.parent.mkdir(parents=True)
+    f.write_text("echo good\n")
+    os.chmod(f, 0o777)
+    os.chmod(root, 0o755)
+    man = tmp_path / "e.manifest"
+    man.write_text(f"exec run /opt/run.sh /opt/run.sh {ME} {MYGID} 0755\n")
+    common = ["--root", str(root), "--service-user", "nobody", "--state", str(tmp_path / "s.json")]
+    held = os.open(f, os.O_WRONLY)
+    try:
+        before = os.stat(f).st_ino
+        assert tool("apply", str(man), *common, "--container-stopped").returncode == 0
+        os.write(held, b"echo evil\n")                       # the attacker writes through the old descriptor
+    finally:
+        os.close(held)
+    assert os.stat(f).st_ino != before                         # negative control: the inode really changed
+    assert f.read_text() == "echo good\n" and f.stat().st_mode & 0o777 == 0o755
+    assert not [p for p in f.parent.iterdir() if p.name != "run.sh"]   # no temp file left behind
+    assert tool("verify", str(man), *common).returncode == 0
+
+
 def test_manifest_rejects_a_moving_exec_item(tmp_path):
     man = tmp_path / "bad.manifest"
     man.write_text("exec x /a/b /c/d root root 0755\n")
