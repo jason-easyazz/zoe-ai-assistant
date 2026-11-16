@@ -42,8 +42,11 @@ class Person:
 
 
 def guards(actor: str, who: Person | None) -> bool:
-    """Is ``actor`` a guardian of ``who`` RIGHT NOW? Only while the kernel's own roster says ``who`` is a CHILD: a guardian link on an
-    adult (left over from a role change, or written by mistake) grants no reach. The one test every guardian path uses."""
+    """Is ``actor`` a guardian of ``who`` RIGHT NOW, for the FORGET / UNDO / EXPLAIN reach? Only while the kernel's own roster says
+    ``who`` is a CHILD: a guardian link on an adult (left over from a role change, or written by mistake) grants no such reach.
+    Organising never includes forget, undo or explain; forgetting on someone's behalf is a separate named power, today offered only
+    to a child's guardian, to be replaced by memory care (owner decision 2026-11-16: a carer of a child or an adult in care may
+    correct or remove what is remembered about that person; not built yet)."""
     return who is not None and who.role == CHILD and actor in who.guardians
 
 

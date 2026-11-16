@@ -284,11 +284,11 @@ job that already snapshots a live SQLite file with Python's online backup API (t
     fi
 
 Never `cp` the live `.db` (its `-wal` holds committed adds the main file does not have yet). `creds.json` and `k.sock` are re-made at
-every start and are never backed up; `people.json` is re-written from `users`. **Restore check** (run on the copy, kernel stopped):
+every start and are never backed up; `people.json` is re-written from `users`, each entry with its role stated
+(`{"id", "role": "adult"|"child"|"guest", "guardians"}`: a plain id is least access, never adult). **Restore check** (run on the copy, kernel stopped):
 `gunzip` it to the `--db` path, then the integrity check above, then start the daemon and read `health` (`schema` 1, `last_write_ok`
-true) and `scripts/maintenance/os_authority_reconcile.py` (`kernel_only=0`). A restore older than a forget must re-apply the forget
-(the repo-wide backup rule in `services/zoe-data/forget_reach.py`): re-run `delete_user` / the entity forget for anything forgotten
-after the backup's date. The backup holds the same words the kernel does, so it ages out with the 35-day rule.
+true) and `scripts/maintenance/os_authority_reconcile.py` (`kernel_only=0`). A restore brings back everything the backup holds (owner
+decision 2026-11-16). The backup holds the same words the kernel does, so it ages out with the 35-day rule.
 
 **Not done here.** Retention (a sweep as written would drop list rows: their receipts must be exempt first, D5), power loss (WAL with
 `synchronous=NORMAL` survives a kill, not necessarily a power cut), the roster push (D6), the guardian model (D7).
