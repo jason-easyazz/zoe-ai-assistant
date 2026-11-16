@@ -1,0 +1,72 @@
+#!/bin/sh
+# P0 de-root root helper (docs/architecture/p0-deroot.md section 4.2, P0-1 audit). NOT installed by anything: the owner
+# installs it root:root 0755 at /usr/local/libexec/zoe-priv/zoe-db-exec, and sudoers.d/60-zoe-deroot lets `zoe` run it
+# with exact argv. It replaces `docker exec zoe-database ...` for the backup, the dump manifest, the off-box globals,
+# the Multica heartbeat and the health checks, because the Docker proxy must NOT allow exec: the exec API takes
+# `Privileged` and `User` from the request BODY, which the proxy cannot see, so an allowed exec is a privileged root
+# process in a container and a short step from host root.
+#
+# Every exec here is `docker exec -i -u postgres zoe-database <fixed argv>`: never privileged, never root in the
+# container, one container with a named volume only. Postgres runs as role zoe (the database superuser zoe-data's own
+# credentials already are), over the container's local socket, so no password crosses a command line.
+#
+#   isready                         pg_isready (exit status only)
+#   dump zoe|multica                pg_dump -Fc to STDOUT; STDIN = tables whose DATA is excluded (schema kept), one name
+#                                   per line, at most 64, each [a-z_][a-z0-9_]{0,62}; anything else refuses (exit 2)
+#   dumpall-globals                 pg_dumpall --globals-only to STDOUT
+#   psql zoe|multica                the SQL on STDIN (psql -X -v ON_ERROR_STOP=1 -f -), command tags printed
+#   psql-at zoe|multica             the same, unaligned tuples only (-XAt)
+#   restore-list|restore-schema|restore-data   a dump on STDIN read with NO database connection: its TOC (pg_restore -l),
+#                                   its schema SQL (-s -f -) or its data SQL (--data-only -f -) to STDOUT
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS_VERIFY DOCKER_API_VERSION 2>/dev/null || true
+HOME=/root
+export HOME
+cd /
+umask 077
+set -f        # no globbing: the dump exclusion list is data, never a pattern for the shell
+C=zoe-database
+X="docker exec -i -u postgres $C"
+
+usage() { echo "usage: zoe-db-exec isready | dump zoe|multica | dumpall-globals | psql zoe|multica | psql-at zoe|multica | restore-list | restore-schema | restore-data" >&2; exit 2; }
+db_arg() { [ "$#" -eq 1 ] || usage; case "$1" in zoe|multica) ;; *) usage ;; esac; }
+
+[ "$#" -ge 1 ] || usage
+cmd="$1"; shift
+case "$cmd" in
+  isready|dumpall-globals|restore-list|restore-schema|restore-data) [ "$#" -eq 0 ] || usage ;;
+  dump|psql|psql-at) db_arg "$@" ;;
+  *) usage ;;
+esac
+
+case "$cmd" in
+  isready) exec $X pg_isready -q -U zoe ;;
+  dumpall-globals) exec $X pg_dumpall -U zoe --globals-only </dev/null ;;
+  psql) exec $X psql -U zoe -d "$1" -X -v ON_ERROR_STOP=1 -f - ;;
+  psql-at) exec $X psql -U zoe -d "$1" -XAt -v ON_ERROR_STOP=1 -f - ;;
+  restore-list) exec $X pg_restore -l ;;
+  restore-schema) exec $X pg_restore -s -f - ;;
+  restore-data) exec $X pg_restore --data-only -f - ;;
+  dump)
+    # read the exclusion list ONCE, bounded (4 KiB, 64 names), strictly validated before anything runs
+    list="$(head -c 4097)"
+    [ "${#list}" -le 4096 ] || { echo "zoe-db-exec: exclusion list too long" >&2; exit 2; }
+    set -- "$1"
+    n=0
+    for t in $list; do
+      case "$t" in
+        [a-z_]*) ;;
+        *) echo "zoe-db-exec: bad table name" >&2; exit 2 ;;
+      esac
+      if printf '%s' "$t" | LC_ALL=C grep -qv '^[a-z_][a-z0-9_]\{0,62\}$'; then
+        echo "zoe-db-exec: bad table name" >&2; exit 2
+      fi
+      n=$((n + 1))
+      [ "$n" -le 64 ] || { echo "zoe-db-exec: more than 64 exclusions" >&2; exit 2; }
+      set -- "$@" "--exclude-table-data=$t"
+    done
+    db="$1"; shift
+    exec $X pg_dump -U zoe -Fc "$@" "$db" </dev/null ;;
+esac
