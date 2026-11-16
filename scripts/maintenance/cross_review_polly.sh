@@ -54,7 +54,7 @@ omnigent_exec_prefix
 # caller's 2500s subprocess timeout (Codex, #1618). It came down again once the
 # bounded flock wait joined the sum (Codex P1, #1624). 30 minutes remains far
 # more than a polly cross-review has ever needed.
-TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-1800}"
+TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-1770}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
 [ "$TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be > 0" >&2; exit 1; }
 # Validated HERE, not left to argparse: an unvalidated value reaches the poller
@@ -93,6 +93,7 @@ LOCK_WAIT_MAX_S=120         # flock -w: the caller's clock runs during this too
 CREATE_MAX_S=60             # curl --max-time on POST /v1/sessions
 REGISTER_HTTP_TIMEOUT_S=30  # await-registration overshoots its budget by at most one request
 KICK_MAX_S=30               # timeout(1) around the detached docker-exec kick
+BRIEF_MAX_S=8               # timeout(1) around staging the brief on stdin, and again around removing it in cleanup
 POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
 # The report GET was the last one-shot HTTP call in the lane: a single
 # `curl -sf` whose failure discarded a COMPLETED review and forced a full
@@ -116,6 +117,7 @@ OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HT
 OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + REPORT_BUDGET_S + REPORT_HTTP_TIMEOUT_S + CLEANUP_MAX_S ))
 OVERHEAD_S=$(( OVERHEAD_S + STOP_BUDGET_S + STOP_HTTP_TIMEOUT_S ))
 OVERHEAD_S=$(( OVERHEAD_S + 2 * TIMEOUT_KILL_AFTER_S ))
+OVERHEAD_S=$(( OVERHEAD_S + 2 * (BRIEF_MAX_S + TIMEOUT_KILL_AFTER_S) ))   # brief staging + its cleanup removal
 WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 [ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
   echo "ALARM: budget inversion — worst-case wall ${WORST_CASE_S}s (poll ${TIMEOUT_S}s + ${OVERHEAD_S}s of bounded phases) is not below the caller's ${CALLER_TIMEOUT_S}s subprocess timeout; a kill there orphans the detached worker. Lower CROSS_REVIEW_TIMEOUT_S (max $(( CALLER_TIMEOUT_S - OVERHEAD_S - 1 ))) or CROSS_REVIEW_REGISTER_TIMEOUT_S." >&2
@@ -322,7 +324,7 @@ cleanup() {
   s=$(stop_session)
   echo "cleanup: session stop: $s (session $SID)" >&2
   # a brief staged for a kick that never ran must not outlive the review
-  [ -n "${BRIEF_FILE:-}" ] && timeout -k "$TIMEOUT_KILL_AFTER_S" 30 "${OMNI_EXEC[@]}" "$CONTAINER" sh -c "rm -f $BRIEF_FILE" >/dev/null 2>&1
+  [ -n "${BRIEF_FILE:-}" ] && timeout -k "$TIMEOUT_KILL_AFTER_S" "$BRIEF_MAX_S" "${OMNI_EXEC[@]}" "$CONTAINER" sh -c "rm -f $BRIEF_FILE" >/dev/null 2>&1 || true
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2
@@ -338,7 +340,7 @@ trap 'cleanup; exit 130' INT TERM
 # container-private 0600 file, read back by the kick and deleted before omnigent starts (and by cleanup if the kick
 # never ran). Pinned by tests/unit/test_omnigent_exec_routing.py.
 BRIEF_FILE="/tmp/zoe-cross-review-brief-$SID"
-printf %s "$BRIEF" | timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" "${OMNI_EXEC[@]}" -i "$CONTAINER" sh -c "umask 077 && cat > $BRIEF_FILE" \
+printf %s "$BRIEF" | timeout -k "$TIMEOUT_KILL_AFTER_S" "$BRIEF_MAX_S" "${OMNI_EXEC[@]}" -i "$CONTAINER" sh -c "umask 077 && cat > $BRIEF_FILE" \
   || { echo "ALARM: could not stage the brief in the container" >&2; exit 2; }
 # `docker exec -d` returns as soon as the container accepts the exec, but that
 # is still an unbounded RPC to the daemon — bound it so the BUDGET arithmetic

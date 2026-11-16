@@ -315,9 +315,10 @@ cleanup — **every `timeout` carries `-k`**, since without it TERM is sent and
 then waited on forever, which is not a bound at all), and the wrapper
 CHECKS the sum at startup and exits 1 on inversion — so raising
 `CROSS_REVIEW_TIMEOUT_S` fails loudly rather than silently re-inverting. Default
-poll budget is 1800s (not 2400) to leave real margin; the shipped worst case is
-**2370s against the caller's 2500s**, i.e. 130s of margin (30s of which the
-runner teardown below now spends). **A retried phase
+poll budget is 1770s (not 2400) to leave real margin; the shipped worst case is
+**2366s against the caller's 2500s**, i.e. 134s of margin (30s of which the
+runner teardown below now spends; the P0-2 brief staging and its cleanup removal
+add 26s, paid for by trimming the poll default from 1800s). **A retried phase
 costs its budget AND one request** — the report fetch adds `90 + 60`, not 90, so
 count both terms or the startup check under-counts the wall. **The lock wait is IN the
 sum**: the caller's timer starts at `subprocess.run`, BEFORE the lock is

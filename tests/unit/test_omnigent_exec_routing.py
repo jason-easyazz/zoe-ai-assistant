@@ -166,7 +166,7 @@ def test_no_caller_text_ever_reaches_an_exec_argv():
         argv = ln.split(PIPE)[-1]          # after the last pipe is the exec; what is piped in is stdin
         for name in ("$CONTRACT", "BRIEF_B64", "base64"):
             assert name not in argv, ln
-        assert "$BRIEF" not in argv.replace("$BRIEF_FILE", "").replace("BRIEF_FILE:-", ""), ln
+        assert "$BRIEF" not in argv.replace("$BRIEF_FILE", "").replace("BRIEF_FILE:-", "").replace("$BRIEF_MAX_S", ""), ln
     staged = [ln for ln in lines if ln.lstrip().startswith('printf %s "$BRIEF" ' + PIPE) and " -i " in ln]
     assert staged, "the brief is not staged on stdin"
     for ln in _exec_lines(CROSS):          # the codex/pi prompt goes on stdin, never in argv
@@ -180,3 +180,25 @@ def test_the_kick_reads_and_deletes_the_staged_brief():
     assert "cat $BRIEF_FILE) && rm -f $BRIEF_FILE && omnigent run" in kick[0], kick[0]
     body = text.split("cleanup() {", 1)[1].split("\ntrap ", 1)[0]
     assert 'sh -c "rm -f $BRIEF_FILE"' in body, "cleanup must remove a staged brief whose kick never ran"
+
+
+def test_brief_removal_in_cleanup_is_best_effort():
+    """cleanup() runs under set -e: a failed removal of the staged brief must never skip the worker teardown."""
+    body = POLLY.read_text().split("cleanup() {", 1)[1].split("\ntrap ", 1)[0]
+    line = [ln for ln in body.splitlines() if "rm -f $BRIEF_FILE" in ln]
+    assert len(line) == 1 and line[0].rstrip().endswith(PIPE * 2 + " true"), line
+    assert body.index("rm -f $BRIEF_FILE") < body.index("(stop_worker)"), "the removal must not sit after the teardown"
+
+
+def test_overhead_counts_the_brief_steps_and_fits_the_dispatchers_reserve():
+    """Every bounded phase polly adds must be in OVERHEAD_S, and the sum must fit what cross_review.sh reserves for
+    polly (POLLY_OVERHEAD_S); otherwise the caller's timeout can kill the shell before its teardown runs."""
+    text = POLLY.read_text()
+    consts = [ln for ln in text.splitlines() if re.match(r"^[A-Z_]+_S=", ln) or ln.startswith("OVERHEAD_S=")]
+    assert any("BRIEF_MAX_S" in ln for ln in consts if ln.startswith("OVERHEAD_S=")), "brief steps not counted"
+    prog = "\n".join(re.sub(r"\$\{[A-Z_]+:-([0-9]+)\}", r"\1", ln.split("  #", 1)[0]) for ln in consts)
+    r = subprocess.run(["bash", "-c", prog + "\necho $OVERHEAD_S"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    total = int(r.stdout.split()[-1])
+    reserve = int(re.search(r"^POLLY_OVERHEAD_S=(\d+)", CROSS.read_text(), re.M).group(1))
+    assert total <= reserve, (total, reserve)

@@ -118,7 +118,7 @@ KILL_AFTER_S=10         # timeout -k: escalate to KILL when TERM is ignored
 MIN_REPORT_BYTES=40
 # Polly's own bounded phases (lock wait, create, register, kick, report fetch, teardown,
 # kill escalation) added on top of its poll window; mirrors the OVERHEAD_S sum in
-# cross_review_polly.sh (570 s) with a little slack. Polly's worst-case wall is
+# cross_review_polly.sh (596 s since the brief is staged on stdin) with a little slack. Polly's worst-case wall is
 # poll window + this, so the window is clamped to what the caller's timeout leaves.
 POLLY_OVERHEAD_S=600
 # Worst-case teardown after polly: cwd sweep (30 s + kill-after) + app-server sweep (90 s +
