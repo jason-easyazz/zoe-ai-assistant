@@ -386,6 +386,9 @@ jobs:
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
           PYTEST_SHARD_LEDGER: ${{ runner.temp }}/ledger/unit-${{ matrix.group }}.json
+          # The personal-details canary (tests/unit/test_privacy_canary.py): with the key the real scan runs; a job of this repo
+          # that declares it but gets it empty FAILS (privacy_canary.missing_key_policy). Fork PRs get no secrets and skip.
+          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
 
       - name: Upload shard ledger
         if: ${{ always() }}
