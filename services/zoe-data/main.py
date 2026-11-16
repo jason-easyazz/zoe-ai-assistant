@@ -1289,6 +1289,11 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_voice_clips_ret.run_retention_loop(), name="voice_clip_retention")
     except Exception as _vc_exc:
         logger.warning("voice clip retention loop not started (non-fatal): %s", _vc_exc)
+    try:  # a member removal (Settings > Delete) whose erase failed or was cut by a restart is resumed: at start and every 5 min
+        import member_removal as _member_removal
+        asyncio.create_task(_member_removal.run_retry_loop(), name="member_removal_retry")
+    except Exception as _mr_exc:
+        logger.warning("member removal retry loop not started (non-fatal): %s", _mr_exc)
     try:
         import omi_health as _omi_health
         import omi_recordings as _omi_rec_h
@@ -2395,6 +2400,10 @@ from routers.struggles import router as struggles_router  # noqa: E402
 app.include_router(struggles_router)
 
 # The owner's decide page over the evolution queue (evolution_inbox; page evolution.html): admin persons only, approving applies nothing.
+# Remove a member (Settings > People > Delete): barrier, deactivate, full erase, then the sign-in; admin persons only.
+from routers.member_removal import router as member_removal_router  # noqa: E402
+app.include_router(member_removal_router)
+
 from routers.evolution_inbox import router as evolution_inbox_router  # noqa: E402
 app.include_router(evolution_inbox_router)
 
