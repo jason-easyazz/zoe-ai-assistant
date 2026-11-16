@@ -146,7 +146,7 @@ one of them: it is blocked in code (above), and setting `REFLEX_MODE=on` only pr
    take it lists must be a regular file with the right sha256 and format, and each bank directory's entries (read without following
    symlinks) must be EXACTLY the manifest plus the takes it lists: an extra file, subdirectory, symlink, hidden or special file, a
    listed file that is a symlink or not regular, or a missing one exits 5 (message: counts and kind of fault only). The rsync then
-   ships only that verified list (`--files-from`), so the check and the transfer cannot disagree; anything else (or no bank) exits 5. Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
+   ships only that verified list (`--files-from`), so nothing outside it is sent. The source must not change between the preflight and the transfer (rsync reopens the files), and the panel's loader verifies every take against the manifest again before it uses a bank, so a file changed in between is refused there; anything else (or no bank) exits 5. Rollback of this step: delete `/home/pi/.zoe-voice/reflex/<voice>/<sha8>`.
 5. **Shadow.** In the panel's `.env.voice` set `REFLEX_MODE=shadow`, `REFLEX_VOICE=<voice>`, `MEDIA_WATCH_ENABLED=true`
    (and `REFLEX_SILENT_MEMBERS=` for the children); `systemctl --user restart zoe-voice`. Expect, within a minute,
    `grep REFLEX_BANK` to say `result=ok ... takes=6..8`. Anything else: fix before going on.
