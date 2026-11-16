@@ -81,19 +81,24 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
 
 - **Flags**: `ZOE_ROUTINES=on` AND `ZOE_ROUTINE_VOICE` = off (default) | shadow | on. Off = the tier returns before any work (no
   floor call, no regex, no database), proven over a corpus of the repo's own synthetic utterances. Shadow logs
-  `ROUTINE_TIER shadow would=<kind>` from read-only checks and takes nothing.
+  `ROUTINE_TIER shadow would=<kind>` from read-only checks and takes nothing. `fast_tiers._routines_tier` reads both flags BEFORE
+  importing the tier, so a flag-off turn never loads `routines_tier` / `routines_store` (pinned in a fresh interpreter).
 - **Where**: one tier in `fast_tiers._resolve_tiers` (the conversation half, after distress, feedback, provenance and the panel
   review cards; voice runs it with `phase="conversation"` before its confirmation gate and keyword intents). `routers/voice_tts.py`
   is not edited.
 - **Walk**: "done / yep / had them" ticks the step Zoe just named, "skip", "later / not now" (snooze), "stop", "no I haven't /
-  untick that" (undo). Any other turn the tier sees ends the walk, so a later "yes" answers that turn, not a step. Residual: a turn
+  untick that" (undo). The walk is keyed by session and holds the member and the day copy's id (which carries the household date):
+  it is honoured only for that member, on that day, within 120 s, and it survives only a turn that named exactly one step just
+  now (any other reply, a list of several lines, a one-off, a different speaker's turn closes it). Residual: a turn
   answered by a tier ABOVE this one (distress, feedback, provenance, enrolment, ...) does not close it; the 120 s cap bounds it.
 - **What's next**: "what's next? / what's left?" names the next line of the walk or of the member's routine whose window is open
   now; a bare "next" outside a walk is left alone (it is a music skip). "start my <name> routine" opens a walk.
-- **One-off**: claimed only when the member has exactly one enabled routine of their own matching the cue, the day is one day, no
+- **One-off**: claimed only when the member has exactly one enabled routine of their own matching the cue (several = "Which routine:
+  <their names>?" and nothing is added), the day is one day, no
   clock time, number or repeat is said, and the routine runs that day. Otherwise None: "remind me at 7 to take the drill" stays a
   7:00 reminder. Reply: "Added to tomorrow's morning routine: take the drill."
-- **I'm off**: with an undone take-with line today, "Before you go: take the drill." (and "got it" then ticks it).
+- **I'm off**: with an undone take-with line today, "Before you go: take the drill." (and "got it" then ticks it). Several lines
+  are listed and none is named: the next "got it" gets "Which one: ...?" and ticks nothing.
 - **Safety**: `medical_safety.detect` runs before anything is claimed; when it fires the tier steps aside and the floor answers on
   the brain lane ("I took them twice by accident" is never a tick). The child safety floor is consulted the same way when it is
   present. A medicine line needs `speaker_verified is True` on voice (chat is the member's own session); otherwise Zoe says so and

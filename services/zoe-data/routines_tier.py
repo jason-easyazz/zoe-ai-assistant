@@ -18,7 +18,13 @@ WHAT IT TAKES (whole utterances only; everything else is None, so the reminder, 
     day (today / tomorrow / a weekday), no clock time or number is said, no repeat is said, and the routine runs that day.
     Anything else steps aside, so "remind me at 7 to take the drill" stays an ordinary 7:00 reminder.
   * "I'm off" / "heading out" with an undone take-with line today: "Before you go: take the drill." (it names the line, so "got
-    it" ticks it). Nothing undone = None (the goodbye answers as today).
+    it" ticks it). Several lines: all are listed and NONE is named (a "got it" ticks nothing). Nothing undone = None.
+  * a one-off that fits SEVERAL of the member's routines: "Which routine: Morning or Leaving?" and nothing is added.
+
+THE WALK (``routines_store.note_named``) is keyed by the session, holds the member it was named to and the day copy's id (which
+carries the household date), and is honoured only for that member, that day and ``WALK_S``. It survives only a turn that named
+exactly one step in that turn (or asked the same speaker to say it again in a known voice): any other reply, a step-aside, a list
+of several lines or a different speaker's turn closes it.
 
 SAFETY. ``medical_safety.detect`` runs before anything is claimed: when it fires (an ingestion - "I took them twice by accident" -, a
 red flag, an emergency-number question, a glucose reading) the tier returns None, the step is left alone, and the floor answers on
@@ -238,6 +244,18 @@ def _summary(day: dict) -> str:
     return f"That's your {name} done." if not left else f"That's your {name} done, except {_listed(left)}."
 
 
+#: session -> (member, the lines "I'm off" listed, when): a "got it" right after a list of several is asked about, never ticked
+_LISTED: dict = {}
+
+
+def _which_line(session_id: str, member: str) -> Optional[str]:
+    listed = _LISTED.pop(session_id or "", None)
+    if listed is None or listed[0] != member or rs._mono() - listed[2] > rs.WALK_S:
+        return None
+    texts = listed[1]
+    return "Which one: " + ", ".join(texts[:-1]) + " or " + texts[-1] + "?"
+
+
 async def _bare(kind: str, session_id: str, member: str, verified: bool) -> Optional[str]:
     if kind == "undo":
         try:
@@ -249,7 +267,7 @@ async def _bare(kind: str, session_id: str, member: str, verified: bool) -> Opti
         return f"OK, it's back on the list: {text}."
     ds_id = rs.named_step(session_id, member)
     if ds_id is None:
-        return None                                        # no walk: a bare "yep" / "done" / "later" is not ours
+        return _which_line(session_id, member) if kind == "done" else None   # no walk: a bare "yep" is not a tick
     if kind == "stop":
         rs.close_walk(session_id)
         return "OK."
@@ -321,27 +339,35 @@ async def _leaving(session_id: str, member: str) -> Optional[str]:
         return None
     if len(lines) == 1:
         await rs.note_named(session_id, member, lines[0]["id"])
+    else:
+        rs.close_walk(session_id)                          # several lines: no single target, so a "got it" ticks nothing ...
+        _LISTED[session_id] = (member, [s["text"] for s in lines], rs._mono())   # ... and Zoe asks which
     return f"Before you go: {_listed([s['text'] for s in lines])}."
 
 
-async def _pick_routine(member: str, cue: tuple, today: date) -> Optional[tuple[dict, date]]:
+async def _pick_routine(member: str, cue: tuple, today: date):
+    """``(routine, day)`` when exactly ONE of the member's routines fits the cue; ``("ask", routines)`` when several do (never a
+    guess: Zoe asks which, by the routines' own names); None when none does (the reminder path answers)."""
     day, anchors, name = cue
     mine = await _own(member)
     if name:
         n = name.lower()
         hits = [r for r in mine if n in (r["name"].lower(), r["anchor"])]
     else:
-        hits = []
-        for a in anchors:
-            hits = [r for r in mine if r["anchor"] == a]
-            if hits:
-                break
-    if len(hits) != 1:
-        return None                                        # none, or two that fit: never a guess
+        hits = [r for r in mine if r["anchor"] in anchors]          # EVERY routine the cue fits, not the first anchor's
+    if len(hits) > 1:
+        return "ask", hits
+    if not hits:
+        return None
     r = hits[0]
     if day is None:
         day = today if rs.household_now().strftime("%H:%M") <= rs.window_of(r)[1] else today + timedelta(days=1)
     return (r, day) if rs.runs_on(r, day) else None
+
+
+def _which(routines: list[dict]) -> str:
+    names = [r["name"] for r in routines]
+    return "Which routine: " + (names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]) + "?"
 
 
 async def _one_off(parts: dict, member: str, *, channel: str, write: bool) -> Optional[str]:
@@ -352,6 +378,8 @@ async def _one_off(parts: dict, member: str, *, channel: str, write: bool) -> Op
     picked = await _pick_routine(member, cue, today)
     if picked is None:
         return None
+    if picked[0] == "ask":
+        return "would" if not write else _which(picked[1])     # nothing is added until the person names one
     r, day = picked
     if not write:
         return "would"
@@ -397,6 +425,10 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         if ch not in ("voice", "chat") or not allow_writes:
             return None
         sh = shape(text)
+        if sh is None or sh[0] != "done":
+            listed = _LISTED.get(session_id or "")
+            if listed is not None and (sh is None or sh[0] != "leaving"):
+                _LISTED.pop(session_id or "", None)        # the list is answered only by the very next turn
         if sh is None:
             rs.close_walk(session_id)                      # any other turn ends the walk: a later "yes" answers THAT turn
             return None
@@ -413,9 +445,11 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
                 logger.info("ROUTINE_TIER shadow would=%s channel=%s", kind, ch)
             return None
         verified = ch == "chat" or (extra_ctx or {}).get("speaker_verified") is True
+        before = rs.walk_entry(session_id)
         reply = await answer(kind, parts, session_id, member, verified=verified, channel=ch)
+        if not reply or (rs.walk_entry(session_id) is before and reply != MEDICINE_UNVERIFIED):
+            rs.close_walk(session_id)      # THE walk rule: it survives only a turn that named ONE step just now (or asked to retry it)
         if not reply:
-            rs.close_walk(session_id)
             return None
         import expert_dispatch as _xd
 

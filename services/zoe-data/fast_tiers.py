@@ -954,6 +954,31 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
     return res
 
 
+def _routines_wanted() -> bool:
+    """Both routines flags on (``ZOE_ROUTINES=on`` and ``ZOE_ROUTINE_VOICE`` shadow | on), read once per turn. Checked BEFORE the
+    tier is imported: a flag-off turn never loads ``routines_tier`` / ``routines_store`` or compiles their patterns."""
+    try:
+        from typed_env import flag
+
+        return (str(flag("ZOE_ROUTINES") or "off").strip().lower() == "on"
+                and str(flag("ZOE_ROUTINE_VOICE") or "off").strip().lower() in ("shadow", "on"))
+    except Exception:  # noqa: BLE001 - an unreadable flag is off
+        return False
+
+
+async def _routines_tier(text: str, user_id: str, session_id: str, kwargs: dict):
+    """The routines tier, imported only when its flags are on (see ``_routines_wanted``). Never raises."""
+    if not _routines_wanted():
+        return None
+    try:
+        import routines_tier as _rt
+
+        return await _rt.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                              extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+    except Exception:  # noqa: BLE001 - the tier never breaks a turn
+        return None
+
+
 async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # A reply that ANSWERS Zoe's own pending reminder offer ("yes please, 2:45 so i'm not late") is not a time question: the domain
     # tiers would hand the bare words to the time expert ("It's 8:54 AM"). Defer the whole turn (flag-gated ZOE_OFFER_FOLLOWUP_BINDING,
@@ -1111,13 +1136,7 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
         # routines (ZOE_ROUTINES + ZOE_ROUTINE_VOICE, both default OFF = returns before any work): "done" / "skip" / "later" to the
         # step Zoe just named, "what's next?", a one-off line ("remind me to take the drill to work tomorrow", only when a routine
         # fits; a clock time steps aside to the reminder path), "I'm off" with an undone take-with line. medical_safety.detect first.
-        try:
-            import routines_tier as _rt
-
-            answered = await _rt.tier(text, user_id, session_id, channel=kwargs.get("channel"),
-                                      extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
-        except Exception:  # noqa: BLE001 - the tier never breaks a turn
-            answered = None
+        answered = await _routines_tier(text, user_id, session_id, kwargs)
         if answered is not None:
             return answered
         # intercom (ZOE_INTERCOM, default OFF = returns before any work): "tell the kitchen dinner's ready", "announce: ...", "call the

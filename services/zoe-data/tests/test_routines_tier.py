@@ -141,10 +141,17 @@ def test_a_one_off_steps_aside_when_no_single_routine_fits_or_it_does_not_run_th
     assert say("remind me to take the drill to work tomorrow") is None      # no morning-moment routine
     _morning(days_rule="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH")                     # Friday is tomorrow: not a run day
     assert say("remind me to take the drill to work tomorrow") is None
-    _morning(owner=SAM, anchor="leaving")
-    _morning(owner=SAM, anchor="leaving")
-    assert say("remind me to take the drill to work tomorrow", SAM) is None  # two that fit: never a guess
     assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE origin = 'one_off'") == [(0,)]
+
+
+def test_a_one_off_with_zero_one_or_two_fitting_routines(store, on):
+    assert say("remind me to take the drill to work tomorrow", SAM) is None  # zero: the reminder path answers
+    run(rs.create_routine(SAM, "Out the door", "leaving", steps=("keys",)))
+    assert say("remind me to take the drill to work tomorrow", SAM) == "Added to tomorrow's out the door routine: take the drill."
+    run(rs.create_routine(SAM, "Wake up", "waking", steps=("water",)))       # a second routine the cue fits (old code: picked leaving)
+    assert say("remind me to take the umbrella to work tomorrow", SAM) == "Which routine: Out the door or Wake up?"
+    assert [t for (t,) in store.q("SELECT text FROM routine_day_steps WHERE origin = 'one_off'")] == ["take the drill"]
+    assert say("put the umbrella on my wake up routine for tomorrow", SAM) == "Added to tomorrow's wake up routine: the umbrella."
 
 
 # -- the walk ----------------------------------------------------------------------------------------------------------------------
@@ -230,6 +237,45 @@ def test_im_off_names_the_undone_take_with_line(store, on, monkeypatch):
     assert _states(store)["take the drill"] == "done"
 
 
+def test_im_off_with_several_lines_names_none_and_a_got_it_ticks_nothing(store, on, monkeypatch):
+    _morning()
+    say("remind me to take the drill to work tomorrow")
+    say("remind me to take the lunchbox to work tomorrow")
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=1))
+    assert say("what's next?") == "Next: feed the cat."                      # an older named step A ...
+    assert say("I'm off") == "Before you go: take the drill and take the lunchbox."
+    assert say("got it") == "Which one: take the drill or take the lunchbox?"     # ... is not what "got it" ticks
+    assert say("got it") is None
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def test_another_speaker_never_ticks_the_first_speakers_step(store, on):
+    _morning()
+    assert say("what's next?") == "Next: feed the cat."
+    assert say("got it", member=SAM) is None
+    assert say("got it") is None                                             # the walk closed on the other speaker's turn
+    assert all(st == "pending" for st in _states(store).values())
+
+
+def test_a_flag_off_turn_never_loads_the_routines_modules():
+    """A FRESH interpreter: import fast_tiers with both flags off, run the routines step of the tier dispatch, and neither routines
+    module is loaded (old code imported routines_tier, and so routines_store, on every turn)."""
+    import os
+    import subprocess
+    import sys
+
+    code = ("import asyncio, sys\n"
+            "import fast_tiers as ft\n"
+            "assert asyncio.run(ft._routines_tier('done', 'm-alex', 's1', {'channel': 'voice'})) is None\n"
+            "bad = [m for m in ('routines_tier', 'routines_store') if m in sys.modules]\n"
+            "assert not bad, bad\n"
+            "print('CLEAN')\n")
+    env = {k: v for k, v in os.environ.items() if k not in ("ZOE_ROUTINES", "ZOE_ROUTINE_VOICE")}
+    env["PYTHONPATH"] = str(SVC) + os.pathsep + env.get("PYTHONPATH", "")
+    out = subprocess.run([sys.executable, "-c", code], cwd=str(SVC), env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and "CLEAN" in out.stdout, out.stderr[-2000:]
+
+
 # -- shadow, dry, identity ---------------------------------------------------------------------------------------------------------
 def test_shadow_claims_nothing_and_writes_nothing(store, monkeypatch, caplog):
     monkeypatch.setenv("ZOE_ROUTINES", "on")
@@ -255,9 +301,7 @@ def test_dry_runs_and_unidentified_voices_take_nothing(store, on):
 def test_the_tier_is_registered_in_the_conversation_half_after_distress():
     tree = ast.parse((SVC / "fast_tiers.py").read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_resolve_tiers")
-    calls = [(n.lineno, n.func.value.id if isinstance(n.func.value, ast.Name) else "")
-             for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "tier"]
     distress = next(n.lineno for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_distress_tier")
-    lines = [ln for ln, mod in calls if mod == "_rt"]
+    lines = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_routines_tier"]
     assert len(lines) == 1 and lines[0] > distress
     assert "routines_tier" not in (SVC / "routers" / "voice_tts.py").read_text(encoding="utf-8")   # registered via fast_tiers only
