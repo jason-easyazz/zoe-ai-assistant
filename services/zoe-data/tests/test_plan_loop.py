@@ -220,7 +220,7 @@ def test_safety_floors_own_the_turn():
 def test_a_floor_that_cannot_be_asked_refuses(monkeypatch):
     import distress_handoff
 
-    monkeypatch.setattr(distress_handoff, "detect", lambda text: 1 / 0)
+    monkeypatch.setattr(distress_handoff, "_detect", lambda text: 1 / 0)
     assert pl.safety_floor("add milk") == "floor_error"
 
 
@@ -268,8 +268,10 @@ HAZARD_PLAN = [pl.Step("list_add", {"item": "milk"}, "add milk to the shopping l
 def test_a_childs_hazard_ask_refuses_the_whole_plan_and_an_adults_does_not():
     result, tools = run(HAZARD_PLAN, speaker=CHILD, utterance=HAZARD)
     assert result.refusal.reason == "safety_floor" and tools.calls == []
-    for speaker in (GUEST, pl.Speaker("member-a", "adult", verified=False)):        # not positively an adult: same answer
-        assert run(HAZARD_PLAN, speaker=speaker, utterance=HAZARD)[0].refusal.reason == "safety_floor"
+    for speaker in (GUEST, pl.Speaker("member-a", "adult", verified=False)):        # owner 2026-11-16: an unrecognised voice
+        assert pl.child_floor(HAZARD, speaker) == ""                                 # is a guest, let through like main's floor
+        lists = [pl.Step("list_add", {"item": "milk"}, "add milk"), pl.Step("list_add", {"item": "eggs"}, "and eggs")]
+        assert run(lists, speaker=speaker, utterance=HAZARD, tools=Tools(user=speaker.user_id))[0].status == "ran"
     assert run(HAZARD_PLAN, utterance=HAZARD)[0].status == "ran"
     assert pl.child_floor("add milk to the shopping list and remind me about the dentist", CHILD) == ""
 
@@ -484,7 +486,7 @@ def test_a_planted_marker_reaches_no_log_and_no_stored_record(monkeypatch, caplo
                     assert r.tool in ("", getattr(pl, "UNREGISTERED", "unregistered")) or r.tool in ha.table().intents
             run(planted, utterance=MARK, tools=raising)
         import distress_handoff
-        monkeypatch.setattr(distress_handoff, "detect", lambda text: (_ for _ in ()).throw(BadExc(MARK)))
+        monkeypatch.setattr(distress_handoff, "_detect", lambda text: (_ for _ in ()).throw(BadExc(MARK)))
         assert pl.safety_floor(MARK) == "floor_error"
     assert caplog.records and not any(MARK in r.getMessage().casefold() for r in caplog.records)
     assert MARK not in repr(write_receipts._STORE).casefold()
@@ -568,6 +570,9 @@ class _NotPending:
     (lambda *a, **k: _NotPending(), "child_floor_unknown"),
     (lambda *a, **k: "safe", "child_floor_unknown"),
     (lambda *a, **k: _pending(declared=None), "child_floor_unknown"),
+    (lambda *a, **k: _pending(cls=None, reply=None, key=None), "child_floor_unknown"),
+    (lambda *a, **k: _pending(key=()), "child_floor_unknown"),
+    (lambda *a, **k: _pending(key=("member-a", 7)), "child_floor_unknown"),
 ])
 def test_a_floor_that_cannot_tell_refuses_even_an_adult_account(monkeypatch, outcome, code):
     import child_safety_floor
@@ -615,7 +620,7 @@ def test_property_no_step_runs_unless_the_floor_explicitly_said_safe(monkeypatch
         monkeypatch.setattr(child_safety_floor, "check", outcome)
         result, tools = run(rng.choice(plans), speaker=speaker, utterance=HAZARD, tools=Tools(user=speaker.user_id))
         if tools.calls:
-            assert name == "safe" or (name == "hazard" and speaker is ADULT)
+            assert name == "safe" or (name == "hazard" and speaker is not CHILD)
 
 
 # ── an executor error is one step's error; a cancelled plan stops its tool ──────────────────────────────────────────────────
@@ -649,3 +654,160 @@ def test_a_cancelled_plan_cancels_its_tool_and_the_tool_never_writes():
         await asyncio.sleep(0.4)
     asyncio.run(go())
     assert wrote == []
+
+
+# ── the loop and main's floor reach the same verdict (owner 2026-11-16: an unrecognised voice is a guest) ────────────────────
+
+@pytest.mark.parametrize("speaker, who, session", [
+    (ADULT, "adult", "s-a"), (CHILD, "child", "s-c"), (GUEST, "guest", "s-g"),
+    (pl.Speaker("member-a", "adult", verified=False), "adult", "s-u"),          # main sees the account; the loop sees a guest voice
+    (pl.Speaker("member-a", "adult", verified=False), "guest", "s-u2"),         # ...or the voice arrives as a guest id
+    (pl.Speaker("member-a", "wizard"), "unverified", "s-w"),                    # a role in neither set
+    (ADULT, "adult", "s-declared"),                                             # an adult account, a child declared this session
+    (pl.Speaker("member-x", "child", verified=False), "child", "s-cu"),          # a child account: refused by both, verified or not
+    (pl.Speaker("member-x", "unrecognised_voice"), "unverified", "s-nr"),         # an id with no account row: main cannot place it
+    (pl.Speaker("voice-guest", "unrecognised_voice"), "guest", "s-vg"),           # an unrecognised voice on a guest id: let through
+])
+def test_the_loop_and_mains_floor_agree_for_every_kind_of_speaker(monkeypatch, speaker, who, session):
+    import child_safety_floor as csf
+
+    async def fake_who(user_id):
+        return who
+    monkeypatch.setattr(csf, "_who", fake_who)
+    monkeypatch.setenv(csf.ENV, "enforce")
+    csf._SESSIONS.clear()
+    if session == "s-declared":
+        csf.check("i am 10 years old", session, speaker.user_id)                # the real turn records the statement
+    pending = csf.check(HAZARD, session, speaker.user_id, dry=True)
+    assert pending is not None and not pending.blind
+    mains = asyncio.run(csf.resolve(pending, speaker.user_id)) is None          # None = main lets the brain answer
+    loops = pl.child_floor(HAZARD, speaker, session) == ""
+    csf._SESSIONS.clear()
+    assert loops == mains
+    assert mains == (who in ("adult", "guest") and session != "s-declared")    # the owner's rule, stated directly
+
+
+def test_negative_control_re_deriving_adult_in_the_loop_disagrees_with_main(monkeypatch):
+    import child_safety_floor as csf
+
+    monkeypatch.setattr(pl, "_floor_who", lambda speaker: "adult" if speaker.role in ("owner", "adult") and speaker.verified
+                        else "unverified")
+    assert pl.child_floor(HAZARD, GUEST, "s1") == "child"                    # the pre-decision rule: a guest refused
+    monkeypatch.undo()
+    assert pl.child_floor(HAZARD, GUEST, "s1") == ""
+    assert csf.source_for(csf.Pending("fire", "r", False, ("guest", "s1")), "guest") == ""
+
+
+def test_resolve_never_reads_declared_on_a_blind_result(monkeypatch):
+    import types
+
+    import child_safety_floor as csf
+
+    monkeypatch.setenv(csf.ENV, "enforce")
+    for who, want in (("adult", None), ("child", "r")):
+        async def fake_who(user_id, who=who):
+            return who
+        monkeypatch.setattr(csf, "_who", fake_who)
+        blind = types.SimpleNamespace(blind=True, reply="r", cls="x", key=("", ""))     # no ``declared`` at all
+        assert asyncio.run(csf.resolve(blind, "m1")) == want
+
+
+def test_where_the_loop_cannot_look_up_an_account_it_is_only_ever_stricter_than_main(monkeypatch):
+    """An unrecognised voice on a NON-guest id: main looks the account up (adult -> through, no row -> refused); the loop has
+    no lookup, so it refuses both. It never lets through what main refuses; a turn it refuses goes to the single-turn path,
+    where main's floor gives its own verdict."""
+    import child_safety_floor as csf
+
+    monkeypatch.setenv(csf.ENV, "enforce")
+    speaker = pl.Speaker("member-x", "unrecognised_voice")
+    for who in ("adult", "unverified", "child"):
+        async def fake_who(user_id, who=who):
+            return who
+        monkeypatch.setattr(csf, "_who", fake_who)
+        pending = csf.check(HAZARD, "s-x", speaker.user_id, dry=True)
+        mains_allows = asyncio.run(csf.resolve(pending, speaker.user_id)) is None
+        loop_allows = pl.child_floor(HAZARD, speaker, "s-x") == ""
+        assert not loop_allows and mains_allows == (who == "adult")
+
+
+# ── a floor that could not check is not "nothing found"; a floor switched off is not a verdict (review of 595b960cb) ───────
+
+BATTERY = "add milk and i swallowed a button battery"
+BATTERY_PLAN = [pl.Step("list_add", {"item": "milk"}, "add milk"), pl.Step("calendar_show", {"qualifier": "today"}, "x")]
+
+
+def test_reviewers_reproduction_a_broken_medical_detector_refuses_the_plan(monkeypatch):
+    import medical_safety
+
+    assert pl.safety_floor(BATTERY) == "medical"                               # control: the healthy detector catches it
+
+    def broken():
+        raise LookupError("medical lexicon")
+    monkeypatch.setattr(medical_safety, "_rx", broken)
+    assert medical_safety.detect(BATTERY) == medical_safety.NONE               # unchanged for its single-turn callers
+    assert pl.safety_floor(BATTERY) == "floor_error"
+    result, tools = run(BATTERY_PLAN, utterance=BATTERY, floors=pl.safety_floor)
+    assert result.refusal.reason == "safety_floor" and tools.calls == []
+
+
+def test_a_broken_or_missing_distress_lexicon_refuses_the_plan(monkeypatch):
+    import distress_handoff
+
+    def broken(lang):
+        raise ValueError("distress pack")
+    monkeypatch.setattr(distress_handoff, "_pack", broken)
+    assert distress_handoff.detect("add milk") == distress_handoff.NONE
+    assert pl.safety_floor("add milk") == "floor_error"
+    monkeypatch.setattr(distress_handoff, "_pack", lambda lang: None)           # every pack silently absent
+    assert distress_handoff.detect("add milk") == distress_handoff.NONE
+    assert pl.safety_floor("add milk") == "floor_error"
+    monkeypatch.undo()
+    assert pl.safety_floor("add milk") == ""                                   # control: healthy, nothing found
+
+
+@pytest.mark.parametrize("text", ["", "add milk", BATTERY, "my chest hurts and my left arm is numb", "i want to die",
+                                  "i feel a bit down today", "my blood sugar is 2.1", "how do i use the gas stove",
+                                  "the dog ate chocolate", "call an ambulance", "i think i swallowed a coin"])
+def test_the_strict_entry_points_decide_exactly_as_detect_when_the_check_runs(text):
+    import distress_handoff
+    import medical_safety
+
+    assert medical_safety.detect_strict(text) == medical_safety.detect(text)
+    assert distress_handoff.detect_strict(text) == distress_handoff.detect(text)
+
+
+def test_a_child_floor_switched_off_is_not_a_verdict(monkeypatch):
+    import child_safety_floor as csf
+
+    plan = [pl.Step("list_add", {"item": "milk"}, "add milk"), pl.Step("list_add", {"item": "eggs"}, "and eggs")]
+    monkeypatch.setenv(csf.ENV, "off")
+    assert csf.check(HAZARD, "s1", CHILD.user_id, dry=True) is None             # the floor itself says nothing when off
+    for speaker in (CHILD, ADULT, GUEST):
+        assert pl.child_floor(HAZARD, speaker, "s1") == "child_floor_off"
+        result, tools = run(plan, speaker=speaker, utterance=HAZARD, tools=Tools(user=speaker.user_id))
+        assert result.refusal.reason == "safety_floor" and tools.calls == []
+    monkeypatch.setenv(csf.ENV, "enforce")                                     # control: on, the child is refused BY the floor
+    assert pl.child_floor(HAZARD, CHILD, "s1") == "child" and pl.child_floor(HAZARD, ADULT, "s1") == ""
+
+
+@pytest.mark.parametrize("which, verdict", [
+    ("medical", lambda: __import__("medical_safety").Verdict(cls=None)),
+    ("medical", lambda: object()),
+    ("distress", lambda: __import__("distress_handoff").Verdict(tier="sideways")),
+    ("distress", lambda: "none"),
+])
+def test_a_malformed_text_floor_verdict_is_not_nothing_found(monkeypatch, which, verdict):
+    import distress_handoff
+    import medical_safety
+
+    module = medical_safety if which == "medical" else distress_handoff
+    monkeypatch.setattr(module, "detect_strict", lambda text: verdict())
+    assert pl.safety_floor("add milk") == "floor_unknown"
+    result, tools = run([ADD, REMIND], utterance="add milk", floors=pl.safety_floor)
+    assert result.refusal.reason == "safety_floor" and tools.calls == []
+
+
+def test_a_text_floor_check_over_its_budget_is_not_trusted(monkeypatch):
+    ticks = iter([0.0, pl.FLOOR_BUDGET_S + 1.0])
+    monkeypatch.setattr(pl, "_floor_clock", lambda: next(ticks))
+    assert pl.safety_floor("add milk") == "floor_timeout"

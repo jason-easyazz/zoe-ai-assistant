@@ -248,16 +248,29 @@ def digest(step: "Step") -> str:
     return hashlib.sha256(body.encode("utf-8", "backslashreplace")).hexdigest()
 
 
+#: the distress + medical checks together; longer than the child floor's budget because the first call on a cold process compiles
+#: their lexicons. Over it the answer is not trusted (``floor_timeout``): a sync check cannot be interrupted, only disbelieved.
+FLOOR_BUDGET_S = 5.0
+
+
 def safety_floor(utterance: str) -> str:
     """Which floor owns this turn ("" = none). The distress and medical floors answer such a turn with fixed text before any
-    brain call; a plan is never run on one. A floor that cannot be asked refuses (fail closed)."""
+    brain call; a plan is never run on one. A floor that cannot be asked refuses (fail closed): the STRICT entry points raise when
+    a check could not run, where ``detect`` would answer "nothing found" for its single-turn callers."""
+    began = _floor_clock()
     try:
         import distress_handoff
         import medical_safety
 
-        if distress_handoff.detect(utterance).tier != "none":
+        d, m = distress_handoff.detect_strict(utterance), medical_safety.detect_strict(utterance)
+        if type(d) is not distress_handoff.Verdict or d.tier not in distress_handoff._RANK \
+                or type(m) is not medical_safety.Verdict or not isinstance(m.cls, str):
+            return "floor_unknown"                 # a verdict that is not well formed is not "nothing found"
+        if _floor_clock() - began > FLOOR_BUDGET_S:
+            return "floor_timeout"
+        if d.tier != "none":
             return "distress"
-        if medical_safety.detect(utterance).cls:
+        if m.cls:
             return "medical"
         return ""
     except Exception as exc:  # noqa: BLE001
@@ -269,35 +282,67 @@ def safety_floor(utterance: str) -> str:
 CHILD_FLOOR_BUDGET_S = 1.0
 _floor_clock = time.monotonic
 #: what ``child_floor`` returns ("" = the floor explicitly said this turn is safe for this speaker); anything else refuses the plan
-CHILD_FLOOR_CODES = ("", "child", "child_floor_blind", "child_floor_error", "child_floor_timeout", "child_floor_unknown")
+CHILD_FLOOR_CODES = ("", "child", "child_floor_blind", "child_floor_error", "child_floor_off", "child_floor_timeout",
+                     "child_floor_unknown")
+
+
+def _floor_who(speaker: "Speaker") -> str:
+    """The speaker in the floor's own terms (``child_safety_floor._who``'s answers), from the loop's frozen ``Speaker`` with no
+    lookup: a child account is a child (verified or not: the floor refuses that id too); a verified owner or adult is an adult; an
+    UNVERIFIED owner or adult voice is a guest (owner 2026-11-16: "you cant tell its a child and not an adult, so it's let
+    through"); a guest or unrecognised voice is a guest only on an id the floor itself treats as a guest (``manner_block.is_guest``,
+    as ``_who``), otherwise ``unverified`` like an account ``_who`` cannot place; a role in neither set is ``unverified``. The
+    floor refuses ``unverified`` and ``child``."""
+    if speaker.role not in authority.ROLES:
+        return "unverified"
+    if speaker.role == "child":
+        return "child"
+    if speaker.role in ("owner", "adult"):
+        return "adult" if speaker.verified else "guest"
+    try:
+        import manner_block
+
+        return "guest" if not speaker.user_id.strip() or manner_block.is_guest(speaker.user_id) else "unverified"
+    except Exception as exc:  # noqa: BLE001 - cannot tell it is a guest id: the floor's "cannot place" answer
+        logger.warning("PLAN_LOOP guest id check failed (%s)", _err(exc))
+        return "unverified"
 
 
 def child_floor(utterance: str, speaker: "Speaker", session_id: str = "") -> str:
     """"" only when the child safety floor EXPLICITLY clears this turn for this speaker; otherwise a code from
     ``CHILD_FLOOR_CODES``. Asked READ-ONLY (``dry``: it records no age statement here; ``brain_dispatch`` does that on the real
     turn). Explicitly safe = ``check`` returned None (no hazard ask), or a well-formed, NOT blind ``Pending`` that is not
-    declared, for a speaker who is positively an adult. FAIL CLOSED, whatever the account says: a blind result (the floor's own
-    detection failed: it cannot see a child declared earlier in the session), a raise, a check slower than
-    ``CHILD_FLOOR_BUDGET_S``, or any unexpected return refuses the WHOLE plan. Refusing only hands the turn back to the ordinary
-    single-turn path, where the floor itself answers."""
-    adult = effective_role(speaker) in ("owner", "adult")
+    declared, for a speaker the FLOOR'S OWN role rule lets through (``child_safety_floor.source_for``, the rule ``resolve`` uses:
+    an adult or a guest passes, a child or an account it cannot place does not; owner 2026-11-16: an unrecognised or unverified
+    voice is a guest: "you cant tell its a child and not an adult, so it's let through"). FAIL CLOSED, for everyone: a blind
+    result (the floor's own detection failed: it cannot see a child declared earlier in the session), a raise, a check slower
+    than ``CHILD_FLOOR_BUDGET_S``, or any unexpected return refuses the WHOLE plan. Refusing only hands the turn back to
+    the ordinary single-turn path, where the floor itself answers. A floor switched OFF (``ZOE_CHILD_SAFETY_FLOOR=off``) did not
+    run, and a floor that did not run is not a verdict: while it is off the loop plans for NOBODY (``child_floor_off``) and
+    every turn goes to the single-turn path."""
     began = _floor_clock()
     try:
         import child_safety_floor
 
+        off = child_safety_floor.mode() == "off"
         pending = child_safety_floor.check(utterance, session_id, speaker.user_id, dry=True)
+        off = off or child_safety_floor.mode() == "off"
         slow = _floor_clock() - began > CHILD_FLOOR_BUDGET_S
-        if slow:
+        if off:
+            code = "child_floor_off"
+        elif slow:
             code = "child_floor_timeout"
         elif pending is None:
             code = ""
         elif type(pending) is not child_safety_floor.Pending or not isinstance(pending.blind, bool) \
-                or not isinstance(pending.declared, bool):
+                or not isinstance(pending.declared, bool) or not isinstance(pending.cls, str) \
+                or not isinstance(pending.reply, str) or not isinstance(pending.key, tuple) \
+                or len(pending.key) != 2 or not all(isinstance(k, str) for k in pending.key):
             code = "child_floor_unknown"
         elif pending.blind:
             code = "child_floor_blind"
         else:
-            code = "child" if pending.declared or not adult else ""
+            code = "child" if child_safety_floor.source_for(pending, _floor_who(speaker)) else ""
     except Exception as exc:  # noqa: BLE001
         logger.warning("PLAN_LOOP child floor check failed (%s)", _err(exc))
         code = "child_floor_error"
