@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import queue
 import socket
@@ -169,12 +170,26 @@ def _recv_exact(sock: socket.socket, n: int, until: Optional[float] = None) -> b
     return bytes(buf)
 
 
+def _no_constant(name: str):
+    """``NaN`` / ``Infinity`` / ``-Infinity`` are not JSON: Python's decoder takes them unless told not to. A kernel reply carrying one
+    is not v1 (``kernel_malformed``), decided HERE, the one place replies are decoded, so no caller can forget."""
+    raise ValueError("non-standard constant")
+
+
+def _finite_float(text: str) -> float:
+    """A JSON number too large for a float (``1e400``) decodes to inf: rejected the same way."""
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number")
+    return value
+
+
 def _read_frame(sock: socket.socket, until: Optional[float] = None) -> dict:
     (size,) = struct.unpack(">I", _recv_exact(sock, 4, until))
     if size > MAX_REPLY:
         raise KernelProtocol("reply too large")
     try:
-        obj = json.loads(_recv_exact(sock, size, until))
+        obj = json.loads(_recv_exact(sock, size, until), parse_constant=_no_constant, parse_float=_finite_float)
     except ValueError as exc:
         raise KernelProtocol("not json") from exc
     if not isinstance(obj, dict):
@@ -443,11 +458,19 @@ class _Kernel:
             c.close()
 
     def call(self, skill: str, op: str, until: Optional[float] = None, **args: Any) -> Any:
-        """``until``: the add's overall deadline (``time.monotonic()``), passed into the connect, the handshake and the call alike."""
+        """``until``: the add's overall deadline (``time.monotonic()``), passed into the connect, the handshake and the call alike.
+        ANY unavailability opens the circuit: a failed connect, unreadable credentials, a missing credential, AND a connection the
+        kernel accepted then closed or timed out mid-request (else such a kernel costs a reconnect on every add). A protocol fault (a
+        reply that is not v1) drops the connection but is not unavailability; the circuit's own refusal never extends it."""
         try:
             return self.conn(skill, until).call(op, until, **args)
-        except (KernelUnavailable, KernelProtocol, OSError):
+        except KernelProtocol:
             self.drop(skill)
+            raise
+        except (KernelUnavailable, OSError) as exc:
+            self.drop(skill)
+            if not (isinstance(exc, KernelUnavailable) and exc.args[:1] == ("circuit",)):
+                self.down_until = time.monotonic() + CIRCUIT_S
             raise
 
 
