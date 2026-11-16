@@ -87,7 +87,6 @@ chromadb==1.5.9
 numpy==1.26.4
 # 1.23.2 ships a cp312 wheel; 1.30.0 (>=3.11 only) is the runbook's step-up.
 onnxruntime==1.23.2
-edge-tts==7.3.1
 # py3-none aarch64 wheels (manylinux_2_31 and _2_34; glibc 2.35 takes either):
 # ABI-independent (ctypes-loaded .so), the SAME wheel the 3.10 box runs — the STT
 # rock does not move. Follows requirements.txt: 0.1.3 since #1714 (B1.10,

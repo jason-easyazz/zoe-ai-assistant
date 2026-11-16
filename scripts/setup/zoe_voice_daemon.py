@@ -2091,6 +2091,10 @@ class _BargeMonitor:
     def start(self) -> None:
         if not BARGE_IN_ENABLED or self._thread is not None:
             return
+        try:  # the first-sound instrument only counts: absent or failing, it must never stop barge-in
+            _TALK.begin()  # before the thread: a first sound can never land ahead of the reset
+        except Exception:
+            pass
         self._thread = threading.Thread(target=self._run, daemon=True, name="barge-monitor")
         self._thread.start()
 
@@ -2115,6 +2119,7 @@ class _BargeMonitor:
         endpointer = _Endpointer(spoke=True, vad=vad)
         caps = _record_caps()
         stop_reason = "max_duration"
+        t_close = None
         while len(frames) < caps[1] + caps[2] and not _shutdown.is_set():
             try:
                 data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
@@ -2123,10 +2128,12 @@ class _BargeMonitor:
                 break
             frames.append(data)
             if endpointer.push(data, len(frames)):
+                t_close = _fs_now()
                 stop_reason = "silence"
                 break
             if _record_cap_stop(len(frames), caps, endpointer):
                 break
+        _stamp_close(t_close, endpointer, stop_reason, frames)
         _note_capture_end(stop_reason, len(frames), caps, endpointer)
         self.seed = _frames_to_wav(self._pa, frames)
         log.info("Barge-in seed: %.2fs from onset (stop=%s) — next turn runs on it, no beep",
@@ -2148,6 +2155,10 @@ class _BargeMonitor:
             log.debug("Barge monitor mic open failed: %s", exc)
             return
         det = _BargeDetector()
+        try:  # same rule as begin(): counting only, never in the monitor's way
+            _TALK.mic_open()
+        except Exception:
+            pass
         log.debug("Barge monitor listening (th=%.2f, %d/%d chunks, grace=%dms, fast=%d@%.2f)",
                   det.threshold, det.min_chunks, det.window_chunks, int(det.grace_s * 1000),
                   det.fast_chunks, det.fast_prob)
@@ -2191,6 +2202,10 @@ class _BargeMonitor:
                     # a reply died before any audio played), and it must not
                     # carry into playback either (live 2026-09-28 18:24:50: a
                     # user still talking at playback start fired it at t+11ms).
+                    try:
+                        _TALK.feed(prob, read_at - _CHUNK_S)  # count only (first-sound instrument)
+                    except Exception:
+                        pass
                     det.idle()
                     continue
                 proc, started_at = playing
@@ -2730,6 +2745,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
     stop_reason = "max_duration"
     caps = _record_caps()
     n_read = 0
+    t_close = None
     for _ in range(caps[1] + caps[2]):
         data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
         frames.append(data)
@@ -2737,12 +2753,14 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         if uploader is not None:
             uploader.push(data)
         if endpointer.push(data, len(frames)):
+            t_close = _fs_now()  # the committed close: the first-sound instrument's zero
             stop_reason = "silence"
             break
         if speculation is not None and endpointer.speculative_ready(len(frames)):
             speculation.fire(_frames_to_wav(pa, frames))
         if _record_cap_stop(n_read, caps, endpointer):
             break
+    _stamp_close(t_close, endpointer, stop_reason, frames, n_pre)
     _note_capture_end(stop_reason, n_read, caps, endpointer)
     if owns_stream:
         stream.stop_stream()
@@ -3690,6 +3708,526 @@ def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
         return pcm
 
 
+# ── Media watch (LOG-ONLY, flag MEDIA_WATCH_ENABLED, default off) ──────────
+# Is anything that is NOT this daemon playing into the panel's PulseAudio server (AirPlay via shairport-sync, the
+# kiosk browser, ...)? The voice reflex's ``media`` input (design: voice-reflex-prereqs note, section 1.2). A watcher
+# thread keeps a cached snapshot; the close only READS it (a lock and four floats) and never runs pactl. Today the
+# answer is only logged on FIRST_SOUND (``media=`` / ``media_age_ms=``); nothing acts on it.
+#   * re-reads ``pactl list sink-inputs`` on a ``pactl subscribe`` sink-input event (coalesced to at most one read per
+#     _MEDIA_MIN_GAP_S, so a ducker's volume ramp cannot storm it) and on a _MEDIA_HEARTBEAT_S heartbeat, so a missed
+#     event or a dead subscribe child can never leave the snapshot stale;
+#   * FOREIGN = an uncorked sink-input whose application.process.id is neither this process nor a direct child of it
+#     (its aplay / mpg123 players; checked by the parent pid in /proc/<pid>/stat, never by a binary name); a stream that
+#     cannot be attributed counts as foreign;
+#   * media_active: None (unknown) when the flag is off, the watcher thread is dead, the last read failed, no read has
+#     completed, the snapshot is older than _MEDIA_FRESH_MS, or fewer than _MEDIA_HOLD_MS of clean reads exist (just
+#     started / just recovered); True when a foreign stream was seen at the last read or went away under
+#     _MEDIA_HOLD_MS ago; False only otherwise. Unknown is always silence for the reflex.
+#   * bounded: one thread + one reader thread + one long-lived ``pactl subscribe`` child (respawned with a 1 s -> 60 s
+#     backoff when it dies or pactl is absent); the subscribe lines are read 512 bytes at most and discarded; a listing
+#     is parsed from at most _MEDIA_MAX_LIST_BYTES; the state is five scalars. CPU: at most one ``pactl list`` per
+#     _MEDIA_MIN_GAP_S on events, else one per second.
+MEDIA_WATCH_ENABLED = os.environ.get("MEDIA_WATCH_ENABLED", "false").lower() in ("1", "true", "yes")
+_MEDIA_FRESH_MS = 2000
+_MEDIA_HOLD_MS = 1000
+_MEDIA_HEARTBEAT_S = 1.0
+_MEDIA_MIN_GAP_S = 0.2
+_MEDIA_MAX_LIST_BYTES = 256 * 1024
+_MEDIA_BACKOFF_S = (1.0, 60.0)
+
+
+def _media_list_sink_inputs(timeout_s: float = 1.5) -> "str | None":
+    """``pactl list sink-inputs`` in the C locale (so "Corked:" is never translated); None on any failure. BOUNDED while it
+    is read: stdout is pulled in pieces and a listing longer than ``_MEDIA_MAX_LIST_BYTES`` is abandoned (the child is
+    killed) and reported UNKNOWN, never buffered whole and never cut short (a cut listing could hide a foreign stream)."""
+    import select
+
+    proc = None
+    try:
+        proc = subprocess.Popen(["pactl", "list", "sink-inputs"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+        deadline = time.monotonic() + float(timeout_s)
+        fd = proc.stdout.fileno()
+        buf = bytearray()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                return None                        # too slow: unknown
+            piece = os.read(fd, 65536)
+            if not piece:
+                break
+            buf += piece
+            if len(buf) > _MEDIA_MAX_LIST_BYTES:
+                return None                        # over the bound: unknown (never a truncated parse)
+        rc = proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+        return buf.decode("utf-8", "replace") if rc == 0 else None
+    except Exception:
+        return None
+    finally:
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+            except Exception:
+                pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+
+
+def _media_spawn_subscribe():
+    """The long-lived ``pactl subscribe`` child (stdout piped, bytes). Raises when pactl cannot start."""
+    return subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+
+
+def _proc_ppid(pid: int) -> "int | None":
+    """The parent pid of ``pid`` from /proc/<pid>/stat (the comm may contain spaces and parens: split at the LAST ')')."""
+    try:
+        with open(f"/proc/{int(pid)}/stat", "rb") as fh:
+            raw = fh.read(1024).decode("ascii", "replace")
+        return int(raw[raw.rindex(")") + 2:].split()[1])
+    except Exception:
+        return None
+
+
+def _parse_sink_inputs(text: str) -> "list[tuple[bool, int | None]]":
+    """[(corked, pid or None)] per sink-input. A block with no Corked line counts as playing (uncorked). A listing over
+    ``_MEDIA_MAX_LIST_BYTES`` raises ValueError (the caller's unknown): parsing only its head could miss a foreign stream."""
+    if len(text) > _MEDIA_MAX_LIST_BYTES:
+        raise ValueError("sink-input listing over the bound")
+    out: list = []
+    for line in text.splitlines():
+        if re.match(r"\s*Sink Input #\d+", line):
+            out.append([False, None])
+            continue
+        if not out:
+            continue
+        m = re.match(r"\s*Corked:\s*(\S+)", line)
+        if m:
+            out[-1][0] = m.group(1).lower() == "yes"
+            continue
+        m = re.search(r'application\.process\.id\s*=\s*"(\d+)"', line)
+        if m:
+            out[-1][1] = int(m.group(1))
+    return [(bool(c), p) for c, p in out]
+
+
+class _MediaWatch:
+    """The cached "is foreign media playing on this panel" snapshot. Every seam is injectable for tests (which NEVER
+    run real pactl): ``list_inputs`` -> listing text or None, ``spawn_subscribe`` -> a Popen-like with ``stdout``,
+    ``clock`` (monotonic), ``own_pid``, ``parent_of``."""
+
+    def __init__(self, *, list_inputs=None, spawn_subscribe=None, clock=None, own_pid=None, parent_of=None,
+                 heartbeat_s: float = _MEDIA_HEARTBEAT_S, min_gap_s: float = _MEDIA_MIN_GAP_S,
+                 backoff_s: "tuple[float, float]" = _MEDIA_BACKOFF_S):
+        self._list = list_inputs or _media_list_sink_inputs
+        self._spawn = spawn_subscribe or _media_spawn_subscribe
+        self._clock = clock or time.monotonic
+        self._own = int(own_pid if own_pid is not None else os.getpid())
+        self._parent_of = parent_of or _proc_ppid
+        self._heartbeat_s, self._min_gap_s, self._backoff = float(heartbeat_s), float(min_gap_s), backoff_s
+        self._lock = threading.Lock()
+        self._ok = False
+        self._refreshed_at: "float | None" = None
+        self._foreign = False
+        self._gone_at: "float | None" = None      # when a foreign stream was first seen gone
+        self._clean_since: "float | None" = None  # start of the current run of ok, foreign-free reads
+        self._dirty = threading.Event()
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+        self._reader: "threading.Thread | None" = None
+        self._child = None
+
+    # -- the watcher side ------------------------------------------------------
+    def _is_ours(self, pid: "int | None") -> bool:
+        if pid is None:
+            return False
+        if pid == self._own:
+            return True
+        return self._parent_of(pid) == self._own
+
+    def refresh(self) -> None:
+        """One read of the sink-inputs; the parse runs OUTSIDE the lock, which is held only to store the result. The result is
+        stamped when the read COMPLETES: stamped before a slow listing, a first read already looked a second old, so the clean
+        hold and the gone hold were counted from before anything was known."""
+        try:
+            text = self._list()
+            foreign = None if text is None else any(not corked and not self._is_ours(pid)
+                                                    for corked, pid in _parse_sink_inputs(text))
+        except Exception:
+            foreign = None
+        now = self._clock()
+        with self._lock:
+            if foreign is None:
+                self._ok, self._clean_since = False, None
+            else:
+                if foreign:
+                    self._clean_since, self._gone_at = None, None
+                else:
+                    if self._foreign:
+                        self._gone_at = now
+                    if self._clean_since is None:
+                        self._clean_since = now
+                self._ok, self._foreign = True, bool(foreign)
+            self._refreshed_at = now
+
+    def _run(self) -> None:
+        last = None
+        while not self._stop.is_set():
+            self._dirty.wait(self._heartbeat_s)
+            self._dirty.clear()
+            if self._stop.is_set():
+                break
+            if last is not None:
+                gap = self._min_gap_s - (time.monotonic() - last)
+                if gap > 0:
+                    self._stop.wait(gap)  # coalesce an event storm into one read
+                    self._dirty.clear()
+            last = time.monotonic()
+            try:
+                self.refresh()
+            except Exception:
+                with self._lock:
+                    self._ok = False
+
+    def _read_events(self) -> None:
+        delay = self._backoff[0]
+        while not self._stop.is_set():
+            try:
+                child = self._spawn()
+                self._child = child
+                started = time.monotonic()
+                while not self._stop.is_set():
+                    line = child.stdout.readline(512)
+                    if not line:
+                        break  # the child died (or pulse restarted): respawn after the backoff
+                    if b"sink-input" in line:
+                        self._dirty.set()
+                if time.monotonic() - started > 30.0:
+                    delay = self._backoff[0]  # it ran a good while: a fresh failure starts the backoff again
+            except Exception:
+                pass
+            finally:
+                self._kill_child()
+            self._dirty.set()
+            self._stop.wait(delay)
+            delay = min(self._backoff[1], delay * 2)
+
+    def _kill_child(self) -> None:
+        child, self._child = self._child, None
+        if child is None:
+            return
+        try:
+            child.kill()
+            child.wait(timeout=1)
+        except Exception:
+            pass
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True, name="media-watch")
+        self._reader = threading.Thread(target=self._read_events, daemon=True, name="media-watch-events")
+        self._thread.start()
+        self._reader.start()
+        self._dirty.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._dirty.set()
+        self._kill_child()
+
+    # -- the close side: READ ONLY ----------------------------------------------
+    def snapshot(self, now: "float | None" = None) -> "tuple[bool | None, int]":
+        """(media_active, snapshot age ms); (None, -1) when no read ever completed. Never blocks beyond the lock."""
+        now = self._clock() if now is None else now
+        with self._lock:
+            ok, at, foreign, gone, clean = self._ok, self._refreshed_at, self._foreign, self._gone_at, self._clean_since
+        if at is None:
+            return None, -1
+        age = max(0, int(round((now - at) * 1000.0)))
+        if self._thread is None or not self._thread.is_alive() or not ok or age > _MEDIA_FRESH_MS:
+            return None, age
+        if foreign or (gone is not None and (now - gone) * 1000.0 < _MEDIA_HOLD_MS):
+            return True, age
+        if clean is None or (now - clean) * 1000.0 < _MEDIA_HOLD_MS:
+            return None, age
+        return False, age
+
+
+_MEDIA: "_MediaWatch | None" = None   # started in main() only when MEDIA_WATCH_ENABLED
+
+
+def _media_at_close(now: float) -> "tuple[bool | None, int]":
+    """The media snapshot at the close; (None, -1) with no watcher. Never raises."""
+    try:
+        w = _MEDIA
+        return (None, -1) if w is None else w.snapshot(now)
+    except Exception:
+        return None, -1
+
+
+# ── First-sound instrument (S0, LOG-ONLY, 2026-11-14) ───────────────────────
+# Measures, changes nothing: two log lines per turn, both written AFTER the stream ends (never inside the per-chunk
+# playback loop: a slow log handler must not stall audio; the per-chunk data lives in plain ints on _FirstSound).
+# Integers and fixed enums ONLY (never a transcript, a name or any
+# text from the person or the reply). All ms are relative to t_close, the monotonic stamp taken where the
+# recording's capture loop ends (the chunk where _Endpointer.push returned True, or the cap). It travels like
+# _pending_stt_stream: the recorder writes _turn_close, the next streamed turn reads it.
+#   PCM_WRITE n=<writes> first_ms=<close->first write OFFERED (t_start)> last_ms=<close->last write offered> dur_ms=<pcm ms>
+#     gap_max_ms=<longest gap between landings> starved=<writes that landed after the previous chunk ended>
+#     underrun_max_ms=.. underrun_sum_ms=.. first_end_ms=<close->first write RETURNED>   (stamps: t_start before write(),
+#     t_end after write()+flush(); first_ms is t_start, a lower bound; neither includes the player's device-open latency)
+#   FIRST_SOUND close=<rule>=<ms>ms post_ms=.. reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0
+#     reflex_wait_ms=0 server_first_ms=.. server_kind=<enum> gap_ms=-1 still_talking=<0|1> talk_chunks=..
+#     chunks=.. underrun_max_ms=.. underrun_sum_ms=.. obs_ms=.. win=<wake|followup|conversation|barge> quiet_ms=..
+#     fall=<clean|hesitating|none> muted_ms=.. first_end_ms=.. media=<1|0|-1> media_age_ms=<n|-1>
+# The reflex fields are constants until a reflex exists, so a parser written now never changes. -1 = unknown.
+_turn_close: dict = {}
+_CLOSE_RULES = ("deep", "quiet", "clean", "hesitation", "no_speech")
+_SERVER_KINDS = ("content", "filler", "tool_ack", "greeting", "canned")
+_OBS_MS = 1500               # the FIXED post-close observation window for the talk count (ms from the close)
+_STILL_TALKING_CHUNKS = 3    # this many speech chunks inside it make still_talking=1
+_FS_WINS = ("wake", "followup", "conversation", "barge")
+_fs_local = threading.local()  # .turn = the _FirstSound of the streamed turn running on this thread
+
+
+def _fs_now() -> float:
+    return time.monotonic()
+
+
+def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason: str, frames: "list | None" = None,
+                 skip: int = 0) -> None:
+    """The recording just closed: remember when, by which rule, the endpointer's own quiet run and fall type at the
+    commit (read, never recomputed) and the recording's frames (its muted ms is summed later, at the turn's end, off
+    the path to the first sound), for the turn that follows."""
+    rule = endpointer.tail_rule if stop_reason == "silence" else ""
+    if rule not in _CLOSE_RULES:
+        rule = "cap" if stop_reason == "max_duration" else "other"
+    closed = rule in _CLOSE_RULES
+    t = _fs_now() if t_close is None else t_close
+    media, media_age = _media_at_close(t)  # a READ of the watcher's cached snapshot: no pactl at the close
+    _turn_close.update(t=t, rule=rule, media=media, media_age_ms=int(media_age),
+                       ms=int(endpointer.close_ms) if closed else 0,
+                       quiet_ms=int(round(int(endpointer._quiet) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE)) if closed else -1,
+                       fall=("hesitating" if endpointer._hesitating else "clean") if closed else "none",
+                       frames=frames, skip=int(skip),
+                       seq=int(_turn_close.get("seq", 0)) + 1)
+
+
+def _server_kind(header: dict) -> str:
+    """What a stream audio header says the sound is, from fields the server sends TODAY; ``unknown`` when it
+    cannot tell (a kokoro-sidecar sentence is content OR a tool ack). Never returns header text."""
+    kind = header.get("kind")
+    if isinstance(kind, str) and kind in _SERVER_KINDS:
+        return kind  # a server that names it (additive follow-up field)
+    if header.get("processing_ack"):
+        return "filler"
+    chunk, provider = header.get("chunk"), header.get("provider")
+    if chunk == -2 or provider == "greeting":
+        return "greeting"
+    if chunk == -1 or provider == "filler":
+        return "filler"
+    if provider == "kokoro":
+        return "canned"   # only _canned_turn_response sends this provider on /turn_stream
+    if provider == "stitch":
+        return "content"
+    return "unknown"
+
+
+class _PostCloseTalk:
+    """Speech the barge monitor hears after the close, in its idle branch, inside a FIXED window: from the close
+    to _OBS_MS after it, or until the first server sound if that is earlier (playback registering ends the idle
+    branch anyway; a reply that finished inside the window must not feed its own echo back in). ``obs_ms`` is the
+    window actually observed (from the monitor's first idle chunk, which is after the close), so a short window is
+    visible and never read as "nobody spoke". Counts only; the monitor's decisions never read it."""
+
+    def __init__(self):
+        self.armed = self.opened = self.stopped = False
+        self.chunks = 0
+        self.first_cap: "float | None" = None
+        self.last_end: "float | None" = None
+
+    def begin(self) -> None:
+        self.armed, self.opened, self.stopped = True, False, False
+        self.chunks = 0
+        self.first_cap = self.last_end = None
+
+    def mic_open(self) -> None:
+        self.opened = True
+
+    def first_sound(self) -> None:
+        self.stopped = True
+
+    def feed(self, prob: float, captured_at: float) -> None:
+        t = _turn_close.get("t")
+        if not self.armed or self.stopped or t is None:
+            return
+        rel = captured_at - t
+        if rel < 0.0 or rel >= _OBS_MS / 1000.0:
+            return
+        if self.first_cap is None:
+            self.first_cap = captured_at
+        self.last_end = captured_at + _CHUNK_S
+        if prob >= VAD_ENDPOINT_THRESHOLD:
+            self.chunks += 1
+
+    def take(self) -> "tuple[int, int, int]":
+        """(talk_chunks, still_talking, obs_ms); (-1, 0, 0) when no monitor listened for this turn or no close is known."""
+        t = _turn_close.get("t")
+        heard = self.armed and self.opened and t is not None
+        self.armed = False
+        if not heard:
+            return -1, 0, 0
+        obs = 0
+        if self.first_cap is not None and self.last_end is not None:
+            end = min(self.last_end, t + _OBS_MS / 1000.0)
+            obs = max(0, int(round((end - max(self.first_cap, t)) * 1000.0)))
+        return self.chunks, 1 if self.chunks >= _STILL_TALKING_CHUNKS else 0, obs
+
+
+_TALK = _PostCloseTalk()
+
+
+class _FirstSound:
+    """One streamed turn's first-sound record. Holds numbers only."""
+
+    def __init__(self, *, speculative: bool, win: str = "barge"):
+        self.win = win if win in _FS_WINS else "barge"
+        self._speculative = speculative
+        self._seq0 = int(_turn_close.get("seq", 0))
+        self._close: "dict | None" = None
+        if not speculative:
+            self._take_close()
+        self.post_at: "float | None" = None
+        self.first_at: "float | None" = None
+        self.kind = "none"
+        self._pending_kind = "unknown"
+        self.writes = 0
+        self._play_end: "float | None" = None
+        self.underrun_max = 0
+        self.underrun_sum = 0
+        self.starved = 0
+        self.pcm_s = 0.0
+        self.first_write: "float | None" = None
+        self.first_end: "float | None" = None
+        self.last_write: "float | None" = None
+        self.gap_max = 0
+
+    def _take_close(self) -> None:
+        c = dict(_turn_close)
+        # A speculative stream starts BEFORE its recording closes: only a close stamped after it started is its own.
+        if c.get("t") is not None and (not self._speculative or int(c.get("seq", 0)) > self._seq0):
+            self._close = c
+
+    def rel_ms(self, at: "float | None") -> int:
+        if self._close is None and self._speculative:
+            self._take_close()
+        if self._close is None or at is None:
+            return -1
+        return int(round((at - self._close["t"]) * 1000.0))
+
+    def header(self, header: dict) -> None:
+        try:
+            self._pending_kind = _server_kind(header)
+        except Exception:
+            self._pending_kind = "unknown"
+
+    def sound(self, at: float) -> None:
+        """The first PCM write was OFFERED to the player (``at`` is its t_start, taken just before write())."""
+        if self.first_at is None:
+            self.first_at = at
+            if self.kind == "none":
+                self.kind = self._pending_kind
+            _TALK.first_sound()
+
+    def blob(self) -> None:
+        """A whole-blob player was dispatched. Nothing observable says when its first sample plays, so no
+        first-sound time is recorded (server_first_ms stays -1); only the talk window stops and the kind is kept."""
+        if self.kind == "none":
+            self.kind = self._pending_kind
+        _TALK.first_sound()
+
+    def write(self, t_start: float, t_end: float, dur_s: float) -> None:
+        """One PCM write: ``t_start`` just before write(), ``t_end`` after write()+flush() returned. A chunk bigger
+        than the pipe makes write() BLOCK while the player is already playing its start, so the honest first-sound
+        stamp is t_start (the pipe accepts the first bytes at once and the player reads them); t_end only says when
+        the whole chunk was accepted. Playback is modelled as chunk_start = max(t_start, prev_end), prev_end =
+        chunk_start + dur; a write is starved when t_start > prev_end. Plain arithmetic: no I/O, no logging."""
+        under = 0 if self._play_end is None else max(0, int(round((t_start - self._play_end) * 1000.0)))
+        self._play_end = max(t_start, self._play_end if self._play_end is not None else t_start) + dur_s
+        if self.last_write is not None:
+            self.gap_max = max(self.gap_max, int(round((t_start - self.last_write) * 1000.0)))
+        self.last_write = t_start
+        if self.first_write is None:
+            self.first_write = t_start
+            self.first_end = t_end
+        self.sound(t_start)
+        self.writes += 1
+        self.pcm_s += dur_s
+        if under > 0:
+            self.starved += 1
+        self.underrun_max = max(self.underrun_max, under)
+        self.underrun_sum += under
+
+    def pcm_line(self) -> str:
+        """The turn's PCM summary, one line (-1 = unknown, 0 writes = nothing was streamed)."""
+        return ("PCM_WRITE n=%d first_ms=%d last_ms=%d dur_ms=%d gap_max_ms=%d starved=%d underrun_max_ms=%d "
+                "underrun_sum_ms=%d first_end_ms=%d") % (
+            self.writes, self.rel_ms(self.first_write), self.rel_ms(self.last_write),
+            int(round(self.pcm_s * 1000.0)), self.gap_max, self.starved, self.underrun_max, self.underrun_sum,
+            self.rel_ms(self.first_end))
+
+    @staticmethod
+    def _muted(c: "dict | None") -> int:
+        """Digital-silence ms of the recording behind this turn, as the ``Recorded command`` line's ``muted=``;
+        -1 when no recording is known. Summed here (turn end), not at the close."""
+        if c is None or c.get("frames") is None:
+            return -1
+        try:
+            return int(_muted_ms(c["frames"], int(c.get("skip", 0))))
+        except Exception:
+            return -1
+
+    def line(self, talk: "tuple[int, int, int]") -> str:
+        c = self._close
+        if c is None and self._speculative:
+            self._take_close()
+            c = self._close
+        rule = c["rule"] if c is not None and c.get("rule") in _CLOSE_RULES + ("cap", "other") else "none"
+        kind = self.kind if self.kind in _SERVER_KINDS + ("unknown", "none") else "unknown"
+        return ("FIRST_SOUND close=%s=%dms post_ms=%d reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
+                "reflex_cut=0 reflex_wait_ms=0 server_first_ms=%d server_kind=%s gap_ms=-1 still_talking=%d "
+                "talk_chunks=%d chunks=%d underrun_max_ms=%d underrun_sum_ms=%d obs_ms=%d win=%s quiet_ms=%d fall=%s "
+                "muted_ms=%d first_end_ms=%d media=%d media_age_ms=%d") % (
+            rule, int(c["ms"]) if rule != "none" else 0, self.rel_ms(self.post_at), self.rel_ms(self.first_at),
+            kind, int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum, int(talk[2]),
+            self.win, int(c.get("quiet_ms", -1)) if c is not None else -1,
+            c["fall"] if c is not None and c.get("fall") in ("clean", "hesitating") else "none",
+            self._muted(c), self.rel_ms(self.first_end), self._media(c),
+            int(c.get("media_age_ms", -1)) if c is not None else -1)
+
+    @staticmethod
+    def _media(c: "dict | None") -> int:
+        """1 / 0 for a stated media snapshot at the close, -1 for unknown (no watcher, stale, dead, or no close)."""
+        v = None if c is None else c.get("media")
+        return 1 if v is True else 0 if v is False else -1
+
+
+def _fs_note_write(t_start: float, t_end: float, dur_s: float) -> None:
+    """Record one landed PCM write of the current streamed turn in memory. Never logs (see the block comment)."""
+    fs = getattr(_fs_local, "turn", None)
+    if fs is None:
+        return
+    try:
+        fs.write(t_start, t_end, dur_s)
+    except Exception:  # the instrument must never touch playback
+        pass
+
+
 def _feed_pcm_chunk(aplay, wav_bytes: bytes):
     """Strip the WAV header and stream raw PCM into a single persistent aplay so
     sentence chunks play gaplessly. Starts aplay on the first chunk (format taken
@@ -3709,14 +4247,19 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         _register_tts_process(aplay)
         if BARGE_DUCK_ENABLED:
             _PLAYOUT.reset()
+    t_start = t_end = None
     try:
         if aplay.stdin:
+            t_start = _fs_now()  # the bytes are offered NOW (the player is already reading its pipe)
             aplay.stdin.write(pcm)
             aplay.stdin.flush()
+            t_end = _fs_now()    # the whole chunk is accepted (a chunk over the pipe size blocks until then)
             if BARGE_DUCK_ENABLED and rate and ch and width:
                 _PLAYOUT.note(time.monotonic(), len(pcm) / float(rate * ch * width))
     except (BrokenPipeError, ValueError, OSError):
         pass
+    if t_end is not None and rate and ch and width:
+        _fs_note_write(t_start, t_end, len(pcm) / float(rate * ch * width))
     return aplay
 
 
@@ -3855,7 +4398,31 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     brain ran: ``_last_turn_flags["incomplete"]``); ``continued`` marks the merged
     retry so it is never held twice. A ``skipped`` frame (side speech, no brain)
     returns False. All three are additive payload keys an old server ignores.
+
+    Every call logs ONE ``FIRST_SOUND`` line after the turn (log-only instrument, see _FirstSound).
     """
+    fs = _FirstSound(speculative=speculation is not None,
+                     win=("wake" if wake_turn or (speculation is not None and not window) else
+                          window if window in ("followup", "conversation") else "barge"))
+    prev = getattr(_fs_local, "turn", None)
+    _fs_local.turn = fs
+    try:
+        return _stream_turn(pa, wav, fs, prompt_on_empty=prompt_on_empty, conversation=conversation,
+                            voice_claim=voice_claim, speculation=speculation, window=window,
+                            can_continue=can_continue, continued=continued, wake_turn=wake_turn)
+    finally:
+        _fs_local.turn = prev
+        for make in (fs.pcm_line, lambda: fs.line(_TALK.take())):
+            try:
+                log.info("%s", make())
+            except Exception as exc:  # the instrument must never change the turn's outcome
+                log.debug("first-sound instrument: %s", type(exc).__name__)
+
+
+def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_on_empty: bool,
+                 conversation: bool, voice_claim: object, speculation: "_SpeculativeTurn | None",
+                 window: str, can_continue: bool, continued: bool, wake_turn: bool) -> bool:
+    """The body of _do_single_turn_stream (which owns the first-sound record ``fs``)."""
     global _tts_process, _prev_reply_asked
     import time as _time
 
@@ -3912,6 +4479,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     _barge_in_requested.clear()
     _barge_stream_closed.clear()
     t0 = _time.monotonic()
+    fs.post_at = _fs_now()
     aplay = None
     ttfa = None
     transcript = ""
@@ -3975,6 +4543,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                     _recording_active.clear()
                 if ttfa is None:
                     ttfa = _time.monotonic() - t0
+                fs.header(obj)
+                fs.blob()
                 play_audio_b64(str(obj.get("full_audio") or ""), obj.get("content_type") or "audio/wav")
                 played_any = True
                 reply = obj.get("reply", "") or reply
@@ -4020,6 +4590,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 continue
             if "chunk" in obj:
                 expect_audio = True
+                fs.header(obj)
                 continue
         _set_turn_response(None)
         # Hand the pooled connection back (or close it when the stream was left unfinished):
@@ -4440,6 +5011,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
         log.info("Recording follow-up command (max %ds, up to %.0fs while still speaking)...",
                  RECORD_SECONDS, caps[1] * _CHUNK_S)
         frames = list(lookback)
+        n_lookback = len(frames)
         if stream_upload:
             uploader = _start_stt_stream(frames)  # same bytes, same order as the WAV below
         # The trigger chunk was already-detected speech — seed the endpointer so
@@ -4447,6 +5019,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
         endpointer = _Endpointer(spoke=True, vad=vad)  # same stream: the recording continues the scored audio
         stop_reason = "max_duration"
         n_read = 0
+        t_close = None
         for _ in range(caps[1] + caps[2]):
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data)
@@ -4454,12 +5027,14 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             if uploader is not None:
                 uploader.push(data)
             if endpointer.push(data, len(frames)):
+                t_close = _fs_now()  # the committed close: the first-sound instrument's zero
                 stop_reason = "silence"
                 break
             if speculation is not None and endpointer.speculative_ready(len(frames)):
                 speculation.fire(_frames_to_wav(pa, frames))
             if _record_cap_stop(n_read, caps, endpointer):
                 break
+        _stamp_close(t_close, endpointer, stop_reason, frames, n_lookback)
         _note_capture_end(stop_reason, n_read, caps, endpointer)
         stream.stop_stream()
         stream.close()
@@ -5410,7 +5985,7 @@ def _start_health_server():
 
 
 def main():
-    global _INPUT_DEVICE_INDEX, _last_wake_at, _HTTP_SESSION, _WAKE_MODEL_SHA256
+    global _INPUT_DEVICE_INDEX, _last_wake_at, _HTTP_SESSION, _WAKE_MODEL_SHA256, _MEDIA
 
     if _CF_ACCESS_REFUSED:
         log.error("Refusing to start: fix ZOE_URL (public https tunnel host) or unset CF_ACCESS_CLIENT_ID/SECRET.")
@@ -5538,6 +6113,11 @@ def main():
         target=_ambient_capture_thread, daemon=True, name="ambient-capture"
     )
     _ambient_thread.start()
+
+    if MEDIA_WATCH_ENABLED and PANEL_PLATFORM != "mac":
+        _MEDIA = _MediaWatch()
+        _MEDIA.start()
+        log.info("Media watch started (log-only).")
 
     # P-W2.3: server-pushed spoken announcements (morning brief etc.).
     threading.Thread(

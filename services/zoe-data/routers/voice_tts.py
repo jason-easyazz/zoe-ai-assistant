@@ -39,6 +39,7 @@ from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
 import traffic_class
+import user_erase_gate as _erase_gate
 from voice_speaker_id import _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -47,12 +48,10 @@ from tts_waterfall import (
     _clean_for_speech,
     _has_espeak_ng,
     _kokoro_http_client,
-    _synthesize_edge_tts,
     _synthesize_espeak,
     _synthesize_kokoro_sidecar,
     _synthesize_local_service,
     TTS_MODE_KOKORO,
-    edge_tts_available,
     tts_mode,
 )
 
@@ -1101,7 +1100,6 @@ async def _require_livekit_auth(
 
 VOICE_PROFILES = {
     "zoe_au_natural_v1": {
-        "edge_voice": "en-AU-NatashaNeural",
         "espeak_speed": 158,
         "espeak_pitch": 44,
         "espeak_volume": 150,
@@ -2466,7 +2464,6 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
-    edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
     speed = int(os.getenv("ZOE_ESPEAK_SPEED", str(prof["espeak_speed"])))
     pitch = int(os.getenv("ZOE_ESPEAK_PITCH", str(prof["espeak_pitch"])))
     volume = int(os.getenv("ZOE_ESPEAK_VOLUME", str(prof["espeak_volume"])))
@@ -2478,16 +2475,15 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     # ── TTS: Kokoro sidecar ONLY by default (ZOE_TTS_MODE=kokoro) ──
     # Owner decision 2026-10-21: Kokoro is Zoe's only voice. No fallback voice,
-    # and reply text never leaves the box (Edge TTS sends it to Microsoft). If
-    # Kokoro fails, the request 503s below. The legacy waterfall (Kokoro → local
-    # sidecar → Edge TTS → espeak-ng) runs only when another mode is set
-    # explicitly (hybrid/local/cloud/edge/offline).
+    # and reply text never leaves the box (there is no off-box engine: Edge TTS
+    # was retired 2026-11-16). If Kokoro fails, the request 503s below. The
+    # legacy LOCAL waterfall (Kokoro → local sidecar → espeak-ng) runs only when
+    # another mode is set explicitly (hybrid/local/offline; see tts_mode).
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
-    if mode != "cloud":
-        audio_bytes = await _synthesize_kokoro_sidecar(text)
-        if audio_bytes:
-            provider = "kokoro-sidecar"
-            content_type = "audio/wav"
+    audio_bytes = await _synthesize_kokoro_sidecar(text)
+    if audio_bytes:
+        provider = "kokoro-sidecar"
+        content_type = "audio/wav"
 
     if audio_bytes is None and mode in {"hybrid", "local"}:
         audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
@@ -2496,17 +2492,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
             if not audio_bytes.startswith(b"RIFF"):
                 content_type = "audio/mpeg"
 
-    if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
-        try:
-            audio_bytes = await _synthesize_edge_tts(text, edge_voice)
-            if audio_bytes:
-                provider = "edge-tts"
-                if not audio_bytes.startswith(b"RIFF"):
-                    content_type = "audio/mpeg"
-        except Exception:
-            audio_bytes = None
-
-    if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
+    if audio_bytes is None and mode != TTS_MODE_KOKORO:
         try:
             audio_bytes = await _synthesize_espeak(text, speed=speed, pitch=pitch, volume=volume)
             provider = "espeak-ng"
@@ -2607,7 +2593,6 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
     mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
-    edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
     local_tts_url = os.getenv("ZOE_LOCAL_TTS_URL", "")
 
     sentences = _split_sentences(text)
@@ -2621,28 +2606,18 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Kokoro ONLY by default (see /synthesize). The waterfall
-            # (Kokoro → local sidecar → Edge TTS → espeak) needs an explicit mode.
-            if mode != "cloud":
-                audio_bytes = await _synthesize_kokoro_sidecar(sentence)
-                if audio_bytes:
-                    provider = "kokoro-sidecar"
+            # Kokoro ONLY by default (see /synthesize). The local waterfall
+            # (Kokoro → local sidecar → espeak) needs an explicit mode.
+            audio_bytes = await _synthesize_kokoro_sidecar(sentence)
+            if audio_bytes:
+                provider = "kokoro-sidecar"
 
             if audio_bytes is None and mode in {"hybrid", "local"} and local_tts_url:
                 audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
                 if audio_bytes:
                     provider = "local-tts"
 
-            if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
-                try:
-                    audio_bytes = await _synthesize_edge_tts(sentence, edge_voice)
-                    if audio_bytes:
-                        provider = "edge-tts"
-                except Exception as exc:
-                    error_msg = str(exc)
-                    audio_bytes = None
-
-            if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
+            if audio_bytes is None and mode != TTS_MODE_KOKORO:
                 try:
                     audio_bytes = await _synthesize_espeak(sentence, prof["espeak_speed"], prof["espeak_pitch"], prof["espeak_volume"])
                     if audio_bytes:
@@ -2706,10 +2681,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _voice_stt_log_path() -> Path:
-    configured = env_str("ZOE_VOICE_STT_LOG")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".zoe-voice" / "voice_stt.jsonl"
+    import local_text_logs
+
+    return local_text_logs.log_path(local_text_logs.VOICE_STT)
 
 
 def _wav_duration_seconds(wav_path: str) -> float | None:
@@ -2724,18 +2698,26 @@ def _wav_duration_seconds(wav_path: str) -> float | None:
 
 
 def _rotate_voice_stt_log(path: Path) -> None:
-    max_bytes = _env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000)
-    if max_bytes <= 0 or not path.exists():
-        return
+    import local_text_logs
+
+    if path != local_text_logs.log_path(local_text_logs.VOICE_STT):
+        raise ValueError("STT rotation path differs from the erase path")
+    local_text_logs.append_line(local_text_logs.VOICE_STT, None,
+                               max_bytes=_env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000))
+
+
+def _stt_erase_epoch() -> int | None:
+    """The forget erase generation, read BEFORE a clip is handed to STT and held as the TURN's epoch (``local_text_logs.begin_turn``,
+    a ContextVar): the STT audit line and every later writer of this turn (the intent-miss log, the router shadow log, the recall
+    trace) check their append against it, so an erase that lands while the clip is transcribed drops them all (the words may name
+    what was just forgotten). One module-global int read and a ContextVar set (no disk, no env, no lock); STT itself is untouched.
+    None only if the module cannot load (append fails too)."""
     try:
-        if path.stat().st_size < max_bytes:
-            return
-        rotated = path.with_name(path.name + ".1")
-        if rotated.exists():
-            rotated.unlink()
-        path.replace(rotated)
-    except OSError as exc:
-        logger.debug("voice STT audit rotation failed: %s", exc)
+        import local_text_logs
+
+        return local_text_logs.begin_turn()
+    except Exception:  # noqa: BLE001 - an audit-log helper must never break a turn
+        return None
 
 
 def _log_voice_stt_sample(
@@ -2748,10 +2730,13 @@ def _log_voice_stt_sample(
     duration_seconds: float | None = None,
     stt_seconds: float | None = None,
     error: str | None = None,
+    epoch: int | None = None,
 ) -> None:
     try:
-        path = _voice_stt_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        import local_text_logs
+
+        # the turn's epoch (held before STT) wins; a pre-STT reading that differs from it means an erase ran between them
+        epoch = local_text_logs.writer_epoch(epoch)
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "route": route,
@@ -2770,9 +2755,8 @@ def _log_voice_stt_sample(
         }
         if error:
             record["error"] = error[:500]
-        _rotate_voice_stt_log(path)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        local_text_logs.append_line(local_text_logs.VOICE_STT, json.dumps(record, ensure_ascii=False), epoch,
+                                    max_bytes=_env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000))
     except Exception as exc:
         logger.debug("voice STT audit log failed: %s", exc)
 
@@ -3230,6 +3214,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     duration_s: float | None = None
     stt_s: float | None = None
     t_stt_start: float | None = None
+    stt_epoch = _stt_erase_epoch()   # BEFORE the clip reaches STT
     try:
         text = ""
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -3255,6 +3240,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         stripped = text.strip()
         stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3289,6 +3275,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if t_stt_start is not None:
             stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3303,6 +3290,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if t_stt_start is not None:
             stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3317,6 +3305,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         if t_stt_start is not None:
             stt_s = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="transcribe",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -3487,6 +3476,9 @@ async def _schedule_voice_chat_save(
         )
 
 
+# The member's erase generation is read when the turn queues this (``_spawn_bg(_run_voice_memory_passes(...))``): every memory write
+# of the passes is dropped if the member is erased after that (``user_erase_gate.scheduled``; mirrors chat's post-turn hook).
+@_erase_gate.scheduled_at_call("user_id")
 async def _run_voice_memory_passes(
     user_text: str, reply: str, user_id: str, session_id: str,
     speaker_verified: Optional[bool] = None, interrupted: bool = False,
@@ -3645,6 +3637,9 @@ async def voice_command(
         _note_voice_activity()
     except Exception:  # noqa: BLE001 - the deploy quiet signal must never break a turn
         pass
+    # The turn's erase epoch: kept when /turn or /turn_stream already read it before STT (same task / a copied context), else read
+    # here, where a text turn's words enter this process. Every erasable write of the turn checks against it. In memory only.
+    _stt_erase_epoch()
     try:  # read FIRST, before any await: a revoke that completes during this turn must win over its speaker note
         import warm_speaker as _ws_mod
         _ws_forget_epoch = _ws_mod.forget_epoch()
@@ -5555,7 +5550,7 @@ async def voice_command(
                         })
 
                         # Prefer kokoro-sidecar (natural GPU voice); fall back to the
-                        # full /synthesize waterfall (local → Edge → espeak) if it's down.
+                        # /synthesize path (Kokoro-only by default) if it's down.
                         wav_bytes = await _synthesize_kokoro_sidecar(s)
                         _tts_provider = "kokoro-sidecar"
                         if wav_bytes:
@@ -6163,6 +6158,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # ── Phase 1: STT ──
     t_stt_start = time.monotonic()
     duration_s: float | None = None
+    stt_epoch = _stt_erase_epoch()   # BEFORE the clip reaches STT
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
@@ -6178,6 +6174,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     except Exception as exc:
         t_stt = time.monotonic() - t_stt_start
         _log_voice_stt_sample(
+            epoch=stt_epoch,
             route="turn",
             panel_id=panel_id,
             audio_bytes=len(raw),
@@ -6208,6 +6205,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
 
     transcript = transcript.strip()
     _log_voice_stt_sample(
+        epoch=stt_epoch,
         route="turn",
         panel_id=panel_id,
         audio_bytes=len(raw),
@@ -6352,6 +6350,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # ── STT (Moonshine, same waterfall as /turn) ──
     t_stt_start = time.monotonic()
     duration_s: float | None = None
+    stt_epoch = _stt_erase_epoch()   # BEFORE the stream result is taken and before batch STT
     # ZOE_STT_STREAM_UNDER_SPEECH (default OFF): the daemon fed this turn's audio to a Moonshine stream while the user
     # spoke; take its finished transcript if (and only if) it provably covers this exact clip. Else batch STT below.
     _pre_text = await _take_stt_stream_text(payload, raw, suffix)
@@ -6384,6 +6383,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         pass
     transcript = (transcript or "").strip()
     _log_voice_stt_sample(
+        epoch=stt_epoch,
         route="turn_stream",
         panel_id=panel_id,
         audio_bytes=len(raw),
@@ -6913,6 +6913,11 @@ async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str |
                     reason = "empty"
                 else:
                     _stt_stream_raw_var.set(" ".join(ln.strip() for ln in lines if ln and ln.strip()))
+                    # these words were transcribed while the member spoke, before this route read the turn's epoch: an
+                    # erase since the first chunk makes every erasable write of the turn refuse
+                    import local_text_logs
+
+                    local_text_logs.turn_predates(getattr(sess, "erase_epoch", None))
     except Exception as exc:
         reason = f"error:{exc.__class__.__name__}"
         text = None
@@ -6941,10 +6946,13 @@ async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_
     if not pcm:
         raise HTTPException(status_code=400, detail="empty chunk")
 
+    epoch = _stt_erase_epoch()   # BEFORE these samples reach the stream: the taking turn compares it (_take_stt_stream_text)
     sess = await asyncio.get_running_loop().run_in_executor(
         None, _stt_stream.get_or_open, sid, seq, _open_moonshine_stream, _moonshine_infer_lock)
     if sess is None:
         raise HTTPException(status_code=429, detail="stt stream refused (unknown stream or too many sessions)")
+    if epoch is not None and (getattr(sess, "erase_epoch", None) is None or epoch < sess.erase_epoch):
+        sess.erase_epoch = epoch     # the EARLIEST chunk's reading (epochs only grow): words streamed after it may predate an erase
     return {"ok": sess.feed(seq, pcm), "samples": sess.samples_fed}
 
 
@@ -6978,6 +6986,7 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
         except Exception as exc:
             raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
         suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+        _stt_erase_epoch()   # the class rule for every STT route (nothing here writes an erasable store today)
         try:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(raw)
@@ -7272,6 +7281,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
 
     import uuid as _uuid
+    _stt_erase_epoch()   # the class rule for every STT route (its store is ambient_memory, not a local text log)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(raw)
         wav_path = tmp.name

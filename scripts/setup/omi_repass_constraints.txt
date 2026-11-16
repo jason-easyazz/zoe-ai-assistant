@@ -84,7 +84,6 @@ docutils==0.22.4
 duckduckgo-search==8.1.1
 durationpy==0.10
 ecdsa==0.19.1
-edge-tts==7.2.8
 email-validator==2.3.0
 en-core-web-sm==3.8.0
 espeakng-loader==0.2.4

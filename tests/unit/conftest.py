@@ -17,7 +17,11 @@ module's module-scope ``from x import y`` cannot hit one. Pinned by ``test_sys_m
 """
 from __future__ import annotations
 
+import atexit
+import os
+import shutil
 import sys
+import tempfile
 import types
 import unittest.mock as mock
 from pathlib import Path
@@ -25,6 +29,17 @@ from pathlib import Path
 import pytest
 
 _ZOE_DATA = Path(__file__).resolve().parents[2] / "services" / "zoe-data"
+
+# No test may inherit the CALLER's git config. A `git commit` in a test's temp repo otherwise runs whatever the caller configured:
+# a signing program (`commit.gpgsign`), a credential helper, `core.hooksPath` hooks, an `init.defaultBranch`. Measured 2026-11-14 with the
+# network blocked: 18 `ci_safe` files of this lane failed (279 tests across both lanes) only because the box's commit-signing program could not reach its server. A neutral identity is
+# supplied, so a box with no identity (a GitHub runner) and an owner's box see the same git. Pinned by tests/unit/test_git_config_isolation.py.
+_GIT_HOME = tempfile.mkdtemp(prefix="zoe-test-git-")
+atexit.register(shutil.rmtree, _GIT_HOME, ignore_errors=True)
+_GIT_CONFIG = os.path.join(_GIT_HOME, "gitconfig")
+with open(_GIT_CONFIG, "w", encoding="utf-8") as _fh:
+    _fh.write("[user]\n\tname = Zoe Test\n\temail = zoe-test@example.invalid\n")
+os.environ.update(GIT_CONFIG_GLOBAL=_GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 
 
 def _repo_module_names() -> frozenset[str]:
@@ -103,11 +118,12 @@ def _no_sys_modules_stub_leaks(request):
 @pytest.fixture(autouse=True)
 def _verbatim_and_night_stores_in_process():
     """``MemoryService.delete_user`` erases the owner's verbatim turns (``exact_words``) AND the night mind's rows
-    (``night_store``) and FAILS CLOSED when either erase fails. Both are Postgres tables in production and no unit test has
+    (``night_store``) and FAILS CLOSED when either erase fails (or when its erase watermark, ``erase_watermark``, cannot be recorded). Both are Postgres tables in production and no unit test has
     that pool, so every unit test gets the in-process stores (the same rule as ``services/zoe-data/tests/conftest.py``);
     a test that wants the SQL backend sets it itself. A real erase failure is NOT hidden by this: it only supplies a
     working store where the test has no pool (pinned by the two test_delete_user_*night* tests in test_memory_service_fixes.py)."""
     try:
+        import erase_watermark
         import exact_words
         import night_store
         import struggle_detector
@@ -118,7 +134,7 @@ def _verbatim_and_night_stores_in_process():
     # long as it is open (module-scoped), and a per-test swap here would pull them out from under it.
     installed = []
     for mod, make in ((exact_words, exact_words.MemoryBackend), (night_store, night_store.MemoryBackend),
-                      (struggle_detector, struggle_detector.MemoryBackend)):
+                      (struggle_detector, struggle_detector.MemoryBackend), (erase_watermark, erase_watermark.MemoryBackend)):
         if getattr(mod, "_backend", None) is None:
             be = make()
             mod.set_backend(be)
