@@ -8,8 +8,11 @@ from __future__ import annotations
 import logging
 import os
 import zoneinfo
-from datetime import datetime, date
+from datetime import datetime, timezone
 
+import erase_watermark
+import nudge_claims
+import user_erase_gate as erase_gate
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -18,12 +21,19 @@ _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 _FIRE_HOUR = 9
 
 
-def _weeks_since(last_contacted_at: str | None) -> str:
+def _days_since(last_contacted_at: str, now_utc: datetime) -> int:
+    """Whole days from ``last_contacted_at`` to ``now_utc`` (the trigger's clock). A naive stamp is read as UTC."""
+    dt = datetime.fromisoformat(last_contacted_at.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now_utc - dt).days
+
+
+def _weeks_since(last_contacted_at: str | None, now_utc: datetime | None = None) -> str:
     if not last_contacted_at:
         return "a long time"
     try:
-        dt = datetime.fromisoformat(last_contacted_at.replace("Z", "+00:00"))
-        days = (datetime.now(dt.tzinfo) - dt).days
+        days = _days_since(last_contacted_at, now_utc or datetime.now(timezone.utc))
         if days < 7:
             return f"{days} day{'s' if days != 1 else ''}"
         weeks = days // 7
@@ -32,14 +42,43 @@ def _weeks_since(last_contacted_at: str | None) -> str:
         return "a while"
 
 
+async def _nudged_today(db, local_day: str) -> set | None:
+    """``(user_id, person_id)`` already nudged on this household day, read from ``proactive_pending`` (the row
+    ``fire_notification`` writes for a send that went through; the birthday and morning triggers read the same table).
+    None when the read failed: the caller then sends nothing this tick rather than risk a repeat."""
+    try:
+        async with db.execute(
+            "SELECT user_id, item_id FROM proactive_pending WHERE trigger_type = ? "
+            "AND (created_at::timestamptz AT TIME ZONE ?)::date::text = ?",
+            (PeopleHealthTrigger.trigger_type, getattr(_ZOE_TZ, "key", "UTC"), local_day),
+        ) as cur:
+            return {(r["user_id"], r["item_id"]) for r in await cur.fetchall()}
+    except Exception as exc:
+        log.warning("PeopleHealthTrigger: nudged-today read failed, skipping this tick: %s", type(exc).__name__)
+        return None
+
+
 class PeopleHealthTrigger(ProactiveTrigger):
     """Daily: fire for Inner Circle people whose health_score is low."""
 
     trigger_type = "people_health"
+    # The "sent today" mark is its proactive_pending row, so a send that no lane delivered (and one that raised) removes it:
+    # the next tick tries again; one lane getting through keeps it (not repeated).
+    retract_if_undelivered = True
 
-    async def check(self, db) -> list[TriggerResult]:
-        now_local = datetime.now(_ZOE_TZ)
+    async def check(self, db, now_utc: datetime | None = None) -> list[TriggerResult]:
+        # Once per person per household day. The mark is the proactive_pending row of a send that went through, so it
+        # survives a restart and a new instance, and a send that failed is retried on the next tick. Two processes checking in the same tick (a deploy overlap) cannot both send: each person's claim is an
+        # ``app_settings`` row with a unique key (nudge_claims), released if the send does not go through.
+        now_utc = now_utc or datetime.now(timezone.utc)
+        # Taken BEFORE the first read of any member's rows: a member erased after this point is refused at the claim (nudge_claims).
+        gens, started = erase_gate.snapshot(), erase_watermark._now()
+        now_local = now_utc.astimezone(_ZOE_TZ)
         if now_local.hour != _FIRE_HOUR:
+            return []
+        local_day = now_local.date().isoformat()
+        already = await _nudged_today(db, local_day)
+        if already is None:
             return []
 
         try:
@@ -68,31 +107,42 @@ class PeopleHealthTrigger(ProactiveTrigger):
                 ) as cur:
                     rows = await cur.fetchall()
             except Exception as exc:
-                log.warning("PeopleHealthTrigger.check failed: %s", exc)
+                log.warning("PeopleHealthTrigger.check failed: %s", type(exc).__name__)
                 return []
 
         results: list[TriggerResult] = []
-        today = date.today()
         for row in rows:
             d = dict(row)
+            if (d["user_id"], d["id"]) in already:
+                continue
             last_c = d.get("last_contacted_at")
             # Enforce 21-day minimum in Python to avoid SQL dialect issues
             if last_c:
                 try:
-                    last_dt = datetime.fromisoformat(last_c.replace("Z", "+00:00"))
-                    if (datetime.now(last_dt.tzinfo) - last_dt).days < 21:
+                    if _days_since(last_c, now_utc) < 21:
                         continue
                 except (ValueError, TypeError):
                     pass
 
-            weeks = _weeks_since(last_c)
+            # The exact once-a-day claim (nudge_claims): the pending-row read above is the cheap first check, the claim is what
+            # two overlapping processes cannot both win. ``fire_notification`` releases it on a send that did not go through.
+            key = nudge_claims.key_for(self.trigger_type, d["user_id"], d["id"], local_day)
+            try:
+                if not await nudge_claims.claim(key, user_id=d["user_id"], gen=gens.get(d["user_id"], 0), started_at=started,
+                                                now=now_utc):
+                    continue
+            except Exception as exc:  # noqa: BLE001
+                log.warning("PeopleHealthTrigger: claim failed, skipping this person this tick: %s", type(exc).__name__)
+                continue
+            weeks = _weeks_since(last_c, now_utc)
             msg = f"You haven't spoken to {d['name']} in {weeks}."
             results.append(TriggerResult(
                 user_id=d["user_id"],
                 message=msg,
                 trigger_type=self.trigger_type,
                 item_id=d["id"],
-                context={"person_id": d["id"], "person_name": d["name"]},
+                context={"person_id": d["id"], "person_name": d["name"], "claim_key": key,
+                         "erase_gen": gens.get(d["user_id"], 0)},
             ))
 
         return results

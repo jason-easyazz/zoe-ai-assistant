@@ -48,12 +48,14 @@ async def create_pending(
     item_id: str = "",
     context: dict | None = None,
     ttl_hours: int = 4,
+    pending_id: str | None = None,
 ) -> str:
     """
-    Insert a proactive_pending row and return its id.
+    Insert a proactive_pending row and return its id. A caller that must be able to remove the row even if it is cancelled before the
+    id comes back (``engine.fire_notification``) passes ``pending_id`` itself.
     The push notification's deep link will point to /chat.html?p={id}.
     """
-    pid = str(uuid.uuid4())
+    pid = pending_id or str(uuid.uuid4())
     expires = (
         datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")

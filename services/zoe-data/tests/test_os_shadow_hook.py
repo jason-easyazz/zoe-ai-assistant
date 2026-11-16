@@ -176,14 +176,14 @@ class _Conn(_TxState):
         self.boom, self.writes, self.fail_commit = boom, [], fail_commit
 
     async def fetchrow(self, sql, *args):
-        if "FROM pending_suggestions" in sql:
+        if "UPDATE pending_suggestions SET resolved = 1" in sql and "RETURNING" in sql:   # the accept's atomic CLAIM (first statement)
             return {"action_type": "list_add", "pre_filled_slots": '{"list_type": "shopping", "item": "oat milk"}'}
         return {"id": "L1"}
 
     async def execute(self, sql, *args):
-        if self.boom and "UPDATE pending_suggestions" in sql:
-            raise RuntimeError("commit failed")
         self.writes.append(sql.split("(")[0].strip())
+        if self.boom and "INSERT INTO list_items" in sql:      # the action fails AFTER the claim (the claim comes first now)
+            raise RuntimeError("write failed")
 
 
 class _Pool:

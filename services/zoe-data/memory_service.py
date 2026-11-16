@@ -2291,6 +2291,11 @@ class MemoryService:
             await reminder_delivery.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: reminder delivery ledger erasure failed ({type(exc).__name__})") from exc
+        try:   # once-a-day nudge claims (nudge_claims.py: app_settings keys with the member id, a person id and a date). Fail closed.
+            import nudge_claims
+            await nudge_claims.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: nudge claim erasure failed ({type(exc).__name__})") from exc
         # The feed spine (migration 0078) and the calendar store (0052): connected accounts + their secrets and sync runs, the member's
         # own email addresses / phone numbers, their calendars and synced events. Fail closed; outside the lock (each takes the erase gate).
         try:

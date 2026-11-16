@@ -36,12 +36,6 @@ A store can be reached by one path and not the other; that asymmetry is what `st
 |---|---|---|---|
 | router shadow log | `services/zoe-data/data/router_head_shadow.jsonl` (+ `.N` segments) | **strips** `utt_text`; the hash and routing features stay | entity: the record naming the entity is dropped whole; member: the text layer of every record is cleared |
 | intent-miss log | `~/training/data/intent-misses.jsonl` | **drops** the record | same |
-| voice STT log (flag-dark) | `$ZOE_VOICE_STT_LOG` (`~/.zoe-voice/voice_stt.jsonl` + `.1`) | **drops** the record (ISO `ts`) | same; only while `ZOE_FORGET_REACH_EXTRA=on` (default off), which also reaches the opt-in Telegram STT capture dir (`erase_capture`: a pair naming the entity, every pair on a member erase) |
-
-STT rotation and append share the eraser's thread lock and file lock, covering the whole segment pass.
-The capture writer and eraser share one resolver: `ZOE_TELEGRAM_STT_CAPTURE_DIR` must expand to an absolute, non-root path without
-parent traversal (relative settings are refused). Capture operations open directory components without following symlinks and
-use the resulting directory descriptor for file operations, including deletes; a renamed directory cannot redirect the sweep.
 
 - **Retention:** `ZOE_TEXT_LOG_RETENTION_DAYS`, default **30** (`keep` = no limit, `0` = keep none). The hourly `zoe-log-rotate` job applies it
   (`scripts/maintenance/rotate_service_logs.py`); `scripts/maintenance/redact_router_shadow.py` does the same once, with a backup and
@@ -91,7 +85,7 @@ member column are therefore recorded here instead, each with why neither forget 
 
 Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for anything else): `reached` with the eraser(s), `out_of_scope` with a one-line
 reason, or `gap` with the reason AND the key in the `forget-reach gaps:` line of [open-problems.md](open-problems.md). A table that holds **words** cannot be
-`out_of_scope`. Then regenerate the table below. A store of words also needs its row (and its writer's `WRITE_SITES` line) in the [household-text inventory](household-text-inventory.md), whose test fails otherwise.
+`out_of_scope`. Then regenerate the table below.
 
 ## Forget completeness (what a layer SERVES after a forget, 2026-11-05)
 
@@ -138,7 +132,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-135 stores: 67 reached, 30 out of scope, 38 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+136 stores: 68 reached, 30 out of scope, 38 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -266,6 +260,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
 | `account_secrets` | vault | config | reached | member: `connected_accounts.forget_user` | Connected-account credentials (account_secrets.py seam). No backend is configured yet, so nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user. |
 | `reminder_phone_ledger` | db | metadata | reached | member: `reminder_delivery.forget_user` | app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows. |
+| `nudge_claims` | db | metadata | reached | member: `nudge_claims.forget_user` | app_settings rows nudge:<kind>:<member>:<person>:<day> = 'claimed': the exact once-a-day claim of a proactive nudge (nudge_claims.py). Ids and a date only, no words; pruned after 7 days; delete_user removes the member's rows. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
 | `device_audit_logs` | file | metadata | out_of_scope | - | Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words. |
 | `pi_intent_evidence` | file | words | gap | - | ~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated (ZOE_PI_INTENT_*), outside the cascade, no retention. |

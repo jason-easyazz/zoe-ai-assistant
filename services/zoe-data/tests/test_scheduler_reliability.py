@@ -535,9 +535,9 @@ async def test_update_cancels_job_before_mutating_state(monkeypatch):
         return None
 
     monkeypatch.setattr("proactive.triggers.reminders.cancel_reminder_jobs", fake_cancel)
-    monkeypatch.setattr(rr, "_reschedule_reminder_due_safe", fake_resched)
-    monkeypatch.setattr(rr, "require_feature_access", noop)
-    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
+    monkeypatch.setattr("reminder_service._reschedule_reminder_due_safe", fake_resched)
+    monkeypatch.setattr("reminder_service.require_feature_access", noop)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", noop)
 
     reminder = {"id": "rem1", "user_id": "u1", "title": "t", "due_time": "09:00",
                 "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
@@ -581,9 +581,9 @@ async def test_snooze_cancels_before_mutate_and_reschedules_at_snooze_time(monke
     async def noop(*a, **k):
         return None
 
-    monkeypatch.setattr(rr, "require_feature_access", noop)
-    monkeypatch.setattr(rr, "_create_notification", noop)
-    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
+    monkeypatch.setattr("reminder_service.require_feature_access", noop)
+    monkeypatch.setattr("reminder_service._create_notification", noop)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", noop)
 
     async def fake_cancel(reminder_id):
         order.append("cancel")
@@ -794,7 +794,7 @@ async def test_snooze_rejects_cross_user(monkeypatch):
     async def noop(*a, **k):
         return None
 
-    monkeypatch.setattr(rr, "require_feature_access", noop)
+    monkeypatch.setattr("reminder_service.require_feature_access", noop)
     reminder = {"id": "rem1", "user_id": "owner", "title": "t", "due_time": "09:00",
                 "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
 
@@ -812,7 +812,7 @@ async def test_acknowledge_rejects_cross_user(monkeypatch):
     async def noop(*a, **k):
         return None
 
-    monkeypatch.setattr(rr, "require_feature_access", noop)
+    monkeypatch.setattr("reminder_service.require_feature_access", noop)
     reminder = {"id": "rem1", "user_id": "owner", "title": "t",
                 "is_active": 1, "acknowledged": 0, "deleted": 0}
 

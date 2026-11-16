@@ -12,6 +12,7 @@ Public API:
 from __future__ import annotations
 
 import asyncio
+import uuid
 import logging
 import os
 import zoneinfo
@@ -20,6 +21,7 @@ from typing import Any
 
 
 from db_compat import get_compat_db as _get_compat_db
+import delivery_tally
 from proactive.composer import compose_message
 from proactive.session_utils import create_pending
 from proactive.scheduler import start_scheduler, stop_scheduler
@@ -84,9 +86,17 @@ async def fire_notification(
     pending_id: str | None = None,
     context: dict[str, Any] | None = None,
     item_id: str = "",
-) -> None:
+    retract_if_undelivered: bool = False,
+) -> bool | None:
     """
-    Core notification dispatch:
+    Core notification dispatch (returns True / False once it has tried to deliver: True = at least one lane got through; None =
+    deferred by quiet hours).
+
+    A row in ``proactive_pending`` is the mark a once-a-day trigger reads as "sent today", so it must mean a send went
+    through: if a lane RAISES after the row is written, the row is removed and the error re-raised (the next tick retries);
+    with ``retract_if_undelivered`` (a trigger that asks for it) a send that no lane delivered (no push subscriber reached, no
+    in-app fallback, nothing spoken) also removes it. "Delivered" = at least one lane succeeded: panel speech, push or phone,
+    in-app. Steps:
       1. Check quiet hours (skip if quiet, unless force_send in context).
       2. Optionally compose a richer message via the LLM.
       3. Create a proactive_pending row (lazy session, claimed on tap).
@@ -136,83 +146,158 @@ async def fire_notification(
             )
         return
 
-    # LLM-compose only for non-reminder types (reminders already have a good message).
-    if trigger_type not in ("reminder", "scheduled") and ctx:
-        message = await compose_message(trigger_type, ctx, fallback=message)
+    claim_key = ctx.get("claim_key")
+    # Choose the id before awaiting the insert: connection release may be cancelled
+    # after commit, before create_pending returns it.
+    pid = str(uuid.uuid4())
+    try:
+        # LLM-compose only for non-reminder types (reminders already have a good message).
+        if trigger_type not in ("reminder", "scheduled") and ctx:
+            message = await compose_message(trigger_type, ctx, fallback=message)
 
-    # Always create a proactive_pending row — this is the id used by claim_pending()
-    # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
-    # is only used below to mark that row as fired; it must NOT be used as the URL id.
-    pid = await create_pending(
-        user_id=user_id,
-        message=message,
-        trigger_type=trigger_type,
-        item_id=item_id,
-        context=ctx,
-    )
+        if _erased_since(ctx, user_id):  # the member was erased since the trigger read them (during the compose, say): send nothing
+            await _release_claim(claim_key)
+            return False
 
-    # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
-    # always sent regardless of what happens in here, and the adapter never
-    # raises (any spoken-path failure must not block the push).
-    await _maybe_speak_notification(
-        user_id=user_id, message=message, trigger_type=trigger_type,
-        guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
-    )
+        # Always create a proactive_pending row — this is the id used by claim_pending()
+        # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
+        # is only used below to mark that row as fired; it must NOT be used as the URL id.
+        pid = await create_pending(
+            user_id=user_id,
+            message=message,
+            trigger_type=trigger_type,
+            item_id=item_id,
+            context=ctx,
+            pending_id=pid,
+        )
+    except BaseException:
+        # Nothing was sent. A row may or may not exist (the INSERT can have committed while the cancel landed in the connection
+        # release): remove it by the id chosen above, as well as the claim, so the "sent today" read cannot see a send that never
+        # happened. Shielded: the cleanup itself must not be cancelled half way.
+        await _shielded(_retract_pending(pid))
+        await _shielded(_release_claim(claim_key))
+        raise
 
-    deep_link = f"/chat.html?p={pid}"
-    # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
-    # "on" moves reminder web push into the seam (owner-only, opt-in, adults, quiet hours, neutral text) and adds Telegram.
-    phone = _reminder_phone_mode() if trigger_type == "reminder" else "off"
-    if phone == "on":
-        subscribers_reached = await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=False)
-    else:
-        subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
-        if phone == "shadow":
-            await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
-    in_app_fallback_ok = False
+    tally, tally_token = delivery_tally.start()  # every lane notes a delivery the moment it succeeds; every exit reads this
+    try:
+        if _erased_since(ctx, user_id):  # erased between the row and the first lane: remove the row, send nothing
+            await _retract_pending(pid)
+            await _release_claim(claim_key)
+            return False
+        # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
+        # always sent regardless of what happens in here, and the adapter never
+        # raises (any spoken-path failure must not block the push).
+        spoken = await _maybe_speak_notification(
+            user_id=user_id, message=message, trigger_type=trigger_type,
+            guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
+        )
 
-    # If no WebSocket subscribers received the push, fall back to an in-app
-    # notification so the reminder appears in the notification centre when the
-    # user next opens the app.
-    if subscribers_reached == 0 and trigger_type == "reminder":
-        try:
-            import uuid as _uuid
-            import datetime as _dt
-            from push import broadcaster as _broadcaster  # deferred to avoid circular imports
-            _new_id = str(_uuid.uuid4())
+        deep_link = f"/chat.html?p={pid}"
+        # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
+        # "on" moves reminder web push into the seam (owner-only, opt-in, adults, quiet hours, neutral text) and adds Telegram.
+        phone = _reminder_phone_mode() if trigger_type == "reminder" else "off"
+        if phone == "on":
+            subscribers_reached = await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=False)
+        else:
+            subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
+            if phone == "shadow":
+                await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
+        in_app_fallback_ok = False
+
+        # If no WebSocket subscribers received the push, fall back to an in-app
+        # notification so the reminder appears in the notification centre when the
+        # user next opens the app.
+        if subscribers_reached == 0 and trigger_type == "reminder":
+            try:
+                import uuid as _uuid
+                import datetime as _dt
+                from push import broadcaster as _broadcaster  # deferred to avoid circular imports
+                _new_id = str(_uuid.uuid4())
+                async with _get_compat_db() as db:
+                    await db.execute(
+                        """INSERT INTO notifications
+                           (id, user_id, type, title, message, delivered, created_at)
+                           VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
+                        (
+                            _new_id,
+                            user_id,
+                            "Reminder",
+                            message,
+                            _dt.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ),
+                    )
+                    await db.commit()
+                    delivery_tally.note()  # committed delivery, even if connection release is cancelled
+                await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
+                in_app_fallback_ok = True
+                log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
+            except Exception as _fe:
+                log.warning("reminder fallback: in-app insert failed: %s", type(_fe).__name__)
+
+        delivered = subscribers_reached > 0 or in_app_fallback_ok
+        delivered_any = bool(tally) or delivered or bool(spoken)
+        if pending_id:
             async with _get_compat_db() as db:
                 await db.execute(
-                    """INSERT INTO notifications
-                       (id, user_id, type, title, message, delivered, created_at)
-                       VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
-                    (
-                        _new_id,
-                        user_id,
-                        "Reminder",
-                        message,
-                        _dt.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    ),
+                    "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
                 )
                 await db.commit()
-            await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
-            in_app_fallback_ok = True
-            log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
-        except Exception as _fe:
-            log.warning("reminder fallback: in-app insert failed: %s", _fe)
+            if trigger_type == "reminder" and not delivered:
+                log.warning(
+                    "reminder scheduled %s marked fired without push/in-app delivery for user %s",
+                    pending_id,
+                    user_id,
+                )
+        if retract_if_undelivered and not delivered_any:
+            await _retract_pending(pid)
+            await _release_claim(claim_key)
+        return delivered_any
+    except BaseException as exc:
+        kept = bool(tally)  # CancelledError, a timeout, a later lane's failure: all read the same live count
+        if not kept:  # a send that raised before any lane got through did not go through: the next tick tries again
+            await _shielded(_retract_pending(pid))
+            await _shielded(_release_claim(claim_key))
+        log.warning("fire_notification raised after the pending row (%s): %s", type(exc).__name__,
+                    "kept (a lane had delivered)" if kept else "row removed, will retry")
+        raise
+    finally:
+        delivery_tally.stop(tally_token)
 
-    delivered = subscribers_reached > 0 or in_app_fallback_ok
-    if pending_id:
+
+def _erased_since(ctx: dict, user_id: str) -> bool:
+    """True when the trigger stamped the member's erase generation (``erase_gen``) and an erase has run since, or one is running now."""
+    if ctx.get("erase_gen") is None:
+        return False
+    import user_erase_gate as erase_gate
+    return erase_gate.generation(user_id) != ctx["erase_gen"] or erase_gate.in_progress(user_id)
+
+
+async def _shielded(coro) -> None:
+    """Run a cleanup coroutine so a (second) cancellation cannot stop it half way: it finishes as its own task."""
+    task = asyncio.ensure_future(coro)
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue  # wait for cleanup even if another cancellation arrives
+    task.result()
+
+
+async def _release_claim(claim_key: str | None) -> None:
+    if claim_key:
+        import nudge_claims
+        await nudge_claims.release(claim_key)
+
+
+async def _retract_pending(pid: str) -> None:
+    """Remove a ``proactive_pending`` row whose send did not go through (best-effort; the row's absence is what lets a once-a-day
+    trigger try again)."""
+    try:
         async with _get_compat_db() as db:
-            await db.execute(
-                "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
-            )
+            await db.execute("DELETE FROM proactive_pending WHERE id = ?", (pid,))
             await db.commit()
-        if trigger_type == "reminder" and not delivered:
-            log.warning(
-                "reminder scheduled %s marked fired without push/in-app delivery for user %s",
-                pending_id,
-                user_id,
-            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not remove the pending row of an undelivered send (%s)", type(exc).__name__)
 
 
 def _spoken_enabled() -> bool:
@@ -259,6 +344,7 @@ async def _speak_on_panel(
                 requested_by="proactive",
                 panel_id=panel_id,
             )
+            delivery_tally.note()  # the kiosk toast is queued: counted now, inside the connection block (a cancel during its cleanup keeps it)
     except Exception as exc:
         panel_outcome = f"error:{exc}"
     # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
@@ -292,6 +378,7 @@ async def _speak_on_panel(
                          claim_id),
                     )
                 ann_id = queued
+            delivery_tally.note()  # queued (and committed): counted before the connection is released
     except Exception as exc:
         daemon_outcome = f"error:{exc}"
     return panel_outcome, daemon_outcome, ann_id
@@ -300,8 +387,10 @@ async def _speak_on_panel(
 async def _maybe_speak_notification(
     user_id: str, message: str, trigger_type: str, guest_safe_message: str | None = None,
     pending_id: str | None = None,
-) -> None:
-    """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
+) -> bool:
+    """Returns True when a spoken lane took it (panel toast enqueued or daemon queued), else False.
+
+    P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
     allowlisted, and the user has a fresh foreground panel session
     (proactive.presence.panel_presence), deliver the composed message to BOTH
     spoken lanes:
@@ -330,9 +419,9 @@ async def _maybe_speak_notification(
     """
     try:
         if not _spoken_enabled():
-            return
+            return False
         if trigger_type not in _spoken_triggers():
-            return
+            return False
         # Deferred imports: keep flag-OFF free of them and avoid import cycles
         # (ui_orchestrator pulls in push.broadcaster, same reason _send_push
         # defers routers.push).
@@ -342,12 +431,12 @@ async def _maybe_speak_notification(
             if not guest_safe_message:
                 log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s tier=%s "
                          "outcome=no_guest_safe_text", trigger_type, user_id, panel_id, tier)
-                return
+                return False
             message = guest_safe_message
         elif tier != _presence.TIER_OWNER or not panel_id:
             log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
                      trigger_type, user_id)
-            return
+            return False
         claim_id = None
         if tier == _presence.TIER_OWNER and trigger_type == "morning_checkin":
             # B2.1: with brief-on-arrival on, the full brief is spoken at most
@@ -362,16 +451,18 @@ async def _maybe_speak_notification(
             if verdict != "speak":
                 log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s tier=%s",
                          trigger_type, user_id, panel_id, verdict, tier)
-                return
+                return False
         panel_outcome, daemon_outcome, _ann_id = await _speak_on_panel(
             user_id=user_id, panel_id=panel_id, message=message, trigger_type=trigger_type,
             claim_id=claim_id,
         )
         log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s tier=%s",
                  trigger_type, user_id, panel_id, panel_outcome, daemon_outcome, tier)
+        return panel_outcome == "enqueued" or daemon_outcome == "queued"
     except Exception as exc:
         log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
                     trigger_type, user_id, exc)
+    return False
 
 
 def _reminder_phone_mode() -> str:
@@ -452,6 +543,8 @@ async def _slow_loop() -> None:
                         trigger_type=r.trigger_type,
                         item_id=r.item_id,
                         context=r.context,
+                        retract_if_undelivered=any(getattr(t, "retract_if_undelivered", False)
+                                                   for t in _slow_triggers if t.trigger_type == r.trigger_type),
                     )
                 except Exception as exc:
                     log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",
