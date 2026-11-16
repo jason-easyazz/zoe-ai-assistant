@@ -54,6 +54,15 @@ the whole plan; nothing has run. The closed list of reasons:
 | `not_allowed` | the table says `never` for this role |
 | `needs_confirmation` | the table says `ask_first` and the speaker has not said yes to that tool |
 
+**What is judged is what runs** (review 2026-11-16). At intake `run` deep-copies the plan and the speaker into structures the
+loop owns (`freeze_plan`, `freeze_speaker`: tuples, frozensets, read-only mappings, exact `str`/`int`/`float`/`bool`), then
+judges that copy and records each step's content hash (`digest`). Just before a step is sent the hash is checked again
+(`skipped` / `not_as_judged` if it differs), the tool gets its own shell of the judged content, and the receipt kind is pinned
+with the verdict. So an earlier step's write into a list the planner shared between steps, a tool mutating its own arguments,
+or the planner editing its objects afterwards cannot turn a judged `personal_write` into a `calendar_shared`. The loop never
+substitutes one step's result into another's arguments: a step filled from a result is a new plan, judged again. A tool that
+tries to mutate its (now immutable) arguments raises inside itself and is reported as for any other raise.
+
 **Bounds.** 6 steps, 90 s wall clock, 20 s per step. A caller may pass smaller numbers, never larger. Each step is sent
 exactly once. A step whose time has run out before it starts is `skipped` (`time_budget`); a step that `needs` a step that is
 not done is `skipped` (`dependency`). One failed part does not stop the independent parts after it.
@@ -70,6 +79,7 @@ not done is `skipped` (`dependency`). One failed part does not stop the independ
 | `uncertain` | `no_receipt` | the tool said ok and left no receipt |
 | `uncertain` | `unprovable` | the tool has no receipt kind at all (journal, music, people) |
 | `skipped` | `time_budget`, `dependency` | never sent |
+| `skipped` | `not_as_judged` | the step's content no longer matches the hash recorded when it was judged: never sent |
 
 A receipt wins over the call's own fate: a write whose row landed and whose call then timed out is `done`. An unstamped
 receipt (another request's write for the same member) never proves a step. A proven write is re-recorded in the caller's turn
@@ -81,7 +91,9 @@ The table gained three receipt kinds the writers already record: `list_remove` -
 ## The flag
 
 `ZOE_PLAN_LOOP` = `off` (default: `run` returns before touching anything) | `shadow` (judge the plan, log codes and counts,
-run nothing) | `on`. One log line per plan, no user id, no words, no argument values:
+run nothing) | `on`. One log line per plan, no user id, no words, no argument values. Every field is a closed code, a number,
+or a tool name the authority table registers: any other tool name is `unregistered` (in the log and in the returned
+`Refusal`), and an exception is named only by its builtin class (`other` for anything else):
 
 ```
 PLAN_LOOP mode=shadow status=refused steps=2 done=0 failed=0 uncertain=0 skipped=0 refusal=not_allowed tool=memory_retire class=memory_forget role=child ms=0
@@ -95,7 +107,9 @@ reports that part as one it has no way to do; it never makes a second reminder a
 
 ## Open
 
-- Not wired. No turn calls the loop; `ZOE_PLAN_LOOP=on` changes nothing until a reviewed wiring PR.
+- Not wired. No turn calls the loop; `ZOE_PLAN_LOOP=on` changes nothing until a reviewed wiring PR. Pinned:
+  `test_no_live_module_imports_the_plan_loop` fails if any module under `services/zoe-data` other than the loop's own
+  `plan_loop*.py` files and the tests imports it.
 - A tool whose writer records a receipt for a row that did not commit would be believed. Receipts are recorded after the
   commit today (`write_receipts` callers); the loop inherits that trust.
 - English only where words are involved; the core itself has no words.

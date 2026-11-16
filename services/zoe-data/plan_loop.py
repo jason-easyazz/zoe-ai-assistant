@@ -24,17 +24,27 @@ The guarantees, each pinned by a test with a negative control (``tests/test_plan
   - A proven write is re-recorded in the CALLER's turn (source ``plan_loop``), so the existing write-claim guard sees exactly
     the proven writes and nothing else when the loop's reply passes through it (``plan_loop_reply``).
 
-Logs carry tool names, classes, codes and counts only: no user id, no words, no argument values.
-Record: docs/knowledge/plan-loop.md. Nothing in a live turn imports this module yet.
+  - WHAT IS JUDGED IS WHAT RUNS. The plan and the speaker are deep-copied into immutable structures the loop owns at intake
+    (``freeze_plan`` / ``freeze_speaker``), BEFORE judging: one step's execution, a tool's mutation of its arguments, or the
+    planner editing its own objects afterwards cannot change any step. Each step's content hash is recorded at judgement and
+    re-checked just before it is sent (``not_as_judged`` otherwise); the tool gets its own shell of the judged content. The loop
+    never substitutes one step's result into another's arguments: a step filled from a result is a NEW plan, judged again.
+
+Every logged field is a closed code, a number, or a registered tool name (any other tool name logs as ``unregistered``): no user
+id, no words, no argument values, no exception text. Record: docs/knowledge/plan-loop.md. Nothing in a live turn imports this
+module yet (pinned by ``test_no_live_module_imports_the_plan_loop``).
 """
 from __future__ import annotations
 
 import asyncio
+import builtins
 import contextvars
+import hashlib
 import json
 import logging
 import time
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence
 
 import household_authority as authority
@@ -55,7 +65,11 @@ STATUSES = ("done", "failed", "uncertain", "skipped")
 CODES = {"done": ("receipt", "read_ok"),
          "failed": ("tool_said_no", "tool_refused", "read_timeout", "read_error"),
          "uncertain": ("timeout", "error_after_send", "no_receipt", "unprovable"),
-         "skipped": ("time_budget", "dependency")}
+         "skipped": ("time_budget", "dependency", "not_as_judged")}
+MODES = ("off", "shadow", "on")
+#: what a refusal, a log line or anything else this module emits says for a tool the authority table does not register
+UNREGISTERED = "unregistered"
+_MAX_DEPTH = 8
 
 READ_CLASSES = frozenset({"read_public", "read_private"})
 READ_TOOLS = frozenset({"list_show"})
@@ -138,9 +152,100 @@ def mode() -> str:
     try:
         from typed_env import flag
 
-        return str(flag("ZOE_PLAN_LOOP"))
+        m = str(flag("ZOE_PLAN_LOOP"))
+        return m if m in MODES else "off"
     except Exception:  # noqa: BLE001 - registry unavailable: off (fail dark)
         return "off"
+
+
+def _err(exc: BaseException) -> str:
+    """An exception for a log line: a builtin class name, else "other" (a caller's class name is not a closed set)."""
+    return type(exc).__name__ if getattr(builtins, type(exc).__name__, None) is type(exc) else "other"
+
+
+class _Unfreezable:
+    """Stands in for a value that cannot be copied into an immutable structure; ``judge`` refuses it (``bad_arguments``)."""
+
+    def __repr__(self) -> str:
+        return "<unfreezable>"
+
+
+_UNFREEZABLE = _Unfreezable()
+
+
+def _freeze(v: Any, depth: int = 0) -> Any:
+    """A deep, immutable copy the loop owns: exact str / int / float / bool / None, tuple for list or tuple, frozenset for a set,
+    a read-only mapping for a mapping. A scalar subclass is copied to its base type (no custom truth or equality survives)."""
+    if depth > _MAX_DEPTH:
+        return _UNFREEZABLE
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return int.__int__(v)
+    if isinstance(v, float):
+        return float.__float__(v)
+    if isinstance(v, str):
+        return str.__str__(v)
+    try:
+        if isinstance(v, Mapping):
+            items = list(v.items())
+            if not all(isinstance(k, str) for k, _ in items):
+                return _UNFREEZABLE
+            return MappingProxyType({str.__str__(k): _freeze(x, depth + 1) for k, x in items})
+        if isinstance(v, (list, tuple)):
+            return tuple(_freeze(x, depth + 1) for x in v)
+        if isinstance(v, (set, frozenset)):
+            return frozenset(_freeze(x, depth + 1) for x in v)
+    except Exception:  # noqa: BLE001 - an unhashable or misbehaving container: refused, never half-copied
+        return _UNFREEZABLE
+    return _UNFREEZABLE
+
+
+def freeze_args(args: Any) -> Mapping[str, Any]:
+    out = _freeze(args)
+    return out if isinstance(out, Mapping) else _UNFREEZABLE  # type: ignore[return-value]
+
+
+def freeze_step(step: Any) -> "Step":
+    """The loop's own immutable copy of one planned step (read ONCE from the planner's object)."""
+    tool, part = getattr(step, "tool", ""), getattr(step, "part", "")
+    try:
+        needs = tuple(int.__int__(n) if isinstance(n, int) else -1 for n in (getattr(step, "needs", ()) or ()))
+    except Exception:  # noqa: BLE001
+        needs = (-1,)
+    return Step(str.__str__(tool).strip() if isinstance(tool, str) else "", freeze_args(getattr(step, "args", None)),
+                str.__str__(part) if isinstance(part, str) else "", needs)
+
+
+def freeze_plan(plan: Sequence[Any]) -> tuple["Step", ...]:
+    return tuple(freeze_step(s) for s in plan)
+
+
+def freeze_speaker(speaker: Any) -> "Speaker":
+    """The loop's own copy of who is speaking, read once: everything judged and everything run uses this copy."""
+    uid, role = getattr(speaker, "user_id", ""), getattr(speaker, "role", "")
+    try:
+        confirmed = frozenset(str.__str__(t) for t in (getattr(speaker, "confirmed", ()) or ()) if isinstance(t, str))
+    except Exception:  # noqa: BLE001
+        confirmed = frozenset()
+    return Speaker(str.__str__(uid) if isinstance(uid, str) else "", str.__str__(role) if isinstance(role, str) else "",
+                   bool(getattr(speaker, "verified", False)), bool(getattr(speaker, "at_panel", True)), confirmed)
+
+
+def _canon(v: Any) -> Any:
+    if isinstance(v, Mapping):
+        return ("m", tuple(sorted((repr(k), _canon(x)) for k, x in v.items())))
+    if isinstance(v, (list, tuple)):
+        return (type(v).__name__, tuple(_canon(x) for x in v))
+    if isinstance(v, (set, frozenset)):
+        return (type(v).__name__, tuple(sorted(repr(_canon(x)) for x in v)))
+    return ("v", type(v).__name__, repr(v))
+
+
+def digest(step: "Step") -> str:
+    """Content hash of one step as judged; re-checked just before the step is sent."""
+    body = repr((step.tool, _canon(step.args), step.part, _canon(step.needs)))
+    return hashlib.sha256(body.encode("utf-8", "backslashreplace")).hexdigest()
 
 
 def safety_floor(utterance: str) -> str:
@@ -156,7 +261,7 @@ def safety_floor(utterance: str) -> str:
             return "medical"
         return ""
     except Exception as exc:  # noqa: BLE001
-        logger.warning("PLAN_LOOP floor check failed (%s): refusing", type(exc).__name__)
+        logger.warning("PLAN_LOOP floor check failed (%s): refusing", _err(exc))
         return "floor_error"
 
 
@@ -174,7 +279,7 @@ def child_floor(utterance: str, speaker: "Speaker", session_id: str = "") -> str
             return ""
         return "child" if pending.declared or not adult else ""
     except Exception as exc:  # noqa: BLE001
-        logger.warning("PLAN_LOOP child floor check failed (%s)", type(exc).__name__)
+        logger.warning("PLAN_LOOP child floor check failed (%s)", _err(exc))
         return "" if adult else "child_floor_error"
 
 
@@ -214,7 +319,10 @@ def _args_problem(args: Any) -> str:
 def judge(plan: Sequence[Step], speaker: Speaker, *, utterance: str = "", floors: Floors = safety_floor,
           child: ChildFloor = child_floor, session_id: str = "",
           max_steps: int = MAX_STEPS) -> tuple[Optional[Refusal], tuple[str, ...]]:
-    """Pure gate over the WHOLE plan: (refusal or None, the action class of every step). Runs no tool."""
+    """Pure gate over the WHOLE plan: (refusal or None, the action class of every step). Runs no tool. It judges its own
+    frozen copy (``freeze_plan``; a plan ``run`` already froze copies to identical content). A refusal names a tool only when
+    the table registers it (``UNREGISTERED`` otherwise), so the planner's text never travels in a refusal or a log line."""
+    plan, speaker = freeze_plan(plan), freeze_speaker(speaker)
     role = effective_role(speaker)
     if floors(utterance or "") or child(utterance or "", speaker, session_id):
         return Refusal("safety_floor", role=role), ()
@@ -228,16 +336,17 @@ def judge(plan: Sequence[Step], speaker: Speaker, *, utterance: str = "", floors
     seen: set[str] = set()
     classes: list[str] = []
     for i, step in enumerate(plan):
-        tool = (step.tool or "").strip()
+        tool = step.tool                                   # stripped, exact str: freeze_step
+        name = tool if tool in known or tool in FRIDGE_RULE_TOOLS else UNREGISTERED
         problem = _args_problem(step.args)
         if not problem and any((not isinstance(n, int)) or n < 0 or n >= i for n in step.needs):
             problem = "bad_arguments"
         if problem:
-            return Refusal(problem, i, tool, role=role), ()
+            return Refusal(problem, i, name, role=role), ()
         if tool in FRIDGE_RULE_TOOLS and speaker.at_panel:
-            return Refusal("fridge_rule", i, tool, "irreversible_other", role), ()
+            return Refusal("fridge_rule", i, name, "irreversible_other", role), ()
         if tool not in known:
-            return Refusal("unknown_tool", i, tool, authority.UNKNOWN_CLASS, role), ()
+            return Refusal("unknown_tool", i, UNREGISTERED, authority.UNKNOWN_CLASS, role), ()
         sig = signature(step)
         if sig in seen:
             return Refusal("repeated_step", i, tool, role=role), ()
@@ -280,15 +389,18 @@ def proof(user_id: str, turn: "write_receipts.TurnStart", kind: str) -> Optional
     return Receipt(kind, tuple(rows), len(rows)) if rows else None
 
 
-async def _run_step(step: Step, action_class: str, speaker: Speaker, execute: Executor, budget_s: float,
+async def _run_step(step: Step, action_class: str, kind: str, speaker: Speaker, execute: Executor, budget_s: float,
                     clock: Callable[[], float]) -> StepOutcome:
-    """Send one allowed step ONCE, in its own receipt turn, and decide its status from the evidence."""
+    """Send one allowed step ONCE, in its own receipt turn, and decide its status from the evidence. ``step``, ``action_class``
+    and ``kind`` are the judged values; the tool gets its own shell of the same immutable content, so nothing it does to the
+    object it was handed reaches the loop's record."""
     began = clock()
     ctx = contextvars.copy_context()
     turn = ctx.run(write_receipts.begin)
     raised, ok, text = "", False, ""
     try:
-        result = await _bounded(ctx.run(asyncio.ensure_future, execute(step)), budget_s)
+        sent = Step(step.tool, step.args, step.part, step.needs)
+        result = await _bounded(ctx.run(asyncio.ensure_future, execute(sent)), budget_s)
         ok = bool((result or {}).get("ok"))
         text = str((result or {}).get("result") or "")[:RESULT_CHARS]
     except asyncio.TimeoutError:
@@ -297,7 +409,7 @@ async def _run_step(step: Step, action_class: str, speaker: Speaker, execute: Ex
         raised = "rejected"
     except Exception as exc:  # noqa: BLE001
         raised = "rejected" if 400 <= int(getattr(exc, "status_code", 0) or 0) < 500 else "error"
-        logger.info("PLAN_LOOP step raised tool=%s (%s)", step.tool, type(exc).__name__)
+        logger.info("PLAN_LOOP step raised tool=%s (%s)", step.tool, _err(exc))   # a judged step: a registered tool
 
     def out(status: str, code: str, receipt: Optional[Receipt] = None, result_text: str = "") -> StepOutcome:
         return StepOutcome(step, action_class, status, code, receipt, result_text, clock() - began)
@@ -308,7 +420,6 @@ async def _run_step(step: Step, action_class: str, speaker: Speaker, execute: Ex
         if ok and text.strip():
             return out("done", "read_ok", Receipt("read", (), 1), text)
         return out("failed", "tool_said_no")
-    kind = authority.receipt_kind(step.tool)
     receipt = proof(speaker.user_id, turn, kind)
     if receipt is not None:                      # the row is the truth, whatever the call itself did afterwards
         for row_id in receipt.row_ids:           # the caller's turn (and so the write-claim guard) sees the proven write
@@ -339,7 +450,8 @@ async def run(plan: Sequence[Step], speaker: Speaker, *, utterance: str, execute
     m = mode()
     if m == "off":
         return PlanResult("off")
-    plan = tuple(plan)
+    plan, speaker = freeze_plan(plan), freeze_speaker(speaker)    # intake: the loop's own copy, BEFORE judging
+    judged = tuple(digest(s) for s in plan)
     started = clock()
     max_seconds = max(0.0, min(float(max_seconds), MAX_SECONDS))
     step_timeout_s = max(0.001, min(float(step_timeout_s), STEP_TIMEOUT_S))
@@ -349,15 +461,19 @@ async def run(plan: Sequence[Step], speaker: Speaker, *, utterance: str, execute
         result = PlanResult("refused" if refusal else "shadow", (), refusal, clock() - started)
         _log(result, m, len(plan))
         return result
+    kinds = tuple(authority.receipt_kind(s.tool) for s in plan)  # pinned with the verdict, before the first tool runs
     outcomes: list[StepOutcome] = []
     for i, step in enumerate(plan):
         remaining = max_seconds - (clock() - started)
-        if remaining <= 0:
+        if digest(step) != judged[i]:
+            outcomes.append(StepOutcome(step, classes[i], "skipped", "not_as_judged"))
+        elif remaining <= 0:
             outcomes.append(StepOutcome(step, classes[i], "skipped", "time_budget"))
         elif any(outcomes[n].status != "done" for n in step.needs):
             outcomes.append(StepOutcome(step, classes[i], "skipped", "dependency"))
         else:
-            outcomes.append(await _run_step(step, classes[i], speaker, execute, min(step_timeout_s, remaining), clock))
+            outcomes.append(await _run_step(step, classes[i], kinds[i], speaker, execute, min(step_timeout_s, remaining),
+                                            clock))
     result = PlanResult("ran", tuple(outcomes), None, clock() - started)
     _log(result, m, len(plan))
     return result

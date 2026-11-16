@@ -299,3 +299,246 @@ def test_a_child_floor_that_cannot_be_asked_lets_only_an_adult_through(monkeypat
     monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: 1 / 0)
     assert pl.child_floor(HAZARD, CHILD) == "child_floor_error" and pl.child_floor(HAZARD, GUEST) == "child_floor_error"
     assert pl.child_floor(HAZARD, ADULT) == ""
+
+
+# ── what is judged is exactly what runs (review 2026-11-16, child safety) ────────────────────────────────────────────────────
+
+class Recorder(Tools):
+    """Tools that also record the CLASS of exactly what each call received, and can run a side effect after each call."""
+
+    def __init__(self, after=None, user="member-c", **kw):
+        super().__init__(user=user, **kw)
+        self.after, self.executed = after or (lambda step: None), []
+
+    async def __call__(self, step: pl.Step):
+        self.executed.append((step.tool, ha.classify_intent(step.tool, step.args), pl.signature(step)))
+        out = await super().__call__(step)
+        try:
+            self.after(step)
+        except Exception:  # noqa: BLE001 - a tool's own failed mutation is not this test's subject
+            pass
+        return out
+
+
+def judged_vs_executed(result, tools):
+    return [o.action_class for o in result.outcomes if o.status != "skipped"], [c for _, c, _ in tools.executed]
+
+
+def test_reviewer_case_an_earlier_steps_write_into_a_shared_list_cannot_make_the_childs_later_step_shared():
+    shared = []                                                                 # the planner reused one list for both steps
+    plan = [pl.Step("calendar_create", {"title": "swim", "date": "friday", "attendees": shared}, "swim on friday"),
+            pl.Step("calendar_create", {"title": "piano", "date": "monday", "attendees": shared}, "piano on monday")]
+    tools = Recorder(after=lambda step: shared.append("member-b"))
+    result, _ = run(plan, speaker=CHILD, tools=tools)
+    judged, executed = judged_vs_executed(result, tools)
+    assert result.status == "ran" and judged == ["personal_write", "personal_write"]
+    assert executed == judged and "calendar_shared" not in executed               # run exactly as judged, never as shared
+
+
+def test_a_tool_that_mutates_its_own_arguments_changes_nothing_that_was_judged():
+    def mutate(step):
+        step.args["attendees"].append("member-b")                              # immutable now: raises inside the tool
+    def rebind(step):
+        object.__setattr__(step, "args", {"title": "x", "attendees": ["member-b"]})   # rebinding the tool's own copy
+    for after in (mutate, rebind):
+        plan = [pl.Step("calendar_create", {"title": "swim", "attendees": []}, "swim"),
+                pl.Step("reminder_create", {"title": "piano", "date": "monday"}, "piano")]
+        tools = Recorder(after=after)
+        result, _ = run(plan, speaker=CHILD, tools=tools)
+        assert judged_vs_executed(result, tools) == (["personal_write", "personal_write"],) * 2
+        assert dict(result.outcomes[0].step.args) == {"title": "swim", "attendees": ()}   # the record is what was judged
+
+
+def test_a_planner_object_mutated_after_intake_changes_nothing():
+    raw = [pl.Step("list_add", {"item": "milk", "tags": []}, "add milk"),
+           pl.Step("calendar_create", {"title": "piano", "attendees": []}, "piano")]
+
+    def planner_edits(step):
+        raw[1].args["attendees"].append("member-b")                            # the planner's own objects, after intake
+        raw[1].args["title"] = "changed"
+        object.__setattr__(raw[1], "tool", "memory_retire")
+        raw.append(pl.Step("memory_retire", {"pick": 1}, "forget"))
+    tools = Recorder(after=planner_edits)
+    result, _ = run(raw, speaker=CHILD, tools=tools)
+    assert [t for t, _, _ in tools.executed] == ["list_add", "calendar_create"]
+    assert judged_vs_executed(result, tools) == (["household_list", "personal_write"],) * 2
+    assert dict(result.outcomes[1].step.args) == {"title": "piano", "attendees": ()}
+
+
+def test_a_later_step_filled_from_an_earlier_result_runs_as_judged_and_the_filled_plan_is_judged_afresh():
+    later_args = {"title": "piano", "date": "monday"}
+
+    def fill_from_result(step):
+        if step.tool == "people_search":
+            later_args["attendees"] = ["member-b"]                             # "invite whoever step 1 found"
+    plan = [pl.Step("people_search", {"query": "piano teacher"}, "who teaches piano"),
+            pl.Step("calendar_create", later_args, "book piano", needs=(0,))]
+    tools = Recorder(after=fill_from_result)
+    result, _ = run(plan, speaker=CHILD, tools=tools)
+    assert [c for _, c, _ in tools.executed][1] == "personal_write" == result.outcomes[1].action_class
+    # the loop never substitutes: the filled step reaches a tool only as a NEW plan, and that one is judged again
+    refiled, tools2 = run([pl.Step("calendar_create", later_args, "book piano")], speaker=CHILD)
+    assert refiled.refusal == pl.Refusal("not_allowed", 0, "calendar_create", "calendar_shared", "child") and not tools2.calls
+
+
+def test_nested_dict_list_tuple_set_arguments_are_deep_frozen_and_owned():
+    nested = {"a": [1, {"b": [2, 3]}], "c": (4, [5]), "d": {6, 7}, "e": frozenset({8})}
+    step = pl.freeze_step(pl.Step("list_add", {"item": "milk", "meta": nested, "tags": ["x", "y"], "set": {"z"}}, "add"))
+    nested["a"][1]["b"].append(99)
+    nested["c"][1].append(99)
+    nested["d"].add(99)
+    frozen = step.args["meta"]
+    assert frozen["a"][1]["b"] == (2, 3) and frozen["c"] == (4, (5,)) and frozen["d"] == frozenset({6, 7})
+    assert step.args["tags"] == ("x", "y") and step.args["set"] == frozenset({"z"})
+    with pytest.raises(TypeError):
+        step.args["item"] = "other"
+    with pytest.raises(TypeError):
+        frozen["a"][1]["b"] = ()
+    class Tricky(str):
+        pass
+    t = pl.freeze_step(pl.Step(Tricky(" list_add "), {Tricky("item"): Tricky("milk")}, "add", needs=(True, "x")))
+    assert type(t.tool) is str and t.tool == "list_add" and all(type(k) is str and type(v) is str for k, v in t.args.items())
+    assert t.needs == (1, -1)
+    for args in ({"item": {"nested": "x"}}, {"item": ["a", ["b"]]}, {"item": {"a", "b"}}, {"item": object()}):
+        result, tools = run([pl.Step("list_add", args, "x")])
+        assert result.refusal.reason == "bad_arguments" and tools.calls == []      # still refused: freezing widens nothing
+
+
+def test_a_step_changed_after_judgement_is_not_sent(monkeypatch):
+    held = {}
+    real = pl.freeze_plan
+    monkeypatch.setattr(pl, "freeze_plan", lambda plan: held.setdefault("plan", real(plan)))
+
+    def tamper(step):                                                         # reaching the loop's OWN record of step 2
+        object.__setattr__(held["plan"][1], "args", pl.freeze_args({"title": "piano", "attendees": ["member-b"]}))
+    plan = [pl.Step("reminder_create", {"title": "swim"}, "swim"), pl.Step("calendar_create", {"title": "piano"}, "piano")]
+    tools = Recorder(after=tamper)
+    result, _ = run(plan, speaker=CHILD, tools=tools)
+    assert codes(result)[1] == ("calendar_create", "skipped", "not_as_judged") and len(tools.executed) == 1
+    # negative control: with the content check gone, the tampered (shared) step reaches the tool
+    held.clear()
+    monkeypatch.setattr(pl, "digest", lambda step: "same")
+    tools = Recorder(after=tamper)
+    run(plan, speaker=CHILD, tools=tools)
+    assert [c for _, c, _ in tools.executed] == ["personal_write", "calendar_shared"]
+
+
+def test_property_the_class_judged_is_the_class_executed_for_random_plans_with_shared_objects():
+    import random
+
+    rng = random.Random(20261116)
+    for _ in range(150):
+        pool = [[] for _ in range(2)]
+        tools_ = ["calendar_create", "reminder_create", "list_add", "calendar_show", "people_search"]
+        plan = []
+        for i in range(rng.randint(1, pl.MAX_STEPS)):
+            tool = rng.choice(tools_)
+            args = {"title": f"t{i}"} if tool != "list_add" else {"item": f"i{i}"}
+            if tool == "calendar_create" and rng.random() < 0.8:
+                args["attendees"] = rng.choice(pool)
+            if rng.random() < 0.3:
+                args["tags"] = rng.choice(pool)
+            plan.append(pl.Step(tool, args, f"part {i}"))
+
+        def chaos(step, pool=pool, plan=plan):
+            rng.choice(pool).append(f"m{rng.randint(0, 9)}")
+            for s in rng.sample(plan, k=1):
+                try:
+                    s.args["attendees"] = rng.choice(pool) + ["x"]
+                except TypeError:
+                    pass
+            try:
+                step.args["attendees"].append("y")
+            except (AttributeError, KeyError, TypeError):
+                pass
+        speaker = rng.choice([CHILD, pl.Speaker("member-a", "adult", confirmed=frozenset({"calendar_create"}))])
+        tools = Recorder(after=chaos, user=speaker.user_id)
+        result, _ = run(plan, speaker=speaker, tools=tools)
+        judged, executed = judged_vs_executed(result, tools)
+        assert executed == judged
+        if speaker is CHILD:
+            assert "calendar_shared" not in executed
+
+
+# ── privacy: nothing the speaker or the planner wrote reaches a log or a stored record ───────────────────────────────────────
+
+MARK = "zqxplanted7731"
+
+
+def test_a_planted_marker_reaches_no_log_and_no_stored_record(monkeypatch, caplog):
+    BadExc = type(MARK.title(), (Exception,), {})
+    planted = [pl.Step("list_add", {"item": MARK, MARK: MARK, "tags": [MARK]}, MARK),
+               pl.Step("calendar_show", {"qualifier": MARK}, MARK)]
+
+    async def raising(step):
+        raise BadExc(MARK)
+    with caplog.at_level(logging.DEBUG):
+        for m in ("shadow", "on"):
+            monkeypatch.setenv("ZOE_PLAN_LOOP", m)
+            for plan in ([pl.Step(MARK, {"x": MARK}, MARK)], [pl.Step(MARK, {"x": {MARK: MARK}}, MARK)],
+                         [pl.Step(MARK, {"user_id": MARK}, MARK)], planted):
+                result, _ = run(plan, utterance=MARK)
+                r = result.refusal
+                if r is not None:
+                    assert MARK not in repr(r)                                 # the returned refusal
+                    assert r.tool in ("", getattr(pl, "UNREGISTERED", "unregistered")) or r.tool in ha.table().intents
+            run(planted, utterance=MARK, tools=raising)
+        import distress_handoff
+        monkeypatch.setattr(distress_handoff, "detect", lambda text: (_ for _ in ()).throw(BadExc(MARK)))
+        assert pl.safety_floor(MARK) == "floor_error"
+    assert caplog.records and not any(MARK in r.getMessage().casefold() for r in caplog.records)
+    assert MARK not in repr(write_receipts._STORE).casefold()
+
+
+def test_negative_control_the_old_raw_name_would_have_leaked(monkeypatch, caplog):
+    monkeypatch.setattr(pl, "UNREGISTERED", MARK)                             # a "sentinel" that is the user's text again
+    monkeypatch.setenv("ZOE_PLAN_LOOP", "shadow")
+    with caplog.at_level(logging.INFO, logger="plan_loop"):
+        run([pl.Step("send_money", {"x": 1}, "x")])
+    assert MARK in caplog.text
+
+
+# ── lab-only: no live module imports the loop ────────────────────────────────────────────────────────────────────────────────
+
+def _plan_loop_importers(root):
+    import ast
+    import pathlib
+
+    hits = []
+    for path in sorted(pathlib.Path(root).rglob("*.py")):
+        rel = path.relative_to(root)
+        if rel.parts[0] in ("tests", ".venv", "venv") or rel.name.startswith("plan_loop"):
+            continue                                                          # the loop's own files and its tests
+        try:
+            src = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "plan_loop" not in src:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""] + [a.name for a in node.names]
+            elif isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+                names = [str(node.args[0].value)]
+            if any(n == "plan_loop" or n.startswith("plan_loop.") or n.startswith("plan_loop_") for n in names):
+                hits.append(str(rel))
+    return sorted(set(hits))
+
+
+def test_no_live_module_imports_the_plan_loop(tmp_path):
+    import pathlib
+
+    assert _plan_loop_importers(pathlib.Path(pl.__file__).parent) == []
+    # planted-import control: each form is caught
+    for i, line in enumerate(("import plan_loop", "from plan_loop import run", "import importlib\nimportlib.import_module('plan_loop')",
+                              "from x import plan_loop_planner", "__import__('plan_loop')")):
+        (tmp_path / f"live_{i}.py").write_text(line + "\n")
+    (tmp_path / "plan_loop_planner.py").write_text("import plan_loop\n")          # the loop's own file: allowed
+    assert _plan_loop_importers(tmp_path) == [f"live_{i}.py" for i in range(5)]
