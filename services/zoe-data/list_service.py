@@ -500,23 +500,35 @@ async def find_list_id(db, *, user_id: str, list_type: str, name: str) -> Option
     A PERSONAL type (to-do / tasks) is the member's OWN list - never another member's family-visible one: their list of that exact
     name, else their oldest list of the type, else None (the caller creates theirs). "my to-do" must not land on someone else's
     list because it happens to be shared (QA 2026-11-06)."""
+    found = await find_list(db, user_id=user_id, list_type=list_type, name=name)
+    return found[0] if found else None
+
+
+async def find_list(db, *, user_id: str, list_type: str, name: str) -> Optional[tuple]:
+    """:func:`find_list_id` with the resolved row's NAME: ``(id, name)`` or None. The same queries, the name read from the rows they
+    already return (no second query): what the Zoe OS shadow is told is the list the row really lands on."""
+    def found(row) -> Optional[tuple]:
+        if not row:
+            return None
+        r = dict(row)
+        return r["id"], str(r.get("name") or name or "")
+
     if list_type in PERSONAL_LIST_TYPES and not panel_principal.is_guest_id(user_id):
         cursor = await db.execute(
-            "SELECT id FROM lists WHERE list_type=? AND deleted=0 AND user_id=?"
+            "SELECT id, name FROM lists WHERE list_type=? AND deleted=0 AND user_id=?"
             " ORDER BY CASE WHEN name=? THEN 0 ELSE 1 END, created_at ASC, id ASC LIMIT 1",
             (list_type, user_id, name),
         )
-        row = await cursor.fetchone()
-        return row["id"] if row else None
-    household = await find_household_list_id(db, list_type=list_type, name=name)
+        return found(await cursor.fetchone())
+    cursor = await db.execute(household_lists_sql("?"), (list_type,))
+    household = pick_household_list(await cursor.fetchall(), name)
     if household is not None or panel_principal.is_guest_id(user_id):
-        return household
+        return found(household)
     cursor = await db.execute(
-        "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0 AND user_id=? LIMIT 1",
+        "SELECT id, name FROM lists WHERE list_type=? AND name=? AND deleted=0 AND user_id=? LIMIT 1",
         (list_type, name, user_id),
     )
-    row = await cursor.fetchone()
-    return row["id"] if row else None
+    return found(await cursor.fetchone())
 
 
 async def _find_recent_duplicate(db, *, list_id: str, text: str, window_s: int) -> Optional[str]:
@@ -583,8 +595,14 @@ async def add_item_to_list(
     """
     text = normalize_item_text(text) or text
     guest = panel_principal.is_guest_id(user_id)
+    # the name of the list the row REALLY lands on (the shadow is told that one, not the words): from the row the resolve already
+    # read; a list the caller resolved itself (``list_id`` given: a list the user NAMED) is called what they named it, give or take
+    # case and a trailing " list"; a list created here is named ``list_name`` exactly
+    landed_name = list_name
     if list_id is None:
-        list_id = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
+        found = await find_list(db, user_id=user_id, list_type=list_type, name=list_name)
+        if found:
+            list_id, landed_name = found
     if list_id is None and guest and list_type not in GUEST_CREATABLE_LIST_TYPES:
         # A guest adds to a household list that exists; it never conjures a new list of another type.
         raise HouseholdListUnavailable(list_type)
@@ -598,7 +616,8 @@ async def add_item_to_list(
                 if dup_id is not None:
                     # the item IS on the list (a replayed add), so a reply that says so is true
                     pending.append((dup_id, "add_item_to_list:dedup"))
-                    outcome = {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True}
+                    outcome = {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True,
+                               "list_name": landed_name}
             if not pending:
                 # The item is already OPEN on the list (case-, plural- and punctuation-insensitive): no duplicate row; the caller says so.
                 cursor = await db.execute(
@@ -607,13 +626,15 @@ async def add_item_to_list(
                 if have is not None:
                     pending.append((have["id"], "add_item_to_list:already"))
                     outcome = {"list_id": list_id, "item_id": have["id"], "created_list": False, "deduped": True, "already": True,
+                               "list_name": landed_name,
                                "text": normalize_item_text(have["text"])}
                 else:
                     item = await create_item_record(
                         db, list_id=list_id, text=text, quantity=quantity, category=category
                     )
                     pending.append((item["id"], "add_item_to_list"))
-                    outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
+                    outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False,
+                               "list_name": landed_name}
         # Receipts land only once the write has committed (a rolled-back add must not read as done).
         for rid, why in pending:
             if receipts is not None:
@@ -622,7 +643,7 @@ async def add_item_to_list(
                 write_receipts.record(user_id, "list", rid, why)
                 if why == "add_item_to_list":
                     note_recent_add(user_id, list_id, rid)
-                os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text,
+                os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=landed_name, item=text,
                                    landed=why == "add_item_to_list")
         return outcome
 
@@ -650,6 +671,7 @@ async def add_item_to_list(
             "item_id": item["id"],
             "created_list": True,
             "deduped": False,
+            "list_name": list_name,
         }
 
     txn = getattr(db, "transaction", None)
@@ -668,7 +690,7 @@ async def add_item_to_list(
     else:
         write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
         note_recent_add(user_id, outcome["list_id"], outcome["item_id"])
-        os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=list_name, item=text)
+        os_shadow.note_add(user_id, source="single", list_type=list_type, list_name=outcome.get("list_name") or list_name, item=text)
     return outcome
 
 
@@ -702,7 +724,8 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
     for uid, rid, why in receipts:
         write_receipts.record(uid, "list", rid, why)
     for out in outcomes:      # the Zoe OS shadow (os_shadow.py): after the commit, never raises, a no-op with the flag off
-        os_shadow.note_add(kwargs.get("user_id"), source="spoken", list_type=kwargs.get("list_type"), list_name=kwargs.get("list_name"),
+        os_shadow.note_add(kwargs.get("user_id"), source="spoken", list_type=kwargs.get("list_type"),
+                           list_name=out.get("list_name") or kwargs.get("list_name"),
                            item=out.get("_text"), landed=not out.get("deduped"))
     fresh = [o for o in outcomes if not o.get("deduped")]
     if fresh:     # the last NEW row of this spoken add is what "no, X" / "spell it X" corrects

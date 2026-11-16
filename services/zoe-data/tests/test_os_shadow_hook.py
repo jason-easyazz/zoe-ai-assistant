@@ -588,3 +588,56 @@ def test_the_detector_reads_every_handled_alias_form(src):
 def test_out_of_scope_alias_forms_are_not_claimed():
     assert writer_sites("import list_service\nasync def f(db, n):\n    await getattr(list_service, n)(db)", LIST_ADD_SQL,
                         LIST_ADD_HELPERS) == []          # a name built at run time: unknowable statically, not claimed
+
+
+# ---- the shadow is told the list the row really lands on, not the words -----------------------------------------------------------
+class _GroceriesDB(_DB):
+    """The household shopping list is called "Groceries": a "Shopping" add lands there (the household rule picks the fullest)."""
+
+    async def execute(self, sql, params=()):
+        if sql.lstrip().upper().startswith("SELECT") and "FROM lists" in sql:
+            return _Cur([{"id": "L1", "name": "Groceries", "created_at": "2030-01-01", "n": 3}])
+        return await super().execute(sql, params)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["spoken", "single"])
+async def test_an_add_is_proposed_against_the_list_it_was_written_to(kernel, path):
+    import list_service
+
+    db = _GroceriesDB()
+    if path == "spoken":
+        await list_service.add_items_to_list(db, text="oat milk", user_id=MEMBER, list_type="shopping", list_name="Shopping",
+                                             new_list_visibility="family")
+    else:
+        await list_service.add_item_to_list(db, user_id=MEMBER, list_type="shopping", list_name="Shopping", text="oat milk",
+                                            new_list_visibility="family")
+    settle(1)
+    (act,) = [a for _, op, a in kernel.calls if op == "act"]
+    assert act["args"]["list"] == "Groceries"                         # the written list, never the requested "Shopping"
+
+
+@pytest.mark.asyncio
+async def test_a_list_the_add_creates_is_proposed_under_the_name_it_was_created_with(kernel):
+    import list_service
+
+    class _NoListDB(_DB):
+        async def execute(self, sql, params=()):
+            if sql.lstrip().upper().startswith("SELECT") and "FROM lists" in sql:
+                return _Cur([])
+            return await super().execute(sql, params)
+
+    out = await list_service.add_item_to_list(_NoListDB(), user_id=MEMBER, list_type="shopping", list_name="Camping gear",
+                                              text="tent pegs", new_list_visibility="family")
+    settle(1)
+    assert out["created_list"] and [a["args"]["list"] for _, op, a in kernel.calls if op == "act"] == ["Camping gear"]
+
+
+def test_find_list_id_is_unchanged_and_find_list_adds_the_name():
+    import asyncio
+
+    import list_service
+
+    db = _GroceriesDB()
+    assert asyncio.run(list_service.find_list_id(db, user_id=MEMBER, list_type="shopping", name="Shopping")) == "L1"
+    assert asyncio.run(list_service.find_list(db, user_id=MEMBER, list_type="shopping", name="Shopping")) == ("L1", "Groceries")
