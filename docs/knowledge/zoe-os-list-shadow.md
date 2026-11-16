@@ -80,7 +80,9 @@ The kernel record holds list items (household words) in the spine, in receipts (
 * **Topic forget** (`forget_topic._forget`): `os_shadow.erase_topic` (kernel `forget(topic=...)`), failure = `store_down` + the same marker.
 * A scope the kernel refuses to match falls back to a whole-member forget (a scope that matches nothing never widens, but this store may).
 * **A forget that cannot be confirmed in the kernel is PARKED, whatever the flag** (`pending-forgets.json`, replayed before the next
-  job): with the flag `shadow` the caller is still told it failed (`ShadowForgetUnavailable`), with it off it is deferred (0). The park
+  job), and the caller is told it FAILED (`ShadowForgetUnavailable`) with the flag on OR off: a durable retry marker is not an erase (a
+  shadow turned off with its kernel stopped still holds what it recorded), so a member delete, entity or topic forget fails closed and is
+  retried until the kernel confirms. The park
   is a locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
   ran is kept; a park that cannot be made durable (disk, an unreadable file, which is never overwritten) FAILS the erase closed
   (`ShadowForgetUnavailable`) instead of letting it say done. **A missing `creds.json` is not proof of nothing to forget** (the kernel's
@@ -109,7 +111,7 @@ The kernel record holds list items (household words) in the spine, in receipts (
   through it. "Never knew them" is the kernel's refusal, read as nothing to forget.
 * **A forget never blocks the event loop**: the job goes on the queue with `put_nowait`; a full queue parks the forget durably instead
   (the park's `flock` + fsync run in an executor thread). Honest to the caller: flag `shadow` and not confirmed (parked or not) raises
-  `ShadowForgetUnavailable`; flag off and parked returns 0 (deferred); not parkable raises.
+  `ShadowForgetUnavailable`, flag on or off (parked, or not parkable).
 * Erase ordering: forget jobs and proposals share ONE FIFO queue and one worker, so a proposal queued before an erase is sent before the
   forget and removed by it; one queued after is dropped (`user_erase_gate` generation moved / erase in progress: `dropped_erased`).
 * `forget_reach.py` lists the kernel store (`zoe_os_shadow_kernel`: reached, member + entity erasers); `docs/knowledge/forget-reach.md` is regenerated.
@@ -188,6 +190,16 @@ stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be m
 **Roll back**: remove the `ZOE_OS_LIST_SHADOW` line and restart zoe-data (the hook becomes a flag read again); optionally
 `systemctl --user disable --now zoe-os-shadow-kernel.service`. Leave `~/.zoe/os-shadow/` in place so a later member erase can still reach the kernel
 (a forget while the unit is stopped is parked in `pending-forgets.json` and replayed), or delete the directory to erase the whole shadow record.
+
+**Retiring the shadow for good** (the only way its record is removed without the kernel): with the flag `off`, a forget the kernel cannot
+confirm FAILS (member delete included) for as long as shadow state exists, by design. zoe-data cannot prove the kernel process is stopped,
+so it never deletes the store itself. The owner stops the kernel unit, then removes the whole shadow directory (a shadow copy is disposable;
+this drops its credentials, roster and parked forgets together, which is correct once nothing is recorded any more):
+
+    systemctl --user stop zoe-os-shadow-kernel.service
+    rm -rf ~/.zoe/os-shadow
+
+After that a forget is the flag-off no-op again (no shadow state).
 
 ## 8. Not done, not proven
 
