@@ -93,13 +93,40 @@ class DurableRows:
         rid = proof.get("id")
         if rid is None or self.rows.get(rid) != proof.get("row"):
             return "it has changed since"
+        row = self.rows.get(rid) or (payload.get("undo") or {}).get("before", {}).get("row")
+        if row is not None and not self.may_reach(actor, row):
+            return "not theirs to undo"          # the CURRENT link decides: a removed carer cannot undo what they once set
         return ""
+
+    # ---- who may reach a row NOW (the setter is never standing authority) -----------------------------------------------------
+    def may_reach(self, person: str, row: dict) -> bool:
+        """May ``person`` reach ``row`` now: its owner, by default; a store adds its carers and shared rows, by the CURRENT link."""
+        return person == row.get("owner")
+
+    def reach_of(self, person: str, payload: dict) -> bool | None:
+        """For an explainer: may ``person`` see a receipt over one of these rows NOW? ``None``: not a receipt over these rows. The
+        row as it stands, else as the receipt recorded it, decides; a receipt that touched no row is judged by who it was for."""
+        proof = payload.get("proof") or {}
+        snaps = [proof, proof.get("restored") or {}, (payload.get("undo") or {}).get("before") or {}]
+        rid = next((s["id"] for s in snaps if isinstance(s, dict) and s.get("id") is not None), None)
+        args = (payload.get("undo") or {}).get("args") or {}
+        ours = payload.get("action") in self.actions or payload.get("of") in self.actions
+        if not ours and (rid is None or not str(rid).startswith(self.prefix)):
+            return None
+        row = self.rows.get(rid) if rid is not None else None
+        row = row or next((s["row"] for s in snaps if isinstance(s, dict) and s.get("row")), None)
+        if row is None:                                            # no row recorded: judged by who it was asked for
+            return "for" not in args or self.may_reach(person, {"owner": args["for"], "visibility": "personal", "private": 0})
+        return self.may_reach(person, row)
 
     def register_all(self, kernel, specs: dict) -> None:
         """``specs``: action -> (do, check, doc, params). Every action is reversible and has the one snapshot rule."""
         for action, (do, check, doc, params) in specs.items():
             kernel.actions.register(action, do, self.read_back, needs_accept=False, snapshot=self.snapshot_for(action),
                                     undo=self.put_back, doc=doc, params=params, check=check, undo_check=self.undo_check)
+        reach = getattr(getattr(kernel, "explainer", None), "reach", None)
+        if reach is not None and self.reach_of not in reach:
+            reach.append(self.reach_of)          # "why did you do that?" over a row: also by the CURRENT link
 
     # ---- the rebuild ------------------------------------------------------------------------------------------------------------
     def rebuild(self) -> int:
