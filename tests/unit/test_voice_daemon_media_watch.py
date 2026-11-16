@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import io
+import queue
 import re
 import sys
 import threading
@@ -425,6 +426,68 @@ def _wait(pred, timeout=3.0):
     return False
 
 
+class _LiveSub:
+    """A subscribe child that stays ALIVE: ``readline`` blocks until the test feeds a line (b"" = the child exits)."""
+
+    def __init__(self):
+        self._q: "queue.Queue[bytes]" = queue.Queue()
+        self.stdout = self
+        self.killed = False
+
+    def feed(self, line: bytes) -> None:
+        self._q.put(line)
+
+    def readline(self, _n=-1) -> bytes:
+        return self._q.get()
+
+    def kill(self):
+        self.killed = True
+        self._q.put(b"")
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_a_sink_input_event_causes_a_read_and_another_kind_of_event_does_not(daemon):
+    """Review of #2572: with every fake child at EOF, the retry path set the dirty flag and supplied the reads, so this passed
+    with event handling disabled. Here the child stays alive (no retry, no EOF) and the heartbeat is a minute away, so the ONLY
+    thing that can cause the second read is a sink-input event."""
+    reads, sub = [], _LiveSub()
+    w = daemon._MediaWatch(list_inputs=lambda: (reads.append(1), "")[1], spawn_subscribe=lambda: sub, own_pid=OWN,
+                           parent_of=PARENTS.get, heartbeat_s=60.0, min_gap_s=0.0, backoff_s=(60.0, 60.0))
+    w.start()
+    try:
+        assert _wait(lambda: len(reads) == 1)               # the one read at start
+        sub.feed(b"Event 'change' on card #0\n")           # not a sink-input: no read
+        sub.feed(b"Event 'new' on source-output #3\n")
+        time.sleep(0.25)
+        assert len(reads) == 1
+        sub.feed(b"Event 'new' on sink-input #7\n")
+        assert _wait(lambda: len(reads) == 2)               # caused by the event, nothing else is due for a minute
+        sub.feed(b"Event 'remove' on sink-input #7\n")
+        assert _wait(lambda: len(reads) == 3)
+        assert not sub.killed and w._reader.is_alive()
+    finally:
+        w.stop()
+    assert _wait(lambda: not w._thread.is_alive() and not w._reader.is_alive())
+
+
+def test_the_heartbeat_reads_on_its_interval_with_a_silent_live_subscriber(daemon):
+    """Review of #2572: with the subscribe failing every 50 ms, the retries woke the loop and supplied the reads, so this passed
+    with the heartbeat disabled. Here the subscriber is alive and silent (no retry, no event): only the heartbeat can read."""
+    reads, sub = [], _LiveSub()
+    w = daemon._MediaWatch(list_inputs=lambda: (reads.append(time.monotonic()), "")[1], spawn_subscribe=lambda: sub,
+                           own_pid=OWN, parent_of=PARENTS.get, heartbeat_s=0.05, min_gap_s=0.0, backoff_s=(60.0, 60.0))
+    w.start()
+    try:
+        assert _wait(lambda: len(reads) >= 6)
+        gaps = [b - a for a, b in zip(reads[1:], reads[2:])]
+        assert all(g >= 0.04 for g in gaps), gaps          # on the interval, not a busy loop
+        assert not sub.killed
+    finally:
+        w.stop()
+
+
 def test_thread_reads_on_events_and_survives_a_dying_subscribe(daemon):
     reads, spawns = [], []
 
@@ -439,7 +502,7 @@ def test_thread_reads_on_events_and_survives_a_dying_subscribe(daemon):
     w.start()
     try:
         assert _wait(lambda: len(spawns) >= 4)              # died (EOF), failed to start, respawned: still going
-        assert len(reads) >= 2                              # the reads came from events, not the 5 s heartbeat
+        assert len(reads) >= 2                              # it keeps reading while the subscribe dies and returns
         assert w._thread.is_alive() and w._reader.is_alive()
         assert w.snapshot()[1] >= 0
     finally:
