@@ -4146,7 +4146,9 @@ class _FirstSound:
 
     def speaker(self, claim: object, at: "float | None") -> None:
         """The turn's speaker claim came back at ``at`` (None = the claim was not scored on this turn)."""
-        self.spk = _spk_verdict(claim)
+        # A claim carried in from an earlier step (``at`` None) was not scored this turn: its verdict stays UNKNOWN (-1), never
+        # accepted or refused, and the reflex decision treats unknown as silence (decide(): speaker_accept is not True).
+        self.spk = _spk_verdict(claim) if at is not None else None
         self.spk_at = at if self.spk is not None else None
         self.spk_guest = _spk_guest(claim)
         self.spk_user = claim[0] if self.spk_guest is False and isinstance(claim[0], str) else None

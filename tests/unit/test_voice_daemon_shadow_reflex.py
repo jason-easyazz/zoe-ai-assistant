@@ -113,7 +113,7 @@ def _close(daemon, *, media=False, busy=False, stop="silence", t=99.9, hour=12):
     daemon._MEDIA = None
 
 
-def _turn(daemon, monkeypatch, caplog, *, claim_fn, claim_s=0.09, **close_kw):
+def _turn(daemon, monkeypatch, caplog, *, claim_fn, claim_s=0.09, carried=None, **close_kw):
     clock = FS._Clock(100.0)
     writes, posts = FS._stream_turn_setup(daemon, monkeypatch, clock)
     _close(daemon, **close_kw)
@@ -124,7 +124,8 @@ def _turn(daemon, monkeypatch, caplog, *, claim_fn, claim_s=0.09, **close_kw):
 
     monkeypatch.setattr(daemon, "_speaker_claim_to_attach", _score)
     with caplog.at_level(logging.INFO, logger=daemon.log.name):
-        ok = daemon._do_single_turn_stream(FS._FakePA(), b"RIFFwav", wake_turn=True)
+        kw = {} if carried is None else {"voice_claim": carried}      # a claim carried in: this turn does not score
+        ok = daemon._do_single_turn_stream(FS._FakePA(), b"RIFFwav", wake_turn=True, **kw)
     (line,) = FS._msgs(caplog, "FIRST_SOUND")
     caplog.clear()
     return ok, line, writes, posts
@@ -263,3 +264,17 @@ def test_no_text_or_id_reaches_the_new_fields(daemon, monkeypatch, caplog):
     _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40, guest=("guest_b", 0.2)))
     assert "member_a" not in line and "guest_b" not in line and "0.4" not in line
     assert re.fullmatch(r"-?\d+", _f(line, "spk")) and re.fullmatch(r"-?\d+", _f(line, "spk_ms"))
+
+
+def test_a_carried_claim_logs_an_unknown_verdict_and_never_counts_as_accepted(daemon, monkeypatch, caplog):
+    """A claim carried in (scored on an earlier step) was not scored this turn: spk=-1 and spk_ms=-1, whatever its value, and the
+    reflex decision treats the unknown verdict as silence. A claim scored this turn still logs its verdict and time."""
+    def never():
+        raise AssertionError("a carried claim must not be re-scored")
+
+    for value in (0.40, 0.05):                                    # a claim that WOULD clear the bar, and one under it
+        _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=never, carried=_claim(daemon, value))
+        assert (_f(line, "spk"), _f(line, "spk_ms")) == ("-1", "-1"), line
+        assert _f(line, "skip") != "-" and _f(line, "skip") != "no_bank"      # never "every guard passed"
+    _, line, _, _ = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))   # CONTROL: scored this turn
+    assert (_f(line, "spk"), _f(line, "spk_ms"), _f(line, "skip")) == ("1", "190", "no_bank")
