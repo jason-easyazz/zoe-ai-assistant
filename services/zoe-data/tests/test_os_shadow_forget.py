@@ -641,7 +641,9 @@ def test_forget_ack_reads_exactly_the_documented_shape():
 
 # ---- no thread start, join, blocking lock, blocking put or file call on the turn's loop ---------------------------------------------
 TURN_FACING = ("note_add", "_door", "_finish", "_tally", "_worker_down", "_worker_alive", "list_class", "mode", "_forget", "forget_user",
-               "erase_entity", "erase_topic")
+               "erase_entity", "erase_topic",
+               # the widened verbs (#2631): the one hook and its per-verb builders, all called synchronously after a live commit
+               "_note", "note_act", "note_list_remove", "note_reminder_create", "note_alarm_create", "_list_raw", "_text", "wants", "verbs")
 FORBIDDEN_ON_LOOP = {"Thread", "start", "join", "put", "sleep", "_ensure_worker", "revive", "shadow_state_exists", "_pending_add",
                      "_pending_read", "_pending_write", "_pending_done", "open", "read_text", "write_text", "stat", "iterdir", "exists",
                      "is_dir", "flock", "fsync", "connect", "sendall", "recv"}
