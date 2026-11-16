@@ -5,21 +5,28 @@ the in-process prototype the same shapes (``kernel.spine.publish(event)``,
 ``kernel.actions.act(...)``) so the SAME skill class runs on the far side of the boundary.
 The ``source`` / ``reader`` / ``skill`` names those calls carry are dropped here: the
 protocol has no such field, the kernel uses the connection's verified identity.
+
+``speaker_key``: the speaker-verifier's secret, for a client that plays the component which
+verifies people (the lab tests do; in production that is zoe-data, never a skill). With it, a
+person-bound call gets a fresh ``speaker`` assertion for the person it names (``speaker.binding``)
+unless one is passed; without it, a person-bound call is refused ``speaker unproven``.
 """
 from __future__ import annotations
 
 import socket
 import time
 
-from . import wire
+from . import speaker, wire
 from .events import Event, Kind
 from .receipts import Receipt
 from .spine import EventCache, Refused
 
 
 class Client:
-    def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0) -> None:
+    def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0,
+                 speaker_key: bytes | None = None) -> None:
         self.skill, self._timeout, self._id = skill, timeout, 0
+        self._speaker_key = speaker_key
         self._cache_conn = (path, skill, credential)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
@@ -48,6 +55,10 @@ class Client:
         raise wire.WireError(err.get("code", wire.INTERNAL), err.get("reason", ""))
 
     def call(self, op: str, **args):
+        if self._speaker_key is not None and "speaker" not in args:
+            token = speaker.mint_for(self._speaker_key, op, args)
+            if token is not None:
+                args["speaker"] = token
         self._id += 1
         wire.write_frame(self.sock, {"v": wire.VERSION, "id": self._id, "op": op, "args": args},
                          timeout=self._timeout)

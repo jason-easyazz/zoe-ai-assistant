@@ -12,6 +12,10 @@ State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no `
     known-people.json  the roster plus every id the kernel still holds a record for: who it can still FORGET. Derived from the
                   kernel's own record at each start, and rewritten (atomic, mode kept) after a whole-person forget succeeds
     creds.json    {"socket": path, "creds": {"voice": hex, "brain": hex, "panel": hex}}   written here, 0600, on every start
+    identity-creds.json  {"socket": path, "creds": {"speaker-verifier": hex}, "ttl_s": 60}   0600, on every start: the secret
+                  the component that VERIFIES people (zoe-data) mints speaker assertions with (``zoe_os/speaker.py``). A
+                  person-bound op from a surface (forget, grant, revoke, undo, explain for a person) needs one; the panel's
+                  credential alone is refused ``speaker unproven``. Fresh each start: an older assertion is dead after a restart.
     k.sock        the Unix socket (0600)
     kernel/       the kernel's SQLite spine (events, receipts, intents), 0600
 
@@ -46,6 +50,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)]
 from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
+from zoe_os import speaker  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 
 # trusted origin adapters: the voice surface records the utterance that is the cause of an act; the panel is the surface that
@@ -209,6 +214,13 @@ def write_creds(state: Path, sock: str, creds: dict) -> None:
     os.replace(tmp, state / "creds.json")
 
 
+def write_identity(state: Path, srv: KernelServer) -> None:
+    """The speaker-verifier's secret, the way every credential file is written (0600 from creation, atomic). Never printed."""
+    from authority import write_secret
+    write_secret(state / speaker.IDENTITY_CREDS, {"socket": srv.path, "creds": {speaker.IDENTITY: srv.speaker_secret().hex()},
+                                                  "ttl_s": speaker.TTL_S})
+
+
 def serve(k: Kernel, srv: KernelServer, stop: threading.Event) -> None:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     while not stop.wait(PUMP_S):          # the Keeper erases the driver's rows when the kernel forgets; pumped here
@@ -226,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)                       # the database, its WAL and the credentials are this user's alone
     k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
+    write_identity(state, srv)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())

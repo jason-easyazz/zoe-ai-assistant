@@ -36,7 +36,10 @@ class Daemon:
         raw = json.loads((state / "creds.json").read_text())
         self.creds = {k: bytes.fromhex(v) for k, v in raw["creds"].items()}
         self.sock = raw["socket"]
-        self.voice, self.brain, self.panel = (Client(self.sock, s, self.creds[s], timeout=5) for s in ("voice", "brain", "panel"))
+        self.speaker_key = bytes.fromhex(json.loads((state / "identity-creds.json").read_text())["creds"]["speaker-verifier"])
+        self.voice, self.brain = (Client(self.sock, s, self.creds[s], timeout=5) for s in ("voice", "brain"))
+        self.panel = Client(self.sock, "panel", self.creds["panel"], timeout=5, speaker_key=self.speaker_key)   # the test verified the person
+        self.bare_panel = Client(self.sock, "panel", self.creds["panel"], timeout=5)                          # the surface's word alone
         erase = json.loads((state / "erase-creds.json").read_text())["creds"]["eraser"]
         self.eraser = Client(self.sock, "eraser", bytes.fromhex(erase), timeout=5)       # the member-delete path's own credential
 
@@ -157,16 +160,28 @@ def test_control_an_erase_that_skips_the_forget_is_caught_by_its_read_back(state
     assert d.eraser.call("erase_member", subject=A)["verified"] is False    # fail closed: the caller must not say "deleted"
 
 
-def test_only_the_member_delete_credential_may_erase_a_member(state):
+def test_a_member_is_erased_only_by_the_member_delete_credential_or_their_own_proven_word(state):
+    from zoe_os import speaker
     d = start(state)
     d.add(A, "oat milk")
-    for who in (d.panel, d.brain, d.voice):
-        with pytest.raises(Refused, match="only the member-delete path"):
+    d.add(B, "rice")
+    for who in (d.brain, d.voice):
+        with pytest.raises(Refused, match="only a person, through a trusted surface"):
             who.call("erase_member", subject=A)
-    assert d.digests() == [digest("oat milk")]                       # nothing was erased by the refused calls
+    with pytest.raises(Refused, match="speaker unproven"):
+        d.bare_panel.call("erase_member", subject=A)                 # the panel's credential alone: refused
+    with pytest.raises(Refused, match="speaker unproven"):           # B's proven word cannot erase A
+        d.bare_panel.call("erase_member", subject=A, speaker=speaker.mint(d.speaker_key, B, "forget.person"))
+    assert d.digests() == sorted([digest("oat milk"), digest("rice")])     # nothing was erased by the refused calls
     assert "eraser" not in json.loads((state[0] / "creds.json").read_text())["creds"]       # apart from the surfaces' file
-    assert (state[0] / "erase-creds.json").stat().st_mode & 0o777 == 0o600
-    assert d.eraser.call("erase_member", subject=A)["verified"] is True
+    for name in ("erase-creds.json", "identity-creds.json"):
+        assert (state[0] / name).stat().st_mode & 0o777 == 0o600
+    assert "speaker-verifier" not in (state[0] / "creds.json").read_text()
+    with pytest.raises(Refused, match="only a person, through a trusted surface"):
+        d.eraser.call("grant", person=A, skill="brain")              # the eraser is the forget family, nothing else
+    assert d.panel.call("erase_member", subject=B)["verified"] is True     # B, saying "forget everything about me"
+    assert d.eraser.call("erase_member", subject=A)["verified"] is True    # member delete
+    assert d.digests() == []
 
 
 def test_a_member_taken_off_the_roster_is_still_erased_by_id_and_then_leaves_the_kernel(state):
@@ -314,3 +329,73 @@ def test_a_copy_that_does_not_match_the_old_record_refuses_the_start_and_keeps_b
     p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0]), "--db", str(new)],
                        capture_output=True, text=True, timeout=30, env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
     assert p.returncode != 0 and "could not be verified" in p.stderr
+
+
+# ---- the roster at start: an empty one is a household, never a reason to stop serving forget ---------------------------------------
+def _members_bytes(state: Path, word: bytes) -> list:
+    """Every file of the state directory but the credential files, scanned for ``word`` (the contract test's byte-scan pattern)."""
+    skip = {"creds.json", "erase-creds.json", "identity-creds.json"}
+    return [f.name for f in state.rglob("*") if f.is_file() and f.name not in skip and word in f.read_bytes()]
+
+
+@pytest.mark.parametrize("roster", ['{"people": []}', "not json at all", '{"people": [7]}'])
+def test_with_the_last_member_removed_or_an_unreadable_roster_the_kernel_starts_forgets_and_acts_for_nobody(state, roster):
+    d = start(state)
+    d.add(A, "synthetic quince marker")
+    d.kill()
+    (state[0] / "people.json").write_text(roster)                      # the last member left (or the file is damaged)
+    again = start(state)
+    assert again.brain.call("health")["roster"] == ("empty" if roster.startswith('{"people": []') else "unreadable")
+    said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})    # A is recorded: known, never granted
+    with pytest.raises(Refused, match="no grant"):                     # nobody is granted anything: nothing can be acted
+        again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq}, caused_by=[said.seq])
+    with pytest.raises(wire.WireError, match="malformed"):            # B was never recorded and is off the roster: unknown
+        again.voice.publish("utterance", subject=B, payload={"text": "synthetic"})
+    assert _members_bytes(state[0], b"synthetic quince marker")         # the control of the scan: the words are there
+    assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2  # A, saying "forget everything about me"
+    assert _members_bytes(state[0], b"synthetic quince marker") == []
+    assert again.digests() == []
+
+
+def test_a_missing_roster_file_is_an_operator_error_and_refuses_the_start(state):
+    (state[0] / "people.json").unlink()
+    p = subprocess.run([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state[0])],
+                       capture_output=True, text=True, timeout=30, env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
+    assert p.returncode != 0 and "people.json is missing" in p.stderr
+
+
+# ---- undo of a remove survives a forget it does not touch -------------------------------------------------------------------------
+def _remove(d: Daemon, person: str, item: str) -> dict:
+    said = d.voice.publish("utterance", subject=person, payload={"text": "synthetic list remove"})
+    return d.brain.call("act", action="list.remove", on_behalf_of=person,
+                        args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
+
+
+@pytest.mark.parametrize("forget", ["unrelated", "one_removed_row"])
+def test_undo_of_a_remove_after_a_forget_restores_exactly_the_rows_the_forget_did_not_reach(state, forget):
+    """A forget scrubs the remove's snapshot row by row (``provenance: 1``). Forgetting an UNRELATED item keeps the undo whole.
+    Forgetting ONE of the removed rows leaves the other in the snapshot, but the undo is then refused by the kernel's forget shield
+    (``forgotten_action_arguments``): the surviving row has the same words as the forgotten one, and forgotten words never come back."""
+    d = start(state)
+    first, second = d.add(A, "milk"), d.add(A, "milk")
+    d.add(A, "eggs")
+    removed = _remove(d, A, "milk")
+    assert removed["verified"] is True and d.digests() == [digest("eggs")]
+    if forget == "one_removed_row":
+        assert d.panel.call("forget", subject=A, actor=A, seqs=[first["asked"]])["count"] >= 1
+        db = sqlite3.connect(f"file:{state[0] / 'kernel' / 'zoe-os.db'}?mode=ro", uri=True)
+        (raw,) = db.execute("SELECT payload FROM events WHERE seq = ?", (removed["seq"],)).fetchone()
+        db.close()
+        kept = json.loads(raw)["undo"]["before"]["rows"]
+        assert [r["asked"] for r in kept] == [second["asked"]]        # the unaffected row survives in the snapshot
+        with pytest.raises(Refused, match="forgotten_action_arguments"):
+            d.panel.call("undo", person=A, actor=A)
+        assert d.digests() == [digest("eggs")]                        # nothing forgotten was put back
+        return
+    assert d.panel.call("erase_item", digest=digest("eggs"), subject=A)["verified"] is True
+    want = [digest("milk")] * 2                                       # both removed rows come back; eggs stays forgotten
+    undone = d.panel.call("undo", person=A, actor=A)
+    assert undone["verified"] is True and undone["action"] == "undo"
+    assert d.digests() == want
+    d.kill()
+    assert start(state).digests() == want                             # the rebuild replays the scrubbed snapshot too

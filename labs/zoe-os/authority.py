@@ -11,10 +11,11 @@ The shadow daemon (``shadow_daemon.py``) plus three things an authority needs an
   receipt, so it is absent after the restart (and ``recover`` gives its intent an ``uncertain`` receipt). Never half there. Chosen
   over a second table so there is ONE copy of the household's words to erase, and so nothing here touches the spine's or the
   dispatcher's transaction code;
-* erase reach over the wire: ``erase_member`` (everything of the member in the record and the list store; ONLY the member-delete
-  path's own ``eraser`` credential, kept in ``erase-creds.json`` apart from the surfaces' ``creds.json``) and ``erase_item``
-  ("forget that" on one list item of ONE named member; a surface credential, a person's decision). Idempotent, each answers with a
-  receipt that is ``verified`` only when the read-back finds nothing left;
+* erase reach over the wire: ``erase_member`` (everything of the member in the record and the list store: the member-delete
+  path's own ``eraser`` credential, kept in ``erase-creds.json`` apart from the surfaces' ``creds.json``, OR a surface carrying a
+  ``forget.person`` speaker assertion for that member) and ``erase_item`` ("forget that" on one list item of ONE named member: a
+  surface with a ``forget.scoped`` assertion for that member, or the eraser). Who may is decided by ``KernelServer._prove_speaker``
+  and nowhere here. Idempotent, each answers with a receipt that is ``verified`` only when the read-back finds nothing left;
 * a DURABLE roster: the kernel knows the current people.json PLUS every id its record still names, so a member taken off the roster
   is still erased by id. After a whole-person erase or forget of a member off the roster, the forget first, then the id leaves;
 * ``health``: alive, schema version, whether the last write went through: what zoe-data reads to decide whether to fall back.
@@ -38,7 +39,7 @@ from pathlib import Path
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
-from shadow_daemon import ACTS, ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds  # noqa: E402
+from shadow_daemon import ACTS, ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds, write_identity  # noqa: E402
 from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person  # noqa: E402
 from zoe_os.events import Kind  # noqa: E402
@@ -48,7 +49,7 @@ from zoe_os.spine import Refused  # noqa: E402
 
 SCHEMA = 1          # the authority's own record shape (the rebuild rule below); bumped when it changes meaning
 _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0"
-#: the member-delete path's identity: the ONLY credential ``erase_member`` accepts. No reads, no emits, no acts.
+#: the member-delete path's identity: the forget family without a speaker assertion, nothing else. No reads, no emits, no acts.
 ERASER = {"skill": "eraser"}
 ERASER_CREDS = "erase-creds.json"
 
@@ -84,8 +85,11 @@ def digest(item: str) -> str:
 
 
 class DurableLists(Lists):
-    """``Lists`` whose rows are a function of the log. Snapshots are LEAN (a count, or the removed rows): a receipt never carries the
-    person's whole list, so an add costs the same on the hundredth item as on the first."""
+    """``Lists`` whose rows are a function of the log. Snapshots are LEAN (nothing for an add, the removed rows for a remove): a receipt
+    never carries the person's whole list, so an add costs the same on the hundredth item as on the first. Both are versioned
+    (``provenance: 1``, every row with its ``asked``): a forget then scrubs only the rows it reaches (``receipts.scrub_snapshot``) and
+    the surviving action stays undoable; an unmarked snapshot would be treated as opaque and lose its undo on ANY forget of the
+    person's."""
 
     def __init__(self, spine) -> None:
         super().__init__()
@@ -95,8 +99,8 @@ class DurableLists(Lists):
     def key(row_or_args) -> tuple:
         return row_or_args.get("list", "shopping"), row_or_args["item"]
 
-    def snapshot(self, person, args):                       # list.add: how many copies were there
-        return {"n": sum(1 for r in self.rows.get(person, []) if self.key(r) == self.key(args))}
+    def snapshot(self, person, args):                       # list.add: its undo takes back only its own row, so nothing is copied
+        return {"provenance": 1, "rows": []}
 
     def put_back(self, person, args, before):               # undo of list.add: the row this add appended goes
         rows = self.rows.get(person, [])
@@ -105,7 +109,7 @@ class DurableLists(Lists):
             rows.remove(mine[-1])
 
     def removed_snapshot(self, person, args):               # list.remove: the rows it is about to take
-        return {"rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
+        return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
 
     def put_back_removed(self, person, args, before):
         self.rows.setdefault(person, []).extend(dict(r) for r in before["rows"])
@@ -189,10 +193,7 @@ class AuthorityServer(KernelServer):
         self.lists, self.others = lists, tuple(others)
         self.roster = frozenset(roster)
         self.last_write_ok: bool | None = None     # None: no write since start
-
-    def _eraser_only(self, conn) -> None:
-        if conn.name != ERASER["skill"]:
-            self.kernel.spine._refuse(conn.name, "erase a member", "only the member-delete path")
+        self.roster_status = "ok"                  # set by ``build`` from ``read_roster``
 
     def _held(self, person: str) -> bool:
         """Does the record still name ``person`` (any people link)? Read from the database every time, never assumed."""
@@ -248,7 +249,8 @@ class AuthorityServer(KernelServer):
                 db.execute("ROLLBACK")
             self.last_write_ok = False
         return {"alive": True, "schema": SCHEMA, "last_write_ok": self.last_write_ok,
-                "recovered": len(self.kernel.recovered), "rows": sum(len(r) for r in self.lists.rows.values())}
+                "recovered": len(self.kernel.recovered), "rows": sum(len(r) for r in self.lists.rows.values()),
+                "roster": self.roster_status}
 
     def _receipts_for(self, person: str, item_digest: str) -> list[int]:
         """The person's live list receipts for the item (by digest), and the utterances they cite (the words go with them)."""
@@ -269,9 +271,8 @@ class AuthorityServer(KernelServer):
     def _op_erase_member(self, conn, a: dict) -> dict:
         """Everything of the member: their events (and what derives from them), their list rows, their reminder and alarm rows, and
         their brain grant (revoked, so a restart does not re-grant them). ``verified`` only when the read-back finds nothing.
-        Forgets BY ID whatever the current roster says. Only the member-delete path's ``eraser`` credential: a surface (the panel)
-        is refused with ``only the member-delete path``."""
-        self._eraser_only(conn)
+        Forgets BY ID whatever the current roster says. The member-delete path's ``eraser`` credential, or a surface with the
+        member's own ``forget.person`` assertion; a surface alone is refused ``speaker unproven`` (``_prove_speaker``)."""
         subject = a["subject"]
         if not self._known_for_forget(subject):                              # checked in the record: never seen, nothing held
             left = len(self.lists.rows.get(subject, [])) + self._live_events(subject)
@@ -290,7 +291,6 @@ class AuthorityServer(KernelServer):
     def _op_erase_item(self, conn, a: dict) -> dict:
         """"Forget that" on one list item of ONE member, by DIGEST (no words cross the wire for an erase). ``subject`` is required:
         a request without it is refused (``name whose item``), so one person's request never changes another member's list."""
-        self._person_op(conn, "erase a list item")
         subject, want = a.get("subject"), a["digest"]
         if not subject:
             self.kernel.spine._refuse(conn.name, "erase a list item", "name whose item")
@@ -417,10 +417,32 @@ def db_path(state: Path, db: str | None) -> Path:
     return path
 
 
+def read_roster(state: Path) -> tuple[list, str]:
+    """The CURRENT roster and how it read: ``ok``, ``empty`` or ``unreadable``. Forget never depends on it: the kernel loads every
+    id its record names whatever this says, and only roster members are granted anything.
+
+    * MISSING people.json: an operator error (the owner never exported a roster): refuse to start;
+    * EMPTY (``{"people": []}``, the last member removed): a valid household state. Nobody can be proposed for or acted for; the
+      recorded people can still be forgotten and erased;
+    * UNREADABLE (not JSON, wrong shape, a non-string id): treated as EMPTY for grants (nothing is granted on a roster nobody can
+      read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line) and ``health``
+      reports ``roster: unreadable``."""
+    path = state / "people.json"
+    if not path.exists():
+        raise SystemExit("people.json is missing: export the household roster first (see README)")
+    try:
+        people = json.loads(path.read_text("utf-8"))["people"]
+    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+        people = None
+    if not isinstance(people, list) or not all(isinstance(p, str) and p for p in people):
+        print("zoe-os authority kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
+              file=sys.stderr, flush=True)
+        return [], "unreadable"
+    return people, "ok" if people else "empty"
+
+
 def build(state: Path, db: str | None = None):
-    people = json.loads((state / "people.json").read_text("utf-8"))["people"]
-    if not people or not all(isinstance(p, str) and p for p in people):
-        raise SystemExit("people.json has no members: the kernel acts for nobody it does not know")
+    people, roster_status = read_roster(state)
     path = db_path(state, db)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # the roster PLUS every id the record still names: a member taken off people.json is still erased by id (never granted)
@@ -437,14 +459,15 @@ def build(state: Path, db: str | None = None):
         if person not in no:
             k.grants.grant(person, SHADOW_BRAIN["skill"], acts=list(ACTS))
     srv = AuthorityServer(k, str(state / "k.sock"), lists, (reminders, alarms), roster=people)
+    srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
-    write_secret(state / ERASER_CREDS, {"socket": srv.path, "creds": {ERASER["skill"]: srv.issue(ERASER["skill"]).hex()}})
+    write_secret(state / ERASER_CREDS, {"socket": srv.path, "creds": {ERASER["skill"]: srv.issue(ERASER["skill"], eraser=True).hex()}})
     return k, srv, creds
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--dir", help="state directory (default $ZOE_OS_SHADOW_DIR or ~/.zoe/os-shadow)")
+    ap.add_argument("--dir", help="state directory (default $OSLAB_SHADOW_DIR or ~/.zoe/os-shadow)")
     ap.add_argument("--db", help=f"the kernel's database file (the unit passes {PERMANENT_DB}); default STATE/kernel/zoe-os.db")
     opts = ap.parse_args(argv)
     state = state_dir(opts.dir)
@@ -452,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
+    write_identity(state, srv)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())

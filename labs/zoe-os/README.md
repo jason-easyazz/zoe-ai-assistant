@@ -48,7 +48,8 @@ is invented.
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
-| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` (member-delete credential only, `erase-creds.json`) / `erase_item` (one named member) / `health` / `list_digest` ops, a roster that keeps every id the record names, revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` (the member-delete credential, `erase-creds.json`, or the member's own speaker assertion) / `erase_item` (one named member) / `health` / `list_digest` ops, a roster that keeps every id the record names (an EMPTY or unreadable `people.json` starts the kernel with nobody granted and forget still served; a missing one refuses the start), revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `zoe_os/speaker.py` | speaker assertions: the proof, minted by the speaker-verifier, of who decided a person-bound request (see "Speaker assertions") |
 | `tests/authority_proc.py`, `tests/test_authority.py` | the authority daemon as its own process with one SIGKILL point or one control armed, and its tests |
 
 ## Run it
@@ -89,6 +90,7 @@ bad outcome.
 |---|---|---|
 | the malicious skill, from another process: six remaining attempts refused; forgotten cache entries unavailable | `test_boundary.py` | the same four controls, applied inside the kernel process |
 | a skill cannot be another skill, name its own source, or speak for a person | `test_boundary_attacks.py` | no credential check: it becomes the panel and reads everything |
+| a SURFACE cannot speak for a person: every person-bound op needs a speaker assertion for that person and verb, used once, within 60 s, issued after this start; forged and truncated tokens refused alike; nothing logs the token or the secret | `test_speaker.py` | `_prove_speaker` removed: the panel alone reaches every person-bound op; the start-time rule removed: a pre-restart token replays |
 | a captured handshake or a re-issued credential does not log in | `test_boundary_attacks.py` | a predictable challenge: the capture logs in |
 | an oversized frame is refused before its body is read | `test_boundary_attacks.py` | no size cap: it is stored |
 | a malformed frame is refused, recorded, and harms nothing (23 cases) | `test_boundary_attacks.py` | no validator: an unknown argument is accepted, nothing recorded |
@@ -144,6 +146,24 @@ and nothing about a real household (record, section 12).
 In-process controls are monkeypatches in the tests. Controls for the kernel process are named patches in
 `tests/kernel_proc.py`, applied through the parent's pipe. Never switches in the kernel.
 
+## Speaker assertions (`zoe_os/speaker.py`)
+
+A person-bound request (`forget`, `erase_member`, `erase_item`, `grant`, `revoke`, `undo`, `explain` with `person`) from a surface
+carries `speaker`: `<body>.<mac>`, `body` the unpadded base64url of `{"p": person, "t": issued_ms, "n": 32 hex, "a": audience}`, `mac`
+the hex HMAC-SHA256 of `"zoe-os speaker assertion v1\0" + body` under the speaker-verifier's secret. Mint with
+`speaker.mint(key, person, audience)` (or `speaker.mint_for(key, op, args)`, which reads who and which audience from the request).
+
+* **The secret**: `STATE/identity-creds.json`, `{"socket", "creds": {"speaker-verifier": hex}, "ttl_s": 60}`, 0600, atomic, written
+  by both daemons at every start (a fresh secret each time). Never in `creds.json`, never readable through any op, never printed.
+* **The TTL**: 60 s, 2 s skew. An assertion issued before the kernel started is refused; used nonces are kept in memory for their TTL.
+* **In the lab**, the test is the component that verifies people: `Box.client("panel")`, `BrainBox.client("panel")` and the
+  authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=)`); `Box.assertion()`
+  mints one for a raw frame. Skills' clients get no key.
+* **A production client must**: read `identity-creds.json` from the provisioned state directory (re-read it after a refusal or a
+  kernel restart), mint one assertion per request ONLY after it has itself verified the person who is deciding, with the audience
+  that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
+* **Not additive**: a surface client that sends no `speaker` is refused `speaker unproven` (code `refused`), a real refusal.
+
 ## Authority kernel (`authority.py`)
 
 **Why the rows are rebuilt from the log.** A row exists exactly when a live, verified `list.add` receipt says so (less the verified
@@ -160,9 +180,9 @@ acknowledged add is lost and the test sees it), `no_member_forget` (the erase's 
 **Where the database lives (owner decision 2026-11-15).** The kernel keeps its OWN SQLite file, never tables in the main database,
 in a permanent home beside Zoe's other stores (`~/.zoe/music-assistant/`, `~/.zoe/night-extract/`, `~/.zoe/omi-recordings/`, ...):
 **proposed `~/.zoe/zoe-os/zoe-os.db`** (directory 0700, file 0600; `authority.PERMANENT_DB`). ONE setting names it:
-`ZOE_OS_KERNEL_DB` in the unit template, passed to the daemon as `--db` (both daemons take it), and the same registered flag in zoe-data
-(`os_authority.kernel_db_path()`, used only to name the store; zoe-data never opens the file). Without `--db` the lab default is
-`STATE/kernel/zoe-os.db`.
+the daemon's `--db` argument, written as a literal path in the unit template's `ExecStart` (both daemons take it); there is NO
+environment name for it (a lab process reads no product-prefixed name, and an unregistered `ZOE_*` name fails `validate`). zoe-data
+never opens the file. Without `--db` the lab default is `STATE/kernel/zoe-os.db`.
 
 **The move is done by the daemon at start (`authority.migrate`, both daemons).** A daemon given `--db` while the old
 `~/.zoe/os-shadow/kernel/zoe-os.db` still exists first moves it: the old record is folded into one file, copied with `VACUUM INTO`
@@ -177,12 +197,12 @@ scrub its blocks from the disk (the same holds for any deleted file).
 job that already snapshots a live SQLite file with Python's online backup API (the `sqlite3` CLI is not installed on the Jetson); not
 `postgres-nightly-backup.sh`, which is `pg_dump` only. Proposed block, after the MemPalace rotation (not applied by this change):
 
-    ZOE_OS_DB="${ZOE_OS_KERNEL_DB:-$HOME/.zoe/zoe-os/zoe-os.db}"
-    ZOE_OS_ROOT="${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
-    if [[ -f "$ZOE_OS_DB" ]]; then
-      mkdir -p -m 700 "$ZOE_OS_ROOT"
-      out="$ZOE_OS_ROOT/zoe-os-$(date +%Y%m%d-%H%M%S).db"
-      python3 - "$ZOE_OS_DB" "$out" <<'PY'
+    kernel_db="$HOME/.zoe/zoe-os/zoe-os.db"                          # the unit's --db
+    kernel_root="${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
+    if [[ -f "$kernel_db" ]]; then
+      mkdir -p -m 700 "$kernel_root"
+      out="$kernel_root/zoe-os-$(date +%Y%m%d-%H%M%S).db"
+      python3 - "$kernel_db" "$out" <<'PY'
     import sqlite3, sys
     src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)   # WAL: a reader beside the live kernel, never a file copy
     dst = sqlite3.connect(sys.argv[2])
@@ -193,7 +213,7 @@ job that already snapshots a live SQLite file with Python's online backup API (t
     assert chk.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()   # a kernel database, not an empty file
     PY
       chmod 600 "$out" && gzip -9 "$out"
-      ls -1t "$ZOE_OS_ROOT"/zoe-os-*.db.gz | tail -n +8 | xargs -r rm -f       # keep 7, like the palace
+      ls -1t "$kernel_root"/zoe-os-*.db.gz | tail -n +8 | xargs -r rm -f       # keep 7, like the palace
     fi
 
 Never `cp` the live `.db` (its `-wal` holds committed adds the main file does not have yet). `creds.json` and `k.sock` are re-made at

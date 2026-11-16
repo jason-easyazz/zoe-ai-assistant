@@ -11,8 +11,13 @@ Everything it can ask for is the closed op table in ``wire.py``.
 * one thread per connection, at most ``max_conns``; a connection that dies releases its
   subscriptions; a request that arrived whole is run whole, whether or not the client
   lives to read the answer;
-* ``forget`` / ``grant`` / ``revoke`` are a PERSON's decisions. Only a credential issued
-  with ``surface=True`` (a panel, the voice adapter) may relay one; a skill asking is refused.
+* ``forget`` / ``grant`` / ``revoke`` / ``undo`` / ``explain`` for a person (and the authority's
+  ``erase_member`` / ``erase_item``) are a PERSON's decisions. Only a credential issued with
+  ``surface=True`` (a panel, the voice adapter) may relay one, and the surface's word is not
+  enough: the request carries a ``speaker`` assertion for the person who decided
+  (``speaker.py``), minted by the speaker-verifier, which a surface relays and cannot mint. The
+  one exception is the member-delete path's ``eraser`` credential, for the forget family only.
+  ONE check, ``_prove_speaker``, at the dispatch in ``_answer``: no op re-implements it.
 
 What this does NOT do: stop a process running as the SAME OS user from opening the database
 file itself. Only file permissions and a separate user do that (see the README).
@@ -26,9 +31,10 @@ import re
 import secrets
 import socket
 import threading
+import time
 
-from . import explain, wire
-from .capability import ConsentError
+from . import explain, speaker, wire
+from .capability import CHILD, ConsentError
 from .events import Event, Kind
 from .kernel import Kernel
 from .spine import Refused, Subscription
@@ -45,14 +51,29 @@ class _Conn:
         self.next_sub = 1
 
 
+#: the refusal's ``attempted`` text per person-bound op (fixed strings: nothing from the request)
+_ATTEMPTED = {"forget": "forget", "grant": "grant", "revoke": "revoke", "undo": "undo",
+              "explain": "explain for a person", "erase_member": "erase a member",
+              "erase_item": "erase a list item"}
+
+
 class KernelServer:
+    _surfaces: set[str] = frozenset()      # class defaults: a server built without __init__ trusts nobody
+    _erasers: set[str] = frozenset()
+
     def __init__(self, kernel: Kernel, path: str, *, max_frame: int = wire.MAX_FRAME,
                  frame_deadline: float | None = 2.0, idle_timeout: float | None = 300.0,
-                 max_conns: int = 32, socket_mode: int = 0o600) -> None:
+                 max_conns: int = 32, socket_mode: int = 0o600, speaker_key: bytes | None = None,
+                 clock=time.time) -> None:
+        """``speaker_key``: the speaker-verifier's secret when it is provisioned; by default a fresh one
+        per start (``speaker_secret`` hands it to the supervisor, which writes ``identity-creds.json``).
+        There is no setting that turns the speaker check off."""
         self.kernel, self.path = kernel, path
         self.max_frame, self.frame_deadline, self.idle_timeout = max_frame, frame_deadline, idle_timeout
         self._creds: dict[str, bytes] = {}
         self._surfaces: set[str] = set()
+        self._erasers: set[str] = set()
+        self._speaker = speaker.Verifier(speaker_key or secrets.token_bytes(32), clock=clock)
         self._slots = threading.BoundedSemaphore(max_conns)
         self._stopping = threading.Event()
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -63,13 +84,21 @@ class KernelServer:
         self._sock.listen(64)
 
     # ---- credentials ----------------------------------------------------------------
-    def issue(self, name: str, *, surface: bool = False) -> bytes:
-        """A fresh credential for one installed skill. Issuing again replaces the old one."""
+    def issue(self, name: str, *, surface: bool = False, eraser: bool = False) -> bytes:
+        """A fresh credential for one installed skill. Issuing again replaces the old one.
+        ``eraser``: the member-delete path, which may run the forget family without an assertion."""
         if name not in self.kernel.grants.manifests:
             raise ConsentError("no manifest: nothing to issue a credential for")
+        if surface and eraser:
+            raise ConsentError("a surface is not the member-delete path")
         self._creds[name] = secrets.token_bytes(32)
         (self._surfaces.add if surface else self._surfaces.discard)(name)
+        (self._erasers.add if eraser else self._erasers.discard)(name)
         return self._creds[name]
+
+    def speaker_secret(self) -> bytes:
+        """For the supervisor only (never a verb): the secret the speaker-verifier mints with."""
+        return self._speaker._key
 
     def withdraw(self, name: str) -> None:
         self._creds.pop(name, None)
@@ -185,6 +214,7 @@ class KernelServer:
                 result = self._op_poll(conn, args)
             else:
                 with self.kernel.spine._lock:
+                    self._prove_speaker(conn, op, args)
                     result = getattr(self, "_op_" + op)(conn, args)
             return {"v": wire.VERSION, "id": rid, "ok": True, "result": result}
         except Refused as exc:                      # already a REFUSAL event on the spine
@@ -236,23 +266,47 @@ class KernelServer:
         return {"events": out}
 
     def _person_op(self, conn: _Conn, what: str) -> None:
+        """Surface-only, NOT person-bound (``list_digest``). A person's decision goes through ``_prove_speaker``."""
         if conn.name not in self._surfaces:
             self.kernel.spine._refuse(conn.name, what, "only a person, through a trusted surface")
 
+    def _is_child(self, person) -> bool:
+        who = self.kernel.grants.people.get(person) if isinstance(person, str) else None
+        return who is not None and who.role == CHILD
+
+    def _prove_speaker(self, conn: _Conn, op: str, a: dict) -> None:
+        """THE check for every person-bound op (``speaker.PERSON_BOUND``), run before the op, under the lock.
+
+        * the member-delete path's ``eraser`` credential: the forget family, no assertion;
+        * a skill (not a surface): refused, ``only a person, through a trusted surface``;
+        * a surface: only with a valid ``speaker`` assertion for the person ``speaker.binding`` names
+          and that op's audience, else ``speaker unproven`` (counted by fixed reason; never the token)."""
+        bound = speaker.binding(op, a, self._is_child)
+        if bound is None:
+            return
+        person, audience = bound
+        what = _ATTEMPTED[op]
+        if conn.name in self._erasers and op in speaker.ERASER_MAY:
+            return
+        if conn.name not in self._surfaces:
+            self.kernel.spine._refuse(conn.name, what, "only a person, through a trusted surface")
+        if not isinstance(person, str):
+            self.kernel.spine._refuse(conn.name, what, "name whose item")
+        verifier = getattr(self, "_speaker", None)     # a server built without __init__ has none: refuse
+        if verifier is None or not verifier.check(a.get("speaker"), person, audience):
+            self.kernel.spine._refuse(conn.name, what, speaker.UNPROVEN)
+
     def _op_forget(self, conn: _Conn, a: dict) -> dict:
-        self._person_op(conn, "forget")
         r = self.kernel.spine.forget(a["subject"], actor=a["actor"], seqs=a.get("seqs"),
                                      entity=a.get("entity"), topic=a.get("topic"))
         return {"count": r.count, "upto": r.upto}
 
     def _op_grant(self, conn: _Conn, a: dict) -> dict:
-        self._person_op(conn, "grant")
         g = self.kernel.grants.grant(a["person"], a["skill"], reads=a.get("reads"),
                                      acts=a.get("acts"), guardian=a.get("guardian"))
         return {"grant_id": g.id}
 
     def _op_revoke(self, conn: _Conn, a: dict) -> dict:
-        self._person_op(conn, "revoke")
         return {"revoked": self.kernel.grants.revoke(a["person"], a["skill"])}
 
     def _op_act(self, conn: _Conn, a: dict) -> dict:
@@ -261,7 +315,6 @@ class KernelServer:
         return dataclasses.asdict(r)
 
     def _op_undo(self, conn: _Conn, a: dict) -> dict:
-        self._person_op(conn, "undo")
         return dataclasses.asdict(self.kernel.actions.undo(a["person"], actor=a["actor"]))
 
     def _op_describe(self, conn: _Conn, a: dict) -> dict:
@@ -270,12 +323,11 @@ class KernelServer:
         return {"actions": self.kernel.actions.catalog(self.kernel.grants.manifests[conn.name].acts)}
 
     def _op_explain(self, conn: _Conn, a: dict) -> dict:
-        """With ``person`` (surfaces only): the full answer of ``explain.Explainer.why``.
+        """With ``person`` (a surface, with a speaker assertion for that person): the full answer of ``explain.Explainer.why``.
         With ``seq``: that event and its causes, as far as the calling skill may read them.
         Without: the caller's own standing (manifest, who granted it, its recent refusals)."""
         spine, store = self.kernel.spine, self.kernel.grants
         if "person" in a:               # a PERSON asks "why did you do that?", through a surface
-            self._person_op(conn, "explain for a person")
             ex, seq = self.kernel.explainer, a.get("seq")
             if seq is None:
                 if a.get("last", "action") not in explain.LAST:

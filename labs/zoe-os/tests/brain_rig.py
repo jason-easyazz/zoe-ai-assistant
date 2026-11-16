@@ -32,6 +32,7 @@ class BrainBox:
         self.proc.stdin.flush()
         ready = json.loads(self.proc.stdout.readline())
         self.creds, self.recovered = ready["creds"], ready["recovered"]
+        self.speaker_key = bytes.fromhex(ready["speaker_key"])     # the test plays the speaker-verifier
         self._clients: dict[str, Client] = {}
 
     def sup(self, cmd: str) -> dict:
@@ -41,7 +42,8 @@ class BrainBox:
 
     def client(self, name: str) -> Client:
         if name not in self._clients:
-            self._clients[name] = Client(self.socket, name, bytes.fromhex(self.creds[name]))
+            key = self.speaker_key if name == "panel" else None      # only the surface relays a person's word
+            self._clients[name] = Client(self.socket, name, bytes.fromhex(self.creds[name]), speaker_key=key)
         return self._clients[name]
 
     def bridge(self, **kw) -> BrainBridge:
