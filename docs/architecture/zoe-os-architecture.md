@@ -252,9 +252,16 @@ the folder from one place. Then:
    lab app stay in `labs/zoe-os/` and use the service package through its socket or its public module.
 2. The setting changes in the same commit. Shadow may start from `labs/` if it is ready first; **authority may not** (Phase 3
    requires the move).
-3. `services/AGENTS.md`'s rule "no home/family/household concepts in kernel code" is scoped in that commit to the main service's
-   router, memory schema, auth and tool signatures, with one line saying Zoe OS models the household on purpose because the
-   household's hard rules are its whole job.
+3. **Prerequisite, before the move: the charter is amended.** Section 6 of `docs/governance/ZOE_DESIGN_PRINCIPLES.md` is the
+   normative rule ("no `home` / `family` / `household` concepts baked into the kernel"), and it says a design that conflicts with
+   it needs an explicit amendment. Editing `services/AGENTS.md` alone would leave Zoe OS allowed by its local contract and
+   forbidden by the charter. So an amendment PR comes first, following the charter's own Amendment process: it edits section 6
+   (the rule keeps binding the main service's router, memory schema, auth and tool signatures; Zoe OS is named as the one place
+   that models the household on purpose, because the household's hard rules are its whole job), updates the enforceable mirrors
+   (`.cursor/rules/*.mdc` and the legacy `.cursorrules`), and states the amended section and the reason in its commit message.
+   The charter is the owner's document, so that PR needs his agreement; until it has merged, the kernel stays in `labs/` and
+   takes no authority.
+4. Only then is `services/AGENTS.md`'s matching rule scoped the same way, in the commit that moves the kernel (step 1).
 
 ### B.3 Runtime identity: its own system user, in two steps
 
