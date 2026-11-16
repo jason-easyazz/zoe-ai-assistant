@@ -144,20 +144,25 @@ async def fire_notification(
             )
         return
 
-    # LLM-compose only for non-reminder types (reminders already have a good message).
-    if trigger_type not in ("reminder", "scheduled") and ctx:
-        message = await compose_message(trigger_type, ctx, fallback=message)
+    claim_key = ctx.get("claim_key")  # a once-a-day trigger's durable claim (nudge_claims): released on every path that did not deliver
+    try:
+        # LLM-compose only for non-reminder types (reminders already have a good message).
+        if trigger_type not in ("reminder", "scheduled") and ctx:
+            message = await compose_message(trigger_type, ctx, fallback=message)
 
-    # Always create a proactive_pending row — this is the id used by claim_pending()
-    # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
-    # is only used below to mark that row as fired; it must NOT be used as the URL id.
-    pid = await create_pending(
-        user_id=user_id,
-        message=message,
-        trigger_type=trigger_type,
-        item_id=item_id,
-        context=ctx,
-    )
+        # Always create a proactive_pending row — this is the id used by claim_pending()
+        # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
+        # is only used below to mark that row as fired; it must NOT be used as the URL id.
+        pid = await create_pending(
+            user_id=user_id,
+            message=message,
+            trigger_type=trigger_type,
+            item_id=item_id,
+            context=ctx,
+        )
+    except BaseException:
+        await _release_claim(claim_key)  # nothing was sent: the next tick may claim and try again
+        raise
 
     delivered_any = False
     try:
@@ -168,6 +173,8 @@ async def fire_notification(
             user_id=user_id, message=message, trigger_type=trigger_type,
             guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
         )
+        if spoken:
+            delivered_any = True  # recorded the moment the lane took it: a cancel from here on keeps the row and the claim
 
         deep_link = f"/chat.html?p={pid}"
         # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
@@ -179,6 +186,8 @@ async def fire_notification(
             subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
             if phone == "shadow":
                 await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
+        if subscribers_reached > 0:
+            delivered_any = True
         in_app_fallback_ok = False
 
         # If no WebSocket subscribers received the push, fall back to an in-app
@@ -206,12 +215,13 @@ async def fire_notification(
                     await db.commit()
                 await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
                 in_app_fallback_ok = True
+                delivered_any = True
                 log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
             except Exception as _fe:
                 log.warning("reminder fallback: in-app insert failed: %s", _fe)
 
         delivered = subscribers_reached > 0 or in_app_fallback_ok
-        delivered_any = delivered or bool(spoken)
+        delivered_any = delivered_any or delivered or bool(spoken)
         if pending_id:
             async with _get_compat_db() as db:
                 await db.execute(
@@ -226,13 +236,21 @@ async def fire_notification(
                 )
         if retract_if_undelivered and not delivered_any:
             await _retract_pending(pid)
+            await _release_claim(claim_key)
         return delivered_any
     except BaseException as exc:
         if not delivered_any:  # a send that raised before any lane got through did not go through: the next tick tries again
             await _retract_pending(pid)
+            await _release_claim(claim_key)
         log.warning("fire_notification raised after the pending row (%s): %s", type(exc).__name__,
                     "kept (a lane had delivered)" if delivered_any else "row removed, will retry")
         raise
+
+
+async def _release_claim(claim_key: str | None) -> None:
+    if claim_key:
+        import nudge_claims
+        await nudge_claims.release(claim_key)
 
 
 async def _retract_pending(pid: str) -> None:

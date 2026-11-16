@@ -1,5 +1,6 @@
 """WP-40: reminder entry points go through the reminder_service verbs and ONE ownership rule (synthetic people)."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -571,6 +572,60 @@ async def test_spoken_cancel_removes_only_the_speakers_own_reminder(monkeypatch,
     assert store.row["deleted"] == 1 and quiet["seam"] == ["cancel"]
 
 
+class _Claims:
+    """``app_settings`` as ``nudge_claims`` uses it: a unique key, ``ON CONFLICT DO NOTHING`` (rowcount 1 / 0), the prune and the erase."""
+
+    def __init__(self):
+        self.rows, self.after_read = {}, None
+
+    def execute(self, sql, params=()):
+        norm, p = " ".join(sql.split()), list(params)
+        store = self
+
+        class _Cur:
+            rowcount = 0
+
+        async def run():
+            cur = _Cur()
+            if norm.startswith("INSERT INTO app_settings"):
+                if p[0] not in store.rows:
+                    store.rows[p[0]] = {"updated_at": p[1]}
+                    cur.rowcount = 1
+            elif norm.startswith("DELETE FROM app_settings WHERE key LIKE ? AND updated_at < ?"):
+                for k in [k for k, v in store.rows.items() if k.startswith(p[0].rstrip("%")) and v["updated_at"] < p[1]]:
+                    del store.rows[k]
+            elif norm.startswith("DELETE FROM app_settings WHERE key = ?"):
+                store.rows.pop(p[0], None)
+            elif norm.startswith("DELETE FROM app_settings WHERE key LIKE ? ESCAPE"):
+                import re as _re
+
+                rx = _re.compile("^" + _re.escape(p[0].replace("\\_", "_")).replace("%", ".*").replace("\\.\\*", ".*") + "$")
+                for k in [k for k in store.rows if rx.match(k)]:
+                    del store.rows[k]
+                    cur.rowcount += 1
+            return cur
+        return run()
+
+    async def commit(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def claims(monkeypatch):
+    import contextlib
+
+    import nudge_claims
+
+    store = _Claims()
+
+    @contextlib.asynccontextmanager
+    async def db():
+        yield store
+
+    monkeypatch.setattr(nudge_claims, "_db", db)
+    return store
+
+
 # ── the "you haven't spoken to X" nudge: once per household day, not every tick of the 9 o'clock hour ─────────────────────
 class _PeopleDb:
     """The people read plus ``proactive_pending``, which ``fire_notification`` writes for a send that went through."""
@@ -592,6 +647,7 @@ class _PeopleDb:
                 return False
 
             async def fetchall(self):
+                await asyncio.sleep(0)                     # a real read yields: two ticks can interleave between read and send
                 if "FROM proactive_pending" in sql:
                     if db.pending_read_fails:
                         raise RuntimeError("pool timeout")
@@ -621,7 +677,10 @@ async def test_people_health_nudge_fires_once_per_day(monkeypatch):
 
     first = await tick(0)
     assert [(r.item_id, r.message) for r in first] == [("p1", "You haven't spoken to Person One in 4 weeks.")]
-    assert [r.item_id for r in await tick(5)] == ["p1"]       # that send failed (no pending row): retried
+    import nudge_claims
+    assert [r.item_id for r in await tick(5)] == []            # the claim is held while the send is in flight: nobody else sends it
+    await nudge_claims.release(first[0].context["claim_key"])  # that send failed (fire_notification releases): retried
+    assert [r.item_id for r in await tick(5)] == ["p1"]
     db.sent(first, "2026-06-10")
     assert await tick(10) == []                                # sent: a restart in the same hour does not repeat it
     db.pending_read_fails = True
@@ -699,7 +758,7 @@ def _engine_world(monkeypatch, db, *, push, spoken=False):
     ("only the spoken lane", 0, True, True, False),
 ])
 @pytest.mark.asyncio
-async def test_a_nudge_is_marked_sent_only_once_a_lane_delivered(monkeypatch, lane, push, spoken, row_stays, raises):
+async def test_a_nudge_is_marked_sent_only_once_a_lane_delivered(monkeypatch, claims, lane, push, spoken, row_stays, raises):
     import zoneinfo
 
     from proactive.triggers import people_health as ph
@@ -719,6 +778,7 @@ async def test_a_nudge_is_marked_sent_only_once_a_lane_delivered(monkeypatch, la
     else:
         assert await engine.fire_notification(**kw) is True or not (push or spoken)
     assert bool(db.pending) is row_stays
+    assert bool(claims.rows) is row_stays                             # the claim goes back with the row: kept only after a delivery
     again = await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))
     assert (again == []) is row_stays                                 # retried on the next tick, or not repeated
 
@@ -804,3 +864,78 @@ async def test_snoozing_a_done_reminder_still_fires_through_the_trigger(quiet, m
     assert db.row["acknowledged"] == 0 and db.row["snoozed_until"] == "2026-06-10T04:10:00Z"
     await trig._fire_reminder("sched-1", A, "take pills")      # the job comes due: the real claim, supersede check and delivery
     assert delivered == ["rem-1"]
+
+
+def _nudge_world(monkeypatch):
+    import zoneinfo
+
+    from proactive.triggers import people_health as ph
+
+    monkeypatch.setattr(ph, "_ZOE_TZ", zoneinfo.ZoneInfo("Australia/Perth"))
+    nine = datetime(2026, 6, 10, 1, 0, tzinfo=timezone.utc)
+    db = _PeopleDb([{"id": "p1", "name": "Person One", "user_id": A,
+                     "last_contacted_at": (nine - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), "context": ""}])
+    return ph, nine, db
+
+
+@pytest.mark.asyncio
+async def test_two_overlapping_ticks_send_the_nudge_once(monkeypatch, claims):
+    ph, nine, db = _nudge_world(monkeypatch)
+    first, second = await asyncio.gather(ph.PeopleHealthTrigger().check(db, now_utc=nine),
+                                         ph.PeopleHealthTrigger().check(db, now_utc=nine))   # both read "no mark today" ...
+    assert len(first) + len(second) == 1                          # ... only the one whose claim landed sends
+    assert list(claims.rows) == [f"nudge:people_health:{A}:p1:2026-06-10"]   # ids and a date, no name
+
+
+@pytest.mark.asyncio
+async def test_a_restart_after_a_delivered_nudge_does_not_repeat_it(monkeypatch, claims):
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=1)
+    trig = ph.PeopleHealthTrigger()
+    (result,) = await trig.check(db, now_utc=nine)
+    await engine.fire_notification(user_id=result.user_id, message=result.message, trigger_type=result.trigger_type,
+                                   item_id=result.item_id, context=result.context, retract_if_undelivered=True)
+    db.pending.clear()                                            # even with the pending row gone (another process, a purge) ...
+    assert await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5)) == []   # ... the claim holds
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_right_after_the_spoken_enqueue_keeps_the_mark_and_the_claim(monkeypatch, claims):
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=asyncio.CancelledError, spoken=True)   # speech took it, then the task is cancelled
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    with pytest.raises(asyncio.CancelledError):
+        await engine.fire_notification(user_id=result.user_id, message=result.message, trigger_type=result.trigger_type,
+                                       item_id=result.item_id, context=result.context, retract_if_undelivered=True)
+    assert len(db.pending) == 1 and len(claims.rows) == 1         # speech was queued: the row and the claim stay
+    assert await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5)) == []
+
+
+@pytest.mark.asyncio
+async def test_a_failure_before_the_row_is_written_releases_the_claim(monkeypatch, claims):
+    ph, nine, db = _nudge_world(monkeypatch)
+    engine = _engine_world(monkeypatch, db, push=1)
+
+    async def broken(**_k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(engine, "create_pending", broken)
+    (result,) = await ph.PeopleHealthTrigger().check(db, now_utc=nine)
+    with pytest.raises(RuntimeError):
+        await engine.fire_notification(user_id=result.user_id, message=result.message, trigger_type=result.trigger_type,
+                                       item_id=result.item_id, context=result.context, retract_if_undelivered=True)
+    assert claims.rows == {}                                      # nothing went out: the next tick may claim and try again
+    assert len(await ph.PeopleHealthTrigger().check(db, now_utc=nine + timedelta(minutes=5))) == 1
+
+
+@pytest.mark.asyncio
+async def test_claims_are_pruned_and_erased_with_the_member(claims):
+    import nudge_claims
+
+    old, new = datetime(2026, 6, 1, tzinfo=timezone.utc), datetime(2026, 6, 10, tzinfo=timezone.utc)
+    assert await nudge_claims.claim("nudge:people_health:member_a:p1:2026-06-01", now=old)
+    assert not await nudge_claims.claim("nudge:people_health:member_a:p1:2026-06-01", now=old)   # the second claimer loses
+    assert await nudge_claims.claim("nudge:people_health:member_a:p1:2026-06-10", now=new)       # prunes the key a week+ old
+    assert list(claims.rows) == ["nudge:people_health:member_a:p1:2026-06-10"]
+    await nudge_claims.claim("nudge:people_health:member_b:p1:2026-06-10", now=new)
+    assert await nudge_claims.forget_user("member_a") == 1 and list(claims.rows) == ["nudge:people_health:member_b:p1:2026-06-10"]
