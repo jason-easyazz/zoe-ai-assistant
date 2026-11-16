@@ -13,11 +13,29 @@ import time
 
 from . import wire
 from .events import Event, Kind
+from .provenance import subject_of
 from .receipts import Receipt
 from .spine import EventCache, Refused
 
 
 class Client:
+    @staticmethod
+    def forgotten_subject(notice: Event) -> str | None:
+        """None for a whole-person notice: it carries no subject and this side holds no key to
+        resolve its hash. The consumer must then treat it as possibly ANY member and keep only
+        state whose source it can still read (``provenance.unresolved_person`` and
+        ``provenance.still_live``), never as a notice about nobody."""
+        return subject_of(notice)
+
+    def live_seqs(self, kinds, after: int) -> set[int]:
+        """Sequence numbers of the live events of ``kinds`` after ``after`` this skill may read.
+        A short-lived reader, like ``_cache_history``: no subscription is left behind."""
+        reader = Client(*self._cache_conn, timeout=self._timeout)
+        try:
+            return {e.seq for e in reader.drain(reader.subscribe(kinds=kinds, from_seq=after))}
+        finally:
+            reader.close()
+
     def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0) -> None:
         self.skill, self._timeout, self._id = skill, timeout, 0
         self._cache_conn = (path, skill, credential)

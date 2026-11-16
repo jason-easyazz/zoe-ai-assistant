@@ -114,13 +114,20 @@ def test_control_without_the_tombstone_the_forgotten_words_replay(scene):
     assert FORGOTTEN in str(bad.do("resurrect", SAM, forget_sam(box))["out"])
 
 
-def test_control_without_the_shield_the_forgotten_words_are_republished(scene):
+@pytest.mark.parametrize('disable_shield', [False, True], ids=['shield-on', 'shield-off'])
+def test_control_without_the_shield_the_forgotten_words_are_republished(scene, disable_shield):
     box, bad = scene
     live = forget_sam(box)
+    # Restore consent explicitly so disabling just the shield exposes the leak.
+    box.client("panel").grant(SAM, HELPER)
     bad.do("plant_stale_copy", SAM, box.cause, FORGOTTEN)
-    box.control("no_shield")
+    if disable_shield:
+        box.control("no_shield")
     back = bad.do("resurrect", SAM, live)["out"]
-    assert len(back) == 2 and FORGOTTEN in str(back)
+    if disable_shield:
+        assert len(back) == 2 and FORGOTTEN in str(back)
+    else:
+        assert back == [] and FORGOTTEN not in str(box.audit())
 
 
 # ---- the honest path ---------------------------------------------------------------------------
@@ -156,7 +163,7 @@ def test_a_forget_through_the_socket_reaches_a_subscriber_in_another_process(box
     panel.grant(SAM, HELPER)
     sub = helper.subscribe(kinds=["utterance"])
     say(box, SAM, FORGOTTEN)
-    assert panel.forget(SAM, actor=SAM)["count"] == 1
+    assert panel.forget(SAM, actor=SAM)["count"] == 2  # utterance plus erased grant
     (notice,) = helper.poll(sub, max=8)
     assert notice.kind.value == "forget" and FORGOTTEN not in str(notice.payload)
     with pytest.raises(Refused, match="not theirs to forget"):

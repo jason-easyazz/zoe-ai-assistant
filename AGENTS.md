@@ -220,11 +220,12 @@ routine path, not the exceptional one.** Findings are hypotheses: verify each wi
 negative control, batch every fix into one push. Advisory to the machine, mandatory to
 the process — a PR should not be marked ready until it has had one.
 
-The script falls back **automatically**: polly (Omnigent) first; if polly cannot start or
-produce a provably cross-vendor report (runner start failure, Claude OAuth refresh
-contention, auth error, timeout), `codex exec` is run DIRECTLY in the `zoe-omnigent`
-container with the same contract; only if codex is unavailable (quota) does ONE lean,
-tool-less, size-capped `pi` pass run. **No backend is Claude** — a same-vendor review is
+The script falls back **automatically**: `codex exec` first, on the HOST with its read-only
+sandbox when a host codex is installed (in the `zoe-omnigent` container otherwise, where Docker's
+seccomp blocks that sandbox); only if codex is unavailable (quota) does ONE lean, tool-less,
+size-capped `pi` pass run. polly (Omnigent) is **opt-in only** since 2026-11-16
+(`CROSS_REVIEW_BACKENDS="polly codex pi"`): its orchestrator runs on a metered Anthropic API
+workspace with no credit, and the owner will not add any. **No backend is Claude** — a same-vendor review is
 never substituted — and if every cross-vendor option fails it exits **2** with
 `cross-review unavailable`, which means *not reviewed*, never "clean". Detail, the
 polly-auth root cause and the owner runbook:
@@ -456,7 +457,7 @@ Engineering work runs on:
 - **Claude Code** (Claude Max, flat-rate) — the primary implementer; Sonnet-tier for routine work, Opus-tier for hard or multi-file work. Reads this file via `CLAUDE.md`.
 - **Codex** (ChatGPT subscription, flat-rate) — second implementer for narrow changes and the primary independent reviewer of Claude-implemented work.
 - **Omnigent** (the `zoe-omnigent` container) — hosts the polly orchestrator and the codex / pi workers behind cross-vendor review and the heavy lane of the Flue executor.
-- **`scripts/maintenance/cross_review.sh <PR#> "<contract>"`** — the cross-vendor review dispatcher (polly → direct codex → one lean pi pass, automatic fallback; exit 2 means "unavailable", never a clean review). Routing and costs: *Review pipeline*, Tier 2, and [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+- **`scripts/maintenance/cross_review.sh <PR#> "<contract>"`** — the cross-vendor review dispatcher (host codex → one lean pi pass, automatic fallback; polly opt-in; exit 2 means "unavailable", never a clean review). Routing and costs: *Review pipeline*, Tier 2, and [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
 - **Multica** (currently paused) is the engineering-board workflow-state driver and the **Flue executor** (`labs/flue-executor/`) its execution seam, per the migration plan; moving the household autopilots off Multica is architecture-deep-dive task B2.
 
 Browser work goes through Zoe's CloakBrowser tools (the Zoe MCP browser broker). Operator-level agent skills live outside the repo and are not user-facing Zoe runtime skills under `skills/`.

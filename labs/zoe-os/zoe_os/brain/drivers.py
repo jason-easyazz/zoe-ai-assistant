@@ -7,14 +7,38 @@ from them) and is reversible. ``asked`` is a ``from: turn`` parameter: the adapt
 the turn the trusted voice surface recorded; the model never sees it. The dispatcher overwrites
 it with the single authorised cause before any driver runs. Multiple causes are refused for
 actions using this scalar provenance, so scoped forget cannot miss another cited request.
+Request sequences are global: erasure follows them across every owner's rows.
 """
 from __future__ import annotations
 
 from ..events import Event, Kind
-from ..provenance import erased_request
+from ..provenance import erased, unresolved_person
+from ..spine import Refused
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
          "description": "the single authorised request (set by the kernel)"}
+
+
+def _register_forget(kernel, name, store):
+    """Trusted pre-erasure purge plus independent read-back, across request owners."""
+    def selected(person, events):
+        gone = None if events is None else {e.seq for e in events}
+        if isinstance(store, Alarms):
+            return [(owner, row) for owner, row in store.at.items()
+                    if (owner == person if gone is None else row['asked'] in gone)]
+        return [(owner, row) for owner, rows in store.rows.items() for row in rows
+                if (owner == person if gone is None else row['asked'] in gone)]
+
+    def purge(person, events):
+        for owner, row in selected(person, events):
+            if isinstance(store, Alarms):
+                store.at.pop(owner, None)
+            else:
+                store.rows[owner].remove(row)
+                if not store.rows[owner]:
+                    store.rows.pop(owner)
+
+    kernel.register_store_purge(name, purge, lambda p, e: not selected(p, e))
 
 
 class Lists:
@@ -22,6 +46,7 @@ class Lists:
         self.rows: dict[str, list[dict]] = {}              # person -> [{list, item, asked}]
 
     def register(self, kernel) -> "Lists":
+        _register_forget(kernel, 'brain-lists', self)
         kernel.actions.register(
             "list.add", self.add, self.added, needs_accept=False, snapshot=self.snapshot,
             undo=self.put_back, doc="Add an item to one of the person's lists",
@@ -51,6 +76,7 @@ class Reminders:
         self.clock, self.rows = clock, {}                    # person -> [{note, due, asked}]
 
     def register(self, kernel) -> "Reminders":
+        _register_forget(kernel, 'brain-reminders', self)
         kernel.actions.register(
             "remind.set", self.add, self.added, needs_accept=False, snapshot=self.snapshot,
             undo=self.put_back, doc="Set a reminder for the person",
@@ -81,6 +107,7 @@ class Alarms:
         self.at: dict[str, dict] = {}                        # person -> {time, asked}
 
     def register(self, kernel) -> "Alarms":
+        _register_forget(kernel, 'brain-alarms', self)
         kernel.actions.register(
             "alarm.set", self.do, self.verify, needs_accept=False, snapshot=self.snapshot,
             undo=self.put_back, doc="Set the person's alarm time",
@@ -117,14 +144,20 @@ class Keeper:
     def on_event(self, ev: Event, ctx) -> None:
         if ev.kind is not Kind.FORGET:
             return
+        if unresolved_person(ev, ctx):
+            # Its own reads cannot vouch for any row: never guess whose rows these are. Not
+            # acknowledged, so it is retried; registered stores were already swept by the kernel.
+            raise Refused('purge unresolved')
         for store in self.stores:
             if isinstance(store, Alarms):
-                for person, row in list(store.at.items()):
-                    if erased_request(ev, row["asked"], person):
-                        del store.at[person]
+                for person in erased(ev, ctx, ((p, p, (row["asked"],)) for p, row in store.at.items()),
+                                     kinds=self.manifest["reads"]):
+                    del store.at[person]
             else:
+                gone = erased(ev, ctx, (((p, i), p, (r["asked"],)) for p, rows in store.rows.items()
+                                        for i, r in enumerate(rows)), kinds=self.manifest["reads"])
                 for person, rows in list(store.rows.items()):
-                    keep = [r for r in rows if not erased_request(ev, r["asked"], person)]
+                    keep = [r for i, r in enumerate(rows) if (person, i) not in gone]
                     store.rows[person] = keep
                     if not keep:
                         store.rows.pop(person, None)
