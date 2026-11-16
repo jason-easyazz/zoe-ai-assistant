@@ -319,3 +319,16 @@ def test_a_removed_carer_cannot_explain_or_undo_a_reminder_they_set_until_the_li
     house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))               # the link is back: so is the reach
     assert house.k.explainer.why(receipt.seq, person=A)["seq"] == receipt.seq
     assert house.k.actions.undo(A, actor=A).verified and house.row(rid) is None
+
+
+def test_a_removed_carer_cannot_explain_the_undo_of_a_reminder_they_set(house):
+    receipt = house.act(A, "remind.set", note="synthetic marker <pack>", time="07:45", mentions=(K,), **{"for": K})
+    undone = house.k.actions.undo(A, actor=A)
+    assert undone.verified and house.k.explainer.why(undone.seq, person=A)["seq"] == undone.seq
+    house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
+    for seq in (receipt.seq, undone.seq):
+        with pytest.raises(Refused):
+            house.k.explainer.why(seq, person=A)
+    assert house.k.explainer.last(A) not in (receipt.seq, undone.seq)
+    house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))
+    assert house.k.explainer.why(undone.seq, person=A)["seq"] == undone.seq
