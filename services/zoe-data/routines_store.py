@@ -659,20 +659,21 @@ async def note_named(session_id: str, member: str, day_step_id: str) -> Optional
     async with _db() as db:
         rows = await _rows(db, "SELECT ds.kind, d.routine_id, d.user_id FROM routine_day_steps ds JOIN routine_days d ON d.id = ds.day_id "
                                "WHERE ds.id = ?", (day_step_id,))
-    if not rows:
-        close_walk(session_id)
+        r = await _load(db, rows[0][1]) if rows else None
+    if r is None or not can_see(r, member):
+        close_walk(session_id, keep_last=True)            # missing and not-yours are the same answer: no text, no counter
         return None
     try:
         async with _guarded_write(seen, subject=rows[0][2], actors=(member,)) as w:
             now = await _rows(w.db, "SELECT ds.text, ds.state, d.closed_at FROM routine_day_steps ds JOIN routine_days d "
                                     "ON d.id = ds.day_id WHERE ds.id = ?", (day_step_id,))
             if not now or now[0][1] not in ("pending", "snoozed") or now[0][2] is not None or w.forgotten(now[0][0]):
-                close_walk(session_id)
+                close_walk(session_id, keep_last=True)
                 return None
             await w.db.execute("UPDATE routine_day_steps SET prompts = prompts + 1, last_prompt_at = ? WHERE id = ?",
                                (_iso(), day_step_id))
     except StoreError:
-        close_walk(session_id)                            # erased meanwhile: nothing is counted and nothing stays named
+        close_walk(session_id, keep_last=True)            # erased meanwhile: nothing is counted and nothing stays named
         return None
     _bounded(_NAMED, session_id, Named(member, day_step_id, _mono()))
     _log("prompted", kind=rows[0][0], member=rows[0][2], routine=rows[0][1])
@@ -701,8 +702,21 @@ def walk_open(session_id: str, member: str) -> bool:
     return named_step(session_id, member) is not None
 
 
-def close_walk(session_id: str) -> None:
+def close_walk(session_id: str, *, keep_last: bool = False) -> None:
+    """End the session's walk: the named step AND (unless ``keep_last``, used only by the turn that made the change) the last said
+    change, so "untick that" after any other turn changes nothing."""
     _NAMED.pop(session_id or "", None)
+    if not keep_last:
+        _LAST.pop(session_id or "", None)
+
+
+def drop_last(session_id: str) -> None:
+    _LAST.pop(session_id or "", None)
+
+
+def last_entry(session_id: str):
+    """The session's last said change (identity only: the tier compares it before / after a turn)."""
+    return _LAST.get(session_id or "")
 
 
 async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, verified: bool) -> dict:
@@ -756,7 +770,7 @@ async def act_said(session_id: str, member: str, action: str, *, verified: bool)
         raise StoreError("nothing_named", 409)
     out = await _apply(ds_id, action, member, via="said", verified=verified)
     _bounded(_LAST, session_id, (ds_id, member, _mono(), out["previous"]))
-    close_walk(session_id)
+    close_walk(session_id, keep_last=True)              # this change is what "untick that" on the NEXT turn may undo
     return out
 
 

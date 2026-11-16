@@ -530,10 +530,14 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
                 logger.info("ROUTINE_TIER shadow would=%s channel=%s", kind, ch)
             return None
         verified = ch == "chat" or (extra_ctx or {}).get("speaker_verified") is True
-        before = rs.walk_entry(session_id)
+        before, last_before = rs.walk_entry(session_id), rs.last_entry(session_id)
         reply = await answer(kind, parts, session_id, member, verified=verified, channel=ch)
         if not reply or rs.walk_entry(session_id) is before:
-            rs.close_walk(session_id)      # THE walk rule: it survives only a turn whose reply named ONE step just now
+            # THE walk rule: it survives only a turn whose reply named ONE step just now; the last said change survives only the
+            # turn that made it (so "untick that" works on the next turn and never after another one)
+            rs.close_walk(session_id, keep_last=True)
+        if last_before is not None and rs.last_entry(session_id) is last_before:
+            rs.drop_last(session_id)                       # a turn that made no said change of its own ends the undo window
         if reply and await rs.names_forgotten({member}, reply):
             # THE last word: the whole reply, exactly as it will be said, against the uncached durable ledger. Whatever was
             # checked earlier (a line, a name) and whatever was forgotten during the reads since, a forgotten name is not said.

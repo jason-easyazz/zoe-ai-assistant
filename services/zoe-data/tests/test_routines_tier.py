@@ -166,8 +166,8 @@ def test_the_walk_names_one_step_at_a_time_and_acts_only_on_it(store, on):
     assert say("next") is None and say("what's the weather") is None
     assert _states(store) == {"feed the cat": "done", "bins": "pending"}
     assert say("no, I haven't", member=SAM) is None                          # an undo is the same person's only
-    assert say("no, I haven't") == "OK, it's back on the list: feed the cat."
-    assert _states(store) == {"feed the cat": "pending", "bins": "pending"}
+    assert say("no, I haven't") is None                                       # turns in between ended the one-turn undo window
+    assert _states(store) == {"feed the cat": "done", "bins": "pending"}
 
 
 def test_any_other_turn_ends_the_walk_so_a_later_yes_is_not_a_tick(store, on):
@@ -392,6 +392,20 @@ def test_a_forget_landing_while_the_reply_is_built_is_caught_by_the_last_check(s
     reply = say("start my morning routine")
     assert reply is None                                                      # suppressed whole: nothing of it is said
     assert rs.named_step("s1", ALEX) is None and say("done") is None
+
+
+def test_untick_after_another_turn_changes_nothing(store, on):
+    _morning()
+    assert say("what's next?") == "Next: feed the cat."
+    assert say("done") == "Ticked. Next: bins."
+    assert say("what's the weather") is None                                  # another turn in between
+    assert say("untick that") is None                                          # the undo window was that one turn only
+    assert _states(store) == {"feed the cat": "done", "bins": "pending"}
+    assert say("what's next?") == "Next: bins."
+    assert say("done") == "Ticked. That's your morning routine done."
+    assert say("what's left?") is None                                         # a routines turn that changes nothing ...
+    assert say("untick that") is None                                          # ... also ends the window
+    assert _states(store) == {"feed the cat": "done", "bins": "done"}
 
 
 def test_a_failed_routines_turn_leaves_no_older_step_tickable(store, on, monkeypatch):

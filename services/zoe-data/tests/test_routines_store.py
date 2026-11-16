@@ -712,3 +712,76 @@ def test_a_line_naming_a_forgotten_entity_is_withheld_from_the_day_copy_while_it
     assert [s["text"] for s in run(rs.day_copy(ALEX, r["id"]))["steps"]] == ["bins"]
     assert run(rs.day_copy(ALEX, named["id"])) is None
     assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE text = 'call Quinn'") == [(1,)]   # withheld, not erased: the cascade erases
+
+
+# -- cross-member reach: every entry point that takes an id from a caller ------------------------------------------------------------
+def _outcome(coro):
+    try:
+        return ("ok", run(coro))
+    except rs.StoreError as exc:
+        return ("refused", exc.code, exc.status)
+
+
+def _snapshot(store):
+    return {t: store.q(f"SELECT * FROM {t} ORDER BY id") for t in ("routines", "routine_steps", "routine_days", "routine_day_steps")}
+
+
+_ENTRY_POINTS = {
+    "get_routine": lambda rid, ds: rs.get_routine(SAM, rid),
+    "add_step": lambda rid, ds: rs.add_step(SAM, rid, "peek"),
+    "day_copy": lambda rid, ds: rs.day_copy(SAM, rid),
+    "add_one_off": lambda rid, ds: rs.add_one_off(SAM, rid, TOMORROW, "peek"),
+    "note_named": lambda rid, ds: rs.note_named("s-sam", SAM, ds),
+    "live_lines": lambda rid, ds: rs.live_lines(SAM, [ds]),
+    "act_tapped": lambda rid, ds: rs.act_tapped(SAM, ds, "done", verified=True),
+    "act_said": lambda rid, ds: (rs._bounded(rs._NAMED, "s-sam", rs.Named(SAM, ds, rs._mono())),
+                                 rs.act_said("s-sam", SAM, "done", verified=True))[1],
+    "undo_said": lambda rid, ds: (rs._bounded(rs._LAST, "s-sam", (ds, SAM, rs._mono(), "done")),
+                                  rs.undo_said("s-sam", SAM, verified=True))[1],
+}
+
+
+@pytest.mark.parametrize("name", sorted(_ENTRY_POINTS))
+def test_another_members_private_id_is_refused_exactly_like_a_missing_one(store, name):
+    """Sam holding Alex's PERSONAL routine / day-line id gets the same answer as for an id that does not exist, and nothing moves
+    (no text, no prompt counter, no state). Old code: ``note_named`` returned Alex's step text and counted a prompt."""
+    mine = _mk(steps=("my private step",))
+    ds = _first(mine)
+    before = _snapshot(store)
+    theirs = _outcome(_ENTRY_POINTS[name](mine["id"], ds))
+    rs.reset_walks()
+    missing = _outcome(_ENTRY_POINTS[name]("no-such-routine", f"no-such-routine:{TODAY.isoformat()}:x"))
+    rs.reset_walks()
+    assert theirs == missing, (name, theirs, missing)
+    assert "my private step" not in repr(theirs)
+    assert _snapshot(store) == before                                               # no counter, state or row moved
+    assert run(rs.note_named("s-alex", ALEX, ds)) == "my private step"              # control: the owner is answered
+
+
+_ID_PARAMS = {"routine_id", "day_step_id", "ds_id", "day_step_ids"}
+
+
+def _unchecked_id_takers(source: str) -> list[str]:
+    """Every module-level ASYNC function taking a caller's routine / day-line id that never calls ``can_see`` (directly, or through
+    ``_apply``, which does). A helper whose first parameter is ``db`` / ``w`` runs inside a caller that checked."""
+    tree = ast.parse(source)
+    out = []
+    for fn in tree.body:
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        names = [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+        if not _ID_PARAMS & set(names) or (names and names[0] in ("db", "w")):
+            continue
+        calls = {c.func.id for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        if not calls & {"can_see", "_apply"}:
+            out.append(fn.name)
+    return sorted(out)
+
+
+def test_every_entry_point_taking_an_id_checks_visibility():
+    from pathlib import Path as _P
+    src = _P(rs.__file__).read_text()
+    assert _unchecked_id_takers(src) == []
+    rogue = src + ("\n\nasync def peek(viewer, day_step_id):\n    async with _db() as db:\n"
+                   "        return await _rows(db, \"SELECT text FROM routine_day_steps WHERE id = ?\", (day_step_id,))\n")
+    assert _unchecked_id_takers(rogue) == ["peek"]                                  # negative control
