@@ -52,7 +52,13 @@ SECRET_PATHS = ("*.pem", "*.key", "*.p12", "*.pfx", "*secret*", "*credential*", 
 REASONS = ("patch_empty", "patch_oversized", "patch_binary", "patch_malformed", "patch_rename", "patch_delete",
            "patch_mode", "patch_symlink", "patch_path_escape", "patch_outside_allowlist", "patch_does_not_apply",
            "diff_cap", "budget_time", "budget_turns", "budget_tokens", "engine_error", "engine_dry_run",
-           "packet_empty")
+           "packet_empty", "usage_malformed")
+# What a report may say about an engine's answer: closed codes and bounded integers, never its text.
+USAGE_MAX = 10**9                                   # a count above this is not a count
+USAGE_CODES = ("reported", "unreported", "usage_malformed")
+ENGINE_NAMES = ("fake", "dryrun-codex", "dryrun-claude", "codex", "claude", "flue_executor")
+WOULD_RUN_STEPS = ("materialize", "init", "engine", "collect")   # the dry-run adapter's own step names
+WOULD_RUN_MAX = 8
 
 _SECRET = [
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)),
@@ -134,6 +140,43 @@ class Proposal:
     patch: str = ""
     usage: Usage = field(default_factory=Usage)
     would_run: list | None = None   # dry-run adapters only: the argv lists, nothing executed
+
+
+# --- what an engine said, reduced to closed codes before anything keeps it ----------------------
+
+def clean_count(v):
+    """(int | None, ok). None = not reported (fine). A bool, a float, a string, a negative or an absurd
+    number is NOT a count: (None, False). The value itself is never kept or echoed."""
+    if v is None:
+        return None, True
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= USAGE_MAX:
+        return None, False
+    return v, True
+
+
+def clean_usage(usage) -> tuple:
+    """(turns, tokens, code) from whatever the engine returned as `usage`."""
+    turns, ok_t = clean_count(getattr(usage, "turns", None))
+    tokens, ok_k = clean_count(getattr(usage, "tokens", None))
+    if not (ok_t and ok_k):
+        return None, None, "usage_malformed"
+    return turns, tokens, "reported" if (turns, tokens) != (None, None) else "unreported"
+
+
+def clean_would_run(would_run) -> list:
+    """The KIND of each step a dry-run adapter says it would run, by the fixed step names; anything
+    else is 'other'. Never an argv, a path or a prompt."""
+    if would_run is None:
+        return []
+    if not isinstance(would_run, (list, tuple)):
+        return ["other"]
+    return [s["step"] if isinstance(s, dict) and s.get("step") in WOULD_RUN_STEPS else "other"
+            for s in would_run[:WOULD_RUN_MAX]]
+
+
+def engine_code(name) -> str:
+    """The engine's name if it is one of ours, else 'other': a name is engine-supplied text."""
+    return name if isinstance(name, str) and name in ENGINE_NAMES else "other"
 
 
 # --- the packet -------------------------------------------------------------------------------
@@ -396,34 +439,38 @@ def _call(proposer, packet: FaultPacket, seconds: int) -> Proposal:
     if t.is_alive():
         raise Refused("budget_time", "")
     if "out" not in box or not isinstance(box["out"], Proposal):
-        raise Refused("engine_error", box.get("err", "bad_return"))
+        raise Refused("engine_error", "raised" if "err" in box else "bad_return")   # never the engine's class name
     return box["out"]
 
 
 class ProposerEngine:
     """Bridges a proposer into the runner's engine seam (`run(ticket, worktree)`): packet -> propose ->
-    budgets -> patch check -> apply. `last` holds the reason and the reported usage (numbers only)."""
+    budgets -> patch check -> apply. `last` holds ONLY validated values: a reason, usage as bounded
+    integers plus a code, the would-run step KINDS, a file count. Engine output is reduced BEFORE it
+    is stored, so a refused answer cannot leave its text on `last`, in a report or in a log."""
 
     def __init__(self, cfg: Config, proposer):
-        self.cfg, self.proposer, self.name = cfg, proposer, proposer.name
+        self.cfg, self.proposer, self.name = cfg, proposer, engine_code(getattr(proposer, "name", None))
         self.attempt, self.last_refusal, self.last = 1, "", {}
 
     def run(self, ticket, wt: str) -> EngineResult:
         t0 = time.monotonic()
-        self.last = {"reason": "", "turns": None, "tokens": None, "would_run": None, "files": []}
+        self.last = {"reason": "", "turns": None, "tokens": None, "usage": "unreported", "would_run": [], "files": 0}
         try:
             packet = build_packet(self.cfg, ticket, wt, attempt=self.attempt, last_refusal=self.last_refusal)
             if not packet.allow_edit:
                 raise Refused("packet_empty", "")
             got = _call(self.proposer, packet, packet.budget["seconds"])
-            self.last.update(turns=got.usage.turns, tokens=got.usage.tokens, would_run=got.would_run)
+            turns, tokens, code = clean_usage(getattr(got, "usage", None))
+            self.last.update(turns=turns, tokens=tokens, usage=code, would_run=clean_would_run(got.would_run))
             if got.would_run is not None:
                 raise Refused("engine_dry_run", "")
-            for name in ("turns", "tokens"):
-                v = getattr(got.usage, name)
-                if v is not None and (not isinstance(v, int) or v > packet.budget[name]):
+            if code == "usage_malformed":
+                raise Refused("usage_malformed", "")
+            for name, v in (("turns", turns), ("tokens", tokens)):
+                if v is not None and v > packet.budget[name]:
                     raise Refused(f"budget_{name}", "")
-            self.last["files"] = check_patch(got.patch, packet, self.cfg)
+            self.last["files"] = len(check_patch(got.patch, packet, self.cfg))
             apply_patch(wt, got.patch)
         except Refused as e:
             self.last["reason"] = e.rule

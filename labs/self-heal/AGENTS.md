@@ -29,6 +29,11 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
 - Every step checks the kill switch first and appends a row to `<state_dir>/audit.jsonl` (allow-listed
   keys, single-token values). Before the engine, gates, landing, push, PR call and each pending verify item the run re-checks
   kill switch, quiet hours, voice lander and night_busy.
+- A loop REPORT (`selfheal/loop.py` `SCHEMA` / `check_report`, run on every result, fail closed) holds only numbers,
+  bools, ids and members of closed sets: reason / outcome / gate / usage / step-kind codes, an engine name from
+  `proposer.ENGINE_NAMES` (else `other`), a 64-hex proof. Engine output (usage, would-run steps, name, error class)
+  is reduced to those BEFORE it is stored (`proposer.clean_*`, `ProposerEngine.last`); a command line, a path
+  or any engine / packet / patch text is never written to a report, and a new report field needs a schema entry.
 - Engines are tried in order `[engine, *engine_fallbacks]`; the first available runs. `flue_executor`
   (Multica + Flue executor + Omnigent, the plan of record) reports its blockers until they are lifted;
   `codex` / `claude` are thin CLI fallbacks whose flags come from the CLI's own `--help`. No engine

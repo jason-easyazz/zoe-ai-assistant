@@ -40,6 +40,7 @@ def test_the_complete_loop_heals_and_reports_the_measures(local_scratch, fault):
     assert res["fault_to_verified_fix_s"] > 0 and res["ledger"] == {"chain_ok": True, "entries": 1}
     assert len(res["proof"]) == 64 and res["proof"] == ledger(cfg)[0]["proof"] and res["shape"] == "sold_unit"
     assert res["would_run"] == [] and res["rounds"][0]["tokens"] == 1200 and res["rounds"][0]["turns"] == 3
+    assert res["rounds"][0]["usage"] == "reported" and res["engine"] == "fake"
     assert gitops.git(cfg.repo, "show", "main:calc.py") + "\n" == FIXED
     json.dumps(res)   # the lab result is plain JSON
 
@@ -92,7 +93,7 @@ def test_this_unit_result_carries_the_printed_pr_commands(local_scratch, fault):
     cfg.dispatch = "full"
     res, _ = loop(cfg, fault, "good", shape=ThisUnit())
     assert res["healed"] and res["shape"] == "this_unit"
-    assert [c[:2] for c in res["would_run"]] == [["git", "push"], ["gh", "pr"]]
+    assert res["would_run"] == ["git_push", "gh_pr_create_draft"]   # the KINDS of step; never the command line
 
 
 @needs_bwrap
@@ -101,7 +102,7 @@ def test_a_dry_run_engine_goes_through_the_loop_and_lands_nothing(local_scratch,
     before = main(cfg)
     res = HealLoop(cfg, DryRunProposer(cfg, "codex"), now=lambda: NOON).run(fault)
     assert not res["healed"] and res["refusals_by_reason"] == {"engine_dry_run": 1} and res["attempts"] == 1
-    assert res["rounds"][0]["would_run"][2]["step"] == "engine" and main(cfg) == before and ledger(cfg) == []
+    assert res["rounds"][0]["would_run"] == ["materialize", "init", "engine", "collect"] and main(cfg) == before and ledger(cfg) == []
 
 
 @pytest.mark.parametrize("out,reason", [
