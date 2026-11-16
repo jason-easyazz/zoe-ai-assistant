@@ -139,3 +139,44 @@ def test_zoe_data_executor_uses_the_same_routing():
     assert fn.search(src).group(0) == fn.search(auth).group(0)
     assert '"docker", "exec"' not in src.replace('return ["docker", "exec"]', "")
     assert src.count("*_docker_exec_prefix()") == 2
+
+
+def _exec_lines(script):
+    """Every code line that runs something in the container (comments dropped)."""
+    out = []
+    for ln in script.read_text().splitlines():
+        if ln.lstrip().startswith("#"):
+            continue
+        ln = ln.split(" #", 1)[0]
+        if EXEC_TOKEN in ln:
+            out.append(ln)
+    return out
+
+
+EXEC_TOKEN = "$" + "{OMNI_EXEC[@]}"
+PIPE = chr(124)
+
+
+def test_no_caller_text_ever_reaches_an_exec_argv():
+    """Once installed, the helper runs as sudo -n HELPER ARGV, and sudo logs every ARGV. The polly brief carries the
+    caller's contract, so it must cross on STDIN, never as an argument (raw, quoted or base64)."""
+    lines = _exec_lines(POLLY)
+    assert len(lines) >= 3, "too few exec lines found: the scan itself is broken"
+    for ln in lines:
+        argv = ln.split(PIPE)[-1]          # after the last pipe is the exec; what is piped in is stdin
+        for name in ("$CONTRACT", "BRIEF_B64", "base64"):
+            assert name not in argv, ln
+        assert "$BRIEF" not in argv.replace("$BRIEF_FILE", "").replace("BRIEF_FILE:-", ""), ln
+    staged = [ln for ln in lines if ln.lstrip().startswith('printf %s "$BRIEF" ' + PIPE) and " -i " in ln]
+    assert staged, "the brief is not staged on stdin"
+    for ln in _exec_lines(CROSS):          # the codex/pi prompt goes on stdin, never in argv
+        assert "$CONTRACT" not in ln, ln
+
+
+def test_the_kick_reads_and_deletes_the_staged_brief():
+    text = POLLY.read_text()
+    kick = [ln for ln in text.splitlines() if "omnigent run --server" in ln and EXEC_TOKEN in ln]
+    assert len(kick) == 1
+    assert "cat $BRIEF_FILE) && rm -f $BRIEF_FILE && omnigent run" in kick[0], kick[0]
+    body = text.split("cleanup() {", 1)[1].split("\ntrap ", 1)[0]
+    assert 'sh -c "rm -f $BRIEF_FILE"' in body, "cleanup must remove a staged brief whose kick never ran"

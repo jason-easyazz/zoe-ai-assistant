@@ -537,7 +537,7 @@ def test_no_script_uses_the_live_checkout_as_a_review_cwd():
         assert "cd /workspace" not in code, f"{p.name} starts a reviewer in the live checkout"
         assert "-C /workspace" not in code and "-C /home/zoe/assistant" not in code, p.name
     polly = _POLLY.read_text()
-    assert re.search(r'sh -c "cd \$KICK_CWD && omnigent run', polly), "the kick cwd must be the review dir"
+    assert re.search(r'sh -c "cd \$KICK_CWD && B=.+? && rm -f \S+ && omnigent run', polly), "the kick cwd must be the review dir"
     brief = re.search(r'^BRIEF="(.*)"$', polly, re.M).group(1)
     assert "NEVER run git checkout, switch, reset, fetch or commit" in brief
     assert "/workspace or /home/zoe/assistant" in brief

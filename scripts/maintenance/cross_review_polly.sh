@@ -321,6 +321,8 @@ cleanup() {
   # entirely).
   s=$(stop_session)
   echo "cleanup: session stop: $s (session $SID)" >&2
+  # a brief staged for a kick that never ran must not outlive the review
+  [ -n "${BRIEF_FILE:-}" ] && timeout -k "$TIMEOUT_KILL_AFTER_S" 30 "${OMNI_EXEC[@]}" "$CONTAINER" sh -c "rm -f $BRIEF_FILE" >/dev/null 2>&1
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2
@@ -331,13 +333,19 @@ trap cleanup EXIT
 # the lock held (Codex, #1578) — clean up, then actually exit.
 trap 'cleanup; exit 130' INT TERM
 
-BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
+# The brief (it carries the caller's $CONTRACT) NEVER rides in an argv: once the P0-2 helper is installed the exec
+# runs as `sudo -n <helper> ...`, and sudo writes every command line to the auth log. It is staged on STDIN into a
+# container-private 0600 file, read back by the kick and deleted before omnigent starts (and by cleanup if the kick
+# never ran). Pinned by tests/unit/test_omnigent_exec_routing.py.
+BRIEF_FILE="/tmp/zoe-cross-review-brief-$SID"
+printf %s "$BRIEF" | timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" "${OMNI_EXEC[@]}" -i "$CONTAINER" sh -c "umask 077 && cat > $BRIEF_FILE" \
+  || { echo "ALARM: could not stage the brief in the container" >&2; exit 2; }
 # `docker exec -d` returns as soon as the container accepts the exec, but that
 # is still an unbounded RPC to the daemon — bound it so the BUDGET arithmetic
 # above holds end to end (Codex, #1618).
 # The kick's cwd is the per-review dir (or `/`), NEVER the live checkout: the omnigent CLI
 # puts its cwd on sys.path, so it is also deliberately not the PR checkout itself.
-timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" "${OMNI_EXEC[@]}" -d "$CONTAINER" sh -c "cd $KICK_CWD && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
+timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" "${OMNI_EXEC[@]}" -d "$CONTAINER" sh -c "cd $KICK_CWD && B=\$(cat $BRIEF_FILE) && rm -f $BRIEF_FILE && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$B\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
 # Poll. The loop lives in cross_review_poll.py so that every response body is
