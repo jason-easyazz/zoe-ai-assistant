@@ -220,6 +220,57 @@ fields; the lab's undo-snapshot scrubbing gets simpler. [inferred] About one pac
 **Stopping the drift:** a test in the kernel suite asserts that no kernel table has a column that holds free text other than
 fingerprints (a schema allowlist), and the size and dependency budget (E.5).
 
+### A.7 The kernel knows people, care and sharing; "household" is a setting
+
+**Decision (owner, 2026-11-16, after a code audit and a prior-art study):** the charter's rule stands, and the kernel is neither
+left household-shaped nor turned into a general policy engine. It takes the middle path the evidence supports.
+
+**What the kernel knows, as fixed kinds with fixed meaning:**
+
+| Kind | What it is | Replaces |
+|---|---|---|
+| Principal | a person or a device, with an id | member, guest, "the household at the panel" |
+| Attributes of a principal | plain flags the settings supply: decides for themselves or needs a co-signer; may read shared things; may grant; counts toward "someone always keeps full control"; expires at | the roles adult / child / guest, compared by name in code today |
+| Care link | one principal acts for another: a typed edge with a stated set of actions, an optional expiry, and who may withdraw it (always including the person cared for, where they decide for themselves) | `guardians`, valid today only when the other person is a child |
+| Scope | private to one principal, shared with a named group, or the kernel's own | the stored visibility value `household`, reminder `family` |
+| Grant | a principal's yes to a skill, narrowed, with a parent and an expiry | today's grant, which has neither parent nor expiry |
+
+**What stays in code, because a mistake here must be impossible to configure:**
+
+1. A "no" beats a "yes"; an unknown principal, attribute or scope gets the least access. (Today an unlabelled person defaults
+   to a full adult, [code] `zoe_os/capability.py:30`; that is fixed with this.)
+2. A care link's organising actions never include forgetting, undoing or explaining someone's data. Acting on those for another
+   person is a separate, narrower permission, offered today only for a principal who needs a co-signer (H3), and the settings
+   loader refuses any file that gives it over a principal who decides for themselves.
+3. An item marked private shuts out every care link.
+4. At least one principal who decides for themselves and may grant always exists; the last one cannot be removed or narrowed.
+5. A grant never exceeds its parent, and withdrawing a parent withdraws its children.
+
+**What moves out of the kernel:** the words `household`, `family`, `child`, `adult`, `guest`, `shopping`, the kinship word list
+and the default list name. They live in one settings file (the household pack) that ships in the repository, is loaded at start,
+and is checked against rules 1 to 5 before the kernel will serve. It is data with executable tests (allow and deny cases run in
+CI), not a policy language: no conditions, no loops, no expressions. A different kind of buyer gets a different file.
+
+**Why this and not the alternatives** (sources in `Sources` below and in the recommendation the owner read):
+
+- The owner's carer rule (a carer organises reminders, alarms, lists, routines and calendar for a child or an adult in care,
+  unless the item is private) cannot be expressed by the household model: every guardian path goes through one child-only check
+  ([code] `zoe_os/capability.py:34-37`), and the reminders branch adds adults in care for reminders alone
+  ([code] `zoe_os/reminder_rows.py:59-64`). Each further verb would repeat that.
+- Consumer products that fixed parent, child and organiser roles in their core are the ones with documented trouble serving
+  shared custody, adult carers and larger adult households; systems that must handle carers model a named delegate, a subject,
+  a scope and a lifetime.
+- Fully general permission engines need their own test and analysis tooling to be trusted, integrator-written policy is
+  measured to drift looser, and their users still keep lock-out rules in code. A general engine with no product rules on top
+  shipped nothing usable in the one home system that tried it.
+- The audit found no rule that needs the kernel to know what a household is: 39 rule lines in the core and 16 in the two
+  daemons branch on a household idea, plus 12 added by reminders; none is irreducible. [inferred] sizing: 300 to 450 changed
+  lines, a settings module of 150 to 300 lines, and the tests that build a household fixture re-pointed. The kernel has no
+  stored data on the box, so nothing is converted.
+
+**Timing.** After the lab stack in review lands, as the next kernel package, and before B.2's move. Every verb added before it
+adds rules to unpick, so alarms, routines and calendar are built on the care link, not on a guardian-of-a-child check.
+
 ---
 
 ## B. Where it lives
@@ -252,16 +303,11 @@ the folder from one place. Then:
    lab app stay in `labs/zoe-os/` and use the service package through its socket or its public module.
 2. The setting changes in the same commit. Shadow may start from `labs/` if it is ready first; **authority may not** (Phase 3
    requires the move).
-3. **Prerequisite, before the move: the charter is amended.** Section 6 of `docs/governance/ZOE_DESIGN_PRINCIPLES.md` is the
-   normative rule ("no `home` / `family` / `household` concepts baked into the kernel"), and it says a design that conflicts with
-   it needs an explicit amendment. Editing `services/AGENTS.md` alone would leave Zoe OS allowed by its local contract and
-   forbidden by the charter. So an amendment PR comes first, following the charter's own Amendment process: it edits section 6
-   (the rule keeps binding the main service's router, memory schema, auth and tool signatures; Zoe OS is named as the one place
-   that models the household on purpose, because the household's hard rules are its whole job), updates the enforceable mirrors
-   (`.cursor/rules/*.mdc` and the legacy `.cursorrules`), and states the amended section and the reason in its commit message.
-   The charter is the owner's document, so that PR needs his agreement; until it has merged, the kernel stays in `labs/` and
-   takes no authority.
-4. Only then is `services/AGENTS.md`'s matching rule scoped the same way, in the commit that moves the kernel (step 1).
+3. **The charter is not amended; the kernel is made to fit it** (owner decision 2026-11-16, section A.7). Section 6 of
+   `docs/governance/ZOE_DESIGN_PRINCIPLES.md` says no `home` / `family` / `household` concepts are baked into the kernel, and
+   `services/AGENTS.md` repeats it. Neither file changes and Zoe OS gets no exception. So the prerequisite for the move is A.7's
+   rework (package G-generic in section G): until the kernel's code speaks only of people, care and sharing, it stays in `labs/`
+   and takes no authority.
 
 ### B.3 Runtime identity: its own system user, in two steps
 
@@ -674,6 +720,11 @@ kernel.
     `describe`. The lab bridge stays as the schema test harness.
 11. **Add cause classes and the untrusted-text rule** (C.5) to the proposal format before the first authority flag; add the
     outbound-on-a-marked-turn refusal with web lookup.
+12. **Add package G-generic (A.7), before WP-03's move:** principal attributes, the care link, scopes and grant parents with
+    expiry replace role names in kernel code; the five rules of A.7 are pinned by tests; the household pack and its allow/deny
+    cases ship with it; the wire and record vocabulary (`household` visibility, the `guardian` argument, `erase_member`, the
+    `shopping` default) is renamed while there is still no stored data. The main service's roster writer is where a household's
+    members, children and carers are translated into attributes and care links.
 12. **Add decision replay** (E.3 step 2) to the kernel's upgrade checklist, and the machine-readable "owns" table with its seam test
     (E.4).
 13. **Phase 5 order gains two entries:** web lookup's grant goes in when web lookup ships (it is new, so it is built on the kernel
@@ -707,10 +758,11 @@ Recommendation: **door locks, garage doors, the security alarm, and anything tha
 media and fans act on the request and keep working. Cost: one extra "yes" for the listed devices; benefit: a web page, a message or
 a misheard phrase can never unlock the door.
 
-**H3. Should a guardian be able to read a child's private things, or only manage them?**
-Recommendation: **a guardian can see and manage a child's reminders, alarms and lists, but not their private notes or journal**;
-guardians can always change the child's permissions and forget things for them. Cost: a parent cannot read a child's journal
-through Zoe. The alternative, full read access, is simpler but means a child has nothing private on Zoe.
+**H3. What may a guardian do? DECIDED (owner, 2026-11-16).** A guardian is a carer, for a child **or an adult in care**: they
+can see and manage that person's reminders, alarms, lists, routines and calendar, unless an item is marked private. They do not
+read private notes or a journal. In the kernel this is the care link of A.7, not a parent-of-a-child rule. **Still open:**
+whether anyone may forget things on another person's behalf. The lab allows it for a child's guardian only, and A.7's rule 2
+keeps it impossible over an adult; say if a child's guardian should lose it too.
 
 **H4. Should changes to the rule-keeper's own code need your approval, even when the reviews are clean?**
 Recommendation: **yes, a one-tap approval** for changes to the kernel's code, its "what it owns" table or its budgets; everything
