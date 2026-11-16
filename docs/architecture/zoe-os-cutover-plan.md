@@ -98,7 +98,11 @@ Waiting two weeks for enough real traffic is slow. Compress it:
   5. a drift report comparing kernel state with the list tables;
   6. the service unit with memory limits that can never pressure the voice stack, a health check, and the kernel's database in the
      nightly backup;
-  7. Phase 2's pass mark for list add; a voice replay.
+  7. Phase 2's pass mark for list add; a voice replay;
+  8. **the child floor, as a prerequisite and not a later upgrade:** until the guardian model exists (owner decision D7, Phase 4),
+     a child's list add is never decided by the kernel. It answers `fallback_child` and the existing production path, with
+     today's child rules, handles it (implementation map G5 and WP-22). Authority is not switched on for anyone until a test
+     proves this for every member marked as a child.
 - **Proof it worked:** a week of real use with zero drift, zero stalled turns, fallbacks counted and each one explained, list-add
   speed on a voice turn no worse than before (replay-gated), and "why did you add that?" and "undo that" answered from receipts.
 - **Rollback:** the authority flag to `off`. The old path never stopped existing.
