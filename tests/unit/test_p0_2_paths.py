@@ -329,3 +329,12 @@ def test_a_copy_that_fails_midway_is_never_published_and_the_retry_completes(box
     again = tool("apply", str(man), *common, "--only", "conf", "--container-stopped")
     assert again.returncode == 0, again.stderr
     assert (root / "srv/zoe/conf/app.conf").read_text() == big
+
+
+def test_a_stamp_already_in_the_source_is_refused_every_time_never_taken_as_done(box):
+    root, man, common = box
+    (root / "home/zoe/app/.p0-2-moved").write_text("")
+    for _ in range(2):   # the retry must refuse too, not trust a copied stamp
+        a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
+        assert a.returncode != 0 and "already contains" in a.stderr, a.stderr
+    assert not (root / "srv/zoe/app").exists()

@@ -34,6 +34,7 @@ import grp
 import json
 import os
 import pwd
+import shutil
 import stat
 import sys
 import time
@@ -187,16 +188,16 @@ def copy_tree_pinned(src_fd, dst):
                 os.symlink(os.readlink(n, dir_fd=dirfd), target)
             elif stat.S_ISDIR(st.st_mode):
                 os.mkdir(target, 0o700)
-                os.chmod(target, stat.S_IMODE(st.st_mode))
+                os.chmod(target, stat.S_IMODE(st.st_mode) & ~0o022)   # never group/world writable, even briefly
             elif stat.S_ISREG(st.st_mode):
                 fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dirfd)
                 try:
                     if not stat.S_ISREG(os.fstat(fd).st_mode):
                         raise RuntimeError(f"{target}: changed type during the copy; refusing")
-                    _copy_fd(fd, target, stat.S_IMODE(st.st_mode))
+                    _copy_fd(fd, target, stat.S_IMODE(st.st_mode) & ~0o022)
                 finally:
                     os.close(fd)
-    os.chmod(dst, stat.S_IMODE(os.fstat(src_fd).st_mode))
+    os.chmod(dst, stat.S_IMODE(os.fstat(src_fd).st_mode) & ~0o022)
 
 
 def apply_item(it, root, state):
@@ -229,6 +230,12 @@ def apply_item(it, root, state):
             if os.path.isdir(old):
                 src = open_nofollow(old, directory=True)  # pinned: a swap after the check above cannot redirect it
                 try:
+                    try:
+                        os.lstat(STAMP, dir_fd=src)
+                        raise RuntimeError(f"{old} already contains {STAMP}: refusing before copying (a planted "
+                                           f"stamp, or a source that was itself a moved tree); inspect it by hand")
+                    except FileNotFoundError:
+                        pass
                     copy_tree_pinned(src, new)            # a planted symlink is copied as a link, never followed
                 finally:
                     os.close(src)
@@ -237,9 +244,10 @@ def apply_item(it, root, state):
             else:
                 os.makedirs(new, exist_ok=True)       # an absent source is a first initialisation: an empty dir
             stamp = os.path.join(new, STAMP)
-            if os.path.lexists(stamp):   # planted by the service user (a link to a host file, say), or a moved tree
-                raise RuntimeError(f"{old} already contains {STAMP}: refusing (a planted stamp, or a source that "
-                                   f"was itself a moved tree); inspect it by hand")
+            if os.path.lexists(stamp):   # planted DURING the copy: remove the half-made tree so a retry starts clean
+                shutil.rmtree(new)       # never follows links (fd-based on Linux); this run created new
+                raise RuntimeError(f"{old} gained {STAMP} during the copy: refusing and removing the partial copy; "
+                                   f"inspect it by hand")
             chown_tree(new, uid, gid)    # harden FIRST: the stamp means "done", so it is written only after this
             # Created EXCLUSIVELY and never through a link.
             os.close(os.open(stamp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
@@ -254,7 +262,7 @@ def apply_item(it, root, state):
                     raise RuntimeError(f"{old} is not a regular file; nothing to copy")
                 if os.path.lexists(partial):
                     os.unlink(partial)
-                _copy_fd(src, partial, stat.S_IMODE(os.fstat(src).st_mode))
+                _copy_fd(src, partial, 0o600)   # private until apply installs the manifest mode on the final file
                 os.replace(partial, new)
             finally:
                 os.close(src)
