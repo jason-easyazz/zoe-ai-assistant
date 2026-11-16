@@ -180,6 +180,65 @@ def test_capture_only_when_dir_is_set(client, monkeypatch, tmp_path):
     assert (cap / names[0]).read_text() == "hello\n"
 
 
+def _erase_ready(monkeypatch, tmp_path):
+    """Capture on, extra forget reach on, only the extra stores in play (synthetic tmp stores)."""
+    import local_text_logs as ltl
+    import recall_gate_trace
+
+    cap = tmp_path / "tg-corpus"
+    monkeypatch.setenv("ZOE_TELEGRAM_STT_CAPTURE_DIR", str(cap))
+    monkeypatch.setenv("ZOE_VOICE_STT_LOG", str(tmp_path / "voice_stt.jsonl"))
+    monkeypatch.setenv("ZOE_FORGET_REACH_EXTRA", "on")
+    monkeypatch.setattr(ltl, "LOGS", ())
+    monkeypatch.setattr(recall_gate_trace, "erase_entity", lambda rx: 0)
+    monkeypatch.setattr(recall_gate_trace, "erase_all", lambda: 0)
+    monkeypatch.setattr(tm, "_run_ffmpeg", _fake_ffmpeg([], write_seconds=1.0))
+    return ltl, cap
+
+
+def test_capture_dropped_when_erase_lands_during_stt(client, monkeypatch, tmp_path):
+    import re
+
+    ltl, cap = _erase_ready(monkeypatch, tmp_path)
+
+    async def stt_with_erase(path):
+        ltl.erase_entity(re.compile("synthetic sentinel"))     # the forget completes while the note is transcribed
+        return "synthetic sentinel note"
+
+    monkeypatch.setattr(tm, "_transcribe_wav", stt_with_erase)
+    r = client.post("/api/system/telegram/transcribe", content=b"OggS", headers=TOKEN)
+    assert r.status_code == 200 and r.json()["text"] == "synthetic sentinel note"   # the reply itself is unchanged
+    assert not cap.exists() or not [p for p in cap.iterdir() if p.name.startswith("tg-")]
+
+
+def test_capture_pair_all_or_nothing_against_erase_mid_write(client, monkeypatch, tmp_path):
+    import shutil
+    import threading
+
+    ltl, cap = _erase_ready(monkeypatch, tmp_path)
+
+    async def fake_stt(path):
+        return "synthetic sentinel note"
+
+    monkeypatch.setattr(tm, "_transcribe_wav", fake_stt)
+    copy = shutil.copyfileobj
+    erased, eraser = [], []
+
+    def copy_then_erase(src, dst, *a, **kw):
+        copy(src, dst, *a, **kw)
+        # audio written, transcript not yet: a member erase starts on another thread
+        t = threading.Thread(target=lambda: erased.append(ltl.erase_all_text()))
+        t.start()
+        eraser.append(t)
+        t.join(timeout=1.0)     # a lock-less writer lets the erase finish here, then recreates the transcript
+
+    monkeypatch.setattr(shutil, "copyfileobj", copy_then_erase)
+    assert client.post("/api/system/telegram/transcribe", content=b"OggS", headers=TOKEN).status_code == 200
+    eraser[0].join(timeout=40)
+    assert not eraser[0].is_alive() and len(erased) == 1     # the erase reported success ...
+    assert not [p.name for p in cap.iterdir() if p.name.startswith("tg-")]   # ... and no member of the pair survives it
+
+
 # ─── synthesize ───────────────────────────────────────────────────────────────
 
 

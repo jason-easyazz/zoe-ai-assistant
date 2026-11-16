@@ -77,6 +77,8 @@ def test_each_case_matches_the_schema(case):
         assert set(case["expect"]["kind_decisions"]) <= {"add", "refuse", "hold_pending"}
     if "events" in case["expect"]:
         assert len(case["expect"]["events"]) == len(events)
+        # an entry is null (no event; stored as mined), {"unfiled": true} (nothing filed at all) or the event's expected shape
+        assert all(e is None or e == {"unfiled": True} or (isinstance(e, dict) and e.get("has")) for e in case["expect"]["events"])
     if "dropped_stale" in case["expect"]:
         assert len(case["expect"]["dropped_stale"]) == len(case["late_mined"])
     if case["class"] == "log":
