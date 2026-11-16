@@ -65,6 +65,12 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
   `MemoryService.delete_user`, fail closed, under the member's erase gate) deletes every routine the member is the subject of, with
   its steps, days and lines, and blanks the member as actor or creator on anyone else's; `routines_store.erase_entity` (the
   `routines` step of `memory_forget_cascade`) deletes a routine named for the entity and any line naming it.
+- **Forget wins every race.** Every write goes through ONE helper, `routines_store._guarded_write`: it names the write's subject,
+  its actor(s) and the text it carries; holds the erase gate of each member involved (sorted id order); inside one real transaction
+  with the per-member advisory locks the erasers also take, re-checks each member's erase mark (a write that began before a member
+  erase is refused, `erased`) and the entity shield (tombstone + the durable `memory_forgotten` ledger, exact words, fail closed: a
+  forgotten name is never written, `names_forgotten`). Both erasers take the same gate and lock. A structural test enumerates the
+  module's writers and fails on one that bypasses the helper. Reads apply no forgotten filter (nothing is left to hide).
 - **Logs**: `ROUTINE event=<created|step_added|one_off|prompted|ticked|skipped|snoozed|undo|missed|refused> kind= via= verified=
   member=<hash8> routine=<hash8>`; codes and counts only, never a step's words or a name (a test asserts it).
 
