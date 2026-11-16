@@ -293,12 +293,12 @@ def test_a_speaker_who_said_they_are_a_child_this_session_is_refused_whatever_th
     child_safety_floor._SESSIONS.clear()
 
 
-def test_a_child_floor_that_cannot_be_asked_lets_only_an_adult_through(monkeypatch):
+def test_a_child_floor_that_cannot_be_asked_refuses_everyone_even_an_adult_account(monkeypatch):
     import child_safety_floor
 
     monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: 1 / 0)
     assert pl.child_floor(HAZARD, CHILD) == "child_floor_error" and pl.child_floor(HAZARD, GUEST) == "child_floor_error"
-    assert pl.child_floor(HAZARD, ADULT) == ""
+    assert pl.child_floor(HAZARD, ADULT) == "child_floor_error"                  # fail closed: the account is not the speaker
 
 
 # ── what is judged is exactly what runs (review 2026-11-16, child safety) ────────────────────────────────────────────────────
@@ -542,3 +542,110 @@ def test_no_live_module_imports_the_plan_loop(tmp_path):
         (tmp_path / f"live_{i}.py").write_text(line + "\n")
     (tmp_path / "plan_loop_planner.py").write_text("import plan_loop\n")          # the loop's own file: allowed
     assert _plan_loop_importers(tmp_path) == [f"live_{i}.py" for i in range(5)]
+
+
+# ── the child floor fails CLOSED (review 2026-11-16 at the main-merge head) ──────────────────────────────────────────────────
+
+def _pending(**kw):
+    import child_safety_floor
+
+    base = dict(cls="fire", reply="ask a grown-up", declared=False, key=("member-a", "s1"), blind=False)
+    base.update(kw)
+    return child_safety_floor.Pending(**base)
+
+
+def _raises(*a, **k):
+    raise TimeoutError("lexicon lookup")
+
+
+class _NotPending:
+    declared, blind, cls = False, False, "fire"
+
+
+@pytest.mark.parametrize("outcome, code", [
+    (lambda *a, **k: _pending(blind=True), "child_floor_blind"),          # a declared child, then the detector failed
+    (_raises, "child_floor_error"),
+    (lambda *a, **k: _NotPending(), "child_floor_unknown"),
+    (lambda *a, **k: "safe", "child_floor_unknown"),
+    (lambda *a, **k: _pending(declared=None), "child_floor_unknown"),
+])
+def test_a_floor_that_cannot_tell_refuses_even_an_adult_account(monkeypatch, outcome, code):
+    import child_safety_floor
+
+    monkeypatch.setattr(child_safety_floor, "check", outcome)
+    assert pl.child_floor(HAZARD, ADULT, "s1") == code
+    result, tools = run(HAZARD_PLAN, utterance=HAZARD, session_id="s1")
+    assert result.refusal.reason == "safety_floor" and tools.calls == []
+
+
+def test_a_floor_that_takes_too_long_cannot_tell(monkeypatch):
+    import child_safety_floor
+
+    ticks = iter([0.0, pl.CHILD_FLOOR_BUDGET_S + 1.0])
+    monkeypatch.setattr(pl, "_floor_clock", lambda: next(ticks))
+    monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: None)
+    assert pl.child_floor(HAZARD, ADULT, "s1") == "child_floor_timeout"
+
+
+def test_floor_controls_a_declared_child_on_an_adult_account_is_refused_and_an_adult_is_allowed(monkeypatch):
+    import child_safety_floor
+
+    monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: _pending(declared=True))
+    assert pl.child_floor(HAZARD, ADULT, "s1") == "child"
+    monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: _pending())
+    assert pl.child_floor(HAZARD, ADULT, "s1") == "" and pl.child_floor(HAZARD, CHILD, "s1") == "child"
+    assert run(HAZARD_PLAN, utterance=HAZARD, session_id="s1")[0].status == "ran"
+    monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: None)
+    assert pl.child_floor(HAZARD, CHILD, "s1") == ""                          # no hazard asked: nothing for the floor
+
+
+def test_property_no_step_runs_unless_the_floor_explicitly_said_safe(monkeypatch):
+    import random
+
+    import child_safety_floor
+
+    rng = random.Random(1116)
+    outcomes = [("safe", lambda *a, **k: None), ("hazard", lambda *a, **k: _pending()),
+                ("declared", lambda *a, **k: _pending(declared=True)), ("blind", lambda *a, **k: _pending(blind=True)),
+                ("raised", _raises), ("odd", lambda *a, **k: object()), ("odd", lambda *a, **k: _pending(blind="no"))]
+    plans = [HAZARD_PLAN, [ADD, REMIND], [SHOW, pl.Step("calendar_create", {"title": "swim"}, "swim")]]
+    for _ in range(120):
+        name, outcome = rng.choice(outcomes)
+        speaker = rng.choice([ADULT, CHILD, GUEST, pl.Speaker("member-a", "adult", verified=False)])
+        monkeypatch.setattr(child_safety_floor, "check", outcome)
+        result, tools = run(rng.choice(plans), speaker=speaker, utterance=HAZARD, tools=Tools(user=speaker.user_id))
+        if tools.calls:
+            assert name == "safe" or (name == "hazard" and speaker is ADULT)
+
+
+# ── an executor error is one step's error; a cancelled plan stops its tool ──────────────────────────────────────────────────
+
+def test_a_non_numeric_status_code_is_an_ordinary_error_for_that_step():
+    class Odd(Exception):
+        status_code = "UNKNOWN"
+
+    async def tools(step):
+        if step.tool == "list_add":
+            raise Odd()
+        return await Tools()(step)
+    result, _ = run([ADD, REMIND], tools=tools)
+    assert codes(result) == [("list_add", "uncertain", "error_after_send"), ("reminder_create", "done", "receipt")]
+
+
+def test_a_cancelled_plan_cancels_its_tool_and_the_tool_never_writes():
+    wrote = []
+
+    async def slow(step):
+        await asyncio.sleep(0.2)
+        wrote.append(step.tool)
+        return {"ok": True, "result": "ok"}
+
+    async def go():
+        task = asyncio.ensure_future(pl.run([ADD], ADULT, utterance="x", execute=slow, floors=NO_FLOOR, step_timeout_s=5))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.4)
+    asyncio.run(go())
+    assert wrote == []

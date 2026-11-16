@@ -265,22 +265,45 @@ def safety_floor(utterance: str) -> str:
         return "floor_error"
 
 
+#: a child floor check slower than this cannot be trusted to have run: it is treated as "cannot tell"
+CHILD_FLOOR_BUDGET_S = 1.0
+_floor_clock = time.monotonic
+#: what ``child_floor`` returns ("" = the floor explicitly said this turn is safe for this speaker); anything else refuses the plan
+CHILD_FLOOR_CODES = ("", "child", "child_floor_blind", "child_floor_error", "child_floor_timeout", "child_floor_unknown")
+
+
 def child_floor(utterance: str, speaker: "Speaker", session_id: str = "") -> str:
-    """"child" when the child safety floor would answer this turn ("" = it would not). Asked READ-ONLY (``dry``: it records no
-    age statement here; ``brain_dispatch`` does that on the real turn). A hazard request passes only for a speaker who is
-    positively an adult and has not said in this session that they are a child; a floor that cannot be asked refuses the same
-    way (fail safe). Refusing here only hands the turn back, where the floor itself answers."""
+    """"" only when the child safety floor EXPLICITLY clears this turn for this speaker; otherwise a code from
+    ``CHILD_FLOOR_CODES``. Asked READ-ONLY (``dry``: it records no age statement here; ``brain_dispatch`` does that on the real
+    turn). Explicitly safe = ``check`` returned None (no hazard ask), or a well-formed, NOT blind ``Pending`` that is not
+    declared, for a speaker who is positively an adult. FAIL CLOSED, whatever the account says: a blind result (the floor's own
+    detection failed: it cannot see a child declared earlier in the session), a raise, a check slower than
+    ``CHILD_FLOOR_BUDGET_S``, or any unexpected return refuses the WHOLE plan. Refusing only hands the turn back to the ordinary
+    single-turn path, where the floor itself answers."""
     adult = effective_role(speaker) in ("owner", "adult")
+    began = _floor_clock()
     try:
         import child_safety_floor
 
         pending = child_safety_floor.check(utterance, session_id, speaker.user_id, dry=True)
-        if pending is None:
-            return ""
-        return "child" if pending.declared or not adult else ""
+        slow = _floor_clock() - began > CHILD_FLOOR_BUDGET_S
+        if slow:
+            code = "child_floor_timeout"
+        elif pending is None:
+            code = ""
+        elif type(pending) is not child_safety_floor.Pending or not isinstance(pending.blind, bool) \
+                or not isinstance(pending.declared, bool):
+            code = "child_floor_unknown"
+        elif pending.blind:
+            code = "child_floor_blind"
+        else:
+            code = "child" if pending.declared or not adult else ""
     except Exception as exc:  # noqa: BLE001
         logger.warning("PLAN_LOOP child floor check failed (%s)", _err(exc))
-        return "" if adult else "child_floor_error"
+        code = "child_floor_error"
+    if code not in ("", "child"):
+        logger.warning("PLAN_LOOP child floor cannot tell code=%s: refusing the plan", code)
+    return code
 
 
 def effective_role(speaker: Speaker) -> str:
@@ -368,12 +391,31 @@ async def _bounded(aw, timeout_s: float):
     """Await for at most ``timeout_s``. On expiry the task is cancelled and NOT awaited, so a tool that swallows cancellation
     cannot hold the loop past its budget."""
     task = asyncio.ensure_future(aw)
-    done, _ = await asyncio.wait({task}, timeout=max(timeout_s, 0.001))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(timeout_s, 0.001))
+    except BaseException:                      # the CALLER was cancelled mid-wait: the tool must not go on to write
+        task.cancel()
+        task.add_done_callback(_consume)
+        raise
     if not done:
         task.cancel()
-        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        task.add_done_callback(_consume)
         raise asyncio.TimeoutError
     return task.result()
+
+
+def _consume(task: "asyncio.Future") -> None:
+    """Retrieve a cancelled tool task's outcome so it is never reported as an unretrieved exception."""
+    if not task.cancelled():
+        task.exception()
+
+
+def _status_code(exc: BaseException) -> int:
+    """An executor exception's HTTP-style status, 0 when it has none or it is not a number (never raises)."""
+    try:
+        return int(getattr(exc, "status_code", 0) or 0)
+    except Exception:  # noqa: BLE001 - "UNKNOWN", None-like objects, a raising property: an ordinary error for this step
+        return 0
 
 
 def proof(user_id: str, turn: "write_receipts.TurnStart", kind: str) -> Optional[Receipt]:
@@ -408,7 +450,7 @@ async def _run_step(step: Step, action_class: str, kind: str, speaker: Speaker, 
     except StepRejected:
         raised = "rejected"
     except Exception as exc:  # noqa: BLE001
-        raised = "rejected" if 400 <= int(getattr(exc, "status_code", 0) or 0) < 500 else "error"
+        raised = "rejected" if 400 <= _status_code(exc) < 500 else "error"
         logger.info("PLAN_LOOP step raised tool=%s (%s)", step.tool, _err(exc))   # a judged step: a registered tool
 
     def out(status: str, code: str, receipt: Optional[Receipt] = None, result_text: str = "") -> StepOutcome:
