@@ -41,10 +41,10 @@ from pathlib import Path
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
-from shadow_daemon import (ACTS, ADAPTERS, SHADOW_BRAIN, read_roster, recorded_people, serve, state_dir,  # noqa: E402
+from shadow_daemon import (ACTS, ADAPTERS, SHADOW_BRAIN, read_roster, recorded_people, roster_people, serve, state_dir,  # noqa: E402
                            write_creds, write_identity)
 from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists, Reminders  # noqa: E402
-from zoe_os.capability import Person  # noqa: E402
+from zoe_os.capability import CHILD, ConsentError, Person  # noqa: E402
 from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
@@ -244,7 +244,7 @@ class AuthorityServer(KernelServer):
         if person in people:
             return True
         if self._held(person):
-            people[person] = Person(person)
+            people[person] = Person(person)         # re-admitted for forget only: LEAST access (no role stated), never adult
             return True
         return False
 
@@ -543,11 +543,13 @@ def db_path(state: Path, db: str | None) -> Path:
 
 
 def build(state: Path, db: str | None = None):
-    people, roster_status = read_roster(state, "authority")      # the one rule, shared with the shadow daemon
+    entries, roster_status = read_roster(state, "authority")     # the one rule, shared with the shadow daemon
+    members = roster_people(entries)                             # roles as stated; anything unstated is LEAST access
+    people = [p.id for p in members]
     path = db_path(state, db)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # the roster PLUS every id the record still names: a member taken off people.json is still erased by id (never granted)
-    k = Kernel(str(path), [Person(p) for p in sorted(set(people) | recorded_people(path))])
+    k = Kernel(str(path), members + [Person(p) for p in sorted(recorded_people(path) - set(people))])     # extras: least
     k.spine._db.execute("INSERT OR REPLACE INTO meta VALUES ('authority_schema', ?)", (str(SCHEMA).encode(),))
     convert_legacy(k.spine)                        # receipts the shadow kernel wrote, into this kernel's lean snapshots: before any replay
     lists = DurableLists(k.spine).register(k)
@@ -557,9 +559,14 @@ def build(state: Path, db: str | None = None):
         k.grants.install(manifest)
     k.install(DurableKeeper(lists, reminders, alarms))
     no, gone = revoked(k, SHADOW_BRAIN["skill"]), erased_marks(k)
-    for person in people:
-        if person not in no and k.spine._owner(person).hex() not in gone:
-            k.grants.grant(person, SHADOW_BRAIN["skill"], acts=list(ACTS))
+    for p in members:
+        if p.id in no or k.spine._owner(p.id).hex() in gone:
+            continue
+        try:       # an adult says yes; a child's yes is signed by a guardian; a least-access member is granted nothing
+            k.grants.grant(p.id, SHADOW_BRAIN["skill"], acts=list(ACTS),
+                           guardian=p.guardians[0] if p.role == CHILD and p.guardians else None)
+        except ConsentError:
+            pass
     srv = AuthorityServer(k, str(state / "k.sock"), lists, (reminders, alarms), roster=people)
     srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}

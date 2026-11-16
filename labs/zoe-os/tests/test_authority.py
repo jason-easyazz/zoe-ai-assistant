@@ -23,6 +23,11 @@ from zoe_os.spine import Refused
 
 HERE = Path(__file__).parent
 A, B = "member-a", "member-b"
+def adult(member: str) -> dict:
+    """A roster entry that SAYS adult: a plain id is least access (``capability.LEAST``)."""
+    return {"id": member, "role": "adult"}
+
+
 _COUNTER = __import__("itertools").count()
 
 
@@ -81,7 +86,7 @@ class Daemon:
 @pytest.fixture
 def state():
     path = Path(tempfile.mkdtemp(prefix="za"))           # short: a socket path is <= 107 bytes
-    (path / "people.json").write_text(json.dumps({"people": [A, B]}))
+    (path / "people.json").write_text(json.dumps({"people": [adult(A), adult(B)]}))      # roles stated: unstated is least access
     procs: list[Daemon] = []
     yield path, procs
     for d in procs:
@@ -211,7 +216,7 @@ def test_a_member_taken_off_the_roster_is_still_erased_by_id_and_then_leaves_the
     d.add(A, "oat milk")
     d.add(B, "rice")
     d.kill()
-    (state[0] / "people.json").write_text(json.dumps({"people": [B]}))      # A was taken off the roster
+    (state[0] / "people.json").write_text(json.dumps({"people": [adult(B)]}))      # A was taken off the roster
     again = start(state)
     out = again.eraser.call("erase_member", subject=A)
     assert out["known"] is True and out["verified"] is True and out["erased"] >= 2
@@ -225,7 +230,7 @@ def test_a_member_off_the_roster_forgotten_through_the_forget_op_is_reached_too(
     d = start(state)
     d.add(A, "oat milk")
     d.kill()
-    (state[0] / "people.json").write_text(json.dumps({"people": [B]}))
+    (state[0] / "people.json").write_text(json.dumps({"people": [adult(B)]}))
     again = start(state)
     assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
     assert again.digests() == [] and not _on_disk(state[0], b"oat milk")
@@ -679,3 +684,23 @@ def test_property_after_any_history_no_live_record_holds_forgotten_content_and_e
         elif v["status"] == "removed":
             assert digest(item) not in held, item
     assert len(gone) >= 3 and sum(v["status"] in ("present", "removed") for v in items.values()) >= 1   # both sides exercised
+
+
+# ---- least access: nothing defaults to adult ----------------------------------------------------------------------------------------
+def test_a_plain_id_roster_and_a_readmitted_member_get_least_access_never_adult(state):
+    (state[0] / "people.json").write_text(json.dumps({"people": [A, adult(B)]}))       # A: a plain id, no role stated
+    d = start(state)
+    with pytest.raises(Refused, match="no grant"):
+        d.add(A, "synthetic plain")                                                # least access: acted for nowhere
+    assert d.add(B, "synthetic stated")["verified"] is True
+    with pytest.raises(Refused, match="consent_refused"):
+        d.panel.call("grant", person=A, skill="brain")                             # and cannot consent, even for themself
+    d.add(B, "synthetic kept")
+    d.kill()
+    (state[0] / "people.json").write_text(json.dumps({"people": [adult(A)]}))        # B leaves the roster; their record stays
+    again = start(state)
+    with pytest.raises(Refused, match="consent_refused"):
+        again.panel.call("grant", person=B, skill="brain")                         # re-admitted from the record: least access
+    with pytest.raises(Refused, match="no grant"):
+        again.add(B, "synthetic again")
+    assert again.panel.call("forget", subject=B, actor=B)["count"] >= 2              # ... and still forgettable
