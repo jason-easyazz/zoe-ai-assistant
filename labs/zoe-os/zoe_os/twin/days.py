@@ -21,7 +21,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-from ..capability import ADULT, CHILD, GUEST, LEAST, Person
+from ..capability import ADULT, CHILD, GUEST, LEAST, Person, person_from_entry
 from ..replay import Recording
 
 GENERATOR = 1
@@ -202,9 +202,11 @@ def household_from(raw: dict) -> Household:
     def habit(value):
         return None if value is None else Habit(value) if isinstance(value, str) else Habit(*value)
 
+    habits = ("wake", "leave", "back", "bed", "routine", "take")
+    who = [person_from_entry(m, extra_keys=habits) for m in raw["members"]]   # roles: anything not fully stated is least access
     members = tuple(Member(
-        m["id"], m.get("role", LEAST), tuple(m.get("guardians", ())),
+        p.id, p.role, p.guardians,
         **{key: habit(m[key]) for key in ("wake", "leave", "back", "bed") if key in m},
-        routine=tuple(m.get("routine", ())), take=tuple(m.get("take", ()))) for m in raw["members"])
+        routine=tuple(m.get("routine", ())), take=tuple(m.get("take", ()))) for p, m in zip(who, raw["members"]))
     return Household(members, habit(raw.get("dinner", "18:45")),
                      tuple(Weekly(**w) for w in raw.get("weekly", ())), raw.get("answers", {}))
