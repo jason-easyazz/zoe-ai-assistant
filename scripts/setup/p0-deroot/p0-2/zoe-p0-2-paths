@@ -280,8 +280,14 @@ def revert_item(it, root, state):
         prev = state.get(it["name"])
         if not prev:
             return "no apply record, left as is"
-        os.chown(new, prev["owner"], prev["group"], follow_symlinks=False)
-        os.chmod(new, prev["mode"])
+        fd = open_nofollow(new, directory=False)   # the same no-follow descriptor as apply: a swapped-in link refuses
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RuntimeError(f"{new} is not a regular file; refusing to restore through it")
+            os.fchown(fd, prev["owner"], prev["group"])
+            os.fchmod(fd, prev["mode"])
+        finally:
+            os.close(fd)
         state.pop(it["name"])
         return f"restored {prev['owner']}:{prev['group']} {prev['mode']:04o}"
     if not os.path.lexists(new):

@@ -338,3 +338,23 @@ def test_a_stamp_already_in_the_source_is_refused_every_time_never_taken_as_done
         a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
         assert a.returncode != 0 and "already contains" in a.stderr, a.stderr
     assert not (root / "srv/zoe/app").exists()
+
+
+def test_revert_of_an_exec_item_swapped_for_a_symlink_is_refused(tmp_path):
+    root = tmp_path / "root"
+    (root / "opt").mkdir(parents=True)
+    script = root / "opt" / "run.sh"
+    script.write_text("#!/bin/sh\n")
+    os.chmod(script, 0o755)
+    man = tmp_path / "e.manifest"
+    man.write_text(f"exec run /opt/run.sh /opt/run.sh {ME} {MYGID} 0700\n")
+    common = ["--root", str(root), "--service-user", "nobody", "--state", str(tmp_path / "s.json")]
+    assert tool("apply", str(man), *common, "--container-stopped").returncode == 0
+    victim = tmp_path / "protected"
+    victim.write_text("protected\n")
+    os.chmod(victim, 0o600)
+    script.unlink()
+    script.symlink_to(victim)
+    r = tool("revert", str(man), *common)
+    assert r.returncode != 0
+    assert victim.stat().st_mode & 0o777 == 0o600, "revert changed the link target"
