@@ -187,6 +187,7 @@ async def test_add_item_existing_list_inserts_item_only():
     assert outcome == {
         "list_id": "L1", "item_id": outcome["item_id"],
         "created_list": False, "deduped": False,
+        "list_name": "Shopping",          # the resolved list's name (this fake row has none: the requested one)
     }
     assert _writes(db, "lists") == []
     (sql, params), = _writes(db, "list_items")
@@ -213,6 +214,7 @@ async def test_dedup_hit_returns_existing_item_and_writes_nothing():
     assert outcome == {
         "list_id": "L1", "item_id": "existing-item",
         "created_list": False, "deduped": True,
+        "list_name": "Shopping",          # the resolved list's name (this fake row has none: the requested one)
     }
     assert db.committed == []
     dup_sql, dup_params = db.selects[1]

@@ -78,7 +78,8 @@ also resolves on 3.12, held for its own gated move.
 | ↳ torch | 2.8.0 | **`torch-2.14.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl`** (PyTorch CPU index, 159 MB), pinned by URL | — | PyPI's aarch64 wheel is CPU-only through 2.8 (102 MB), then a **454 MB CUDA-13 bundle** from 2.9 that drags in `nvidia-*-cu13` + `triton` (the first resolve did exactly that). `torch.cuda.is_available()` is False in the venv, as intended. |
 | ↳ librosa / scipy | 0.11.0 / 1.15.3 | 0.11.0 / 1.17.1 | pure / cp312 | uncapped 3.12 resolve picks librosa **1.0.0** (≥3.12, API removals) — held at 0.11.0 for Resemblyzer |
 | ↳ typing | 3.7.4.3 (box) | **dropped** | — | py2 backport; must not be installed on 3.12 |
-| edge-tts, ddgs, cloakbrowser | 7.2.8 / 9.16.0 / 0.3.28 | 7.2.8 (held: 7.3.1 hand-rolls SHA-256) / 9.16.1 (2026-10-29) / 0.3.28 exact (floors → box) | pure | cloakbrowser 0.5.11 is latest; held. Playwright resolves 1.63.0 (box 1.59.0); its browser binary is a separate download. |
+| edge-tts | 7.2.8 | **removed** (2026-11-16) | — | the off-box Microsoft TTS engine was retired (owner decision); `test_canonical_invariants.py` pins its absence |
+| ddgs, cloakbrowser | 9.16.0 / 0.3.28 | 9.16.1 (2026-10-29) / 0.3.28 exact (floors → box) | pure | cloakbrowser 0.5.11 is latest; held. Playwright resolves 1.63.0 (box 1.59.0); its browser binary is a separate download. |
 | openinference-* / arize-phoenix-otel | on box | **not included** | pure | `zoe_agent._setup_otel` imports inside `try` behind `_OTEL_ENABLED`; optional tracing, add when wanted |
 | mcp, memu-py, livekit-agents, kokoro, ctranslate2 | on box | **not included** | — | zoe-data imports none of them (mcp bridge is its own service; kokoro/ctranslate2 are the sidecar's). The venv is where they finally fall away. |
 

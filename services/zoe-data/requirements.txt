@@ -123,9 +123,8 @@ numpy<2
 # 1.23.2 is the LAST onnxruntime release with a cp310 wheel (1.24+ requires
 # Python >=3.11), so this pin cannot move until the zoe-data 3.12 venv (B0.7).
 onnxruntime==1.23.2
-# Cloud TTS — legacy explicit ZOE_TTS_MODE=hybrid/cloud/edge only; NOT used by
-# default (Kokoro-only, owner decision 2026-10-21: Edge sends reply text off-box).
-edge-tts>=7.3.1
+# No cloud TTS: Edge TTS (reply text to Microsoft) was retired 2026-11-16 and must
+# not come back (test_canonical_invariants.py pins its absence from both manifests).
 # Zoe's only voice is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
 # port 10201) — NOT an in-process dep here. zoe-data reaches it over HTTP; by
 # default there is no fallback if it is down (see ZOE_TTS_MODE in .env.example).

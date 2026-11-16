@@ -883,11 +883,11 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
                 visibility,
             )
         item_id = str(uuid.uuid4())
-        await conn.execute(
-            "INSERT INTO list_items (id, list_id, text) VALUES ($1,$2,$3)",
-            item_id,
-            list_id,
-            text,
+        from list_service import create_item_record
+
+        await create_item_record(
+            conn, item_id=item_id, list_id=list_id, text=text,
+            raw_asyncpg=True, normalize_text=False, defaults_only=True,
         )
         return {"item_id": item_id, "list_id": list_id, "text": text}
 
@@ -1086,6 +1086,13 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                 )
                 if action == "forget_alias":
                     await _scrub_forget_alias(suggestion_id, conn)
+        if action == "list_add" and isinstance(result, dict):
+            # The member said yes: a real list add, so the Zoe OS shadow (os_shadow.py) hears it, AFTER the transaction committed (the row
+            # is written inside it, by _execute_action). Never raises; a flag read with the shadow off.
+            import os_shadow
+
+            os_shadow.note_add(user_id, source="suggestion", list_type=slots.get("list_type", "shopping"),
+                               list_name=str(slots.get("list_type", "shopping")).capitalize(), item=result.get("text"))
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}

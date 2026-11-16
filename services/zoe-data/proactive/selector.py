@@ -193,7 +193,6 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
     already spoke, and the member's own events in the next 48 h."""
     from memory_digest import fact_has_topic
     from memory_service import get_memory_service, is_emotional_memory
-    from time_utils import zoe_timezone
 
     async with db.execute(
         "SELECT id, loop_text, follow_up_hint, emotional_weight, created_at, follow_up_after "
@@ -216,24 +215,31 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
         meta = ref.metadata or {}
         moments.append({"id": ref.id, "text": ref.text, "added": meta.get("added_at"),
                         "intensity": meta.get("candidate_intensity")})
+    return loops, moments, await _events_ahead(db, user_id, now)
+
+
+async def _events_ahead(db, user_id: str, now: datetime) -> list[dict]:
+    """The member's OWN events starting in the next three household days, via the shared read path (a repeat's occurrence
+    counts, cancelled / EXDATE do not, a zoned event is at its household time); one per event, its next one not yet begun."""
+    import calendar_read
+    from time_utils import zoe_timezone
+
     tz = zoe_timezone()
     local = now.astimezone(tz)
     days = [(local + timedelta(days=i)).date().isoformat() for i in range(3)]
-    async with db.execute(
-        "SELECT id, title, start_date, start_time FROM events WHERE user_id = ? AND deleted = 0 "
-        "AND start_date IN (?, ?, ?)", (user_id, *days),
-    ) as cur:
-        rows = await cur.fetchall()
-    events = []
-    for r in rows:
-        m = re.match(r"^\s*(\d{1,2}):(\d{2})", str(r[3] or ""))
+    events, seen = [], set()
+    for o in await calendar_read.events_in_window(db, user_id, days[0], days[-1], own_only=True):
+        m = re.match(r"^\s*(\d{1,2}):(\d{2})", str(o["start_time"] or ""))
         try:
-            day = datetime.fromisoformat(str(r[2])[:10]).replace(tzinfo=tz)
+            day = datetime.fromisoformat(o["date"]).replace(tzinfo=tz)
         except ValueError:
             continue
         start = day.replace(hour=int(m.group(1)), minute=int(m.group(2))) if m and int(m.group(1)) < 24 else day
-        events.append({"id": r[0], "title": r[1], "start": start, "tz": tz})
-    return loops, moments, events
+        if o["date"] not in days or o["event_id"] in seen or (o["is_recurring"] and start <= now):
+            continue
+        seen.add(o["event_id"])
+        events.append({"id": o["event_id"], "title": o["title"], "start": start, "tz": tz})
+    return events
 
 
 async def _people_names(db, user_id: str) -> list[str]:
@@ -254,22 +260,44 @@ async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict 
     async with get_compat_db() as db:
         scored = score_all(*await _gather(db, user_id, now), now)
         kept = rank(scored)
-        if restraint.mode() != "off":
-            # The thread classes are decided here, in code, and stored (invalidate, never delete).
-            await restraint.store_thread_classes(
-                db, user_id, [(c.source_ref, c.text, c.kind) for c in kept], await _people_names(db, user_id), now)
-        for c in kept:
-            await db.execute(
-                """INSERT INTO proactive_candidates (id, user_id, kind, source_ref, text, hint,
-                       salience, on_open, cue_words, expires_at, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (user_id, kind, source_ref) DO UPDATE SET text = excluded.text,
-                       hint = excluded.hint, salience = excluded.salience, on_open = excluded.on_open,
-                       cue_words = excluded.cue_words, expires_at = excluded.expires_at,
-                       updated_at = excluded.updated_at""",
-                (uuid.uuid4().hex, user_id, c.kind, c.source_ref, c.text, c.hint, c.salience,
-                 1, c.cues, _iso(c.expires_at), stamp, stamp),
-            )
+        import erase_watermark
+
+        async def write() -> list:    # CREATED keys only: an existing candidate is UPDATEd (never re-created), and never undone
+            if restraint.mode() != "off":
+                # The thread classes are decided here, in code, and stored (invalidate, never delete).
+                await restraint.store_thread_classes(
+                    db, user_id, [(c.source_ref, c.text, c.kind) for c in kept], await _people_names(db, user_id), now)
+            async with db.execute("SELECT kind, source_ref FROM proactive_candidates WHERE user_id = ?", (user_id,)) as cur:
+                there = {(str(r[0]), str(r[1])) for r in await cur.fetchall()}
+            created = []
+            for c in kept:
+                if (c.kind, c.source_ref) in there:
+                    await db.execute(
+                        "UPDATE proactive_candidates SET text = ?, hint = ?, salience = ?, on_open = 1, cue_words = ?, expires_at = ?, "
+                        "updated_at = ? WHERE user_id = ? AND kind = ? AND source_ref = ?",
+                        (c.text, c.hint, c.salience, c.cues, _iso(c.expires_at), stamp, user_id, c.kind, c.source_ref))
+                    continue
+                created.append((c.kind, c.source_ref))
+                await db.execute(
+                    """INSERT INTO proactive_candidates (id, user_id, kind, source_ref, text, hint,
+                           salience, on_open, cue_words, expires_at, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT (user_id, kind, source_ref) DO UPDATE SET text = excluded.text,
+                           hint = excluded.hint, salience = excluded.salience, on_open = excluded.on_open,
+                           cue_words = excluded.cue_words, expires_at = excluded.expires_at,
+                           updated_at = excluded.updated_at""",
+                    (uuid.uuid4().hex, user_id, c.kind, c.source_ref, c.text, c.hint, c.salience,
+                     1, c.cues, _iso(c.expires_at), stamp, stamp),
+                )
+            return created
+
+        async def undo(keys: list) -> None:          # exactly the candidates just CREATED, nothing that existed before
+            for kind, ref in keys:
+                await db.execute("DELETE FROM proactive_candidates WHERE user_id = ? AND kind = ? AND source_ref = ?", (user_id, kind, ref))
+            await db.commit()
+        # a night pass that ranked rows read before the member's erase: checked right before and right after the upserts
+        if await erase_watermark.guarded_write(user_id, "proactive_selector", write, undo) is None:
+            return {"user_id": user_id, "status": "erased_since_cycle"}
         await db.execute(
             # a 'commitment' candidate (commitments.py) is not the nightly pass's to expire: it lives until its own expiry
             "UPDATE proactive_candidates SET expires_at = ? WHERE user_id = ? AND updated_at < ? "

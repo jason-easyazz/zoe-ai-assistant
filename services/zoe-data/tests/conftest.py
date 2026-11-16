@@ -40,6 +40,14 @@ if _too_late:  # a pin after the import is a silent no-op — fail loudly instea
 
 ZOE_TEST_STORE_DIR = tempfile.mkdtemp(prefix="zoe-test-stores-")
 atexit.register(shutil.rmtree, ZOE_TEST_STORE_DIR, ignore_errors=True)  # no /tmp litter per session
+# No test may inherit the CALLER's git config. A `git commit` in a test's temp repo otherwise runs whatever the caller configured:
+# a signing program (`commit.gpgsign`), a credential helper, `core.hooksPath` hooks, an `init.defaultBranch`. Measured 2026-11-14 with the
+# network blocked: 3 `ci_safe` files of this lane failed only because the box's commit-signing program could not reach its server. A neutral identity is
+# supplied, so a box with no identity (a GitHub runner) and an owner's box see the same git. Pinned by tests/unit/test_git_config_isolation.py.
+_GIT_CONFIG = os.path.join(ZOE_TEST_STORE_DIR, "gitconfig")
+with open(_GIT_CONFIG, "w", encoding="utf-8") as _fh:
+    _fh.write("[user]\n\tname = Zoe Test\n\temail = zoe-test@example.invalid\n")
+os.environ.update(GIT_CONFIG_GLOBAL=_GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
 # The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
@@ -97,11 +105,39 @@ _STATE_PINS = (
 )
 for _var, _leaf in _STATE_PINS:
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+# ``main`` discovers this host's LAN address AT IMPORT by "connecting" a UDP socket to a public address when ``ZOE_HOST_LAN_IP`` is unset,
+# so every test that imports ``main`` asked the host's routing table and got an allow-list that differs online vs offline (measured
+# 2026-11-14: 17 ``ci_safe`` files). Pinned to the value ``zoe_agent`` already defaults to, so the prompt bytes do not change.
+# ``setdefault``: a lane that sets its own keeps it. Pinned by test_host_lan_ip_pinned.py.
+os.environ.setdefault("ZOE_HOST_LAN_IP", "192.168.1.218")
 # The session-wide value, kept so test_live_store_isolation can prove this layer on its own (the per-test fixture overrides the variable).
 os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER_STATE"]
 
 
 import pytest  # noqa: E402
+
+# Collection-time pin precedes every service import; the fixture then isolates
+# each test, including tests that inherit extra reach enabled from the shell.
+_ERASE_PATHS = {
+    "ZOE_ROUTER_HEAD_LOG": "router_head_shadow.jsonl",
+    "ZOE_INTENT_MISS_LOG": "intent-misses.jsonl",
+    "ZOE_VOICE_STT_LOG": "voice_stt.jsonl",
+    "ZOE_TELEGRAM_STT_CAPTURE_DIR": "telegram-capture",
+    "ZOE_RECALL_GATE_TRACE_DIR": "recall-gate-trace",
+    "ZOE_ADHOC_BACKUP_DIR": "adhoc-backups",
+}
+for _var, _leaf in _ERASE_PATHS.items():
+    os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+
+
+@pytest.fixture(autouse=True)
+def _local_erase_paths_are_per_test(monkeypatch, tmp_path):
+    for name, leaf in _ERASE_PATHS.items():
+        monkeypatch.setenv(name, str(tmp_path / "zoe-test-stores-local" / leaf))
+    # A sync test that runs a route helper directly holds a per-turn erase epoch in the main thread's context: the next test starts
+    # as a fresh request does, with none.
+    import local_text_logs
+    local_text_logs._TURN_EPOCH.set(None)
 
 
 @pytest.fixture(autouse=True)
@@ -109,13 +145,16 @@ def _exact_words_in_process_index():
     """The owner's verbatim-turn index (``exact_words``) is a Postgres table in production; no test has that pool. Since
     ``MemoryService.delete_user`` FAILS CLOSED when the verbatim erase fails, a test of the delete must not reach for a pool
     that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
+    import erase_watermark
     import exact_words
     import night_store
     import struggle_detector
+    erase_watermark.set_backend(erase_watermark.MemoryBackend())   # delete_user records the member's erase mark first (fail closed)
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     struggle_detector.set_backend(struggle_detector.MemoryBackend())   # struggle_events too (delete_user / forget fail closed)
     yield
+    erase_watermark.set_backend(None)
     exact_words.set_backend(None)
     night_store.set_backend(None)
     struggle_detector.reset()     # the worker task belongs to this test's loop
@@ -248,3 +287,20 @@ def jason_signed_in_at_the_panel(monkeypatch):
     monkeypatch.setattr(biometric_scope, "_fresh_panel_member", _pin)
     yield
     biometric_scope.reset_enrolment_grants()
+
+
+@pytest.fixture(autouse=True)
+def _forget_session_epochs_are_per_test(tmp_path, monkeypatch):
+    """``forget_session`` keeps member -> forget-epoch in a file under the home directory that the live service reads. Any
+    test reaching a real forget path used to write that REAL file (found 2026-11-14: five entries, one for a real member id),
+    and a later test then saw ``sess~f<epoch>`` instead of ``sess`` depending on run order. Every test gets its own empty
+    store; the module itself also refuses the real path under pytest."""
+    try:
+        import forget_session
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+    monkeypatch.setattr(forget_session, "_PATH", tmp_path / "forget_session_epochs.json")
+    monkeypatch.setattr(forget_session, "_EPOCH", {})
+    monkeypatch.setattr(forget_session, "_LOADED", False)
+    yield
