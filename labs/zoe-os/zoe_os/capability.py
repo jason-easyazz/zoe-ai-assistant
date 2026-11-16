@@ -240,4 +240,5 @@ class Enforcer:
         who = self.store.people.get(subject)
         if who is None or actor not in self.store.people:
             return Decision(False, "only a person can ask to forget")
-        return Decision(actor == subject or actor in who.guardians, "not theirs to forget")
+        guardian = actor in who.guardians and self._adult(actor)      # a guardian link counts only for a STATED adult
+        return Decision(actor == subject or guardian, "not theirs to forget")
