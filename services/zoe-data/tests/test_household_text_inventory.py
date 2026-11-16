@@ -166,7 +166,7 @@ def all_sites() -> set[str]:
 def test_the_scan_sees_the_known_writers(all_sites):
     """Sanity control: a scan that silently found nothing would make the coverage test vacuous."""
     assert len(all_sites) >= 50
-    for known in ("services/zoe-data/semantic_router.py::_append_shadow_line", "services/zoe-data/routers/telegram_media.py::_maybe_capture",
+    for known in ("services/zoe-data/semantic_router.py::_append_shadow_line", "services/zoe-data/local_text_logs.py::write_capture_pair",
                   "services/zoe-data/zoe_agent.py::_log_feedback_triple"):
         assert known in all_sites
 
@@ -186,6 +186,20 @@ def test_no_allowlist_pattern_is_stale(all_sites):
 
 def test_every_mapped_site_names_a_registered_store():
     assert {k for k in ht.WRITE_SITES.values()} <= set(ht.BY_KEY)
+
+
+def test_inventory_names_stores_without_importing_runtime_readers():
+    """The Omi boundary scans allow this metadata module, not new runtime access."""
+    tree = ast.parse((SVC / "household_text.py").read_text())
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.add(node.module)
+    assert imports <= {"__future__", "fnmatch", "dataclasses", "pathlib", "typing", "forget_reach", "sys"}
+    assert not any(isinstance(n, ast.Name) and n.id in {"__import__", "eval", "exec", "get_db", "db_pool"}
+                   for n in ast.walk(tree))
 
 
 def test_the_detector_catches_a_new_text_sink():
@@ -291,7 +305,7 @@ def test_unerasable_copies_are_counted_as_gaps():
 
 def test_the_detector_catches_removing_a_reviewed_entry(all_sites, monkeypatch):
     """Break-the-fix control on the real tree: drop one WRITE_SITES entry and the coverage check must go red."""
-    site = "services/zoe-data/routers/telegram_media.py::_maybe_capture"
+    site = "services/zoe-data/local_text_logs.py::write_capture_pair"
     monkeypatch.delitem(ht.WRITE_SITES, site)
     assert ht.classify(site) is None and site in all_sites
 
