@@ -34,7 +34,7 @@ class Explainer:
     # ---- who may see what ---------------------------------------------------------------
     def _is(self, asker: str, person: str | None) -> bool:
         owner = self.people.get(person or "")
-        return bool(owner) and (asker == owner.id or guards(asker, owner))
+        return bool(owner) and (asker == owner.id or guards(asker, owner, self.people.get(asker)))
 
     def _may_see(self, asker: str, ev: Event) -> bool:
         who = self.people.get(asker)
