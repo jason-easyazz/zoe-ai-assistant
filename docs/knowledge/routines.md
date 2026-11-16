@@ -69,7 +69,12 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
   its actor(s) and the text it carries; holds the erase gate of each member involved (sorted id order); inside one real transaction
   with the per-member advisory locks the erasers also take, re-checks each member's erase mark (a write that began before a member
   erase is refused, `erased`) and the entity shield (tombstone + the durable `memory_forgotten` ledger, exact words, fail closed: a
-  forgotten name is never written, `names_forgotten`). Both erasers take the same gate and lock. A structural test enumerates the
+  forgotten name is never written, `names_forgotten`). The in-process checks are a fast path; what holds ACROSS PROCESSES is the
+  re-read after the advisory locks, on the gate's own connection inside the write's transaction: the member's durable erase
+  watermark (`erase_watermark`, written by `delete_user` before it erases; a write that started before it is `erased`) and the
+  forgotten ledger (`memory_forgotten.active_hashes_on`, uncached). The forget path commits its mark before its eraser takes the
+  lock, so a writer that locks first is erased after it and one that locks second is refused. Both erasers take the same gate and
+  lock. Proven on real PostgreSQL by the opt-in `tests/test_routines_gate_postgres.py` (`ZOE_TEST_PG_URL`). A structural test enumerates the
   module's writers and fails on one that bypasses the helper. Reads apply no forgotten filter (nothing is left to hide).
 - **Logs**: `ROUTINE event=<created|step_added|one_off|prompted|ticked|skipped|snoozed|undo|missed|refused> kind= via= verified=
   member=<hash8> routine=<hash8>`; codes and counts only, never a step's words or a name (a test asserts it).
