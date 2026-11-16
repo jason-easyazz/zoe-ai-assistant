@@ -73,7 +73,7 @@ def test_control_without_the_credential_check_a_skill_becomes_the_panel_and_read
     box.control("no_verify")
     s = box.raw()
     assert ask(s, {"v": 1, "skill": "panel", "proof": "00"})["ok"]
-    assert ask(s, req("grant", person=ALEX, skill=HELPER))["ok"]
+    assert ask(s, req("grant", person=ALEX, skill=HELPER, speaker=box.assertion(ALEX, "grant")))["ok"]
     helper = box.client(HELPER)
     assert VICTIM_SECRET in str(helper.drain(helper.subscribe(from_seq=0)))
 
@@ -110,17 +110,31 @@ def test_control_with_a_predictable_nonce_the_captured_handshake_logs_in(box):
 BIG = "x" * 200_000
 
 
+def declare(sock: socket.socket, length: int) -> dict | None:
+    """Send ONLY a frame header declaring ``length`` body bytes, read the reply, close.
+
+    Deterministic on purpose: the kernel refuses on the header and closes. Had the body been sent
+    as well, bytes still unread on the kernel's side at close turn the client's read into a
+    connection reset instead of the refusal frame (the race the old probe lost now and then).
+    A kernel that waited for the body before deciding would never answer: this returns None."""
+    sock.sendall(struct.pack(">I", length))
+    try:
+        return wire.read_frame(sock, max_frame=wire.MAX_REPLY, idle=5)
+    except (wire.WireError, OSError):
+        return None
+    finally:
+        sock.close()
+
+
 def test_an_oversized_frame_is_refused_before_its_body_is_read(box):
-    helper = box.raw(HELPER)
-    helper.sendall(struct.pack(">I", 1 << 30))               # "a gigabyte follows"; nothing does
-    assert wire.read_frame(helper, idle=5)["error"]["code"] == "too_large"
-    voice = box.raw("voice")
-    assert ask(voice, req("publish", kind="utterance", subject=SAM,
-                          payload={"text": BIG}))["error"]["code"] == "too_large"
+    assert declare(box.raw(HELPER), 1 << 30)["error"]["code"] == "too_large"    # "a gigabyte follows"
+    # The exact header of a real 200 kB publish: refused on its declared length, body never sent.
+    real = frame(req("publish", kind="utterance", subject=SAM, payload={"text": BIG}))
+    assert len(real) - 4 > wire.MAX_FRAME
+    assert declare(box.raw("voice"), len(real) - 4)["error"]["code"] == "too_large"
     assert box.reasons() == ["frame too large"] * 2
-    # The body never reached the store: no run of it is on disk (a bare size bound only measured the schema).
     assert BIG[:4096].encode() not in box.on_disk() and len(box.on_disk()) < 2 * len(BIG)
-    assert alive(box)
+    assert alive(box)                                        # a fresh connection is still served
 
 
 def test_control_without_the_size_cap_the_big_frame_is_stored(box):

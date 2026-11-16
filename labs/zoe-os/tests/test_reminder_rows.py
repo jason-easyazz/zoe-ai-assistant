@@ -34,8 +34,9 @@ class House:
         self.k.grants.grant(K, "brain", acts=list(AUTH_ACTS), guardian=A)
 
     def said(self, person, mentions=()):
-        return self.k.spine.publish(Event(Kind.UTTERANCE, "voice", person, Visibility.PRIVATE, {"text": "synthetic reminder words"},
-                                          mentions=tuple(mentions))).seq
+        self.n = getattr(self, "n", 0) + 1                  # a fresh text: forgotten words are shielded for every publisher
+        return self.k.spine.publish(Event(Kind.UTTERANCE, "voice", person, Visibility.PRIVATE,
+                                          {"text": f"synthetic reminder words {self.n}"}, mentions=tuple(mentions))).seq
 
     def act(self, person, action, mentions=(), **args):
         seq = self.said(person, mentions)
@@ -165,9 +166,9 @@ def test_a_guardian_may_set_one_for_their_child_when_the_ask_names_the_child(hou
     assert row["owner"] == K and row["by"] == A and [x["id"] for x in house.rem.visible_to(K)] == [row["id"]]
     with pytest.raises(Refused, match="must name who it is for"):
         house.act(A, "remind.set", note="x", time="07:45", **{"for": K})
-    with pytest.raises(Refused, match="only a guardian"):
+    with pytest.raises(Refused, match="only a carer"):
         house.act(B, "remind.set", note="x", time="07:45", mentions=(K,), **{"for": K})
-    with pytest.raises(Refused, match="only a guardian"):
+    with pytest.raises(Refused, match="only a carer"):
         house.act(A, "remind.set", note="x", time="07:45", mentions=(B,), **{"for": B})
 
 
@@ -204,7 +205,11 @@ def test_a_childs_forget_reaches_the_reminder_their_guardian_set_for_them(house,
 
 
 def test_control_a_rebuild_that_ignores_the_create_anchor_resurrects_a_forgotten_row(house, monkeypatch):
-    """Without "a row exists only while its create is live", a later edit's receipt brings back what a forget took."""
+    """Without "a row exists only while its create is live", a later edit's receipt brings back what a forget took. The spine's
+    forward link (a forgotten reminder takes its later records, ``Spine._row_source``) is a second layer that would hide it, so it
+    is switched off here too: each layer on its own keeps the row gone (see the next test)."""
+    from zoe_os import spine as spine_mod
+    monkeypatch.setattr(spine_mod, "_row_source", lambda payload: None)
     rid = rid_of(house.act(A, "remind.set", note="gift for Dana", time="20:00"))
     house.act(A, "remind.edit", id=rid, note="a present")                  # the edit's proof no longer names Dana
     house.act(A, "remind.snooze", id=rid, minutes=5)
@@ -213,3 +218,59 @@ def test_control_a_rebuild_that_ignores_the_create_anchor_resurrects_a_forgotten
     monkeypatch.setattr(DurableReminders, "anchored", lambda self, rid, made: True)     # the anchor rule removed
     house.rem.rebuild()
     assert rid in house.rem.rows                                         # the snooze receipt alone resurrects it: the test sees it
+
+
+def test_with_the_anchor_rule_removed_the_forward_link_alone_still_keeps_a_forgotten_row_gone(house, monkeypatch):
+    rid = rid_of(house.act(A, "remind.set", note="gift for Dana", time="20:00"))
+    house.act(A, "remind.edit", id=rid, note="a present")
+    house.act(A, "remind.snooze", id=rid, minutes=5)
+    house.forget(A, entity="Dana")                                       # the create goes, and with it every later record of the row
+    monkeypatch.setattr(DurableReminders, "anchored", lambda self, rid, made: True)
+    house.rem.rebuild()
+    assert rid not in house.rem.rows
+
+
+def _held(house, word: str) -> bool:
+    return any(word in (raw or "") for (raw,) in house.k.spine._db.execute(
+        "SELECT payload FROM events WHERE tombstoned = 0"))
+
+
+def test_forgetting_an_edit_takes_every_later_record_that_copied_its_words(house, tmp_path, clock):
+    rid = rid_of(house.act(A, "remind.set", note="synthetic before", time="20:00"))
+    edit = house.act(A, "remind.edit", id=rid, note="synthetic marker <edited>")
+    house.act(A, "remind.snooze", id=rid, minutes=5)                  # its proof copies the edited row
+    house.forget(A, seqs=[edit.seq])
+    assert not _held(house, "synthetic marker <edited>")
+    assert house.row(rid)["note"] == "synthetic before"               # the row is back to what it was before the edit
+    assert restart(house, tmp_path, clock).row(rid)["note"] == "synthetic before"
+
+
+def test_a_private_mark_shuts_out_the_carer_who_set_it(house):
+    rid = rid_of(house.act(A, "remind.set", note="pack the bag", time="07:45", mentions=(K,), **{"for": K}))
+    house.act(K, "remind.edit", id=rid, note="synthetic marker <kid-own>", visibility="private")
+    assert [r["id"] for r in house.rem.visible_to(A)] == []           # neither the carer's view ...
+    with pytest.raises(Refused, match="no such reminder"):
+        house.act(A, "remind.cancel", id=rid)                          # ... nor their reach
+    assert house.row(rid)["visibility"] == "private" and [r["id"] for r in house.rem.visible_to(K)] == [rid]
+
+
+def test_a_carers_undo_cannot_overwrite_what_the_person_changed_since(house):
+    rid = rid_of(house.act(A, "remind.set", note="pack the bag", time="07:45", mentions=(K,), **{"for": K}))
+    house.act(A, "remind.edit", id=rid, note="pack the bag and lunch")
+    house.act(K, "remind.edit", id=rid, note="synthetic marker <kid-later>", visibility="private")
+    with pytest.raises(Refused, match="it has changed since"):
+        house.k.actions.undo(A, actor=A)                               # the carer's last action is the edit the child has overwritten
+    assert house.row(rid)["visibility"] == "private" and house.row(rid)["note"] == "synthetic marker <kid-later>"
+
+
+def test_an_unrelated_forget_never_brings_back_an_undone_reminder_or_edit(house, tmp_path, clock):
+    rid = rid_of(house.act(A, "remind.set", note="synthetic marker <undone>", time="20:00"))
+    house.k.actions.undo(A, actor=A)                                       # the reminder is undone
+    kept = rid_of(house.act(A, "remind.set", note="synthetic kept", time="21:00"))
+    house.act(A, "remind.edit", id=kept, note="synthetic kept, edited")
+    house.k.actions.undo(A, actor=A)                                       # the edit is undone
+    other = house.said(A)
+    house.forget(A, seqs=[other])                                          # forget something unrelated of A's
+    assert house.row(rid) is None and house.row(kept)["note"] == "synthetic kept"
+    again = restart(house, tmp_path, clock)
+    assert again.row(rid) is None and again.row(kept)["note"] == "synthetic kept"

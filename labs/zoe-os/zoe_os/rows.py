@@ -25,6 +25,7 @@ class DurableRows:
     prefix = "x"                 # row ids: <prefix><the asking event's seq>[.n]
     creates = ""                 # the action that makes a row
     actions: tuple = ()          # every action over these rows (``creates`` included)
+    removes: tuple = ()          # the actions that take a row away (a cancel): REVERSALS of the create, for the forget rule
 
     def __init__(self, spine, clock) -> None:
         self.spine, self.clock = spine, clock
@@ -43,14 +44,30 @@ class DurableRows:
     def target(self, action: str, args: dict) -> str:
         return self.fresh(args) if action == self.creates else str(args.get("id", ""))
 
+    def source_of(self, rid: str) -> int | None:
+        """The request that CREATED row ``rid`` (ids are ``<prefix><that request's seq>[.n]``)."""
+        head = str(rid)[len(self.prefix):].split(".")[0] if str(rid).startswith(self.prefix) else ""
+        return int(head) if head.isdigit() else None
+
     def snapshot_for(self, action: str):
+        """The row before the write, plus ``source`` (the creating request: the spine links every later action over the row to it,
+        so forgetting the row takes its edits, snoozes and cancel, and forgetting a cancel takes the row) and ``reverses`` for an
+        action that takes the row away (``Spine._row_source``)."""
         def snapshot(person, args):
             rid = self.target(action, args)
             row = self.rows.get(rid)
-            return {"id": rid, "row": dict(row) if row else None}
+            out = {"provenance": 1, "id": rid, "row": dict(row) if row else None}
+            source = args.get("asked") if action == self.creates else self.source_of(rid)
+            if type(source) is int:
+                out["source"] = source
+            if action in self.removes:
+                out["reverses"] = True
+            return out
         return snapshot
 
     def put_back(self, person, args, before) -> None:
+        if before.get("id") is None:
+            return
         if before["row"] is None:
             self.rows.pop(before["id"], None)
         else:
@@ -69,11 +86,20 @@ class DurableRows:
             return {"id": rid, "row": None} if row is None else None
         return {"id": rid, "row": dict(row), **self.summary(row)} if row == want else None
 
+    def undo_check(self, person, payload: dict, actor) -> str:
+        """An undo puts back the row as it was before ONE action: only while the row is still what that action left. Changed
+        since (a later edit, by anyone: the owner marking it private, say) or gone: refused, never a silent overwrite."""
+        proof = payload.get("proof") or {}
+        rid = proof.get("id")
+        if rid is None or self.rows.get(rid) != proof.get("row"):
+            return "it has changed since"
+        return ""
+
     def register_all(self, kernel, specs: dict) -> None:
         """``specs``: action -> (do, check, doc, params). Every action is reversible and has the one snapshot rule."""
         for action, (do, check, doc, params) in specs.items():
             kernel.actions.register(action, do, self.read_back, needs_accept=False, snapshot=self.snapshot_for(action),
-                                    undo=self.put_back, doc=doc, params=params, check=check)
+                                    undo=self.put_back, doc=doc, params=params, check=check, undo_check=self.undo_check)
 
     # ---- the rebuild ------------------------------------------------------------------------------------------------------------
     def rebuild(self) -> int:

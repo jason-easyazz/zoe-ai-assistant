@@ -29,6 +29,12 @@ def at(y, mo, d, h=0, mi=0, tz=UTC) -> float:
 T0 = at(2030, 1, 7, 6, 0)                     # Monday 06:00 UTC
 
 
+def seq_n(owner) -> int:
+    """A fresh utterance text per request: forgotten words are shielded for every publisher."""
+    owner._n = getattr(owner, "_n", 0) + 1
+    return owner._n
+
+
 class House:
     def __init__(self, path, clock):
         self.k = Kernel(str(path), [Person(A), Person(B)], clock=lambda: clock[0])
@@ -42,7 +48,7 @@ class House:
             self.k.grants.grant(p, "brain", acts=list(AUTH_ACTS))
 
     def act(self, person, action, **args):
-        seq = self.k.spine.publish(Event(Kind.UTTERANCE, "voice", person, Visibility.PRIVATE, {"text": "synthetic alarm words"})).seq
+        seq = self.k.spine.publish(Event(Kind.UTTERANCE, "voice", person, Visibility.PRIVATE, {"text": f"synthetic alarm words {seq_n(self)}"})).seq
         return self.k.actions.act("brain", action, person, {**args, "asked": seq}, caused_by=(seq,))
 
     def state(self, rid):
@@ -238,3 +244,20 @@ def test_a_time_edit_or_a_switch_back_on_reschedules_a_spent_one_off(house, cloc
     clock[0] = at(2030, 1, 11, 12)
     assert house.act(A, "alarm.edit", id=a, time="08:00").verified
     assert house.al.visible_to(A)[0]["next_fire"] == at(2030, 1, 12, 8)
+
+
+def test_the_row_rules_hold_for_alarms_undo_refused_once_changed_and_an_unrelated_forget_resurrects_nothing(house):
+    from zoe_os.spine import Refused
+    gone = rid(house.act(A, "alarm.set", time="07:00", repeat="daily", label="synthetic undone"))
+    house.k.actions.undo(A, actor=A)                                   # the alarm is undone
+    kept = rid(house.act(A, "alarm.set", time="08:00", repeat="daily", label="synthetic kept"))
+    house.act(A, "alarm.edit", id=kept, label="synthetic kept, edited")
+    house.act(A, "alarm.toggle", id=kept, enabled=0)
+    house.k.actions.undo(A, actor=A)                                   # the toggle is undone: on again
+    house.act(B, "alarm.set", time="09:00", label="synthetic other")   # (B's: A's last action stays the undo)
+    other = house.k.spine.publish(Event(Kind.UTTERANCE, "voice", A, Visibility.PRIVATE, {"text": "synthetic unrelated words"})).seq
+    house.k.spine.forget(A, actor=A, seqs=[other])
+    house.k.pump()
+    assert gone not in house.al.rows and house.al.rows[kept]["enabled"] == 1 and house.al.rows[kept]["label"] == "synthetic kept, edited"
+    with pytest.raises(Refused):
+        house.k.actions.undo(A, actor=A)                               # the last action is itself an undo

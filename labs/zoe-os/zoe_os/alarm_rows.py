@@ -9,7 +9,9 @@ Whether it is ringing NOW is ``schedule.alarm_state`` (pure), where production's
 
 Actions (all reversible, all read back): ``alarm.set`` (today's ``{time}`` still works: it now ADDS an alarm, as production does,
 instead of replacing the one the lab driver kept), ``alarm.edit``, ``alarm.toggle``, ``alarm.delete``, ``alarm.snooze``,
-``alarm.dismiss``. Who may: the owner only (``alarms.can_edit`` for a personal alarm). A HOUSEHOLD alarm (owner ``__household__``,
+``alarm.dismiss``. Who may: the owner (``alarms.can_edit`` for a personal alarm), and a CARER (owner rule 2026-11-16: a guardian on
+the roster of a child or of an adult in care) for the person they care for, except an alarm its owner made ``private``. Forget,
+undo and explain stay child-only (``capability.guards``). A HOUSEHOLD alarm (owner ``__household__``,
 set at the wall panel) and the panel's right to silence any ringing alarm are NOT expressible: the kernel acts only for a person.
 """
 from __future__ import annotations
@@ -31,17 +33,27 @@ TIME = {"type": "string", "required": True, "max": 5, "pattern": sch.HHMM,
 FIELDS = {"repeat": OPT("string", "once, daily, weekdays, weekends, or days:1,3,5 (Monday is 1)", max=40),
           "date": OPT("string", "a one-off's day, YYYY-MM-DD", pattern=sch.DAY, max=10),
           "label": OPT("string", "a name for it", max=LABEL_MAX),
-          "snooze_minutes": OPT("integer", "how long a snooze lasts", minimum=SNOOZE_RANGE[0], maximum=SNOOZE_RANGE[1])}
+          "snooze_minutes": OPT("integer", "how long a snooze lasts", minimum=SNOOZE_RANGE[0], maximum=SNOOZE_RANGE[1]),
+          "private": OPT("integer", "1: only its owner sees and manages it (not a carer); owner only", minimum=0, maximum=1)}
 ON = OPT("integer", "1 on, 0 off", minimum=0, maximum=1)
 
 
 class DurableAlarms(DurableRows):
     prefix, creates = "alm", "alarm.set"
     actions = ("alarm.set", "alarm.edit", "alarm.toggle", "alarm.delete", "alarm.snooze", "alarm.dismiss")
+    removes = ("alarm.delete",)
 
-    def __init__(self, spine, clock, *, tz: str = "UTC") -> None:
+    def __init__(self, spine, clock, grants=None, *, tz: str = "UTC") -> None:
         super().__init__(spine, clock)
-        self.tz = ZoneInfo(tz)
+        self.grants, self.tz = grants, ZoneInfo(tz)
+
+    def _carer(self, adult: str, person: str) -> bool:
+        people = getattr(self.grants, "people", {}) or {}
+        who, by = people.get(person), people.get(adult)
+        return who is not None and by is not None and by.role == "adult" and adult in who.guardians
+
+    def _may_see(self, person: str, row: dict) -> bool:
+        return row["owner"] == person or (not row.get("private") and self._carer(person, row["owner"]))
 
     def summary(self, row: dict) -> dict:
         return {"alarm": row["time"]}           # the proof key the shadow client compares (os_shadow.VERBS alarm_create)
@@ -54,7 +66,7 @@ class DurableAlarms(DurableRows):
         one-off that has rung is off."""
         out = []
         for _, r in sorted(self.rows.items()):
-            if r["owner"] == person:
+            if self._may_see(person, r):
                 state, _occ, nxt = self.state(r)
                 out.append(r | {"state": state, "next_fire": nxt, "enabled": int(bool(r["enabled"]) and (nxt is not None or state != "idle"))})
         return out
@@ -84,10 +96,10 @@ class DurableAlarms(DurableRows):
 
     def _mine(self, person, args) -> str:
         row = self.rows.get(args["id"])
-        return "" if row is not None and row["owner"] == person else "no such alarm"         # alarms.can_edit, a member
+        return "" if row is not None and self._may_see(person, row) else "no such alarm"     # alarms.can_edit; a carer, not private
 
     def _check_edit(self, person, args, caused_by):
-        return self._mine(person, args) or self._edited(args)[1]
+        return self._mine(person, args) or self._edited(person, args)[1]
 
     def _check_snooze(self, person, args, caused_by):
         why = self._mine(person, args)
@@ -108,7 +120,7 @@ class DurableAlarms(DurableRows):
         return {"owner": person, "by": person, "label": " ".join(str(args.get("label", "")).split())[:LABEL_MAX],
                 "time": args["time"], "repeat": args.get("repeat", "once"), "date": args.get("date"),
                 "snooze_minutes": args.get("snooze_minutes", DEFAULT_SNOOZE_MIN), "enabled": 1, "after": self.clock(),
-                "snoozed_until": None, "snooze_of": None, "snooze_count": 0}
+                "snoozed_until": None, "snooze_of": None, "snooze_count": 0, "private": args.get("private", 0)}
 
     def _set(self, person, args):
         rid = self.fresh(args)
@@ -116,7 +128,7 @@ class DurableAlarms(DurableRows):
         self.rows[rid] = row | {"id": rid}
         return rid, dict(self.rows[rid])
 
-    def _edited(self, args) -> tuple[dict, str]:
+    def _edited(self, person, args) -> tuple[dict, str]:
         """alarms.update_alarm: a changed time or repeat re-picks a one-off's day unless one is given; a spent one-off turned back on
         rings at the NEXT such time; every edit lands idle (a ring in progress stops)."""
         row, now = self.rows[args["id"]], self.clock()
@@ -125,6 +137,8 @@ class DurableAlarms(DurableRows):
             new["label"] = " ".join(args["label"].split())[:LABEL_MAX]
         if "enabled" in args:
             new["enabled"] = args["enabled"]
+        if "private" in args and person == row["owner"]:       # only the owner says who else may see it (a carer's change is dropped)
+            new["private"] = args["private"]
         if new["repeat"] == "once" and (set(args) & {"time", "repeat"}) and "date" not in args:
             new["date"] = None
         landed = {"after": now, "snoozed_until": None, "snooze_of": None, "snooze_count": 0}
@@ -143,7 +157,7 @@ class DurableAlarms(DurableRows):
         return new | landed, why
 
     def _edit(self, person, args):
-        new, _ = self._edited(args)
+        new, _ = self._edited(person, args)
         self.rows[new["id"]] = new
         return new["id"], dict(new)
 
