@@ -2,7 +2,9 @@
 # nosuid,nodev: a set-uid file or a device node that a ROOT container writes into its bind source is inert when
 # anything on the host runs or opens it (labs/p0-2-root-paths cell R3b-3). No noexec: Home Assistant and Music
 # Assistant load shared libraries from their config trees.
-# Install (zoe-admin):  sudo install -m 0644 srv-zoe.mount /etc/systemd/system/ && sudo systemctl daemon-reload
+# Install (zoe-admin):  sudo install -d -m 0755 -o root -g root /srv/zoe   (FIRST: the condition below skips the
+#                       mount when /srv/zoe is absent, which would leave the sources without nosuid,nodev)
+#                       && sudo install -m 0644 srv-zoe.mount /etc/systemd/system/ && sudo systemctl daemon-reload
 #                       && sudo systemctl enable --now srv-zoe.mount
 # Verify (read-only):   findmnt -no OPTIONS /srv/zoe     (must list nosuid and nodev)
 # Revert:               sudo systemctl disable --now srv-zoe.mount && sudo rm /etc/systemd/system/srv-zoe.mount

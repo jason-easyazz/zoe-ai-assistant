@@ -150,7 +150,7 @@ def test_exec_item_fixed_in_place_and_reverted(tmp_path):
 def test_manifest_rejects_a_moving_exec_item(tmp_path):
     man = tmp_path / "bad.manifest"
     man.write_text("exec x /a/b /c/d root root 0755\n")
-    assert tool("verify", str(man)).returncode == 2
+    assert tool("verify", str(man), "--service-user", "nobody").returncode == 2   # no production account needed
 
 
 def _line(name, priv, sources, status="running"):
@@ -284,3 +284,33 @@ def test_a_source_that_is_not_a_directory_is_refused(box):
     a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
     assert a.returncode != 0 and "not a directory" in a.stderr, a.stderr
     assert not (root / "srv/zoe/app").exists()
+
+
+def test_copied_files_lose_group_and_world_write(box):
+    root, man, common = box
+    os.chmod(root / "home/zoe/app/conf.yaml", 0o666)
+    a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
+    assert a.returncode == 0, a.stderr
+    assert (root / "srv/zoe/app/conf.yaml").stat().st_mode & 0o022 == 0
+
+
+def test_an_exec_item_swapped_for_a_symlink_is_refused(tmp_path):
+    root = tmp_path / "root"
+    (root / "opt").mkdir(parents=True)
+    victim = tmp_path / "protected"
+    victim.write_text("protected\n")
+    os.chmod(victim, 0o600)
+    (root / "opt" / "run.sh").symlink_to(victim)
+    man = tmp_path / "e.manifest"
+    man.write_text(f"exec run /opt/run.sh /opt/run.sh {ME} {MYGID} 0755\n")
+    a = tool("apply", str(man), "--root", str(root), "--service-user", "nobody", "--state", str(tmp_path / "s.json"),
+             "--container-stopped")
+    assert a.returncode != 0
+    assert victim.stat().st_mode & 0o777 == 0o600, "apply changed the link target"
+
+
+def test_a_partial_single_file_copy_is_never_published(box, monkeypatch):
+    root, man, common = box
+    a = tool("apply", str(man), *common, "--only", "conf", "--container-stopped")
+    assert a.returncode == 0, a.stderr
+    assert not list((root / "srv/zoe/conf").glob("*.p0-2-partial"))

@@ -126,11 +126,20 @@ def verify_item(it, root, svc):
     return problems
 
 
+def _own(p, uid, gid):
+    """Owner set without following a link; group- and world-write stripped from every non-link (a copied 0666
+    file must not stay writable by the service user once root owns it)."""
+    os.lchown(p, uid, gid)
+    st = os.lstat(p)
+    if not stat.S_ISLNK(st.st_mode) and st.st_mode & 0o022:
+        os.chmod(p, stat.S_IMODE(st.st_mode) & ~0o022)
+
+
 def chown_tree(path, uid, gid):
-    os.lchown(path, uid, gid)
+    _own(path, uid, gid)
     for base, dirs, files in os.walk(path):
         for n in dirs + files:
-            os.lchown(os.path.join(base, n), uid, gid)
+            _own(os.path.join(base, n), uid, gid)
 
 
 def open_nofollow(path, directory):
@@ -194,10 +203,18 @@ def apply_item(it, root, state):
     old, new = under(root, it["old"]), under(root, it["new"])
     uid, gid = uid_of(it["owner"]), gid_of(it["group"])
     if it["kind"] == "exec":
-        st = os.lstat(new)
-        state.setdefault(it["name"], {"owner": st.st_uid, "group": st.st_gid, "mode": stat.S_IMODE(st.st_mode)})
-        os.chown(new, uid, gid, follow_symlinks=False)
-        os.chmod(new, it["mode"])
+        # The service user owns this script today, so it may swap it for a link to a protected file just before the
+        # owner runs apply. Open it pinned without following a link and change it only through that descriptor.
+        fd = open_nofollow(new, directory=False)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise RuntimeError(f"{new} is not a regular file; refusing")
+            state.setdefault(it["name"], {"owner": st.st_uid, "group": st.st_gid, "mode": stat.S_IMODE(st.st_mode)})
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, it["mode"])
+        finally:
+            os.close(fd)
         return "fixed in place"
     parent = os.path.dirname(new)
     if not os.path.isdir(parent):  # the /srv/zoe chain: root-owned, 0755, created only when absent
@@ -231,12 +248,18 @@ def apply_item(it, root, state):
             if not os.path.isfile(old) or os.path.islink(old):
                 raise RuntimeError(f"{old} is not a regular file; nothing to copy")
             src = open_nofollow(old, directory=False)
+            partial = new + ".p0-2-partial"   # published only once complete: a half copy is never "done" on retry
             try:
                 if not stat.S_ISREG(os.fstat(src).st_mode):
                     raise RuntimeError(f"{old} is not a regular file; nothing to copy")
-                _copy_fd(src, new, stat.S_IMODE(os.fstat(src).st_mode))
+                if os.path.lexists(partial):
+                    os.unlink(partial)
+                _copy_fd(src, partial, stat.S_IMODE(os.fstat(src).st_mode))
+                os.replace(partial, new)
             finally:
                 os.close(src)
+                if os.path.lexists(partial):
+                    os.unlink(partial)
             os.chown(new, uid, gid)
     os.chown(new, uid, gid, follow_symlinks=False)  # re-assert the top only: the container owns what is inside
     os.chmod(new, it["mode"])
