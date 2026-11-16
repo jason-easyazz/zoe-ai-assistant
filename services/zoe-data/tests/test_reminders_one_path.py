@@ -143,14 +143,26 @@ async def test_cancel_own_only_is_stricter(quiet):
 
 
 # ── bug 2: an accepted reminder suggestion ────────────────────────────────────────────────────────────────────────────────
+class _PgState:
+    """The database: one suggestion row, the reminders, and the ROW LOCK a claiming UPDATE takes until its transaction ends."""
+
+    def __init__(self, slots=None):
+        import asyncio
+
+        self.reminders, self.notifications, self.resolved = {}, [], 0
+        self.slots = slots or '{"title": "book the vet", "date": "2099-06-16", "time": "15:00"}'
+        self.row_lock, self.fail_after_insert = asyncio.Lock(), False
+
+
 class _PgConn:
     """A fake asyncpg connection (the one ``AsyncpgCompat`` wraps) with REAL transaction semantics: ``transaction()`` snapshots the
     state and puts it back on an exception, and every statement is recorded with the transaction depth it ran at. A bare
-    ``commit`` does nothing (as on Postgres), so a write made OUTSIDE ``transaction()`` is durable at once and cannot be undone."""
+    ``commit`` does nothing (as on Postgres). The claiming ``UPDATE ... WHERE resolved = 0`` blocks while another connection's
+    transaction holds the row, then re-reads it (READ COMMITTED), as Postgres does."""
 
-    def __init__(self, fail_resolve=False):
-        self.reminders, self.notifications, self.resolved, self.fail_resolve = {}, [], 0, fail_resolve
-        self.depth, self.log = 0, []
+    def __init__(self, state=None):
+        self.st = state or _PgState()
+        self.depth, self.log, self.held = 0, [], False
 
     def transaction(self):
         conn = self
@@ -158,46 +170,63 @@ class _PgConn:
         class _Tx:
             async def __aenter__(self):
                 conn.depth += 1
-                self.snap = (dict(conn.reminders), list(conn.notifications), conn.resolved)
+                st = conn.st
+                self.snap = (dict(st.reminders), list(st.notifications), st.resolved)
 
             async def __aexit__(self, exc_type, *_):
                 conn.depth -= 1
+                st = conn.st
                 if exc_type is not None:
-                    conn.reminders, conn.notifications, conn.resolved = self.snap
+                    st.reminders, st.notifications, st.resolved = self.snap
+                if conn.held:
+                    conn.held = False
+                    st.row_lock.release()
         return _Tx()
 
     async def fetch(self, sql, *args):
+        import asyncio
+
+        await asyncio.sleep(0)
         self.log.append((sql.split()[0], self.depth))
         if "FROM users" in sql:
             return [{"id": args[0], "role": "user", "name": "Member"}]
         if "FROM reminders" in sql:
-            return [dict(self.reminders[args[0]])] if args[0] in self.reminders else []
+            if self.st.fail_after_insert:
+                raise RuntimeError("connection lost")
+            return [dict(self.st.reminders[args[0]])] if args[0] in self.st.reminders else []
         return []
 
     async def fetchrow(self, sql, *args):
+        import asyncio
+
         self.log.append(("fetchrow", self.depth))
-        if "FROM pending_suggestions" in sql and not self.resolved:
-            return {"action_type": "reminder_create",
-                    "pre_filled_slots": '{"title": "book the vet", "date": "2099-06-16", "time": "15:00"}'}
+        if "UPDATE pending_suggestions" in sql:       # the claim: first statement of the transaction
+            assert self.depth == 1 and "resolved = 0" in sql
+            await self.st.row_lock.acquire()
+            self.held = True
+            await asyncio.sleep(0)
+            if self.st.resolved:
+                return None
+            self.st.resolved = 1
+            return {"action_type": "reminder_create", "pre_filled_slots": self.st.slots}
         return None
 
     async def execute(self, sql, *args):
+        import asyncio
+
+        await asyncio.sleep(0)
         self.log.append((" ".join(sql.split()[:3]), self.depth))
         if "INSERT INTO reminders" in sql:
-            self.reminders[args[0]] = {"id": args[0], "user_id": args[1], "title": args[2], "due_date": args[7],
-                                       "due_time": args[8], "is_active": 1, "acknowledged": 0, "deleted": 0}
+            self.st.reminders[args[0]] = {"id": args[0], "user_id": args[1], "title": args[2], "due_date": args[7],
+                                          "due_time": args[8], "is_active": 1, "acknowledged": 0, "deleted": 0}
         elif "INSERT INTO notifications" in sql:
-            self.notifications.append(args)
-        elif "UPDATE pending_suggestions" in sql:
-            if self.fail_resolve:
-                raise RuntimeError("connection lost")
-            self.resolved = 1
+            self.st.notifications.append(args)
         return "OK 1"
 
 
 class _PgPool:
-    def __init__(self, conn):
-        self.conn, self.acquired = conn, 0
+    def __init__(self, state):
+        self.state, self.acquired, self.conns = state, 0, []
 
     def acquire(self):
         pool = self
@@ -205,17 +234,17 @@ class _PgPool:
         class _Ctx:
             async def __aenter__(self):
                 pool.acquired += 1
-                return pool.conn
+                conn = _PgConn(pool.state)
+                pool.conns.append(conn)
+                return conn
 
             async def __aexit__(self, *_):
                 pass
         return _Ctx()
 
 
-@pytest.mark.asyncio
-async def test_accepted_suggestion_is_one_transaction_on_one_connection(monkeypatch):
-    conn = _PgConn(fail_resolve=True)
-    pool, scheduled, announced = _PgPool(conn), [], []
+def _accept_world(monkeypatch, state):
+    pool, scheduled, announced = _PgPool(state), [], []
 
     async def allow(*_a, **_k):
         return None
@@ -231,17 +260,94 @@ async def test_accepted_suggestion_is_one_transaction_on_one_connection(monkeypa
     monkeypatch.setattr("reminder_service.broadcaster.broadcast", announce)
     monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", schedule)
     monkeypatch.setattr("anticipation.mode", lambda: "off")
+    return pool, scheduled, announced
 
-    out = await pending_suggestions.execute_suggestion("sug-1", A)       # the suggestion's own update fails AFTER the insert
-    assert out["ok"] is False and "connection lost" in out["error"]
-    assert conn.reminders == {} and conn.notifications == [] and conn.resolved == 0     # rolled back together
+
+@pytest.mark.asyncio
+async def test_accepted_suggestion_is_one_transaction_on_one_connection(monkeypatch):
+    state = _PgState()
+    state.fail_after_insert = True                                       # fails AFTER the reminder insert
+    pool, scheduled, announced = _accept_world(monkeypatch, state)
+
+    out = await pending_suggestions.execute_suggestion("sug-1", A)
+    assert out["ok"] is False
+    assert state.reminders == {} and state.notifications == [] and state.resolved == 0   # claim, insert and notice rolled back together
     assert scheduled == [] and announced == []                           # no job and no panel news for a reminder that never was
 
-    conn.fail_resolve = False                                            # the retry
+    state.fail_after_insert = False                                      # the retry
     out = await pending_suggestions.execute_suggestion("sug-1", A)
-    assert out["ok"] is True and len(conn.reminders) == 1 and conn.resolved == 1       # exactly one reminder
-    assert scheduled == list(conn.reminders) and len(announced) == 1     # job and broadcast only after the commit
-    assert pool.acquired == 2 and {depth for _, depth in conn.log} == {1}   # one connection per attempt; EVERY statement in the transaction
+    assert out["ok"] is True and len(state.reminders) == 1 and state.resolved == 1       # exactly one reminder
+    assert scheduled == list(state.reminders) and len(announced) == 1    # job and broadcast only after the commit
+    assert pool.acquired == 2 and {d for c in pool.conns for _, d in c.log} == {1}   # one connection per attempt; EVERY statement in the transaction
+
+
+@pytest.mark.asyncio
+async def test_two_accepts_racing_make_one_reminder_one_job(monkeypatch):
+    import asyncio
+
+    state = _PgState()
+    pool, scheduled, announced = _accept_world(monkeypatch, state)
+    first, second = await asyncio.gather(pending_suggestions.execute_suggestion("sug-1", A),
+                                         pending_suggestions.execute_suggestion("sug-1", A))
+    assert sorted([first["ok"], second["ok"]]) == [False, True]
+    loser = first if not first["ok"] else second
+    assert loser == {"ok": False, "error": "not_found"}                  # the answer a later accept of a taken offer gets
+    assert len(state.reminders) == 1 and state.resolved == 1 and len(scheduled) == 1 and len(announced) == 1
+    assert pool.acquired == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_winner_hands_the_offer_to_the_waiting_accept(monkeypatch):
+    import asyncio
+
+    state = _PgState()
+    state.fail_after_insert = True
+    pool, scheduled, _ = _accept_world(monkeypatch, state)
+    state.fail_after_insert = True
+
+    async def heal():                                                    # the second accept runs once the first has rolled back
+        while state.row_lock.locked() or not pool.conns:
+            await asyncio.sleep(0)
+        state.fail_after_insert = False
+        return await pending_suggestions.execute_suggestion("sug-1", A)
+
+    first, second = await asyncio.gather(pending_suggestions.execute_suggestion("sug-1", A), heal())
+    assert first["ok"] is False and second["ok"] is True and len(state.reminders) == 1 and len(scheduled) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_when_hint_stays_open_and_is_never_stored_or_logged(monkeypatch, caplog):
+    import logging
+
+    marker = "zxqv blorp wibble"
+    state = _PgState(slots='{"title": "book the vet", "when_hint": "%s"}' % marker)
+    pool, scheduled, announced = _accept_world(monkeypatch, state)
+    with caplog.at_level(logging.DEBUG):
+        out = await pending_suggestions.execute_suggestion("sug-1", A)
+    assert out == {"ok": False, "error": "reminder_needs_time"}
+    assert state.reminders == {} and state.resolved == 0 and scheduled == []          # the offer stays open
+    for rec in caplog.records:
+        assert marker not in rec.getMessage() and marker not in repr(rec.args) and not rec.exc_info
+    # an unreadable explicit date and time are the same: fixed code, nothing quoted
+    for slots in ('{"title": "t", "date": "%s", "time": "9am"}' % marker, '{"title": "t", "date": "2099-06-16", "time": "%s"}' % marker):
+        state.slots = slots
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG):
+            out = await pending_suggestions.execute_suggestion("sug-1", A)
+        assert out == {"ok": False, "error": "reminder_needs_time"} and state.reminders == {}
+        assert all(marker not in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_past_day_is_refused_without_logging_the_words(monkeypatch, caplog):
+    import logging
+
+    state = _PgState(slots='{"title": "book the vet", "date": "2001-01-01", "time": "9am"}')
+    _accept_world(monkeypatch, state)
+    with caplog.at_level(logging.DEBUG):
+        out = await pending_suggestions.execute_suggestion("sug-1", A)
+    assert out == {"ok": False, "error": rs.SPOKEN["past_day"]} and state.reminders == {} and state.resolved == 0
+    assert all("2001" not in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -249,7 +355,7 @@ async def test_a_reminder_offer_without_a_time_stays_open():
     conn = _PgConn()
     with pytest.raises(ValueError, match="reminder_needs_time"):
         await pending_suggestions._execute_action(conn, "reminder_create", {"title": "book the vet"}, A)
-    assert conn.reminders == {} and conn.log == []
+    assert conn.st.reminders == {} and conn.log == []
     assert pending_suggestions._suggested_when("book the vet", {"when_hint": "friday"}) == ("friday", None)
 
 
@@ -478,3 +584,24 @@ async def test_people_health_nudge_fires_once_per_day(monkeypatch):
     assert await tick(15) == []                                # cannot tell what was sent: send nothing this tick
     db.pending_read_fails = False
     assert [r.item_id for r in await tick(0, days=1)] == ["p1"]  # tomorrow fires again
+
+
+def test_no_logger_call_in_the_reminder_paths_carries_exception_text():
+    """Log pin (the privacy sweep's rule): the suggestion and store paths log an exception's TYPE, never its text (a refusal quotes
+    the person's words) and never a traceback (``logger.exception``). Negative control: the scanner flags the old form."""
+    import ast
+    from pathlib import Path
+
+    def bad(src):
+        hits = []
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in (
+                    "debug", "info", "warning", "error", "exception", "critical") and getattr(node.func.value, "id", "") == "logger":
+                if node.func.attr == "exception" or any(isinstance(a, ast.Name) and a.id in ("exc", "e", "err") for a in node.args[1:]):
+                    hits.append(node.lineno)
+        return hits
+
+    assert bad('logger.warning("x failed: %s", exc)\n') == [1] and bad('logger.exception("x")\n') == [1]
+    root = Path(__file__).resolve().parents[1]
+    for name in ("pending_suggestions.py", "reminder_service.py"):
+        assert bad((root / name).read_text(encoding="utf-8")) == [], name

@@ -17,6 +17,8 @@ from people_utils import name_covered_by_contacts
 
 from user_filters import is_unidentified
 
+from fastapi import HTTPException
+
 logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -349,7 +351,7 @@ async def store_suggestions(
         # WARNING, not debug: a swallowed store error (e.g. the users FK) hid the
         # propose-on-mention failure for a long time. Any orphan users row from a
         # partial write is benign (a valid user is a prerequisite, no PII).
-        logger.warning("pending_suggestions.store failed (stored=%d): %s", stored, exc)
+        logger.warning("pending_suggestions.store failed (stored=%d): %s", stored, type(exc).__name__)
     return stored
 
 
@@ -397,7 +399,7 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
     except Exception as exc:
         logger.warning(
             "pending_suggestions.load_for_prompt failed for user=%s — offers "
-            "not surfaced and turns_elapsed NOT aged: %s", user_id, exc)
+            "not surfaced and turns_elapsed NOT aged: %s", user_id, type(exc).__name__)
     if not lines:
         return ""
     return "\n".join(lines)
@@ -434,7 +436,7 @@ async def list_active(user_id: str, session_id: str) -> list[dict]:
             })
         return out
     except Exception as exc:
-        logger.debug("pending_suggestions.list_active failed: %s", exc)
+        logger.debug("pending_suggestions.list_active failed: %s", type(exc).__name__)
         return []
 
 
@@ -480,7 +482,7 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
             })
         return out
     except Exception as exc:
-        logger.debug("pending_suggestions.list_pending_contacts failed: %s", exc)
+        logger.debug("pending_suggestions.list_pending_contacts failed: %s", type(exc).__name__)
         return []
 
 
@@ -554,7 +556,7 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
     except Exception as exc:
         logger.warning(
             "pending_suggestions.surface_pending_contacts_for_prompt failed for "
-            "user=%s — contact offers NOT surfaced: %s", user_id, exc)
+            "user=%s — contact offers NOT surfaced: %s", user_id, type(exc).__name__)
     if out:
         _SHOWN_SINCE_TICK.add(user_id)
     return out
@@ -591,7 +593,7 @@ async def age_person_offers_on_user_turn(user_id: str) -> int:
     except Exception as exc:
         logger.warning(
             "pending_suggestions.age_person_offers_on_user_turn failed for "
-            "user=%s — offers will not expire on schedule: %s", user_id, exc)
+            "user=%s — offers will not expire on schedule: %s", user_id, type(exc).__name__)
         return 0
 
 
@@ -633,7 +635,7 @@ async def surfaced_person_offers(user_id: str, *, limit: int = 5) -> list[dict]:
                 "offer_phrase": row["offer_phrase"],
             })
     except Exception as exc:
-        logger.debug("pending_suggestions.surfaced_person_offers failed: %s", exc)
+        logger.debug("pending_suggestions.surfaced_person_offers failed: %s", type(exc).__name__)
     return out
 
 
@@ -813,7 +815,7 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
                     await memory_disputes.resolve(user_id, cid, accept=False)
         return bool(rows)
     except Exception as exc:
-        logger.debug("pending_suggestions.mark_resolved failed: %s", exc)
+        logger.debug("pending_suggestions.mark_resolved failed: %s", type(exc).__name__)
         return False
 
 
@@ -865,6 +867,8 @@ def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
         from intent_router import _extract_simple_reminder_slots
 
         parsed = _extract_simple_reminder_slots(f"remind me to {title} {hint}") or {}
+        if str(parsed.get("title") or "").strip().lower() == f"{title} {hint}".strip().lower():
+            parsed = {}  # the grammar read NOTHING of the hint (it stays in the title and the date is its default "today"): unreadable
         due_date, due_time = parsed.get("date") or None, parsed.get("time") or None
         if not (due_date or due_time):
             due_date = hint
@@ -886,6 +890,20 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
 
     title = str(slots.get("title") or slots.get("description") or "Reminder").strip()
     due_date, due_time = _suggested_when(title, slots)
+    if not (due_date or due_time):
+        raise ValueError("reminder_needs_time")
+    # What a person said is read HERE, once: a day or time that cannot be read leaves the offer open under a fixed code, and only a
+    # real ISO date / clock time ever reaches the store, a column or a log. (``_suggested_when`` may hand over an unreadable
+    # ``when_hint`` as the day; the store's refusals quote the text they were given.)
+    from fastapi import HTTPException
+    from reminder_service import ReminderPastError, normalize_due_date, normalize_due_time
+
+    try:
+        due_date, due_time = normalize_due_date(due_date), normalize_due_time(due_time)
+    except ReminderPastError:
+        raise
+    except HTTPException:
+        raise ValueError("reminder_needs_time") from None
     if not (due_date or due_time):
         raise ValueError("reminder_needs_time")
     db = conn if hasattr(conn, "commit") else AsyncpgCompat(conn)
@@ -1102,9 +1120,13 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         pool = get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # The CLAIM is the first statement, in this transaction: ``resolved`` is 0/1 only, so the claim IS the resolve. A second
+                # accept racing this one blocks on the row until this transaction ends, then finds it resolved (no row) and gets the
+                # same "not_found" a later accept gets; if this one rolls back, the claim rolls back with the insert and a retry works.
                 row = await conn.fetchrow(
-                    """SELECT action_type, pre_filled_slots FROM pending_suggestions
-                       WHERE id = $1 AND user_id = $2 AND resolved = 0""",
+                    """UPDATE pending_suggestions SET resolved = 1
+                       WHERE id = $1 AND user_id = $2 AND resolved = 0
+                       RETURNING action_type, pre_filled_slots""",
                     suggestion_id,
                     user_id,
                 )
@@ -1113,21 +1135,19 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                 action = row["action_type"]
                 slots = json.loads(row["pre_filled_slots"] or "{}")
                 result = await _execute_action(conn, action, slots, user_id, after_commit)
-                await conn.execute(
-                    "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1 AND user_id = $2",
-                    suggestion_id,
-                    user_id,
-                )
                 if action == "forget_alias":
                     await _scrub_forget_alias(suggestion_id, conn)
             for later in after_commit:  # committed: the reminder is real now (best-effort, the scan retries a job)
                 try:
                     await later()
-                except Exception:  # noqa: BLE001
-                    logger.exception("pending_suggestions: post-commit step failed after %s", action)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("pending_suggestions: post-commit step failed after %s (%s)", action, type(exc).__name__)
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    except HTTPException as exc:  # the store's refusal (a past day or time): its detail quotes the person's words, never logged
+        logger.info("pending_suggestions.execute refused: %s status=%s", type(exc).__name__, exc.status_code)
+        return {"ok": False, "error": getattr(exc, "spoken", None) or "reminder_not_valid"}
     except Exception as exc:
-        logger.warning("pending_suggestions.execute failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        logger.warning("pending_suggestions.execute failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__}

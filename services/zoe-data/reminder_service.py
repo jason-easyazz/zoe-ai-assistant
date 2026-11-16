@@ -334,8 +334,8 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
             try:
                 from proactive.triggers.reminder_scan import schedule_due_reminder
                 await schedule_due_reminder(db, reminder, now_utc=now_utc)
-            except Exception:
-                logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
+            except Exception as exc:
+                logger.warning("reminder %s created but not scheduled yet (slow loop will retry): %s", reminder_id, type(exc).__name__)
         await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
 
     if after_commit is not None:
@@ -381,8 +381,8 @@ async def _cancel_reminder_jobs_safe(reminder_id: str) -> None:
     try:
         from proactive.triggers.reminders import cancel_reminder_jobs
         await cancel_reminder_jobs(reminder_id)
-    except Exception:
-        logger.exception("reminder resync: cancel stale jobs failed for %s", reminder_id)
+    except Exception as exc:
+        logger.warning("reminder resync: cancel stale jobs failed for %s: %s", reminder_id, type(exc).__name__)
 
 
 async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
@@ -411,8 +411,8 @@ async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
         if r.get("due_time") or r.get("due_date"):
             from proactive.triggers.reminder_scan import schedule_due_reminder
             await schedule_due_reminder(db, row)
-    except Exception:
-        logger.exception("reminder resync: reschedule failed for %s", reminder_id)
+    except Exception as exc:
+        logger.warning("reminder resync: reschedule failed for %s: %s", reminder_id, type(exc).__name__)
 
 
 async def _reread(db, reminder_id: str) -> dict | None:
@@ -507,8 +507,8 @@ async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: s
         from proactive.triggers.reminders import schedule_reminder
         await schedule_reminder(user_id=row.get("user_id") or user_id, message=row.get("title") or "Reminder",
                                 send_at=snooze_at.replace(microsecond=0), item_id=reminder_id)
-    except Exception:
-        logger.exception("reminder snooze: reschedule at snoozed_until failed for %s", reminder_id)
+    except Exception as exc:
+        logger.warning("reminder snooze: reschedule at snoozed_until failed for %s: %s", reminder_id, type(exc).__name__)
     reminder = await _reread(db, reminder_id)
     await broadcaster.broadcast("reminders", "reminder_snoozed", reminder, user_id=user_id)
     return reminder
