@@ -53,7 +53,7 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
 from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders  # noqa: E402
-from zoe_os.capability import ROLES, Person  # noqa: E402
+from zoe_os.capability import Person, person_from_entry  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os import speaker  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
@@ -212,14 +212,7 @@ def roster_ids(entries: list) -> list:
 def roster_people(entries: list) -> list:
     """Persons from roster entries, roles as STATED. Least access whenever the entry does not fully say otherwise: a plain id, a
     missing or unknown role, an unknown key, or guardians that are not a list of ids give ``Person(id)`` (``capability.LEAST``)."""
-    out = []
-    for p in entries:
-        if isinstance(p, dict) and not set(p) - {"id", "role", "guardians"} and p.get("role") in ROLES \
-                and isinstance(p.get("guardians", []), list) and all(isinstance(g, str) and g for g in p.get("guardians", [])):
-            out.append(Person(p["id"], p["role"], tuple(p.get("guardians", []))))
-        else:
-            out.append(Person(entry_id(p)))
-    return out
+    return [person_from_entry(p) for p in entries]
 
 
 def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
