@@ -66,6 +66,7 @@ class FakeKernel:
         self.forget_mode = "ok"
         self.known = None                      # the members the kernel knows (None = everyone): a stranger's forget is refused
         self.reply_mode = "ok"
+        self.close_on = None
         self.delay = 0.0
         self.stall: dict = {}                  # (stage, connection number) -> seconds the kernel sits on that stage
         self._seq = 0
@@ -107,6 +108,8 @@ class FakeKernel:
                 if self.delay:
                     time.sleep(self.delay)
                 self._wait(req["op"], n)
+                if req["op"] == self.close_on:
+                    raise ConnectionError                  # accepted, authenticated, then closed mid-request
                 self._answer(conn, skill, req)
         except (ConnectionError, OSError, ValueError):
             pass
@@ -155,6 +158,9 @@ class FakeKernel:
             raise ConnectionError
         if a["action"] == "remind.set" and set(a["args"]) - {"note", "in_minutes", "asked"}:
             return self._refuse(conn, req, "unknown argument")          # the kernel's check_params: an extra argument is refused
+        if mode.startswith("raw_result:"):                # the act's result as raw JSON text (NaN, Infinity, 1e400 ...)
+            body = ('{"v":1,"id":%d,"ok":true,"result":%s}' % (req["id"], mode.split(":", 1)[1])).encode()
+            return conn.sendall(struct.pack(">I", len(body)) + body)
         if mode == "error_code":                         # an error envelope whose code is free text from the kernel
             return _send(conn, self._frame(req, {"ok": False, "error": {"code": self.error_code, "reason": self.error_code}}))
         if mode == "wrong_shape":
@@ -742,3 +748,36 @@ def test_marker_text_from_any_caller_argument_never_reaches_a_log_line_or_a_coun
     assert line.count("result=") == 1 and line.count("reason=") == 1
     if field == "source":
         assert " src=other " in line
+
+
+# ---- unavailability opens the circuit, whatever the stage --------------------------------------------------------------------------
+def test_a_kernel_that_accepts_then_closes_mid_request_opens_the_circuit(kernel, caplog):
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    kernel.close_on = "publish"
+    add()
+    add()
+    settle(2)
+    assert os_shadow.counters() == {"kernel_unavailable": 2}
+    assert kernel.connections == 1, "the second add reconnected: the circuit stayed closed"
+    assert " reason=circuit " in _lines(caplog)[1]
+
+
+@pytest.mark.parametrize("creds", ["not json", '{"socket": "x"}', '{"socket": "x", "creds": {}}'])
+def test_unreadable_or_missing_credentials_open_the_circuit(kernel, monkeypatch, creds):
+    (kernel.state / "creds.json").write_text(creds)
+    loads = []
+    real = os_shadow._load_creds
+    monkeypatch.setattr(os_shadow, "_load_creds", lambda: (loads.append(1), real())[1])
+    add()
+    add()
+    settle(2)
+    assert os_shadow.counters() == {"kernel_unavailable": 2} and len(loads) == 1
+
+
+@pytest.mark.parametrize("raw", ['{"verified": NaN, "outcome": "verified"}', '{"verified": true, "outcome": "verified", "n": Infinity}',
+                                 '{"verified": true, "outcome": "verified", "n": -Infinity}', '{"verified": true, "outcome": "verified", "n": 1e400}'])
+def test_a_reply_with_a_non_standard_number_is_malformed_at_the_decoder(kernel, raw):
+    kernel.act_mode = "raw_result:" + raw
+    add()
+    settle(1)
+    assert os_shadow.counters() == {"kernel_malformed": 1}

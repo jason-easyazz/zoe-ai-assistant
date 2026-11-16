@@ -334,3 +334,15 @@ def test_junk_numbers_never_move_the_pass_line_except_as_rejected():
     junk = [act("alarm_create", hop=2.0).replace("hop_ms=2.0", f"hop_ms={h}") for h in ("nan", "inf", "-inf", "-1", "1e300", "")]
     a, b = rep.summarize(*rep.parse_counted(good)), rep.summarize(*rep.parse_counted(good + junk))
     assert a["verbs"] == b["verbs"] and b["rejected"] == len(junk) and b["verbs"]["alarm_create"]["verdict"]["pass"]
+
+
+@pytest.mark.parametrize("cut", ["OS_SHADOW_LIST_ADD", "OS_SHADOW_LIST_ADD\n", "OS_SHADOW_LIST_ADD   ",
+                                 "x INFO os_shadow: OS_SHADOW_LIST_ADD src=spoken",                     # the marker plus one field
+                                 "x INFO os_shadow: OS_SHADOW_LIST_ADD src=spoken cls=shopping li",      # cut mid-key
+                                 "x INFO os_shadow: OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=ma"])  # mid-value
+def test_a_marker_line_cut_short_anywhere_is_counted_as_rejected(cut, tmp_path, capsys):
+    recs, rejected = rep.parse_counted([line(), cut])
+    assert len(recs) == 1 and rejected == 1
+    f = tmp_path / "log"
+    f.write_text(line() + "\n" + cut)                                 # the cut line LAST in the file, newline or not
+    assert rep.main([str(f)]) == 0 and "rejected lines 1" in capsys.readouterr().out

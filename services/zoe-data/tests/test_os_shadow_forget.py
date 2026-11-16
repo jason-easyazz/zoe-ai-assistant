@@ -237,10 +237,11 @@ def test_a_failing_replay_never_costs_the_add_behind_it_its_line(kernel, monkeyp
 
     caplog.set_level(logging.INFO, logger="os_shadow")
     os_shadow._reset_for_tests()
-    monkeypatch.setattr(os_shadow, "_replay_pending", lambda k: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(os_shadow, "_replay_pending", lambda k, **kw: (_ for _ in ()).throw(RuntimeError("boom")))   # the worker passes force=
     assert os_shadow.revive()
     add()
     settle(1)
+    assert any(r.getMessage() == "OS_SHADOW replay error=RuntimeError" for r in caplog.records)   # the INJECTED error, not a TypeError
     # the park file was never read, so whether a forget is parked is unknown: the add fails closed (never sent ahead of a forget)
     # and still writes its one line
     assert os_shadow.counters() == {"dropped_erased": 1}
@@ -323,21 +324,28 @@ async def test_a_full_queue_never_blocks_the_loop_and_the_forget_is_parked_not_l
 
     full: queue.Queue = queue.Queue(maxsize=1)
     full.put_nowait(("stop",))
+    real_park = os_shadow._pending_add
+
+    def slow_park(member):                                    # a park that takes 300 ms (a slow disk): it must run OFF the loop
+        time.sleep(0.3)
+        return real_park(member)
+
     with monkeypatch.context() as m:
         m.setattr(os_shadow, "_q", full)
+        m.setattr(os_shadow, "_pending_add", slow_park)
         t = asyncio.create_task(ticker())
         await asyncio.sleep(0.02)
-        before, t0 = len(ticks), time.perf_counter()
+        t0 = time.perf_counter()
         if flag == "off":
             assert await os_shadow.forget_user(MEMBER) == 0              # deferred, and said so
         else:
             with pytest.raises(os_shadow.ShadowForgetUnavailable):       # the flag on: not confirmed is never "forgotten"
                 await os_shadow.forget_user(MEMBER)
-        took = time.perf_counter() - t0
-        await asyncio.sleep(0.02)
+        t1 = time.perf_counter()
         t.cancel()
-    assert took < 0.5, f"the forget held the loop {took:.2f} s"         # the old blocking put held it 2 s
-    assert len(ticks) > before                                            # other tasks ran
+    during = sum(1 for x in ticks if t0 < x < t1)
+    assert t1 - t0 >= 0.3                                                 # the slow park really ran inside the forget
+    assert during >= 20, f"only {during} ticks while the forget ran: the loop was blocked"   # a blocked loop gets 0; free ~60
     assert _pending(kernel) == [MEMBER]
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
     add()
@@ -418,3 +426,55 @@ async def test_marker_text_in_a_forget_never_reaches_a_log_line_or_a_counter(ker
     with pytest.raises(os_shadow.ShadowForgetUnavailable):
         await (os_shadow.erase_entity(MEMBER, mark) if field == "entity" else os_shadow.erase_topic(MEMBER, mark))
     assert mark not in " ".join(r.getMessage() for r in caplog.records) and not any(mark in str(k) for k in os_shadow.counters())
+
+
+
+# ---- a missing credential is never proof there is nothing to forget -------------------------------------------------------------------
+def _db_without_creds(kernel):
+    (kernel.state / "creds.json").unlink()
+    (kernel.state / "kernel").mkdir(exist_ok=True)
+    (kernel.state / "kernel" / "zoe-os.db").write_bytes(b"x")        # the kernel's store outlived its credential
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["forget_user", "erase_entity", "erase_topic"])
+async def test_a_forget_with_the_credential_gone_but_a_store_present_is_parked_then_replayed(kernel, monkeypatch, call):
+    creds = (kernel.state / "creds.json").read_text()
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    _db_without_creds(kernel)
+    fn = getattr(os_shadow, call)
+    out = await (fn(MEMBER) if call == "forget_user" else fn(MEMBER, "Dana"))
+    assert out == 0 and _pending(kernel) == [MEMBER]                     # deferred AND parked: never a silent "done"
+    (kernel.state / "creds.json").write_text(creds)                       # the credential comes back
+    os_shadow._reset_for_tests()
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    assert os_shadow.revive()
+    add()
+    settle(1)
+    assert [op for _, op, _ in kernel.calls][:1] == ["forget"] and not (kernel.state / "pending-forgets.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_with_the_shadow_on_a_forget_that_cannot_reach_the_kernel_raises_and_is_parked(kernel):
+    _db_without_creds(kernel)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await os_shadow.forget_user(MEMBER)
+    assert _pending(kernel) == [MEMBER]
+
+
+@pytest.mark.asyncio
+async def test_only_a_state_directory_with_nothing_in_it_is_a_no_op(kernel, monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    for d, expect in ((tmp_path / "absent", False), (empty, False), (kernel.state, True)):
+        monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(d))
+        assert os_shadow.shadow_state_exists() is expect, d
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(empty))
+    assert await os_shadow.forget_user(MEMBER) == 0 and kernel.calls == [] and not (empty / "pending-forgets.json").exists()
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x")
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(not_a_dir))
+    assert os_shadow.shadow_state_exists() is True                       # unreadable / not a directory: counts as state
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):               # and since it cannot be parked there either: fails closed
+        await os_shadow.forget_user(MEMBER)
