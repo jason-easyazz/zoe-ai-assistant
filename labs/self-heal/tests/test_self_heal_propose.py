@@ -203,7 +203,10 @@ def test_dry_run_prints_the_command_and_executes_nothing(local_scratch, tmp_path
     eng = ProposerEngine(cfg, DryRunProposer(cfg, cli))
     out = runner(cfg, eng).run_once()
     assert (out["outcome"], out["why"]) == ("discarded", "engine_dry_run"), out
-    steps = {s["step"]: s for s in eng.last["would_run"]}
+    assert eng.last["would_run"] == ["materialize", "init", "engine", "collect"]   # step KINDS only, never an argv
+    pkt = FaultPacket(1, "t", "failing_test", "tests/test_calc.py::test_add", "python -m pytest -q x", "0" * 40, "", {},
+                      [], [], {"seconds": 5}, 1)
+    steps = {s["step"]: s for s in DryRunProposer(cfg, cli).propose(pkt).would_run}
     argv = steps["engine"]["argv"]
     assert argv[0] == str(stubs / cli) and steps["engine"]["cwd"] == "<packet-dir>"
     assert ("workspace-write" in argv and argv[argv.index("-C") + 1] == "<packet-dir>") if cli == "codex" \

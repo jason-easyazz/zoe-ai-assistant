@@ -561,3 +561,24 @@ Honest limits. The proof costs the gates a second time (supervised nodes + the w
 landing. The ledger shares the loop's trust domain: it shows edits, not a cut tail, and code that owns
 the state dir can rewrite it whole. `finish_intent` trusts the recorded phase. The health probe and
 the applier are fakes: what "healthy" means on a deployed unit is not designed here.
+
+### The loop driver (`selfheal/loop.py`, `loop_scratch.py`)
+
+`HealLoop(cfg, engine).run(fault_fixture)` composes the runner, `ProposerEngine` and `LedgerLanding`:
+fault (a JUnit fixture) -> packet -> engine -> patch check -> diff policy -> supervised gates -> local
+landing -> proof -> ledger. Every run that does not heal ends in ONE reason from the closed list
+`loop.REASONS` (the proposer's, the diff policy's, the lander's and the runner's reasons; anything
+else is `unclassified`, and a test maps free text to it).
+
+Retry policy: a TABLE lookup (`loop.RETRY`) under a deterministic cap. A round whose reason is in the
+table (malformed / empty / oversized patch, does not apply, a red gate, an engine error, a spent
+budget) may be followed by another, up to `max_rounds`, which is clamped to the per-fault cap of the
+hard floor (2). Every other reason ends the loop: a patch outside its bounds, a rollback, a refusal to
+run. Nothing the engine says is an input: no severity, score or plea is read
+(`test_an_out_of_bounds_patch_is_never_retried_whatever_the_engine_says`). The next packet carries the
+previous reason as a token.
+
+Measures, in the result JSON (`python3 labs/self-heal/loop_scratch.py --scenario <name>` prints it):
+`fault_to_verified_fix_s` (fixture read to ledger line; `null` when not healed), `attempts`,
+`rollbacks`, `refusals_by_reason`, plus per round: outcome, reason, failing gate, seconds, and the
+turns / tokens the engine reported (`null` = unreported).
