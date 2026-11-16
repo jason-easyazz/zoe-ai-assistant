@@ -12,9 +12,12 @@ the owner cares about:
 How a turn observed at the live level U is predicted at level L (``PROFILES`` is monotone, so every tail at L <= U is <= U's):
 
 * L < U: the close comes no later; a clean observation stays clean (the quiet run was unbroken and nobody spoke for the window
-  after U's close), a cut stays a cut. The wait shortens to the clean gate only when the fall was clean and the rule was deep:
-  an UPPER bound on the saving (the gate also needs <= 2 decay chunks and >= 480 ms of speech, neither on the line).
-* L > U: the wait grows by the tail difference for the rule that closed it. An observed cut is avoided only when the line says
+  after U's close), a cut stays a cut. The wait reaches the clean gate only when the fall was clean: an UPPER bound on the
+  saving (the gate also needs <= 2 decay chunks and >= 480 ms of speech, neither on the line).
+* any L: the wait is the observed one moved by L's table wait minus U's table wait for the close KIND (quiet / clean fall /
+  hesitating deep), so the U table is undone before L's applies (an L4 deep close replayed at L0 gets L0's deep tail; an L-3
+  gate close replayed at L0, which has no gate, gets L0's deep tail plus an assumed one-chunk decay, ``GATE_DECAY_MS``).
+* L > U: an observed cut is avoided only when the line says
   when the talk resumed (``talk_first_ms``, not on PR 2495's line yet) and it is inside the extra wait; otherwise it is still
   counted as a cut (conservative) and reported as "possibly avoided".
 
@@ -79,21 +82,45 @@ def _int(fields: dict, key: str) -> Optional[int]:
         return None
 
 
+GATE_DECAY_MS = 80   # a clean-gate close does not say when its deep run began: assume one decay chunk (the gate allows <= 2)
+
+
+def _kind(o, fields: dict) -> str:
+    """The close KIND, which decides the tail at any level: ``quiet`` (quiet / hesitation), ``clean`` (a clean fall: the gate
+    can close it where a level has one), ``deep`` (a hesitating fall closed by the deep tail)."""
+    if o.rule in ("quiet", "hesitation"):
+        return "quiet"
+    return "clean" if o.rule == "clean" or fields.get("fall") == "clean" else "deep"
+
+
+def _table_wait(p, kind: str, ov: int) -> int:
+    """The wait after speech end that profile ``p`` defines for ``kind``; ``ov`` = the decay before the deep / quiet run."""
+    if kind == "quiet":
+        return p.quiet_ms + ov
+    deep = p.deep_ms + ov
+    return min(deep, p.clean_ms) if kind == "clean" and p.clean_ms > 0 else deep
+
+
 def predict(fields: dict, o, level: int, observed: int) -> "tuple[bool, Optional[int], str]":
-    """(cut at ``level``, wait at ``level`` or None, avoided: yes | maybe | no | -)."""
+    """(cut at ``level``, wait at ``level`` or None, avoided: yes | maybe | no | -).
+
+    The wait is the observed wait moved by (the replayed level's table wait - the OBSERVED level's table wait) for this close
+    kind, so a close seen at any level replays to the replayed level's own tail (an L4 deep close at L0 is L0's deep tail; an
+    L-3 gate close at L0, which has no gate, is L0's deep tail) and observed == replayed changes nothing."""
     cut_obs = bool(o.still_talking or o.held)
     q = _int(fields, "quiet_ms")
     wait = q if q is not None and q >= 0 else None
     pl, pu = LP.profile(level), LP.profile(observed)
-    if level < observed:
-        if wait is not None and fields.get("fall") == "clean" and o.rule == "deep" and 0 < pl.clean_ms < wait:
-            wait = pl.clean_ms
-        return cut_obs, wait, "-"
-    if level == observed:
-        return cut_obs, wait, "-"
-    extra = (pl.deep_ms - pu.deep_ms) if o.rule == "deep" else (pl.quiet_ms - pu.quiet_ms) if o.rule in ("quiet", "hesitation") else 0
+    kind = _kind(o, fields)
+    if o.rule == "clean":
+        ov = GATE_DECAY_MS
+    else:
+        ov = (q - (pu.quiet_ms if kind == "quiet" else pu.deep_ms)) if wait is not None else 0
+    extra = _table_wait(pl, kind, ov) - _table_wait(pu, kind, ov) if o.rule in LP.CLOSE_RULES else 0
     if wait is not None:
         wait += extra
+    if level <= observed:
+        return cut_obs, wait, "-"
     if not cut_obs:
         return False, wait, "-"
     tf = _int(fields, "talk_first_ms")

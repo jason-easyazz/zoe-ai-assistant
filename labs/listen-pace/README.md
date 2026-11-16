@@ -9,6 +9,9 @@ wait (observed vs predicted) and ms of waiting saved per 100 turns. SSOT: `docs/
 - Prediction rules (and why they are sound) are in the module docstring. Short version: a shorter level never changes whether a
   turn was cut, and its saving is an upper bound; a longer level's avoided cut-offs are exact only when the line carries
   `talk_first_ms` (not on PR 2495's line yet), otherwise reported as "possibly avoided".
+- `--observed-level N` (a log recorded at a level other than L0): each wait is first undone through level N's table, then
+  the replayed level's table applies, so a close replays to that level's own tail. No number in this
+  README was produced with a non-zero N.
 - The log has no speaker, so the replay is per panel (household), which is v1's learning unit anyway.
 
 ```

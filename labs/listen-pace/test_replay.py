@@ -10,6 +10,8 @@ import random
 import sys
 from pathlib import Path
 
+import pytest
+
 _MOD = Path(__file__).resolve().parent / "replay.py"
 _spec = importlib.util.spec_from_file_location("listen_pace_replayer_under_test", _MOD)
 R = importlib.util.module_from_spec(_spec)
@@ -93,3 +95,51 @@ def test_main_prints_numbers_only(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "cuts_per_100_observed" in out and "Recorded" not in out
     assert R.main([str(p), "--json"]) == 0
+
+
+# ── --observed-level other than 0: the wait is re-derived from the OBSERVED level's table, then the replayed level's ──────────
+OV = 80          # the synthetic decay between speech end and the deep/quiet run (the replayer's assumed gate-close decay too)
+
+
+def _table_wait(level, kind):
+    deep, quiet, clean = R.LP.PROFILES[level]
+    if kind == "quiet":
+        return quiet + OV
+    if kind == "clean" and clean:
+        return min(deep + OV, clean)
+    return deep + OV
+
+
+def _observed_line(level, kind):
+    deep, quiet, clean = R.LP.PROFILES[level]
+    q = _table_wait(level, kind)
+    if kind == "quiet":
+        return fs_line(rule="quiet", close_ms=quiet, quiet_ms=q, fall="hesitating")
+    if kind == "clean" and clean and clean < deep + OV:
+        return fs_line(rule="clean", close_ms=clean, quiet_ms=q, fall="clean")
+    return fs_line(rule="deep", close_ms=deep, quiet_ms=q, fall="clean" if kind == "clean" else "hesitating")
+
+
+def _predicted_wait(line, level, observed):
+    _t, f = R.parse_line(line)
+    return R.predict(f, R.LP.outcome_from_fields(f), level, observed)[1]
+
+
+def test_a_deep_close_seen_at_l4_replayed_at_l0_waits_l0s_deep_tail():
+    rep = R.replay([fs_line(rule="deep", close_ms=960, quiet_ms=960 + OV, fall="hesitating")], observed=4)
+    assert rep["rows"][0]["level"] == 0 and rep["rows"][0]["wait_pred"] == 640 + OV        # not 1040
+
+
+def test_a_clean_gate_close_seen_at_l_minus_3_replayed_at_l0_loses_the_gate():
+    rep = R.replay([fs_line(rule="clean", close_ms=560, quiet_ms=560, fall="clean")], observed=-3)
+    assert rep["rows"][0]["level"] == 0 and rep["rows"][0]["wait_pred"] == 640 + OV        # L0 has no clean gate: not 560
+
+
+@pytest.mark.parametrize("kind", ["clean", "deep", "quiet"])
+def test_replaying_a_close_observed_at_a_as_b_gives_bs_table_wait(kind):
+    levels = range(R.LP.LEVEL_MIN, R.LP.LEVEL_MAX + 1)
+    for a in levels:
+        line = _observed_line(a, kind)
+        assert _predicted_wait(line, a, a) == _table_wait(a, kind)                           # observed == replayed: unchanged
+        for b in levels:
+            assert _predicted_wait(line, b, a) == _table_wait(b, kind), (kind, a, b)
