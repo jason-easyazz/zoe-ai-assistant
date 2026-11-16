@@ -93,3 +93,18 @@ def test_the_replay_and_twin_loaders_give_least_access_to_an_entry_they_cannot_f
         people = {m.id: m for m in household_from({"members": [bad, {"id": "member-a", "role": "adult"}]}).members}
     assert people["member-u"].role == LEAST and tuple(people["member-u"].guardians) == ()
     assert people["member-a"].role == ADULT
+
+
+def test_a_least_access_guardian_link_gives_no_forget_and_no_explain_reach(tmp_path):
+    from world import household
+    from zoe_os.capability import CHILD
+    k = household(tmp_path)
+    try:
+        k.grants.people["member-u"] = Person("member-u")                         # no role stated
+        k.grants.people["kid-u"] = Person("kid-u", CHILD, guardians=("member-u",))
+        said = k.spine.publish(Event(Kind.UTTERANCE, "voice", "kid-u", Visibility.PRIVATE, {"text": "synthetic kid words"}))
+        assert not k.enforcer.may_forget("member-u", "kid-u").allowed
+        assert not k.explainer._is("member-u", "kid-u") and k.explainer._is("kid-u", "kid-u")
+        assert said.seq
+    finally:
+        k.close()

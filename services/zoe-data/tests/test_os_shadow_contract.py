@@ -143,8 +143,10 @@ def what_still_names(state: Path, member: str) -> dict:
         }
 
 
-#: what is left naming a forgotten member: kernel bookkeeping only (see the strict xfail at the end for the kernel gap)
-ONLY_BOOKKEEPING = {"event_subject": 0, "people_links": 0, "intents": 0, "event_payload_kinds": ["forget", "grant_change"]}
+#: what is left naming a forgotten member: NOTHING. The kernel's whole-person forget writes the notice and the ledger under a keyed
+#: hash of the id (``subject_hash``, ``forget_ledger.subject``) and tombstones the member's grant records; the shadow's record-only grant
+#: stays in memory (no new event names them until a restart re-grants a member still on the roster).
+NOTHING_NAMES = {"event_subject": 0, "people_links": 0, "intents": 0, "event_payload_kinds": []}
 
 
 def test_the_client_constants_and_ops_agree_with_the_kernels_wire_module():
@@ -182,9 +184,10 @@ def test_a_real_list_add_matches_and_the_forget_leaves_none_of_it_readable(real_
     with closing(kernel_db(state)) as db:
         assert db.execute("SELECT tombstoned, payload, subject, mentions, caused_by FROM events WHERE seq = ?",
                           (receipts[0],)).fetchone() == (1, None, None, None, None)
-    # nothing the member did is left: no event about them, no link to them, no action bookkeeping. They are still on the roster, so
-    # the kernel's membership records (their grant, the forget notice and ledger) name them, and so do people.json/known-people.json.
-    assert what_still_names(state, MEMBER) == ONLY_BOOKKEEPING
+    # nothing the member did is left, and nothing in the kernel's record names them in plaintext: no event, no link, no action
+    # bookkeeping, no notice or ledger row (hashed), no grant record (tombstoned). Still on the roster: people.json names them.
+    assert what_still_names(state, MEMBER) == NOTHING_NAMES
+    assert holds(state, MEMBER, kernel=True) == []
     assert MEMBER in known(state)
 
     os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="rice")
@@ -263,7 +266,7 @@ def test_a_member_taken_off_the_roster_is_forgotten_and_the_daemon_keeps_no_copy
         assert stat.S_IMODE((state / "known-people.json").stat().st_mode) == 0o600
         assert holds(state, MEMBER, kernel=False) == []                 # no daemon or client file holds the id, temp files included
         assert holds(state, ITEM) == [] and holds(state, LIST) == []
-        assert what_still_names(state, MEMBER) == ONLY_BOOKKEEPING
+        assert what_still_names(state, MEMBER) == NOTHING_NAMES
         assert forget(MEMBER) == 0                                      # nothing is left to reach: the kernel no longer knows them
         assert forget("member-never") == 0                              # a stranger: the kernel never knew them
     finally:
@@ -298,11 +301,6 @@ def test_a_forgotten_member_who_acts_again_is_recorded_afresh_and_stays_forgetta
         stop(proc)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KERNEL GAP, not the daemon's: a whole-person forget keeps the subject's id in plaintext in the kernel's own bookkeeping - the "
-    "FORGET notice payload and forget_ledger (zoe_os/spine.py Spine.forget) and every grant_change event (zoe_os/kernel.py "
-    "_grant_changed; retention KEEPs them and no forget reaches them). Closing it is a kernel change (the notice's subject is read by "
-    "provenance.erased_request and Dispatcher._concerns) for its own reviewed PR; strict, so this turns red the day it is closed"))
 def test_after_a_removed_member_is_forgotten_no_kernel_file_holds_their_id(state, monkeypatch):
     proc = removed_and_forgotten(state, monkeypatch)
     try:
