@@ -56,8 +56,7 @@ PUBLIC = [
     ("5 best ways to learn chess", "5 best ways learn chess"),
     ("gift ideas for my wife", "gift ideas wife"),
     ("internationalization best practices", "internationalization best practices"),
-    ("covid19 symptoms b2b 4k tv iphone17", "covid19 symptoms b2b 4k tv iphone17"),
-    ("\u6771\u4eac\u306e\u5929\u6c17 caf\u00e9 \u043f\u043e\u0433\u043e\u0434\u0430", "\u6771\u4eac\u306e\u5929\u6c17 caf\u00e9 \u043f\u043e\u0433\u043e\u0434\u0430"),
+    ("covid19 symptoms 4k tv iphone17", "covid19 symptoms 4k tv iphone17"),  # a dictionary word + number, a number + unit
 ]
 
 
@@ -112,7 +111,6 @@ REFUSED = [
     ("lookup a1b2c3d4e5f6 shellfish", "encoded"),
     ("M i r a b e l shellfish allergy", "spelled_out"),
     ("\u041cirabel shellfish allergy dangerous", "mixed_script"),  # Cyrillic capital Em, looks like M
-    ("mi rabel shellfish allergy symptoms", "tripwire"),
     ("allergic to shellfish symptoms treatment", "memory_heavy"),
     ("spare key lives under the blue planter", "memory_heavy"),
 ]
@@ -147,7 +145,8 @@ def test_a_long_private_word_is_stripped_inside_any_token_and_the_short_one_limi
     assert scrub_query("mirabelfamily holiday rentals coast", TERMS).query == "holiday rentals coast"
     assert scrub_query("xxharrowgatexx uniform shop hours", TERMS).query == "uniform shop hours"
     # KNOWN LIMIT (documented in docs/knowledge/web-lookup.md): under six letters + three or more glued letters.
-    assert leaks(scrub_query("chloefamily holiday rentals coast", TERMS).query) == ["chloe"]
+    # The short-name limit this pinned is CLOSED by the allow-list: an unknown glued word never leaves.
+    assert leaks(scrub_query("chloefamily holiday rentals coast", TERMS).query) == []
 
 
 def test_each_half_of_a_hyphenated_or_apostrophised_name_is_private():
@@ -158,7 +157,9 @@ def test_each_half_of_a_hyphenated_or_apostrophised_name_is_private():
 
 
 def test_output_is_bounded():
-    r = scrub_query(" ".join(f"word{chr(97 + i)}" for i in range(26)), TERMS)
+    words = ("apple bread chair dance eagle fabric garden hammer island jacket kettle ladder magnet needle orange "
+             "pencil quilt river saddle table umbrella violin window yellow zebra anchor").split()
+    r = scrub_query(" ".join(words), TERMS)
     assert r.send and len(r.query.split()) == ws.MAX_WORDS and len(r.query) <= ws.MAX_CHARS
 
 
@@ -248,7 +249,8 @@ def test_a_split_name_with_lookalike_digits_never_leaves():
 
 @pytest.mark.parametrize("raw,name", [("ki m violin lessons price", "Kim"), ("b o swimming lessons", "Bo")])
 def test_a_short_known_name_split_into_pieces_never_leaves(raw, name):
-    assert not scrub_query(raw, PrivateTerms.of(names=[name])).send
+    r = scrub_query(raw, PrivateTerms.of(names=[name]))
+    assert not r.send or name.casefold() not in r.query.replace(" ", ""), r
 
 
 @pytest.mark.parametrize("raw", ["pizza lasagna recipe", "real estate prices"])
@@ -275,3 +277,28 @@ def test_a_phone_number_with_any_separator_is_stripped(raw):
 
 def test_a_fraction_is_not_a_phone_number():
     assert scrub_query("3/4 cup flour conversion").send
+
+
+
+def test_a_split_name_is_dropped_or_refused_never_sent():
+    r = scrub_query("mi rabel shellfish allergy symptoms", TERMS)
+    assert not r.send or not leaks(r.query), r
+
+
+def test_words_the_allow_list_cannot_check_never_leave():
+    """The allow-list is English: words in another script cannot be checked, so they are dropped (fail closed)."""
+    r = scrub_query("\u6771\u4eac\u306e\u5929\u6c17 caf\u00e9 \u043f\u043e\u0433\u043e\u0434\u0430")
+    assert not r.send or set(r.query.split()) <= {"cafe"}, r
+
+
+@pytest.mark.parametrize("raw,gone", [("xqzvbn uniform shop hours", "xqzvbn"), ("x7k2 door code reset", "x7k2"),
+                                      ("syntheticsecret reviews", "syntheticsecret"),
+                                      ("b2b software reviews", "b2b")])
+def test_a_word_that_is_not_in_the_dictionary_never_leaves(raw, gone):
+    r = scrub_query(raw)
+    assert gone not in r.query, r
+
+
+def test_a_missing_allow_list_fails_closed(monkeypatch):
+    monkeypatch.setattr(ws, "allow_words", lambda: frozenset())
+    assert not scrub_query("weather forecast tomorrow").send

@@ -26,6 +26,7 @@ Operator doc: docs/knowledge/web-lookup.md.
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 import unicodedata
@@ -98,7 +99,7 @@ def load_lexicon() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not data.get("enabled"):
             continue
-        for key in ("drop_words", "question_words", "relation_words", "naming_words", "street_types"):
+        for key in ("drop_words", "question_words", "relation_words", "naming_words", "street_types", "possessive_words"):
             out[key] = frozenset(out.get(key, frozenset())) | {fold(w) for w in data.get(key, [])}
         out["instruction_cues"] = list(out["instruction_cues"]) + list(data.get("instruction_cues", []))
         out["answer"].setdefault(data.get("lang", path.stem), data.get("answer", {}))
@@ -279,7 +280,7 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
         # and "my friend dana smith" must not leave the house. The word after a relation word is a name, and so
         # is the one after that unless it is a function word (a first name plus a surname). Over-stripping costs
         # a weaker query; under-stripping sends a person's name.
-        owned = i > 0 and tokens[i - 1] in lex.get("possessive_words", _POSSESSIVES)   # "my friend", not "dog food"
+        owned = i > 0 and tokens[i - 1] in lex.get("possessive_words", frozenset())   # "my friend", not "dog food"
         if j < len(tokens) and tokens[j] and tokens[j] not in lex["drop_words"] and tokens[j] not in lex["question_words"] \
                 and (named or owned or words[j][:1].isupper()):
             drop.setdefault(j, "relation_name")
@@ -290,6 +291,14 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
                 drop.setdefault(k, "relation_name")
     for i in _memory_runs(tokens, terms, lex):
         drop.setdefault(i, "memory")
+    # THE ALLOW-LIST, last and strongest: a word may leave the house only if it is an ordinary dictionary word
+    # (allow_words(), SCOWL plus a small supplement) or a number of at most four digits. Everything the rules
+    # above did not recognise (a name, a code, an invented spelling, a glued or split private term) is dropped,
+    # so a new trick has to produce real dictionary words to get anything out.
+    allow = allow_words()
+    for i, tok in enumerate(tokens):
+        if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(tok, allow):
+            drop[i] = "unknown"
 
     def _content(idx: Iterable[int]) -> int:
         return sum(1 for i in idx if tokens[i] and tokens[i] not in lex["drop_words"] and tokens[i] not in lex["question_words"])
@@ -332,7 +341,37 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)
 
 
-_POSSESSIVES = frozenset({"my", "our", "your", "his", "her", "their"})
+ALLOW_PATH = _LEXICON_DIR / "web_lookup_allow_en.txt.gz"
+
+
+@lru_cache(maxsize=1)
+def allow_words() -> frozenset:
+    """The words a query may carry out (built by tools/generators/build_web_lookup_allowlist.py). A missing or
+    unreadable list allows NOTHING, so every query is refused: the gate fails closed."""
+    try:
+        with gzip.open(ALLOW_PATH, "rt", encoding="utf-8") as f:
+            return frozenset(w for w in (line.strip() for line in f) if w)
+    except (OSError, EOFError, UnicodeDecodeError):
+        return frozenset()
+
+
+_WORD_NUMBER = re.compile(r"^([a-z]{3,})(\d{1,4})$")    # a dictionary word and a short number: covid19, iphone17
+_NUMBER_UNIT = re.compile(r"^\d{1,4}[a-z]{1,2}$")        # a short number and a unit: 4k, 5g, 10mm
+
+
+def _allowed_part(x: str, allow: frozenset) -> bool:
+    if (x.isdigit() and len(x) <= 4) or x in allow or _NUMBER_UNIT.match(x):
+        return True
+    m = _WORD_NUMBER.match(x)
+    return bool(m) and m.group(1) in allow
+
+
+def _allowed(tok: str, allow: frozenset) -> bool:
+    """A token is allowed when every part of it (split on . - and apostrophes) is a dictionary word, a short number,
+    a dictionary word followed by a short number, or a short number with a one- or two-letter unit. Anything else
+    (a code like x7k2, a name, an invented spelling) is not."""
+    parts = [x for x in re.split(r"[.\-'’]", tok) if x]
+    return bool(parts) and all(_allowed_part(x, allow) for x in parts)
 
 
 def _split_exactly(query: str, single: str) -> bool:
