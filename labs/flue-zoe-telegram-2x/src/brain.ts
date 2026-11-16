@@ -232,7 +232,7 @@ export async function registerBotUsername(username: string): Promise<void> {
  * (loopback / valid token); a public request that sets the header is ignored, so
  * this cannot be used to impersonate a user from outside.
  */
-export async function askZoeAs(text: string, sessionId: string, userId: string): Promise<string> {
+export async function askZoeAs(text: string, sessionId: string, userId: string, eraseToken?: string): Promise<string> {
   const headers = internalHeaders();
   // TRUSTED forwarded identity: run the turn as this real Zoe user.
   headers['X-Zoe-User-Id'] = userId;
@@ -240,8 +240,14 @@ export async function askZoeAs(text: string, sessionId: string, userId: string):
   const res = await fetch(`${DATA_URL}/api/chat/?stream=false`, {
     method: 'POST',
     headers,
-    // channel:'telegram' tags the turn so fast_tiers can apply the telegram profile.
-    body: JSON.stringify({ message: text, session_id: sessionId, channel: 'telegram' }),
+    // channel:'telegram' tags the turn so fast_tiers can apply the telegram profile. ``erase_token`` (a voice note only): the
+    // forget epoch zoe-data read BEFORE it transcribed the note, so an erase that landed since makes the turn's logs refuse.
+    body: JSON.stringify({
+      message: text,
+      session_id: sessionId,
+      channel: 'telegram',
+      ...(eraseToken ? { erase_token: eraseToken } : {}),
+    }),
     signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`brain ${res.status} ${await res.text().catch(() => '')}`);
@@ -259,7 +265,13 @@ export async function askZoeAs(text: string, sessionId: string, userId: string):
  * '' = no speech. Throws on transport / structured errors so the caller can
  * answer generically; the error text never carries audio or a URL.
  */
-export async function transcribeTelegramAudio(audio: Uint8Array): Promise<string> {
+export interface Transcript {
+  text: string;
+  /** zoe-data's forget epoch from BEFORE the note was transcribed; sent back with the chat turn (opaque). */
+  eraseToken?: string;
+}
+
+export async function transcribeTelegramAudio(audio: Uint8Array): Promise<Transcript> {
   const headers = internalHeaders();
   headers['Content-Type'] = 'audio/ogg';
   const res = await fetch(`${DATA_URL}/api/system/telegram/transcribe`, {
@@ -268,9 +280,9 @@ export async function transcribeTelegramAudio(audio: Uint8Array): Promise<string
     body: audio,
     signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
   });
-  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; text?: string; error?: string };
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; text?: string; error?: string; erase_token?: unknown };
   if (!res.ok || !data.ok) throw new Error(`telegram transcribe ${res.status} ${data.error ?? ''}`.trim());
-  return data.text ?? '';
+  return { text: data.text ?? '', ...(typeof data.erase_token === 'string' ? { eraseToken: data.erase_token } : {}) };
 }
 
 /**

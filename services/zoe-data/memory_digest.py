@@ -22,7 +22,7 @@ import os
 import re
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import brain_slot_guard
 import digest_pack
@@ -31,6 +31,7 @@ from llm_json import strip_code_fence
 import memory_authority
 import own_words
 import trait_challenge
+import erase_watermark as _erase_watermark
 import user_erase_gate as erase_gate
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
@@ -149,6 +150,94 @@ def _name_from_pending_slug(entity_id: str) -> str:
     return s.replace("_", " ").strip()
 
 
+async def _store(call: Callable, /, **kw: Any) -> Any:
+    """One ``leased_drawers`` read OFF the event loop (A6 step 2): ``MemoryService._run_sync``, the executor + lease
+    search and ingest use, so the store call (and any compaction-gate wait) no longer holds the single worker."""
+    from memory_service import MemoryService
+    return await MemoryService._run_sync(functools.partial(call, **kw))
+
+
+_WRITE_ADMIT_S = 0.5   # under the owner lock a write waits at most this long for the store's lease, never for a compaction
+_WRITE_TRIES = 3
+
+
+def _live_ids(col: Any, user_id: str, ids: list, prior_status: list) -> set:
+    """The ids that are still live for ``user_id`` NOW, by the read path's own predicate (``MemoryService._filter_visible``:
+    expiry, owner visibility, status). A row whose status is the one the pass read (deep sleep reads ``pending`` rows) counts
+    as unchanged; any other non-readable status - rejected (a soft forget), archived, superseded, disputed - is skipped."""
+    import datetime as _dt
+    from memory_service import MemoryService
+
+    cur = col.get(ids=list(ids), include=["documents", "metadatas"])
+    want = dict(zip(ids, prior_status))
+    metas = []
+    for rid, meta in zip(cur.get("ids") or [], cur.get("metadatas") or []):
+        m = dict(meta or {})
+        if str(m.get("status", "approved") or "approved").strip().lower() == want.get(rid):
+            m["status"] = "approved"   # unchanged since the pass read it: judge it as the row the pass is updating
+        metas.append(m)
+    probe = {"ids": cur.get("ids") or [], "documents": cur.get("documents") or [], "metadatas": metas}
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return {r.id for r in MemoryService._filter_visible(probe, user_id, now)}
+
+
+def _upsert_rows(col: Any, ids: list, docs: list, metas: list) -> None:
+    col.upsert(ids=ids, documents=docs, metadatas=metas)
+
+
+def _status_of(meta: Any) -> str:
+    return str((meta or {}).get("status", "approved") or "approved").strip().lower()
+
+
+async def _under_owner_lock(svc: Any, user_id: str, fn: Callable[[], Any]) -> Any:
+    """Run ``fn`` in the executor under the owner's memory lock (``svc._user_locks[user_id]``, the key ``erase_rows`` and
+    ``review`` take), BOUNDED: the compaction gate is waited for OUTSIDE the lock, and inside it the lease admission gives up
+    after ``_WRITE_ADMIT_S`` (then the lock is released and the gate waited for again). So a forget never queues behind a
+    store maintenance wait, only behind one admitted re-check + write."""
+    from memory_service import MemoryServiceError, _wait_for_maintenance_gate, collection_op
+
+    def _bounded() -> Any:
+        with collection_op(timeout=_WRITE_ADMIT_S):
+            return fn()
+
+    loop = asyncio.get_running_loop()
+    locks = getattr(svc, "_user_locks", None)
+    for attempt in range(_WRITE_TRIES):
+        await loop.run_in_executor(None, _wait_for_maintenance_gate)
+        try:
+            if locks is None:
+                return await loop.run_in_executor(None, _bounded)
+            async with locks.setdefault(user_id, asyncio.Lock()):
+                return await loop.run_in_executor(None, _bounded)
+        except MemoryServiceError:
+            if attempt == _WRITE_TRIES - 1:
+                raise
+
+
+async def _store_upsert(svc: Any, user_id: str, col: Any, *, ids: list, documents: list, metadatas: list,
+                        prior_status: Optional[list] = None, update_only: bool = False) -> None:
+    """A pass's ``col.upsert`` off the loop: re-checked and written under the owner's lock (``_under_owner_lock``), only
+    for rows still live (``_live_ids``). Off the loop a pass's write can interleave with a forget, so a row erased or
+    soft-forgotten since the pass read it is never written back (forgotten means forever); a live row gets exactly the
+    old write. ``prior_status`` = each row's status as the pass READ it (default: the status being written). ``update_only``:
+    rewrite rows that EXIST (``_update_existing``), never create one - for a pass that only modifies (the night-write rule)."""
+    prior = list(prior_status) if prior_status is not None else [_status_of(m) for m in metadatas]
+    # The lock is keyed by the row's STORED owner - the key ``review`` (soft forget) takes from the row and ``erase_rows`` is
+    # called with - so an alias spelling of the pass's user id still serialises with a forget of the same rows.
+    owners: dict = {}
+    for k, m in enumerate(metadatas):
+        owners.setdefault(str((m or {}).get("user_id") or (m or {}).get("wing") or user_id), []).append(k)
+    for owner, idx in owners.items():
+        def _write(idx: list = idx) -> None:
+            live = _live_ids(col, user_id, [ids[k] for k in idx], [prior[k] for k in idx])
+            keep = [k for k in idx if ids[k] in live]
+            if keep:
+                put = _update_existing if update_only else _upsert_rows
+                put(col, [ids[k] for k in keep], [documents[k] for k in keep], [metadatas[k] for k in keep])
+
+        await _under_owner_lock(svc, owner, _write)
+
+
 async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
     """Idle pass: re-link ``person_pending`` facts to a real ``people.id``.
 
@@ -181,7 +270,8 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
         svc = get_memory_service()
         col = leased_drawers(svc)   # per-call lease: never a handle across an await
         # Owner + status scoped scan: only THIS user's still-pending person facts.
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"entity_type": {"$eq": "person_pending"}},
@@ -1360,6 +1450,7 @@ async def run_turn_digest(
 
 
 @erase_gate.scheduled_at_call("user_id")      # an on-demand run is scheduled when called; the nightly pass's earlier snapshot wins
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 
@@ -1881,9 +1972,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
 
 async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     """``(content, id, created_at)`` chat rows -> the day's ``Transcript`` of the OWNER's own words: pasted / third-person text is cut away (``own_words``),
-    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time."""
+    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time. Turns at or before the member's erase
+    watermark are never read (``erase_watermark``; an unreadable one RAISES, which the loaders turn into ``TranscriptLoadError``)."""
+    import erase_watermark
     from exact_words import speaker_rejected
 
+    rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[2] if len(r) > 2 else None, reader="digest")
     pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""),
               (str(row[2]) if len(row) > 2 and row[2] is not None else ""))
              for row in rows if row[0] and not distress_handoff.guarded_text(str(row[0]))]
@@ -2484,6 +2578,7 @@ async def _implicit_conflict_pass(user_id: str) -> dict | None:
     return await memory_supersede.nightly_conflict_pass(get_memory_service(), user_id)
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_weekly_consolidation(user_id: str) -> dict:
     """Per-user Sunday pass: merge duplicates, resolve contradictions, soft-archive.
 
@@ -2728,6 +2823,18 @@ async def _extract_concept_tags(fact: str) -> list[str]:
     return []
 
 
+def _update_existing(col, ids: list, docs: list, metas: list) -> None:
+    """Rewrite rows that EXIST; an id that is gone stays gone (Chroma ``update`` skips unknown ids; ``upsert`` would re-create a row a
+    member erase in another process just removed). A store without ``update`` (a lab stand-in) gets an upsert of the ids still there."""
+    if callable(getattr(col, "update", None)):
+        col.update(ids=list(ids), documents=list(docs), metadatas=list(metas))
+        return
+    there = set(col.get(ids=list(ids), include=[]).get("ids") or [])
+    keep = [k for k, i in enumerate(ids) if i in there]
+    if keep:
+        col.upsert(ids=[ids[k] for k in keep], documents=[docs[k] for k in keep], metadatas=[metas[k] for k in keep])
+
+
 async def _rem_reinforce_pass(user_id: str) -> dict:
     """REM pass: for each new memory ingested tonight, strengthen related existing memories.
 
@@ -2751,7 +2858,8 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
         # ChromaDB $gte only supports int/float — filter by user_id only, then
         # post-filter by added_at date in Python (ISO strings compare correctly
         # lexicographically for same-length prefix matching).
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"user_id": {"$eq": user_id}},
             include=["documents", "metadatas"],
         )
@@ -2789,34 +2897,45 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             # Exclude self
             neighbour_ids = [n.id for n in neighbours if n.id != mem_id][:5]
 
-            if neighbour_ids:
-                # Bump access on neighbours (reinforcement)
-                await svc.tick_access(user_id, neighbour_ids)
+            # the upserts write back rows READ before the awaits above: after a member erase (another process) they would recreate
+            # them, so they run through the night-write rule (checked right before and right after; what was written is undone)
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, neighbour_ids=neighbour_ids) -> list:
+                nonlocal linked
+                if neighbour_ids:
+                    # Bump access on neighbours (reinforcement)
+                    await svc.tick_access(user_id, neighbour_ids)
 
-                # Write related_ids on new memory
-                existing_related = set((meta.get("related_ids") or "").split(","))
-                existing_related.update(neighbour_ids)
-                meta["related_ids"] = ",".join(i for i in existing_related if i)
-                linked += 1
+                    # Write related_ids on new memory
+                    existing_related = set((meta.get("related_ids") or "").split(","))
+                    existing_related.update(neighbour_ids)
+                    meta["related_ids"] = ",".join(i for i in existing_related if i)
+                    linked += 1
 
-                # Write related_ids on neighbours (bidirectional)
-                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
-                nb_ids = nb_result.get("ids") or []
-                nb_docs = nb_result.get("documents") or []
-                nb_metas = nb_result.get("metadatas") or []
-                new_nb_metas = []
-                for nm in nb_metas:
-                    nm = dict(nm) if nm else {}
-                    nb_related = set((nm.get("related_ids") or "").split(","))
-                    nb_related.add(mem_id)
-                    nm["related_ids"] = ",".join(i for i in nb_related if i)
-                    new_nb_metas.append(nm)
-                if nb_ids:
-                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+                    # Write related_ids on neighbours (bidirectional)
+                    nb_result = await _store(col.get, ids=neighbour_ids, include=["metadatas", "documents"])
+                    nb_ids = nb_result.get("ids") or []
+                    nb_docs = nb_result.get("documents") or []
+                    nb_metas = nb_result.get("metadatas") or []
+                    new_nb_metas = []
+                    for nm in nb_metas:
+                        nm = dict(nm) if nm else {}
+                        nb_related = set((nm.get("related_ids") or "").split(","))
+                        nb_related.add(mem_id)
+                        nm["related_ids"] = ",".join(i for i in nb_related if i)
+                        new_nb_metas.append(nm)
+                    if nb_ids:
+                        await _store_upsert(svc, user_id, col, ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas,
+                                            update_only=True)
 
-            # Mark as REM-processed
-            meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                # Mark as REM-processed
+                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], update_only=True)
+                return []                    # MODIFIED existing rows only: nothing created, so nothing is ever undone
+
+            async def _undo(_created: list) -> None:
+                raise AssertionError("REM creates no row: it has nothing to undo")
+            if await _erase_watermark.guarded_write(user_id, "rem", _write, _undo) is None:
+                break
 
     except Exception as exc:
         logger.warning("REM reinforce pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
@@ -2891,7 +3010,8 @@ async def _deep_sleep_pass(user_id: str) -> dict:
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=14)).isoformat() + "Z"
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [{"user_id": {"$eq": user_id}}, {"status": {"$eq": "pending"}}]},
             include=["documents", "metadatas"],
         )
@@ -2907,16 +3027,28 @@ async def _deep_sleep_pass(user_id: str) -> dict:
 
             if meta.get("challenged_by_turn"):
                 continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
-
             if score >= 0.8 and uqc >= 3:
-                meta["status"] = "approved"
-                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
-                promoted += 1
+                new_status = "approved"
             elif added_at and added_at < cutoff:
-                meta["status"] = "archived"
+                new_status = "archived"
+            else:
+                continue
+
+            # an upsert of a row read before a member erase (another process) recreates it: the night-write rule
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, new_status=new_status) -> list:
+                meta["status"] = new_status
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], prior_status=["pending"],
+                                    update_only=True)
+                return []                    # MODIFIED an existing row: nothing created, so nothing is ever undone
+
+            async def _undo(_created: list) -> None:
+                raise AssertionError("deep sleep creates no row: it has nothing to undo")
+            if await _erase_watermark.guarded_write(user_id, "deep_sleep", _write, _undo) is None:
+                break
+            if new_status == "approved":
+                promoted += 1
+            else:
                 archived += 1
 
     except Exception as exc:
@@ -2980,7 +3112,8 @@ async def _synthesis_pass(user_id: str) -> dict:
     synthesized = 0
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"status": {"$eq": "approved"}},
@@ -3028,6 +3161,15 @@ async def _synthesis_pass(user_id: str) -> dict:
                     logger.debug("synthesis: dropped non-fact insight: %s", _log_redaction.utterance_tag(synthesis_text))
                     continue
 
+                # Every source must still be live right before a memory DERIVED from them is made (a forget since the scan
+                # wins). Ingest takes the owner lock itself: the post-check below closes the gap after this pre-check.
+                source_ids = [mid for mid, _ in sample]
+                live = await _under_owner_lock(
+                    svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                if set(source_ids) - set(live or ()):
+                    logger.info("synthesis: skipped, a source is no longer live user=%s n=%d", user_id, len(source_ids))
+                    continue
+                created_ids: list[str] = []
                 ref = await svc.ingest(
                     synthesis_text,
                     user_id=user_id,
@@ -3036,16 +3178,42 @@ async def _synthesis_pass(user_id: str) -> dict:
                     confidence=0.85,
                     status="approved",
                     tags=[tag, "synthesis"],
+                    created_ids=created_ids,
                 )
                 if ref:
+                    # The SOURCE post-check, beside ingest's own member-mark post-check (erase_watermark.guarded_write): ingest
+                    # released the owner lock before writing, so a forget/reject of a source can land in the gap. Same rule:
+                    # undo only on POSITIVE evidence (a source gone or no longer live by the pre-check's own ``_live_ids``) and
+                    # only a row THIS ingest created; an unreadable re-check keeps the row.
+                    try:
+                        live = await _under_owner_lock(
+                            svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                    except Exception as exc:
+                        logger.warning("SYNTHESIS_SOURCE_UNKNOWN code=%s", type(exc).__name__)
+                    else:
+                        if set(source_ids) - set(live or ()):
+                            if created_ids:
+                                # Outside the memory lock: erase_rows takes the erase gate before its memory lock.
+                                await svc.erase_rows(user_id, created_ids, actor="synthesis_undo",
+                                                     reason="synthesis source no longer live")
+                                logger.info("SYNTHESIS_SOURCE_COMPENSATED n=%d", len(created_ids))
+                            continue
                     # Link synthesized memory back to source cluster
-                    source_ids = [mid for mid, _ in sample]
-                    col_result = col.get(ids=[ref.id], include=["metadatas", "documents"])
+                    col_result = await _store(col.get, ids=[ref.id], include=["metadatas", "documents"])
                     if col_result.get("ids"):
                         sm = dict((col_result["metadatas"] or [{}])[0])
                         sm["related_ids"] = ",".join(source_ids)
                         sm["concept_tags"] = tag
-                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+
+                        async def _link(rid=ref.id, sm=sm, text=synthesis_text) -> list:
+                            # the row ingest just kept: modified (off the loop, re-checked live), never re-created
+                            await _store_upsert(svc, user_id, col, ids=[rid], documents=[text], metadatas=[sm], update_only=True)
+                            return []
+
+                        async def _unlink(_created: list) -> None:
+                            raise AssertionError("the synthesis link creates no row: it has nothing to undo")
+                        if await _erase_watermark.guarded_write(user_id, "synthesis", _link, _unlink) is None:
+                            continue
                     synthesized += 1
             except Exception as exc:
                 logger.warning("synthesis failed for tag=%s user=%s: %s", _log_redaction.utterance_tag(tag), user_id, _log_redaction.exc_tag(exc))
@@ -3205,7 +3373,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 )
             result["discarded_meta"] = len(junk)
             async with _db.execute(
-                f"""SELECT cm.content FROM chat_messages cm
+                f"""SELECT cm.content, cm.created_at FROM chat_messages cm
                    JOIN chat_sessions cs ON cm.session_id = cs.id
                    WHERE {_message_owner_expr()} = ? AND cm.role = 'user'
                      AND {_off_record_sql("cm")}
@@ -3223,6 +3391,12 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         return _done("load_error")
 
     rows = [r for r in rows if not distress_handoff.guarded_text(str(r[0]))]   # a distress hand-off turn is never mined for open loops
+    try:   # ... nor a turn at or before the member's erase watermark (erase_watermark). Fail closed: unreadable = no loops tonight.
+        import erase_watermark
+        rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[1], reader="open_loops")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("open_loops: erase watermark unreadable (%s) - deferred", type(exc).__name__)
+        return _done("load_error")
     # A turn naming a forgotten entity is skipped, not re-mined (memory_forgotten; ZMB F3).
     try:
         import memory_forgotten
@@ -3356,6 +3530,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     result["extracted"] = len(candidates)
     if not candidates:
         return _done("ok")
+    import erase_watermark
 
     try:
         async with _get_compat_db() as _db:
@@ -3366,19 +3541,33 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 (user_id,),
             ) as cur:
                 seen = [_content_tokens(r[0]) for r in await cur.fetchall()]
-            for text, hint, weight, days in candidates:
-                tokens = _content_tokens(text)
-                if _loop_is_dup(tokens, seen):
-                    result["skipped_dup"] += 1
-                    continue
-                await _db.execute(
-                    """INSERT INTO open_loops
-                       (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
-                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
-                    (user_id, text, hint, weight, days),
-                )
-                result["inserted"] += 1
-                seen.append(tokens)
+
+            async def write() -> list:
+                wrote = []
+                for text, hint, weight, days in candidates:
+                    tokens = _content_tokens(text)
+                    if _loop_is_dup(tokens, seen):
+                        result["skipped_dup"] += 1
+                        continue
+                    await _db.execute(
+                        """INSERT INTO open_loops
+                           (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
+                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
+                        (user_id, text, hint, weight, days),
+                    )
+                    result["inserted"] += 1
+                    seen.append(tokens)
+                    wrote.append(text)
+                return wrote
+
+            async def undo(texts: list) -> None:      # exactly the loops this pass inserted (an unresolved loop text is unique per member)
+                for text in texts:
+                    await _db.execute("DELETE FROM open_loops WHERE user_id = ? AND loop_text = ? AND resolved IS NOT TRUE", (user_id, text))
+                await _db.commit()
+                result["inserted"] = 0
+            # erased since the night pass began (its reads are stale): checked right before and right after the inserts
+            if await erase_watermark.guarded_write(user_id, "open_loops", write, undo) is None:
+                return _done("erased_since_cycle")
     except Exception as exc:
         # Class + constraint only: a driver message can echo a bound value.
         constraint = getattr(exc, "constraint_name", "") or "-"     # a schema identifier, never a bound value
@@ -3388,6 +3577,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     return _done("ok")
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool = True) -> dict:
     """Run the full dreaming cycle for a user.
 
@@ -3563,6 +3753,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
 # and genres by play/skip behaviour, and writes preference facts to MemPalace.
 # ═══════════════════════════════════════════════════════════════════════════
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_music_taste_digest(user_id: str) -> dict:
     """Consolidate 30 days of music events into MemPalace preference memories.
 

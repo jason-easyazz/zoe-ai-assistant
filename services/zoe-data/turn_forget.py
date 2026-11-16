@@ -257,6 +257,9 @@ def retract(user_id: str, turn: Turn, *, now: Optional[float] = None) -> None:
             while len(_retracted) > _MAX_USERS:
                 _retracted.popitem(last=False)
         logger.info("TURN_FORGET user=%s retracted=1", user_id)
+        import correction_marker
+
+        correction_marker.forget_user(user_id, reason="forget_turn")   # any forget drops the member's pending corrections
     except Exception:  # noqa: BLE001
         logger.warning("turn_forget.retract failed", exc_info=True)
 
@@ -267,6 +270,12 @@ def mark_forgotten(user_id: str, turn: Turn) -> None:
         for tr in _turns.get(user_id) or ():
             if tr.tid == turn.tid:
                 tr.text = ""
+    try:  # the rows are flagged off the record by now: clear the pending corrections AGAIN, after the flagging (retract
+        import correction_marker  # cleared them before it; a marker set in between must not outlive the forget)
+
+        correction_marker.forget_user(user_id, reason="forget_turn")
+    except Exception:  # noqa: BLE001
+        logger.warning("turn_forget.mark_forgotten: marker clear failed", exc_info=True)
 
 
 def _live(user_id: str, t: float) -> list:

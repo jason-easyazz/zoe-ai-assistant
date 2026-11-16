@@ -595,12 +595,13 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
 
 
 def _erase_epoch_now() -> Optional[int]:
-    """``local_text_logs.erase_epoch()`` or None when it cannot be read (then the append is not epoch-guarded - the erase's own
+    """The epoch this turn's appends are checked against: the TURN's (``local_text_logs.writer_epoch``: read before STT on a voice
+    turn, at entry for typed text), else now. None when it cannot be read (then the append is not epoch-guarded - the erase's own
     file pass under the append lock is still the primary guarantee)."""
     try:
         import local_text_logs
 
-        return local_text_logs.erase_epoch()
+        return local_text_logs.writer_epoch()
     except Exception:  # noqa: BLE001
         return None
 
