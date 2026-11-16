@@ -187,15 +187,43 @@ def test_degraded_tts_flips_status_but_stays_ready(monkeypatch):
     assert report["degraded_reasons"]["tts"] == "CUDA unavailable (OOM)"
 
 
-def test_tts_mode_edge_counts_ready_without_kokoro(monkeypatch):
+def test_tts_mode_offline_counts_ready_without_kokoro(monkeypatch):
     import main
 
-    monkeypatch.setenv("ZOE_TTS_MODE", "edge")
+    monkeypatch.setenv("ZOE_TTS_MODE", "offline")
 
     report = asyncio.run(main._check_tts_ready())
 
     assert report["ok"] is True
-    assert report["provider"] == "edge"
+    assert report["provider"] == "offline"
+
+
+def test_retired_edge_mode_is_readiness_checked_like_kokoro(monkeypatch):
+    """The retired off-box mode no longer counts ready without Kokoro: it reads as
+    kokoro, so a down sidecar is NOT ready (was: ok=True, provider=edge)."""
+    import main
+
+    class FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            raise OSError("sidecar down")
+
+    monkeypatch.setenv("ZOE_TTS_MODE", "edge")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
+
+    report = asyncio.run(main._check_tts_ready())
+
+    assert report["mode"] == "kokoro"
+    assert report["ok"] is False
+    assert "provider" not in report
 
 
 def test_tts_hybrid_requires_a_real_provider(monkeypatch):
@@ -218,40 +246,11 @@ def test_tts_hybrid_requires_a_real_provider(monkeypatch):
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
     monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: False)
-    monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: False)
 
     report = asyncio.run(main._check_tts_ready())
 
     assert report["ok"] is False
     assert report["error"] == "no_tts_provider_available"
-
-
-def test_tts_hybrid_edge_package_counts_ready(monkeypatch):
-    import main
-    from routers import voice_tts
-
-    class FailingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            raise OSError("sidecar down")
-
-    monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
-    monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
-    monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: False)
-    monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: True)
-
-    report = asyncio.run(main._check_tts_ready())
-
-    assert report["ok"] is True
-    assert report["provider"] == "edge-tts"
 
 
 def test_tts_sidecar_down_falls_to_espeak(monkeypatch):

@@ -73,7 +73,7 @@ module globals**. Therefore:
   path must be updated **in the same PR**, with the asserted VALUES byte-identical.
   This is the guard following the code, NOT a rock swap; the `rocks:` yaml block in
   `docs/CANONICAL.md` is untouched. Say exactly that in the PR description.
-- `test_canonical_invariants.py::test_tts_live_waterfall_keeps_kokoro_before_edge_before_espeak`
+- `test_canonical_invariants.py::test_tts_live_waterfall_keeps_kokoro_before_espeak`
   and `::test_kokoro_tts_is_primary_live_voice_engine` pin the **waterfall ORDER inside
   the router handlers**. Nothing in this packet touches those handlers — if either test
   fails, you moved something you shouldn't have. Revert.
@@ -308,7 +308,7 @@ its own replay-gated plan.
 - **Do NOT create parallel files** — no `voice_tts_v2.py`, `voice_tts_new.py`,
   `_old`/backup copies, and no second voice router. Same contract as the chat-router
   rule in `services/zoe-data/routers/AGENTS.md`. Branches, not file duplication.
-- **NEVER move the TTS waterfall ORDER out of the router.** Kokoro → Edge → espeak
+- **NEVER move the TTS waterfall ORDER out of the router.** Kokoro → local → espeak
   ordering in `/synthesize`, `/speak`, `/stream` is policy, pinned by
   `test_canonical_invariants.py` — it stays inline in `routers/voice_tts.py` by
   contract (`services/zoe-data/AGENTS.md`).
