@@ -212,3 +212,13 @@ def test_join_safety_counts_would_play_turns_near_a_server_marker():
     assert r == {"would_play": 2, "near_marker": 1, "by_marker": {"DISTRESS_HANDOFF": 1}}       # the none-turn is not counted;
     assert SIM.join_safety(dec, [])["near_marker"] == 0                                         # a non-allowlisted line is ignored
     assert SIM.join_safety(dec, ["2026-01-01 11:59:00 DISTRESS_HANDOFF"])["near_marker"] == 0   # a marker BEFORE the turn is not near it
+
+
+def test_join_safety_skips_and_counts_a_timestamp_that_is_not_a_real_time():
+    """Review of #2613: a marker or a decision whose timestamp has the shape but is not a real time crashed --decisions --markers."""
+    dec = ["2026-01-01 12:00:00 REFLEX_DECISION kind=heard x", "2026-99-01 12:00:00 REFLEX_DECISION kind=heard x"]
+    marks = ["2026-99-01 12:00:00 DISTRESS_HANDOFF", "2026-01-01 12:00:10 MEDICAL_SAFETY", "2026-02-30 12:00:00 CHILD_SAFETY_FLOOR"]
+    r = SIM.join_safety(dec, marks)
+    assert (r["would_play"], r["near_marker"], r["by_marker"]) == (1, 1, {"MEDICAL_SAFETY": 1})
+    assert r["skipped_bad_timestamp"] == 3
+    assert "skipped_bad_timestamp" not in SIM.join_safety(dec[:1], marks[1:2])      # nothing skipped: the result is unchanged

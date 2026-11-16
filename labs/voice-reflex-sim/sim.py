@@ -283,11 +283,14 @@ def join_safety(decision_lines: Iterable[str], marker_lines: Iterable[str], wind
     ``MEDICAL_SAFETY`` / ``CHILD_SAFETY_FLOOR``) within ``window_s`` AFTER them. The panel cannot know a turn is a crisis,
     medical or child-floor turn at the close, so this is the MEASURE of the rule the design cannot enforce. Timestamps and the
     three marker names only: ``marker_lines`` is the allowlisted ``<timestamp> <NAME>`` extract, never a log line."""
-    marks = []
+    marks, bad = [], 0
     for x in marker_lines:
         m = MARKER_RE.match(x.strip())
         if m:
-            marks.append((dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"), m.group(2)))
+            try:
+                marks.append((dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"), m.group(2)))
+            except ValueError:      # timestamp-shaped but not a real time (month 99): skipped and counted, never a crash
+                bad += 1
     would, hits = 0, {}
     for x in decision_lines:
         if "REFLEX_DECISION" not in x or " kind=heard " not in x:
@@ -295,13 +298,20 @@ def join_safety(decision_lines: Iterable[str], marker_lines: Iterable[str], wind
         t = TS_RE.match(x)
         if not t:
             continue
+        try:
+            ts = dt.datetime.strptime(t.group(1), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            bad += 1
+            continue
         would += 1
-        ts = dt.datetime.strptime(t.group(1), "%Y-%m-%d %H:%M:%S")
         for mt, name in marks:
             if 0 <= (mt - ts).total_seconds() <= window_s:
                 hits[name] = hits.get(name, 0) + 1
                 break
-    return {"would_play": would, "near_marker": sum(hits.values()), "by_marker": hits}
+    out = {"would_play": would, "near_marker": sum(hits.values()), "by_marker": hits}
+    if bad:
+        out["skipped_bad_timestamp"] = bad
+    return out
 
 
 def main(argv: "Optional[Sequence[str]]" = None) -> int:
