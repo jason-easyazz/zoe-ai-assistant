@@ -829,6 +829,28 @@ def test_an_entity_forget_through_the_old_op_also_reaches_the_reminder_rows(stat
     assert set(start(state).notes(A)) == {"eggs"}
 
 
+@pytest.mark.parametrize("scope", [{"entity": "Dana"}, {"topic": "Dana telescope"}])
+def test_scoped_shared_edit_forget_erases_reads_receipts_and_bytes_after_daemon_restart(state, scope):
+    d = start(state)
+    rid = d.remind(A, note="shared original", time="19:00", visibility="family")["proof"]["id"]
+    edited = d.remind(B, "remind.edit", id=rid, note="Dana telescope delivery")
+    assert "Dana telescope delivery" in d.notes(A)
+    assert d.panel.call("explain", person=B, seq=edited["seq"])["seq"] == edited["seq"]
+    assert _members_bytes(state[0], b"Dana")
+    d.panel.call("forget", subject=A, actor=A, **scope)
+
+    def check(daemon):
+        for person in (A, B):
+            assert set(daemon.notes(person)) == {"shared original"}
+            with pytest.raises(Refused):
+                daemon.panel.call("explain", person=person, seq=edited["seq"])
+        assert _members_bytes(state[0], b"Dana") == []
+
+    check(d)  # the authority pumps the rebuild before replying
+    d.kill()
+    check(start(state))
+
+
 # ---- the forget rule over reminder rows: a reminder takes its later records; a cancel takes the reminder -----------------------
 def test_forgetting_a_reminder_takes_its_edits_snoozes_and_cancel_and_their_bytes(state):
     note, edit = "synthetic marker <rem-a>", "synthetic marker <rem-a-edit>"

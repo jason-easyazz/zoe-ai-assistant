@@ -235,6 +235,79 @@ def _held(house, word: str) -> bool:
         "SELECT payload FROM events WHERE tombstoned = 0"))
 
 
+@pytest.mark.parametrize("scope", [{"entity": "Dana"}, {"topic": "Dana telescope"}])
+def test_scoped_forget_reaches_other_members_shared_edit_and_linked_records(house, tmp_path, clock, scope):
+    made = house.act(A, "remind.set", note="original shared task", time="20:00", visibility="family")
+    rid = rid_of(made)
+    earlier = house.act(B, "remind.edit", id=rid, note="earlier shared task")
+    edit = house.act(B, "remind.edit", id=rid, note="Dana telescope delivery")
+    snooze = house.act(A, "remind.snooze", id=rid, minutes=5)
+    later = house.act(B, "remind.edit", id=rid, note="later unrelated wording")
+    assert house.k.explainer.why(edit.seq, person=B)["seq"] == edit.seq
+    assert _held(house, "Dana")
+    house.forget(A, **scope)
+
+    def check(h):
+        # An edit takes later actions, even nonmatching ones, but not its create or earlier edit.
+        assert h.row(rid)["note"] == "earlier shared task"
+        assert h.k.spine._get(made.seq) is not None and h.k.spine._get(earlier.seq) is not None
+        for r in (edit, snooze, later):
+            assert h.k.spine._get(r.seq) is None
+            assert h.k.spine._get(r.asked) is None
+            for person in (A, B):
+                with pytest.raises(Refused):
+                    h.k.explainer.why(r.seq, person=person)
+        assert not _held(h, "Dana")
+        for person in (A, B):
+            assert "Dana" not in str(h.rem.visible_to(person))
+        # Receipt listing/replay also comes from the tombstoned spine, not a stale cache.
+        assert "Dana" not in str([e.payload for e in h.k.spine.replay("brain")])
+        assert all(b"Dana" not in p.read_bytes() for p in tmp_path.glob("k.db*"))
+
+    check(house)
+    house.rem.rebuild()
+    check(house)
+    again = restart(house, tmp_path, clock)
+    try:
+        check(again)
+        assert again.k.actions.undo(B, actor=B).verified
+        assert again.row(rid)["note"] == "original shared task"  # B's surviving earlier edit is the undo target
+    finally:
+        again.k.close()
+
+
+@pytest.mark.parametrize("scope", [{"entity": "Dana"}, {"topic": "Dana telescope"}])
+def test_scoped_shared_forget_preserves_invisible_and_unrelated_rows(house, scope):
+    hidden = [house.act(B, "remind.set", note=f"Dana telescope {visibility}", time="19:00", visibility=visibility)
+              for visibility in ("personal", "private")]
+    unrelated = house.act(B, "remind.set", note="unrelated shared task", time="18:00", visibility="family")
+    shared = house.act(B, "remind.set", note="shared baseline", time="20:00", visibility="family")
+    edit = house.act(B, "remind.edit", id=rid_of(shared), note="Dana telescope shared task")
+    house.forget(A, **scope)  # A owns NONE of these records: visibility alone supplies the shared candidates
+    assert house.row(rid_of(shared))["note"] == "shared baseline"
+    assert house.k.spine._get(edit.seq) is None
+    for r in (*hidden, unrelated):
+        assert house.row(rid_of(r)) == r.proof["row"]
+        assert house.k.explainer.why(r.seq, person=B)["seq"] == r.seq
+    assert all("Dana" not in r["note"] for r in house.rem.visible_to(A))
+    assert sum("Dana" in r["note"] for r in house.rem.visible_to(B)) == 2
+
+
+@pytest.mark.parametrize("scope", [{"entity": "Dana"}, {"topic": "Dana telescope"}])
+def test_scoped_shared_forget_after_cancel_reaches_create_and_all_actions(house, scope):
+    made = house.act(B, "remind.set", note="shared original", time="20:00", visibility="family")
+    rid = rid_of(made)
+    edit = house.act(B, "remind.edit", id=rid, note="Dana telescope collection")
+    cancel = house.act(B, "remind.cancel", id=rid)
+    house.rem.rebuild()  # cancelled rows must be discoverable even with no current row
+    house.forget(A, **scope)
+    for r in (made, edit, cancel):
+        assert house.k.spine._get(r.seq) is None and house.k.spine._get(r.asked) is None
+    assert not _held(house, "Dana") and house.row(rid) is None
+    house.rem.rebuild()
+    assert house.row(rid) is None
+
+
 def test_forgetting_an_edit_takes_every_later_record_that_copied_its_words(house, tmp_path, clock):
     rid = rid_of(house.act(A, "remind.set", note="synthetic before", time="20:00"))
     edit = house.act(A, "remind.edit", id=rid, note="synthetic marker <edited>")

@@ -19,6 +19,9 @@ from __future__ import annotations
 import json
 
 _RECEIPTS = "SELECT seq, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0 ORDER BY seq"
+_ROW_RECEIPTS = (" FROM events e JOIN (SELECT seq FROM causes WHERE cause = ?"
+                 " UNION SELECT seq FROM dependents WHERE target = ?) d ON e.seq = d.seq"
+                 " WHERE e.kind = 'action_receipt' AND e.tombstoned = 0")
 
 
 class DurableRows:
@@ -30,6 +33,7 @@ class DurableRows:
     def __init__(self, spine, clock) -> None:
         self.spine, self.clock = spine, clock
         self.rows: dict[str, dict] = {}
+        self._sources: set[int] = set()  # creating requests, including cancelled/undone rows; no copied content
 
     # ---- one row per action: id, snapshot, undo, read-back --------------------------------------------------------------------
     def fresh(self, args: dict) -> str:
@@ -63,6 +67,7 @@ class DurableRows:
             source = args.get("asked") if action == self.creates else self.source_of(rid)
             if type(source) is int:
                 out["source"] = source
+                self._sources.add(source)
             if action in self.removes:
                 out["reverses"] = True
             return out
@@ -143,10 +148,13 @@ class DurableRows:
         reach = kernel.enforcer.reach            # skills' reads and "why did you do that?": both by the CURRENT link
         if self.reach_of not in reach:
             reach.append(self.reach_of)
+        if self.forget_candidates not in self.spine._forget_candidates:
+            self.spine._forget_candidates.append(self.forget_candidates)
 
     # ---- the rebuild ------------------------------------------------------------------------------------------------------------
     def rebuild(self) -> int:
         self.rows.clear()
+        self._sources.clear()
         live: dict[int, dict] = {}
         made: set[str] = set()
         for seq, raw in self.spine._db.execute(_RECEIPTS).fetchall():
@@ -156,6 +164,9 @@ class DurableRows:
                 continue
             action = p.get("action")
             if action in self.actions:
+                source = ((p.get("undo") or {}).get("before") or {}).get("source")
+                if type(source) is int:
+                    self._sources.add(source)
                 proof = p.get("proof") or {}
                 rid = proof.get("id")
                 if action == self.creates:
@@ -170,6 +181,24 @@ class DurableRows:
                     if orig.get("action") == self.creates:
                         made.discard(before["id"])
         return len(self.rows)
+
+    def forget_candidates(self, person: str):
+        """Receipts over rows visible NOW, whoever wrote them, for entity/topic matching.
+
+        Probe the existing row-source dependency index, never unrelated event history. The
+        latest receipt also attributes a cancelled/undone row when no current row exists.
+        Rebuild and snapshots maintain only source ids; receipt bodies remain the sole copy.
+        The spine applies its normal matcher and closure in the same erase transaction.
+        """
+        receipts = _ROW_RECEIPTS + " AND json_extract(e.payload, '$.action') IN (" + ",".join("?" for _ in self.actions) + ")"
+        for source in self._sources:
+            params = (source, source, *self.actions)
+            latest = self.spine._db.execute(
+                "SELECT e.payload" + receipts + " ORDER BY e.seq DESC LIMIT 1", params).fetchone()
+            if latest is None or self.reach_of(person, json.loads(latest[0] or "{}")) is not True:
+                continue
+            yield from (seq for (seq,) in self.spine._db.execute(
+                "SELECT e.seq" + receipts, params))
 
     @staticmethod
     def anchored(rid, made: set) -> bool:

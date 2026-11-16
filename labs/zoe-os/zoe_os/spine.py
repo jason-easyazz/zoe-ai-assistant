@@ -377,6 +377,7 @@ class Spine:
         """)
         self._subs: list[Subscription] = []
         self._before_forget = None  # trusted kernel store cleanup, never a skill/wire operation
+        self._forget_candidates: list = []  # trusted row stores: visible cross-member receipts, before matching/closure
         self._epoch = 0     # bumped by every forget; a subscription re-checks its queue on a change
         key = self._db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()
         if key is None:
@@ -603,6 +604,8 @@ class Spine:
                             f"SELECT seq FROM people INDEXED BY people_seq WHERE person = ?"
                             f" AND seq <= ? AND seq IN ({marks})", [subject, upto, *chunk]))
                 if key or groups:
+                    for candidates in self._forget_candidates:
+                        seed.update(candidates(subject))
                     seed = self._matching(seed, key, groups)
                     if groups and len(seed) > MAX_TOPIC_EVENTS:
                         raise Refused("too many events match: say which part")
