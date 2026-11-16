@@ -537,6 +537,11 @@ MAX_TOKENS = 512
 WINDOW_TTL_S = 30
 
 
+class ListenPaceEraseError(RuntimeError):
+    """A member forget removed the rows in memory but could not rewrite the file: NOT forgotten (a restart would reload them).
+    The caller fails closed and retries; the retry rewrites the file."""
+
+
 class Book:
     """Subjects + tokens. ``path=None`` keeps everything in memory (tests, and any process under pytest by default)."""
 
@@ -546,9 +551,9 @@ class Book:
         self._states: "dict[str, State]" = load(path) if path else {}
         self._tokens: "dict[str, tuple[float, dict]]" = {}
 
-    def _persist(self) -> None:
-        if self.path:
-            save(self.path, self._states)
+    def _persist(self) -> bool:
+        """Write the whole book (caller holds the lock). True when it is on disk, or there is no file to keep."""
+        return save(self.path, self._states) if self.path else True
 
     def states(self) -> "dict[str, State]":
         with self._lock:
@@ -577,20 +582,22 @@ class Book:
         """One turn's outcome POST. ``None`` for an unknown / expired / reused token or an unusable body: nothing changes."""
         try:
             tok = body.get("token")
+            # ONE critical section from consuming the token to persisting the result. forget_user takes the same lock, so it
+            # either ran first (and dropped this token: nothing is written) or runs after (and removes what this wrote); it can
+            # never land between the pop and the update and be undone by a pending outcome.
             with self._lock:
                 ent = self._tokens.pop(tok, None) if isinstance(tok, str) else None
-            if ent is None or now - ent[0] >= TOKEN_TTL_S:
-                return None
-            fields = dict(body)
-            # The level the panel ACTUALLY used: the one it says it applied, else today's tails (assumed L0: the panel's
-            # .env.voice is the household default). In shadow every outcome is therefore an L0 observation.
-            if fields.get("level_used") in (None, "", "-"):
-                fields["level_used"] = DEFAULT_LEVEL
-            o = outcome_from_fields(fields)
-            if o is None or o.win == "barge":
-                return None
-            key, _lvl = ent[1]["wake" if o.win == "wake" else "window"]
-            with self._lock:
+                if ent is None or now - ent[0] >= TOKEN_TTL_S:
+                    return None
+                fields = dict(body)
+                # The level the panel ACTUALLY used: the one it says it applied, else today's tails (assumed L0: the panel's
+                # .env.voice is the household default). In shadow every outcome is therefore an L0 observation.
+                if fields.get("level_used") in (None, "", "-"):
+                    fields["level_used"] = DEFAULT_LEVEL
+                o = outcome_from_fields(fields)
+                if o is None or o.win == "barge":
+                    return None
+                key, _lvl = ent[1]["wake" if o.win == "wake" else "window"]
                 cur = self._states.get(key)
                 if cur is None:
                     lvl, _k, _s = level_for(self._states, key.split("|", 1)[0], None, now)
@@ -598,7 +605,7 @@ class Book:
                 nxt, ch = step(cur, o, now, reflex_on=reflex_on)
                 if nxt is not cur:
                     self._states[key] = nxt
-                    self._persist()
+                    self._persist()       # a learned level that misses the disk stays in memory and goes with the next save
             return ch
         except Exception:  # noqa: BLE001
             return None
@@ -616,10 +623,12 @@ class Book:
             nxt, ch = override(cur, kind, now)
             if nxt is not cur:
                 self._states[key] = nxt
-                self._persist()
+                self._persist()           # as in record: a spoken setting that misses the disk is retried by the next save
         return ch
 
     def forget_user(self, member_id: str) -> int:
+        """Remove the member's rows on every panel and every pending token naming them, then rewrite the file. Raises
+        ``ListenPaceEraseError`` when the file could not be rewritten (not forgotten); a retry rewrites it and returns 0."""
         m = (member_id or "").strip()
         if not m:
             return 0
@@ -629,7 +638,8 @@ class Book:
                 self._states.pop(k, None)
             self._tokens = {t: v for t, v in self._tokens.items()
                             if not any(v[1][w][0].endswith("|" + m) for w in ("wake", "window"))}
-            self._persist()
+            if not self._persist():
+                raise ListenPaceEraseError("listen-pace file not rewritten")
         return len(gone)
 
 
@@ -678,10 +688,8 @@ def record_outcome(body: Mapping, *, now: Optional[float] = None, reflex_on: boo
 
 def forget_user(member_id: str) -> int:
     """Member forget (``MemoryService.delete_user``): the member's rows on every panel, in memory and in the file. Runs
-    whatever the flag says, so a forget is never skipped because the feature was off. Never raises."""
-    try:
-        if _book is None and _default_path() and not Path(os.path.expanduser(STATE_FILE)).exists():
-            return 0
-        return book().forget_user(member_id)
-    except Exception:  # noqa: BLE001
+    whatever the flag says, so a forget is never skipped because the feature was off. RAISES when the erase did not reach the
+    file (``ListenPaceEraseError``, or the error itself): the member delete fails closed and the caller retries."""
+    if _book is None and _default_path() and not Path(os.path.expanduser(STATE_FILE)).exists():
         return 0
+    return book().forget_user(member_id)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 
 import pytest
 
@@ -134,3 +135,94 @@ def test_the_narrow_calls_are_no_ops_while_off(monkeypatch):
     assert lp.done_frame_field("panel-a", None, now=T0)["apply"] is True
     assert lp.book().path is None                                      # under pytest the live file is never touched
     assert lp.forget_user("member-9") == 0
+
+
+def test_a_valid_token_recorded_after_the_flag_goes_off_changes_nothing(monkeypatch, tmp_path):
+    """The off check, proven with a token that WOULD record: issued while the flag was on, still unexpired and unused."""
+    path = str(tmp_path / "listen-pace.json")
+    monkeypatch.setattr(lp, "_book", lp.Book(path))
+    monkeypatch.setenv("ZOE_LISTEN_PACE", "shadow")
+    tok = lp.done_frame_field("panel-a", None, now=T0)["token"]
+    before = lp.book().states()
+    monkeypatch.delenv("ZOE_LISTEN_PACE", raising=False)
+    assert lp.record_outcome(body(tok, still_talking=1, talk_chunks=5), now=T0 + 1) is None
+    assert lp.book().states() == before and not os.path.exists(path)          # nothing in memory, nothing on disk
+    monkeypatch.setenv("ZOE_LISTEN_PACE", "shadow")                           # the same token was good all along
+    assert lp.record_outcome(body(tok, still_talking=1, talk_chunks=5), now=T0 + 2) == "none"
+    assert lp.book().states()["panel-a|*"].events_half == lp.HALF and os.path.exists(path)
+
+
+# ── forgotten means forever: a forget that did not reach the disk is a failure, and no pending outcome outlives a forget ─────
+def test_a_forget_whose_file_write_fails_raises_and_a_retry_erases(monkeypatch, tmp_path):
+    path = str(tmp_path / "listen-pace.json")
+    b = lp.Book(path)
+    b.say("panel-a", "member-1", "longer", now=T0)
+    b.say("panel-a", None, "quicker", now=T0)
+    real_save = lp.save
+    monkeypatch.setattr(lp, "save", lambda *_a, **_k: False)
+    with pytest.raises(lp.ListenPaceEraseError):
+        b.forget_user("member-1")
+    assert "member-1" in open(path).read()                                    # (the failure the caller is now told about)
+    monkeypatch.setattr(lp, "save", real_save)
+    assert b.forget_user("member-1") == 0                                     # the retry rewrites the file
+    assert "member-1" not in open(path).read() and set(lp.Book(path).states()) == {"panel-a|*"}   # and a restart agrees
+
+
+def test_the_module_forget_passes_the_erase_failure_up(monkeypatch, tmp_path):
+    path = str(tmp_path / "listen-pace.json")
+    monkeypatch.setattr(lp, "_book", lp.Book(path))
+    lp.book().say("panel-a", "member-1", "longer", now=T0)
+    monkeypatch.setattr(lp, "save", lambda *_a, **_k: False)
+    with pytest.raises(lp.ListenPaceEraseError):
+        lp.forget_user("member-1")
+
+
+async def test_member_delete_fails_closed_when_the_listen_pace_erase_is_not_durable(monkeypatch, tmp_path):
+    from memory_service import MemoryService, MemoryServiceError
+
+    path = str(tmp_path / "listen-pace.json")
+    monkeypatch.setattr(lp, "_book", lp.Book(path))
+    lp.book().say("panel-a", "member-1", "longer", now=T0)
+    svc = MemoryService(data_dir="/nonexistent/zoe-test-listen-pace")
+    monkeypatch.setattr(svc, "_list_ids_for_user", lambda uid: [])
+    monkeypatch.setattr(svc, "_delete_audit_for_user_sync", lambda uid: 0)
+    real_save = lp.save
+    monkeypatch.setattr(lp, "save", lambda *_a, **_k: False)
+    with pytest.raises(MemoryServiceError, match="listen-pace erasure failed"):
+        await svc.delete_user("member-1", actor="admin", reason="rtbf")
+    monkeypatch.setattr(lp, "save", real_save)
+    await svc.delete_user("member-1", actor="admin", reason="rtbf")           # the caller's retry
+    assert "member-1" not in open(path).read()
+
+
+def test_a_forget_landing_inside_record_leaves_nothing_of_the_member(monkeypatch, tmp_path):
+    """Deterministic: the forget is started from INSIDE record (at the outcome parse, the point after the token is consumed and
+    before the state update). Whether it runs there or has to wait for record, the member must be gone afterwards."""
+    path = str(tmp_path / "listen-pace.json")
+    b = lp.Book(path)
+    tok = b.frame("panel-a", "member-1", now=T0)["token"]
+    real_parse = lp.outcome_from_fields
+    forget = threading.Thread(target=b.forget_user, args=("member-1",))
+
+    def parse_then_forget(m):
+        forget.start()
+        if not b._lock.locked():          # nothing holds the book: the forget runs to completion right here, in the gap
+            forget.join(10)
+        return real_parse(m)
+
+    monkeypatch.setattr(lp, "outcome_from_fields", parse_then_forget)
+    b.record(body(tok, win="followup", still_talking=1, talk_chunks=5), now=T0 + 1)
+    forget.join(10)
+    assert not forget.is_alive()
+    assert "panel-a|member-1" not in b.states()
+    assert "member-1" not in open(path).read() and "panel-a|member-1" not in lp.Book(path).states()
+
+
+def test_a_token_issued_before_a_forget_never_writes_after_it(tmp_path):
+    path = str(tmp_path / "listen-pace.json")
+    b = lp.Book(path)
+    tok = b.frame("panel-a", "member-1", now=T0)["token"]
+    b.forget_user("member-1")
+    assert b.record(body(tok, win="followup", still_talking=1, talk_chunks=5), now=T0 + 1) is None
+    assert b.record(body(tok, still_talking=1, talk_chunks=5), now=T0 + 1) is None     # nor through its household half
+    assert b.states() == {} and "member-1" not in open(path).read()

@@ -104,7 +104,7 @@ True when done:
 |---|---|---|
 | decision core (levels, rule, override, who) | `services/zoe-data/listen_pace.py` | built, tested, unwired |
 | persistence + per-turn token + the narrow calls | same module: `Book`, `done_frame_field`, `record_outcome`, `forget_user` | built, tested, unwired |
-| member forget | `MemoryService.delete_user` calls `listen_pace.forget_user`; `forget_reach.py` entry `listen_pace_levels` | wired (a no-op while nothing is stored) |
+| member forget | `MemoryService.delete_user` calls `listen_pace.forget_user`; `forget_reach.py` entry `listen_pace_levels` | wired, FAIL CLOSED: a forget whose file rewrite fails raises and the delete reports failure (the retry rewrites it); a no-op while nothing is stored |
 | state file | `~/.zoe/listen-pace.json`, 0600, atomic write, at most 256 subjects | never written while the flag is off |
 
 The state file holds a level, counters and times per `"<panel>|<member id or *>"`: no words, no audio. A malformed file is an
