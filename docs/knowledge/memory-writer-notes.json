@@ -29,5 +29,6 @@
   "services/zoe-data/skybridge_service.py": "Skybridge card actions: a fact the member confirms on a card is stored (ingest, source skybridge_action).",
   "services/zoe-data/trait_challenge.py": "The owner hedges or denies a trait Zoe holds about them: parks the matching approved row as pending (flag_challenged); text and provenance untouched, an approve restores it.",
   "services/zoe-data/zoe_agent.py": "The agent loop's memory tool (ingest, brain_tool/zoe_agent source) and a one-time startup migration of legacy palace rows (a RAW upsert that bypasses the funnel).",
-  "services/zoe-data/zoe_memory_prompt_packet_measure.py": "Measurement helper: ingests fixtures to time the prompt packet. Bench use; never real members."
+  "services/zoe-data/zoe_memory_prompt_packet_measure.py": "Measurement helper: ingests fixtures to time the prompt packet. Bench use; never real members.",
+  "services/zoe-data/member_removal.py": "Settings > People > Delete: the durable member-removal job runs the full member erase (MemoryService.delete_user) after the erase mark and the sign-in deactivation; it writes no memory, only removes it."
 }

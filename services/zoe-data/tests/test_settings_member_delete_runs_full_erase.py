@@ -140,7 +140,7 @@ def test_the_barrier_is_written_before_deactivation_and_a_failed_barrier_touches
         raise ew.Unavailable("store down")
     monkeypatch.setattr(ew, "record", mark_down)
     world.calls.clear()
-    assert asyncio.run(mr.advance("member-b", actor=ADMIN, session_id=SESSION)) == "start"
+    assert asyncio.run(mr.advance("member-b", actor=ADMIN, session_id=SESSION)) == "intent", "the intent is durable, the barrier is not: the job stays at intent"
     assert world.steps() == ["barrier"], "no mark, no sign-in step and no erase"
     st = asyncio.run(mr.status("member-b"))
     assert st["status"] == "retrying" and st["erased"] is False
@@ -195,3 +195,120 @@ def test_the_route_is_admin_only_refuses_self_delete_and_passes_the_session():
     assert seen == [(A, ADMIN, SESSION)]
     deps = {d.call for r in route.router.routes for d in r.dependant.dependencies}
     assert auth.require_admin in deps and all(r.path.startswith("/api/members") for r in route.router.routes)
+
+
+def test_a_crash_between_the_intent_and_the_barrier_is_resumed_not_orphaned(world):
+    """The job row is written BEFORE the barrier: a crash right after it is found by the retry pass, which writes the barrier."""
+    assert asyncio.run(mr.get_store().put(A, "intent", None)) is True        # the process died right after the intent
+    world.restart()
+    assert asyncio.run(mr.status(A))["status"] == "retrying"
+    assert asyncio.run(mr.resume_unattended()) == 1
+    assert world.mark.rows.get(A) and asyncio.run(mr.status(A))["state"] == "barrier"
+    assert world.steps() == ["barrier"], "and it stops there: deactivation needs an administrator"
+
+
+def test_a_job_never_moves_backwards_or_over_a_step_it_did_not_see(world):
+    store = mr.get_store()
+    asyncio.run(mr.advance(A, actor=ADMIN, session_id=SESSION))
+    assert asyncio.run(store.get(A)) == "done"
+    assert asyncio.run(store.put(A, "erased", "deactivated")) is False       # a second runner that read "deactivated" earlier
+    assert asyncio.run(store.put(A, "intent", None)) is False                # nor can a fresh start overwrite it
+    assert asyncio.run(store.get(A)) == "done"
+
+
+def test_the_sign_in_call_can_only_name_the_member_that_was_erased(monkeypatch):
+    """An id that would change the shape of the zoe-auth URL is refused (the route answers 400; the step fails before any request),
+    and a valid id travels as ONE percent-encoded path segment."""
+    import httpx
+
+    urls = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def delete(self, url, params=None, headers=None):
+            urls.append((url, params))
+            return httpx.Response(200)
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    for bad in ("victim#x", "victim/../admin", "victim?permanent=true", "", "a b"):
+        assert not mr.valid_member_id(bad)
+        with pytest.raises(mr.StepFailed):
+            asyncio.run(mr._auth_delete(bad, SESSION, permanent=True))
+    assert urls == []
+    asyncio.run(mr._auth_delete("member-a.1@home", SESSION, permanent=True))
+    assert urls == [(mr._auth_url() + "/api/admin/users/member-a.1%40home", {"permanent": "true"})]
+
+
+def test_settings_shows_an_unfinished_removal_whose_sign_in_is_already_off():
+    src = SETTINGS.read_text(encoding="utf-8")
+    fn = src[src.index("async function loadUsers("):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "/api/admin/users?active_only=false" in fn and "removalsById" in fn
+
+
+def test_a_step_another_runner_holds_is_not_run_twice_and_a_dead_runners_claim_is_taken_over(world):
+    """Each step is CLAIMED durably before its side effect: a second runner (another process) that finds the claim does not run the
+    step; a claim whose runner died (older than CLAIM_STALE_S) is released and the step runs once."""
+    world.erase_fails = True
+    asyncio.run(mr.advance(A, actor=ADMIN, session_id=SESSION))               # stops at deactivated
+    world.erase_fails = False
+    store = mr.get_store()
+    assert asyncio.run(store.put(A, "deactivated" + mr.CLAIM, "deactivated"))    # another process claimed the erase just now
+    before = world.steps().count("delete_user")
+    assert asyncio.run(mr.advance(A, actor=ADMIN, session_id=SESSION)) == "deactivated+run"
+    assert world.steps().count("delete_user") == before, "the held step is not run a second time"
+    assert asyncio.run(mr.status(A))["status"] == "in_progress"
+
+    async def age_claim():                                                     # that process died 20 minutes ago
+        async with aiosqlite.connect(world.path) as db:
+            await db.execute("UPDATE memory_forgotten SET forgotten_at = '2000-01-01T00:00:00.000000Z' WHERE user_id = ?", (A,))
+            await db.commit()
+    asyncio.run(age_claim())
+    assert asyncio.run(mr.advance(A, actor=ADMIN, session_id=SESSION)) == "done"
+    assert world.steps().count("delete_user") == before + 1 and world.steps()[-1] == "sign_in_delete"
+
+
+def test_settings_follows_a_removal_that_is_already_running_when_reopened():
+    src = SETTINGS.read_text(encoding="utf-8")
+    fn = src[src.index("async function loadRemovals("):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "r.status === 'in_progress'" in fn and "watchRemoval(" in fn
+
+
+def test_a_runner_whose_stale_claim_was_taken_over_can_neither_complete_nor_release_it(world):
+    world.erase_fails = True
+    asyncio.run(mr.advance(A, actor=ADMIN, session_id=SESSION))               # at deactivated
+    world.erase_fails = False
+    store = mr.get_store()
+    old = "deactivated" + mr.CLAIM + ":runner-a"
+    assert asyncio.run(store.put(A, old, "deactivated"))                       # runner A claimed the erase, then stalled
+
+    async def age_claim():
+        async with aiosqlite.connect(world.path) as db:
+            await db.execute("UPDATE memory_forgotten SET forgotten_at = '2000-01-01T00:00:00.000000Z' WHERE user_id = ?", (A,))
+            await db.commit()
+    asyncio.run(age_claim())
+    world.calls.clear()
+
+    async def b_runs_while_a_returns():
+        # runner B takes the stale claim over; while B's erase runs, A comes back and tries to complete / release ITS claim
+        real = mr.full_erase
+
+        async def erase(uid, actor):
+            assert await store.put(A, "erased", old) is False, "A cannot complete a claim it lost"
+            assert await store.put(A, "deactivated", old) is False, "nor release it"
+            await real(uid, actor)
+        mr.full_erase = erase
+        try:
+            return await mr.advance(A, actor=ADMIN, session_id=SESSION)
+        finally:
+            mr.full_erase = real
+    assert asyncio.run(b_runs_while_a_returns()) == "done"
+    assert world.steps() == ["delete_user", "sign_in_delete"]

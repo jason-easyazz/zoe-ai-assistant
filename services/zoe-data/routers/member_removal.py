@@ -28,8 +28,8 @@ def _session(request: Request) -> str:
 @router.post("/{user_id}/remove", status_code=202)
 async def remove_member(user_id: str, request: Request, admin: dict = Depends(require_admin)):
     target = str(user_id or "").strip()
-    if not target:
-        raise HTTPException(status_code=400, detail="user_id is required")
+    if not member_removal.valid_member_id(target):
+        raise HTTPException(status_code=400, detail="Not a member id")
     if target == str(admin.get("user_id") or ""):
         raise HTTPException(status_code=400, detail="You can't delete your own account")
     task = asyncio.ensure_future(member_removal.advance(target, actor=str(admin.get("user_id") or ""), session_id=_session(request)))

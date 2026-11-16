@@ -1681,6 +1681,16 @@ async function loadUsers() {
     usersById = {};
     for (const u of users) usersById[u.user_id] = u;
     await loadRemovals();
+    // an unfinished removal whose sign-in is already off is not in the default (active-only) list: show it anyway, with its state
+    const missing = Object.keys(removalsById).filter(id => !usersById[id]);
+    if (missing.length) {
+      try {
+        const all = await apiCall('GET', '/api/admin/users?active_only=false');
+        for (const u of (all.users || all || [])) {
+          if (missing.includes(u.user_id) && !usersById[u.user_id]) { usersById[u.user_id] = u; users.push(u); }
+        }
+      } catch (e) { /* the badge rows below still show for the ones already listed */ }
+    }
     if (!users.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No users found</td></tr>';
       return;
@@ -1791,7 +1801,12 @@ async function loadRemovals() {
   } catch (e) { removalsById = {}; }
   // a removal that is not finished resumes with this administrator's session (the sign-in steps need one); same one action
   for (const r of Object.values(removalsById)) {
-    if (r.status === 'retrying' && !resumedRemovals.has(r.user_id)) { resumedRemovals.add(r.user_id); resumeRemoval(r.user_id); }
+    if (resumedRemovals.has(r.user_id)) continue;
+    if (r.status === 'retrying') { resumedRemovals.add(r.user_id); resumeRemoval(r.user_id); }
+    else if (r.status === 'in_progress') {   // already running: just follow it to its outcome
+      resumedRemovals.add(r.user_id);
+      watchRemoval(r.user_id, (usersById[r.user_id] || {}).username || 'this member');
+    }
   }
 }
 
