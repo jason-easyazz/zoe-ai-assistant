@@ -74,6 +74,14 @@ class Daemon:
         out = self.brain.call("act", action=action, on_behalf_of=person, args={**args, "asked": said.seq}, caused_by=[said.seq])
         return {**out, "said": said.seq}
 
+    def alarm(self, person: str, action: str = "alarm.set", **args) -> dict:
+        said = self.voice.publish("utterance", subject=person, payload={"text": _t("synthetic alarm")})
+        out = self.brain.call("act", action=action, on_behalf_of=person, args={**args, "asked": said.seq}, caused_by=[said.seq])
+        return {**out, "said": said.seq}
+
+    def labels(self, person: str) -> set:
+        return {r["label"] for r in self.panel.call("alarms", person=person)["alarms"]}
+
     def notes(self, person: str) -> dict:
         return {r["note"]: r for r in self.panel.call("reminders", person=person)["reminders"]}
 
@@ -906,6 +914,66 @@ def test_a_carer_manages_an_adult_in_cares_reminders_except_private_ones_and_nev
         d.panel.call("forget", subject=B, actor=A)
     with pytest.raises(Refused, match="not theirs to undo"):
         d.panel.call("undo", person=B, actor=A)
+
+
+# ---- the durable alarm rows: the same guarantees ---------------------------------------------------------------------------------
+@pytest.mark.parametrize("die,present,uncertain", [("after_intent", False, 1), ("after_do", False, 1), ("after_commit", True, 0)])
+def test_an_acknowledged_alarm_survives_a_kill_and_an_unacknowledged_one_is_absent_or_uncertain(state, die, present, uncertain):
+    d = start(state, die=die)
+    assert d.alarm(A, time="07:00", repeat="weekdays", label="kept")["proof"]["alarm"] == "07:00"
+    with pytest.raises((ConnectionError, OSError, wire.WireError)):
+        d.alarm(A, time="06:00", repeat="daily", label="die")
+    assert d.proc.wait(timeout=10) == -9
+    again = start(state)
+    assert again.labels(A) == ({"kept", "die"} if present else {"kept"})
+    assert again.brain.call("health")["recovered"] == uncertain
+
+
+def test_an_alarm_delete_undone_after_a_restart_stays_back_and_erase_member_takes_them(state):
+    d = start(state)
+    rid = d.alarm(A, time="07:00", repeat="daily", label="gym")["proof"]["id"]
+    d.alarm(A, "alarm.delete", id=rid)
+    d.alarm(B, time="06:00", label="early")
+    d.kill()
+    again = start(state)
+    assert again.labels(A) == set()
+    assert again.panel.call("undo", person=A, actor=A)["verified"] is True and again.labels(A) == {"gym"}
+    assert again.eraser.call("erase_member", subject=A)["verified"] is True and again.labels(A) == set()
+    again.kill()
+    final = start(state)
+    assert final.labels(A) == set() and final.labels(B) == {"early"}
+
+
+def test_forgetting_an_alarm_takes_its_later_records_and_forgetting_its_delete_takes_it(state):
+    label, edit = "synthetic marker <alm-a>", "synthetic marker <alm-a-edit>"
+    d = start(state)
+    made = d.alarm(A, time="07:00", repeat="daily", label=label)
+    rid = made["proof"]["id"]
+    d.alarm(A, "alarm.edit", id=rid, label=edit)
+    d.alarm(A, "alarm.toggle", id=rid, enabled=0)
+    d.panel.call("forget", subject=A, actor=A, seqs=[made["said"]])
+    assert d.labels(A) == set() and all(_members_bytes(state[0], w.encode()) == [] for w in (label, edit))
+    other = "synthetic marker <alm-b>"
+    rid2 = d.alarm(A, time="08:00", repeat="daily", label=other)["proof"]["id"]
+    gone = d.alarm(A, "alarm.delete", id=rid2)
+    d.panel.call("forget", subject=A, actor=A, seqs=[gone["said"]])          # "forget that I deleted it"
+    assert d.labels(A) == set() and _members_bytes(state[0], other.encode()) == []
+    d.kill()
+    assert start(state).labels(A) == set()
+
+
+def test_a_carer_manages_an_adult_in_cares_alarms_except_private_ones_and_never_forgets_for_them(state):
+    (state[0] / "people.json").write_text(json.dumps({"people": [adult(A), {"id": B, "role": "adult", "guardians": [A]}]}))
+    d = start(state)
+    rid = d.alarm(B, time="07:00", repeat="daily", label="synthetic marker <b-wake>")["proof"]["id"]
+    assert d.labels(A) == {"synthetic marker <b-wake>"}                           # the carer sees it ...
+    assert d.alarm(A, "alarm.toggle", id=rid, enabled=0)["verified"] is True      # ... and manages it
+    mine = d.alarm(B, time="22:00", label="synthetic marker <b-private>", private=1)["proof"]["id"]
+    assert "synthetic marker <b-private>" not in d.labels(A)
+    with pytest.raises(Refused, match="no such alarm"):
+        d.alarm(A, "alarm.delete", id=mine)
+    with pytest.raises(Refused, match="not theirs to forget"):
+        d.panel.call("forget", subject=B, actor=A)
 
 
 # ---- least access: nothing defaults to adult ----------------------------------------------------------------------------------------

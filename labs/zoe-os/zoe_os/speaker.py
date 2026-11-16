@@ -50,10 +50,10 @@ UNPROVEN = "speaker unproven"
 _DOMAIN = b"zoe-os speaker assertion v1\0"
 
 #: who must be proven, per person-bound op. The ONE table: the server and the lab client both read ``binding``.
-PERSON_BOUND = frozenset({"forget", "erase_member", "erase_item", "grant", "revoke", "undo", "explain", "reminders"})
+PERSON_BOUND = frozenset({"forget", "erase_member", "erase_item", "grant", "revoke", "undo", "explain", "reminders", "alarms"})
 #: what the member-delete path's ``eraser`` credential may do without an assertion: the forget family, nothing else
 ERASER_MAY = frozenset({"forget", "erase_member", "erase_item"})
-AUDIENCES = frozenset({"forget.person", "forget.scoped", "grant", "revoke", "undo", "explain", "reminders"})
+AUDIENCES = frozenset({"forget.person", "forget.scoped", "grant", "revoke", "undo", "explain", "reminders", "alarms"})
 
 
 def binding(op: str, args: dict, is_child: Callable[[str], bool] | None = None) -> tuple[object, str] | None:
@@ -76,8 +76,8 @@ def binding(op: str, args: dict, is_child: Callable[[str], bool] | None = None) 
         return (guardian if child else person), "grant"
     if op in ("revoke", "undo"):
         return args.get("person" if op == "revoke" else "actor"), op
-    if op == "reminders":                     # a person's reminders are read FOR that proven person, never for whoever asks
-        return args.get("person"), "reminders"
+    if op in ("reminders", "alarms"):          # a person's rows are read FOR that proven person, never for whoever asks
+        return args.get("person"), op
     if op == "explain" and "person" in args:
         return args.get("person"), "explain"
     return None

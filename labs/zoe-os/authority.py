@@ -19,6 +19,8 @@ The shadow daemon (``shadow_daemon.py``) plus three things an authority needs an
 * a DURABLE roster: the kernel knows the current people.json PLUS every id its record still names, so a member taken off the roster
   is still erased by id. After a whole-person erase or forget of a member off the roster, the forget first, then the id leaves;
 * ``health``: alive, schema version, whether the last write went through: what zoe-data reads to decide whether to fall back.
+* durable REMINDER and ALARM rows by the same rule (``zoe_os/rows.py``; models ``reminder_rows.py`` / ``alarm_rows.py``), read in the
+  household zone and default time given as ``--tz`` / ``--default-time``, and two person-bound reads, ``reminders`` and ``alarms``.
 
 A revoke is remembered by a keyed, content-free denial in meta, even when its event is forgotten.
 At start every roster member is granted the brain's acts EXCEPT those denied or erased.
@@ -43,7 +45,8 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
 from shadow_daemon import (ADAPTERS, SHADOW_BRAIN, read_roster, recorded_people, roster_people, serve, state_dir,  # noqa: E402
                            write_creds, write_identity)
-from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists  # noqa: E402
+from zoe_os.alarm_rows import DurableAlarms  # noqa: E402
+from zoe_os.brain.drivers import ASKED, Keeper, Lists  # noqa: E402
 from zoe_os.capability import CHILD, ConsentError, Person  # noqa: E402
 from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
@@ -54,7 +57,8 @@ from zoe_os.spine import KERNEL, Refused  # noqa: E402
 SCHEMA = 1          # the authority's own record shape (the rebuild rule below); bumped when it changes meaning
 _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0"
 #: the brain's ceiling as the authority serves it: the shadow's acts plus the durable reminder verbs (``remind.set`` already in it)
-AUTHORITY_BRAIN = {**SHADOW_BRAIN, "acts": [*SHADOW_BRAIN["acts"], *(a for a in DurableReminders.actions if a not in SHADOW_BRAIN["acts"])]}
+AUTHORITY_BRAIN = {**SHADOW_BRAIN, "acts": [*SHADOW_BRAIN["acts"], *(a for a in (*DurableReminders.actions, *DurableAlarms.actions)
+                                                                     if a not in SHADOW_BRAIN["acts"])]}
 AUTH_ACTS = tuple(AUTHORITY_BRAIN["acts"])
 #: the member-delete path's identity: the forget family without a speaker assertion, nothing else. No reads, no emits, no acts.
 ERASER = {"skill": "eraser"}
@@ -352,8 +356,6 @@ class AuthorityServer(KernelServer):
         self.kernel.pump()                                                   # every member's rows the erase reached, now
         self._erased(subject)
         self.lists.rebuild(subject)
-        for store in self.others:                                            # the lab in-memory alarm store
-            (store.at if isinstance(store, Alarms) else store.rows).pop(subject, None)
         for store in self.durable:
             store.rebuild()
         left = len(self.lists.rows.get(subject, [])) + self._live_events(subject) + sum(
@@ -383,6 +385,15 @@ class AuthorityServer(KernelServer):
         """The reminders ``person`` may see (production's list filter, plus a carer's reach), each with its next fire time, for
         that PROVEN person (a speaker assertion: ``KernelServer._prove_speaker``)."""
         return {"reminders": self.reminders.visible_to(a["person"])}
+
+    def _op_alarms(self, conn, a: dict) -> dict:
+        """The alarms ``person`` may see (their own, and a carer's reach), each with whether it is ringing now and when it rings
+        next, for that PROVEN person (a speaker assertion: ``KernelServer._prove_speaker``)."""
+        return {"alarms": self.alarms.visible_to(a["person"])}
+
+    @property
+    def alarms(self) -> DurableAlarms:
+        return next(s for s in self.durable if isinstance(s, DurableAlarms))
 
     @property
     def reminders(self) -> DurableReminders:
@@ -615,10 +626,11 @@ def build(state: Path, db: str | None = None, *, tz: str = "UTC", default_time: 
     lists.rebuild()
     reminders = DurableReminders(k.spine, lambda: k.clock(), k.grants, tz=tz, default_time=default_time).register(k)
     reminders.rebuild()
-    alarms = Alarms().register(k)
+    alarms = DurableAlarms(k.spine, lambda: k.clock(), k.grants, tz=tz).register(k)
+    alarms.rebuild()
     for manifest in (*ADAPTERS, AUTHORITY_BRAIN, ERASER, RECONCILER):
         k.grants.install(manifest)
-    k.install(DurableKeeper(lists, alarms, durable=(reminders,)))
+    k.install(DurableKeeper(lists, durable=(reminders, alarms)))
     no, gone = revoked(k, SHADOW_BRAIN["skill"]), erased_marks(k)
     for p in members:
         if p.id in no or k.spine._owner(p.id).hex() in gone:
@@ -628,7 +640,7 @@ def build(state: Path, db: str | None = None, *, tz: str = "UTC", default_time: 
                            guardian=p.guardians[0] if p.role == CHILD and p.guardians else None)
         except ConsentError:
             pass
-    srv = AuthorityServer(k, str(state / "k.sock"), lists, (alarms,), (reminders,), roster=people)
+    srv = AuthorityServer(k, str(state / "k.sock"), lists, (), (reminders, alarms), roster=people)
     srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     write_secret(state / ERASER_CREDS, {"socket": srv.path, "creds": {ERASER["skill"]: srv.issue(ERASER["skill"], eraser=True).hex()}})

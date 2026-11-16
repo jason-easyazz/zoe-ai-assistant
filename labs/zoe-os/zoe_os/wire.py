@@ -64,6 +64,7 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "erase_item": {"digest": ((str,), True), "subject": ((str,), False), "speaker": _SPEAKER},     # subject: optional on the wire, REFUSED when absent
     "list_digest": {},
     "reminders": {"person": ((str,), True), "speaker": _SPEAKER},
+    "alarms": {"person": ((str,), True), "speaker": _SPEAKER},
 }
 
 # error codes (closed)
