@@ -12,9 +12,11 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import os
+import stat
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -49,10 +51,26 @@ def test_hostile_stdin_is_refused(stdin):
     assert r.returncode == 2 and b"usage" in r.stderr
 
 
+def sandboxed_deploy(tmp_path):
+    """A copy of the helper whose state dir and env file live in tmp_path, so even a run as root touches no live
+    state: it passes the stdin check, then stops at the state-dir check (non-root) or the absent env file (root),
+    both before any fetch, export or container call."""
+    text = DEPLOY.read_text()
+    subs = {'STATE = "/var/lib/zoe-compose-deploy"': f'STATE = "{tmp_path}/state"',
+            'ENV_FILE = "/etc/zoe/compose.env"': f'ENV_FILE = "{tmp_path}/absent.env"'}
+    for old, new in subs.items():
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    p = tmp_path / "zoe-compose-deploy"
+    p.write_text(text)
+    return p
+
+
 @pytest.mark.parametrize("stdin", [SHA.encode(), SHA.encode() + b"\n"])
-def test_negative_control_an_exact_sha_passes_the_stdin_check(stdin):
-    r = deploy(stdin)          # it then stops at the root-owned state dir (not root here), never with the usage error
-    assert r.returncode != 2 and b"usage" not in r.stderr
+def test_negative_control_an_exact_sha_passes_the_stdin_check(stdin, tmp_path):
+    h = sandboxed_deploy(tmp_path)
+    r = subprocess.run([sys.executable, "-I", str(h), "zoe-auth"], input=stdin, capture_output=True, timeout=30)
+    assert r.returncode in (5, 6) and b"usage" not in r.stderr, r.stderr   # a later check, never the usage error
 
 
 def test_stdin_that_never_ends_hits_the_deadline():
@@ -107,10 +125,26 @@ def test_a_user_writable_parent_is_refused(dh, tmp_path):
     assert why and ("not root-owned" in why or "writable" in why)
 
 
-def test_a_symlinked_source_is_refused(dh, tmp_path):
-    os.symlink("/usr/share", tmp_path / "link")
-    assert "symlink" in dh.unswappable(str(tmp_path / "link")) or "root-owned" in dh.unswappable(str(tmp_path / "link"))
-    assert dh.unswappable("/usr/share") is None          # negative control: a root-owned path passes
+def _fake_fs(monkeypatch, dh, last_mode):
+    """unswappable() sees /srv/zoe/x with every parent root-owned 0755 and the last component of `last_mode`, so only
+    the last component's own type can cause a refusal (a real tmp_path has a user-owned parent, which is refused
+    first and would let a symlink test pass without the symlink check)."""
+    def lstat(p):
+        mode = last_mode if p == "/srv/zoe/x" else stat.S_IFDIR | 0o755
+        return os.stat_result((mode, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(dh, "os", types.SimpleNamespace(lstat=lstat, path=os.path))
+
+
+def test_a_symlinked_source_is_refused(dh, monkeypatch):
+    _fake_fs(monkeypatch, dh, stat.S_IFLNK | 0o777)
+    assert "symlink" in dh.unswappable("/srv/zoe/x")
+
+
+def test_negative_control_the_same_path_as_a_directory_passes(dh, monkeypatch):
+    _fake_fs(monkeypatch, dh, stat.S_IFDIR | 0o755)
+    assert dh.unswappable("/srv/zoe/x") is None
+    monkeypatch.undo()
+    assert dh.unswappable("/usr/share") is None          # and a real root-owned path passes
 
 
 def test_a_swap_between_check_and_use_needs_root(dh):
@@ -120,6 +154,41 @@ def test_a_swap_between_check_and_use_needs_root(dh):
     assert dh.unswappable("/tmp/x") is not None                     # world-writable parent (sticky or not)
     assert dh.unswappable("/usr/share/../share") is not None        # unnormalised
     assert dh.unswappable("relative/x") is not None
+
+
+def _prune_rig(dh, tmp_path, monkeypatch, ps_rc=0, inspect_rc=0, mounted=()):
+    state = tmp_path / "state"
+    trees = state / "trees"
+    trees.mkdir(parents=True)
+    names = [f"{i:040x}" for i in range(1, 7)]           # six exports, oldest first
+    for i, n in enumerate(names):
+        (trees / n).mkdir()
+        os.utime(trees / n, (1000 + i, 1000 + i))
+    srcs = [f"{trees}/{names[m]}/services/zoe-ui/nginx.conf" for m in mounted] + ["/srv/zoe/data"]
+    (tmp_path / "mounts.txt").write_text("\n".join(srcs) + "\n")
+    fake = tmp_path / "docker"
+    fake.write_text("#!/bin/sh\n"
+                    f'case "$1" in ps) echo c1; exit {ps_rc};; inspect) cat "{tmp_path}/mounts.txt"; exit {inspect_rc};; esac\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(dh, "STATE", str(state))
+    monkeypatch.setattr(dh, "DOCKER", str(fake))
+    return trees, names
+
+
+def test_prune_keeps_an_old_export_a_container_still_mounts(dh, tmp_path, monkeypatch):
+    trees, names = _prune_rig(dh, tmp_path, monkeypatch, mounted=(0,))
+    dh.prune_trees(names[-1])
+    left = sorted(p.name for p in trees.iterdir())
+    assert names[0] in left, "the oldest export is still bind-mounted by a container: it must survive"
+    assert names[1] not in left and names[2] not in left, "unreferenced old exports are still pruned (control)"
+    assert sorted(names[3:] + [names[0]]) == left
+
+
+@pytest.mark.parametrize("ps_rc,inspect_rc", [(1, 0), (0, 1)])
+def test_prune_keeps_everything_when_mounts_cannot_be_listed(dh, tmp_path, monkeypatch, ps_rc, inspect_rc):
+    trees, names = _prune_rig(dh, tmp_path, monkeypatch, ps_rc=ps_rc, inspect_rc=inspect_rc)
+    dh.prune_trees(names[-1])
+    assert sorted(p.name for p in trees.iterdir()) == names
 
 
 # ── zoe-db-exec ──────────────────────────────────────────────────────────────────────────────────────────────

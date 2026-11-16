@@ -153,12 +153,34 @@ def export_tree(mirror, sha):
     return tree
 
 
+def trees_in_use(trees):
+    """The export names any container (running or stopped) still bind-mounts, or None when Docker cannot say.
+    A deploy of one service leaves the others on older exports; deleting one of those empties a live bind mount
+    and breaks that container's next restart."""
+    ps = subprocess.run([DOCKER, "ps", "-aq"], env=ENV, capture_output=True, text=True, timeout=60)
+    if ps.returncode != 0:
+        return None
+    ids = ps.stdout.split()
+    if not ids:
+        return set()
+    insp = subprocess.run([DOCKER, "inspect", "--format", "{{range .Mounts}}{{.Source}}\n{{end}}", *ids],
+                          env=ENV, capture_output=True, text=True, timeout=60)
+    if insp.returncode != 0:
+        return None
+    return {src[len(trees) + 1:].split("/", 1)[0] for src in insp.stdout.splitlines()
+            if src.startswith(trees + "/")}
+
+
 def prune_trees(keep):
     trees = os.path.join(STATE, "trees")
+    used = trees_in_use(trees)
+    if used is None:              # fail safe: an unknown mount set prunes nothing
+        print("zoe-compose-deploy: could not list container mounts; keeping every export", file=sys.stderr)
+        return
     names = sorted((n for n in os.listdir(trees) if SHA.fullmatch(n)),
                    key=lambda n: os.lstat(os.path.join(trees, n)).st_mtime, reverse=True)
     for n in names[KEEP_TREES:]:
-        if n != keep:
+        if n != keep and n not in used:
             shutil.rmtree(os.path.join(trees, n), ignore_errors=True)
 
 
