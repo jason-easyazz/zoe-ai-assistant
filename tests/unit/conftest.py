@@ -17,12 +17,19 @@ module's module-scope ``from x import y`` cannot hit one. Pinned by ``test_sys_m
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import types
 import unittest.mock as mock
 from pathlib import Path
 
 import pytest
+
+# A unit test that imports zoe-data modules (memory_service, the forget paths) reaches the Zoe OS shadow client; its state directory
+# defaults to the LIVE ~/.zoe/os-shadow. Pin it to an empty per-session directory and the switch off before anything is imported.
+os.environ.setdefault("ZOE_OS_SHADOW_DIR", tempfile.mkdtemp(prefix="zoe-unit-os-shadow-"))
+os.environ["ZOE_OS_LIST_SHADOW"] = "off"
 
 _ZOE_DATA = Path(__file__).resolve().parents[2] / "services" / "zoe-data"
 
