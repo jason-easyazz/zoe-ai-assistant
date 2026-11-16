@@ -301,3 +301,36 @@ def test_an_unknown_key_is_counted_by_a_tag_never_by_its_name(tmp_path, capsys):
     rep.main([str(f)])
     out = capsys.readouterr().out
     assert f"{tag}=1" in out and "Zq7Secret" not in out
+
+
+# ---- a verb the kernel cannot yet be compared on is said so, not shown as a low match rate --------------------------------------
+def _rem(n_ok, n_unproven, n_differs=0):
+    out = [act("reminder_create", hop=1.0)] * n_ok + [act("reminder_create", "schedule_unproven", hop=1.0)] * n_unproven
+    return out + [act("reminder_create", "schedule_differs", hop=1.0)] * n_differs
+
+
+def test_a_verb_whose_every_disagreement_is_schedule_unproven_is_not_comparable_yet(tmp_path, capsys):
+    s = rep.summarize(rep.parse(_rem(0, 250)))
+    v = s["verbs"]["reminder_create"]
+    assert v["verdict"]["status"] == "not_comparable" and not v["verdict"]["pass"]
+    assert (v["seen"], v["disagree"], v["disagree_by_result"]) == (250, 250, {"schedule_unproven": 250})   # the counts stay visible
+    f = tmp_path / "log"
+    f.write_text("\n".join(_rem(10, 240)) + "\n")
+    rep.main([str(f)])
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith("reminder_create: "))
+    assert line.startswith("reminder_create: NOT COMPARABLE YET (schedule_unproven: 240)")
+    assert "the kernel does not report when a reminder is due" in line and "agreement" not in line   # the rate is not a failure
+
+
+def test_one_real_schedule_disagreement_makes_it_not_yet_again():
+    v = rep.summarize(rep.parse(_rem(10, 240, 1)))["verbs"]["reminder_create"]["verdict"]
+    assert v["status"] == "not_yet" and any(f.startswith("agreement") for f in v["fails"])
+    assert rep.summarize(rep.parse(_rem(300, 0)))["verbs"]["reminder_create"]["verdict"]["status"] == "pass"   # no disagreement at all
+
+
+def test_junk_numbers_never_move_the_pass_line_except_as_rejected():
+    good = [act("alarm_create", hop=2.0)] * 200
+    junk = [act("alarm_create", hop=2.0).replace("hop_ms=2.0", f"hop_ms={h}") for h in ("nan", "inf", "-inf", "-1", "1e300", "")]
+    a, b = rep.summarize(*rep.parse_counted(good)), rep.summarize(*rep.parse_counted(good + junk))
+    assert a["verbs"] == b["verbs"] and b["rejected"] == len(junk) and b["verbs"]["alarm_create"]["verdict"]["pass"]

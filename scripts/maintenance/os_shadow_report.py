@@ -172,6 +172,30 @@ def verdict(agree: int, disagree: int, unavailable: int, unexplained: int, hop_p
     return {"pass": not fails, "fails": fails}
 
 
+#: a disagreement code that says the KERNEL cannot yet report what the comparison needs (not that it got it wrong)
+NOT_COMPARABLE = ("schedule_unproven",)
+
+
+def _verb_verdict(recs: list[dict], b: Counter, unexplained: int, hop_p90: float) -> dict:
+    """The pass line. One rule before the five numbers: when there IS at least one disagreement and EVERY disagreement is
+    ``schedule_unproven`` (the kernel's read-back does not say when a reminder is due), the verb is ``not_comparable``: its agree rate
+    measures the kernel's missing field, not a disagreement, and is not reported as a failure. One real disagreement of any other code
+    makes it an ordinary ``NOT YET`` again. The counts stay in the table either way."""
+    dis = Counter(r["result"] for r in recs if bucket(r["result"]) == "disagree")
+    if dis and set(dis) <= set(NOT_COMPARABLE):
+        return {"pass": False, "status": "not_comparable", "fails": [f"{code}: {n}" for code, n in sorted(dis.items())]}
+    out = verdict(b["agree"], b["disagree"], b["unavailable"], unexplained, hop_p90)
+    return {**out, "status": "pass" if out["pass"] else "not_yet"}
+
+
+def _pass_line(v: dict) -> str:
+    vd = v["verdict"]
+    if vd["status"] == "not_comparable":
+        return ("NOT COMPARABLE YET (" + "; ".join(vd["fails"]) + "): cannot meet the pass mark yet: the kernel does not report when a "
+                "reminder is due")
+    return "PASS" if vd["pass"] else "NOT YET (" + "; ".join(vd["fails"]) + ")"
+
+
 def verb_summary(recs: list[dict]) -> dict:
     b = Counter(bucket(r["result"]) for r in recs)
     judged = b["agree"] + b["disagree"]
@@ -182,7 +206,7 @@ def verb_summary(recs: list[dict]) -> dict:
     return {
         "compared": judged, "unexplained": unexplained,
         "unavailable_rate": round(b["unavailable"] / asked, 4) if asked else None,
-        "verdict": verdict(b["agree"], b["disagree"], b["unavailable"], unexplained, pct(hops, 90)),
+        "verdict": _verb_verdict(recs, b, unexplained, pct(hops, 90)),
         "seen": len(recs), "agree": b["agree"], "disagree": b["disagree"], "unavailable": b["unavailable"],
         "not_compared": b["not_compared"], "agree_rate": round(b["agree"] / judged, 4) if judged else None,
         "unknown": sum(1 for r in recs if r["result"] == UNKNOWN), "shadow_errors": sum(1 for r in recs if r["result"] == "shadow_error"),
@@ -237,7 +261,7 @@ def render(s: dict) -> str:
             rows.append(f"{verb} disagreements: " + ", ".join(f"{k}={n}" for k, n in v["disagree_by_reason"].items()))
     rows.append("")
     for verb, v in s["verbs"].items():
-        rows.append(f"{verb}: " + ("PASS" if v["verdict"]["pass"] else "NOT YET (" + "; ".join(v["verdict"]["fails"]) + ")"))
+        rows.append(f"{verb}: " + _pass_line(v))
     rows += ["", f"list add: logged {s['adds_logged']}    compared: {s['compared']}    match: {s['match']} ({rate})",
              f"list add kernel hop (publish + act), {s['hop_answered']} answered: p50 {s['hop_ms_p50']} ms, p95 {s['hop_ms_p95']} ms",
              f"list add kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}",
