@@ -103,6 +103,12 @@ def settle(total, timeout=10.0):
     raise AssertionError(f"counters never reached {total}: {os_shadow.counters()}")
 
 
+needs_forget = pytest.mark.skipif(
+    not hasattr(os_shadow, "forget_user"),
+    reason="this os_shadow has no forget_user (it arrives with the shadow train, #2631): the forget half of the contract runs again "
+           "on its own once that is on main")
+
+
 def forget(member: str) -> int:
     return asyncio.run(os_shadow.forget_user(member))
 
@@ -165,6 +171,7 @@ def test_the_client_constants_and_ops_agree_with_the_kernels_wire_module():
                                                       "args": {}, "caused_by": [1], "actor": "p"}.items() if k in wire.OPS[op]}) == ""
 
 
+@needs_forget
 def test_a_real_list_add_matches_and_the_forget_leaves_none_of_it_readable(real_kernel):
     state = real_kernel
     os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name=LIST, item=ITEM)
@@ -214,6 +221,7 @@ needs_verbs = pytest.mark.skipif(not hasattr(os_shadow, "note_act"),
 
 
 @needs_verbs
+@needs_forget
 def test_a_reminder_an_alarm_and_a_remove_match_against_the_real_kernel(real_kernel, monkeypatch):
     import proactive.triggers.reminder_scan as scan
     from datetime import timedelta
@@ -231,6 +239,7 @@ def test_a_reminder_an_alarm_and_a_remove_match_against_the_real_kernel(real_ker
 
 
 @needs_verbs
+@needs_forget
 def test_the_real_kernel_refuses_what_its_schema_cannot_take_and_the_client_names_it(real_kernel, monkeypatch):
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
     os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="7:5", repeat="once")      # never sent: the client stops it
@@ -259,6 +268,7 @@ def removed_and_forgotten(state: Path, monkeypatch) -> subprocess.Popen:
     return proc
 
 
+@needs_forget
 def test_a_member_taken_off_the_roster_is_forgotten_and_the_daemon_keeps_no_copy_of_their_id(state, monkeypatch):
     proc = removed_and_forgotten(state, monkeypatch)
     try:
@@ -278,6 +288,7 @@ def test_a_member_taken_off_the_roster_is_forgotten_and_the_daemon_keeps_no_copy
         stop(proc)
 
 
+@needs_forget
 def test_a_forgotten_member_who_acts_again_is_recorded_afresh_and_stays_forgettable_off_the_roster(state, monkeypatch):
     """A whole-person forget erases what the member did and shields their words; it does not shield the PERSON: a member still on the
     roster who acts again is recorded afresh, and that new record is what keeps them forgettable once they leave the roster."""
@@ -301,6 +312,7 @@ def test_a_forgotten_member_who_acts_again_is_recorded_afresh_and_stays_forgetta
         stop(proc)
 
 
+@needs_forget
 def test_after_a_removed_member_is_forgotten_no_kernel_file_holds_their_id(state, monkeypatch):
     proc = removed_and_forgotten(state, monkeypatch)
     try:
