@@ -261,3 +261,11 @@ def test_the_row_rules_hold_for_alarms_undo_refused_once_changed_and_an_unrelate
     assert gone not in house.al.rows and house.al.rows[kept]["enabled"] == 1 and house.al.rows[kept]["label"] == "synthetic kept, edited"
     with pytest.raises(Refused):
         house.k.actions.undo(A, actor=A)                               # the last action is itself an undo
+
+
+def test_no_carer_reaches_a_least_access_members_alarms(tmp_path, clock):
+    from zoe_os.capability import LEAST
+    al = DurableAlarms(None, lambda: clock[0], type("G", (), {"people": {
+        A: Person(A, ADULT), "member-u": Person("member-u", guardians=(A,))}})())
+    al.rows["alm1"] = {"id": "alm1", "owner": "member-u", "private": 0}
+    assert al.grants.people["member-u"].role == LEAST and not al._may_see(A, al.rows["alm1"])

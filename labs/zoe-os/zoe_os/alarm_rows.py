@@ -52,7 +52,9 @@ class DurableAlarms(DurableRows):
     def _carer(self, adult: str, person: str) -> bool:
         people = getattr(self.grants, "people", {}) or {}
         who, by = people.get(person), people.get(adult)
-        return who is not None and by is not None and by.role == "adult" and adult in who.guardians
+        # both STATED: a least-access person (no role stated) is nobody's to manage, and a least-access carer cares for no one
+        return who is not None and by is not None and by.role == "adult" and who.role in ("adult", "child") \
+            and adult in who.guardians
 
     def _may_see(self, person: str, row: dict) -> bool:
         return row["owner"] == person or (not row.get("private") and self._carer(person, row["owner"]))
