@@ -7,13 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from _shadow_guard import shadow_dir_violation
 import os_shadow
 
 pytestmark = pytest.mark.ci_safe
 
 
-def test_every_test_runs_on_its_own_empty_shadow_dir(tmp_path):
+def test_every_test_runs_on_its_own_empty_shadow_dir(tmp_path, shadow_dir_violation):
     assert os_shadow.state_dir() == tmp_path / "os-shadow" and not os_shadow.shadow_state_exists()
     assert os_shadow.mode() == "off" and shadow_dir_violation() == ""
 
@@ -26,7 +25,7 @@ async def test_a_member_forget_in_a_default_test_touches_no_kernel_and_writes_no
 
 @pytest.mark.parametrize("value,bad", [("", True), ("~/.zoe/os-shadow", True), ("~/.zoe", True), ("~/.zoe/os-shadow/sub", True),
                                        ("TMP", False)])
-def test_the_guard_flags_a_home_path_negative_control(monkeypatch, tmp_path, value, bad):
+def test_the_guard_flags_a_home_path_negative_control(monkeypatch, tmp_path, value, bad, shadow_dir_violation):
     if value == "":
         monkeypatch.delenv("ZOE_OS_SHADOW_DIR")
     else:
