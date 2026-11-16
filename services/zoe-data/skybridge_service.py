@@ -4904,7 +4904,9 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     list_name = await _list_name_of(db, list_id)
     from list_service import add_reply
 
-    added, already, new_ids, item_id = await _add_spoken_items(db, user_id, list_id, list_type, list_name, intent.item_text)
+    # list_name IS the resolved row's name here; handed on as landed_name too, so the shadow is told the list the items land on
+    added, already, new_ids, item_id = await _add_spoken_items(db, user_id, list_id, list_type, list_name, intent.item_text,
+                                                               landed_name=list_name)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
