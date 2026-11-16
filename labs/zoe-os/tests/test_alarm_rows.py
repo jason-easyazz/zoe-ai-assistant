@@ -269,3 +269,14 @@ def test_no_carer_reaches_a_least_access_members_alarms(tmp_path, clock):
         A: Person(A, ADULT), "member-u": Person("member-u", guardians=(A,))}})())
     al.rows["alm1"] = {"id": "alm1", "owner": "member-u", "private": 0}
     assert al.grants.people["member-u"].role == LEAST and not al._may_see(A, al.rows["alm1"])
+
+
+def test_a_removed_carer_loses_an_alarm_at_once_and_regains_it_with_the_link(clock):
+    people = {A: Person(A, ADULT), "member-c": Person("member-c", ADULT, guardians=(A,))}
+    al = DurableAlarms(None, lambda: clock[0], type("G", (), {"people": people})())
+    row = {"id": "alm1", "owner": "member-c", "by": A, "private": 0}           # set by the carer: never authority by itself
+    assert al._may_see(A, row)
+    people["member-c"] = Person("member-c", ADULT)                             # the care link is removed
+    assert not al._may_see(A, row)
+    people["member-c"] = Person("member-c", ADULT, guardians=(A,))
+    assert al._may_see(A, row)
