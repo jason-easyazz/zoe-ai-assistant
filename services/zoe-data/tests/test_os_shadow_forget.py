@@ -128,7 +128,8 @@ async def test_flag_off_with_a_kernel_down_parks_the_forget_and_replays_it_befor
     real_path = kernel.path
     (kernel.state / "creds.json").write_text(json.dumps({"socket": str(kernel.dir / "gone.sock"),
                                                          "creds": {s: c.hex() for s, c in kernel.creds.items()}}))
-    assert await os_shadow.forget_user(MEMBER) == 0                    # the erase is not blocked ...
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):             # not confirmed, flag off too: the erase fails closed ...
+        await os_shadow.forget_user(MEMBER)
     assert json.loads((kernel.state / "pending-forgets.json").read_text()) == [MEMBER]   # ... and is not lost
     assert oct((kernel.state / "pending-forgets.json").stat().st_mode & 0o777) == "0o600"
     os_shadow._reset_for_tests()
@@ -327,7 +328,8 @@ async def test_a_forget_that_failed_as_the_first_job_still_goes_before_the_next_
     monkeypatch.setattr(os_shadow, "CIRCUIT_S", 0.0)
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     _creds(kernel, str(kernel.dir / "gone.sock"))
-    assert await os_shadow.forget_user(MEMBER) == 0                       # the worker's FIRST job: failed, parked
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):                # the worker's FIRST job: failed, parked, not "done"
+        await os_shadow.forget_user(MEMBER)
     assert _pending(kernel) == [MEMBER]
     _creds(kernel, kernel.path)
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")                    # same worker, no restart
@@ -344,7 +346,8 @@ async def test_while_the_kernel_is_still_down_a_parked_members_add_is_dropped_ne
     caplog.set_level(logging.INFO, logger="os_shadow")
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     _creds(kernel, str(kernel.dir / "gone.sock"))
-    assert await os_shadow.forget_user(MEMBER) == 0                       # parked; the failed connect opened the 5 s circuit
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):                # parked; the failed connect opened the 5 s circuit
+        await os_shadow.forget_user(MEMBER)
     _creds(kernel, kernel.path)
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
     add()
@@ -404,11 +407,8 @@ async def test_a_full_queue_never_blocks_the_loop_and_the_forget_is_parked_not_l
         t = asyncio.create_task(ticker())
         await asyncio.sleep(0.02)
         t0 = time.perf_counter()
-        if flag == "off":
-            assert await os_shadow.forget_user(MEMBER) == 0              # deferred, and said so
-        else:
-            with pytest.raises(os_shadow.ShadowForgetUnavailable):       # the flag on: not confirmed is never "forgotten"
-                await os_shadow.forget_user(MEMBER)
+        with pytest.raises(os_shadow.ShadowForgetUnavailable):           # either flag: not confirmed is never "forgotten"
+            await os_shadow.forget_user(MEMBER)
         t1 = time.perf_counter()
         t.cancel()
     during = sum(1 for x in ticks if t0 < x < t1)
@@ -513,8 +513,9 @@ async def test_a_forget_with_the_credential_gone_but_a_store_present_is_parked_t
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     _db_without_creds(kernel)
     fn = getattr(os_shadow, call)
-    out = await (fn(MEMBER) if call == "forget_user" else fn(MEMBER, "Dana"))
-    assert out == 0 and _pending(kernel) == [MEMBER]                     # deferred AND parked: never a silent "done"
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):               # fails closed (flag off too) AND parked: never a silent "done"
+        await (fn(MEMBER) if call == "forget_user" else fn(MEMBER, "Dana"))
+    assert _pending(kernel) == [MEMBER]
     (kernel.state / "creds.json").write_text(creds)                       # the credential comes back
     os_shadow._reset_for_tests()
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
@@ -584,11 +585,8 @@ async def test_the_state_check_and_the_park_never_run_on_the_event_loop(kernel, 
     t = asyncio.create_task(ticker())
     await asyncio.sleep(0.02)
     t0 = time.perf_counter()
-    if flag == "off":
-        assert await os_shadow.forget_user(MEMBER) == 0
-    else:
-        with pytest.raises(os_shadow.ShadowForgetUnavailable):
-            await os_shadow.forget_user(MEMBER)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await os_shadow.forget_user(MEMBER)
     t1 = time.perf_counter()
     t.cancel()
     assert t1 - t0 >= (0.4 if flag == "off" else 0.2)                     # the slow check / park really ran inside the forget
@@ -610,11 +608,8 @@ BAD_REPLIES = ['null', '{}', '{"ok": true}', '{"count": "3", "upto": 1}', '{"cou
 async def test_a_forget_reply_that_is_not_the_documented_one_is_never_a_success(kernel, monkeypatch, reply, flag):
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", flag)
     kernel.forget_mode = "reply:" + reply
-    if flag == "off":
-        assert await os_shadow.forget_user(MEMBER) == 0                   # deferred, never "forgotten"
-    else:
-        with pytest.raises(os_shadow.ShadowForgetUnavailable):           # the caller is told it failed
-            await os_shadow.forget_user(MEMBER)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):               # the caller is told it failed, either flag
+        await os_shadow.forget_user(MEMBER)
     assert _pending(kernel) == [MEMBER]                                   # the durable retry marker stays
     os_shadow._replay_pending(os_shadow._Kernel())                        # a replay against the same bad reply keeps it too
     assert _pending(kernel) == [MEMBER]
@@ -733,3 +728,40 @@ def test_an_empty_write_with_nothing_parked_touches_nothing(kernel, monkeypatch)
 
     monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(AssertionError("fsync with nothing to make durable")))
     os_shadow._pending_write([])
+
+
+# ---- the reviewer's case: shadow records, then the flag is turned OFF and the kernel STOPPED ---------------------------------------------
+def _stop_kernel_with_records(kernel, monkeypatch):
+    (kernel.state / "kernel").mkdir(exist_ok=True)
+    (kernel.state / "kernel" / "zoe-os.db").write_bytes(b"recorded events and receipts")   # what the shadow recorded
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    kernel.srv.close()
+    Path(kernel.path).unlink()                                            # stopped: nothing answers the socket
+
+
+@pytest.mark.asyncio
+async def test_a_member_delete_with_the_shadow_off_and_its_kernel_stopped_is_not_reported_done(kernel, env, monkeypatch):  # noqa: F811
+    import memory_service
+
+    svc, _col = env
+    _stop_kernel_with_records(kernel, monkeypatch)
+    with pytest.raises(memory_service.MemoryServiceError, match="Zoe OS shadow erasure failed"):
+        await svc.delete_user(MEMBER, actor=MEMBER)
+    assert _pending(kernel) == [MEMBER]                                   # retried later, but the delete itself said NO
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["erase_entity", "erase_topic"])
+async def test_a_scoped_forget_with_the_shadow_off_and_its_kernel_stopped_fails(kernel, monkeypatch, call):
+    _stop_kernel_with_records(kernel, monkeypatch)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await getattr(os_shadow, call)(MEMBER, "Dana")
+
+
+@pytest.mark.asyncio
+async def test_a_topic_forget_with_the_shadow_off_and_its_kernel_stopped_reports_store_down(kernel, forget_env, monkeypatch):  # noqa: F811
+    import forget_topic
+
+    _stop_kernel_with_records(kernel, monkeypatch)
+    res = await forget_topic.forget(_TopicSvc(("r1", "The book club meets at the library")), TOPIC_MEMBER, "the book club")
+    assert res.store_down                                                 # not "forgotten" while the kernel's record may remain
