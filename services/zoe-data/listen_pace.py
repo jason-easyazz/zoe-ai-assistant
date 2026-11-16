@@ -204,7 +204,7 @@ def valid_outcome(o) -> bool:
 
 
 _TRUE = ("1", "true", "yes")
-_FALSE = ("0", "false", "no", "")
+_FALSE = ("0", "false", "no")      # an EMPTY flag is malformed, never "no": a blank still_talking must not read as a clean close
 
 
 def _int(v, *, lo: int, hi: int) -> int:

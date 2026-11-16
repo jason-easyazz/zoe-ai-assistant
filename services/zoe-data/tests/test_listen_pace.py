@@ -369,3 +369,11 @@ def test_mode_reads_the_registered_flag(monkeypatch):
     assert lp.mode() == "shadow"
     monkeypatch.setenv("ZOE_LISTEN_PACE", "yes-please")
     assert lp.mode() == "off"
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t"])
+def test_a_blank_flag_is_malformed_never_a_clean_close(blank):
+    """Review of #2597: an empty or whitespace still_talking read as False, so a line with the field blank counted as clean."""
+    with pytest.raises(ValueError):
+        lp._flag01(blank)
+    assert lp._flag01("0") is False and lp._flag01("no") is False and lp._flag01("1") is True
