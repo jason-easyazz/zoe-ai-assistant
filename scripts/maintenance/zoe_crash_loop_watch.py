@@ -585,6 +585,59 @@ def _unit_code(prefix: str, unit: str) -> str:
     return prefix
 
 
+# ── owner-alert WORDING (2026-11-16, owner: "a bit more human, not like reading a log") ─────────────────────────
+# What each watched part of Zoe is, in household terms: noun (for "<noun> keeps dropping out"), headline (the first
+# sentence: no unit names, ports or codes), means (what it means for the owner) and back (the recovery sentence).
+# zoe_health.py reads this table too (it already loads this file for deliver()), so both senders describe a service the
+# same way. A technical detail goes in brackets at the END only (service name + a short code; never a path or secret).
+PLAIN_WORDS: dict = {
+    "zoe-data": {"noun": "the main part of me", "headline": "I'm not reachable at all.",
+                 "means": "Nothing that talks to me (the panel, the app, chat) can get an answer.",
+                 "back": "I'm reachable again."},
+    "llama-server": {"noun": "my thinking", "headline": "I can't think right now.",
+                     "means": "I can hear you, but I can't answer questions or do what you ask.",
+                     "back": "I can think again."},
+    "flue-zoe-brain-2x": {"noun": "my conversations", "headline": "I can't hold a conversation right now.",
+                          "means": "You may get no reply, or a short apology instead of an answer.",
+                          "back": "I can hold a conversation again."},
+    "kokoro-tts": {"noun": "my voice", "headline": "I've lost my voice.",
+                   "means": "I can still hear you and answer on screen, but I can't speak.",
+                   "back": "My voice is back."},
+    "functiongemma-router": {"noun": "my action picker", "headline": "I'm slow at working out what you want.",
+                             "means": "I still answer, but picking the right action is slower and less reliable.",
+                             "back": "I'm quick at working out what you want again."},
+    "flue-zoe-telegram": {"noun": "my Telegram chat", "headline": "I can't chat with you on Telegram right now.",
+                          "means": "Messages you send me there won't get a reply.",
+                          "back": "I can chat with you on Telegram again."},
+    "github-runner": {"noun": "my engineering helper", "headline": "My engineering helper keeps failing.",
+                      "means": "Nothing in the house is affected; only updates to my code are held up.",
+                      "back": "My engineering helper is working again."},
+}
+_GENERIC_WORDS = {"noun": "one of my services", "headline": "One of my services keeps failing.",
+                  "means": "Some things may not work until it settles.", "back": "That service is steady again."}
+
+
+def plain_words(unit: str) -> dict:
+    """The owner-facing words for a unit (``kokoro-tts`` or ``kokoro-tts.service``); generic for one not listed."""
+    return PLAIN_WORDS.get(unit[:-len(".service")] if unit.endswith(".service") else unit, _GENERIC_WORDS)
+
+
+def loop_text(unit: str, restarts_seen: int, span: str, total: int, active: str) -> str:
+    """The crash-loop alert. Starts with the red mark: ``_hand_off`` (and a pre-outbox ``pending``) keys on it."""
+    w = plain_words(unit)
+    me = unit == UNIT
+    return (f"🔴 {w['headline']} {w['means']} {'I keep' if me else 'It keeps'} crashing and restarting: "
+            f"{restarts_seen} times {span}. {'I am' if me else 'It is'} still trying by {'myself' if me else 'itself'}; "
+            f"I'll tell you when {'I am' if me else 'it is'} steady again. "
+            f"({unit} crash-looping, {total} restarts in all, {active or 'unknown'})")
+
+
+def recovery_text(unit: str, total: int) -> str:
+    w = plain_words(unit)
+    return (f"🟢 {w['back']} {'I have' if unit == UNIT else 'It has'} stopped crashing. "
+            f"({unit} recovered, {total} restarts in all)")
+
+
 def _raise_alert(code: str, msg: str) -> bool:
     """True when the outbox has it (delivered, uncertain, held for retry, or given up loudly); False only when it could
     not even be stored and the direct send failed."""
@@ -641,13 +694,9 @@ def check(threshold: int, cooldown: int, dry_run: bool) -> int:
     if looping:
         last = state.get("last_alert_ts", 0)
         if now - last >= cooldown:
-            loop_msg = (f"🔴 Zoe is crash-looping.\n"
-                        f"{UNIT} restarted {delta}x since the last check "
-                        f"(total {restarts}), ActiveState={active}, /health not responding.\n"
-                        f"Zoe cannot be talked to right now.\n"
-                        f"Check: journalctl --user -u zoe-data / ~/.zoe-logs/zoe-data.stderr.log")
+            loop_msg = loop_text(UNIT, delta, "since I last checked", restarts, active)
     elif recovered:
-        recovery_msg = f"🟢 Zoe recovered — {UNIT} is healthy again (total restarts {restarts})."
+        recovery_msg = recovery_text(UNIT, restarts)
     msg = _pick_alert(state, loop_msg, recovery_msg)
 
     if msg:
@@ -723,10 +772,9 @@ def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: f
         any_loop = any_loop or looping
         loop_msg = recovery_msg = None
         if looping and now - s.get("last_alert_ts", 0) >= cooldown:
-            loop_msg = (f"🔴 {unit} is crash-looping: restarted {recent}x in the last {int(window_s // 60)} min "
-                        f"(total {restarts}), ActiveState={active}.\nCheck: journalctl --user -u {unit}")
+            loop_msg = loop_text(unit, recent, f"in the last {int(window_s // 60)} minutes", restarts, active)
         elif s.get("alerted") and settled:
-            recovery_msg = f"🟢 {unit} recovered (total restarts {restarts})."
+            recovery_msg = recovery_text(unit, restarts)
         msg = _pick_alert(s, loop_msg, recovery_msg)              # an unstored loop alert (or a pre-outbox one) first
         if msg:
             print(msg.replace("\n", " | "))

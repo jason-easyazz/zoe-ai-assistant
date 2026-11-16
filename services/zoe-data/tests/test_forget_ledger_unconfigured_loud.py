@@ -184,7 +184,7 @@ def test_unestablishable_state_fails_closed(monkeypatch, caplog):
     assert not chk[0].ok and not chk[0].unknown
     _, st = zh.transitions(chk, {})
     lines, _ = zh.transitions(chk, st)
-    assert lines and lines[0].startswith("DOWN: forget ledger")
+    assert lines and lines[0].startswith("Forgetting isn't permanent right now.")
 
 
 def test_startup_marker_fails_closed(monkeypatch, caplog):
