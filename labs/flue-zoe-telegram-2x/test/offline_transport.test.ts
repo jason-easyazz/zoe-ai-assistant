@@ -112,8 +112,8 @@ describe('an unlinked sender', () => {
       15_000,
     );
     assert.ok(answered, 'the unlinked sender got no reply at all');
-    assert.match(h.telegram.sent.at(-1)!.text, /not linked/i);
-    assert.match(h.telegram.sent.at(-1)!.text, /77777/);
+    assert.match(h.telegram.sent.at(-1)!.text, /isn't connected/i);
+    assert.doesNotMatch(h.telegram.sent.at(-1)!.text, /77777/);   // the sender's id is no longer handed out: a link is started from Settings, never typed
     assert.equal(
       hits('/api/chat/').length,
       chatsBefore,

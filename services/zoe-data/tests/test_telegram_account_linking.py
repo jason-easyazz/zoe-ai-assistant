@@ -1,7 +1,9 @@
 """Tests for Telegram account linking (feat/telegram-account-linking).
 
 Covers three pieces:
-  1. Profile telegram_id set/get/unlink + uniqueness (routers/user_profile.py).
+  1. Linking by proof of control of both sides: a signed link token minted for the
+     signed-in member and redeemed from the Telegram account (routers/user_profile.py,
+     routers/system.py, telegram_link.py); explicit, recorded unlinking; the member erase.
   2. The internal resolver telegram_id → user_id (routers/system.py).
   3. The /api/chat TRUSTED forwarded-user override security boundary
      (auth.resolve_acting_user): internal caller may set X-Zoe-User-Id;
@@ -9,7 +11,14 @@ Covers three pieces:
 
 The user_preferences table is modelled by a tiny in-memory fake that understands
 exactly the SQL these routers issue (SELECT prefs by user_id, INSERT ... ON
-CONFLICT, and the `prefs::jsonb ->> 'telegram_id'` match).
+CONFLICT, key removal, the `prefs::jsonb ->> 'telegram_id'` match, and the
+account lookups on `users` / `auth_users`), plus what alembic 0084 adds: the
+redemption rows, the one-holder unique index, the member link lock, the erase
+watermark read, and transactions that roll back. THE FAKE ENFORCES THE UNIQUE
+INDEX, THE PRIMARY KEY AND THE LOCK ITSELF: weaker evidence than a real
+PostgreSQL (it refuses a conflicting write at once, where PostgreSQL waits for
+the other transaction), so the race tests here prove the code's handling of a
+refusal, and the database guarantee is the migration's.
 """
 from __future__ import annotations
 
@@ -17,8 +26,13 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
+import asyncio
+import contextlib
+import contextvars
+import importlib
 import json
 import sys
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +48,9 @@ import auth
 from routers import system, user_profile
 
 
+_MISSING = object()
+
+
 class _Cursor:
     def __init__(self, rows: list[dict[str, Any]] | None = None):
         self._rows = rows or []
@@ -45,21 +62,107 @@ class _Cursor:
         return list(self._rows)
 
 
+class FakeUniqueViolation(Exception):
+    """What asyncpg raises for the one-holder index (sqlstate 23505)."""
+
+    sqlstate = "23505"
+    constraint_name = "uq_user_preferences_telegram_id"
+
+
+#: the open fake transaction of the current task: {"undo": [...], "locks": [...]}, or None (autocommit)
+_TXN: contextvars.ContextVar = contextvars.ContextVar("fake_txn", default=None)
+
+
 class FakePrefsDB:
     """In-memory user_preferences store keyed by user_id → prefs dict."""
 
-    def __init__(self, seed: dict[str, dict] | None = None):
+    def __init__(self, seed: dict[str, dict] | None = None, accounts: dict[str, int] | None = None):
+        self.redemptions: dict[str, tuple[str, float]] = {}    # telegram_link_redemptions: token_id -> (user_id, expires_at)
+        self.watermarks: dict[str, str] = {}                    # memory_forgotten erase watermark: user_id -> forgotten_at
+        self._locks: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
         # user_id → (prefs_json_str, updated_at_counter)
         self.store: dict[str, tuple[str, int]] = {}
+        # auth_users.is_active per registered account; every seeded member is an active account by default
+        self.accounts: dict[str, int] = dict(accounts) if accounts is not None else {uid: 1 for uid in (seed or {})}
         self._clock = 0
         for uid, prefs in (seed or {}).items():
             self._clock += 1
             self.store[uid] = (json.dumps(prefs), self._clock)
         self.commits = 0
 
+    # -- transactions (undo log, rolled back on an exception) and the member link lock --------------------------------
+    def _write(self, table: dict, key, value) -> None:
+        txn = _TXN.get()
+        if txn is not None:
+            txn["undo"].append((table, key, table.get(key, _MISSING)))
+        if value is _MISSING:
+            table.pop(key, None)
+        else:
+            table[key] = value
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        txn = {"undo": [], "locks": []}
+        token = _TXN.set(txn)
+        try:
+            yield
+        except BaseException:
+            for table, key, old in reversed(txn["undo"]):
+                if old is _MISSING:
+                    table.pop(key, None)
+                else:
+                    table[key] = old
+            raise
+        finally:
+            _TXN.reset(token)
+            for lock in txn["locks"]:
+                lock.release()
+
+    def _held_by_another(self, uid: str, tid) -> bool:
+        if not tid:
+            return False
+        for other, (prefs_str, _ts) in self.store.items():
+            if other != uid and json.loads(prefs_str).get("telegram_id") == tid:
+                return True
+        return False
+
     async def execute(self, sql: str, params=()):
+        await asyncio.sleep(0)      # every statement is a suspension point, as on a real connection
         p = list(params or [])
         norm = " ".join(sql.split())
+
+        if norm.startswith("SELECT pg_advisory_xact_lock("):
+            txn = _TXN.get()
+            assert txn is not None, "a transaction-scoped lock outside a transaction"
+            table = self._locks.setdefault(asyncio.get_running_loop(), {})
+            lock = table.setdefault(p[0], asyncio.Lock())
+            await lock.acquire()
+            txn["locks"].append(lock)
+            return _Cursor([{"pg_advisory_xact_lock": None}])
+
+        if norm.startswith("SELECT forgotten_at FROM memory_forgotten WHERE user_id ="):
+            at = self.watermarks.get(p[0])
+            return _Cursor([{"forgotten_at": at}] if at else [])
+
+        if norm.startswith("INSERT INTO memory_forgotten"):     # erase_watermark.SqlBackend.put: (user_id, key, scope, actor, at, never)
+            self._write(self.watermarks, p[0], max(p[4], self.watermarks.get(p[0], "")))
+            return _Cursor()
+
+        if norm.startswith("DELETE FROM telegram_link_redemptions WHERE expires_at <"):
+            for tok in [t for t, (_u, exp) in self.redemptions.items() if exp < p[0]]:
+                self._write(self.redemptions, tok, _MISSING)
+            return _Cursor()
+
+        if norm.startswith("DELETE FROM telegram_link_redemptions WHERE user_id ="):
+            for tok in [t for t, (u, _e) in self.redemptions.items() if u == p[0]]:
+                self._write(self.redemptions, tok, _MISSING)
+            return _Cursor()
+
+        if norm.startswith("INSERT INTO telegram_link_redemptions"):    # ON CONFLICT (token_id) DO NOTHING RETURNING token_id
+            if p[0] in self.redemptions:
+                return _Cursor([])
+            self._write(self.redemptions, p[0], (p[1], p[2]))
+            return _Cursor([{"token_id": p[0]}])
 
         if norm.startswith("SELECT prefs FROM user_preferences WHERE user_id ="):
             uid = p[0]
@@ -90,25 +193,38 @@ class FakePrefsDB:
             uid, prefs_json = p[0], p[1]
             self._clock += 1
             if "::jsonb ||" in norm and uid in self.store:
+                stored = json.loads(self.store[uid][0])
+                if "RETURNING user_id" in norm and stored.get(p[2]) not in (None, "", p[3]):
+                    return _Cursor([])          # user_prefs.set_prefs(unless_held=...): the conflict branch's WHERE refused
                 # user_prefs.set_pref: atomic single-key merge (jsonb ||).
-                merged = json.loads(self.store[uid][0])
-                merged.update(json.loads(prefs_json))
-                prefs_json = json.dumps(merged)
-            self.store[uid] = (prefs_json, self._clock)
-            return _Cursor()
+                stored.update(json.loads(prefs_json))
+                prefs_json = json.dumps(stored)
+            if self._held_by_another(uid, json.loads(prefs_json).get("telegram_id")):
+                raise FakeUniqueViolation("duplicate key value violates unique constraint")   # alembic 0084's index
+            self._write(self.store, uid, (prefs_json, self._clock))
+            return _Cursor([{"user_id": uid}] if "RETURNING user_id" in norm else [])
 
         if norm.startswith("UPDATE user_preferences SET prefs = (COALESCE(prefs, '{}')::jsonb -"):
-            # user_prefs.delete_pref: atomic key removal, optionally only when the
-            # key still holds the expected value (params: key, uid[, key, value]).
-            key, uid = p[0], p[1]
+            # user_prefs.delete_prefs: atomic removal of n keys, optionally only while the first key still holds
+            # the expected value (params: key1..keyn, uid[, key1, value]).
+            n = norm.count("- ?::text")
+            keys, uid, rest = p[:n], p[n], p[n + 1:]
             entry = self.store.get(uid)
             if entry is not None:
                 prefs = json.loads(entry[0])
-                if len(p) == 2 or prefs.get(p[2]) == p[3]:
-                    prefs.pop(key, None)
+                if not rest or prefs.get(rest[0]) == rest[1]:
+                    for key in keys:
+                        prefs.pop(key, None)
                     self._clock += 1
-                    self.store[uid] = (json.dumps(prefs), self._clock)
+                    self._write(self.store, uid, (json.dumps(prefs), self._clock))
             return _Cursor()
+
+        if norm.startswith("SELECT is_active FROM auth_users WHERE user_id ="):
+            uid = p[0]
+            return _Cursor([{"is_active": self.accounts[uid]}] if uid in self.accounts else [])
+
+        if norm.startswith("SELECT 1 FROM users WHERE id ="):
+            return _Cursor([{"1": 1}] if p[0] in self.accounts or p[0] in self.store else [])
 
         raise AssertionError(f"unexpected SQL: {norm}")
 
@@ -116,7 +232,7 @@ class FakePrefsDB:
         self.commits += 1
 
 
-def _profile_client(db: FakePrefsDB, *, role: str = "user", user_id: str = "jason") -> TestClient:
+def _profile_client(db: FakePrefsDB, *, role: str = "user", user_id: str = "member-a") -> TestClient:
     app = FastAPI()
     app.include_router(user_profile.router)
 
@@ -142,93 +258,367 @@ def _system_client(db: FakePrefsDB) -> TestClient:
     return TestClient(app)
 
 
-# ─── 1. Profile telegram_id set / get / unlink / uniqueness ──────────────────
+# ─── 1. Linking by proof of control of both sides ─────────────────────────────
 
 
-def test_profile_set_and_get_telegram_id():
-    db = FakePrefsDB()
-    client = _profile_client(db)
+def _prefs(db: FakePrefsDB, uid: str) -> dict:
+    return json.loads(db.store[uid][0]) if uid in db.store else {}
 
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "99999"})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"telegram_id": "99999", "linked": True}
 
-    r = client.get("/api/user/profile/telegram")
-    assert r.status_code == 200
-    assert r.json() == {"telegram_id": "99999"}
+def _redeem(db: FakePrefsDB, monkeypatch, token: str, tid: str, username: str | None = None):
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    body = {"token": token, "telegram_id": tid}
+    if username:
+        body["telegram_username"] = username
+    return _system_client(db).post("/api/system/telegram/consume-link-token", json=body, headers={"X-Internal-Token": "tok"})
 
 
 def test_profile_get_when_unlinked_is_null():
     db = FakePrefsDB()
-    client = _profile_client(db)
-    r = client.get("/api/user/profile/telegram")
+    r = _profile_client(db).get("/api/user/profile/telegram")
     assert r.status_code == 200
-    assert r.json() == {"telegram_id": None}
+    assert r.json() == {"telegram_id": None, "proof": None, "last_change": None}
 
 
-def test_profile_unlink_clears_id():
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999", "theme": "dark"}})
-    client = _profile_client(db)
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": None})
+def test_a_value_typed_onto_a_profile_never_links_an_account():
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "99999"}, "member-a": {"theme": "dark"}})
+    for value in ("99999", "12345", 12345, "not-a-number"):
+        r = _profile_client(db).put("/api/user/profile/telegram", json={"telegram_id": value})
+        assert r.status_code == 400, (value, r.text)
+    assert _prefs(db, "member-a") == {"theme": "dark"}
+    assert _prefs(db, "member-b") == {"telegram_id": "99999"}
+
+
+def test_a_redeemed_link_token_links_the_redeeming_account_with_its_proof(monkeypatch):
+    import telegram_link
+
+    db = FakePrefsDB(seed={"member-a": {"theme": "dark"}})
+    token = telegram_link.make_link_token("member-a")
+    r = _redeem(db, monkeypatch, token, "55501", "@synthetic_a")
+    assert r.status_code == 200, r.text
+    stored = _prefs(db, "member-a")
+    assert stored["telegram_id"] == "55501" and stored["theme"] == "dark"
+    assert stored["telegram_link_proof"]["via"] == "signed_link"
+    assert stored["telegram_link_proof"]["username"] == "synthetic_a"
+    got = _profile_client(db).get("/api/user/profile/telegram").json()
+    assert got["telegram_id"] == "55501" and got["proof"]["username"] == "synthetic_a"
+    # single use: the same token cannot be redeemed twice
+    assert _redeem(db, monkeypatch, token, "55501").status_code == 400
+
+
+def test_a_link_never_displaces_another_members_link(monkeypatch):
+    import telegram_link
+
+    # its own member: a token is a pure function of (member, expiry second), so reusing another test's member could
+    # mint that test's already-spent token
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "55502"}, "member-c": {}})
+    token = telegram_link.make_link_token("member-c")
+    r = _redeem(db, monkeypatch, token, "55502")
+    assert r.status_code == 409, r.text
+    assert _prefs(db, "member-b") == {"telegram_id": "55502"}
+    assert "telegram_id" not in _prefs(db, "member-c")
+    # the refused token was released, not burned: after member-b unlinks, member-c can redeem it
+    _profile_client(db, user_id="member-b").delete("/api/user/profile/telegram")
+    assert _redeem(db, monkeypatch, token, "55502").status_code == 200
+    assert _prefs(db, "member-c")["telegram_id"] == "55502"
+
+
+def test_a_member_unlinks_their_own_link_and_the_unlink_is_recorded():
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55503", "telegram_link_proof": {"via": "signed_link"}, "theme": "dark"}})
+    r = _profile_client(db).put("/api/user/profile/telegram", json={"telegram_id": None})
     assert r.status_code == 200
     assert r.json() == {"telegram_id": None, "linked": False}
-    # Other prefs are preserved.
-    assert json.loads(db.store["jason"][0]) == {"theme": "dark"}
+    stored = _prefs(db, "member-a")
+    assert "telegram_id" not in stored and "telegram_link_proof" not in stored and stored["theme"] == "dark"
+    assert stored["telegram_link_change"]["event"] == "unlinked" and stored["telegram_link_change"]["by"] == "self"
 
 
-def test_profile_rejects_non_numeric_id():
-    db = FakePrefsDB()
-    client = _profile_client(db)
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "not-a-number"})
-    assert r.status_code == 400
+def test_only_an_admin_unlinks_another_members_link():
+    db = FakePrefsDB(seed={"member-b": {"telegram_id": "55504"}})
+    r = _profile_client(db, user_id="member-a").delete("/api/user/profile/telegram", params={"user_id": "member-b"})
+    assert r.status_code == 403
+    assert _prefs(db, "member-b")["telegram_id"] == "55504"
+    r = _profile_client(db, role="admin", user_id="admin-a").delete("/api/user/profile/telegram", params={"user_id": "member-b"})
+    assert r.status_code == 200 and r.json()["removed"] is True
+    assert "telegram_id" not in _prefs(db, "member-b")
+    assert _prefs(db, "member-b")["telegram_link_change"]["by"] == "admin"
 
 
-def test_profile_guest_cannot_link():
+def test_a_guest_can_neither_mint_a_link_token_nor_unlink():
     db = FakePrefsDB()
     client = _profile_client(db, role="guest", user_id="guest")
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "99999"})
-    assert r.status_code == 403
+    assert client.post("/api/user/profile/telegram/link-token").status_code == 403
+    assert client.delete("/api/user/profile/telegram").status_code == 403
+    assert client.put("/api/user/profile/telegram", json={"telegram_id": None}).status_code == 403
 
 
-def test_profile_uniqueness_last_writer_wins():
-    # jason already owns 99999; family-admin claims it → jason loses it.
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999"}})
-    client = _profile_client(db, user_id="family-admin")
-    r = client.put("/api/user/profile/telegram", json={"telegram_id": "99999"})
-    assert r.status_code == 200
-    assert r.json() == {"telegram_id": "99999", "linked": True}
-    assert json.loads(db.store["family-admin"][0])["telegram_id"] == "99999"
-    assert "telegram_id" not in json.loads(db.store["jason"][0])
+def test_the_member_erase_removes_the_link_and_its_records(monkeypatch):
+    import contextlib
+
+    import db_pool
+    import telegram_link
+
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55505", "telegram_link_proof": {"via": "signed_link"},
+                                        "telegram_link_change": {"event": "unlinked"}, "theme": "dark"}})
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    import asyncio
+
+    assert asyncio.run(telegram_link.forget_user("member-a")) == 1
+    assert _prefs(db, "member-a") == {"theme": "dark"}
 
 
-def test_profile_set_preserves_other_prefs():
-    db = FakePrefsDB(seed={"jason": {"openclaw_auto_update": "notify"}})
-    client = _profile_client(db)
-    client.put("/api/user/profile/telegram", json={"telegram_id": "12345"})
-    stored = json.loads(db.store["jason"][0])
-    assert stored == {"openclaw_auto_update": "notify", "telegram_id": "12345"}
+def test_the_member_erase_is_all_or_nothing(monkeypatch):
+    """The link and the member's redemption rows are erased in ONE transaction: a failure on the second leaves neither half done
+    (the caller fails closed and retries), never a link gone with the rows left behind."""
+    import asyncio
+    import db_pool
+    import telegram_link
+
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55505", "telegram_link_proof": {"via": "signed_link"}}})
+    db.redemptions["tok-a"] = ("member-a", 9e12)
+    real = db.execute
+
+    async def failing(sql, params=()):
+        if " ".join(sql.split()).startswith("DELETE FROM telegram_link_redemptions WHERE user_id ="):
+            raise RuntimeError("injected")
+        return await real(sql, params)
+
+    db.execute = failing
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    with pytest.raises(RuntimeError):
+        asyncio.run(telegram_link.forget_user("member-a"))
+    assert _prefs(db, "member-a").get("telegram_id") == "55505", "the link removal rolled back with the failed delete"
+    assert "tok-a" in db.redemptions
+
+
+# ─── 1b. Durable single use, one holder per account, no moved link, the member erase (alembic 0084) ─────────────
+
+
+def _system_app(db: FakePrefsDB) -> FastAPI:
+    app = FastAPI()
+    app.include_router(system.router)
+
+    async def fake_get_db():
+        yield db
+
+    app.dependency_overrides[system.get_db] = fake_get_db
+    return app
+
+
+async def _post_redeems(db: FakePrefsDB, bodies: list[dict]) -> list[int]:
+    """Redeem concurrently (asyncio.gather) through the real route; returns the status codes in order."""
+    import httpx
+
+    transport = httpx.ASGITransport(app=_system_app(db))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async def one(body):
+            r = await client.post("/api/system/telegram/consume-link-token", json=body, headers={"X-Internal-Token": "tok"})
+            return r.status_code
+        return list(await asyncio.gather(*(one(b) for b in bodies)))
+
+
+def _holders_of(db: FakePrefsDB, tid: str) -> list[str]:
+    return sorted(uid for uid in db.store if _prefs(db, uid).get("telegram_id") == tid)
+
+
+@pytest.fixture
+def fixed_secret(monkeypatch):
+    """A persistent signing secret (the recommended config). The module is reloaded IN PLACE, as a restart re-imports it."""
+    import telegram_link
+
+    monkeypatch.setenv("ZOE_TELEGRAM_LINK_SECRET", "synthetic-test-secret")
+    importlib.reload(telegram_link)
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    return telegram_link
+
+
+def test_single_use_survives_a_restart(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {}})
+    token = fixed_secret.make_link_token("member-a")
+    assert _redeem(db, monkeypatch, token, "55511").status_code == 200
+    importlib.reload(fixed_secret)          # a restart (or another worker): fresh module state, same secret, same database
+    assert fixed_secret.verify_link_token(token) == "member-a"      # still authentic and unexpired ...
+    for tid in ("55512", "55511"):
+        assert _redeem(db, monkeypatch, token, tid).status_code == 400   # ... but spent, durably
+    assert _prefs(db, "member-a")["telegram_id"] == "55511" and _holders_of(db, "55512") == []
+    assert len(db.redemptions) == 1
+
+
+def test_one_token_redeemed_twice_at_once_links_once(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {}})
+    token = fixed_secret.make_link_token("member-a")
+    codes = asyncio.run(_post_redeems(db, [{"token": token, "telegram_id": "55513"}, {"token": token, "telegram_id": "55514"}]))
+    assert sorted(codes) == [200, 400], codes
+    held = [t for t in ("55513", "55514") if _holders_of(db, t)]
+    assert len(held) == 1 and _holders_of(db, held[0]) == ["member-a"]
+
+
+def test_two_tokens_racing_for_one_account_leave_one_holder(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {}, "member-b": {}})
+    bodies = [{"token": fixed_secret.make_link_token(m), "telegram_id": "55515"} for m in ("member-a", "member-b")]
+    codes = asyncio.run(_post_redeems(db, bodies))
+    assert sorted(codes) == [200, 409], codes
+    assert len(_holders_of(db, "55515")) == 1
+    assert len(db.redemptions) == 1         # the refused redemption was rolled back with its link write
+
+
+def test_a_redemption_never_moves_a_members_link(monkeypatch, fixed_secret):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55516", "telegram_link_proof": {"via": "signed_link"}}})
+    token = fixed_secret.make_link_token("member-a")
+    r = _redeem(db, monkeypatch, token, "55517")
+    assert r.status_code == 409, r.text
+    assert _prefs(db, "member-a")["telegram_id"] == "55516" and _holders_of(db, "55517") == []
+    assert db.redemptions == {}             # refused: the token is not spent
+    # the explicit path: the member unlinks first, then the same token links the new account
+    _profile_client(db, user_id="member-a").delete("/api/user/profile/telegram")
+    assert _redeem(db, monkeypatch, token, "55517").status_code == 200
+    assert _prefs(db, "member-a")["telegram_id"] == "55517"
+
+
+def test_a_token_that_expires_while_waiting_for_the_member_lock_is_refused(monkeypatch, fixed_secret):
+    """Expiry is checked inside the transaction, after the lock: a redemption that passed the caller's check and then waited
+    past the token's expiry links nothing and spends nothing."""
+    import time as _time
+
+    db = FakePrefsDB(seed={"member-a": {}})
+    token = fixed_secret.make_link_token("member-a")
+    real_lock, real_time = fixed_secret._member_lock, _time.time
+
+    async def slow_lock(conn, user_id):
+        await real_lock(conn, user_id)
+        monkeypatch.setattr(fixed_secret.time, "time", lambda: real_time() + 3600)      # the wait outlived the token
+
+    monkeypatch.setattr(fixed_secret, "_member_lock", slow_lock)
+    r = _redeem(db, monkeypatch, token, "55530")
+    assert r.status_code == 400, r.text
+    assert _holders_of(db, "55530") == [] and db.redemptions == {}
+
+
+def test_the_member_erase_removes_the_members_redemption_rows(monkeypatch, fixed_secret):
+    import db_pool
+
+    db = FakePrefsDB(seed={"member-a": {}, "member-b": {}})
+    assert _redeem(db, monkeypatch, fixed_secret.make_link_token("member-a"), "55518").status_code == 200
+    assert _redeem(db, monkeypatch, fixed_secret.make_link_token("member-b"), "55519").status_code == 200
+    assert sorted(u for u, _e in db.redemptions.values()) == ["member-a", "member-b"]
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    assert asyncio.run(fixed_secret.forget_user("member-a")) == 1
+    assert [u for u, _e in db.redemptions.values()] == ["member-b"]
+    assert "telegram_id" not in _prefs(db, "member-a") and _prefs(db, "member-b")["telegram_id"] == "55519"
+
+
+@pytest.mark.parametrize("erase_first", [False, True])
+def test_a_redemption_racing_the_member_erase_leaves_no_link(monkeypatch, fixed_secret, erase_first):
+    """The erase as ``MemoryService.delete_user`` orders it for this store: the durable erase watermark first, then
+    ``telegram_link.forget_user``. Both orders of the race; then a token issued before the erase is refused after it."""
+    import db_pool
+    import erase_watermark
+
+    db = FakePrefsDB(seed={"member-a": {}})
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    monkeypatch.setattr(erase_watermark, "_backend", erase_watermark.SqlBackend(ctx=ctx))
+    before = [fixed_secret.make_link_token("member-a"), fixed_secret.make_link_token("member-a", ttl=599)]
+
+    async def erase():
+        await erase_watermark.record("member-a", actor="test")
+        await fixed_secret.forget_user("member-a")
+        return "erased"
+
+    async def race():
+        redeem = _post_redeems(db, [{"token": before[0], "telegram_id": "55520"}])
+        return await asyncio.gather(*((erase(), redeem) if erase_first else (redeem, erase())))
+
+    asyncio.run(race())
+    assert "telegram_id" not in _prefs(db, "member-a")
+    assert _holders_of(db, "55520") == []
+    # a token issued before the erase is void after it, whichever account redeems it
+    assert asyncio.run(_post_redeems(db, [{"token": before[1], "telegram_id": "55521"}])) == [400]
+    assert "telegram_id" not in _prefs(db, "member-a")
+
+
+def test_migration_0084_holds_both_guarantees_and_keeps_one_head():
+    import importlib.util
+    import re
+
+    versions = ROOT / "alembic" / "versions"
+    spec = importlib.util.spec_from_file_location("mig_0084", versions / "0084_telegram_link_ledger.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sql = " ".join(" ".join(mod.statements()).split())
+    assert "CREATE TABLE IF NOT EXISTS telegram_link_redemptions ( token_id TEXT PRIMARY KEY" in sql
+    assert ("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_preferences_telegram_id ON user_preferences "
+            "((prefs::jsonb ->> 'telegram_id')) WHERE (prefs::jsonb ->> 'telegram_id') <> ''") in sql
+    # every link without the current proof (so every duplicate holder too) is removed BEFORE the index is built
+    assert "'telegram_link_proof' ->> 'v', '') <> '2'" in sql
+    assert sql.index("- 'telegram_id'") < sql.index("CREATE UNIQUE INDEX")
+    revs, downs = set(), set()
+    for f in versions.glob("*.py"):
+        src = f.read_text()
+        r = re.search(r'^revision = "(\w+)"', src, re.M)
+        d = re.search(r'^down_revision = "(\w+)"', src, re.M)
+        revs |= {r.group(1)} if r else set()
+        downs |= {d.group(1)} if d else set()
+    assert mod.down_revision in revs and len(revs - downs) == 1, sorted(revs - downs)
 
 
 # ─── 2. Internal resolver telegram_id → user_id ──────────────────────────────
 
 
-def test_resolver_registered_returns_user_id(monkeypatch):
+def _resolve(db: FakePrefsDB, monkeypatch, tid: str):
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999"}})
-    client = _system_client(db)
-    # Loopback (TestClient) satisfies require_internal_token; token also works.
-    r = client.get("/api/system/resolve-telegram/99999", headers={"X-Internal-Token": "tok"})
+    r = _system_client(db).get(f"/api/system/resolve-telegram/{tid}", headers={"X-Internal-Token": "tok"})
     assert r.status_code == 200
-    assert r.json() == {"user_id": "jason"}
+    return r.json()["user_id"]
+
+
+def test_resolver_registered_returns_user_id(monkeypatch):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "99999", "telegram_link_proof": {"via": "signed_link", "v": 2}}})
+    assert _resolve(db, monkeypatch, "99999") == "member-a"
+
+
+def test_resolver_acts_for_nobody_on_a_link_without_the_current_proof(monkeypatch):
+    """A link made before both sides had to prove control (no proof, or an older proof) is never honoured."""
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55540"},
+                           "member-b": {"telegram_id": "55541", "telegram_link_proof": {"via": "signed_link"}}})
+    assert _resolve(db, monkeypatch, "55540") is None and _resolve(db, monkeypatch, "55541") is None
 
 
 def test_resolver_unregistered_returns_null(monkeypatch):
-    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-    db = FakePrefsDB(seed={"jason": {"telegram_id": "99999"}})
-    client = _system_client(db)
-    r = client.get("/api/system/resolve-telegram/77777", headers={"X-Internal-Token": "tok"})
-    assert r.status_code == 200
-    assert r.json() == {"user_id": None}
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "99999"}})
+    assert _resolve(db, monkeypatch, "77777") is None
+
+
+def test_resolver_acts_for_nobody_when_the_link_is_ambiguous(monkeypatch):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55506"}, "member-b": {"telegram_id": "55506"}})
+    assert _resolve(db, monkeypatch, "55506") is None
+
+
+def test_resolver_acts_for_nobody_once_the_member_account_is_inactive_or_gone(monkeypatch):
+    db = FakePrefsDB(seed={"member-a": {"telegram_id": "55507", "telegram_link_proof": {"via": "signed_link", "v": 2}},
+                           "member-b": {"telegram_id": "55508", "telegram_link_proof": {"via": "signed_link", "v": 2}}},
+                     accounts={"member-a": 0})
+    assert _resolve(db, monkeypatch, "55507") is None   # deactivated
+    assert _resolve(db, monkeypatch, "55508") is None   # no account at all (deleted)
 
 
 def test_resolver_requires_internal_token_when_not_loopback(monkeypatch):

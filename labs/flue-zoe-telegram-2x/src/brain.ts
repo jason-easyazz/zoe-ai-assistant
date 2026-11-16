@@ -8,8 +8,8 @@
  * intelligence lives in zoe-data, and this channel just calls it.
  *
  * ACCOUNT LINKING: a Telegram sender is mapped to their real Zoe user via
- * /api/system/resolve-telegram/<telegram_id> (they store their numeric id in
- * their Zoe profile). Once resolved, we forward that user_id to /api/chat over
+ * /api/system/resolve-telegram/<telegram_id> (linked by redeeming a signed link
+ * token from this account; see consumeLinkToken). Once resolved, we forward that user_id to /api/chat over
  * zoe-data's TRUSTED internal path (X-Zoe-User-Id + X-Internal-Token), so the
  * turn runs as the real user (with their memory) instead of as guest.
  *
@@ -56,6 +56,7 @@ function internalHeaders(): Record<string, string> {
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LinkHeldError } from './handler.ts';
 import { describeError } from './redact.ts';
 
 // Anchor the default at the PACKAGE ROOT (the parent of the built `dist/`),
@@ -134,7 +135,7 @@ export function sessionFor(chatId: number): string {
 /**
  * Resolve a verified Telegram user id to a Zoe user_id via zoe-data's internal
  * resolver. Returns the user_id string if the sender has linked their account,
- * or null if not linked (they must set their telegram_id in Zoe settings).
+ * or null if not linked (they connect it from Zoe Settings; see handler.ts).
  */
 // Every call into zoe-data carries a deadline: a stalled zoe-data used to hang that chat's handler
 // forever (no signal on any fetch, 2026-11-02). The turn gets the long one; a slow brain turn is
@@ -161,7 +162,8 @@ export async function resolveTelegramUser(telegramId: number): Promise<string | 
  * settings and sent us `/start <token>`. We forward the token + the VERIFIED
  * sender id to zoe-data, which links that Telegram account to the Zoe user the
  * token was minted for. Returns the linked Zoe user_id, or null if the token was
- * invalid/expired.
+ * invalid/expired; throws LinkHeldError when the account is already linked to
+ * another member (a link never displaces another member's).
  */
 export async function consumeLinkToken(
   token: string,
@@ -179,6 +181,7 @@ export async function consumeLinkToken(
     signal: AbortSignal.timeout(DATA_TIMEOUT_MS),
   });
   if (res.status === 400) return null; // invalid / expired token
+  if (res.status === 409) throw new LinkHeldError(); // refused (held by another member, or the member already has another): nothing changed
   if (!res.ok) throw new Error(`consume-link-token ${res.status} ${await res.text().catch(() => '')}`);
   const data = (await res.json()) as { user_id?: string | null };
   return data.user_id ?? null;

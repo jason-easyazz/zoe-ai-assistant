@@ -32,14 +32,28 @@ export interface IncomingDeps {
   reply: (text: string) => Promise<unknown>;
 }
 
-/** Onboarding reply for an unlinked sender (id interpolated for manual linking). */
-export function unlinkedMessage(telegramId: number): string {
+/** Reply for a sender whose account is not linked: how to link (the QR / link flow in Settings; nothing to type). */
+export function unlinkedMessage(): string {
   return (
-    "You're not linked to a Zoe account yet. Open Zoe → Settings → Telegram and " +
-    'scan the QR (or tap Connect), or send /start to begin. Prefer to type it? Your ' +
-    `Telegram ID is ${telegramId}.`
+    "This Telegram isn't connected to a Zoe account yet, so I can't act for you here. " +
+    'To connect it, open Zoe → Settings → Telegram, tap Connect Telegram and scan the code ' +
+    '(or tap the link), then send the message it opens.'
   );
 }
+
+/** Thrown by the redeemer when a link was refused (HTTP 409): this account is linked to another member, or the member is
+ * already linked to a different account (a redemption never moves a link). Nothing was changed. */
+export class LinkHeldError extends Error {
+  constructor() {
+    super('telegram account already linked to another member');
+    this.name = 'LinkHeldError';
+  }
+}
+
+/** Reply when a link was refused (see LinkHeldError): one message covers both causes. */
+export const LINK_HELD_REPLY =
+  'This Telegram is already connected to another Zoe account, or your Zoe account already has a different Telegram, ' +
+  'so I did not change anything. Disconnect the old link in Zoe → Settings → Telegram first (an admin can too).';
 
 /**
  * Handle one text message. `telegramId` is the Telegram-verified sender id;
@@ -47,8 +61,9 @@ export function unlinkedMessage(telegramId: number): string {
  *
  * Identity is the gate: a linked sender runs the brain as their real Zoe user;
  * an unlinked sender is guided to link and NEVER reaches the brain (so an unknown
- * id can access no data). Linking requires a signed token minted in an
- * authenticated Zoe session, so "linked ⇒ allowed" needs no separate allow-list.
+ * id can access no data). A link exists only after a signed token minted in an
+ * authenticated Zoe session was redeemed from this account, so "linked ⇒ allowed"
+ * needs no separate allow-list.
  */
 export async function handleIncoming(
   telegramId: number,
@@ -59,7 +74,7 @@ export async function handleIncoming(
 ): Promise<void> {
   const userId = await deps.resolve(telegramId);
   if (!userId) {
-    await deps.reply(unlinkedMessage(telegramId));
+    await deps.reply(unlinkedMessage());
     return;
   }
   // A FORWARDED message is someone else's words: fenced as untrusted data, never the member's command (src/untrusted.ts).
@@ -89,7 +104,7 @@ export function startReply(linkedUserId: string | null, hadToken: boolean): stri
 }
 
 export interface StartDeps {
-  /** Redeem a signed link token for the VERIFIED sender id. */
+  /** Redeem a signed link token for the VERIFIED sender id; throws LinkHeldError when the link is refused (409). */
   consume: (token: string, telegramId: number, username?: string) => Promise<string | null>;
   reply: (text: string) => Promise<unknown>;
 }
@@ -114,6 +129,10 @@ export async function handleStart(
     const linkedUser = trimmed ? await deps.consume(trimmed, telegramId, username) : null;
     await deps.reply(startReply(linkedUser, Boolean(trimmed)));
   } catch (err) {
+    if (err instanceof LinkHeldError) {
+      await deps.reply(LINK_HELD_REPLY);
+      return;
+    }
     console.error(`Telegram link error: ${describeError(err)}`);
     await deps.reply('Something went wrong linking your account. Please try again in a moment.');
   }

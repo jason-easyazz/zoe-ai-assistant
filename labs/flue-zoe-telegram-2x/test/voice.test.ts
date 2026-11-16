@@ -125,8 +125,8 @@ test('unlinked sender NEGATIVE CONTROL: onboarding text, nothing downloaded, bra
   assert.deepEqual(trace.downloads, []);
   assert.deepEqual(trace.asks, []);
   assert.equal(trace.replies.length, 1);
-  assert.match(trace.replies[0]!, /not linked/i);
-  assert.match(trace.replies[0]!, /77777/);
+  assert.match(trace.replies[0]!, /isn't connected/i);
+  assert.doesNotMatch(trace.replies[0]!, /77777/);   // the sender's id is no longer handed out: a link is started from Settings, never typed
 });
 
 test('forwarded note NEGATIVE CONTROL: refused before getFile (someone else\'s words never run as the member)', async () => {

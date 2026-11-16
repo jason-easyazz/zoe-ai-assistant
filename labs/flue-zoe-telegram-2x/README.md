@@ -52,7 +52,7 @@ untouched. `test/brain.test.ts` now asserts them against a real loopback server
 | call | shape |
 |---|---|
 | `GET /api/system/resolve-telegram/<id>` | `X-Internal-Token` → `{user_id\|null}` |
-| `POST /api/system/telegram/consume-link-token` | `{token, telegram_id, telegram_username}` → `{user_id}` \| 400 |
+| `POST /api/system/telegram/consume-link-token` | `{token, telegram_id, telegram_username}` → `{user_id}` \| 400 \| 409 (account linked to another member: `LinkHeldError`, nothing changed) |
 | `POST /api/system/telegram/register-bot` | `{username}` |
 | `POST /api/chat/?stream=false` | `X-Zoe-User-Id` + `X-Internal-Token`, `{message, session_id, channel:'telegram'}` |
 

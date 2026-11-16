@@ -326,7 +326,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   error is logged through `describeError`, and `installConsoleRedaction()` at module load
   redacts every `console.*` line); **a FORWARDED text message or voice note reaches the brain
   fenced as untrusted data** (`src/untrusted.ts`), never as the member's own command
-  (`test/redact_and_forward.test.ts`). Regression net: `npm test` (84 tests, fully offline — a mock Telegram Bot
+  (`test/redact_and_forward.test.ts`); **a sender acts as a member only through a proven link**
+  (zoe-data `telegram_link.py`: a signed token redeemed from this account; the unlinked reply says how
+  to link and carries no account id; a 409 on redeem = the account is linked to another member,
+  answered with `LINK_HELD_REPLY`, nothing changed; `test/handler.test.ts`). Regression net: `npm test` (84 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because

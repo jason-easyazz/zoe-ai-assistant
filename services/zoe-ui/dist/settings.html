@@ -990,16 +990,6 @@ function buildSections() {
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-header">Link manually</div>
-      <div class="row"><div class="row-info"><div class="row-sub">Prefer to type it? Message <b>@<span id="tg-botname">your Zoe bot</span></b> and it will tell you your numeric Telegram ID, then enter it here.</div></div></div>
-      <div style="padding:0 12px 12px;display:flex;gap:8px;align-items:center">
-        <input type="text" id="tg-manual-id" placeholder="e.g. 6308082458" inputmode="numeric"
-          style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)">
-        <button class="btn btn-primary" onclick="setTelegramManual()">Save</button>
-      </div>
-    </div>
-
     <!-- Reminders on my phone (component js/reminder-phone-settings.js, desktop only; shown only once Telegram is linked) -->
     <div id="tg-reminders-root"></div>
   </div>
@@ -1116,13 +1106,15 @@ function loadReminderPhone() {
 }
 function stopTgPoll() { if (_tgPoll) { clearInterval(_tgPoll); _tgPoll = null; } }
 
-function renderTgStatus(tid) {
+function renderTgStatus(tid, proof) {
   loadReminderPhone();
   const statusEl = document.getElementById('tg-status');
   const connectBtn = document.getElementById('tg-connect-btn');
   const unlinkBtn = document.getElementById('tg-unlink-btn');
   if (tid) {
-    statusEl.innerHTML = `<div class="row-info"><div class="row-label">✅ Connected</div><div class="row-sub">Telegram ID ${tid}</div></div>`;
+    statusEl.innerHTML = '<div class="row-info"><div class="row-label">✅ Connected</div><div class="row-sub"></div></div>';
+    const who = proof && proof.username ? '@' + proof.username : 'Telegram account ' + tid;
+    statusEl.querySelector('.row-sub').textContent = who;
     connectBtn.textContent = 'Reconnect';
     unlinkBtn.style.display = '';
   } else {
@@ -1136,7 +1128,7 @@ async function loadTelegram() {
   stopTgPoll();
   try {
     const r = await apiCall('GET', '/api/user/profile/telegram');
-    renderTgStatus(r.telegram_id);
+    renderTgStatus(r.telegram_id, r.proof);
   } catch (e) {
     document.getElementById('tg-status').innerHTML =
       `<div class="row-info"><div class="row-label">Couldn't load status</div><div class="row-sub">${e.message}</div></div>`;
@@ -1149,14 +1141,15 @@ async function startTelegramLink() {
   const deeplink = document.getElementById('tg-deeplink');
   const hint = document.getElementById('tg-link-hint');
   try {
+    const before = await apiCall('GET', '/api/user/profile/telegram').catch(() => ({}));
+    const beforeAt = before && before.proof ? before.proof.at : null;
     const r = await apiCall('POST', '/api/user/profile/telegram/link-token');
-    if (r.bot_username) { const bn = document.getElementById('tg-botname'); if (bn) bn.textContent = r.bot_username; }
     if (r.qr_svg) { qr.innerHTML = r.qr_svg; qr.style.display = 'inline-block'; } else { qr.style.display = 'none'; }
     if (r.deep_link) {
       deeplink.href = r.deep_link; deeplink.style.display = ''; hint.textContent = '';
     } else {
       deeplink.style.display = 'none';
-      hint.textContent = 'The Telegram bot is still starting up — use “Link manually” below for now.';
+      hint.textContent = 'The Telegram bot is still starting up. Try again in a minute.';
     }
     area.style.display = '';
     // Poll for the link to complete (bot redeems the token when the user sends /start).
@@ -1166,10 +1159,10 @@ async function startTelegramLink() {
       if (++tries > 60) return stopTgPoll(); // ~5 minutes, then give up quietly
       try {
         const s = await apiCall('GET', '/api/user/profile/telegram');
-        if (s.telegram_id) {
+        if (s.telegram_id && s.proof && s.proof.at !== beforeAt) {
           stopTgPoll();
           area.style.display = 'none';
-          renderTgStatus(s.telegram_id);
+          renderTgStatus(s.telegram_id, s.proof);
           toast('Telegram connected 🎉', 'success');
         }
       } catch {}
@@ -1179,21 +1172,9 @@ async function startTelegramLink() {
   }
 }
 
-async function setTelegramManual() {
-  const v = (document.getElementById('tg-manual-id').value || '').trim();
-  if (!v) return;
-  try {
-    const r = await apiCall('PUT', '/api/user/profile/telegram', { telegram_id: v });
-    stopTgPoll();
-    document.getElementById('tg-link-area').style.display = 'none';
-    renderTgStatus(r.telegram_id);
-    toast('Telegram linked', 'success');
-  } catch (e) { toast(e.message || 'Invalid Telegram ID', 'error'); }
-}
-
 async function unlinkTelegram() {
   try {
-    await apiCall('PUT', '/api/user/profile/telegram', { telegram_id: null });
+    await apiCall('DELETE', '/api/user/profile/telegram');
     stopTgPoll();
     document.getElementById('tg-link-area').style.display = 'none';
     renderTgStatus(null);

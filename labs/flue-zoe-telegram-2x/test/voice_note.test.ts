@@ -109,7 +109,7 @@ describe('controls', () => {
     h.telegram.push(voiceUpdate(77777, 43, 'note-1'));
     const replied = await waitFor(() => h.telegram.sent.length > sentBefore);
     assert.ok(replied);
-    assert.match(h.telegram.sent.at(-1)!.text, /not linked/i);
+    assert.match(h.telegram.sent.at(-1)!.text, /isn't connected/i);
     assert.equal(h.telegram.methods.filter((m) => m === 'getFile').length, methodsBefore);
     assert.equal(hits('/api/system/telegram/transcribe').length, mediaBefore);
   });

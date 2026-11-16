@@ -22,6 +22,7 @@ import hmac
 import importlib
 import json
 import sys
+from pathlib import Path
 
 import auth_handoff
 import music_setup
@@ -119,16 +120,11 @@ def test_telegram_link_token_is_byte_identical(tl, monkeypatch):
     assert tl.verify_link_token(_ref_link_token(b"tg-secret", "amy", NOW + 60)) == "amy"
 
 
-def test_telegram_ledger_is_the_shared_one(tl):
-    assert isinstance(tl._LEDGER, auth_handoff.SingleUseLedger)
-    assert tl._pending_sigs is tl._LEDGER.pending and tl._consumed_sigs is tl._LEDGER.spent
+def test_telegram_single_use_is_not_an_in_process_ledger(tl):
+    # single use is a database row written with the link (telegram_link.link, alembic 0084), never process memory
+    assert not hasattr(tl, "_LEDGER") and "SingleUseLedger" not in (Path(tl.__file__).read_text())
     tok = tl.make_link_token("jason")
-    assert tl.verify_link_token(tok) == "jason" and tl.verify_link_token(tok) is None  # reserved
-    tl.release_token(tok)
-    assert tl.verify_link_token(tok) == "jason"
-    tl.mark_token_consumed(tok)
-    tl.release_token(tok)  # a release after the spend cannot revive it
-    assert tl.verify_link_token(tok) is None
+    assert tl.verify_link_token(tok) == "jason" and tl.verify_link_token(tok) == "jason"   # verifying has no side effect
 
 
 def test_one_copy_of_the_mechanics():

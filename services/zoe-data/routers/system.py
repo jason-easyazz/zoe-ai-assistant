@@ -2476,9 +2476,9 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
 # ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────
 #
 # The Telegram channel (labs/flue-zoe-telegram-2x) forwards NO session, so every
-# message would otherwise land as guest with no memory. A user links their
-# account by storing their numeric telegram_id in their profile (via
-# /api/user/profile, session-authed as themselves). This INTERNAL resolver maps
+# message would otherwise land as guest with no memory. A member links their
+# account ONLY by redeeming a signed link token from that Telegram account
+# (telegram_link.py: proof of control of both sides). This INTERNAL resolver maps
 # a verified sender's telegram_id back to that Zoe user_id so the bot can act as
 # them. Loopback / X-Internal-Token gated — it exposes an identity mapping and
 # must never be reachable publicly.
@@ -2490,31 +2490,15 @@ async def resolve_telegram(
     _: None = Depends(require_internal_token),
     db=Depends(get_db),
 ):
-    """Return {"user_id": <id>} for the profile that registered telegram_id, else
-    {"user_id": null}. Internal-only (loopback or X-Internal-Token).
+    """Return {"user_id": <id>} for the member this Telegram account is linked to,
+    else {"user_id": null} (no link, an ambiguous link, or an inactive account:
+    telegram_link.resolve). Internal-only (loopback or X-Internal-Token)."""
+    import telegram_link
 
-    The telegram_id lives inside each user's user_preferences.prefs JSON under
-    the "telegram_id" key (see routers/user_profile.py). Mapping is unique per
-    telegram_id (the profile write enforces it), so at most one row matches; if
-    a stale duplicate somehow exists we return the earliest-updated one
-    deterministically.
-    """
     tid = (telegram_id or "").strip()
     if not tid:
         return {"user_id": None}
-    # prefs is a JSON blob; match on the stored telegram_id string. Ordering by
-    # updated_at keeps the result deterministic even if a stale duplicate exists.
-    cursor = await db.execute(
-        """SELECT user_id, prefs FROM user_preferences
-           WHERE prefs::jsonb ->> 'telegram_id' = ?
-           ORDER BY updated_at ASC
-           LIMIT 1""",
-        (tid,),
-    )
-    row = await cursor.fetchone()
-    if not row:
-        return {"user_id": None}
-    return {"user_id": row["user_id"]}
+    return {"user_id": await telegram_link.resolve(db, tid)}
 
 
 class _ConsumeLinkBody(BaseModel):
@@ -2537,54 +2521,35 @@ async def consume_telegram_link_token(
     """
     import telegram_link
     from routers.user_profile import _TELEGRAM_ID_RE
-    from user_prefs import delete_pref, set_pref
 
     token = (body.token or "").strip()
-    # verify_link_token validates AND atomically RESERVES the token (single-use).
-    # From here on, ANY exit path must either mark_token_consumed (success) or
-    # release_token (failure) — otherwise the reservation would strand the token.
-    user_id = telegram_link.verify_link_token(token)
-    if not user_id:
+    # Signature + expiry only. Single use is the database's: telegram_link.link records the redemption in the SAME transaction
+    # as the link write, so a refusal or a failure (a cancelled request included) rolls both back and the member can re-scan.
+    decoded = telegram_link.decode_link_token(token)
+    if not decoded:
         raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
+    user_id, token_id, expires_at = decoded
 
-    try:
-        tid = (body.telegram_id or "").strip()
-        if not _TELEGRAM_ID_RE.match(tid):
-            raise HTTPException(
-                status_code=400,
-                detail="telegram_id must be a positive numeric Telegram user id",
-            )
-
-        # The token's user must still exist (a since-deleted user would otherwise
-        # 500 on the FK). Clean 400 instead, and the reservation is released below.
-        cur = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
-        if not await cur.fetchone():
-            raise HTTPException(status_code=400, detail="link target user no longer exists")
-
-        # Last-writer-wins uniqueness: a telegram_id maps to at most one Zoe user.
-        cursor = await db.execute(
-            """SELECT user_id, prefs FROM user_preferences
-               WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
-            (tid, user_id),
+    tid = (body.telegram_id or "").strip()
+    if not _TELEGRAM_ID_RE.match(tid):
+        raise HTTPException(
+            status_code=400,
+            detail="telegram_id must be a positive numeric Telegram user id",
         )
-        # Atomic + conditional key ops (see user_prefs): never a stale full-copy
-        # write that could drop a concurrent change to another key.
-        for row in await cursor.fetchall():
-            await delete_pref(row["user_id"], "telegram_id", db=db, only_if=tid)
 
-        await set_pref(user_id, "telegram_id", tid, db=db)
-    except BaseException:
-        # Failure before commit → free the reservation so the user can re-scan.
-        # BaseException (not Exception) so asyncio.CancelledError — raised when
-        # uvicorn cancels the handler on a client disconnect mid-await — ALSO
-        # releases, instead of stranding the token in _pending_sigs for the TTL.
-        # The bare `raise` re-raises CancelledError, preserving shutdown semantics.
-        telegram_link.release_token(token)
-        raise
+    # The token's user must still exist (a since-deleted user would otherwise 500 on the FK).
+    cur = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
+    if not await cur.fetchone():
+        raise HTTPException(status_code=400, detail="link target user no longer exists")
 
-    # Link is durably written — now burn the token so a replay/second scan fails.
-    telegram_link.mark_token_consumed(token)
-    logger.info("telegram self-service link: %s → user %s", tid, user_id)
+    # One holder per account, one account per member, and a redemption never moves a link (telegram_link.link).
+    outcome = await telegram_link.link(db, user_id, tid, body.telegram_username, token_id=token_id, expires_at=expires_at)
+    if outcome in (telegram_link.TOKEN_SPENT, telegram_link.MEMBER_GONE, telegram_link.TOKEN_EXPIRED):
+        raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
+    if outcome == telegram_link.HELD_BY_OTHER:
+        raise HTTPException(status_code=409, detail="this Telegram account is already linked to another member")
+    if outcome == telegram_link.MEMBER_LINKED:
+        raise HTTPException(status_code=409, detail="this member already has a linked Telegram account; disconnect it first")
     return {"ok": True, "user_id": user_id, "telegram_id": tid}
 
 

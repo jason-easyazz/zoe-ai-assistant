@@ -3,22 +3,31 @@
 Flow:
   1. An authenticated user asks for a link token
      (POST /api/user/profile/telegram/link-token). We mint a short-lived,
-     HMAC-signed token that ENCODES their user_id + expiry — no server-side
-     storage, so it survives restarts and needs no DB table.
+     HMAC-signed token that ENCODES their user_id + expiry (nothing stored at mint).
   2. The UI shows a Telegram deep link (`https://t.me/<bot>?start=<token>`) and a
      QR of it. The user opens/scans it; Telegram sends the bot `/start <token>`.
   3. The bot forwards the token + the VERIFIED sender id to zoe-data
      (POST /api/system/telegram/consume-link-token, internal-only). We verify the
-     signature + expiry, recover the user_id, and store the telegram_id on that
-     user's profile.
+     signature + expiry, recover the user_id, and ``link`` records the redemption and
+     stores the telegram_id on that user's profile in ONE transaction.
 
 Security: the token proves "the person who generated this in an authenticated Zoe
 session wants to link whatever Telegram account redeems it." The sender's numeric
 id is supplied by Telegram to the bot (not by the user), and the consume endpoint
 is internal-only — so a leaked token can at worst link the leaker's OWN Telegram
 account to the generating user, which is the same trust the deep link already
-implies. Tokens are single-use in practice (short TTL) and cannot be forged
-without the secret.
+implies. Tokens are short-lived, cannot be forged without the secret, and are
+single-use DURABLY (``telegram_link_redemptions``, alembic 0084: a database row, so it
+holds across restarts and workers); a token issued before a member erase is void.
+
+The link store (this module is its one writer; ``user_preferences.prefs``):
+  * ``telegram_id``          the linked account (read by the resolver and the outbound senders);
+  * ``telegram_link_proof``  how and when it was proven (``via``, ``at``, the Telegram username shown in Settings);
+  * ``telegram_link_change`` the last explicit unlink (``event``, ``at``, ``by``: "self" | "admin" | "forget").
+A link is written ONLY by ``link`` (a redeemed token), never displaces another member's link and never moves a member's own
+link to another account (unlink first), and is removed only by ``unlink`` (the member or an admin) or ``forget_user`` (the
+member erase). One holder per account is a database guarantee (``uq_user_preferences_telegram_id``, alembic 0084). ``resolve`` answers only for an
+unambiguous link held by an active account.
 """
 
 import hashlib
@@ -27,6 +36,7 @@ import logging
 import os
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import auth_handoff
@@ -36,7 +46,10 @@ logger = logging.getLogger(__name__)
 # Signing secret, PURPOSE-SPECIFIC to link tokens. Set ZOE_TELEGRAM_LINK_SECRET
 # (recommended) so tokens survive a zoe-data restart and rotate independently of
 # other credentials; otherwise a per-process random is used (tokens are short-
-# lived, so a restart just invalidates any in-flight ones — acceptable). We do NOT
+# lived, so a restart just invalidates any in-flight ones — acceptable). Either
+# way single use is the database's, not this process's. With MORE THAN ONE worker
+# process the secret is REQUIRED: without it each worker signs with its own random,
+# so a token minted by one fails on another (it fails closed, but linking breaks). We do NOT
 # reuse ZOE_INTERNAL_TOKEN here: mixing an internal-auth credential with a token-
 # signing key couples their rotation policies.
 _LINK_SECRET = (
@@ -46,20 +59,11 @@ _LINK_SECRET = (
 LINK_TOKEN_TTL_S = 600  # 10 minutes
 _SIG_BYTES = 12  # 96-bit truncated HMAC — ample for a 10-minute single-use token
 
-# Single-use enforcement. In-process only (a restart clears it, but expired tokens
-# are rejected regardless) — generate + redeem both hit the same zoe-data process.
-# Two sets so single-use holds ACROSS the async DB write without burning the token
-# on failure:
-#   _pending_sigs  — reserved by verify_link_token() the instant a token validates
-#                    (synchronous, no await before the reservation), so a second
-#                    concurrent scan of the same QR can't also pass verification.
-#   _consumed_sigs — permanently redeemed (moved here after the link write commits).
-# A token whose sig is in EITHER set is rejected. On a failed write the caller
-# calls release_token() to drop the reservation so the user can just re-scan.
-# The ledger is auth_handoff's shared one; the two names stay as aliases.
-_LEDGER = auth_handoff.SingleUseLedger()
-_pending_sigs = _LEDGER.pending
-_consumed_sigs = _LEDGER.spent
+# Single use is DURABLE: a redeemed token's id is a row in ``telegram_link_redemptions`` (alembic 0084), written by ``link`` in the
+# same transaction as the link itself, so it holds across restarts and workers until the token expires.
+REDEMPTIONS = "telegram_link_redemptions"
+#: the unique index that keeps one holder per messaging id (alembic 0084)
+TID_INDEX = "uq_user_preferences_telegram_id"
 
 
 def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
@@ -77,9 +81,7 @@ def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
 
 
 def _decode_raw(token: str):
-    """Return (user_id, sig, exp) for an authentic, unexpired token, else None.
-    Validates signature + expiry ONLY — no pending/consumed check, no side effect.
-    Used by mark/release which operate on an already-reserved sig."""
+    """Return (user_id, sig, exp) for an authentic, unexpired token, else None. Signature + expiry only; no side effect."""
     if not token or len(token) > 128:
         return None
     try:
@@ -99,40 +101,20 @@ def _decode_raw(token: str):
         return None
 
 
-def verify_link_token(token: str) -> Optional[str]:
-    """Validate a token AND atomically reserve it (single-use). Returns the
-    user_id, or None if invalid/expired/already-claimed. There is NO ``await``
-    between the claim check and the reservation, so two concurrent redemptions of
-    the same token cannot both pass. The caller MUST then either mark_token_consumed
-    (on a successful, committed link) or release_token (on any failure) — the
-    reservation alone never permanently burns the token (it expires with the TTL)."""
+def decode_link_token(token: str) -> Optional[tuple[str, str, int]]:
+    """``(user_id, token_id, expires_at)`` for an authentic, unexpired token, else None. No side effect: whether it was already
+    redeemed is the database's answer, given by ``link``. ``token_id`` is a hash of the signature (never the token itself)."""
     decoded = _decode_raw(token)
-    if not decoded:
+    if not decoded or not decoded[0]:
         return None
     user_id, sig, exp = decoded
-    _LEDGER.prune(int(time.time()))
-    if _LEDGER.claimed(sig):
-        return None  # already claimed by a concurrent request, or already redeemed
-    _LEDGER.reserve(sig, exp)  # synchronous, no await before this point
-    return user_id
+    return user_id, hashlib.sha256(b"telegram-link:" + sig).hexdigest()[:32], exp
 
 
-def mark_token_consumed(token: str) -> None:
-    """Promote a reserved token to permanently redeemed. Call ONLY after the link
-    write has committed successfully."""
-    decoded = _decode_raw(token)
-    if decoded:
-        _, sig, exp = decoded
-        _LEDGER.spend(sig, exp)
-
-
-def release_token(token: str) -> None:
-    """Drop a token's reservation so it can be redeemed again. Call on ANY failure
-    after verify_link_token so a transient error (DB hiccup, missing user) doesn't
-    leave the user with a dead QR."""
-    decoded = _decode_raw(token)
-    if decoded:
-        _LEDGER.release(decoded[1])
+def verify_link_token(token: str) -> Optional[str]:
+    """The member a token was minted for, if it is authentic and unexpired. Says nothing about single use (``link`` does)."""
+    decoded = decode_link_token(token)
+    return decoded[0] if decoded else None
 
 
 # ── Bot identity (self-registered by the Telegram bot at startup) ──────────────
@@ -179,4 +161,219 @@ def make_qr_svg(data: str) -> Optional[str]:
         return buf.getvalue().decode("utf-8")
     except Exception:
         logger.warning("QR render failed for a telegram link", exc_info=True)
+        return None
+
+
+# ── The link store (see the module doc) ─────────────────────────────────────────
+
+KEY_ID = "telegram_id"
+KEY_PROOF = "telegram_link_proof"
+KEY_CHANGE = "telegram_link_change"
+LINKED, ALREADY_LINKED, HELD_BY_OTHER = "linked", "already_linked", "held_by_other"
+MEMBER_LINKED, TOKEN_SPENT, MEMBER_GONE = "member_linked", "token_spent", "member_gone"
+TOKEN_EXPIRED = "token_expired"
+
+#: The proof a link must carry to be honoured. Links made before proof of control of both sides was required carry none (or an
+#: older shape): alembic 0084 removes them and ``resolve`` never honours one, so every live link is a proven one.
+PROOF_VERSION = 2
+
+
+def proven(prefs: dict) -> bool:
+    proof = prefs.get(KEY_PROOF)
+    return isinstance(proof, dict) and proof.get("v") == PROOF_VERSION
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+async def _holders(db, tid: str) -> list[str]:
+    cursor = await db.execute(
+        """SELECT user_id, prefs FROM user_preferences
+           WHERE prefs::jsonb ->> 'telegram_id' = ?
+           ORDER BY updated_at ASC""",
+        (tid,),
+    )
+    return [row["user_id"] for row in await cursor.fetchall()]
+
+
+class _Watermark:
+    """``erase_watermark``'s store, read on the redemption's OWN connection (inside its transaction)."""
+
+    def __init__(self, db):
+        self._db = db
+
+    async def get(self, user_id: str) -> Optional[str]:
+        import erase_watermark
+
+        cursor = await self._db.execute(
+            "SELECT forgotten_at FROM memory_forgotten WHERE user_id = ? AND key_hash = ?", (user_id, erase_watermark.KEY))
+        row = await cursor.fetchone()
+        return str(row["forgotten_at"]) if row and row["forgotten_at"] else None
+
+
+async def _member_lock(db, user_id: str) -> None:
+    """The member's link lock, held to the end of the current transaction. ``link`` and ``forget_user`` both take it, so a
+    redemption and a member erase are ordered by the database: whichever commits second sees what the first did."""
+    await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"telegram_link:{user_id}",))
+
+
+async def _issued_before_erase(db, user_id: str, expires_at: float) -> bool:
+    """True when the member was erased at or after this token was issued (``erase_watermark``: durable, recorded by
+    ``MemoryService.delete_user`` before it erases anything), so the token is void. Raises when the mark cannot be read."""
+    import erase_watermark
+
+    mark = await erase_watermark.watermark(user_id, backend=_Watermark(db))
+    return mark is not None and float(expires_at) - LINK_TOKEN_TTL_S <= mark.timestamp()
+
+
+class _Refused(Exception):
+    """Inside ``link``'s transaction: refuse, and roll back the redemption row with everything else."""
+
+    def __init__(self, outcome: str):
+        super().__init__(outcome)
+        self.outcome = outcome
+
+
+def _is_tid_conflict(exc: BaseException) -> bool:
+    """The one-holder index refused the write (a concurrent redemption linked this account to another member first)."""
+    if getattr(exc, "sqlstate", None) != "23505":
+        return False
+    name = getattr(exc, "constraint_name", None)
+    return name is None or name == TID_INDEX
+
+
+async def link(db, user_id: str, tid: str, username: Optional[str] = None, *, token_id: str, expires_at: float) -> str:
+    """Redeem the token ``token_id`` (minted for ``user_id``, expiring at ``expires_at``) from the account ``tid``, and link them.
+
+    ONE transaction: expired redemption rows are swept, the redemption is recorded (its primary key makes a token single-use for
+    good), the holders are checked and the link is written. Returns ``LINKED`` / ``ALREADY_LINKED`` (committed), or a refusal with
+    nothing kept, not even the redemption, so the member can scan again once the cause is cleared:
+      * ``TOKEN_SPENT``   - this token was already redeemed;
+      * ``TOKEN_EXPIRED`` - the token expired, including while this call waited for the member lock;
+      * ``HELD_BY_OTHER`` - another member holds ``tid`` (the one-holder index also refuses a concurrent second holder);
+      * ``MEMBER_LINKED`` - ``user_id`` already holds a DIFFERENT account. A redemption never moves a link: the member (or an admin)
+                            unlinks first, then links the new account;
+      * ``MEMBER_GONE``   - the member no longer exists, or was erased after this token was issued (the token is void for good).
+    The member's link lock (``_member_lock``) is held throughout, so a member erase never interleaves with a redemption.
+    """
+    from user_prefs import read_prefs, set_prefs
+
+    proof = {"via": "signed_link", "v": PROOF_VERSION, "at": _now_iso()}
+    cleaned = (username or "").lstrip("@").strip()[:64]
+    if cleaned:
+        proof["username"] = cleaned
+    try:
+        async with db.transaction():
+            await _member_lock(db, user_id)
+            # The clock is read AFTER the lock: a redemption that waited on the member lock past its token's expiry is refused
+            # here, whatever the caller's earlier check said.
+            now = time.time()
+            if float(expires_at) <= now:
+                raise _Refused(TOKEN_EXPIRED)
+            cursor = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
+            if not await cursor.fetchone() or await _issued_before_erase(db, user_id, expires_at):
+                raise _Refused(MEMBER_GONE)
+            await db.execute(f"DELETE FROM {REDEMPTIONS} WHERE expires_at < ?", (now,))
+            cursor = await db.execute(
+                f"""INSERT INTO {REDEMPTIONS} (token_id, user_id, expires_at, redeemed_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT (token_id) DO NOTHING RETURNING token_id""",
+                (token_id, user_id, float(expires_at), now),
+            )
+            if not await cursor.fetchone():
+                raise _Refused(TOKEN_SPENT)
+            if any(h != user_id for h in await _holders(db, tid)):
+                raise _Refused(HELD_BY_OTHER)
+            current = (await read_prefs(db, user_id)).get(KEY_ID)
+            if current and str(current) != tid:
+                raise _Refused(MEMBER_LINKED)
+            if not await set_prefs(user_id, {KEY_ID: tid, KEY_PROOF: proof}, db=db, unless_held=(KEY_ID, tid)):
+                raise _Refused(MEMBER_LINKED)      # a concurrent redemption linked this member to another account first
+    except _Refused as refused:
+        logger.warning("telegram link refused (%s) for user %s", refused.outcome, user_id)
+        return refused.outcome
+    except Exception as exc:  # noqa: BLE001 - only the one-holder index is a refusal; anything else propagates
+        if _is_tid_conflict(exc):
+            logger.warning("telegram link refused (%s, concurrent) for user %s", HELD_BY_OTHER, user_id)
+            return HELD_BY_OTHER
+        raise
+    logger.info("telegram link proven for user %s", user_id)
+    return ALREADY_LINKED if current else LINKED
+
+
+async def unlink(db, user_id: str, *, by: str) -> bool:
+    """Remove ``user_id``'s link and record who did it (``by``: "self" | "admin"). Returns whether one existed."""
+    from user_prefs import delete_prefs, read_prefs, set_prefs
+
+    async with db.transaction():      # the removal and its record commit together, in order with any redemption
+        await _member_lock(db, user_id)
+        had = bool((await read_prefs(db, user_id)).get(KEY_ID))
+        await delete_prefs(user_id, (KEY_ID, KEY_PROOF), db=db)
+        if had:
+            await set_prefs(user_id, {KEY_CHANGE: {"event": "unlinked", "at": _now_iso(), "by": by}}, db=db)
+    if had:
+        logger.warning("telegram link removed for user %s (by %s)", user_id, by)
+    return had
+
+
+async def forget_user(user_id: str) -> int:
+    """Member erase (``MemoryService.delete_user``): remove the link, its records and the member's redemption rows. Returns 1 when a
+    link existed. Raises on a DB error (the caller fails closed).
+
+    Under the member's link lock, in one transaction: a redemption in flight commits first and its link is removed here; one that
+    starts after waits, then finds the erase watermark (``delete_user`` records it before any eraser runs) and is refused. Tokens
+    issued before the erase stay void after it for the same reason."""
+    from db_pool import get_db_ctx
+    from user_prefs import delete_prefs, read_prefs
+
+    uid = str(user_id or "").strip()
+    if not uid:
+        return 0
+    try:
+        async with get_db_ctx() as db:
+            async with db.transaction():
+                await _member_lock(db, uid)
+                had = bool((await read_prefs(db, uid)).get(KEY_ID))
+                await delete_prefs(uid, (KEY_ID, KEY_PROOF, KEY_CHANGE), db=db)
+                # Same transaction, same lock: the link and the member's redemption rows go together or not at all.
+                await db.execute(f"DELETE FROM {REDEMPTIONS} WHERE user_id = ?", (uid,))
+    except Exception as exc:  # noqa: BLE001
+        from conversation_notes import _no_store       # the one "nothing stored to erase" rule (a lost pool still raises)
+
+        # "Nothing stored" is true only when the preferences store itself is absent. A missing redemptions table (code ahead of
+        # its migration) rolled the link removal back too, so that is a failed erase: raise, the caller retries.
+        if _no_store(exc) and REDEMPTIONS not in str(exc):
+            return 0
+        logger.error("telegram link forget failed (%s): link NOT erased", type(exc).__name__)
+        raise
+    return int(had)
+
+
+async def _account_active(db, user_id: str) -> bool:
+    """True only for a registered, active account (``auth_users``). Raises on a failed lookup (the caller refuses)."""
+    cursor = await db.execute("SELECT is_active FROM auth_users WHERE user_id = ? LIMIT 1", (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return False
+    active = row["is_active"]
+    return active is None or bool(int(active))
+
+
+async def resolve(db, tid: str) -> Optional[str]:
+    """The member ``tid`` is linked to, or None: no link, a link more than one member holds (ambiguous, refused), a link that
+    carries no current proof (made before both sides had to prove control), or a link whose member is no longer an active account (deleted or deactivated). Fails closed on a lookup error."""
+    try:
+        holders = await _holders(db, tid)
+        if len(holders) != 1:
+            if holders:
+                logger.warning("telegram resolve refused: %d members hold one account", len(holders))
+            return None
+        from user_prefs import read_prefs
+
+        if not proven(await read_prefs(db, holders[0])):
+            logger.warning("telegram resolve refused: the link carries no current proof")
+            return None
+        return holders[0] if await _account_active(db, holders[0]) else None
+    except Exception as exc:  # noqa: BLE001 - not knowing who someone is means acting for nobody
+        logger.warning("telegram resolve failed closed: %s", type(exc).__name__)
         return None

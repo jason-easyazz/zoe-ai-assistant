@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import time
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Iterable
 
 KEY_MEMORY_OPT_OUT = "memory_opt_out"
 
@@ -130,22 +130,35 @@ async def get_pref(user_id: str, key: str, default: Any = None, *, db=None) -> A
 
 
 async def set_pref(user_id: str, key: str, value: Any, *, db=None) -> None:
-    """Atomically set ONE key for ``user_id``, preserving every other key.
+    """Atomically set ONE key for ``user_id``, preserving every other key."""
+    await set_prefs(user_id, {key: value}, db=db)
 
-    A single upsert whose conflict branch merges the new key into the stored
+
+async def set_prefs(user_id: str, values: dict, *, db=None, unless_held: "tuple[str, str] | None" = None) -> bool:
+    """Atomically set several keys for ``user_id`` in ONE statement, preserving every other key. Returns whether it wrote.
+
+    A single upsert whose conflict branch merges the new keys into the stored
     JSON server-side (``jsonb ||``), so it cannot lose a concurrent writer's key.
+    With ``unless_held=(key, value)`` the write happens only while the stored ``key`` is absent, empty or already ``value``: the
+    check is the statement's own conflict condition, so no concurrent writer can slip between the check and the write.
     """
-    async with _conn(db) as conn:
-        await conn.execute(
-            """INSERT INTO user_preferences (user_id, prefs, updated_at)
+    sql = """INSERT INTO user_preferences (user_id, prefs, updated_at)
                VALUES (?, ?, NOW())
                ON CONFLICT(user_id) DO UPDATE
                SET prefs = (COALESCE(user_preferences.prefs, '{}')::jsonb || excluded.prefs::jsonb)::text,
-                   updated_at = NOW()""",
-            (user_id, json.dumps({key: value})),
-        )
+                   updated_at = NOW()"""
+    params: tuple = (user_id, json.dumps(values))
+    if unless_held is not None:
+        sql += """
+               WHERE COALESCE(COALESCE(user_preferences.prefs, '{}')::jsonb ->> ?::text, '') IN ('', ?::text)
+               RETURNING user_id"""
+        params = (*params, unless_held[0], str(unless_held[1]))
+    async with _conn(db) as conn:
+        cursor = await conn.execute(sql, params)
+        written = True if unless_held is None else bool(await cursor.fetchone())
         await conn.commit()
     clear_pref_cache(user_id)
+    return written
 
 
 async def delete_pref(user_id: str, key: str, *, db=None, only_if: Any = _UNSET) -> None:
@@ -154,13 +167,23 @@ async def delete_pref(user_id: str, key: str, *, db=None, only_if: Any = _UNSET)
     With ``only_if``, the key is removed only while it still holds that value
     (compared as text) — the check and the write are one statement.
     """
-    sql = """UPDATE user_preferences
-             SET prefs = (COALESCE(prefs, '{}')::jsonb - ?::text)::text, updated_at = NOW()
-             WHERE user_id = ?"""
-    params: tuple = (key, user_id)
+    await delete_prefs(user_id, (key,), db=db, only_if=only_if)
+
+
+async def delete_prefs(user_id: str, keys: Iterable[str], *, db=None, only_if: Any = _UNSET) -> None:
+    """Atomically remove several keys for ``user_id`` in ONE statement (no-op for absent keys).
+
+    With ``only_if``, nothing is removed unless the FIRST key still holds that value (compared as text).
+    """
+    keys = tuple(keys)
+    if not keys:
+        return
+    sql = ("UPDATE user_preferences\n             SET prefs = (COALESCE(prefs, '{}')::jsonb"
+           + " - ?::text" * len(keys) + ")::text, updated_at = NOW()\n             WHERE user_id = ?")
+    params: tuple = (*keys, user_id)
     if only_if is not _UNSET:
         sql += " AND prefs::jsonb ->> ?::text = ?::text"
-        params = (key, user_id, key, str(only_if))
+        params = (*keys, user_id, keys[0], str(only_if))
     async with _conn(db) as conn:
         await conn.execute(sql, params)
         await conn.commit()

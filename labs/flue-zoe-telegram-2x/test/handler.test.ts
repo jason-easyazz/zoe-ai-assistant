@@ -17,6 +17,8 @@ import {
   handleIncoming,
   handleNew,
   handleStart,
+  LINK_HELD_REPLY,
+  LinkHeldError,
   startReply,
   unlinkedMessage,
 } from '../src/handler.ts';
@@ -63,9 +65,16 @@ test('unlinked sender: refuses with the link instructions incl. their numeric id
 
   assert.equal(asked, false, 'the brain must NOT be asked for an unlinked sender');
   assert.equal(replies.length, 1);
-  assert.equal(replies[0], unlinkedMessage(77777));
-  assert.match(replies[0]!, /77777/); // includes their numeric id to copy
-  assert.match(replies[0]!, /not linked/i);
+  assert.equal(replies[0], unlinkedMessage());
+  assert.match(replies[0]!, /isn't connected/i);
+});
+
+test('unlinkedMessage: tells the person how to link by the Settings QR / link, and asks them to type nothing', () => {
+  const msg = unlinkedMessage();
+  assert.match(msg, /Settings → Telegram/);
+  assert.match(msg, /scan the code/i);
+  assert.doesNotMatch(msg, /\d{3,}/, 'no account number to copy: a link is made only by the QR / link flow');
+  assert.doesNotMatch(msg, /type|enter/i);
 });
 
 // ─── startReply: /start deep-link outcomes ───────────────────────────────────
@@ -134,6 +143,24 @@ test('handleStart: a rejected token replies "expired", links nobody', async () =
     },
   });
   assert.match(replies[0]!, /expired|invalid/i);
+});
+
+test('handleStart: a refused link gets one plain reply and the redeemer is asked only once (no retry)', async () => {
+  const replies: string[] = [];
+  let calls = 0;
+  await handleStart(1, 'tok', undefined, {
+    consume: async () => {
+      calls += 1;
+      throw new LinkHeldError();
+    },
+    reply: async (t) => {
+      replies.push(t);
+    },
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(replies, [LINK_HELD_REPLY]);
+  assert.doesNotMatch(replies[0]!, /Linked!/);
+  assert.match(replies[0]!, /another Zoe account/);
 });
 
 test('handleStart: a redeemer failure is answered generically, not with a stack trace', async () => {

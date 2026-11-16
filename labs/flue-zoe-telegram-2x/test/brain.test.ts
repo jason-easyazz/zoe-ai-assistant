@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 
+import { LinkHeldError } from '../src/handler.ts';
 import { startMockZoeData, type MockZoeData } from './helpers/mock-zoe-data.ts';
 
 let zoeData: MockZoeData;
@@ -84,6 +85,13 @@ test('consumeLinkToken: posts the token + the VERIFIED sender id, stringified', 
 
 test('consumeLinkToken: an invalid/expired token (HTTP 400) resolves to null, not a throw', async () => {
   assert.equal(await brain.consumeLinkToken('nope', 123), null);
+});
+
+test('consumeLinkToken: an account another member holds (HTTP 409) throws LinkHeldError', async () => {
+  zoeData.tokens.set('tok-a', 'member-a');
+  zoeData.tokens.set('tok-b', 'member-b');
+  assert.equal(await brain.consumeLinkToken('tok-a', 4242), 'member-a');
+  await assert.rejects(brain.consumeLinkToken('tok-b', 4242), LinkHeldError);
 });
 
 test('sessionFor: ZOE_TELEGRAM_TRIAL=1 namespaces the session id', () => {

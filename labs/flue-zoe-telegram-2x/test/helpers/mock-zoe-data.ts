@@ -7,7 +7,7 @@
  * tests assert on the WIRE, not on the client's intentions:
  *
  *   GET  /api/system/resolve-telegram/<id>          → { user_id | null }
- *   POST /api/system/telegram/consume-link-token    → { user_id } | 400
+ *   POST /api/system/telegram/consume-link-token    → { user_id } | 400 | 409 (held by another member)
  *   POST /api/system/telegram/register-bot          → { ok }
  *   POST /api/chat/?stream=false                    → { response }
  *
@@ -94,6 +94,8 @@ export async function startMockZoeData(): Promise<MockZoeData> {
         const payload = body as { token?: string; telegram_id?: string } | null;
         const userId = payload?.token ? tokens.get(payload.token) : undefined;
         if (!userId) return json({ detail: 'invalid or expired link token' }, 400);
+        const holder = payload?.telegram_id ? links.get(payload.telegram_id) : undefined;
+        if (holder && holder !== userId) return json({ detail: 'already linked to another member' }, 409);
         if (payload?.telegram_id) links.set(payload.telegram_id, userId);
         return json({ ok: true, user_id: userId, telegram_id: payload?.telegram_id });
       }
