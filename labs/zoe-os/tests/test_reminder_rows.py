@@ -332,3 +332,26 @@ def test_a_removed_carer_cannot_explain_the_undo_of_a_reminder_they_set(house):
     assert house.k.explainer.last(A) not in (receipt.seq, undone.seq)
     house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))
     assert house.k.explainer.why(undone.seq, person=A)["seq"] == undone.seq
+
+
+def test_an_undo_stays_hidden_from_a_removed_carer_after_the_receipt_it_reversed_expires(house, clock):
+    house.act(A, "remind.set", note="synthetic marker <pack>", time="07:45", mentions=(K,), **{"for": K})
+    clock[0] += 2 * 86400
+    undone = house.k.actions.undo(A, actor=A)
+    assert undone.verified
+    house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
+    with pytest.raises(Refused):
+        house.k.explainer.why(undone.seq, person=A)
+    swept = house.k.retention.sweep(now=clock[0] + 364 * 86400)               # the create (day 0) expires; the undo (day 2) not yet
+    assert swept["expired"] >= 1 and house.k.spine._get(undone.seq) is not None
+    with pytest.raises(Refused):
+        house.k.explainer.why(undone.seq, person=A)
+    house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))               # the link is back: so is the reach
+    assert house.k.explainer.why(undone.seq, person=A)["seq"] == undone.seq
+
+
+def test_a_receipt_over_a_row_with_nothing_to_judge_by_is_hidden():
+    from zoe_os.reminder_rows import DurableReminders
+    rem = DurableReminders(None, lambda: 0.0, type("G", (), {"people": {A: Person(A, ADULT)}})())
+    assert rem.reach_of(A, {"action": "remind.edit", "proof": {"id": "rem9", "row": None}}) is False
+    assert rem.reach_of(A, {"action": "list.add", "proof": {"id": "l1"}}) is None

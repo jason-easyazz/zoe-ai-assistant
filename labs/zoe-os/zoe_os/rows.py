@@ -57,6 +57,9 @@ class DurableRows:
             rid = self.target(action, args)
             row = self.rows.get(rid)
             out = {"provenance": 1, "id": rid, "row": dict(row) if row else None}
+            owner = row["owner"] if row else (self.owner_of(person, args) if action == self.creates else None)
+            if owner is not None:
+                out["owner"] = owner             # who the row is FOR, kept even when no row is (an undone create): ``reach_of``
             source = args.get("asked") if action == self.creates else self.source_of(rid)
             if type(source) is int:
                 out["source"] = source
@@ -103,25 +106,26 @@ class DurableRows:
         """May ``person`` reach ``row`` now: its owner, by default; a store adds its carers and shared rows, by the CURRENT link."""
         return person == row.get("owner")
 
+    def owner_of(self, person: str, args: dict) -> str:
+        """Who a create makes the row FOR: ``for`` when a carer sets it for someone, else the person asking."""
+        return args.get("for", person)
+
     def reach_of(self, person: str, payload: dict) -> bool | None:
         """For an explainer: may ``person`` see a receipt over one of these rows NOW? ``None``: not a receipt over these rows. The
-        row as it stands, else as the receipt recorded it, decides; a receipt that touched no row is judged by who it was for."""
-        undone = payload.get("undoes") if payload.get("of") in self.actions else None
-        if type(undone) is int:                  # an undo is judged as the receipt it reversed (an undone create leaves no row)
-            ev = self.spine._get(undone)
-            if ev is not None:
-                return self.reach_of(person, ev.payload)
+        row as it stands, else as the receipt recorded it (its proof, an undo's restored snapshot, the snapshot before), else
+        whom it was for, decides. Nothing to judge by: NO (fail closed)."""
         proof = payload.get("proof") or {}
-        snaps = [proof, proof.get("restored") or {}, (payload.get("undo") or {}).get("before") or {}]
-        rid = next((s["id"] for s in snaps if isinstance(s, dict) and s.get("id") is not None), None)
-        args = (payload.get("undo") or {}).get("args") or {}
+        snaps = [s for s in (proof, proof.get("restored"), (payload.get("undo") or {}).get("before")) if isinstance(s, dict)]
+        rid = next((s["id"] for s in snaps if s.get("id") is not None), None)
         ours = payload.get("action") in self.actions or payload.get("of") in self.actions
         if not ours and (rid is None or not str(rid).startswith(self.prefix)):
             return None
-        row = self.rows.get(rid) if rid is not None else None
-        row = row or next((s["row"] for s in snaps if isinstance(s, dict) and s.get("row")), None)
-        if row is None:                                            # no row recorded: judged by who it was asked for
-            return "for" not in args or self.may_reach(person, {"owner": args["for"], "visibility": "personal", "private": 0})
+        row = (self.rows.get(rid) if rid is not None else None) or next((s["row"] for s in snaps if s.get("row")), None)
+        if row is None:
+            owner = next((s["owner"] for s in snaps if s.get("owner") is not None), None)
+            if owner is None:
+                return False
+            row = {"owner": owner, "visibility": "personal", "private": 0}
         return self.may_reach(person, row)
 
     def register_all(self, kernel, specs: dict) -> None:
