@@ -289,3 +289,18 @@ def test_a_least_access_member_sees_no_shared_reminder_and_no_carer_acts_for_the
             h.act(A, "remind.set", note="x", time="07:45", mentions=("member-u",), **{"for": "member-u"})
     finally:
         h.k.close()
+
+
+def test_a_removed_carer_loses_every_reach_over_a_reminder_they_set_and_regains_it_with_the_link(house):
+    rid = rid_of(house.act(A, "remind.set", note="synthetic marker <pack>", time="07:45", mentions=(K,), **{"for": K}))
+    assert [r["id"] for r in house.rem.visible_to(A)] == [rid]
+    house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
+    assert house.rem.visible_to(A) == []                                       # nothing readable
+    for action, args in (("remind.edit", {"note": "x"}), ("remind.snooze", {"minutes": 5}), ("remind.done", {}),
+                         ("remind.cancel", {})):
+        with pytest.raises(Refused, match="no such reminder"):
+            house.act(A, action, id=rid, **args)
+    assert house.row(rid)["note"] == "synthetic marker <pack>"
+    house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))               # the link is back: so is the reach
+    assert [r["id"] for r in house.rem.visible_to(A)] == [rid]
+    assert house.act(A, "remind.snooze", id=rid, minutes=5).verified
