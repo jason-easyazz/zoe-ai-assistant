@@ -966,7 +966,26 @@ def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: O
         if not scoped:
             raise
         out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # unmatchable scope: over-forget, the safe error
-    return int(out.get("count", 0)) if isinstance(out, dict) else 0
+    return forget_ack(out)
+
+
+#: the kernel's documented forget reply (``labs/zoe-os/zoe_os/server.py`` ``_op_forget`` -> ``spine.ForgetResult``), the same for a
+#: whole, entity, topic or seqs forget: exactly these keys, each a non-negative int (never a bool)
+FORGET_REPLY_KEYS = frozenset({"count", "upto"})
+
+
+def forget_ack(out: Any) -> int:
+    """The ONE place a kernel reply is read as "forgotten": ``count`` when ``out`` is exactly the documented reply, else
+    ``KernelProtocol`` (so the delete is NOT confirmed and a parked forget STAYS parked). ``_kernel_forget`` is the only caller, and
+    every path that confirms a forget or drops its durable marker goes through it: ``_do_forget`` (a delete, an entity or topic
+    erase, the cascade's step and its whole-member retry) and ``_replay_pending``."""
+    if not isinstance(out, dict) or set(out) != FORGET_REPLY_KEYS:
+        raise KernelProtocol("forget reply")
+    for key in FORGET_REPLY_KEYS:
+        v = out[key]
+        if type(v) is not int or v < 0:
+            raise KernelProtocol("forget reply")
+    return out["count"]
 
 
 def _do_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optional[str], fut: "concurrent.futures.Future") -> None:

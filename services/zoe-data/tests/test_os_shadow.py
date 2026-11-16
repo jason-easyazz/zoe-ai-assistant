@@ -146,6 +146,9 @@ class FakeKernel:
                 return self._refuse(conn, req, "not theirs to forget")
             if self.forget_mode == "refuse_scoped" and ("entity" in a or "topic" in a):
                 return self._refuse(conn, req, "nothing to match")
+            if self.forget_mode.startswith("reply:"):          # the forget's result as raw JSON text
+                body = ('{"v":1,"id":%d,"ok":true,"result":%s}' % (req["id"], self.forget_mode.split(":", 1)[1])).encode()
+                return conn.sendall(struct.pack(">I", len(body)) + body)
             return self._ok(conn, req, {"count": 3, "upto": self._seq})
         if op != "act":
             return self._refuse(conn, req, "unknown op")
