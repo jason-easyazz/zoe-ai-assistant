@@ -11,9 +11,18 @@ Truthfulness (design note W2 sections 0, 3; ``docs/knowledge/voice-reflex.md``):
 * non-lexical only: the bank holds "mm" takes, nothing that claims understanding or agreement;
 * one voice: the bank's manifest voice must equal the household's current voice, else silence (never the wrong voice);
 * silent when in doubt: every rule below that fails is ONE named skip reason from the fixed ``SKIPS`` enum, and the explicit
-  inputs ``committed``, ``guest``, ``media_active`` and ``speaker_conf`` are silence unless the daemon states the safe value
-  (a MISSING speaker score is always silence: until a pre-close identity exists, the reflex stays silent); a non-finite or
-  non-numeric number, or any exception inside ``decide``, is silence with skip ``error``.
+  inputs ``committed``, ``guest``, ``media_active``, ``speaker_accept``, ``speaker_model`` and ``verdict_ms`` are silence
+  unless the daemon states the safe value; a non-finite or non-numeric number, or any exception inside ``decide``, is
+  silence with skip ``error``.
+* a guest or an unknown speaker is ALWAYS silent (skip ``guest``): only ``guest`` exactly False (a household member's claim)
+  passes, and there is deliberately no setting that opens this guard (the old ``REFLEX_FOR_GUESTS`` is gone: the daemon
+  never produces an accepted guest verdict, so it could only ever have let an UNKNOWN speaker through).
+* the speaker guard is MODEL-AWARE: the reflex never compares a raw score against a number of its own. The daemon passes the
+  speaker model's OWN accept decision at the stricter window-tier bar (FAR 0.1 %: ResNet34 0.309 for a clip of 2 s or less,
+  0.351 longer; ``zoe_speaker_resnet34.decision(score, seconds, tier="far01")``) and that model's id. Silent unless the
+  accept is exactly True AND the id is one of ``KNOWN_SPEAKER_MODELS``; a retired or unknown model is silence.
+* a verdict that arrives late is silence (skip ``late``): ``verdict_ms`` = ms from the committed close until the speaker
+  verdict and the decision were ready; over ``REFLEX_SCORE_DEADLINE_MS`` (or unknown) means a sound would land too late.
 
 Logs and the handshake carry integers and fixed enums only, never text or audio.
 """
@@ -21,11 +30,13 @@ from __future__ import annotations
 
 import array
 import hashlib
+import io
 import json
 import math
 import os
 import random
 import re
+import stat
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,8 +53,7 @@ REFLEX_NIGHT_START = 22         # silent from 22:00 ...
 REFLEX_NIGHT_END = 7            # ... to 07:00 (env REFLEX_NIGHT="22-07")
 REFLEX_GAIN_DB = -3.0           # a take's active-speech RMS relative to the reference reply speech
 REFLEX_NOISE_FLOOR_DBFS = -40.0  # pre-roll RMS above this = music / TV in the room; PROVISIONAL until S0 data sets it
-REFLEX_FOR_GUESTS = False       # a guest / unknown speaker gets silence unless the owner allows it
-REFLEX_MIN_SPEAKER_CONF = 0.70  # a speaker confidence under this is silence (the live claim threshold); a MISSING one too
+REFLEX_SCORE_DEADLINE_MS = 250  # the speaker verdict + decision must be ready this many ms after the close, else skip "late"
 REFLEX_CHAIN_ENABLED = False    # S4 (later): follow-up / conversation turns under the chain rule
 REFLEX_CHAIN_EVERY = 3          # chain rule: at most one reflex per this many turns of a chain
 REFLEX_DIR = "~/.zoe-voice/reflex"
@@ -62,9 +72,13 @@ RULES = ("deep", "quiet", "clean", "hesitation", "no_speech", "max_duration")
 TURN_KINDS = ("wake", "followup", "conversation", "barge")
 #: in gate order (the first that applies is the one reported)
 SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
-         "idle_greeting", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
+         "idle_greeting", "guest", "low_confidence", "late", "prev_question", "budget", "no_bank", "voice_mismatch")
 LOAD_RESULTS = ("ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format", "too_long", "too_few")
 NO_SKIP = "-"
+
+#: the speaker models whose accept decision the reflex trusts (zoe_speaker_resnet34.MODEL_ID; drift-pinned by
+#: tests/unit/test_voice_reflex.py). The retired Resemblyzer ("resemblyzer") is NOT here: its claims are silence.
+KNOWN_SPEAKER_MODELS = ("wespeaker_resnet34+i8qdq-u8s8+c1",)
 
 TAKE_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 BANK_SHA_RE = re.compile(r"^[0-9a-f]{8}$")
@@ -175,8 +189,7 @@ class Settings:
     night_end: int = REFLEX_NIGHT_END
     gain_db: float = REFLEX_GAIN_DB
     noise_floor_dbfs: float = REFLEX_NOISE_FLOOR_DBFS
-    for_guests: bool = REFLEX_FOR_GUESTS
-    min_speaker_conf: float = REFLEX_MIN_SPEAKER_CONF
+    score_deadline_ms: int = REFLEX_SCORE_DEADLINE_MS
     chain_enabled: bool = REFLEX_CHAIN_ENABLED
     chain_every: int = REFLEX_CHAIN_EVERY
     dir: str = REFLEX_DIR
@@ -196,8 +209,7 @@ def settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         night_start=ns, night_end=ne,
         gain_db=_env_num(env, "REFLEX_GAIN_DB", REFLEX_GAIN_DB, -24, 0),
         noise_floor_dbfs=_env_num(env, "REFLEX_NOISE_FLOOR_DBFS", REFLEX_NOISE_FLOOR_DBFS, -90, 0),
-        for_guests=_env_bool(env, "REFLEX_FOR_GUESTS", REFLEX_FOR_GUESTS),
-        min_speaker_conf=_env_num(env, "REFLEX_MIN_SPEAKER_CONF", REFLEX_MIN_SPEAKER_CONF, 0.0, 1.0),
+        score_deadline_ms=int(_env_num(env, "REFLEX_SCORE_DEADLINE_MS", REFLEX_SCORE_DEADLINE_MS, 50, 1000)),
         chain_enabled=_env_bool(env, "REFLEX_CHAIN_ENABLED", REFLEX_CHAIN_ENABLED),
         chain_every=int(_env_num(env, "REFLEX_CHAIN_EVERY", REFLEX_CHAIN_EVERY, 2, 20)),
         dir=(env.get("REFLEX_DIR") or "").strip() or REFLEX_DIR,
@@ -226,7 +238,9 @@ class Ctx:
     takes: tuple = ()                   # the loaded bank's take ids
     committed: Optional[bool] = None    # the endpointer COMMITTED the close (push() returned True); anything but True = silence
     guest: Optional[bool] = None        # the speaker is a guest / unknown (False only for a household member's local claim)
-    speaker_conf: Optional[float] = None  # the local speaker claim's score at the close (None = no claim scored)
+    speaker_accept: Optional[bool] = None  # the speaker model's OWN accept at the FAR 0.1 % bar (None = not scored)
+    speaker_model: Optional[str] = None    # the id of the model that made that decision (KNOWN_SPEAKER_MODELS, else silence)
+    verdict_ms: Optional[float] = None     # ms from the committed close until the verdict was ready (None = unknown = late)
     media_active: Optional[bool] = None   # music / video is playing through the panel (None = unknown = silence)
 
 
@@ -259,7 +273,7 @@ def _real(v) -> bool:
 #: the numeric Ctx inputs; each must be a finite, non-negative real number (the two optional ones may also be None)
 NUMERIC_FIELDS = ("speech_ms", "muted_ms", "idle_h")
 SIGNED_FIELDS = ("noise_dbfs",)
-OPTIONAL_FIELDS = ("since_last_s", "chain_turns_since")
+OPTIONAL_FIELDS = ("since_last_s", "chain_turns_since", "verdict_ms")
 
 
 def inputs_valid(ctx: Ctx) -> bool:
@@ -311,12 +325,14 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
         return "night"  # G:night
     if ctx.idle_h >= s.idle_greet_h:
         return "idle_greeting"  # G:idle_greeting
-    if ctx.guest is not False and not s.for_guests:
-        return "guest"  # G:guest (a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS)
-    if ctx.speaker_conf is None:
-        return "low_confidence"  # G:conf_missing (no pre-close speaker score: always silent)
-    if ctx.speaker_conf is not None and not (_real(ctx.speaker_conf) and s.min_speaker_conf <= ctx.speaker_conf <= 1.0):
-        return "low_confidence"  # G:conf_low (under the threshold, over 1.0 - not a score - or not a finite number)
+    if ctx.guest is not False:
+        return "guest"  # G:guest (a guest or an unknown speaker: ALWAYS silent; no setting opens this guard)
+    if not isinstance(ctx.speaker_model, str) or ctx.speaker_model not in KNOWN_SPEAKER_MODELS:
+        return "low_confidence"  # G:model_unknown (no model, or a retired / unknown one: its accept means nothing here)
+    if ctx.speaker_accept is not True:
+        return "low_confidence"  # G:not_accepted (the model's own FAR 0.1 % accept, exactly True; None / False / 1 = silent)
+    if ctx.verdict_ms is None or ctx.verdict_ms > s.score_deadline_ms:
+        return "late"  # G:late (an accepted verdict that came after REFLEX_SCORE_DEADLINE_MS, or at an unknown time)
     if window and ctx.prev_question:
         return "prev_question"  # G:prev_question
     if ctx.since_last_s is not None and ctx.since_last_s < s.min_gap_s:
@@ -423,11 +439,13 @@ def ordering_wait_ms(reflex_started_at: Optional[float], reflex_dur_ms, now: flo
 
 
 # ── the bank ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-def bank_sha8(voice: str, style_len, takes: "list[tuple[str, str]]") -> str:
-    """The bank id: sha256 over the voice, the pinned style row and every (take id, file sha256), sorted. A render date or a
-    tool version does not change it; any changed byte of audio does."""
-    canon = json.dumps({"voice": voice, "style_len": style_len, "takes": sorted([list(t) for t in takes])},
-                       sort_keys=True, separators=(",", ":"))
+def manifest_sha8(manifest: Mapping) -> str:
+    """The bank id: sha256 over the WHOLE manifest except its own ``bank`` key, in canonical JSON (sorted keys, no
+    whitespace, no NaN). Every take's file sha256 is in the manifest, so the id covers every byte of audio AND every manifest
+    field (durations, levels, render date, versions): no file of the bank can be swapped or edited without changing the
+    directory name the loader demands. Raises ValueError on a value JSON cannot carry exactly (NaN, infinity)."""
+    body = {k: v for k, v in manifest.items() if k != "bank"}
+    canon = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     return hashlib.sha256(canon.encode()).hexdigest()[:8]
 
 
@@ -445,6 +463,7 @@ class Bank:
     sha8: str
     style_len: Optional[int]
     takes: "dict[str, Take]"
+    render_date: str = ""       # from the VERIFIED manifest bytes (covered by sha8); orders candidate banks, never re-read
 
     @property
     def take_ids(self) -> tuple:
@@ -457,11 +476,13 @@ class LoadResult:
     reason: str                 # LOAD_RESULTS
 
 
-def _read_take(path: Path, max_ms: int) -> "tuple[Optional[bytes], str, int]":
+def _read_take(raw: bytes, max_ms: int) -> "tuple[Optional[bytes], str, int]":
+    """Decode ONE take from ``raw``: the very bytes whose sha256 was just checked (never a second open of the path, which
+    could be swapped between the hash and the decode)."""
     try:
-        if not path.is_file() or path.stat().st_size > _MAX_TAKE_BYTES:
+        if not isinstance(raw, (bytes, bytearray)) or len(raw) > _MAX_TAKE_BYTES:
             return None, "bad_format", 0
-        with wave.open(str(path), "rb") as wf:
+        with wave.open(io.BytesIO(bytes(raw)), "rb") as wf:
             if (wf.getnchannels(), wf.getsampwidth(), wf.getframerate()) != (BANK_CHANNELS, BANK_WIDTH, BANK_RATE):
                 return None, "bad_format", 0
             n = wf.getnframes()
@@ -476,18 +497,41 @@ def _read_take(path: Path, max_ms: int) -> "tuple[Optional[bytes], str, int]":
     return pcm, "ok", dur_ms
 
 
+def _read_regular_file(path: Path, limit: int) -> Optional[bytes]:
+    """The bytes of ``path`` from ONE descriptor, or None: not a regular file (checked on the open descriptor, so a FIFO or a
+    swap after a separate ``is_file()`` cannot slip in), unreadable, or over ``limit`` bytes."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb", closefd=True) as fh:
+            fd = -1
+            raw = fh.read(limit + 1)
+        return raw if len(raw) <= limit else None
+    except OSError:
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def load_bank_dir(bank_dir, voice: str, s: Optional[Settings] = None) -> LoadResult:
     """Load and verify ONE bank directory ``<root>/<voice>/<sha8>/``. Any mismatch is no bank (fail silent, never the wrong
-    voice): the manifest voice and the directory names must equal ``voice``; the directory name must equal the sha8 recomputed
-    from the files; every file must hash to its manifest sha256, be 24 kHz mono S16, and be at most ``REFLEX_MAX_MS`` long."""
+    voice): the manifest voice and the directory names must equal ``voice``; the directory name and the manifest's ``bank``
+    must equal ``manifest_sha8`` of the whole manifest (which holds every file's sha256); every file must hash to its manifest
+    sha256, be 24 kHz mono S16, and be at most ``REFLEX_MAX_MS`` long."""
     s = s or settings()
     d = Path(bank_dir)
     mf = d / "manifest.json"
+    raw_man = _read_regular_file(mf, _MAX_MANIFEST_BYTES)   # ONE read of the manifest too
+    if raw_man is None:
+        return LoadResult(None, "missing")
     try:
-        if not mf.is_file() or mf.stat().st_size > _MAX_MANIFEST_BYTES:
-            return LoadResult(None, "missing")
-        man = json.loads(mf.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        man = json.loads(raw_man.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return LoadResult(None, "bad_manifest")
     if not isinstance(man, dict) or not isinstance(man.get("takes"), list):
         return LoadResult(None, "bad_manifest")
@@ -505,15 +549,12 @@ def load_bank_dir(bank_dir, voice: str, s: Optional[Settings] = None) -> LoadRes
         if not (isinstance(tid, str) and TAKE_ID_RE.fullmatch(tid)) or not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
             return LoadResult(None, "bad_manifest")
         path = d / f"{tid}.wav"
-        try:
-            raw = path.read_bytes() if path.is_file() and path.stat().st_size <= _MAX_TAKE_BYTES else None
-        except OSError:
-            raw = None
+        raw = _read_regular_file(path, _MAX_TAKE_BYTES)   # ONE read: these bytes are hashed AND decoded
         if raw is None:
             return LoadResult(None, "missing")
         if hashlib.sha256(raw).hexdigest() != sha:
             return LoadResult(None, "sha_mismatch")
-        pcm, why, dur_ms = _read_take(path, s.max_ms)
+        pcm, why, dur_ms = _read_take(raw, s.max_ms)   # decode the HASHED bytes: one read, no second open
         if pcm is None:
             return LoadResult(None, why)
         rms = t.get("rms_db")
@@ -521,15 +562,20 @@ def load_bank_dir(bank_dir, voice: str, s: Optional[Settings] = None) -> LoadRes
         pairs.append((tid, sha))
     if len(takes) < BANK_MIN_TAKES or len(takes) != len(man["takes"]):
         return LoadResult(None, "too_few")
-    sha8 = bank_sha8(voice, style_len, pairs)
-    if d.name != sha8 or man.get("bank") not in (None, sha8):
+    try:
+        sha8 = manifest_sha8(man)          # the WHOLE manifest (bar its own ``bank`` key), so no field is swappable
+    except (TypeError, ValueError):
+        return LoadResult(None, "bad_manifest")
+    if d.name != sha8 or man.get("bank") != sha8:
         return LoadResult(None, "sha_mismatch")
-    return LoadResult(Bank(voice, sha8, style_len, takes), "ok")
+    rd = man.get("render_date")
+    return LoadResult(Bank(voice, sha8, style_len, takes, rd if isinstance(rd, str) else ""), "ok")
 
 
 def load_bank(voice: str, root: Optional[str] = None, s: Optional[Settings] = None) -> LoadResult:
     """The bank for ``voice`` under ``root`` (default ``REFLEX_DIR``): the valid ``<sha8>`` directory with the latest
-    manifest ``render_date`` (ties: the greatest sha8). No valid directory = no bank, with the first failure's reason."""
+    manifest ``render_date`` (ties: the greatest sha8), the date taken from the bytes ``load_bank_dir`` verified (each manifest is
+    read once, never re-opened by path). No valid directory = no bank, with the first failure's reason."""
     s = s or settings()
     if not (isinstance(voice, str) and VOICE_RE.fullmatch(voice)):
         return LoadResult(None, "voice_mismatch")
@@ -544,11 +590,7 @@ def load_bank(voice: str, root: Optional[str] = None, s: Optional[Settings] = No
         if res.bank is None:
             first_fail = first_fail or res.reason
             continue
-        try:
-            date = str(json.loads((c / "manifest.json").read_text(encoding="utf-8")).get("render_date") or "")
-        except (OSError, ValueError):
-            date = ""
-        key = (date, c.name)
+        key = (res.bank.render_date, c.name)   # the verified bytes' date: the manifest is NEVER opened a second time
         if best_key is None or key > best_key:
             best, best_key = res, key
     return best or LoadResult(None, first_fail or "missing")

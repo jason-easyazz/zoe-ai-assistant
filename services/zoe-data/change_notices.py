@@ -20,8 +20,10 @@ Pipeline, one tick every ``ZOE_CHANGE_NOTICES_INTERVAL_S`` (default 600 s):
      3+ ready at once = ONE batched message) and digest lane (daily at 19:00, weekly; empty = not sent)
   -> ``telegram_notify`` (the bot's loopback ``/internal/notify``) with at-most-once claims and an audit line per event.
 
-Rendering is deterministic, English only (owner decision 14): the PR title plus one or two sentences from the PR
-body (its ``For-The-Household:`` trailer when present). No model and no external API ever sees PR content.
+Rendering is deterministic, English only (owner decision 14), in an assistant's voice: the PR body's
+``For-The-Household:`` sentence first (else one honest "housekeeping" line from the title's subject), its optional
+``Numbers:`` line and ``Owner-Step:`` (else "Nothing for you to do."), bad news first. No model and no external API
+ever sees PR content.
 
 Kill switch: a file named ``KILL`` in the state dir (``POST /api/change-notices/kill``) stops every send at the next
 tick without a restart. State: ``~/.zoe/change-notices/state.json`` (0600, atomic replace) + ``audit.jsonl``.
@@ -48,8 +50,7 @@ MODES = ("off", "shadow", "on")
 STATE_VERSION = 1
 MAX_CHUNKS = 3  # design 6: at most 3 messages a minute to one chat
 CHUNK_CHARS = 990  # the notify route caps text at 1000
-LINE_CHARS = 900  # one digest line, so a line plus the "...and N more" tail always fits a chunk
-MORE_RESERVE = 40
+LINE_CHARS = 880  # one digest line: a line plus the longest possible suffix (``SUFFIX_MAX``) always fits a chunk
 SAME_KIND_SPACING = timedelta(minutes=30)
 BATCH_AT = 3  # this many instant notices ready at once go out as ONE message
 MAX_ATTEMPTS = 8
@@ -254,7 +255,11 @@ class GhCli:
         return runs[0] if isinstance(runs, list) and runs else None
 
 
-# ── rendering (deterministic, English) ────────────────────────────────────────
+# ── rendering (deterministic, English, in an assistant's voice) ───────────────
+# Voice rules (docs/knowledge/change-notices.md "How the messages read"): plain first-person sentences, what is
+# different for the household first (the ``For-The-Household:`` trailer), bad news first, every went-live message
+# ends with the owner's step or "Nothing for you to do.", no commit syntax / hashes / backticks, the PR number at most
+# once (on the button for a single message, in brackets otherwise). Wording rotates by a stable counter, never random.
 _CC = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]*)\))?(?P<bang>!)?:\s*(?P<subject>.+)$", re.I)
 _TYPE_CATEGORY = {
     "feat": "ability",
@@ -264,9 +269,18 @@ _TYPE_CATEGORY = {
     "chore": "under_the_hood", "ci": "under_the_hood", "build": "under_the_hood", "refactor": "under_the_hood",
     "style": "under_the_hood", "deps": "under_the_hood",
 }
-_TRAILER = re.compile(r"^(?:Co-Authored-By|Signed-off-by|Zoe-Origin|Zoe-Notice|For-The-Household|For-Children|"
-                      r"Struggle-Cluster|Refs|Closes|Fixes):\s", re.I)
-_HOUSEHOLD = re.compile(r"^For-The-Household:\s*(.+)$", re.M)
+# Every PR-body trailer this module knows. A trailer line is read only through ``_trailer`` and is never prose.
+_TRAILER = re.compile(r"^(?P<key>Co-Authored-By|Signed-off-by|Zoe-Origin|Zoe-Notice|For-The-Household|For-Children|"
+                      r"Numbers|Owner-Step|If-No-Answer|Struggle-Cluster|Refs|Closes|Fixes):[ \t]*(?P<value>.*)$",
+                      re.I | re.M)
+_NOTHING = ("nothing visible", "none", "n/a", "nothing")
+_TYPES = r"(?:feat|fix|perf|security|revert|docs?|tests?|chore|ci|build|refactor|style|deps)"
+_CC_LEAD = re.compile(rf"^{_TYPES}!?:\s*", re.I)
+_CC_SCOPED = re.compile(rf"\b{_TYPES}\([^)]*\)!?:\s*", re.I)
+_PRREF = re.compile(r"\(\s*#\d+\s*\)|#\d+\b")
+_HEX = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+NUMBERS_MAX = 3
+NUMBER_CHARS = 70
 
 
 def category_for_title(title: str) -> str:
@@ -288,6 +302,17 @@ def _plain(md: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _dejargon(text: str) -> str:
+    """``_plain`` plus the deterministic de-jargon rules: no commit prefix, no ``#N``, no commit hash."""
+    s = _CC_SCOPED.sub("", _CC_LEAD.sub("", _plain(text or "")))
+    s = _HEX.sub("", _PRREF.sub("", s))
+    return re.sub(r"\s+([.,;:!?])", r"\1", re.sub(r"\s+", " ", s)).strip(" ,;:-")
+
+
+def _clip_words(text: str, cap: int) -> str:
+    return text if len(text) <= cap else text[: cap - 1].rsplit(" ", 1)[0].rstrip(",;:- ") + "…"
+
+
 def _sentences(text: str, n: int, cap: int) -> str:
     parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", text)
     out = ""
@@ -296,143 +321,191 @@ def _sentences(text: str, n: int, cap: int) -> str:
         if len(cand) > cap and out:
             break
         out = cand
-    if len(out) > cap:
-        out = out[: cap - 1].rsplit(" ", 1)[0].rstrip(",;:- ") + "…"
+    return _clip_words(out, cap)
+
+
+def _end(s: str) -> str:
+    return s if not s or s[-1] in ".!?…" else s + "."
+
+
+def _cap(s: str) -> str:
+    return s[:1].upper() + s[1:]
+
+
+def _low(s: str) -> str:
+    return s if s[1:2].isupper() else s[:1].lower() + s[1:]  # "It stays off" -> "it stays off"; "OK" stays
+
+
+def _trailer(body: str, name: str) -> str:
+    text = re.sub(r"<!--.*?-->", "", body or "", flags=re.S)
+    text = re.sub(r"^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$", "", text, flags=re.S | re.M)  # either fence kind
+    text = re.sub(r"^[ \t]*(?:```|~~~).*", "", text, flags=re.S | re.M)  # an unclosed fence runs to the end
+    # An indented (4-space) code line can never match: a trailer must start at column 0 (``_TRAILER`` is anchored).
+    for m in _TRAILER.finditer(text):
+        if m.group("key").lower() == name.lower():
+            v = m.group("value").strip()
+            return "" if v.lower().rstrip(". ") in _NOTHING else v
+    return ""
+
+
+def household(body: str) -> str:
+    """The ``For-The-Household:`` sentence(s), at most two; "" when missing or "nothing visible"."""
+    return _end(_sentences(_dejargon(_trailer(body, "For-The-Household")), 2, 280))
+
+
+def numbers(body: str) -> list[str]:
+    """``Numbers: a -> b; c -> d``: at most 3 items with a digit, each clipped; [] when the line has no digit."""
+    raw = _trailer(body, "Numbers")
+    if not re.search(r"\d", raw):
+        return []
+    out = []
+    for part in raw.split(";"):
+        t = re.sub(r"\s*(?:->|→)\s*", " → ", _dejargon(part.replace("->", " → "))).strip()
+        if re.search(r"\d", t):
+            out.append(_clip_words(t.rstrip("."), NUMBER_CHARS))
+    return out[:NUMBERS_MAX]
+
+
+def _one(body: str, name: str) -> str:
+    return _cap(_end(_sentences(_dejargon(_trailer(body, name)), 1, 200)))
+
+
+def pr_fields(title: str, body: str) -> dict:
+    """What a notice keeps from a PR body (the body itself is never stored)."""
+    return {"household": household(body), "numbers": numbers(body), "owner_step": _one(body, "Owner-Step"),
+            "if_no_answer": _one(body, "If-No-Answer")}
+
+
+PR_FIELDS = ("household", "numbers", "owner_step", "if_no_answer")
+
+
+def subject(title: str) -> str:
+    """The title's subject in sentence case: no ``type(scope):``, no ``Revert "..."`` wrapper, no ``(#N)``."""
+    t = (title or "").strip()
+    rv = re.match(r'^revert:?\s*"?(.+?)"?\s*(?:\(#\d+\))?\s*$', t, re.I)
+    t = _dejargon(rv.group(1) if rv else t).rstrip(". ")
+    return _clip_words(_cap(t), 120) if t else "A change"
+
+
+_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+
+
+def _count(n: int, word: str) -> str:
+    return f"{_WORDS[n] if n < len(_WORDS) else n} {word if n == 1 else word + 's'}"
+
+
+def _pick(options: tuple, turn: int) -> str:
+    return options[turn % len(options)]
+
+
+def _when(local: Optional[datetime]) -> str:
+    if local is None:
+        return "just now"
+    h = local.hour
+    return ("overnight" if h < 5 or h >= 22 else "this morning" if h < 12 else "this afternoon" if h < 17
+            else "this evening")
+
+
+def _greeting(local: Optional[datetime]) -> str:
+    if local is None or local.hour < 5 or local.hour >= 22:
+        return ""
+    return "Good morning. " if local.hour < 12 else "Good afternoon. " if local.hour < 17 else "Good evening. "
+
+
+_LEADS_NEW = ("Something new is in and running.", "New, and live now.", "A new change just went live.")
+_LEADS_FIX = ("A fix is in and running.", "Fixed, and live now.", "A fix just went live.")
+_LEADS_ANY = ("A change is in and running.", "Live now.", "This just went live.")
+_HOUSEKEEPING = ("Some housekeeping went in: {s}.", "A behind-the-scenes change is in and running: {s}.",
+                 "Housekeeping, nothing you will notice: {s}.")
+_REVERT = ('Heads up first: "{s}" was rolled back and is no longer running.',
+           'Before anything else: "{s}" was rolled back, so it is no longer running.')
+_DECISION = ("I need your OK on something.", "One for you to decide.", "This one is waiting on you.")
+_BATCH_HEADS = ("{N} things went in {when}.", "{When}, {n} changes went live.", "{N} changes are now in and running.")
+_DIGEST_OPENERS = ("Here's {period}:", "Here's how {period} went:", "Here's the round-up for {period}:")
+NOTHING_TO_DO = "Nothing for you to do."
+NOTHING_ELSE = "Nothing else for you to do."
+FOLLOWS = "The rest of what needs you follows shortly."
+
+
+def _more(n: int) -> str:
+    return f"…and {n} more on GitHub."
+
+
+# The most text ever appended to a packed chunk: the count line, the follow-up line and the closing line.
+SUFFIX_MAX = len("\n" + _more(99999)) + len("\n" + FOLLOWS) + len("\n" + NOTHING_ELSE)
+assert LINE_CHARS + SUFFIX_MAX <= CHUNK_CHARS
+POINTER_TEXT = "There's an update from Zoe for you. Ask me \"what's new?\" or look on the desktop."
+
+
+def _hh(item: dict) -> str:
+    """The household line. A notice stored before the assistant voice has no ``household`` field, only the old
+    ``summary`` (trailer, else first paragraph, else title): that is used, through the same de-jargon path."""
+    if "household" in item:
+        return item["household"] or ""
+    return _end(_sentences(_dejargon(item.get("summary") or ""), 2, 280))
+
+
+def _is_bad(item: dict) -> bool:
+    return item["kind"] == "stuck" or (item["kind"] == "live" and item["category"] == "broke")
+
+
+def _priority(item: dict) -> int:
+    """Bad news first, then what waits on the owner, then the good news."""
+    return 0 if _is_bad(item) else 1 if item["kind"] == "raised" else 2
+
+
+def _ref(item: dict, on: bool) -> str:
+    return f" (#{item['number']})" if on and item.get("number") else ""
+
+
+def _refs(items: list[dict]) -> str:
+    nums = [f"#{i['number']}" for i in items if i.get("number")]
+    return f" ({', '.join(nums)})" if nums else ""
+
+
+def _numbers_line(item: dict) -> str:
+    return f"By the numbers: {'; '.join(item['numbers'])}." if item.get("numbers") else ""
+
+
+def _lead(item: dict, turn: int) -> str:
+    leads = (_LEADS_NEW if item["category"] in ("ability", "household") else
+             _LEADS_FIX if item["category"] == "fixed" else _LEADS_ANY)
+    return _pick(leads, turn)
+
+
+def _story(item: dict, turn: int, *, lead: bool) -> str:
+    """One went-live line: the household sentence (with a lead in a single message), else the housekeeping line."""
+    hh = _hh(item)
+    if item["kind"] == "stuck":
+        return item["summary"]
+    if _is_bad(item):
+        return _pick(_REVERT, turn).format(s=subject(item.get("title", ""))) + (f" {hh}" if hh else "")
+    if not hh:
+        return _pick(_HOUSEKEEPING, turn).format(s=subject(item.get("title", "")))
+    return f"{_lead(item, turn)} {hh}" if lead else hh
+
+
+def _decision(item: dict, turn: int) -> list[str]:
+    what = _hh(item) or f'It is about "{subject(item.get("title", ""))}".'
+    ask = item.get("owner_step") or "Can you have a look when you get a minute?"
+    out = [f"{_pick(_DECISION, turn)} {what}", ask]
+    if item.get("if_no_answer"):
+        out.append(f"If you leave it, {_low(item['if_no_answer'])}")
     return out
 
 
-def summarise(title: str, body: str, *, cap: int = 280) -> str:
-    """One or two plain sentences about the PR: its ``For-The-Household:`` trailer, else the body's first paragraph,
-    else the title's subject. Never invents anything that is not in the PR text."""
-    body = body or ""
-    hh = _HOUSEHOLD.search(body)
-    if hh and hh.group(1).strip().lower() not in ("nothing visible", "none", "n/a"):
-        return _sentences(_plain(hh.group(1)), 2, cap)
-    text = re.sub(r"<!--.*?-->", "", body, flags=re.S)
-    text = re.sub(r"```.*?```", "", text, flags=re.S)
-    para: list[str] = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            if para:
-                break
-            continue
-        if s.startswith("#") or _TRAILER.match(s) or s.startswith("🤖") or s.startswith("|"):
-            if para:
-                break
-            continue
-        para.append(re.sub(r"^(?:[-*+]|\d+\.)\s+", "", s))
-    out = _sentences(_plain(" ".join(para)), 2, cap) if para else ""
-    if out:
-        return out
-    m = _CC.match((title or "").strip())
-    subject = (m.group("subject") if m else (title or "")).strip()
-    return (subject[:1].upper() + subject[1:]).rstrip(".") + "." if subject else ""
+def _decision_line(item: dict) -> str:
+    """A decision as one line inside a batch or a digest (the single message is ``_decision``)."""
+    hh, step = _hh(item), item.get("owner_step") or ""
+    if not hh and not step:
+        return f'"{subject(item.get("title", ""))}" needs a look from you.'
+    what = hh or f'"{subject(item.get("title", ""))}":'
+    tail = f" If you leave it, {_low(item['if_no_answer'])}" if item.get("if_no_answer") else ""
+    return f"{what} {step or 'Can you have a look?'}{tail}"
 
 
-BULLET_MAX = 4
-BULLET_CHARS = 140
-_SUMMARY_HEAD = re.compile(r"^#{1,4}\s*(?:summary|what|what changed|changes|achieved|why)\b", re.I)
-_BULLET = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.+)$")
-
-
-def _bullet(text: str) -> str:
-    t = _plain(text).rstrip()
-    if len(t) > BULLET_CHARS:
-        t = t[: BULLET_CHARS - 1].rsplit(" ", 1)[0].rstrip(",;:- ") + "…"
-    return (t[:1].upper() + t[1:]) if t else ""
-
-
-def bullets(title: str, body: str, *, limit: int = BULLET_MAX) -> list[str]:
-    """2-4 plain dot points about what the PR achieved, deterministic and drawn only from the PR text: the
-    ``For-The-Household:`` trailer's sentences first, else the bullet list under the summary section (else the first
-    bullet list in the body), else the first paragraph's sentences. May be shorter (or empty) for a bare PR."""
-    body = body or ""
-    hh = _HOUSEHOLD.search(body)
-    if hh and hh.group(1).strip().lower() not in ("nothing visible", "none", "n/a"):
-        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", _plain(hh.group(1)))
-        return [b for b in (_bullet(x) for x in parts) if b][:limit]
-    text = re.sub(r"<!--.*?-->", "", body, flags=re.S)
-    text = re.sub(r"```.*?```", "", text, flags=re.S)
-    lines = text.splitlines()
-    found: list[str] = []
-    in_summary = False
-    break_first = False
-    first_list: list[str] = []
-    for ln in lines:
-        s = ln.strip()
-        if s.startswith("#"):
-            in_summary = bool(_SUMMARY_HEAD.match(s))
-            if found:
-                break
-            continue
-        m = _BULLET.match(ln)
-        if not m or _TRAILER.match(m.group(1)) or s.startswith("🤖"):
-            if not s and first_list and not in_summary and not found:
-                break_first = True  # the first plain list ended; later lists are not part of it
-            continue
-        if break_first and not in_summary:
-            continue
-        (found if in_summary else first_list).append(m.group(1))
-    picked = [b for b in (_bullet(x) for x in (found or first_list)) if b][:limit]
-    if picked:
-        return picked
-    para = summarise_paragraph(text)
-    if para:
-        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", para)
-        return [b for b in (_bullet(x) for x in parts) if b][:limit]
-    return []
-
-
-def summarise_paragraph(text: str) -> str:
-    para: list[str] = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            if para:
-                break
-            continue
-        if s.startswith("#") or _TRAILER.match(s) or s.startswith("🤖") or s.startswith("|"):
-            if para:
-                break
-            continue
-        para.append(s)
-    return _plain(" ".join(para)) if para else ""
-
-
-def _ref(item: dict) -> str:
-    return f"#{item['number']} {item['title']}" if item.get("number") else item.get("title", "")
-
-
-def _short_ref(item: dict) -> str:
-    """``#N scope: subject`` for a digest line (the section already says fixed / new), at most 110 characters."""
-    title = (item.get("title") or "").strip()
-    m = _CC.match(title)
-    if m:
-        title = f"{m.group('scope')}: {m.group('subject')}" if m.group("scope") else m.group("subject")
-    title = _clip(title, 110)
-    return f"#{item['number']} {title}" if item.get("number") else title
-
-
-def _short_summary(item: dict) -> str:
-    return _sentences(item.get("summary") or "", 1, 160)
-
-
-_INSTANT_LEAD = {"decision": "Needs your OK", "broke": "Something broke", "security": "Account notice",
-                 "fixed": "Live now", "ability": "Live now", "household": "Live now", "under_the_hood": "Live now"}
-
-
-def _instant_line(item: dict, detail: str) -> str:
-    if item["kind"] == "stuck":
-        return item["summary"]
-    lead = "Reverted and live" if item["kind"] == "live" and item["category"] == "broke" else (
-        "Raised, waiting on you" if item["kind"] == "raised" else _INSTANT_LEAD.get(item["category"], "Update"))
-    if detail == "plain":
-        return f"{lead}: {item['summary']}"
-    return f"{lead}: {_ref(item)}\n{item['summary']}".rstrip()
-
-
-POINTER_TEXT = "There's an update from Zoe for you. Ask me \"what's new?\" or look on the desktop."
+def _step(item: dict) -> str:
+    return f"One thing for you: {item['owner_step']}" if item.get("owner_step") else NOTHING_TO_DO
 
 
 @dataclass
@@ -443,118 +516,235 @@ class Message:
     label: Optional[str] = None
 
 
-def _live_block(item: dict, detail: str, nb: int) -> list[str]:
-    """A went-live notice as a title line plus up to ``nb`` dot points of what was achieved (none = the old prose)."""
-    pts = [f"• {b}" for b in (item.get("bullets") or [])[:nb]]
-    if item.get("kind") != "live" or not pts:
-        return _instant_line(item, detail).split("\n")
-    lead = "Reverted and live" if item["category"] == "broke" else _INSTANT_LEAD.get(item["category"], "Update")
-    return [f"{lead}: {_ref(item)}", *pts]
+def _single(item: dict, detail: str, turn: int) -> str:
+    if item["kind"] == "raised":
+        return "\n".join(_decision(item, turn))
+    lines = [_story(item, turn, lead=True)]
+    if item["kind"] == "stuck":
+        return lines[0]
+    if detail == "technical" and item.get("numbers"):
+        lines.append(_numbers_line(item))
+    lines.append(_step(item))
+    return "\n".join(lines)
 
 
-def render_instant(items: list[dict], detail: str, repo_name: str) -> Message:
-    keys = [i["key"] for i in items]
+def _fit(lines: list[tuple[str, int, bool]], limit: int = CHUNK_CHARS) -> Optional[str]:
+    """Fit by dropping only droppable lines (counted as "...and N more"); ``must`` lines (bad news, decisions, the
+    owner's steps) are never dropped. ``None`` = the must lines alone do not fit."""
+    reserve = len("\n" + _more(sum(n for _, n, _ in lines)))  # the longest count line this message could need
+    room = limit + 1 - reserve - sum(len(t) + 1 for t, _, must in lines if must)  # +1: n lines have n-1 joins
+    if room < 0:
+        return None
+    out: list[str] = []
+    dropped, at = 0, -1
+    for t, n, must in lines:
+        if not must and len(t) + 1 > room:
+            dropped += n
+            at = len(out) if at < 0 else at
+            continue
+        out.append(t)
+        room -= 0 if must else len(t) + 1
+    if dropped:
+        out.insert(at, _more(dropped))
+    return "\n".join(out)
+
+
+def _word(n: int) -> str:
+    return _WORDS[n] if n < len(_WORDS) else str(n)
+
+
+def _batch(items: list[dict], detail: str, turn: int, local: Optional[datetime], *, numbers_on: bool = True,
+           hh_cap: int = 0) -> list[tuple[str, int, bool]]:
+    """The batched instant message as (line, items it stands for, must): bad news, then waiting on you, then the
+    rest, then every owner step (from any kind that carries one) or the closing line."""
+    tech = detail == "technical"
+    bad = [i for i in items if _is_bad(i)]
+    waiting = [i for i in items if i["kind"] == "raised"]
+    good = [i for i in items if not _is_bad(i) and i["kind"] != "raised"]
+    lines = [(_story(i, turn, lead=False) + _ref(i, tech and i["kind"] != "stuck"), 1, True) for i in bad]
+    if waiting:
+        lines.append(("Waiting on you:", 0, True))
+        lines += [("• " + _decision_line(i) + _ref(i, tech), 1, True) for i in waiting]
+    if good:
+        n, when = len(good), _when(local)
+        head = (f"One change went in {when}." if n == 1 else
+                _pick(_BATCH_HEADS, turn).format(N=_cap(_word(n)), n=_word(n), when=when, When=_cap(when)))
+        lines.append((f"Also, {_low(head)}" if bad or waiting else head, 0, True))
+    stories = [i for i in good if _hh(i)]
+    chores = [i for i in good if not _hh(i)]
+    for i in stories:
+        hh = _clip_words(_hh(i), hh_cap) if hh_cap else _hh(i)
+        lines.append((f"• {hh}{_ref(i, tech)}", 1, False))
+        if tech and numbers_on and i.get("numbers"):
+            lines.append((f"   {_numbers_line(i)}", 0, False))
+    refs = _refs(chores) if tech else ""
+    if stories and chores:
+        lines.append((f"{_pick(('Plus', 'And'), turn)} {_count(len(chores), 'bit')} of housekeeping{refs}.",
+                      len(chores), False))
+    elif len(chores) == 1:
+        lines.append((f"• {_story(chores[0], turn, lead=False)}{_ref(chores[0], tech)}", 1, False))
+    elif chores:
+        who = "Both were" if len(chores) == 2 else f"All {_word(len(chores))} were"
+        lines.append((f"{who} housekeeping, nothing you will notice{refs}.", len(chores), False))
+    steps = [i for i in bad + good if i.get("owner_step")]  # a decision's step is its question, on its own line
+    if steps:
+        lines.append(("For you:", 0, True))
+        lines += [(f"• {i['owner_step']}", 0, True) for i in steps]  # its number is already on the item's line
+    elif not any(i["kind"] == "stuck" for i in bad):  # a stuck deploy already says it may need a look
+        lines.append((NOTHING_ELSE if waiting else NOTHING_TO_DO, 0, True))
+    return lines
+
+
+def _must(item: dict) -> bool:
+    return bool(item.get("owner_step")) or _is_bad(item) or item["kind"] == "raised"
+
+
+def render_instant(items: list[dict], detail: str, repo_name: str, *, turn: int = 0,
+                   local: Optional[datetime] = None) -> Message:
+    """One message. Its ``keys`` are the notices it LANDS: a notice whose owner step could not be shown is left
+    out (the caller sends it in a follow-up), so a step is never lost to truncation."""
     if detail == "pointer":
-        return Message(POINTER_TEXT, keys)
-    if len(items) == 1:
-        it = items[0]
-        label = "Deploy runs" if it["kind"] == "stuck" else f"Open #{it['number']}" if it.get("number") else "Open"
-        for nb in range(BULLET_MAX, -1, -1):  # fewer dot points until it fits the route's 1000 characters
-            text = "\n".join(_live_block(it, detail, nb)).rstrip()
-            if len(text) <= CHUNK_CHARS or nb == 0:
-                break
-        return Message(_clip(text), keys, it.get("url"), label)
-    head = f"{len(items)} updates from Zoe:"
-    for nb in range(BULLET_MAX, -1, -1):
-        lines = [head]
-        for i in items:
-            blk = _live_block(i, detail, nb)
-            lines.append(f"• {blk[0]}")
-            if i.get("kind") == "live" and nb:
-                lines.extend(f"   {x}" for x in blk[1:])
-        text = "\n".join(lines)
-        if len(text) <= CHUNK_CHARS:
-            break
-    return Message(_clip(text), keys, f"https://github.com/{repo_name}/pulls", "Open on GitHub")
+        return Message(POINTER_TEXT, [i["key"] for i in items])
+    pending = sorted(items, key=_priority)
+    while len(pending) > 1:
+        tries = [_batch(pending, detail, turn, local, **kw)
+                 for kw in ({}, {"hh_cap": 100}, {"hh_cap": 100, "numbers_on": False})]
+        # household lines are shortened first, then the numbers go, then whole lines become "...and N more"
+        text = next(("\n".join(t for t, _, _ in ls) for ls in tries
+                     if len("\n".join(t for t, _, _ in ls)) <= CHUNK_CHARS), None) or _fit(tries[-1])
+        if text is not None:
+            return Message(text, [i["key"] for i in pending], f"https://github.com/{repo_name}/pulls",
+                           "Open on GitHub")
+        pending.remove([i for i in pending if _must(i)][-1])  # the steps do not fit: defer the last one
+    it = pending[0]
+    label = "Deploy runs" if it["kind"] == "stuck" else f"Open #{it['number']}" if it.get("number") else "Open"
+    return Message(_clip(_single(it, detail, turn)), [it["key"]], it.get("url"), label)
 
 
 def _clip(text: str, limit: int = CHUNK_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-_OPENERS = ("Today on Zoe: {n}.", "Here's what changed in Zoe: {n}.", "Zoe's changes since the last update: {n}.")
-_SECTIONS = (("ability", "New"), ("fixed", "Fixed"), ("broke", "Reverted or broken"), ("household", "Household"),
-             ("decision", "Waiting on you"), ("security", "Account"), ("under_the_hood", "Under the hood"))
-
-
-def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, opener: int,
-                  repo_name: str) -> list[Message]:
+def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, opener: int, repo_name: str,
+                  local: Optional[datetime] = None, period: str = "today") -> list[Message]:
     """The digest as up to ``MAX_CHUNKS`` messages of at most ``CHUNK_CHARS``. Every key lands in exactly one."""
     cats = prefs["categories"]
+
+    def tech(i: dict) -> bool:
+        return cats.get(i["category"], cats["decision"])["detail"] == "technical"
+
     live = [i for i in items if i["category"] != "raised"]  # live changes, stuck deploys, decisions rolled over
     raised = [i for i in items if i["category"] == "raised"]
-    lines: list[tuple[str, list[str]]] = []  # (text, keys this line accounts for)
-    n_live = sum(1 for i in live if i["kind"] == "live")
-    head = _OPENERS[opener % len(_OPENERS)].format(
-        n=f"{n_live} change{'s' if n_live != 1 else ''} went live" if n_live else "nothing new went live")
-    lines.append((head, []))
-    # The short lines go first, so a truncated digest can never swallow them into "...and N more".
-    drafts = sum(1 for i in raised if i.get("draft"))
-    tail = f" ({drafts} draft{'s' if drafts != 1 else ''})" if drafts else ""
-    if raised and prefs.get("raised") != "list":
-        lines.append((f"Raised, not merged: {len(raised)} new{tail}.", [i["key"] for i in raised]))
-    if uncertain:
-        refs = ", ".join(f"#{i['number']}" if i.get("number") else i["key"] for i in uncertain)
-        lines.append((f"This may not have reached you earlier: {refs}.", [i["key"] for i in uncertain]))
-    pointer_only = all(cats[c]["detail"] == "pointer" for c in comm_prefs.CATEGORIES)
-    if pointer_only:
+    if all(cats[c]["detail"] == "pointer" for c in comm_prefs.CATEGORIES):
         return [Message(f"Zoe has {len(items)} update{'s' if len(items) != 1 else ''} for you. Ask me \"what's new?\".",
                         [i["key"] for i in items + uncertain])]
-    for cat, heading in _SECTIONS:
-        group = [i for i in live if i["category"] == cat]
-        if not group:
-            continue
-        detail = cats[cat]["detail"]
-        lines.append((f"\n{heading} ({len(group)})", []))
-        if cat == "under_the_hood" and detail != "technical":
-            lines.append(("housekeeping only: tests, docs, tooling", [i["key"] for i in group]))
-            continue
-        for i in group:
-            if i["kind"] == "stuck":
-                lines.append((f"• {i['summary']}", [i["key"]]))
-            elif cat == "under_the_hood":
-                lines.append((f"• {_short_ref(i)}", [i["key"]]))
-            elif detail == "plain":
-                lines.append((f"• {_short_summary(i)}", [i["key"]]))
-            else:
-                ref, summ = _short_ref(i), _short_summary(i)
-                same = summ.rstrip(".").lower() in ref.lower()  # the summary only repeats the title
-                lines.append((f"• {ref}" if same else f"• {ref} - {summ}", [i["key"]]))
+    lines: list[tuple[str, list[str]]] = []  # (text, keys this line accounts for)
+    n_live = sum(1 for i in live if i["kind"] == "live")
+    went = f"{_count(n_live, 'change')} went live." if n_live else "nothing new went live."
+    lines.append((f"{_greeting(local)}{_pick(_DIGEST_OPENERS, opener).format(period=period)} {went}", []))
+    # The short lines go first, so a truncated digest can never swallow them into "...and N more".
+    drafts = sum(1 for i in raised if i.get("draft"))
+    tail = (f" ({'one is a draft' if drafts == 1 else _word(drafts) + ' are drafts'})" if drafts else "")
+    if raised and prefs.get("raised") != "list":
+        lines.append((f"{_cap(_count(len(raised), 'new change'))} {'is' if len(raised) == 1 else 'are'} open and not "
+                      f"merged yet{tail}.", [i["key"] for i in raised]))
+    # An uncertain notice may never have been seen: one line each, carrying only its own key, and MUST-KEEP (held for
+    # the follow-up, never counted unseen), so a clipped or overflowing line can never mark another notice delivered.
+    def _was(i: dict) -> str:
+        return f'"{subject(i.get("title", ""))}"{_ref(i, True)}' if i.get("number") else i["key"]
+
+    if len(uncertain) == 1:
+        lines.append((f"This may not have reached you earlier: {_was(uncertain[0])}.", [uncertain[0]["key"]]))
+    elif uncertain:
+        lines.append(("These may not have reached you earlier:", []))
+        lines += [(f"• {_was(i)}", [i["key"]]) for i in uncertain]
+    bad = [i for i in live if _is_bad(i)]
+    good = [i for i in live if i["kind"] == "live" and not _is_bad(i)]
+    steps = [i for i in bad + good if i.get("owner_step")]
+    hold = {i["key"] for i in steps} | {i["key"] for i in uncertain}  # land only on their own line, never counted
+
+    def own(i: dict) -> list[str]:  # the key rides on the item's own line unless its step line carries it
+        return [] if i["key"] in hold else [i["key"]]
+
+    for i in bad:  # bad news with a step carries it inline, so its key lands with its own (first) line
+        step = f"\n   For you: {i['owner_step']}" if i.get("owner_step") else ""
+        lines.append((_story(i, opener, lead=False) + _ref(i, tech(i) and i["kind"] != "stuck") + step, [i["key"]]))
+    waiting = [i for i in live if i["category"] == "decision"]
+    if waiting:
+        lines.append(("\nWaiting on you:", []))
+        lines += [("• " + _decision_line(i) + _ref(i, tech(i)), [i["key"]]) for i in waiting]
+        hold |= {i["key"] for i in waiting if i.get("owner_step")}  # a decision's step is its question
+    good_steps = [i for i in good if i.get("owner_step")]
+    if good_steps:
+        lines.append(("\nFor you to do:", []))
+        lines += [(f"• {i['owner_step']}", [i["key"]]) for i in good_steps]  # its number is on the item's line
+    stories = [i for i in good if _hh(i)]
+    if stories and len(lines) > 1:
+        lines.append(("\nWhat went in:", []))
+    for i in stories:
+        extra = f"\n   {_numbers_line(i)}" if tech(i) and i.get("numbers") else ""
+        lines.append((f"• {_hh(i)}{_ref(i, tech(i))}{extra}", own(i)))
+    chores = [i for i in good if not _hh(i)]
+    if chores:
+        refs = _refs([i for i in chores if tech(i)])
+        lead = "Plus " if stories else ""
+        word = _count(len(chores), "bit")
+        lines.append((f"{_cap(lead + word)} of housekeeping{refs}{'' if stories else ', nothing you will notice'}.",
+                      [k for i in chores for k in own(i)]))
     if raised and prefs.get("raised") == "list":
-        lines.append((f"\nRaised, not merged ({len(raised)}){tail}", []))
+        lines.append((f"\nOpen and not merged yet ({len(raised)}){tail}:", []))
         for i in raised:
-            lines.append((f"• {_short_ref(i)}{' (draft)' if i.get('draft') else ''}", [i["key"]]))
-    return _pack(lines, f"https://github.com/{repo_name}/pulls?q=is%3Apr+is%3Amerged", "Merged PRs on GitHub")
+            lines.append((f"• {subject(i.get('title', ''))}{' (draft)' if i.get('draft') else ''}{_ref(i, tech(i))}",
+                          [i["key"]]))
+    stuck = any(i["kind"] == "stuck" for i in bad)  # a stuck deploy already says it may need a look
+    done = "" if steps or stuck or not n_live else NOTHING_ELSE if waiting else NOTHING_TO_DO
+    return _pack(lines, f"https://github.com/{repo_name}/pulls?q=is%3Apr+is%3Amerged", "Merged PRs on GitHub", done,
+                 hold=hold)
 
 
-def _pack(lines: list[tuple[str, list[str]]], url: str, label: str) -> list[Message]:
+def _suffix(rest: list[tuple[str, list[str]]], tail: str, hold: frozenset | set) -> str:
+    """Exactly what the last chunk gets appended when ``rest`` does not fit: the count of what is left (held keys
+    excluded: they follow up instead), the follow-up line when any held key is left, and the closing line."""
+    n = sum(1 for _, ks in rest for k in ks if k not in hold)
+    held = any(k in hold for _, ks in rest for k in ks)
+    return ((f"\n{_more(n)}" if n else "") + (f"\n{FOLLOWS}" if held else "") + (f"\n{tail}" if tail else ""))
+
+
+def _pack(lines: list[tuple[str, list[str]]], url: str, label: str, tail: str = "",
+          hold: frozenset | set = frozenset()) -> list[Message]:
+    """Lines into at most ``MAX_CHUNKS`` messages of at most ``CHUNK_CHARS``. When the last allowed message cannot
+    take everything, the WHOLE suffix (count, follow-up line, closing line, with their real numbers) is computed
+    first and lines are moved out of that message until message plus suffix fits. A ``hold`` key (one with an
+    owner step) lands only if its line is shown: left over, it is in no message and the caller follows up."""
+    lines = [(_clip(t, LINE_CHARS), ks) for t, ks in lines] + ([(tail, [])] if tail else [])
     chunks: list[Message] = []
-    cur, keys = "", []
-    for idx, (text, lkeys) in enumerate(lines):
-        text = _clip(text, LINE_CHARS)
-        last = len(chunks) == MAX_CHUNKS - 1
-        if cur and len(cur) + 1 + len(text) > CHUNK_CHARS - (MORE_RESERVE if last else 0):
-            if last:  # the last allowed message: everything left becomes one count line
-                rest = [k for _, ks in lines[idx:] for k in ks]
-                chunks.append(Message(f"{cur}\n…and {len(rest)} more on GitHub.", keys + rest, url, label))
-                return chunks
-            chunks.append(Message(cur, keys))
-            cur, keys = text.lstrip("\n"), list(lkeys)
-            continue
-        cur = f"{cur}\n{text}" if cur else text
-        keys.extend(lkeys)
-    if cur:
-        chunks.append(Message(cur, keys, url, label))
+    i = 0
+    while i < len(lines):
+        take: list[int] = []
+        size = 0
+        for j in range(i, len(lines)):
+            t = lines[j][0] if take else lines[j][0].lstrip("\n")
+            if take and size + 1 + len(t) > CHUNK_CHARS:
+                break
+            size += len(t) + (1 if take else 0)
+            take.append(j)
+        end = take[-1] + 1
+        if end < len(lines) and len(chunks) == MAX_CHUNKS - 1:  # the last allowed message overflows
+            while True:
+                suffix = _suffix(lines[end:], tail, hold)
+                body = "\n".join(lines[k][0] if n else lines[k][0].lstrip("\n") for n, k in enumerate(range(i, end)))
+                if len(body) + len(suffix) <= CHUNK_CHARS or end == i:
+                    break
+                end -= 1  # this line moves into the count (or, if held, into the follow-up)
+            text = (body + suffix) if body else suffix.lstrip("\n")
+            keys = [k for _, ks in lines[i:end] for k in ks] + [k for _, ks in lines[end:] for k in ks
+                                                                 if k not in hold]
+            chunks.append(Message(text, keys, url, label))
+            return chunks
+        body = "\n".join(lines[k][0] if n else lines[k][0].lstrip("\n") for n, k in enumerate(range(i, end)))
+        keys = [k for _, ks in lines[i:end] for k in ks]
+        chunks.append(Message(body, keys, url if end == len(lines) else None, label if end == len(lines) else None))
+        i = end
     return chunks
 
 
@@ -568,7 +758,18 @@ class Recipient:
     env_default: bool = False  # prefs came from the operator's env default, not the member's saved document
 
 
-async def load_recipients(db=None) -> list[Recipient]:
+class Recipients(list):
+    """The recipient list plus WHY it is what it is, as counts only (no ids): ``diag`` goes into the
+    ``no_recipients`` audit line, so an empty tick says which step is missing."""
+
+    diag: dict
+
+    def __init__(self, items=(), **diag: Any) -> None:
+        super().__init__(items)
+        self.diag = diag
+
+
+async def load_recipients(db=None) -> Recipients:
     """Admin members with a linked Telegram id and preferences that let them receive anything.
 
     The set comes from the ``users`` table (a member) filtered to the owner roles, and the chat id ONLY from that
@@ -589,6 +790,7 @@ async def load_recipients(db=None) -> list[Recipient]:
             yield conn
 
     out: list[Recipient] = []
+    linked = 0
     async with _ctx() as conn:
         cur = await conn.execute("SELECT id, role FROM users WHERE role IN ('admin', 'family-admin') ORDER BY id")
         rows = list(await cur.fetchall())
@@ -598,10 +800,19 @@ async def load_recipients(db=None) -> list[Recipient]:
             tid = prefs.get("telegram_id")
             raw, from_env = comm_prefs.with_env_default(prefs.get(comm_prefs.PREF_KEY))
             doc = comm_prefs.normalise(raw, role)
-            if doc is None or not (isinstance(tid, str) and tid.isdigit()):
+            if not (isinstance(tid, str) and tid.isdigit()):
                 continue
-            out.append(Recipient(uid, role, tid, doc, env_default=from_env))
-    return out
+            linked += 1
+            if doc is not None:
+                out.append(Recipient(uid, role, tid, doc, env_default=from_env))
+        other_case = 0
+        if not rows:  # is it "no owner at all" or an owner role spelled differently (the match above is exact)?
+            cur = await conn.execute("SELECT id, role FROM users")
+            other_case = sum(1 for r in await cur.fetchall()
+                             if str(r["role"] or "").strip().lower() in comm_prefs.OWNER_ROLES)
+    reason = ("ok" if out else "no_prefs" if linked else "no_link" if rows else
+              "owner_role_spelling" if other_case else "no_admin")
+    return Recipients(out, reason=reason, admins=len(rows), linked=linked, owner_role_other_case=other_case)
 
 
 # ── the tick ──────────────────────────────────────────────────────────────────
@@ -648,8 +859,7 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             n = int(pr["number"])
             labels = {str(lb.get("name", "")).lower() for lb in pr.get("labels") or [] if isinstance(lb, dict)}
             item = {"kind": "raised", "number": n, "title": pr.get("title", ""), "url": pr.get("url"),
-                    "summary": summarise(pr.get("title", ""), pr.get("body", "")),
-                    "bullets": bullets(pr.get("title", ""), pr.get("body", "")), "draft": bool(pr.get("isDraft"))}
+                    **pr_fields(pr.get("title", ""), pr.get("body", "")), "draft": bool(pr.get("isDraft"))}
             if NEEDS_OWNER_LABEL in labels:  # waits on the owner: an instant-capable decision, not a digest line
                 c.st["seen"][f"pr:{n}:raised"] = _iso(c.now)
                 _new_notice(c, {**item, "key": f"pr:{n}:decision", "category": "decision"}, silent=silent)
@@ -673,8 +883,7 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             title = pr.get("title", "")
             st["pending_live"][str(n)] = {"number": n, "title": title, "sha": sha, "url": pr.get("url"),
                                           "merged_at": pr.get("mergedAt") or _iso(c.now), "base": base,
-                                          "summary": summarise(title, pr.get("body", "")),
-                                          "bullets": bullets(title, pr.get("body", "")),
+                                          **pr_fields(title, pr.get("body", "")),
                                           "category": category_for_title(title)}
             # A merge supersedes its raised / waiting-on-you notice wherever it is still unsent: a digest line, or an
             # instant one held by quiet hours or a retry backoff (design 5.4).
@@ -714,8 +923,9 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
         if live:
             st["pending_live"].pop(n_s, None)
             _new_notice(c, {"key": f"pr:{p['number']}:live", "kind": "live", "number": p["number"],
-                            "title": p["title"], "summary": p["summary"], "bullets": p.get("bullets") or [], "url": p.get("url"),
-                            "category": p["category"]}, silent=silent)
+                            "title": p["title"], "url": p.get("url"), "category": p["category"],
+                            "summary": p.get("summary") or "",  # a merge stored before the upgrade has only this
+                            **{k: p[k] for k in PR_FIELDS if k in p}}, silent=silent)
         elif (live is False or not deployed) and c.now - merged_at > stale_after():
             stuck.append(p)  # definitely not in the deployed code (an unchecked or unknown one is not counted)
     if stuck and not silent:
@@ -724,16 +934,37 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             run = await gh.latest_deploy_run()
         except Exception:  # noqa: BLE001
             run = None
-        refs = ", ".join(f"#{p['number']}" for p in stuck[:12]) + (f" and {len(stuck) - 12} more" if len(stuck) > 12 else "")
-        mins = int(stale_after().total_seconds() // 60)
-        why = (f" The last deploy run ended: {run.get('conclusion') or run.get('status')}."
-               if isinstance(run, dict) and (run.get("conclusion") or run.get("status")) else "")
         _new_notice(c, {"key": f"deploy:stuck:{deployed or 'none'}", "kind": "stuck", "category": "broke",
-                        "title": "Merged but not live",
-                        "summary": f"Merged but not live after {mins} min: {refs}. The deploy may have failed or "
-                                   f"been held by the voice gate.{why}",
+                        "title": "Merged but not live", "summary": stuck_text(stuck, stale_after(), run),
                         "url": (run or {}).get("url") or f"https://github.com/{c.repo}/actions/workflows/deploy.yml"},
                     silent=silent)
+
+
+_RUN_WORDS = {"failure": "failed", "cancelled": "was cancelled", "timed_out": "timed out", "startup_failure": "failed",
+              "in_progress": "is still running", "queued": "is still waiting to start", "success": "finished"}
+
+
+def stale_words(after: timedelta) -> str:
+    """The stale threshold in words ("an hour", "2 hours", "90 minutes"): a CONFIGURED wait, never the time since anything."""
+    mins = int(after.total_seconds() // 60)
+    return ("an hour" if mins == 60 else f"{mins // 60} hours") if mins % 60 == 0 else f"{mins} minutes"
+
+
+def stuck_text(stuck: list[dict], after: timedelta, run: Optional[dict]) -> str:
+    """Bad news, plainly and first: which changes did not go live, how long, and how the last deploy ended."""
+    names = [f'"{subject(p.get("title", ""))}"' for p in stuck[:3]]
+    if len(stuck) > 3:
+        what = f"{', '.join(names)} and {len(stuck) - 3} more"
+    else:
+        what = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    ago = stale_words(after)
+    one = len(stuck) == 1
+    word = _RUN_WORDS.get(str((run or {}).get("conclusion") or (run or {}).get("status") or "")) if run else None
+    refs = ", ".join(f"#{p['number']}" for p in stuck[:12]) + (f" and {len(stuck) - 12} more" if len(stuck) > 12 else "")
+    lead = f"Heads up: {what} did not go live." if one else \
+        f"Heads up: {_count(len(stuck), 'change')} did not go live: {what}."
+    return (f"{lead} {'It was' if one else 'They were'} merged over {ago} ago and {'is' if one else 'are'} not "
+            f"running yet.{f' The last deploy {word}.' if word else ''} It may need a look. ({refs})")
 
 
 def _fan_out(c: Ctx, recipients: list[Recipient]) -> None:
@@ -769,6 +1000,9 @@ async def _send(c: Ctx, r: Recipient, msg: Message) -> str:
     """Claim -> persist -> send -> record. A crash between claim and record leaves ``sending``, which the next
     tick turns into ``uncertain`` (listed once in the next digest), never into a second send."""
     ds = c.st["deliveries"]
+    if len(msg.text) > CHUNK_CHARS:  # our own bug, never the member's loss: not sent, not claimed, not refused
+        audit("oversize_held", member=r.user_id, keys=msg.keys, chars=len(msg.text), code="over_chunk_chars")
+        return "oversize"  # the keys stay queued for the next tick
     for k in msg.keys:
         ds[f"{r.user_id}|{k}"]["status"] = "sending"
     c.persist()
@@ -840,13 +1074,52 @@ async def _deliver_instant(c: Ctx, r: Recipient) -> None:
     items = [st["notices"][k] for k, _ in go]
     details = {r.prefs["categories"].get(i["category"], {}).get("detail", "technical") for i in items}
     detail = "pointer" if "pointer" in details else "plain" if details == {"plain"} else "technical"
+    items.sort(key=_priority)  # bad news first, then what waits on the owner (stable within each)
     batches = [items] if len(items) >= BATCH_AT else [[i] for i in items]
+
+    def roll(left: list[dict], reason: str) -> None:  # exactly the over-cap path above: the next digest, audited
+        for i in left:
+            ds[f"{r.user_id}|{i['key']}"]["lane"] = "digest"
+            audit("rolled_to_digest", member=r.user_id, key=i["key"], reason=reason)
+
+    sent_now = 0  # instant messages to this member in this tick (design 6: at most MAX_CHUNKS a minute)
     for batch in batches:
-        outcome = await _send(c, r, render_instant(batch, detail, c.repo))
-        if outcome in ("sent", "shadow", "uncertain"):
+        follow_up = False
+        while batch:
+            # The base's messages (one per batch) go exactly as before this PR: the selection above is their only
+            # check. A FOLLOW-UP (a notice whose step did not fit the message before) is new, so it is rechecked
+            # against every limit and can never overrun one; what does not fit rolls into the digest.
+            if follow_up:
+                if killed():
+                    return  # the kill switch appeared mid-tick: the rest stays queued, unsent
+                now_local = _local(c)
+                if comm_prefs.in_quiet_hours(r.prefs, now_local.hour * 60 + now_local.minute):
+                    return  # quiet hours began: held, as at the start of a tick
+                if not r.env_default:
+                    spaced = [i for i in batch if c.now - (_parse(st["last_instant"].get(
+                        f"{r.user_id}|{i['category']}")) or c.now - SAME_KIND_SPACING) < SAME_KIND_SPACING]
+                    roll(spaced, "spacing")
+                    batch = [i for i in batch if i not in spaced]
+                    if not batch:
+                        break
+                over = "cap" if len(sent_today) >= cap else "rate" if sent_now >= MAX_CHUNKS else ""
+                if over:
+                    roll(batch, over)
+                    break
+            turn = int(st["opener"].get(r.user_id, -1)) + 1  # the digest's counter: two in a row never match
+            st["opener"][r.user_id] = turn
+            msg = render_instant(batch, detail, c.repo, turn=turn, local=local)
+            outcome = await _send(c, r, msg)
+            if outcome not in ("sent", "shadow", "uncertain"):
+                break  # not delivered: its notices retry with backoff, the unclaimed rest stays queued
+            sent_now += 1
+            sent_today.append(local.isoformat())
             st["instant_sent"].setdefault(r.user_id, []).append(local.isoformat())
             for i in batch:
-                st["last_instant"][f"{r.user_id}|{i['category']}"] = _iso(c.now)
+                if i["key"] in msg.keys:
+                    st["last_instant"][f"{r.user_id}|{i['category']}"] = _iso(c.now)
+            batch = [i for i in batch if i["key"] not in msg.keys]
+            follow_up = True
 
 
 def _due(c: Ctx, r: Recipient, lane: str) -> Optional[str]:
@@ -889,10 +1162,19 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
             d["uncertain"] = True
             d["status"] = "queued"  # claimable once more, ONLY as the one "may not have reached you" line
     idx = int(st["opener"].get(r.user_id, -1)) + 1
-    msgs = render_digest(items, uncertain, r.prefs, opener=idx, repo_name=c.repo)
+    msgs = render_digest(items, uncertain, r.prefs, opener=idx, repo_name=c.repo, local=local,
+                         period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
     outcomes = [await _send(c, r, m) for m in msgs]
-    if all(o != "retry" for o in outcomes):
+    landed = {k for m, o in zip(msgs, outcomes) if o != "oversize" for k in m.keys}
+    for u in uncertain:  # not shown this time: it stays an "uncertain" mention for the next digest, never a resend
+        d = ds[f"{r.user_id}|{u['key']}"]
+        if u["key"] not in landed and d["status"] == "queued":
+            d["status"] = "uncertain"
+    left = [i["key"] for i in items + uncertain if i["key"] not in landed]
+    if left:  # a step or an uncertain mention that did not fit: it follows next tick
+        audit("digest_follow_up", member=r.user_id, keys=left)
+    elif all(o != "retry" for o in outcomes):
         st["digest_sent"][f"{r.user_id}|{lane}"] = period
 
 
@@ -935,7 +1217,7 @@ async def tick(*, gh: Optional[GitHub] = None, sender: Sender = telegram_sender,
         audit("bootstrapped", seen=len(st["seen"]))
     members = await (recipients or load_recipients)()
     if not members and c.new_keys:  # new notices with nobody to send them to are otherwise lost without a trace
-        audit("no_recipients", new=len(c.new_keys))
+        audit("no_recipients", new=len(c.new_keys), **(getattr(members, "diag", None) or {"reason": "unknown"}))
     _fan_out(c, members)
     c.persist()
     if m == "on" and sender is telegram_sender and not telegram_notify.available():
