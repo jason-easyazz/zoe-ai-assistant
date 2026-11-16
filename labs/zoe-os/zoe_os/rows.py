@@ -56,7 +56,7 @@ class DurableRows:
         def snapshot(person, args):
             rid = self.target(action, args)
             row = self.rows.get(rid)
-            out = {"id": rid, "row": dict(row) if row else None}
+            out = {"provenance": 1, "id": rid, "row": dict(row) if row else None}
             source = args.get("asked") if action == self.creates else self.source_of(rid)
             if type(source) is int:
                 out["source"] = source

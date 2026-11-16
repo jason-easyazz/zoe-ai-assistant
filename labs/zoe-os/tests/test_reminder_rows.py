@@ -261,3 +261,16 @@ def test_a_carers_undo_cannot_overwrite_what_the_person_changed_since(house):
     with pytest.raises(Refused, match="it has changed since"):
         house.k.actions.undo(A, actor=A)                               # the carer's last action is the edit the child has overwritten
     assert house.row(rid)["visibility"] == "private" and house.row(rid)["note"] == "synthetic marker <kid-later>"
+
+
+def test_an_unrelated_forget_never_brings_back_an_undone_reminder_or_edit(house, tmp_path, clock):
+    rid = rid_of(house.act(A, "remind.set", note="synthetic marker <undone>", time="20:00"))
+    house.k.actions.undo(A, actor=A)                                       # the reminder is undone
+    kept = rid_of(house.act(A, "remind.set", note="synthetic kept", time="21:00"))
+    house.act(A, "remind.edit", id=kept, note="synthetic kept, edited")
+    house.k.actions.undo(A, actor=A)                                       # the edit is undone
+    other = house.said(A)
+    house.forget(A, seqs=[other])                                          # forget something unrelated of A's
+    assert house.row(rid) is None and house.row(kept)["note"] == "synthetic kept"
+    again = restart(house, tmp_path, clock)
+    assert again.row(rid) is None and again.row(kept)["note"] == "synthetic kept"

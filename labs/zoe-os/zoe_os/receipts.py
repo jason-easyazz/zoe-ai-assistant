@@ -61,6 +61,8 @@ def snapshot_sources(payload: dict) -> tuple[set[int], bool]:
             numeric_slot = (isinstance(before, dict) and set(before) == {'value'}
                             and (before['value'] is None or isinstance(before['value'], (int, float))))
             opaque |= not numeric_slot
+        elif 'row' in before:                          # a durable row store's one-row snapshot (``zoe_os/rows.py``)
+            sources.add(before['source'])
         else:
             rows = before.get('rows', [before.get('alarm')])
             sources.update(row['asked'] for row in rows if row is not None)
@@ -71,6 +73,11 @@ def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
     """Only versioned row snapshots assert complete provenance; None means unknown."""
     if not isinstance(before, dict) or before.get('provenance') != 1:
         return None
+    if 'row' in before and type(before.get('source')) is int:
+        # One durable row (``zoe_os/rows.py``): its state derives from the request that created it and every action over it, and
+        # the spine links this receipt to each of them (``Spine._row_source``): if any one is forgotten this receipt is erased
+        # with it. A surviving receipt therefore holds nothing forgotten, and an unrelated forget leaves it (and its undo) whole.
+        return before
     if 'rows' in before:
         rows = before['rows']
         if not all(isinstance(r.get('asked'), int) for r in rows):
