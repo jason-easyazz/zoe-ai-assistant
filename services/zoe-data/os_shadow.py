@@ -903,8 +903,8 @@ def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: O
     except KernelRefused as exc:
         if NEVER_KNOWN in (exc.reason or "").lower():
             return 0
-        if not scoped or os_speaker.is_unproven(exc.reason):     # an unproven scoped ask is never widened into "forget me"
-            raise
+        if not scoped or os_speaker.is_unproven(exc.reason) or "not theirs" in (exc.reason or "").lower():
+            raise                     # a refusal of WHO asked is the kernel's answer: a scoped ask is never widened into "forget me"
         out = _forget_call(kernel, member, {})    # unmatchable scope: over-forget, the safe error
     return int(out.get("count", 0)) if isinstance(out, dict) else 0
 

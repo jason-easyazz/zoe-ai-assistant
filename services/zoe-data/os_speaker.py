@@ -6,8 +6,9 @@ already verified, with the audience that request needs. Written from the spec (`
 "The reconcile digest"); this module imports NOTHING from ``labs/`` (``test_zoe_data_never_imports_the_lab_kernel``), and
 ``tests/test_os_speaker_contract.py`` proves the lab kernel accepts what it mints.
 
-* ``identity-creds.json`` ``{"socket", "creds": {"speaker-verifier": hex}, "ttl_s"}``: the minting secret, FRESH at every kernel start,
-  so it is read again for every mint (a small file; forget-class requests are rare) and a restart never strands an old secret.
+* ``identity-creds.json`` ``{"socket", "creds": {"speaker-verifier": hex}, "generation": 32 hex, "ttl_s"}``: the minting secret and
+  the kernel RUN's generation (every token names it, ``"g"``), both FRESH at every kernel start, so they are read again for every mint
+  (a small file; person-bound requests are rare) and a restart never strands an old secret or generation.
 * ``erase-creds.json`` ``{"socket", "creds": {"eraser": hex}}``: the member-delete path's own credential (the forget family, no
   assertion). Only the authority kernel writes it.
 * ``reconcile-creds.json`` ``{"socket", "creds": {"reconciler": hex}, "digest_key": hex}``: the only credential ``list_digest`` answers,
@@ -23,6 +24,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import stat
 import time
@@ -98,16 +100,31 @@ def _ms(seconds: float) -> int:
     return int(round(seconds * 1000))
 
 
-def mint(person: str, audience: str, *, key: Optional[bytes] = None, now: Optional[float] = None) -> str:
-    """One assertion that ``person`` (already verified by zoe-data) decided a request of ``audience``. One per request: the kernel
-    spends its nonce. Never log the return value."""
+_GENERATION = re.compile(r"[0-9a-f]{32}")
+
+
+def identity() -> tuple[bytes, str]:
+    """``(key, generation)`` of the running kernel, read now from ``identity-creds.json``."""
+    raw = _read(IDENTITY_CREDS)
+    gen = raw.get("generation")
+    if not isinstance(gen, str) or not _GENERATION.fullmatch(gen):
+        raise _unavailable("no_generation")
+    return _secret(raw, IDENTITY), gen
+
+
+def mint(person: str, audience: str, *, key: Optional[bytes] = None, generation: Optional[str] = None,
+         now: Optional[float] = None) -> str:
+    """One assertion that ``person`` (already verified by zoe-data) decided a request of ``audience``, for the kernel run
+    ``generation`` names. One per request: the kernel spends its nonce. Never log the return value. Body: unpadded base64url of the
+    compact, key-sorted JSON ``{"a", "g", "n", "p", "t"}``; MAC: hex HMAC-SHA256 over the domain plus the body."""
     if audience not in AUDIENCES:
         raise ValueError("unknown audience")
     if not isinstance(person, str) or not person:
         raise ValueError("no person")
-    if key is None:
-        key = _secret(_read(IDENTITY_CREDS), IDENTITY)
-    claims = {"p": person, "t": _ms(time.time() if now is None else now), "n": secrets.token_hex(16), "a": audience}
+    if key is None or generation is None:
+        key, generation = identity()
+    claims = {"p": person, "t": _ms(time.time() if now is None else now), "n": secrets.token_hex(16), "a": audience,
+              "g": generation}
     body = base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     mac = hmac.new(key, _DOMAIN + body, hashlib.sha256).hexdigest().encode()
     return (body + b"." + mac).decode()
