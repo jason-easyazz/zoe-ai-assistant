@@ -550,3 +550,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
+- `web-lookup/` - **the privacy-first web lookup's lab proof** (2026-11-14): `run_lab.py` drives a FROZEN 40-question
+  corpus (`corpus.json`, synthetic household, scripted provider responses) through zoe-data's `web_lookup_scrub` ->
+  `web_lookup_provider` (FakeProvider) -> `web_lookup_answer`, called as a library - no network, no model, no database -
+  and reports answered with a source / refused / unavailable / withheld, privacy leaks (must be 0) and injected
+  instructions followed (must be 0); `--negative-control` proves both counters can go red. `report.json` is the
+  committed result; `services/zoe-data/tests/test_web_lookup_lab.py` pins it. README is the record; operator doc
+  `docs/knowledge/web-lookup.md`.

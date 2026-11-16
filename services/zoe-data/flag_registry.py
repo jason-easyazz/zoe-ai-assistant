@@ -1065,7 +1065,7 @@ _ENTRIES = (
     _f('ZOE_WEATHER_CACHE_TTL_S', 'int', 600, doc='docs/research/self-building-skills-2026-10-04.md'),
     _f('ZOE_WEB_BROWSE_MAX_HTML', 'int', 1500000),
     _f('ZOE_WEB_FALLBACK_PROVIDER', 'str', 'auto', doc='docs/architecture/beat-the-bar-2026-program.md'),
-    _f('ZOE_WEB_SEARCH_TOOL', 'bool', False, doc='docs/knowledge/self-model.md'),
+    _f('ZOE_WEB_SEARCH_TOOL', 'bool', False, doc='docs/knowledge/web-lookup.md'),
     _f('ZOE_WORKTREE_PRUNE_INTERVAL_S', 'float', 86400.0, doc='docs/architecture/multica-retirement-gates.md'),
     _f('ZOE_WORKTREE_ROOT', 'str', '', doc='docs/guides/MULTICA_HERMES_PR_LOOP.md'),
     _f('ZOE_WRITE_CLAIM_CORRECTION', 'bool', False, doc='docs/knowledge/write-claim-guard.md'),
