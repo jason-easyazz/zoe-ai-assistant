@@ -280,13 +280,16 @@ async def get_current_user(request: Request) -> dict:
     # with panel_auth (which imports auth). _resolve_device_token_user owns the
     # rule (the device, not a person; ZOE_DEVICE_TOKEN_BINDS_MEMBER is the rollback).
     if not session_id and device_token:
+        _resolved = None
         try:
             from routers.panel_auth import _resolve_device_token_user
             _resolved = await _resolve_device_token_user(device_token)
-            if _resolved is not None:
-                return _resolved
         except Exception:
             pass
+        if _resolved is not None:
+            # OUTSIDE the try: the removal gate's 401/503 must reach the caller, not be swallowed. A panel principal has no member
+            # id and passes unchanged; with ZOE_DEVICE_TOKEN_BINDS_MEMBER=1 the token resolves to its MEMBER, who is gated here.
+            return await _removal_gate(_resolved)
         # Invalid/unknown token → fall through to unauthenticated behaviour
 
     if not session_id:
@@ -298,7 +301,7 @@ async def get_current_user(request: Request) -> dict:
             )
             # Marked so a gate that must not trust a header-less caller (home control,
             # panel_principal.is_member) can tell this promotion from a real sign-in.
-            return {"user_id": DEFAULT_USER_ID, "role": "admin", "unauthenticated_override": True}
+            return await _removal_gate({"user_id": DEFAULT_USER_ID, "role": "admin", "unauthenticated_override": True})
         return {
             "user_id": "guest",
             "role": "guest",

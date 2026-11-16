@@ -479,3 +479,66 @@ def test_a_relayed_request_for_a_member_under_removal_is_refused(monkeypatch):
     assert e.value.status_code == 401
     who["id"] = "member-b"
     assert asyncio.run(auth.get_current_user(object()))["user_id"] == "member-b"
+
+
+def test_every_member_identity_get_current_user_returns_passes_the_removal_gate():
+    """#2669 review P1 (device-token members), fixed as a CLASS: every ``return`` in ``auth.get_current_user`` is either
+    ``await _removal_gate(...)``, or one of the names already gated or guest-only (``cached`` - its in-process bar plus the erase's
+    cache-settle wait; ``degraded`` - a guest; ``gated`` / ``validated`` - returned after _removal_gate), or a literal guest dict.
+    A new return path that hands back a member without the gate fails here. Negative control: the checker flags a bare member return."""
+    import ast
+    import inspect
+    import textwrap
+
+    import auth
+
+    allowed_names = {"cached", "degraded", "gated", "validated"}
+
+    def ungated(src: str) -> list:
+        fn = ast.parse(textwrap.dedent(src)).body[0]
+        bad = []
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Return) or node.value is None:
+                continue
+            v = node.value
+            if isinstance(v, ast.Await) and isinstance(v.value, ast.Call) and getattr(v.value.func, "id", "") == "_removal_gate":
+                continue
+            if isinstance(v, ast.Name) and v.id in allowed_names:
+                continue
+            if isinstance(v, ast.Dict) and any(isinstance(k, ast.Constant) and k.value == "user_id" and isinstance(val, ast.Constant)
+                                               and val.value == "guest" for k, val in zip(v.keys, v.values)):
+                continue
+            bad.append(ast.unparse(v)[:80])
+        return bad
+
+    assert ungated(inspect.getsource(auth.get_current_user)) == []
+    rogue = "async def get_current_user(request):\n    member = {'user_id': 'x'}\n    return member\n"
+    assert ungated(rogue) == ["member"], "the checker catches a member returned without the gate"
+
+
+def test_a_device_token_bound_to_a_member_under_removal_is_refused(monkeypatch):
+    """With ZOE_DEVICE_TOKEN_BINDS_MEMBER=1 a device token resolves to its member; that member under removal gets 401, and the 401 is
+    not swallowed by the device-token try. Negative control: another member's token passes."""
+    import auth
+    from fastapi import HTTPException
+    from routers import panel_auth
+
+    class Req:
+        def __init__(self):
+            self.headers = {"X-Device-Token": "tok"}
+    who = {}
+
+    async def resolve(_tok):
+        return {"user_id": who["id"], "role": "member", "username": "m"}
+    monkeypatch.setattr(panel_auth, "_resolve_device_token_user", resolve)
+    monkeypatch.setattr(auth.relay_ingress, "is_relay", lambda _req: False)
+
+    async def under_removal(uid):
+        return uid == A
+    monkeypatch.setattr(auth, "_under_removal", under_removal)
+    who["id"] = A
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(auth.get_current_user(Req()))
+    assert e.value.status_code == 401
+    who["id"] = "member-b"
+    assert asyncio.run(auth.get_current_user(Req()))["user_id"] == "member-b"
