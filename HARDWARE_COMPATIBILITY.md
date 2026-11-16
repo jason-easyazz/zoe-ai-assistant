@@ -364,13 +364,15 @@ If you successfully run Zoe on a platform not listed here, please open an issue 
 
 ## TTS Voice Stack (Jetson Orin NX)
 
-Zoe uses a waterfall of TTS providers, attempted in order until one succeeds:
+Kokoro is Zoe's only voice by default (`ZOE_TTS_MODE=kokoro`): if it is down, the reply is
+silent rather than another voice, and no TTS ever runs off the box (the Edge TTS cloud
+fallback was retired 2026-11-16). An explicitly set legacy mode (`hybrid`/`local`/`offline`)
+adds a LOCAL waterfall after Kokoro:
 
 ```
-1. Kokoro PyTorch sidecar  :10201  af_sky  GPU  ~150–400ms warm  ← primary / natural voice
-2. wyoming-piper           :10200  en_GB-cori  CPU  ~111ms       ← fast fallback (British accent)
-3. Edge TTS (cloud)        internet    en-AU-NatashaNeural       ← cloud fallback
-4. espeak-ng               in-process  robotic                   ← last resort
+1. Kokoro PyTorch sidecar  :10201  af_sky  GPU  ~150–400ms warm  ← the voice
+2. local sidecar           ZOE_LOCAL_TTS_URL (unset by default)  ← hybrid/local only
+3. espeak-ng               in-process  robotic                   ← hybrid/local/offline only
 ```
 
 ### Primary voice: Kokoro PyTorch sidecar

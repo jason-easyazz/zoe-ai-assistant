@@ -183,7 +183,7 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         "mode": mode,
         "sidecar_url": sidecar_url,
     }
-    if mode in {"edge", "cloud", "offline"}:
+    if mode == "offline":
         detail["ok"] = True
         detail["provider"] = mode
         return detail
@@ -220,11 +220,6 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
         detail["ok"] = True
         detail["provider"] = "espeak-ng"
-        return detail
-    detail["edge_tts_available"] = bool(voice_tts.edge_tts_available())
-    if mode in {"hybrid"} and detail["edge_tts_available"]:
-        detail["ok"] = True
-        detail["provider"] = "edge-tts"
         return detail
     if mode in {"hybrid", "local"}:
         detail["error"] = "no_tts_provider_available"

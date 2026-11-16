@@ -106,6 +106,34 @@ def load_key() -> bytes | None:
     return raw.encode("utf-8") if raw else None
 
 
+def missing_key_policy(env: "dict[str, str] | None" = None) -> tuple[str, str]:
+    """``("fail" | "skip", why)`` when no key is available (audit row G11: the real scan must not skip silently on CI).
+
+    FAIL: a GitHub Actions job of THIS repository (not a fork PR, not Dependabot: neither can read secrets) that declares
+    ``ZOE_PRIVACY_CANARY_KEY`` in its env while the secret came through empty (= not provisioned), or any run with
+    ``ZOE_PRIVACY_CANARY_REQUIRED=1`` (same fork/Dependabot exemptions). An unreadable event payload on such a job fails
+    (closed). SKIP: a local run, or a CI job that does not declare the variable at all; the reason says which."""
+    env = os.environ if env is None else env
+    declared = "ZOE_PRIVACY_CANARY_KEY" in env
+    required = env.get("ZOE_PRIVACY_CANARY_REQUIRED", "").strip() == "1"
+    on_actions = env.get("GITHUB_ACTIONS", "") == "true"
+    if not required and not (on_actions and declared):
+        where = "this CI job does not pass ZOE_PRIVACY_CANARY_KEY" if on_actions else "local run with no key"
+        return "skip", f"{where} - the real household-canary scan did NOT run (key: ~/.zoe/privacy-canary/key or the secret)"
+    if env.get("GITHUB_ACTOR", "") == "dependabot[bot]":
+        return "skip", "Dependabot run: repository secrets are not available - the real scan did NOT run"
+    if on_actions and env.get("GITHUB_EVENT_NAME", "").startswith("pull_request"):
+        try:
+            head = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())["pull_request"]["head"]["repo"]
+            fork = bool(head.get("fork")) or head.get("full_name") != env.get("GITHUB_REPOSITORY")
+        except (KeyError, OSError, ValueError, TypeError, AttributeError):
+            return "fail", "cannot read the pull request event to tell a fork PR from this repository's own (fail closed)"
+        if fork:
+            return "skip", "fork pull request: repository secrets are not available - the real scan did NOT run"
+    return "fail", ("privacy canary key missing on a run that must scan: provision the ZOE_PRIVACY_CANARY_KEY Actions secret "
+                    "(or unset ZOE_PRIVACY_CANARY_REQUIRED)")
+
+
 def load_digests(path: Path = DIGESTS) -> set[str]:
     data = json.loads(path.read_text())
     return set(data.get("digests", []))
