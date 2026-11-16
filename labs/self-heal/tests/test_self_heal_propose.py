@@ -115,6 +115,20 @@ def test_redact_removes_each_class(text):
     assert redact("def add(a, b):\n    return a + b\n", personal=False) == ("def add(a, b):\n    return a + b\n", {})
 
 
+@pytest.mark.parametrize("text", [
+    "{'password': 'qzx7wkv9'}", '{"api_key": "qzx7wkv9"}', "{'db_password' : 'qzx7wkv9', 'port': 5432}",
+    'assert {"token": "qzx7wkv9"} == {"token": "other"}', "Authorization': 'qzx7wkv9'", "password = 'qzx7wkv9'"])
+def test_redact_removes_a_value_behind_a_quoted_key(text):
+    """Review of #2582: a dict or JSON key closes its quote before the colon, which the pattern did not allow, so the value
+    of a secret-named key in pytest's assertion output reached the proposer."""
+    out, counts = redact(text)
+    assert "qzx7wkv9" not in out and counts.get("secret_value"), out
+
+
+def test_redact_leaves_a_quoted_key_that_is_not_secret_named():
+    assert redact("{'colour': 'teal'}") == ("{'colour': 'teal'}", {})
+
+
 # --- the allowed output -------------------------------------------------------------------
 
 @pytest.mark.parametrize("name,reason", [

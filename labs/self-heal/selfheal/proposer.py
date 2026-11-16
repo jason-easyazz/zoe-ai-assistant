@@ -64,7 +64,7 @@ _SECRET = [
     ("bearer", re.compile(r"(?i)(?<=bearer )[A-Za-z0-9._~+/=-]{12,}")),
 ]
 _PERSONAL = [   # failure text only: over-redaction is the safe direction there
-    ("secret_value", re.compile(r"(?i)\b(\w*(?:password|passwd|secret|token|api_?key|cookie|authorization)\w*\s*[=:]\s*)"
+    ("secret_value", re.compile(r"(?i)\b(\w*(?:password|passwd|secret|token|api_?key|cookie|authorization)\w*[\"']?\s*[=:]\s*)"
                                 r"(\"[^\"]*\"|'[^']*'|\S+)")),
     ("email", re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")),
     ("coordinate", re.compile(r"-?\b\d{1,3}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}\b")),
