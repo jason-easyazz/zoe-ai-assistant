@@ -1,9 +1,11 @@
 """Kokoro is Zoe's ONLY voice by default (owner decision 2026-10-21).
 
-With ZOE_TTS_MODE unset, a Kokoro failure must NOT fall back to the local sidecar,
-Edge TTS (which sends reply text to Microsoft) or espeak-ng: /synthesize 503s and
-/stream yields its per-chunk error. The negative control proves the recorders can
-see a fallback call: with ZOE_TTS_MODE=hybrid set explicitly, Edge IS attempted.
+With ZOE_TTS_MODE unset, a Kokoro failure must NOT fall back to the local sidecar
+or espeak-ng: /synthesize 503s and /stream yields its per-chunk error. There is no
+off-box engine at all (Edge TTS retired 2026-11-16), and the retired "cloud"/"edge"
+mode values behave exactly like the default. The negative control proves the
+recorders can see a fallback call: with ZOE_TTS_MODE=hybrid set explicitly, the
+LOCAL espeak-ng last resort IS attempted.
 """
 
 import pytest
@@ -18,7 +20,7 @@ from fastapi import HTTPException
 import routers.voice_tts as vt
 
 CANNED = b"RIFFfake-wav"
-FALLBACKS = ("local_service", "edge", "espeak")
+FALLBACKS = ("local_service", "espeak")
 
 
 def _run(coro):
@@ -41,7 +43,6 @@ def _patch_providers(monkeypatch, calls, *, kokoro_ok, local_ok=True):
 
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", recorder("kokoro", CANNED if kokoro_ok else None))
     monkeypatch.setattr(vt, "_synthesize_local_service", recorder("local_service", CANNED if local_ok else None))
-    monkeypatch.setattr(vt, "_synthesize_edge_tts", recorder("edge", CANNED))
     monkeypatch.setattr(vt, "_synthesize_espeak", recorder("espeak", CANNED))
 
 
@@ -91,8 +92,11 @@ def test_synthesize_default_kokoro_ok(monkeypatch, default_mode):
 
     resp = _run(vt.synthesize(dict(HELLO), caller=dict()))
 
+    # The healthy default path is unchanged by the Edge retirement: the Kokoro bytes
+    # pass through untouched, as WAV, with exactly one provider header.
     assert resp.headers.get("X-Zoe-TTS-Provider") == "kokoro-sidecar"
     assert resp.body == CANNED
+    assert resp.media_type == "audio/wav"
     assert calls == ["kokoro"], calls
 
 
@@ -119,8 +123,28 @@ def test_stream_default_kokoro_ok(monkeypatch, default_mode):
     assert calls == ["kokoro", "kokoro"], calls
 
 
+@pytest.mark.parametrize("retired", ["cloud", "edge"])
+def test_retired_off_box_modes_behave_like_the_default(monkeypatch, retired):
+    """A stale ZOE_TTS_MODE=cloud/edge (the retired Edge modes) must not skip Kokoro
+    (old "cloud" did) nor reach any fallback: Kokoro only, 503 when it is down."""
+    monkeypatch.setenv("ZOE_TTS_MODE", retired)
+    monkeypatch.setenv("ZOE_LOCAL_TTS_URL", "http://127.0.0.1:1")
+    calls: list[str] = []
+    _patch_providers(monkeypatch, calls, kokoro_ok=False)
+
+    with pytest.raises(HTTPException) as exc:
+        _run(vt.synthesize(dict(HELLO), caller=dict()))
+    assert exc.value.status_code == 503
+    assert calls == ["kokoro"], calls
+
+    calls.clear()
+    objs = [json.loads(line) for line in _stream_lines(dict(TWO_SENTENCES))]
+    assert all(o.get("error") == "all providers failed" for o in objs), objs
+    assert calls == ["kokoro", "kokoro"], calls
+
+
 # -- Negative control: the recorders DO see a fallback when one is configured --
-def test_negative_control_hybrid_synthesize_attempts_edge(monkeypatch):
+def test_negative_control_hybrid_synthesize_attempts_espeak(monkeypatch):
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.delenv("ZOE_LOCAL_TTS_URL", raising=False)
     calls: list[str] = []
@@ -128,11 +152,11 @@ def test_negative_control_hybrid_synthesize_attempts_edge(monkeypatch):
 
     resp = _run(vt.synthesize(dict(HELLO), caller=dict()))
 
-    assert "edge" in calls, calls
-    assert resp.headers.get("X-Zoe-TTS-Provider") == "edge-tts"
+    assert calls == ["kokoro", "local_service", "espeak"], calls
+    assert resp.headers.get("X-Zoe-TTS-Provider") == "espeak-ng"
 
 
-def test_negative_control_hybrid_stream_attempts_edge(monkeypatch):
+def test_negative_control_hybrid_stream_attempts_espeak(monkeypatch):
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.delenv("ZOE_LOCAL_TTS_URL", raising=False)
     calls: list[str] = []
@@ -140,8 +164,8 @@ def test_negative_control_hybrid_stream_attempts_edge(monkeypatch):
 
     lines = _stream_lines(dict(text="Hello there."))
 
-    assert "edge" in calls, calls
-    assert json.loads(lines[0]).get("provider") == "edge-tts"
+    assert "espeak" in calls, calls
+    assert json.loads(lines[0]).get("provider") == "espeak-ng"
 
 
 # -- Readiness: default mode = engine kokoro, the sidecar is the only check --
@@ -200,7 +224,6 @@ def test_readiness_default_kokoro_down_is_not_ready_even_with_fallbacks(monkeypa
     seen: list[str] = []
     monkeypatch.setattr(main.httpx, "AsyncClient", _client(_down, seen))
     monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: True)
-    monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: True)
 
     report = asyncio.run(main._check_tts_ready())
 
