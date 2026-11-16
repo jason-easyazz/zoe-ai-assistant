@@ -367,3 +367,24 @@ def test_an_undo_cut_short_by_a_dead_kernel_stays_hidden_from_a_removed_carer(ho
     house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
     with pytest.raises(Refused):
         house.k.explainer.why(recovered.seq, person=A)
+
+
+def test_a_skill_reading_for_a_removed_carer_loses_the_receipt_at_once(house):
+    house.k.grants.install({"skill": "receipt-app", "reads": {"action_receipt": "private"}})
+    house.k.grants.grant(A, "receipt-app", reads={"action_receipt": "private"})
+    receipt = house.act(A, "remind.set", note="synthetic marker <pack>", time="07:45", mentions=(K,), **{"for": K})
+    ev = house.k.spine._get(receipt.seq)
+    assert house.k.spine._deliverable("receipt-app", ev)
+    house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
+    assert not house.k.spine._deliverable("receipt-app", ev)
+    assert receipt.seq not in [e.seq for e in house.k.spine.replay("receipt-app")]
+    house.k.grants.people[K] = Person(K, CHILD, guardians=(A,))
+    assert house.k.spine._deliverable("receipt-app", ev)
+
+
+def test_an_owner_still_sees_their_own_action_recovered_as_uncertain(house):
+    house.act(K, "remind.set", note="synthetic marker <pack>", time="07:45")
+    house.k.spine._db.execute("UPDATE intents SET receipt_seq = NULL WHERE id = (SELECT MAX(id) FROM intents)")
+    recovered = [e for e in house.k.actions.recover() if e.kind is Kind.ACTION_RECEIPT][0]
+    assert house.k.explainer.why(recovered.seq, person=K)["seq"] == recovered.seq
+    assert house.k.explainer.last(K) == recovered.seq

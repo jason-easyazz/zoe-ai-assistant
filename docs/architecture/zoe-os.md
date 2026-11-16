@@ -1102,7 +1102,7 @@ member's visibility change is dropped, as production drops it). A CARER (owner r
 roster of a child OR of an adult in care) may also see, set, edit, snooze, mark done and cancel the person's reminders,
 except a `private` one. That reach is for managing rows only: organising never includes forget, undo or explain;
 forgetting on someone's behalf is a separate named power, today offered only to a child's guardian (`capability.guards`), to
-be replaced by memory care. Who SET a reminder is never standing authority: a carer reaches it only through the CURRENT care link, checked at every use, so a removed carer loses reading, editing, snoozing, done, cancel, and undoing or explaining their own past action over it at once, and regains them with the link (`rows.DurableRows.may_reach`). The `reminders` read op is person-bound: it answers only for the person a speaker assertion proves.
+be replaced by memory care. Who SET a reminder is never standing authority: a carer reaches it only through the CURRENT care link, checked at every use, so a removed carer loses reading, editing, snoozing, done, cancel, and undoing or explaining their own past action over it at once (a skill reading receipts on their behalf loses those receipts too: one rule, `Enforcer.reach`), and regains them with the link (`rows.DurableRows.may_reach`). The `reminders` read op is person-bound: it answers only for the person a speaker assertion proves.
 
 **Durable.** Rows are rebuilt from the kernel's own verified receipts (`rows.DurableRows`, the list store's rule): each
 receipt's proof carries its row, and a row exists only while the receipt that created it is live. Every later action over a
