@@ -544,3 +544,44 @@ async def test_the_state_check_and_the_park_never_run_on_the_event_loop(kernel, 
     for name, (a, b) in spans.items():                                    # ticks DURING each slow step: a blocked loop gets none
         during = sum(1 for x in ticks if a < x < b)
         assert during >= 15, f"only {during} ticks during the {name}: it ran on the event loop"
+
+
+# ---- only the kernel's DOCUMENTED forget reply is a "forgotten" ---------------------------------------------------------------------
+BAD_REPLIES = ['null', '{}', '{"ok": true}', '{"count": "3", "upto": 1}', '{"count": true, "upto": 1}', '{"count": -1, "upto": 1}',
+               '{"count": NaN, "upto": 1}', '{"count": 3, "upto": 1.5}', '{"count": 3}', '{"count": 3, "upto": 1, "extra": 1}',
+               '{"extra": 1}', '[3, 1]']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", BAD_REPLIES)
+@pytest.mark.parametrize("flag", ["off", "shadow"])
+async def test_a_forget_reply_that_is_not_the_documented_one_is_never_a_success(kernel, monkeypatch, reply, flag):
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", flag)
+    kernel.forget_mode = "reply:" + reply
+    if flag == "off":
+        assert await os_shadow.forget_user(MEMBER) == 0                   # deferred, never "forgotten"
+    else:
+        with pytest.raises(os_shadow.ShadowForgetUnavailable):           # the caller is told it failed
+            await os_shadow.forget_user(MEMBER)
+    assert _pending(kernel) == [MEMBER]                                   # the durable retry marker stays
+    os_shadow._replay_pending(os_shadow._Kernel())                        # a replay against the same bad reply keeps it too
+    assert _pending(kernel) == [MEMBER]
+    kernel.forget_mode = "ok"                                             # the real reply clears it
+    assert os_shadow._replay_pending(os_shadow._Kernel()) is True and not (kernel.state / "pending-forgets.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["erase_entity", "erase_topic"])
+async def test_a_scoped_forget_needs_the_documented_reply_too(kernel, call):
+    kernel.forget_mode = 'reply:{"count": 3}'
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await getattr(os_shadow, call)(MEMBER, "Dana")
+    assert _pending(kernel) == [MEMBER]
+
+
+def test_forget_ack_reads_exactly_the_documented_shape():
+    assert os_shadow.forget_ack({"count": 0, "upto": 0}) == 0 and os_shadow.forget_ack({"count": 3, "upto": 9}) == 3
+    for bad in (None, {}, {"count": 3}, {"count": True, "upto": 1}, {"count": 3, "upto": -1}, {"count": 3.0, "upto": 1},
+                {"count": float("nan"), "upto": 1}, {"count": 3, "upto": 1, "x": 0}):
+        with pytest.raises(os_shadow.KernelProtocol):
+            os_shadow.forget_ack(bad)
