@@ -20,8 +20,8 @@ The shadow daemon (``shadow_daemon.py``) plus three things an authority needs an
   is still erased by id. After a whole-person erase or forget of a member off the roster, the forget first, then the id leaves;
 * ``health``: alive, schema version, whether the last write went through: what zoe-data reads to decide whether to fall back.
 
-A revoke is remembered: at start every roster member is granted the brain's acts EXCEPT one whose newest ``brain`` grant change in
-the log is a revoke (the shadow re-granted everyone on every start, which an authority must not do).
+A revoke is remembered by a keyed, content-free denial in meta, even when its event is forgotten.
+At start every roster member is granted the brain's acts EXCEPT those denied or erased.
 
 Lab only, stdlib only; never started by any script or deploy (unit template ``zoe-os-authority-kernel.service`` beside this file).
 """
@@ -314,6 +314,8 @@ class AuthorityServer(KernelServer):
         disk. The grant leaves memory; the start-up grant skips them by a keyed hash (``erased_marks``), never by their id."""
         self.kernel.grants._grants.get(SHADOW_BRAIN["skill"], {}).pop(person, None)
         self.kernel.spine._db.execute("INSERT OR IGNORE INTO meta VALUES (?, x'01')",
+                                      (denial_key(self.kernel, person, SHADOW_BRAIN["skill"]),))
+        self.kernel.spine._db.execute("INSERT OR IGNORE INTO meta VALUES (?, x'01')",
                                       (ERASED_MARK + self.kernel.spine._owner(person).hex(),))
 
     def _live_events(self, person: str) -> int:
@@ -427,6 +429,42 @@ def convert_legacy(spine) -> int:
 
 
 ERASED_MARK = "authority_erased:"
+DENIED_MARK = "authority_denied:"
+
+
+def denial_key(k: Kernel, person: str, skill: str) -> str:
+    """No member id or words: the same private owner hash as erasure, scoped to a skill."""
+    return DENIED_MARK + k.spine._owner(person).hex() + ":" + hashlib.sha256(skill.encode()).hexdigest()
+
+
+def remember_consent(k: Kernel) -> None:
+    """Migrate live legacy withdrawals, then remember every withdrawal independently of erasable events.
+
+    Only a successful new grant clears a denial. Bootstrap skips denied members before granting.
+    Write denial first so an interrupted revoke fails closed; clear only after its grant record exists.
+    """
+    db = k.spine._db
+    last = {}
+    if db.execute("SELECT 1 FROM meta WHERE key = 'authority_consent_v1'").fetchone() is None:
+        for (raw,) in db.execute("SELECT payload FROM events WHERE kind = 'grant_change' AND tombstoned = 0 ORDER BY seq"):
+            p = json.loads(raw) if raw else {}
+            if p.get("person") and p.get("skill"):
+                last[p["person"], p["skill"]] = p.get("change")
+        for (person, skill), change in last.items():
+            if change == "revoked":
+                db.execute("INSERT OR IGNORE INTO meta VALUES (?, x'01')", (denial_key(k, person, skill),))
+        db.execute("INSERT INTO meta VALUES ('authority_consent_v1', x'01')")
+    record_change = k.grants.on_change
+
+    def changed(change, grant):
+        key = denial_key(k, grant.person, grant.skill)
+        if change == "revoked":
+            db.execute("INSERT OR IGNORE INTO meta VALUES (?, x'01')", (key,))
+        record_change(change, grant)
+        if change == "granted":
+            db.execute("DELETE FROM meta WHERE key = ?", (key,))
+
+    k.grants.on_change = changed
 
 
 def erased_marks(k: Kernel) -> set[str]:
@@ -435,13 +473,9 @@ def erased_marks(k: Kernel) -> set[str]:
 
 
 def revoked(k: Kernel, skill: str) -> set[str]:
-    """Members whose newest grant change for ``skill`` in the log is a revoke."""
-    last: dict[str, str] = {}
-    for (raw,) in k.spine._db.execute("SELECT payload FROM events WHERE kind = 'grant_change' AND tombstoned = 0 ORDER BY seq"):
-        p = json.loads(raw) if raw else {}
-        if p.get("skill") == skill and p.get("person"):
-            last[p["person"]] = p.get("change", "")
-    return {who for who, change in last.items() if change == "revoked"}
+    """Known members denied this skill, including withdrawals whose content has been erased."""
+    denied = {key for (key,) in k.spine._db.execute("SELECT key FROM meta WHERE key LIKE ?", (DENIED_MARK + "%",))}
+    return {who for who in k.grants.people if denial_key(k, who, skill) in denied}
 
 
 #: the PROPOSED permanent home of the kernel's own database (owner decision 2026-11-15: its own file, beside Zoe's other stores, in the
@@ -550,6 +584,7 @@ def build(state: Path, db: str | None = None):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # the roster PLUS every id the record still names: a member taken off people.json is still erased by id (never granted)
     k = Kernel(str(path), members + [Person(p) for p in sorted(recorded_people(path) - set(people))])     # extras: least
+    remember_consent(k)
     k.spine._db.execute("INSERT OR REPLACE INTO meta VALUES ('authority_schema', ?)", (str(SCHEMA).encode(),))
     convert_legacy(k.spine)                        # receipts the shadow kernel wrote, into this kernel's lean snapshots: before any replay
     lists = DurableLists(k.spine).register(k)
