@@ -340,7 +340,7 @@ def test_on_plays_one_take_in_an_unregistered_player(daemon, monkeypatch, caplog
     ok, line, writes, players, first, registered, dec = _turn(daemon, monkeypatch, caplog, mode="on", bank=bank)
     assert ok and len(players) == 1 and len(writes) == 3
     (p,) = players
-    assert len(p.buf) == 1 and p.buf[0] in {t.pcm for t in bank.takes.values()}      # exactly one whole bank take
+    assert b"".join(p.buf) in {t.pcm for t in bank.takes.values()}      # exactly one whole bank take, written in small chunks
     assert 4242 in registered and p.pid not in registered                              # only the REPLY's player is registered
     assert _f(line, "reflex") == "heard" and int(_f(line, "reflex_at_ms")) == 190
     assert int(_f(line, "reflex_dur_ms")) in {TAKE_MS + i for i in range(1, 5)} and _f(line, "reflex_cut") == "0"
@@ -433,7 +433,7 @@ def test_a_reply_during_the_take_cuts_the_reflex_and_is_never_delayed(daemon, mo
     ok, line, writes, players, first, _, _ = _turn(daemon, monkeypatch, caplog, mode="on", bank=bank, hold=True,
                                                    before="playing")
     (p,) = players
-    assert ok and p.terminated.is_set() and len(writes) == 3 and len(p.buf) == 1
+    assert ok and p.terminated.is_set() and len(writes) == 3 and len(p.buf) >= 1
     if "reflex_pending=1" in line:
         assert (_f(line, "reflex"), _f(line, "reflex_cut"), _f(line, "gap_ms")) == ("none", "-1", "-1")
     else:
@@ -580,7 +580,7 @@ def test_turn_end_cuts_a_playing_take_without_a_reply(daemon, monkeypatch, bank)
     monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=lambda *a: p))
     ctl.start()
     try:
-        assert playing.wait(1) and len(p.buf) == 1
+        assert playing.wait(1) and len(p.buf) >= 1
         assert not p.terminated.wait(0.04)  # control: without the end signal the take stays playing
         assert not ctl._reply.is_set()
         start = time.perf_counter()
@@ -725,3 +725,123 @@ def test_a_listed_member_never_gets_the_reflex_and_the_id_is_never_logged(daemon
     assert "skip=-" in dec[0] and len(players) == 1
     monkeypatch.delenv("REFLEX_SILENT_MEMBERS")
     assert daemon._reflex_silent_members() == frozenset()
+
+
+# ── the window opens only once the turn is committed to its POST ─────────────────────────────────────────────────────────────
+
+def _order_turn(daemon, monkeypatch, bank, *, attach_raises):
+    """One shadow turn with spies on the reflex start, the payload step and the POST. Returns (events, raised)."""
+    monkeypatch.setattr(daemon, "REFLEX_MODE", "shadow")
+    monkeypatch.setattr(daemon, "_REFLEX_BANK", bank)
+    monkeypatch.setenv("REFLEX_VOICE", "af_sky")
+    clock = FS._Clock(100.0)
+    FS._stream_turn_setup(daemon, monkeypatch, clock)
+    events: list = []
+    real_begin = daemon._reflex_begin
+
+    def begin(fs):
+        events.append(("begin", fs.post_at is not None))      # the POST clock was already stamped when the window opened
+        return real_begin(fs)
+
+    def attach(payload, wav, speculation):
+        events.append(("payload", None))
+        if attach_raises:
+            raise RuntimeError("turn dropped while building the payload")
+
+    monkeypatch.setattr(daemon, "_reflex_begin", begin)
+    monkeypatch.setattr(daemon, "_attach_stt_stream", attach)
+    monkeypatch.setattr(daemon.requests, "post",
+                        lambda url, json=None, **kw: (events.append(("post", None)), FS._FakeResp(FS._wire(), clock))[1],
+                        raising=False)
+    SH._close(daemon, hour=12)
+    _talk(daemon)
+    monkeypatch.setattr(daemon, "_speaker_claim_to_attach", lambda _w: SH._claim(daemon, 0.40))
+    raised = None
+    try:
+        daemon._do_single_turn_stream(FS._FakePA(), b"RIFFwav", wake_turn=True)
+    except Exception as exc:  # noqa: BLE001
+        raised = exc
+    for t in threading.enumerate():
+        if t.name == "reflex-turn":
+            t.join(timeout=3)
+    return events, raised
+
+
+def test_the_reflex_opens_after_the_payload_and_at_the_post(daemon, monkeypatch, bank):
+    events, raised = _order_turn(daemon, monkeypatch, bank, attach_raises=False)
+    assert raised is None
+    assert [e[0] for e in events] == ["payload", "begin", "post"] and events[1][1] is True
+
+
+def test_a_turn_dropped_before_the_post_never_starts_a_reflex(daemon, monkeypatch, bank):
+    events, raised = _order_turn(daemon, monkeypatch, bank, attach_raises=True)
+    assert raised is not None                                   # the turn really was abandoned before its POST
+    assert [e[0] for e in events] == ["payload"]                # no window opened, no POST
+    assert daemon._REFLEX_CUR is None
+
+
+# ── a slow player pipe cannot pin the reflex: the cut is bounded ────────────────────────────────────────────────────────────
+
+class _CountingStdin:
+    """Wraps a real pipe, counting the bytes each write call handed over (the blocking write is the one under test)."""
+
+    def __init__(self, real):
+        self.real, self.n = real, 0
+
+    def write(self, b):
+        r = self.real.write(b)
+        self.n += len(b)
+        return r
+
+    def flush(self):
+        return self.real.flush()
+
+    def close(self):
+        return self.real.close()
+
+
+def test_a_slow_player_pipe_is_cut_within_the_bound_and_the_rest_is_never_written(daemon, monkeypatch, bank):
+    import subprocess
+    assert 0 < daemon._REFLEX_CUT_BOUND_S <= 0.1 and daemon._REFLEX_CHUNK_MS <= 50
+    pcm = bytes(range(256)) * 1600                                   # 409.6 kB: far more than a pipe holds (64 kB)
+    take = types.SimpleNamespace(pcm=pcm, dur_ms=30_000)             # a long take: the wait deadline is not what ends it
+    fake_bank = types.SimpleNamespace(takes={"big": take}, sha8="deadbeef")
+    fs, ctl = _controller(daemon, monkeypatch, bank)
+    ctl.bank = fake_bank
+    monkeypatch.setattr(REFLEX, "record", lambda st, d, now: st)
+    real = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE)     # a player that never reads: the slowest possible pipe
+    counted = _CountingStdin(real.stdin)
+    proc = types.SimpleNamespace(stdin=counted, poll=real.poll, kill=real.kill, wait=real.wait, pid=real.pid)
+    monkeypatch.setattr(daemon, "_PLATFORM", types.SimpleNamespace(start_pcm_stream=lambda *a: proc))
+    play = threading.Thread(target=ctl._play, args=(types.SimpleNamespace(take="big"),), daemon=True)
+    try:
+        play.start()
+        last, stable = -1, 0
+        for _ in range(400):                                          # wait (real time) until the pipe is full and the feeder blocked
+            threading.Event().wait(0.02)
+            stable = stable + 1 if counted.n == last and counted.n > 0 else 0
+            last = counted.n
+            if stable >= 8:
+                break
+        assert 0 < counted.n < len(pcm) and real.poll() is None and play.is_alive()    # CONTROL: stuck, nothing cut yet
+        t0 = time.perf_counter()
+        ctl.note_reply()                                              # the reply path's only action
+        note_s = time.perf_counter() - t0
+        while real.returncode is None and time.perf_counter() - t0 < 2.0:
+            real.poll()
+            threading.Event().wait(0.002)
+        cut_s = time.perf_counter() - t0
+        play.join(timeout=2.0)
+        at_cut = counted.n
+        threading.Event().wait(0.2)
+        assert note_s < 0.005                                         # the reply is never delayed by the reflex
+        assert cut_s <= daemon._REFLEX_CUT_BOUND_S + 0.1, cut_s       # +0.1 s: scheduler slack on a loaded box
+        assert counted.n == at_cut and counted.n < len(pcm)           # the remaining bytes are never written
+        assert not play.is_alive() and real.returncode == -9 and ctl.cut   # reaped (a returncode exists only after wait/poll)
+        assert not [t for t in threading.enumerate() if t.name == "reflex-feed"]
+    finally:
+        try:
+            real.kill()
+            real.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            pass

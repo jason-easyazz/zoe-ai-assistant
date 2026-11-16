@@ -4422,7 +4422,7 @@ def _shadow_reflex_skip(fs: "_FirstSound") -> str:
 # every eligible turn, with the real bank, and LOGGED (``REFLEX_DECISION``), no sound;  on = it may play one take - but ONLY
 # when ``_REFLEX_ON_ALLOWED`` is True, and it is False: see below.
 # The env ``REFLEX_ENABLED`` the module reads is IGNORED here (modes force it per call), so there is no second switch.
-# Nothing here runs on the audio path or before the POST: the decision and the player live on ONE short thread per turn. The
+# Nothing here runs on the audio path, and the window opens only once the turn is committed to its POST (``_reflex_begin`` is the last step before it): the decision and the player live on ONE short thread per turn. The
 # reply is never delayed: when its first audio arrives (``_reflex_note_reply`` in the first-chunk branch), a pending reflex is
 # dropped (skip ``reply_first``) and a playing one is CUT (terminate), never waited for. The reflex player is NOT registered
 # (``_register_tts_process``): a registered player would start the barge monitor's grace before the reply's onset.
@@ -4445,6 +4445,15 @@ def _reflex_effective_mode(mode: str) -> str:
 _REFLEX_TALK_MIN_OBS_MS = 160    # the post-close mic must have covered this long before "nobody is talking" can be stated
 _REFLEX_TALK_STALE_MS = 300      # ... and its newest chunk must be this fresh
 _REFLEX_POLL_S = 0.02
+# Playback of a take: written in small fixed chunks by a feeder thread, so a stalled or slow player pipe can never pin the
+# reflex thread inside one blocking write. The cut is a poll on the reflex's own thread: the reply's first audio (or the turn's
+# end) is seen within ``_REFLEX_CUT_POLL_S`` and the player is then SIGKILLed (a blocked feeder write then fails at once: the
+# pipe's read end is gone). Worst case from "reply audio starts" to "the reflex stops being fed and the player is dead" is
+# ``_REFLEX_CUT_BOUND_S`` (one poll + the kill + scheduling slack). Sound already inside the player's own ALSA buffer is not
+# recallable [inferred]. The reply path only sets an Event, so it is never delayed by any of this.
+_REFLEX_CHUNK_MS = 20
+_REFLEX_CUT_POLL_S = 0.01
+_REFLEX_CUT_BOUND_S = 0.05
 _REFLEX_BANK = None              # the loaded Bank (zoe_voice_reflex.Bank) or None
 _REFLEX_STATE: dict = {}         # {"recent": [<=2 take ids], "last_at": monotonic s}: in memory, reset by a restart
 _REFLEX_LOCK = threading.Lock()
@@ -4493,7 +4502,7 @@ def _reflex_init() -> None:
 
 
 class _ReflexTurn:
-    """One turn's reflex. Decides on its own thread (never before the POST, never on the audio path), logs ONE
+    """One turn's reflex. Decides on its own thread (never on the audio path; started only once the POST is the next statement, so a turn dropped before it has no reflex), logs ONE
     ``REFLEX_DECISION`` line, and in mode ``on`` plays at most one take. Numbers and fixed enums only."""
 
     def __init__(self, fs: "_FirstSound", mode: str, bank):
@@ -4510,6 +4519,7 @@ class _ReflexTurn:
         self.pending = False            # FIRST_SOUND snapshot: worker had not finished at turn end
         self._reply = threading.Event()  # the reply's first audio arrived (set by the reply path: its ONLY reflex action)
         self._over = threading.Event()   # the turn ended
+        self._stop = threading.Event()   # this take's feeder must write nothing more (cut, end of wait, or done)
         self._thread = threading.Thread(target=self._run, daemon=True, name="reflex-turn")
 
     def start(self) -> None:
@@ -4600,29 +4610,67 @@ class _ReflexTurn:
             self.skip = "reply_first"    # the reply came while the player spawned: kill it unwritten
             self._reap(proc, kill=True)
             return
+        chunk = max(2, int(_reflex.BANK_RATE * _reflex.BANK_CHANNELS * _reflex.BANK_WIDTH * _REFLEX_CHUNK_MS // 1000))
+        chunk -= chunk % (_reflex.BANK_CHANNELS * _reflex.BANK_WIDTH)      # whole sample frames only
+        pcm = take.pcm
         try:
             t0 = _fs_now()
-            proc.stdin.write(take.pcm)
-            proc.stdin.close()
+            proc.stdin.write(pcm[:chunk])   # the first chunk, inline: a fresh pipe is empty so it cannot block, and a dead player fails here
+            proc.stdin.flush()
         except Exception:  # noqa: BLE001
             self.skip = "player_failed"
             self._reap(proc, kill=True)
             return
+        feeder = None
+        if len(pcm) > chunk:
+            feeder = threading.Thread(target=self._feed, args=(proc, pcm, chunk), daemon=True, name="reflex-feed")
+            feeder.start()
+        else:
+            self._close_stdin(proc)
         self.started_at, self.dur_ms, self.kind = t0, int(take.dur_ms), "heard"
         self.at_ms = int(round((t0 - self.t_close) * 1000.0))
         global _REFLEX_STATE
         with _REFLEX_LOCK:               # the reflex thread's own state lock: the reply path never takes it
             _REFLEX_STATE = _reflex.record(_REFLEX_STATE, d, _fs_now())
         # The CUT lives here, on the reflex's own thread: wait (here, never on the reply path) for the take to end or the
-        # reply's first audio; if the reply came while the take still plays, terminate it.
+        # reply's first audio; if the reply came while the take still plays, stop feeding and kill the player.
         deadline = time.monotonic() + take.dur_ms / 1000.0 + 2.0
-        while proc.poll() is None and time.monotonic() < deadline:
-            if self._reply.is_set() or self._over.wait(timeout=0.01) or _shutdown.is_set():
-                if proc.poll() is None:
-                    self.cut = True
-                    self._reap(proc, kill=True)
-                return
-        self._reap(proc, kill=False)
+        try:
+            while proc.poll() is None and time.monotonic() < deadline:
+                if self._reply.is_set() or self._over.wait(timeout=_REFLEX_CUT_POLL_S) or _shutdown.is_set():
+                    if proc.poll() is None:
+                        self.cut = True
+                        self._stop.set()
+                        self._reap(proc, kill=True)
+                    return
+            if feeder is not None:
+                feeder.join(timeout=1.0)
+            self._reap(proc, kill=False)
+        finally:
+            self._stop.set()             # whatever ended the wait, the feeder writes nothing more
+            if feeder is not None:
+                feeder.join(timeout=0.2)
+
+    def _feed(self, proc, pcm: bytes, chunk: int) -> None:
+        """Feeder thread: the rest of the take, one small chunk per write, checking the stop signal before each. Its blocking
+        write is the only thing a stalled player can pin, and the cut (a kill from ``_play``) breaks it with a pipe error."""
+        try:
+            for i in range(chunk, len(pcm), chunk):
+                if self._stop.is_set() or self._reply.is_set() or self._over.is_set() or _shutdown.is_set():
+                    return
+                proc.stdin.write(pcm[i:i + chunk])
+                proc.stdin.flush()
+        except Exception:  # noqa: BLE001  # a dead / killed player: the cut or the end of the take, never a turn error
+            pass
+        finally:
+            self._close_stdin(proc)
+
+    @staticmethod
+    def _close_stdin(proc) -> None:
+        try:
+            proc.stdin.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     @staticmethod
     def _reap(proc, *, kill: bool, timeout: float = 1.0) -> None:
@@ -4912,8 +4960,6 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
         fs.speaker(voice_claim, _fs_now() if scored_here else None)
     except Exception:  # noqa: BLE001
         pass
-    if REFLEX_MODE != "off":
-        _reflex_begin(fs)  # decide (and maybe play) on its own thread, off the path to the POST
     if speculation is not None:
         speculation.voice_claim = voice_claim
     _last_turn_flags.clear()
@@ -4955,6 +5001,10 @@ def _stream_turn(pa: pyaudio.PyAudio, wav: bytes, fs: "_FirstSound", *, prompt_o
     _barge_stream_closed.clear()
     t0 = _time.monotonic()
     fs.post_at = _fs_now()
+    # The reflex window opens only here: the payload is built and the POST is the very next statement, so a turn dropped
+    # before this point (a raise while building it) never has a reflex. One thread start, off the path to the POST.
+    if REFLEX_MODE != "off":
+        _reflex_begin(fs)
     aplay = None
     ttfa = None
     transcript = ""
