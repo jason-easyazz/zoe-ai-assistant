@@ -4355,15 +4355,16 @@ def _rms_floor_dbfs(frames: "list | None", n: int) -> "float | None":
     """The QUIETEST 80 ms chunk (dBFS) among the first ``n`` frames (the pre-roll / lookback before the recording proper):
     an estimate of the room's floor. The whole-window RMS used before held the wake word itself, so ``noisy`` fired on
     nearly every wake turn (docs/knowledge/voice-reflex-noise-input.md); the minimum chunk is the pause around it. Steady
-    music or TV keeps even the quietest chunk high, which is what ``noisy`` is for. None when there are no frames."""
+    music or TV keeps even the quietest chunk high, which is what ``noisy`` is for. All-zero chunks (the Jabra's mute) are
+    skipped. None when there is no usable frame (then ``noisy``: unknown is silence)."""
     try:
         if not frames or n <= 0:
             return None
         best = None
         for f in frames[:n]:
             a = np.frombuffer(f, dtype=np.int16)
-            if a.size == 0:
-                continue
+            if a.size == 0 or not a.any():
+                continue                  # digital zeros are the Jabra's own playback mute, not a quiet room: no evidence
             rms = float(np.sqrt(np.mean(a.astype(np.float64) ** 2)))
             db = max(-120.0, min(0.0, 20.0 * math.log10(max(rms, 1e-9) / 32768.0)))
             best = db if best is None else min(best, db)

@@ -501,6 +501,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   rebuild from survivors, FTS optimize), a fail-closed serve wall, and a salted re-ingest ledger. Seeded property tests with a
   lineage-less negative control (hand-run, never CI-wired, scratch temp-dir data only) + `bench.py` (forget latency, fan-out,
   on-disk residue per strategy). README is the record, including a writer-lineage table read from `services/zoe-data`.
+- `voice-reflex-sim/` - **voice reflex projection** (`docs/knowledge/voice-reflex.md`): `sim.py` runs the REAL `scripts/setup/zoe_voice_reflex.py` `decide()` over per-turn (timestamp, close ms, TTFA) rows from the felt scorecard's allowlisted panel extract (or a saved file, or invented turns) and reports per-rule skips and the first-sound distribution with the reflex on versus today's; rules the log cannot state are explicit `Assumptions` (default = the ceiling) with a sensitivity grid. `--decisions` summarises the panel's `REFLEX_DECISION` shadow lines and `--markers` counts would-play turns near a server safety marker (timestamps and three marker names only). Reads no audio, loads no model, writes nothing; self-check `tests/unit/test_voice_reflex_sim.py` (CI).
 - `felt-scorecard/` - **felt scorecard** (`docs/research/samantha-frontier-2026-11-11.md`
   section 4, P1): one read-only script, `scorecard.py`, that prints (table or `--json`) whether
   the memory circuit is closed on real household turns, from live log-marker counts, aggregate
