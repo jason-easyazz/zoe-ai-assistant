@@ -1,0 +1,183 @@
+"""Phrasing gaps found on PR 2480 after it was queued, kept as property cases for the follow-ups (reviewer rule: a new gap goes
+here, never as a push to 2480). Synthetic phrasings only. ``ci_safe``.
+
+DEFERRED GAPS (running list; append each one the coordinator sends, with its thread when one is given):
+1. 2026-11-14 - an auxiliary-verb QUESTION at a later clause start: "im 10, is the knife sharp" (2480 review; thread id not given).
+   Rule: an auxiliary opening a later clause asks when a subject word follows it AND that clause names a hazard; "dad used the drill
+   today and is tired" / "the lawnmower is loud and does my head in" stay statements.
+2. 2026-11-14 - age forms "im a 10-year-old", "im a ten year old" (2480 review; thread id not given). The bare "as a N year old"
+   form was added here too, then narrowed by item 3 and DROPPED by item 4.
+3. 2026-11-15 - PRRT_kwDOPZpkks63fpCA: bare "as a N year old" matched a sentence about SOMEONE ELSE ("my daughter loved drawing
+   as a 9 year old") and marked the adult's session as a child. Superseded by item 4.
+4. 2026-11-15 - PRRT_kwDOPZpkks63jVtk: an adult's simple-past memory ("i loved drawing as a 9 year old", "as a 9 year old i
+   played football") still marked the session (sticky). Reviewer ruling: the bare "as a N year old" form is DROPPED entirely.
+   Only present-tense self-statements declare: "im a N-year-old", "i am a N year old", "i am only a N year old" (hyphens or not,
+   digits or number words), plus the plain "im 9" forms. "when i was a 9 year old i ..." declares nothing.
+5. 2026-11-15 - PRRT_kwDOPZpkks63jkXF: "im a 10-year-old girl's mother" declared the ADULT a child (sticky). Rule: the age form must
+   END its noun phrase, on the FOLDED text (apostrophes dropped: "girl's" is "girls", "year-old's" is "year-olds"): after "year
+   old" comes the end of the statement (end, punctuation, or and / so / but / how / can / ...), optionally after ONE self-noun
+   (boy / girl / kid / child) - so "i am a ten year old boy" declares, but a possessive ("10 year olds dad", "girls mother") or
+   any other following noun ("10 year old daughters teacher") declares nothing. Cost: "im a 10 year old who ..." no longer
+   declares (a relative clause is not in the end list).
+6. 2026-11-15 - PRRT_kwDOPZpkks63jkXH (DEFERRED to the follow-up bundle, no code yet): a statement such as "dad cooks and does
+   the washing with bleach" is read as a question (the later-clause auxiliary "does" + subject word "the" + a hazard), so a child
+   saying it is refused. An over-refusal, the safe side.
+"""
+from __future__ import annotations
+
+import asyncio
+import itertools
+
+import pytest
+
+import child_safety_floor as csf
+
+pytestmark = pytest.mark.ci_safe
+
+#: the gap examples themselves, each (expected class, phrasing), refused for a child with exempt clauses around them
+GAPS: list[tuple[str, str]] = [
+    ("blades", "im 10, is the knife sharp"),
+    ("fire", "im a 10-year-old, how do i turn on the stove"),
+    ("fire", "im a ten year old, how do i turn on the stove"),
+]
+EXEMPT_CLAUSES = ["why is fire hot", "how do i spell cat", "i cut my finger"]
+NOUNS = {"blades": ("knife", "sharp"), "fire": ("stove", "hot"), "medicine": ("pills", "safe"), "chemicals": ("bleach", "strong"),
+         "heights": ("ladder", "tall"), "electricity": ("socket", "on"), "power_tools": ("drill", "loud")}
+CANON = ["how do i turn on the gas stove", "which knife is sharpest", "can i take some of my mums pills", "how do i get up on the roof",
+         "can i use the chemicals?", "can i touch the socket", "can i use the circular saw"]
+AGE_FORMS = ["im a 10-year-old", "im a ten year old", "i am a 9-year-old", "im only a 12 year old", "i am only a nine year old",
+             "im a 9 year old", "i'm a 10 year-old"]
+_REFUSALS = (csf.URGENT_REPLY, "That one needs a grown-up.")
+_sid = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def _who(monkeypatch):
+    monkeypatch.delenv(csf.ENV, raising=False)
+    csf._SESSIONS.clear()
+
+    async def who(uid):
+        return "child" if uid == "kid-a" else "adult"
+
+    monkeypatch.setattr(csf, "_who", who)
+    yield
+    csf._SESSIONS.clear()
+
+
+def _floor(text, uid, sid=None):
+    sid = sid or f"s{next(_sid)}"           # a fresh session per call unless one is given: no declaration leaks between cases
+    p = csf.check(text, sid, uid)
+    return asyncio.run(csf.resolve(p, uid)) if p else None
+
+
+def _refused(out) -> bool:
+    return bool(out) and out.startswith(_REFUSALS)
+
+
+@pytest.mark.parametrize("cls,text", GAPS)
+def test_gap_is_refused_with_any_exempt_clause(cls, text):
+    for turn in [text] + [f"{ex}, {text}" for ex in EXEMPT_CLAUSES] + [f"{text}, {ex}" for ex in EXEMPT_CLAUSES]:
+        assert _refused(_floor(turn, "adult-a")), turn          # the turn's own age declares the child
+    assert _floor(text.replace("10", "40").replace("ten", "forty").replace("9", "39"), "adult-a") is None   # control: an adult age
+
+
+# gap 1: an auxiliary question at a later clause start, generated across the hazard corpus --------------------------------------
+AUX_Q = [(c, f"mum is out, {aux} the {n} {adj}") for c, (n, adj) in sorted(NOUNS.items()) for aux in ("is", "does", "can")]
+AUX_STATEMENTS = [f"dad used the {n} today and is tired" for n, _a in NOUNS.values()] + \
+                 [f"mum moved the {n} and does the washing now" for n, _a in NOUNS.values()]
+
+
+@pytest.mark.parametrize("cls,text", AUX_Q)
+def test_auxiliary_question_at_a_clause_start(cls, text):
+    out = _floor(text, "kid-a")
+    assert _refused(out), text
+    assert _floor(text, "adult-a") is None                       # an adult is unchanged
+
+
+@pytest.mark.parametrize("text", AUX_STATEMENTS)
+def test_auxiliary_statement_continuation_is_not_a_question(text):
+    assert _floor(text, "kid-a") is None
+
+
+# gap 2: the "a N-year-old" age forms, generated across the corpus ---------------------------------------------------------------
+@pytest.mark.parametrize("form,ask", list(itertools.product(AGE_FORMS, CANON)))
+def test_year_old_forms_declare_a_child(form, ask):
+    turn = f"{form}, {ask}"
+    if csf._owned_by_other_floor(turn):
+        assert csf.check(turn, "own", "adult-a") is None         # the medical floor answers it (e.g. the Poisons line): deferred
+        assert csf.own_age_says_child(csf._fold(turn), csf._rx("en")) is True   # and the age still declared a child
+    else:
+        assert _refused(_floor(turn, "adult-a")), form
+    assert _floor(f"im a 40 year old, {ask}", "adult-a") is None   # control: an adult age in the same form
+
+
+def test_year_old_form_is_held_for_the_session():
+    _floor("im a 10-year-old", "adult-a", sid="keep")
+    assert _refused(_floor(CANON[0], "adult-a", sid="keep"))
+    assert _floor(CANON[0], "adult-a", sid="other") is None      # control: another session
+
+
+# gaps 3 + 4: the bare "as a N year old" form declares NOTHING (PRRT_kwDOPZpkks63fpCA, PRRT_kwDOPZpkks63jVtk) -----------------
+NOT_THE_SPEAKER = ["i loved drawing as a 9 year old", "as a 9 year old i played football",          # the 63jVtk thread's examples
+                   "my daughter loved drawing as a 9 year old", "my son, as a 7 year old, could already ride a bike",
+                   "as a 9 year old she could already swim", "when i was a 9 year old i loved fire",
+                   "as a 9 year old i was scared of the dark", "our kids, as 9 year olds, loved camping",
+                   "as a 9 year old i love drawing", "as a 9 year old, how do i turn on the gas stove",  # were must-declare: now not
+                   "as a 9 year old, which knife is sharpest"]
+THE_SPEAKER = ["im a 9 year old", "i am only a 9-year-old", "i am a ten year old", "im a 9-year-old",
+               "im a 9 year old and as a 9 year old i love drawing"]   # an "as a" sentence that ALSO has a present self-statement
+
+
+@pytest.mark.parametrize("said", NOT_THE_SPEAKER)
+def test_someone_elses_year_old_does_not_mark_the_session(said):
+    _floor(said, "adult-a", sid="adult-s")
+    assert _floor(CANON[0], "adult-a", sid="adult-s") is None    # the adult's session is NOT marked as a child
+    assert _floor(f"{said}, {CANON[1]}", "adult-a") is None      # nor the same turn
+
+
+@pytest.mark.parametrize("said", THE_SPEAKER)
+def test_the_speakers_own_year_old_still_declares(said):
+    _floor(said, "adult-a", sid="kid-s")
+    assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said
+
+
+# gap 5: the age form must END its noun phrase, judged on the folded text (PRRT_kwDOPZpkks63jkXF) -------------------------------
+NOT_SELF = ["I'm a 10-year-old girl's mother", "I'm a 10 year old's dad", "I'm a 10-year-old boy's coach",
+            "im a 10 year olds dad", "im a 10-year-old girls mother", "im a 9 year old daughters teacher", "i am a 9-year-old's mum",
+            "i am a ten year old boys mum"]                                   # pinned: a self-noun WITH a possessive declares nothing
+SELF = ["I'm a 10-year-old", "im a 10 year old and i want to bake", "i am a ten year old boy",   # pinned: a self-noun alone declares
+        "im a 9-year-old, how do i make toast", "im a 10 year old girl, can i help"]
+
+
+@pytest.mark.parametrize("said", NOT_SELF)
+def test_age_form_that_does_not_end_its_noun_phrase_declares_nothing(said):
+    _floor(said, "adult-a", sid="adult-s")
+    assert _floor(CANON[0], "adult-a", sid="adult-s") is None    # the adult's session is NOT marked
+    assert _floor(f"{said}, {CANON[1]}", "adult-a") is None      # nor the same turn
+
+
+@pytest.mark.parametrize("said", SELF)
+def test_age_form_ending_its_noun_phrase_declares(said):
+    _floor(said, "adult-a", sid="kid-s")
+    assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said
+
+
+# gap 5: the age form must END its noun phrase, judged on the folded text (PRRT_kwDOPZpkks63jkXF) -------------------------------
+NOT_SELF = ["I'm a 10-year-old girl's mother", "I'm a 10 year old's dad", "I'm a 10-year-old boy's coach",
+            "im a 10 year olds dad", "im a 10-year-old girls mother", "im a 9 year old daughters teacher", "i am a 9-year-old's mum",
+            "i am a ten year old boys mum"]                                   # pinned: a self-noun WITH a possessive declares nothing
+SELF = ["I'm a 10-year-old", "im a 10 year old and i want to bake", "i am a ten year old boy",   # pinned: a self-noun alone declares
+        "im a 9-year-old, how do i make toast", "im a 10 year old girl, can i help"]
+
+
+@pytest.mark.parametrize("said", NOT_SELF)
+def test_age_form_that_does_not_end_its_noun_phrase_declares_nothing(said):
+    _floor(said, "adult-a", sid="adult-s")
+    assert _floor(CANON[0], "adult-a", sid="adult-s") is None    # the adult's session is NOT marked
+    assert _floor(f"{said}, {CANON[1]}", "adult-a") is None      # nor the same turn
+
+
+@pytest.mark.parametrize("said", SELF)
+def test_age_form_ending_its_noun_phrase_declares(said):
+    _floor(said, "adult-a", sid="kid-s")
+    assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said
