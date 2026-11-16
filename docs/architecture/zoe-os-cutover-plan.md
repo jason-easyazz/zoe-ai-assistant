@@ -65,7 +65,8 @@ Each phase lists what it delivers, what must be proven to start it, what proves 
   kernel records it and its verdict is compared with what production did. Production is still the only writer.
 - **Needs first:** the shadow PRs landed; a kernel service unit installed; the member roster written; a voice replay (the hook sits
   on the voice path); the hook's cost on a turn re-measured (it must be a flag read and one queue put); and a test proving the
-  kernel's state directory is in **no** backup (implementation map WP-09a). The shadow holds real words, and until a forget can
+  kernel's state directory is in **no** backup (implementation map WP-09a). Every erase entry point must already reach the kernel:
+  the Settings delete button (WP-24) and guardian forget, "forget that" and the MCP erase (WP-64) land before the switch goes on. The shadow holds real words, and until a forget can
   reach backups a backed-up copy would outlive a forget.
 - **Owner steps:** install the unit, set the shadow switch and the verb list, restart. Exact commands arrive with the PR.
 - **Proof it worked:** the per-verb report shows lines arriving, agreement near 100%, the kernel answering in under 10 ms at p90,

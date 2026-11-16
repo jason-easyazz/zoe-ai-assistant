@@ -874,12 +874,14 @@ entry layer (REST / MCP / voice).
 2. **In parallel:**
    - WP-01 (K) → WP-03 (K);
    - WP-20 (G1) → WP-22 (G1);
-   - WP-24 (G);
-   - WP-64 (G).
+   - WP-24 (G) and WP-64 (G): built in parallel, but both are **activation prerequisites** (step 4), not fill-ins.
 3. **Infrastructure:** WP-06 lands and **deploys first** (one landing ahead). Then WP-04 and WP-05 (L), WP-02 (L), WP-08, WP-09a,
    WP-10 and WP-11.
-4. **Shadow:** land the stack (#2622 to #2625, #2631, #2632). **Activation gate:** WP-09a is green (the kernel's state is in no
-   backup), then the owner installs the unit and turns shadow on (Phase 1). Landing the code flag-dark does not wait for this.
+4. **Shadow:** land the stack (#2622 to #2625, #2631, #2632). **Activation gate** (plan rule 5: every forget and
+   member delete reaches the kernel before it holds real content): WP-09a is green (the kernel's state is in no backup), **WP-24
+   has landed** (the Settings delete button runs the full erase) and **WP-64 has landed** (guardian forget, "forget that" and the
+   MCP erase reach the kernel). Only then does the owner install the unit and turn shadow on (Phase 1). Landing the code
+   flag-dark does not wait for this.
 5. **Prove agreement:** WP-07 with #2642, the synthetic day and the corpus replay with shadow on, until the D1 pass mark is met for
    list add (Phase 2).
 6. **Authority:** WP-09b (backup-safe forget) then WP-09 (the kernel joins the backup); #2637 (rebased by WP-01), WP-22 (reshaped #2638), #2639 reconcile, WP-26 `created_by`, WP-65 why/undo. Then a
