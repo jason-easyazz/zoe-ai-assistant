@@ -244,3 +244,13 @@ def test_digit_spelled_places_and_relation_surnames_never_leave(raw, gone):
 def test_a_split_name_with_lookalike_digits_never_leaves():
     r = scrub_query("m1 ra bel shellfish allergy symptoms", PrivateTerms.of(names=["Mirabel"]))
     assert (not r.send) or ("mirabel" not in r.query.replace(" ", "").translate(str.maketrans("1", "i"))), r
+
+
+@pytest.mark.parametrize("raw,name", [("ki m violin lessons price", "Kim"), ("b o swimming lessons", "Bo")])
+def test_a_short_known_name_split_into_pieces_never_leaves(raw, name):
+    assert not scrub_query(raw, PrivateTerms.of(names=[name])).send
+
+
+@pytest.mark.parametrize("raw", ["pizza lasagna recipe", "real estate prices"])
+def test_a_short_name_is_not_found_across_ordinary_words(raw):
+    assert scrub_query(raw, PrivateTerms.of(names=["Al"])).query == raw

@@ -318,7 +318,8 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     for view in (query, plain_query):
         squeezed = fold(view)
         for s in singles:
-            if s in {fold(w) for w in view.split()} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)):
+            if s in {fold(w) for w in view.split()} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \
+                    or (len(s) < 4 and _split_exactly(view, s)):
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         for phrase in phrases:
             if "".join(phrase) in squeezed:
@@ -329,6 +330,22 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
 
 
 _POSSESSIVES = frozenset({"my", "our", "your", "his", "her", "their"})
+
+
+def _split_exactly(query: str, single: str) -> bool:
+    """True when a run of two or more kept words joins to EXACTLY ``single`` ("ki m" for Kim, "b o" for Bo). Short
+    names are matched only this way: containment across words would refuse ordinary queries ("pizza lasagna" holds
+    "al")."""
+    toks = [fold(w) for w in query.split()]
+    for i in range(len(toks)):
+        acc = toks[i]
+        for j in range(i + 1, len(toks)):
+            acc += toks[j]
+            if acc == single:
+                return True
+            if len(acc) >= len(single):
+                break
+    return False
 
 
 def _glued_span(query: str, single: str) -> bool:
