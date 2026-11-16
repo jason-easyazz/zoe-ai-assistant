@@ -35,8 +35,9 @@ class Shadow:
         raw = json.loads((state / "creds.json").read_text())
         self.voice, self.brain = (Client(raw["socket"], s, bytes.fromhex(raw["creds"][s]), timeout=5) for s in ("voice", "brain"))
         # the test plays the speaker-verifier: the panel relays a person's forget only with their speaker assertion
-        key = bytes.fromhex(json.loads((state / "identity-creds.json").read_text())["creds"]["speaker-verifier"])
-        self.panel = Client(raw["socket"], "panel", bytes.fromhex(raw["creds"]["panel"]), timeout=5, speaker_key=key)
+        ident = json.loads((state / "identity-creds.json").read_text())
+        self.panel = Client(raw["socket"], "panel", bytes.fromhex(raw["creds"]["panel"]), timeout=5,
+                            speaker_key=bytes.fromhex(ident["creds"]["speaker-verifier"]), speaker_generation=ident["generation"])
 
     def add(self, person: str, item: str) -> dict:
         said = self.voice.publish("utterance", subject=person, payload={"text": item})

@@ -388,15 +388,18 @@ checks it in ONE place (`KernelServer._prove_speaker`, at the dispatch, so the s
 inherit it): the MAC (constant time), the person (the request's speaking field: `actor` for forget and undo,
 the guardian for a child's grant, else the named person; the kernel's own rule then links that speaker to the
 subject), the audience (`forget.person`, `forget.scoped`, `grant`, `revoke`, `undo`, `explain`: "forget that"
-cannot become "forget me"), age under 60 s (2 s skew), issued after this kernel started, and a nonce used once
+cannot become "forget me"), age under 60 s (2 s skew), minted for THIS kernel run's generation (a random id
+fresh at every start, published with the secret), and a nonce used once
 (kept until its token's own issue time + 60 s + 2 s, so it outlives the token's acceptance window). The authority's
 `list_digest` (every member's list rows, for the reconcile tool) answers only a dedicated `reconciler` credential, with
 digests keyed by a per-start secret over member, list and item, so no surface can confirm a guess at anyone's list.
 Every failure is one refusal, `speaker unproven`, counted by a fixed reason name; the token is never logged.
 The member-delete path's `eraser` credential needs no assertion, for the forget family only. The secret is in
 `identity-creds.json` (0600, apart from `creds.json` and `erase-creds.json`), fresh at every start. Used
-nonces live in memory (bounded at 1024, a full store refuses); a restart loses them, which is safe because an
-assertion issued before the kernel started is refused, even under a provisioned secret. There is no setting
+nonces live in memory (bounded at 1024, a full store refuses); a restart loses them, which is safe because a
+new run has a new generation and refuses every token minted for an earlier one, whatever the clocks did and
+even under a provisioned secret. A guardian link grants reach (forget, undo, seeing private events, signing a
+grant) only while the kernel's own roster says the subject is a child. There is no setting
 that turns the check off. What it does not defend: a process holding the identity secret can mint for anyone,
 so that secret must live only with the code that verifies people.
 

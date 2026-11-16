@@ -249,6 +249,7 @@ def write_identity(state: Path, srv: KernelServer) -> None:
     """The speaker-verifier's secret, the way every credential file is written (0600 from creation, atomic). Never printed."""
     from authority import write_secret
     write_secret(state / speaker.IDENTITY_CREDS, {"socket": srv.path, "creds": {speaker.IDENTITY: srv.speaker_secret().hex()},
+                                                  "generation": srv.speaker_generation(),
                                                   "ttl_s": speaker.TTL_S})
 
 

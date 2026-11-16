@@ -5,15 +5,21 @@ A surface (the panel, the voice adapter) relays a person's decision; it does not
 assertion minted by the ``speaker-verifier`` identity (in production: the zoe-data code that has just verified the voice or the
 panel session). The surface can pass it along; without the identity secret it cannot mint one.
 
-A token is ``<body>.<mac>``: ``body`` = unpadded base64url of ``{"p": person, "t": issued_ms, "n": nonce_hex, "a": audience}``,
-``mac`` = hex HMAC-SHA256(secret, DOMAIN + body). The kernel accepts it only when the MAC is right (constant-time compare), the
-person and the audience are what the request needs, it was issued after this kernel started, LESS than ``TTL_S`` ago and no more
-than ``SKEW_S`` ahead, and its nonce has not been used.
+A token is ``<body>.<mac>``: ``body`` = unpadded base64url of
+``{"p": person, "t": issued_ms, "n": nonce_hex, "a": audience, "g": generation}``, ``mac`` = hex HMAC-SHA256(secret, DOMAIN + body).
+The kernel accepts it only when the MAC is right (constant-time compare), the person and the audience are what the request needs,
+its ``generation`` is THIS kernel run's (a random id fresh at every start, published in ``identity-creds.json``), it was issued LESS
+than ``TTL_S`` ago and no more than ``SKEW_S`` ahead, and its nonce has not been used in this run.
 
-THE INVARIANT (``Verifier._why``): a token issued at ``t`` (ms) can be accepted only while ``now < t + TTL``, and its nonce, once
-used, is kept until ``now >= t + TTL + SKEW``: keyed to the token's OWN issue time, never to when it was accepted. So a used
-nonce always outlives every instant at which its token could be accepted, and a second presentation is never accepted. Every failure is the same refusal (``UNPROVEN``); the reason is counted
-by a fixed name and never logged with the token. Stdlib only; verification is O(1) (the nonce store prunes from its oldest end).
+THE INVARIANT, within one run (``Verifier._why``): a token issued at ``t`` (ms) can be accepted only while ``now < t + TTL``, and its
+nonce, once used, is kept until ``now >= t + TTL + SKEW``: keyed to the token's OWN issue time, never to when it was accepted. So a
+used nonce outlives every instant at which its token could be accepted, and a second presentation is never accepted.
+ACROSS runs: a token names the generation it was minted for, and no two runs share one, so NOTHING a previous run could have
+accepted is accepted by this one: whatever the clocks did (a restart inside the skew, a wall clock stepped backwards between runs)
+and even under a provisioned secret that survives the restart. Losing the in-memory nonce store at a restart is safe for that reason.
+
+Every failure is the same refusal (``UNPROVEN``); the reason is counted by a fixed name and never logged with the token. Stdlib
+only; verification is O(log n) at worst (the used-nonce heap).
 """
 from __future__ import annotations
 
@@ -77,28 +83,28 @@ def _mac(key: bytes, body: bytes) -> bytes:
     return hmac.new(key, _DOMAIN + body, hashlib.sha256).hexdigest().encode()
 
 
-def mint(key: bytes, person: str, audience: str, *, now: float | None = None, nonce: str | None = None) -> str:
-    """What the speaker-verifier hands the surface after it verified ``person``. Never logged."""
+def mint(key: bytes, person: str, audience: str, *, generation: str, now: float | None = None, nonce: str | None = None) -> str:
+    """What the speaker-verifier hands the surface after it verified ``person``, for the kernel run ``generation`` names (read
+    from ``identity-creds.json`` with the key). Never logged."""
     if audience not in AUDIENCES:
         raise ValueError("unknown audience")
     claims = {"p": person, "t": _ms(time.time() if now is None else now), "n": nonce or secrets.token_hex(16),
-              "a": audience}
+              "a": audience, "g": generation}
     body = base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
     return (body + b"." + _mac(key, body)).decode()
 
 
-def mint_for(key: bytes, op: str, args: dict, *, now: float | None = None) -> str | None:
+def mint_for(key: bytes, op: str, args: dict, *, generation: str, now: float | None = None) -> str | None:
     """The assertion a lab client attaches to ``op`` (``None``: the op is not person-bound, or names nobody)."""
     bound = binding(op, args)
     if bound is None or not isinstance(bound[0], str):
         return None
-    return mint(key, bound[0], bound[1], now=now)
+    return mint(key, bound[0], bound[1], generation=generation, now=now)
 
 
 class Verifier:
-    """The kernel's side. ``clock`` is injectable (tests); ``started_ms`` is when this kernel started: an assertion issued
-    before it is refused, so a token captured before a restart is dead after it even when the secret is provisioned and kept
-    (the used-nonce store is in memory, and this rule is what makes losing it at a restart safe)."""
+    """The kernel's side, one per kernel RUN. ``clock`` is injectable (tests). ``generation``: this run's id, random (128 bits)
+    and never chosen by a caller, so a restart always changes it; a token for any other generation is refused (``generation``)."""
 
     def __init__(self, key: bytes, *, clock: Callable[[], float] = time.time, ttl: float = TTL_S,
                  max_live: int = MAX_LIVE) -> None:
@@ -106,7 +112,7 @@ class Verifier:
             raise ValueError("a speaker secret is at least 32 bytes")
         self._key, self._clock = key, clock
         self._ttl_ms, self._skew_ms, self._max = int(ttl * 1000), int(SKEW_S * 1000), max_live
-        self.started_ms = _ms(clock())
+        self.generation = secrets.token_hex(16)
         self._used: dict[str, int] = {}                     # nonce -> keep until (ms) = its token's issue time + TTL + skew
         self._expiry: list[tuple[int, str]] = []            # a heap on keep-until: pruning is O(log n) per nonce
         self.refused: collections.Counter[str] = collections.Counter()    # fixed reason names only
@@ -141,16 +147,16 @@ class Verifier:
             claims = json.loads(base64.urlsafe_b64decode(raw_body + b"=" * (-len(raw_body) % 4)))
         except (ValueError, binascii.Error):
             return "malformed"
-        if not isinstance(claims, dict) or set(claims) != {"p", "t", "n", "a"} or not isinstance(claims["t"], int) \
+        if not isinstance(claims, dict) or set(claims) != {"p", "t", "n", "a", "g"} or not isinstance(claims["t"], int) \
                 or isinstance(claims["t"], bool) or not isinstance(claims["n"], str) or len(claims["n"]) != 32:
             return "malformed"
         if claims["a"] != audience:
             return "audience"
         if claims["p"] != person:
             return "person"
+        if not isinstance(claims["g"], str) or not hmac.compare_digest(claims["g"].encode(), self.generation.encode()):
+            return "generation"                            # minted for another run of the kernel: dead, whatever the clocks say
         now_ms, t = _ms(self._clock()), claims["t"]
-        if t < self.started_ms:
-            return "before start"
         if t > now_ms + self._skew_ms:
             return "future"
         if now_ms - t >= self._ttl_ms:                     # acceptable only while now < t + TTL

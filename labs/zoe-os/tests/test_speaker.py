@@ -81,7 +81,7 @@ def ask(s: KernelServer, name: str, op: str, **args) -> dict:
 
 
 def mint(s, clock, person, audience, **kw) -> str:
-    return speaker.mint(s.speaker_secret(), person, audience, now=kw.pop("now", clock.t), **kw)
+    return speaker.mint(s.speaker_secret(), person, audience, generation=s.speaker_generation(), now=kw.pop("now", clock.t), **kw)
 
 
 def unproven(reply: dict) -> bool:
@@ -179,7 +179,7 @@ def test_the_speaker_is_the_actor_and_the_kernels_own_rule_still_links_them_to_t
 def test_a_forged_and_a_truncated_token_are_refused_in_the_same_shape(srv):
     s, k, clock = srv
     good = mint(s, clock, SAM, "forget.person")
-    other = speaker.mint(secrets.token_bytes(32), SAM, "forget.person", now=clock.t)     # a key the kernel never issued
+    other = speaker.mint(secrets.token_bytes(32), SAM, "forget.person", generation=s.speaker_generation(), now=clock.t)  # foreign key
     flipped = good[:-1] + ("0" if good[-1] != "0" else "1")
     bad = [flipped, other, good[: len(good) // 2], good.split(".")[0], "." + good.split(".")[1], "x" * 600, "é." + "0" * 64, ""]
     replies = [ask(s, "panel", "forget", subject=SAM, actor=SAM, speaker=t) for t in bad]
@@ -190,17 +190,18 @@ def test_a_forged_and_a_truncated_token_are_refused_in_the_same_shape(srv):
     assert ask(s, "panel", "forget", subject=SAM, actor=SAM, speaker=good)["ok"]        # the real one was never spent
 
 
-def test_a_restart_kills_every_assertion_issued_before_it_even_with_the_same_secret():
+def test_a_restart_kills_every_assertion_minted_for_the_run_before_it_even_with_the_same_secret():
     key, clock = secrets.token_bytes(32), Clock(T0)
     first = speaker.Verifier(key, clock=clock)
     clock.t += 1
-    token = speaker.mint(key, SAM, "forget.person", now=clock.t)
+    token = speaker.mint(key, SAM, "forget.person", generation=first.generation, now=clock.t)
     assert first.check(token, SAM, "forget.person")
     clock.t += 1
-    again = speaker.Verifier(key, clock=clock)                  # the kernel restarted: its used-nonce store is empty
-    assert not again.check(token, SAM, "forget.person") and again.refused == {"before start": 1}
+    again = speaker.Verifier(key, clock=clock)                  # the kernel restarted: a new generation, an empty nonce store
+    assert again.generation != first.generation
+    assert not again.check(token, SAM, "forget.person") and again.refused == {"generation": 1}
     control = speaker.Verifier(key, clock=clock)
-    control.started_ms = 0                                       # control: without the start rule the replay is accepted
+    control.generation = first.generation                       # control: a run that kept the old generation accepts the replay
     assert control.check(token, SAM, "forget.person")
 
 
@@ -208,11 +209,11 @@ def test_the_used_nonce_store_is_bounded_fails_closed_when_full_and_frees_itself
     key, clock = secrets.token_bytes(32), Clock(T0)
     v = speaker.Verifier(key, clock=clock, max_live=2)
     clock.t += 1
-    tokens = [speaker.mint(key, SAM, "undo", now=clock.t) for _ in range(3)]
+    tokens = [speaker.mint(key, SAM, "undo", generation=v.generation, now=clock.t) for _ in range(3)]
     assert v.check(tokens[0], SAM, "undo") and v.check(tokens[1], SAM, "undo")
     assert not v.check(tokens[2], SAM, "undo") and v.refused == {"busy": 1}             # full: refuse, never forget a nonce early
     clock.t += speaker.TTL_S + speaker.SKEW_S + 1
-    assert v.check(speaker.mint(key, SAM, "undo", now=clock.t), SAM, "undo") and len(v._used) == 1
+    assert v.check(speaker.mint(key, SAM, "undo", generation=v.generation, now=clock.t), SAM, "undo") and len(v._used) == 1
 
 
 # ---- through the socket ----------------------------------------------------------------------------------------------------------
@@ -268,8 +269,10 @@ def test_the_token_and_the_secret_reach_no_file_but_the_identity_file_and_no_log
             said = voice.publish("utterance", subject=who, payload={"text": WORDS})
             brain.call("act", action="list.add", on_behalf_of=who, args={"item": "synthetic item", "asked": said.seq},
                        caused_by=[said.seq])
-        good = speaker.mint(key, A, "forget.person")
-        tokens, texts = [good, speaker.mint(key, B, "forget.person"), speaker.mint(key, A, "grant")], []
+        gen = ident["generation"]
+        good = speaker.mint(key, A, "forget.person", generation=gen)
+        tokens, texts = [good, speaker.mint(key, B, "forget.person", generation=gen),
+                         speaker.mint(key, A, "grant", generation=gen)], []
         for bad in (tokens[1], tokens[2], good[:-2] + "00", good[:40]):
             with pytest.raises(Refused) as exc:
                 panel.call("forget", subject=A, actor=A, speaker=bad)
@@ -305,9 +308,17 @@ def test_the_token_and_the_secret_reach_no_file_but_the_identity_file_and_no_log
 TTL_MS, SKEW_MS = int(speaker.TTL_S * 1000), int(speaker.SKEW_S * 1000)
 
 
-def _at(v: speaker.Verifier, clock: Clock, key: bytes, *, issued_ms: int, at_ms: int, nonce: str | None = None) -> bool:
+def _tok(key: bytes, gen: str, issued_ms: int, nonce: str | None = None) -> str:
+    return speaker.mint(key, SAM, "undo", generation=gen, now=issued_ms / 1000, nonce=nonce)
+
+
+def _present(v: speaker.Verifier, clock: Clock, token: str, at_ms: int) -> bool:
     clock.t = at_ms / 1000
-    return v.check(speaker.mint(key, SAM, "undo", now=issued_ms / 1000, nonce=nonce), SAM, "undo")
+    return v.check(token, SAM, "undo")
+
+
+def _at(v: speaker.Verifier, clock: Clock, key: bytes, *, issued_ms: int, at_ms: int, nonce: str | None = None) -> bool:
+    return _present(v, clock, _tok(key, v.generation, issued_ms, nonce), at_ms)
 
 
 @pytest.mark.parametrize("edge, ok_at, bad_at", [
@@ -324,12 +335,28 @@ def test_the_acceptance_window_on_both_sides_of_the_millisecond(edge, ok_at, bad
     assert v.refused == {"expired" if edge == "expiry" else "future": 1}
 
 
-def test_the_kernel_start_on_both_sides_of_the_millisecond():
-    key, clock = secrets.token_bytes(32), Clock(T0)
-    v = speaker.Verifier(key, clock=clock)
-    assert _at(v, clock, key, issued_ms=v.started_ms, at_ms=v.started_ms + 5)
-    assert not _at(v, clock, key, issued_ms=v.started_ms - 1, at_ms=v.started_ms + 5)
-    assert v.refused == {"before start": 1}
+def test_the_reviewers_restart_case_issued_t_plus_2_accepted_at_t_restart_at_t_plus_half_is_refused():
+    key, t = secrets.token_bytes(32), int(T0 * 1000)
+    clock = Clock(T0)
+    old = speaker.Verifier(key, clock=clock)
+    token = _tok(key, old.generation, t + SKEW_MS)                      # issued T+2 s (inside the skew)
+    assert _present(old, clock, token, t)                               # accepted at T
+    clock.t = (t + 500) / 1000
+    new = speaker.Verifier(key, clock=clock)                            # restart at T+0.5 s, the SAME provisioned secret
+    assert not _present(new, clock, token, t + 600) and new.refused == {"generation": 1}
+    # and an honest token for the new run, issued right at its start, is accepted at once: no dead window after a start
+    assert _present(new, clock, _tok(key, new.generation, t + 500), t + 600)
+
+
+def test_a_wall_clock_stepped_backwards_between_runs_still_refuses_the_old_runs_tokens():
+    key, t = secrets.token_bytes(32), int(T0 * 1000)
+    clock = Clock(T0)
+    old = speaker.Verifier(key, clock=clock)
+    token = _tok(key, old.generation, t)
+    assert _present(old, clock, token, t + 10)
+    clock.t = (t - 3_600_000) / 1000                                    # the next run starts an hour EARLIER on the wall clock
+    new = speaker.Verifier(key, clock=clock)
+    assert not _present(new, clock, token, t + 20)                      # a start-time rule alone would have accepted this
 
 
 def test_the_reviewers_replay_a_token_from_the_edge_of_the_skew_presented_again_as_its_nonce_would_have_been_pruned():
@@ -363,26 +390,83 @@ def test_property_for_any_issue_time_inside_the_skew_and_any_two_presentations_t
     for _ in range(3000):
         clock = Clock(T0)
         v = speaker.Verifier(key, clock=clock, max_live=8)
-        first = v.started_ms + TTL_MS + rnd.randrange(0, 5000)            # the first presentation
+        first = int(T0 * 1000) + TTL_MS + rnd.randrange(0, 5000)          # the first presentation
         # the issue time, anywhere a token could be accepted at ``first`` (and a few ms outside), often exactly at the skew edge
         issued = first + (SKEW_MS if rnd.random() < 0.3 else rnd.randrange(-TTL_MS - 5, SKEW_MS + 6))
         edges = (issued + TTL_MS, first + TTL_MS + SKEW_MS, issued + TTL_MS + SKEW_MS)     # where an off-by-one would live
         second = rnd.choice(edges) + rnd.randrange(-3, 4) if rnd.random() < 0.5 else first + rnd.randrange(0, TTL_MS + SKEW_MS + 10)
         first, second = min(first, second), max(first, second)
         nonce = secrets.token_hex(16)
-        once = _at(v, clock, key, issued_ms=issued, at_ms=max(first, v.started_ms), nonce=nonce)
-        twice = _at(v, clock, key, issued_ms=issued, at_ms=max(second, v.started_ms), nonce=nonce)
+        once = _at(v, clock, key, issued_ms=issued, at_ms=first, nonce=nonce)
+        twice = _at(v, clock, key, issued_ms=issued, at_ms=second, nonce=nonce)
         assert not (once and twice)
         accepted += once
     assert accepted > 1000                                               # the property was exercised, not vacuous
 
 
+def test_property_across_restarts_nothing_a_previous_run_could_accept_is_accepted_by_a_later_one():
+    """Accept, restart at a random offset (before the accept, inside the skew, after, with the clock stepped back), re-present."""
+    import random
+    rnd = random.Random(20261117)
+    key, accepted = secrets.token_bytes(32), 0
+    for _ in range(2000):
+        t = int(T0 * 1000) + rnd.randrange(0, 10_000)
+        clock = Clock(t / 1000)
+        runs = [speaker.Verifier(key, clock=clock)]
+        token = _tok(key, runs[0].generation, t + rnd.randrange(-TTL_MS, SKEW_MS + 1), secrets.token_hex(16))
+        first = t + rnd.randrange(0, 100)
+        accepted += (once := _present(runs[0], clock, token, first))
+        for _ in range(rnd.randrange(1, 4)):                             # one to three restarts, each at a random wall-clock time
+            clock.t = (first + rnd.randrange(-3_600_000, TTL_MS + SKEW_MS + 10)) / 1000
+            runs.append(speaker.Verifier(key, clock=clock))
+            again = _present(runs[-1], clock, token, first + rnd.choice((-SKEW_MS, 0, 1, 500, SKEW_MS, TTL_MS - 1)))
+            assert not again                                             # never accepted by a later run, accepted before or not
+    assert accepted > 1000
+
+
 def test_the_cap_holds_under_the_issue_time_retention_and_frees_by_issue_time_not_arrival():
     key, clock = secrets.token_bytes(32), Clock(T0)
     v = speaker.Verifier(key, clock=clock, max_live=2)
-    t = v.started_ms
+    t = int(T0 * 1000)
     assert _at(v, clock, key, issued_ms=t + 2000, at_ms=t + 100)        # issued later (inside the skew): kept longer
     assert _at(v, clock, key, issued_ms=t + 50, at_ms=t + 100)
     assert not _at(v, clock, key, issued_ms=t + 100, at_ms=t + 100) and v.refused == {"busy": 1}
     assert _at(v, clock, key, issued_ms=t + 50 + TTL_MS - 1, at_ms=t + 50 + TTL_MS + SKEW_MS)   # the t+50 nonce freed first
     assert len(v._used) == 2
+
+
+# ---- a guardian link reaches only a CHILD, by the kernel's own roster -----------------------------------------------------------------
+def _reason(reply: dict) -> str:
+    return "" if reply["ok"] else reply["error"]["reason"]
+
+
+def test_a_proven_guardian_cannot_forget_or_undo_for_an_adult_who_carries_a_guardian_link(srv):
+    from zoe_os.capability import ADULT, Person
+    s, k, clock = srv
+    k.grants.people[SAM] = Person(SAM, ADULT, guardians=(ALEX,))      # an adult with a (stale or mistaken) guardian link
+    for scope in ({}, {"topic": "synthetic words"}):
+        aud = "forget.scoped" if scope else "forget.person"
+        reply = ask(s, "panel", "forget", subject=SAM, actor=ALEX, **scope, speaker=mint(s, clock, ALEX, aud))
+        assert _reason(reply).endswith("not theirs to forget")
+    reply = ask(s, "panel", "undo", person=SAM, actor=ALEX, speaker=mint(s, clock, ALEX, "undo"))
+    assert _reason(reply).endswith("not theirs to undo")
+    assert not k.explainer._is(ALEX, SAM)                               # nor may the guardian see the adult's private events
+    reply = ask(s, "panel", "grant", person=SAM, skill="toy", guardian=ALEX, speaker=mint(s, clock, ALEX, "grant"))
+    assert unproven(reply)                                              # grant: the adult's own word only (binding.is_child)
+
+
+def test_the_same_link_on_a_child_reaches_and_stops_the_moment_the_roster_says_adult(srv):
+    from zoe_os.capability import ADULT, Person
+    s, k, clock = srv
+    assert ask(s, "panel", "forget", subject=KID, actor=ALEX, speaker=mint(s, clock, ALEX, "forget.person"))["ok"]
+    undo = ask(s, "panel", "undo", person=KID, actor=ALEX, speaker=mint(s, clock, ALEX, "undo"))
+    assert not _reason(undo).endswith("not theirs to undo")             # allowed in principle (KID has nothing to undo)
+    assert k.explainer._is(ALEX, KID)
+    assert ask(s, "panel", "grant", person=KID, skill="toy", guardian=ALEX, speaker=mint(s, clock, ALEX, "grant"))["ok"]
+    k.grants.people[KID] = Person(KID, ADULT, guardians=(ALEX,))      # KID turns 18; the link is left behind
+    reply = ask(s, "panel", "forget", subject=KID, actor=ALEX, speaker=mint(s, clock, ALEX, "forget.person"))
+    assert _reason(reply).endswith("not theirs to forget")              # immediately: the roster's role decides, not the link
+    assert _reason(ask(s, "panel", "undo", person=KID, actor=ALEX, speaker=mint(s, clock, ALEX, "undo"))).endswith(
+        "not theirs to undo")
+    assert not k.explainer._is(ALEX, KID)
+    assert ask(s, "panel", "forget", subject=KID, actor=KID, speaker=mint(s, clock, KID, "forget.person"))["ok"]   # their own

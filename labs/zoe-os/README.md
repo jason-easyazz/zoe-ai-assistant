@@ -90,7 +90,7 @@ bad outcome.
 |---|---|---|
 | the malicious skill, from another process: six remaining attempts refused; forgotten cache entries unavailable | `test_boundary.py` | the same four controls, applied inside the kernel process |
 | a skill cannot be another skill, name its own source, or speak for a person | `test_boundary_attacks.py` | no credential check: it becomes the panel and reads everything |
-| a SURFACE cannot speak for a person: every person-bound op needs a speaker assertion for that person and verb, used once, within 60 s, issued after this start; forged and truncated tokens refused alike; nothing logs the token or the secret | `test_speaker.py` | `_prove_speaker` removed: the panel alone reaches every person-bound op; the start-time rule removed: a pre-restart token replays |
+| a SURFACE cannot speak for a person: every person-bound op needs a speaker assertion for that person and verb, used once, within 60 s, for THIS kernel run's generation; forged and truncated tokens refused alike; nothing logs the token or the secret | `test_speaker.py` | `_prove_speaker` removed: the panel alone reaches every person-bound op; the start-time rule removed: a pre-restart token replays |
 | a captured handshake or a re-issued credential does not log in | `test_boundary_attacks.py` | a predictable challenge: the capture logs in |
 | an oversized frame is refused before its body is read | `test_boundary_attacks.py` | no size cap: it is stored |
 | a malformed frame is refused, recorded, and harms nothing (23 cases) | `test_boundary_attacks.py` | no validator: an unknown argument is accepted, nothing recorded |
@@ -149,21 +149,29 @@ In-process controls are monkeypatches in the tests. Controls for the kernel proc
 ## Speaker assertions (`zoe_os/speaker.py`)
 
 A person-bound request (`forget`, `erase_member`, `erase_item`, `grant`, `revoke`, `undo`, `explain` with `person`) from a surface
-carries `speaker`: `<body>.<mac>`, `body` the unpadded base64url of `{"p": person, "t": issued_ms, "n": 32 hex, "a": audience}`, `mac`
-the hex HMAC-SHA256 of `"zoe-os speaker assertion v1\0" + body` under the speaker-verifier's secret. Mint with
-`speaker.mint(key, person, audience)` (or `speaker.mint_for(key, op, args)`, which reads who and which audience from the request).
+carries `speaker`: `<body>.<mac>`, `body` the unpadded base64url of the compact, key-sorted JSON
+`{"a": audience, "g": generation, "n": 32 hex, "p": person, "t": issued_ms}`, `mac` the hex HMAC-SHA256 of
+`"zoe-os speaker assertion v1\0" + body` under the speaker-verifier's secret. Mint with
+`speaker.mint(key, person, audience, generation=g)` (or `speaker.mint_for(key, op, args, generation=g)`, which reads who and which
+audience from the request).
 
-* **The secret**: `STATE/identity-creds.json`, `{"socket", "creds": {"speaker-verifier": hex}, "ttl_s": 60}`, 0600, atomic, written
-  by both daemons at every start (a fresh secret each time). Never in `creds.json`, never readable through any op, never printed.
-* **The TTL**: accepted only while `now < issued + 60 s` and `issued <= now + 2 s`, and never if issued before the kernel started. A
-  used nonce is kept (in memory, a heap on its keep-until) until `issued + 60 s + 2 s`: keyed to the token's OWN issue time, so it
-  outlives every instant the token could be accepted (a property test and millisecond-boundary tests in `test_speaker.py`).
+* **The secret and the generation**: `STATE/identity-creds.json`,
+  `{"socket", "creds": {"speaker-verifier": hex}, "generation": 32 hex, "ttl_s": 60}`, 0600, atomic, written by both daemons at every
+  start (a fresh secret AND a fresh generation each time). Never in `creds.json`, never readable through any op, never printed.
+* **The window**: accepted only while `now < issued + 60 s` and `issued <= now + 2 s`, and only for THIS run's generation. A used
+  nonce is kept (in memory, a heap on its keep-until) until `issued + 60 s + 2 s`: keyed to the token's OWN issue time, so it
+  outlives every instant the token could be accepted in this run. Across runs the generation does the work: no token minted for a
+  previous run is ever accepted, whatever the clocks did (a restart inside the skew, a wall clock stepped back) and even under a
+  provisioned secret. There is no dead window after a start: a token for the new generation is good at once. (Property tests over
+  one run and over restart sequences, and millisecond-boundary tests, in `test_speaker.py`.)
 * **In the lab**, the test is the component that verifies people: `Box.client("panel")`, `BrainBox.client("panel")` and the
-  authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=)`); `Box.assertion()`
+  authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=, speaker_generation=)`);
+  `Box.assertion()`
   mints one for a raw frame. Skills' clients get no key.
-* **A production client must**: read `identity-creds.json` from the provisioned state directory (re-read it after a refusal or a
-  kernel restart), mint one assertion per request ONLY after it has itself verified the person who is deciding, with the audience
-  that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
+* **A production client must**: read `identity-creds.json` (the key AND `generation`) from the provisioned state directory, put
+  `"g": generation` in every token, and re-read the file after any `speaker unproven` refusal or a reconnect (a restarted kernel has a
+  new key and a new generation; retry the request once with a fresh token). Mint one assertion per request ONLY after it has itself
+  verified the person who is deciding, with the audience that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
 * **Not additive**: a surface client that sends no `speaker` is refused `speaker unproven` (code `refused`), a real refusal.
 
 ## The reconcile digest (`list_digest`)

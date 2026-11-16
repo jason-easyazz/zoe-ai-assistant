@@ -100,6 +100,10 @@ class KernelServer:
         """For the supervisor only (never a verb): the secret the speaker-verifier mints with."""
         return self._speaker._key
 
+    def speaker_generation(self) -> str:
+        """For the supervisor only (never a verb): this run's generation, which every assertion must name."""
+        return self._speaker.generation
+
     def withdraw(self, name: str) -> None:
         self._creds.pop(name, None)
 

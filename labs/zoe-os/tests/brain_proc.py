@@ -44,6 +44,7 @@ def main() -> None:
              for name in ("brain", "voice", "panel", "audit")}
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print(json.dumps({"pid": os.getpid(), "creds": creds, "speaker_key": srv.speaker_secret().hex(),
+                      "speaker_generation": srv.speaker_generation(),
                       "recovered": [e.seq for e in k.recovered]}),
           flush=True)
     for line in sys.stdin:

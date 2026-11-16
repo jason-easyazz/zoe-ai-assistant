@@ -37,9 +37,11 @@ class Daemon:
         raw = json.loads((state / "creds.json").read_text())
         self.creds = {k: bytes.fromhex(v) for k, v in raw["creds"].items()}
         self.sock = raw["socket"]
-        self.speaker_key = bytes.fromhex(json.loads((state / "identity-creds.json").read_text())["creds"]["speaker-verifier"])
+        ident = json.loads((state / "identity-creds.json").read_text())
+        self.speaker_key, self.generation = bytes.fromhex(ident["creds"]["speaker-verifier"]), ident["generation"]
         self.voice, self.brain = (Client(self.sock, s, self.creds[s], timeout=5) for s in ("voice", "brain"))
-        self.panel = Client(self.sock, "panel", self.creds["panel"], timeout=5, speaker_key=self.speaker_key)   # the test verified the person
+        self.panel = Client(self.sock, "panel", self.creds["panel"], timeout=5, speaker_key=self.speaker_key,
+                            speaker_generation=self.generation)   # the test verified the person
         self.bare_panel = Client(self.sock, "panel", self.creds["panel"], timeout=5)                          # the surface's word alone
         erase = json.loads((state / "erase-creds.json").read_text())["creds"]["eraser"]
         self.eraser = Client(self.sock, "eraser", bytes.fromhex(erase), timeout=5)       # the member-delete path's own credential
@@ -182,7 +184,7 @@ def test_a_member_is_erased_only_by_the_member_delete_credential_or_their_own_pr
     with pytest.raises(Refused, match="speaker unproven"):
         d.bare_panel.call("erase_member", subject=A)                 # the panel's credential alone: refused
     with pytest.raises(Refused, match="speaker unproven"):           # B's proven word cannot erase A
-        d.bare_panel.call("erase_member", subject=A, speaker=speaker.mint(d.speaker_key, B, "forget.person"))
+        d.bare_panel.call("erase_member", subject=A, speaker=speaker.mint(d.speaker_key, B, "forget.person", generation=d.generation))
     assert d.digests() == sorted([digest("oat milk"), digest("rice")])     # nothing was erased by the refused calls
     assert "eraser" not in json.loads((state[0] / "creds.json").read_text())["creds"]       # apart from the surfaces' file
     for name in ("erase-creds.json", "identity-creds.json"):

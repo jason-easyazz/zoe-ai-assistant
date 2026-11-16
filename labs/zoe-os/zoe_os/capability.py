@@ -31,6 +31,12 @@ class Person:
     guardians: tuple[str, ...] = ()
 
 
+def guards(actor: str, who: Person | None) -> bool:
+    """Is ``actor`` a guardian of ``who`` RIGHT NOW? Only while the kernel's own roster says ``who`` is a CHILD: a guardian link on an
+    adult (left over from a role change, or written by mistake) grants no reach. The one test every guardian path uses."""
+    return who is not None and who.role == CHILD and actor in who.guardians
+
+
 @dataclass(frozen=True)
 class Manifest:
     skill: str
@@ -203,4 +209,4 @@ class Enforcer:
         who = self.store.people.get(subject)
         if who is None or actor not in self.store.people:
             return Decision(False, "only a person can ask to forget")
-        return Decision(actor == subject or actor in who.guardians, "not theirs to forget")
+        return Decision(actor == subject or guards(actor, who), "not theirs to forget")
