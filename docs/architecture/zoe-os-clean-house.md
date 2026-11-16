@@ -80,7 +80,7 @@ The fixed class vocabulary below is used in both detail cells of each generalise
 | L11 | DUP | M | `zd/user_filters.py:17,39` | guest predicate 5 of 6 (the sentinel list; the natural home for the one function) | the function every other site calls | NEW WP-32 | P3 | low | open |
 | L12 | DUP | M | `zd/list_sharing.py:81-82` | guest predicate 6 of 6 | as L07 | NEW WP-32 | P3 | med | open |
 | L13 | DUP | M | `zd/skybridge_service.py:4875,5024,5142,5187,5276` | 5 literal `{"guest","voice-guest"}` checks | as L07 | NEW WP-32 | P3 | med | open |
-| L14 | DUP | M | `zd/routers/lists.py:49-53,86` | fridge rule copy 1 of 4 ("anyone at the panel may edit items on household lists") | the household principal's rule in the kernel (G3), matching `list_service.py:807-808`; three copies deleted at P6 | WP-25 | P6 | med | open |
+| L14 | DUP | M | `zd/routers/lists.py:49-53,86` | fridge rule copy 1 of 4 ("anyone at the panel may edit items on household lists") | the shared device principal's rule in the kernel's settings (G3, A.7), matching `list_service.py:807-808`; three copies deleted at P6 | WP-25 | P6 | med | open |
 | L15 | DUP | M | `zd/skybridge_service.py:2947-2950,3073` | fridge rule copy 2 of 4 | as L14 | WP-25 | P6 | med | open |
 | L16 | DUP | M | `zd/intent_router.py:3977,4193-4203` | fridge rule copy 3 of 4 | as L14 | WP-25 | P6 | med | open |
 | L17 | DUP | M | `zd/list_service.py:807-808` | fridge rule copy 4 of 4 (the reference copy) | the kernel rule is pinned to this one by a golden table | WP-25 | P3 | low | open |
@@ -111,7 +111,7 @@ The fixed class vocabulary below is used in both detail cells of each generalise
 | K07 | PRIV | S | held privately | consent or disclosure gap | consent or disclosure gap | NEW WP-01b | P3 | med | open |
 | K08 | VER | M | PR #2639 | reconcile lands after #2638 and has no uncertain-receipt settlement (G18) | settlement added; drift report reads fingerprints | WP-22 | P3 | low | in flight #2639 |
 | K09 | NAME | M | lab `drivers.py:21-31` | list rows keyed by person only, default list "shopping" (G2) | list id, name, type, visibility, owner; an actor separate from the owner | WP-25 | 5.1 | med | open |
-| K10 | NAME | M S | lab (no household principal) | no "household at the panel" principal (G3) | the principal of study D.5 with the fridge rule and alarm silencing | WP-25 | 5.1 | med | open |
+| K10 | NAME | M S | lab (no household principal) | no shared device principal for a signed-in panel with nobody verified (G3) | a device principal with narrow fixed rights (study D.5, A.7); "household", the fridge rule and alarm silencing are its settings, not kernel words | WP-25 | 5.1 | med | open |
 | K11 | NAME | M | lab `capability.py:20,101` | the guest role exists but is never created; no named guests (G4) | guest persons with expiry and their own forget | WP-25 / WP-23a | 5.1 | med | open (blocks #2534, #2537 for kernel cases) |
 | K12 | PRIV | M | held privately | authorisation gap | authorisation gap | WP-22 / WP-23a | P3 | med | open |
 | K13 | PRIV | P | held privately | authorisation gap | authorisation gap | WP-22 / WP-25 | P3 | med | open |
@@ -139,7 +139,7 @@ The fixed class vocabulary below is used in both detail cells of each generalise
 | KN02 | NAME | M | lab `drivers.py:52-60` | `remind.set` takes relative minutes 1..10080 only (G7) | absolute wall time plus the household zone, date-only at the default time, no 7-day cap | WP-41a | 5.2 | med | open |
 | KN03 | NAME | M | lab | no recurrence (G8) | the production RRULE subset; one golden table read by both sides | WP-41b | 5.2 | med | open |
 | KN04 | NAME | M | lab `zoe_os/skills/reminders.py:26` | no edit, snooze, done (one occurrence) or delete on the brain path (G9) | the verbs with today's owner and family rules | WP-41c | 5.2 | med | open |
-| KN05 | NAME | M | lab `drivers.py:80-92` | one alarm per person, `HH:MM` only (G10) | up to 30, labels, repeat rules, once-date, overrides, enabled, snooze limits, household owner | WP-50a / WP-50b | 5.3 | med | open |
+| KN05 | NAME | M | lab `drivers.py:80-92` | one alarm per person, `HH:MM` only (G10) | up to 30, labels, repeat rules, once-date, overrides, enabled, snooze limits, a shared (device) owner | WP-50a / WP-50b | 5.3 | med | open |
 | KN06 | OWN | S | `zd/skybridge_service.py:241,304` | timers are decided by nobody and cancel records no receipt; study: timers are recorded, not decided (drops G11) | a create and cancel receipt; labels in forget reach (WP-53) | WP-53 | 5.3 | low | open |
 | KN07 | MEM | M | lab `capability.py:86`, `attention.py:30-32`, `twin/unusual.py:63` | grants, manifests, attention settings, sharing, reminders and alarms live in memory (G12) | durable stores, crash-tested like the record | WP-41a / WP-50a / WP-60 | P4 | med | open |
 | KN08 | NAME | M | lab `kernel.py:41`, `capability.py:82-84` | the roster is fixed at construction; no `member_upsert` / `member_remove` (G13) | wire ops; `member_remove` chains to `erase_member` | WP-23a | P4 | med | open |
@@ -159,7 +159,7 @@ The fixed class vocabulary below is used in both detail cells of each generalise
 | KN22 | FGT | P | held privately | forget does not reach a store | forget does not reach a store | NEW WP-09a | P1 | med | open |
 | KN23 | TEST | P | held privately | forget does not reach a store | forget does not reach a store | NEW WP-09a | P1 | med | open |
 | KN24 | TEST | P | held privately | forget does not reach a store | forget does not reach a store | WP-10 | P1 | med | open |
-| KN25 | OWN | P | design (P 5.4, Q7) | no stated backup retention window; person-facing text could promise "forever" over an unreachable copy | a window chosen by the owner and the honest sentence | WP-09a | P1 | low | open |
+| KN25 | OWN | P | design (P 5.4, Q7) | no stated backup retention window; person-facing text could promise "forever" over a copy a forget does not touch | DECIDED (owner, 2026-11-16): backups keep their data and a restore brings back everything; say that plainly wherever Zoe describes forgetting | WP-09a | P1 | low | open |
 | KN26 | NAME | P | design (P 6.3, 6.4) | drivers declare nothing about repeat safety; relative verbs are allowed | every driver idempotent-by-key, readable or fire-and-forget; absolute verbs only | NEW WP-78 | P4 | low | open |
 | KN27 | NAME | P | design (P 6.5) | an uncertain receipt is never resolved | a bounded resolver pass on start and on a timer | NEW WP-78 | P4 | low | open |
 | KN28 | BUG | P | held privately | security or privacy assurance gap | security or privacy assurance gap | NEW WP-01b | P3 | low | open |
@@ -189,7 +189,7 @@ The fixed class vocabulary below is used in both detail cells of each generalise
 | KN52 | DOC | M H | branch `ci/zoe-os-tests-in-validate` (r) | the CI branch puts the lab tests into the `unit-shard` lanes; the map recommends a separate step in `checks` because `tests/AGENTS.md:20` forbids two service trees in one invocation; its shard pins never ran | one approach chosen; the pins run | WP-02 | P1 | med | local (unpushed) |
 | KN53 | OWN | H | proposed kernel DB path (r) | D3 decided "own file beside Zoe's data" but the exact path waits on the unit | the path confirmed and written in the unit and store entry | WP-04 | P1 | low | open |
 | KN54 | FLAG | M | `tools/audit/flag_inventory.py:36-38,871-873` | moving the kernel out of `labs/` moves its flag reads from the LAB section to production | the registry entries updated in the move | WP-03 | P3 | low | open |
-| KN55 | DOC | M S | `services/AGENTS.md:25` | "no household concepts in kernel code" reads as a ban on a kernel that models household lists (Q5, now closed) | the rule scoped to the main service's router, memory schema, auth and tools | WP-03 | P3 | low | open |
+| KN55 | DOC | M S | `services/AGENTS.md:25` | "no household concepts in kernel code" is a ban the lab kernel breaks today (roles, guardian-of-a-child, a household visibility value) | the rule STANDS and is not narrowed (owner, 2026-11-16): the kernel is reworked to know people, care links and sharing scopes, with household words in a settings file (architecture study A.7, package G-generic) | G-generic, before WP-03 | P3 | med | open |
 | KN56 | NAME | S | design (study E.4) | the "what the kernel owns" table is prose; nothing fails when a write slips past a seam | a machine-readable block; a test per owned action that fails on any other write to its table | NEW WP-75 | P3 | med | open |
 | KN57 | TEST | S | design (study E.5) | no size or dependency budget for the trusted core | 6,000 non-blank lines, stdlib-only imports, no free-text columns, 64/96 MB, each pinned | NEW WP-75 | P3 | low | open |
 | KN58 | TEST | S | design (study E.3) | nothing replays recent decisions through an upgraded kernel | decision replay on a copy of the live record, every difference explained in the PR | NEW WP-75 | P3 | med | open |
@@ -237,7 +237,7 @@ The fixed class vocabulary below is used in both detail cells of each generalise
 | R17 | VER | M | held privately | forget does not reach a store | forget does not reach a store | WP-10 | P1 | med | open |
 | R18 | DOC | M S | `zd/reminder_service.py:57-63` vs study D.5(a) | the map says past dates are refused; the study says production stores one that never fires | the code read and one doc corrected; the spoken reply "that time has passed" pinned | WP-40 | 5.2 | low | open |
 | R19 | BUG | H | `_fire_reminder` (PR #2598) (r) | the claim and lock must span check and deliver, and delete must wait for an in-flight fire; mostly untested on the latest commit | the four focused runs from the PR done | WP-40 | P1 | med | in flight #2598 |
-| R20 | OWN | S | design (study D.5(b)) | a guardian may snooze or complete a child's reminder (owner-accepted; it adds an ability) | in the kernel's reminder rules | WP-41c | 5.2 | low | open |
+| R20 | OWN | S | design (study D.5(b)) | a carer may snooze or complete a reminder of the person they care for, a child or an adult in care, unless it is private (owner, 2026-11-16; it adds an ability) | in the kernel's reminder rules | WP-41c | 5.2 | low | open |
 | R21 | OWN | S | design (study D.5) | snooze length: the kernel allows 1..1440 minutes, production any number | the main service clamps and says so | WP-41c | 5.2 | low | open |
 | R22 | OWN | S | design (study D.5) | reminder priority, category and type: only priority is a rule (urgent may break quiet hours) | priority read by the speak gate only | WP-61 | 5.6 | low | open |
 | R23 | PRIV | C | held privately | action leaves no record | action leaves no record | WP-61 / NEW WP-81 | 5.6 | med | open |
@@ -445,7 +445,7 @@ The map's packages run WP-01 to WP-66. These are new; sizes are [inferred].
 |---|---|---|---|---|
 | WP-01b | Authority kernel integration, privacy safeguards and reliable settlement | L | P3 | K |
 | WP-02b | The brain's Node suite (and the kernel lab app's) in CI, offline; `set_timer` through `runWrite` | S | now | L + G |
-| WP-09a | Forget and restore consistency, with stated backup retention | S | P1 | K + G |
+| WP-09a | Forget reaches the stores listed privately (KN22, KN23, F12), and person-facing text states that backups and restores keep data. No restore-time forget replay and no backup rewriting is owed | S | P1 | K + G |
 | WP-24R | Complete, durable and resumable member removal; replaces WP-24 | M | now | G |
 | WP-26R | Authorship and accepted-sharing migration, including an explicit old-row policy | M | P3 | G |
 | WP-31 | Read side: one visibility function for lists, reminders and calendar; the kernel's sharing written as the `visibility` projection; a test forbidding raw filters (study G.9) | M | starts now, finishes P6 | G |
