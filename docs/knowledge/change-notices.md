@@ -70,6 +70,16 @@ update from an assistant". The rules, all in `change_notices.py` and pinned by e
   `MAX_CHUNKS` (3) instant messages a tick. What does not fit rolls into the next digest with the same
   `rolled_to_digest` event (`reason` `spacing`, `cap` or `rate`). Within a tick the single messages now go bad news
   first; the set of messages is the same.
+- **Bad news and decisions are must-keep, trailer or not.** A revert, a stuck deploy and a decision count as
+  delivered only once their own line was in a sent message; they are never folded into "...and N more" (instant
+  batch and digest, technical and plain). What does not fit follows (instant: the same tick; digest: the next
+  tick). Only ordinary good news and housekeeping may be counted without being shown. Pointer mode is the
+  exception by design: a pointer is the member's chosen level of detail (design 3.1, `detail: pointer` =
+  content-free), so its one message marks everything it stands for delivered; the content stays on the desktop and
+  GitHub.
+- **Follow-ups read the real clock for quiet hours.** The first messages of a tick use the tick's own time, as
+  before; before each follow-up the live clock is read (`tick(clock=...)`, injectable for tests), so a follow-up is
+  held if quiet hours began after the tick started.
 - **"May not have reached you" mentions are one line each and must-keep.** Each uncertain notice has its own line
   carrying only its own key, so clipping or overflow can never mark another one delivered; one that does not fit
   stays `uncertain` and is mentioned in the next digest's follow-up (once in all), never resent as itself.
