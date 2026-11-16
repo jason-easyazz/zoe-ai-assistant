@@ -2,11 +2,12 @@
 
 ## First-Time Setup
 
-For a new installation, initialize local schemas before starting services:
+For a new installation, run the installer (it applies the PostgreSQL migrations,
+downloads the brain and installs the services; see the README *Install* section):
 
 ```bash
 cd /home/zoe/assistant
-./scripts/setup/init_databases.sh
+./scripts/setup/install-jetson.sh
 ```
 
 Existing installations should keep their current databases.
