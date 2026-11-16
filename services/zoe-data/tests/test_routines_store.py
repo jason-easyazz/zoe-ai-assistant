@@ -678,3 +678,25 @@ def test_a_one_off_naming_a_forgotten_entity_is_refused(store):
         run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take Quinn's book"))
     assert e.value.code == "names_forgotten"
     assert run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take the book"))["text"] == "take the book"
+
+
+def test_an_actor_erased_by_another_process_mid_tick_writes_nothing_of_theirs(store, monkeypatch):
+    """The actor case across PROCESSES: Sam's delete runs elsewhere (its watermark first, then its eraser) between Sam's tick's read
+    and its write. This process's gate sees nothing; the durable watermark re-read under the lock refuses the tick."""
+    import erase_watermark
+
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    ds = _first(fam, SAM)
+    _as_another_process(monkeypatch)
+
+    async def delete_sam_elsewhere():
+        await erase_watermark.record(SAM)
+        await rs.forget_user(SAM)
+
+    async def scenario():
+        _hook_rows(monkeypatch, "SELECT ds.state", delete_sam_elsewhere)
+        with pytest.raises(rs.StoreError) as e:
+            await rs.act_tapped(SAM, ds, "done", verified=True)
+        assert e.value.code == "erased"
+    run(scenario())
+    assert store.q("SELECT state, actor_user_id FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending", None)]

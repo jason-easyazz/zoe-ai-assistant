@@ -263,3 +263,63 @@ async def test_a_member_erase_holding_the_lock_refuses_the_waiting_write_that_be
     assert e.value.code == "erased"
     await asyncio.wait_for(eraser, 60)
     assert await world.admin.fetchval("SELECT count(*) FROM routines") == 0
+
+
+# (d) a tick takes the subject's AND the actor's lock in sorted order; two opposite ticks do not deadlock
+async def test_two_opposite_ticks_take_both_locks_in_sorted_order_and_do_not_deadlock(world, monkeypatch):
+    house = await rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",))
+    yard = await rs.create_routine(SAM, "Yard", "dinner", visibility="family", steps=("water the lawn",))
+    a_line = (await rs.day_copy(SAM, house["id"]))["steps"][0]["id"]
+    s_line = (await rs.day_copy(ALEX, yard["id"]))["steps"][0]["id"]
+    Recording.locks = {}
+    holding = _hold_writer(world, monkeypatch)
+    first = asyncio.ensure_future(rs.act_tapped(SAM, a_line, "done", verified=True))     # Sam ticks Alex's line
+    await asyncio.wait_for(holding.wait(), 15)
+    a, b = await asyncio.wait_for(asyncio.gather(first, rs.act_tapped(ALEX, s_line, "done", verified=True)), 60)
+    assert a["state"] == b["state"] == "done"
+    takes = [keys for keys in Recording.locks.values() if len(keys) == 2]
+    assert len(takes) == 2 and all(keys == [f"routines|{ALEX}", f"routines|{SAM}"] for keys in takes)
+
+
+# (e-a, ticks) the member-erase version of (a): the tick lands first and the member erase that follows blanks the actor
+async def test_a_tick_holding_the_lock_lands_first_and_the_actors_member_erase_then_blanks_it(world, monkeypatch):
+    house = await rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",))
+    line = (await rs.day_copy(SAM, house["id"]))["steps"][0]["id"]
+    holding = _hold_writer(world, monkeypatch)
+    tick = asyncio.ensure_future(rs.act_tapped(SAM, line, "done", verified=True))
+    await asyncio.wait_for(holding.wait(), 15)
+
+    async def delete_sam():
+        await erase_watermark.record(SAM)            # delete_user's order: the durable mark, then the erasers
+        return await rs.forget_user(SAM)
+    await asyncio.wait_for(asyncio.gather(tick, delete_sam()), 60)
+    assert await world.admin.fetchval("SELECT count(*) FROM routine_day_steps WHERE actor_user_id = $1", SAM) == 0
+
+
+# (e-b, ticks) the member-erase version of (b): the erase holds the lock; the tick that began before it is refused by the re-read mark
+async def test_a_member_erase_holding_the_lock_refuses_the_waiting_tick_that_began_before_it(world, monkeypatch):
+    house = await rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",))
+    line = (await rs.day_copy(SAM, house["id"]))["steps"][0]["id"]
+    eraser_holding = _hold_eraser(world, monkeypatch, _MEMBER_SCAN)
+    go = asyncio.Event()
+    real_rows = rs._rows
+
+    async def rows(db, sql, params=()):                # the tick's own first read waits until the erase is holding its lock
+        out = await real_rows(db, sql, params)
+        if sql.startswith("SELECT ds.state") and not go.is_set():
+            await asyncio.wait_for(eraser_holding.wait(), 15)
+            go.set()
+        return out
+    monkeypatch.setattr(rs, "_rows", rows)
+    tick = asyncio.ensure_future(rs.act_tapped(SAM, line, "done", verified=True))       # began BEFORE the mark
+    await asyncio.sleep(0.05)
+
+    async def delete_sam():
+        await erase_watermark.record(SAM)
+        return await rs.forget_user(SAM)
+    eraser = asyncio.ensure_future(delete_sam())
+    with pytest.raises(rs.StoreError) as e:
+        await asyncio.wait_for(tick, 60)
+    assert e.value.code == "erased"
+    await asyncio.wait_for(eraser, 60)
+    assert await world.admin.fetchval("SELECT count(*) FROM routine_day_steps WHERE actor_user_id = $1", SAM) == 0
