@@ -280,3 +280,20 @@ def test_a_removed_carer_loses_an_alarm_at_once_and_regains_it_with_the_link(clo
     assert not al._may_see(A, row)
     people["member-c"] = Person("member-c", ADULT, guardians=(A,))
     assert al._may_see(A, row)
+
+
+def test_a_removed_carer_cannot_explain_or_undo_an_alarm_change_until_the_link_returns(house):
+    a = rid(house.act(B, "alarm.set", time="06:30", label="synthetic"))
+    house.al.grants = house.k.grants
+    house.k.grants.people[B] = Person(B, ADULT, guardians=(A,))               # A cares for B (an adult in care)
+    receipt = house.act(A, "alarm.edit", id=a, label="synthetic edit")
+    assert receipt.verified and house.k.explainer.why(receipt.seq, person=A)["seq"] == receipt.seq
+    house.k.grants.people[B] = Person(B, ADULT)                               # A is no longer B's carer
+    with pytest.raises(Refused):
+        house.k.explainer.why(receipt.seq, person=A)
+    with pytest.raises(Refused, match="not theirs to undo"):
+        house.k.actions.undo(A, actor=A)
+    assert house.al.rows[a]["label"] == "synthetic edit"
+    house.k.grants.people[B] = Person(B, ADULT, guardians=(A,))               # the link is back: so is the reach
+    assert house.k.explainer.why(receipt.seq, person=A)["seq"] == receipt.seq
+    assert house.k.actions.undo(A, actor=A).verified and house.al.rows[a]["label"] == "synthetic"

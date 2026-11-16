@@ -59,6 +59,10 @@ class DurableAlarms(DurableRows):
     def _may_see(self, person: str, row: dict) -> bool:
         return row["owner"] == person or (not row.get("private") and self._carer(person, row["owner"]))
 
+    def may_reach(self, person: str, row: dict) -> bool:
+        """Read, and so undo and explain (``rows.DurableRows``): by the CURRENT care link, never by who set or last touched it."""
+        return self._may_see(person, row)
+
     def summary(self, row: dict) -> dict:
         return {"alarm": row["time"]}           # the proof key the shadow client compares (os_shadow.VERBS alarm_create)
 
