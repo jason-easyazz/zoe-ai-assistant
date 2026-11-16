@@ -77,12 +77,15 @@ class Recording(db_pool.AsyncpgCompat):
 
 
 class World:
-    def __init__(self, schema, pool, admin):
-        self.schema, self.pool, self.admin = schema, pool, admin
+    def __init__(self, schema, pool, admin, watch):
+        # ``admin`` seeds and asserts (and plays the OTHER process's ledger write); ``watch`` ONLY polls pg_stat_activity. An asyncpg
+        # connection runs one operation at a time, and the watcher polls WHILE the other process writes (case a): one connection
+        # each, or asyncpg raises "another operation is in progress".
+        self.schema, self.pool, self.admin, self.watch = schema, pool, admin, watch
 
     async def blocked_on_advisory(self) -> int:
         """Backends of THIS test's pool really waiting on an advisory lock."""
-        return await self.admin.fetchval(
+        return await self.watch.fetchval(
             "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 "
             "AND wait_event_type = 'Lock' AND wait_event = 'advisory'", self.schema)
 
@@ -109,6 +112,7 @@ async def world(monkeypatch):
     root = await asyncpg.connect(URL)
     await root.execute(f'CREATE SCHEMA "{schema}"')
     admin = await asyncpg.connect(URL, server_settings={"search_path": schema})
+    watch = await asyncpg.connect(URL)
     for f, t in _TABLES:
         await admin.execute(_create_sql(f, t))
     pool = await asyncpg.create_pool(URL, min_size=3, max_size=8,
@@ -142,12 +146,13 @@ async def world(monkeypatch):
     monkeypatch.setattr(user_erase_gate, "in_progress", lambda _m: False)
     monkeypatch.setattr(user_erase_gate, "snapshot", dict)
     try:
-        yield World(schema, pool, admin)
+        yield World(schema, pool, admin, watch)
     finally:
         memory_forgotten.set_backend(None)
         erase_watermark.set_backend(None)
         await pool.close()
         await admin.close()
+        await watch.close()
         await root.execute(f'DROP SCHEMA "{schema}" CASCADE')
         await root.close()
 
