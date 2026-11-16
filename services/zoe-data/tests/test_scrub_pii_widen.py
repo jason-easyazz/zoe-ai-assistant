@@ -588,3 +588,175 @@ def test_every_label_form_stays_linear_on_a_long_padding_run(pad):
         if t_long > 0.08 and all(_timed(long) / max(_timed(short), 1e-4) > 2.5 for _ in range(2)):
             slow.append((form, "ratio", round(t_long, 3)))
     assert not slow, slow
+
+
+# ── review round (2026-11-16): the Nth contact detail after the first; introducers that were excused ───────────────────────────
+
+@pytest.mark.parametrize("text", [
+    "call me on 0400 555 101. 9555 0123",
+    "call me on 0400 555 101, 9555 0123",
+    "call me on 0400 555 101 or 9555 0123",
+    "call me on 0400 555 101 and 9555 0123",
+    "call me on 0400 555 101\n9555 0123",
+    "call me on 0400 555 101; 9555 0123 after five",
+    "call me on 0400 555 101. 9555 0123. 9555 0456",
+    "call me on 0400 555 101, 9555 0123 or 9555 0456",
+    "my email is sam@example.com. 9555 0123",
+    "email me at sam@example.com or 9555 0123",
+])
+def test_every_contact_number_after_the_first_is_redacted(text):
+    """A second (and Nth) number said straight after a redacted contact detail is redacted too: the split phone pass ends the
+    first at the sentence end and the label the wide fallback needs is gone by then. Fails on d038d11e9."""
+    out, reject = scrub_pii(text)
+    assert reject is None
+    for secret in ("9555 0123", "9555 0456", "0400 555 101", "sam@example.com"):
+        assert secret not in out, (text, out)
+
+
+@pytest.mark.parametrize("text", [
+    "call me on 0400 555 101. I have 2 kids", "call me on 0400 555 101, 3 times a day", "call me on 0400 555 101 in 2026",
+])
+def test_a_short_number_after_a_contact_detail_is_kept(text):
+    """The chain takes only phone-sized runs (8+ digits): a count or a year after a redacted number stays."""
+    out, _ = scrub_pii(text)
+    assert out.startswith("call me on " + R) and out.endswith(text.split("101", 1)[1]), out
+
+
+#: the words REMOVED from the exemption lists in this round (they INTRODUCE a value), each with the forms it now redacts
+_REMOVED_INTRODUCERS = {
+    "same": ["my password is same as {w}", "my password is the same as {w}", "my password same as {w}"],
+    "the": ["my password the word {w}", "password the one {w}"],
+    "a": ["my password a word {w}"], "an": ["my password an odd word {w}"],
+    "this": ["my password this {w}"], "that": ["my password that {w}"],
+    "my": ["password my {w}"], "your": ["password your {w}"], "our": ["password our {w}"], "their": ["password their {w}"],
+}
+
+
+@pytest.mark.parametrize("word,form", [(w, f) for w, forms in _REMOVED_INTRODUCERS.items() for f in forms])
+@pytest.mark.parametrize("value", ["zebrafiddle", "quokkamarble"])
+def test_a_removed_introducer_followed_by_a_value_is_redacted(word, form, value):
+    """FAIL CLOSED after a secret label: a word that INTRODUCES a value is not an exemption. Fails on d038d11e9 (each one passed
+    the whole sentence through unchanged)."""
+    import memory_service as ms
+
+    assert word not in ms._LABELLED_NOT_VALUES and word not in ms._PASSWORD_NOT_VALUES
+    out, reject = scrub_pii(form.format(w=value))
+    assert reject is None and value not in out and R in out, out
+
+
+@pytest.mark.parametrize("text", [
+    "my password is saved as {w}", "my password is written like {w}", "my password will be {w}", "my password should be {w}",
+    "the password has been {w}", "the pin and password are {w}", "my password isn't {w} any more", "the password I use is {w}",
+    "the password that you gave me was {w}",
+])
+@pytest.mark.parametrize("value", ["zebrafiddle", "quokkamarble"])
+def test_other_value_introducing_wordings_are_redacted(text, value):
+    out, _ = scrub_pii(text.format(w=value))
+    assert value not in out and R in out, out
+
+
+@pytest.mark.parametrize("text", [
+    "my password is wrong", "my password is expired", "my password is not working", "my password isn't working",
+    "my password will be expired", "my password should be strong", "the password I use is wrong", "my password will expire soon",
+    "my password is saved", "my password is saved on the fridge", "the password manager is great", "password and username",
+])
+def test_kept_state_wordings_still_pass_unchanged(text):
+    assert scrub_pii(text) == (text, None)
+
+
+def test_the_contact_chain_stays_linear_on_long_padding():
+    """The chain pass on an adversarial run of separators and digit groups stays linear (the same bound as the other passes)."""
+    base_text = "call me on 0400 555 101" + ". 9555 0123" * 50
+    t0 = time.perf_counter()
+    scrub_pii(base_text)
+    base = time.perf_counter() - t0
+    long_text = "call me on 0400 555 101" + ". 9555 0123" * 2000 + " ." * 5000
+    t0 = time.perf_counter()
+    out, _ = scrub_pii(long_text)
+    took = time.perf_counter() - t0
+    assert "9555" not in out
+    assert took < 50 * base + 0.5 and took < 10.0, (took, base)
+
+
+@pytest.mark.parametrize("text", [
+    "call me on 0400 555 101, or {n}", "call me on 0400 555 101.    {n}", "call me on 0400 555 101; and {n}",
+])
+def test_a_chained_number_after_punctuation_and_a_conjunction_is_redacted(text):
+    out, _ = scrub_pii(text.format(n="9555 0123"))
+    assert "9555 0123" not in out and "0400 555 101" not in out, out
+
+
+@pytest.mark.parametrize("text", [
+    "my password is saved under the name {w}", "my password is saved, as {w}", "the password I use will be {w}",
+    "my password is same as my very favourite old childhood nickname {w}", "my password is not working but was {w}",
+    "my password the word my very favourite old childhood nickname {w}",
+])
+def test_a_value_later_in_the_clause_is_redacted(text):
+    """Cross-review round: the value introduced later in the clause, or after more than six words, goes too."""
+    out, _ = scrub_pii(text.format(w="zebrafiddle"))
+    assert "zebrafiddle" not in out and R in out, out
+
+
+@pytest.mark.parametrize("text,kept", [
+    ("my password is the word quokkamarble and I am allergic to peanuts", "and I am allergic to peanuts"),
+    ("password the word quokkamarble and we left early", "and we left early"),
+])
+def test_an_introduced_value_ends_where_a_new_clause_starts(text, kept):
+    out, _ = scrub_pii(text)
+    assert "quokkamarble" not in out and out.endswith(kept), out
+
+
+@pytest.mark.parametrize("text", [
+    "call me on 0400555101. 12", "call me on 0400555101. 1234", "call me on 0400 555 101. 9555 0123",
+    "call me on 0400. 555 101", "ring the shop on 0400 555 101. 0400 555 202", "call me on +61 400 555 101. 9555 0123",
+])
+def test_the_wide_phone_shape_is_unioned_with_the_split_one(text):
+    """Review (PR #2574): the wide shape runs on the SAME text as the split shapes and the spans are unioned - a fallback on text
+    a split pass already replaced lost its label and freed the rest ("call me on 0400555101. 12" kept "12")."""
+    out, _ = scrub_pii(text)
+    assert not any(c.isdigit() for c in out.replace("+", "")), out
+
+
+@pytest.mark.parametrize("text", [
+    "my password is written as {w}", "my password is spelled {w}", "my password is spelt {w}", "the password reads {w}",
+    "my password is written {w}", "my password is kept as {w}", "my password is stored as {w}", "my password is hidden as {w}",
+    "my password written as {w}", "the pin is saved as {w}",
+])
+def test_a_state_word_followed_by_its_value_is_redacted(text):
+    """Review (PR #2574): "written", "saved", "stored", "kept", "hidden" ... can be followed by the value ("is written as X",
+    "is spelled X"): the value after them is redacted."""
+    out, _ = scrub_pii(text.format(w="zebrafiddle"))
+    assert "zebrafiddle" not in out and R in out, out
+
+
+#: THE CLASSIFICATION of every word ``_LABELLED_NOT_VALUES`` keeps after "<label> is / was" (review, PR #2574): STATE / TIME words
+#: are kept only while nothing straight after them could be the value (``_STATE_TAIL_OK``) and no later introducer follows;
+#: PLACE words start a location phrase. A word that INTRODUCES a value is never on the list.
+_CLASSES = {
+    "state": {"wrong", "incorrect", "invalid", "valid", "expired", "working", "broken", "gone", "lost", "forgotten", "missing",
+              "saved", "stored", "kept", "written", "hidden", "weak", "strong", "long", "short", "blank", "empty", "unset",
+              "fine", "ok", "okay"},
+    "time": {"yesterday", "today", "tonight", "recently", "earlier", "lately"},
+    "place": {"on", "in", "under", "behind", "inside", "with", "somewhere", "there", "here"},
+}
+
+
+def test_every_kept_word_is_classified_and_none_is_an_introducer():
+    import memory_service as ms
+
+    assert set(ms._LABELLED_NOT_VALUES) == set().union(*_CLASSES.values())
+    assert _CLASSES["place"] == set(ms._PLACE_WORDS)
+    assert not ms._LABELLED_NOT_VALUES & (ms._LABELLED_INTRODUCERS | ms._STATE_THEN_VALUE)
+
+
+@pytest.mark.parametrize("word", sorted(_CLASSES["state"] | _CLASSES["time"]))
+@pytest.mark.parametrize("intro", ["as", "like", "called"])
+def test_every_kept_state_or_time_word_then_an_introducer_redacts_the_value(word, intro):
+    out, _ = scrub_pii(f"my password is {word} {intro} zebrafiddle")
+    assert "zebrafiddle" not in out, out
+
+
+@pytest.mark.parametrize("word", sorted(_CLASSES["state"] | _CLASSES["time"]))
+def test_every_kept_state_or_time_word_then_a_bare_word_redacts_it(word):
+    out, _ = scrub_pii(f"my password is {word} zebrafiddle")
+    assert "zebrafiddle" not in out, out

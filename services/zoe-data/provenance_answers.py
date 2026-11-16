@@ -1381,12 +1381,10 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         excerpt = str(meta.get("source_excerpt") or "").strip().lower()
         turn = str(meta.get("user_turn_id") or "")
         out = []
-        # THE TWIN RULE (the same fact written twice for the same member by parallel writers; predates the ids): saved-turn ids
-        # only ever SEPARATE - a candidate with its own saved turn is a twin only of that turn's row; every other pair (legacy,
-        # a non-turn kind, or mixed) is decided by the twin criteria below (excerpt / turn id / clock + content words), never
-        # by a store-wide words match
-        kind, src = turn_forget.classify(meta)
-        src = src if kind == turn_forget.TURN else ""
+        # THE TWIN RULE (the same fact written twice for the same member by parallel writers; predates the ids):
+        # ``turn_forget.twin_basis`` - a candidate of the SAME saved turn is a twin by id; a LEGACY candidate is decided by the
+        # criteria below (excerpt / turn id / clock + content words); a candidate of ANOTHER saved turn or of a non-turn source
+        # (``source_kind``) never is, however alike
         _ref_forms: list = []
 
         def ref_forms() -> tuple:           # the target's excerpt forms, scrubbed once (only if a legacy candidate needs them)
@@ -1397,20 +1395,18 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
             m = r.metadata or {}
+            basis = turn_forget.twin_basis(meta, m)
+            if not basis:
+                continue                                     # another saved turn, or a non-turn source: never a twin
             r_turn = str(m.get("user_turn_id") or "")
             r_ex = str(m.get("source_excerpt") or "").strip().lower()
-            r_kind, r_src = turn_forget.classify(m)
-            if r_kind == turn_forget.TURN and r_src != src:
-                continue                                     # PER ROW: a row of ANOTHER saved turn is never a twin, however alike
-            r_src = r_src if r_kind == turn_forget.TURN else ""
-            by_id = bool(src) and r_src == src               # the same saved turn: no text needed to say so
-            # one excerpt inside the other as stored; for a LEGACY candidate only, also as the boundary scrubs it now (a pre-upgrade
-            # row kept its contact as said while a newer excerpt holds it redacted) - never widens a bound or non-turn candidate
+            by_id = basis == turn_forget.BY_ID               # the same saved turn: no text needed to say so
+            # one excerpt inside the other, as stored or as the boundary scrubs it now (a pre-upgrade row kept its contact as said
+            # while a newer excerpt holds it redacted); only a LEGACY candidate ever reaches this
             ex_overlap = not by_id and bool(excerpt and r_ex) and (
                 excerpt in r_ex or r_ex in excerpt
-                or (r_kind == turn_forget.LEGACY and turn_forget.forms_overlap(ref_forms(), turn_forget.excerpt_forms(
-                    str(m.get("source_excerpt") or "")))))
-            if not by_id:                                    # the candidate has no saved turn (legacy / non-turn): the words decide
+                or turn_forget.forms_overlap(ref_forms(), turn_forget.excerpt_forms(str(m.get("source_excerpt") or ""))))
+            if not by_id:                                    # a LEGACY candidate: the words decide
                 if turn and r_turn and r_turn != turn:
                     continue                                 # two different saved turns: a different fact, however alike the words
                 if excerpt and r_ex and not ex_overlap:

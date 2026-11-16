@@ -438,6 +438,27 @@ def classify(row: Any) -> tuple[str, str]:
     return (KIND, kind) if kind else (LEGACY, "")
 
 
+#: ``twin_basis`` results
+BY_ID, BY_WORDS = "id", "words"
+
+
+def twin_basis(target: Any, candidate: Any) -> str:
+    """THE one rule every twin / sibling matcher applies BEFORE its own words criteria (``provenance_answers.twins_of``,
+    ``ask_to_remember.siblings_of``): how a CANDIDATE row may be found a twin of a forget TARGET (``classify`` of each).
+
+    * ``BY_ID``: both are bound to the SAME saved turn - a twin by id (the matcher's content check still applies);
+    * ``BY_WORDS``: the candidate is LEGACY (no provenance) - the matcher's excerpt / clock / content words decide;
+    * ``""``: NEVER a twin, however identical its words - a candidate bound to ANOTHER saved turn, or to a non-turn source
+      (KIND: an Omi recording, a provider, a restore ...; only that row's own forget takes it)."""
+    ck, cs = classify(candidate)
+    if ck == LEGACY:
+        return BY_WORDS
+    if ck == TURN:
+        tk, ts = classify(target)
+        return BY_ID if tk == TURN and ts == cs else ""
+    return ""
+
+
 def provenance(meta: Optional[dict]) -> tuple[str, str]:
     """``classify`` of a memory row's metadata (kept name)."""
     return classify(meta or {})

@@ -510,10 +510,9 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             if ref_is_ask and is_ask_row(m) and ta and tb and ta != tb:
                 continue
             import turn_forget
-            ka, sa = turn_forget.classify(meta)
-            kb, sb = turn_forget.classify(m)
-            sa, sb = (sa if ka == turn_forget.TURN else ""), (sb if kb == turn_forget.TURN else "")
-            if sb and sb != sa:             # PER ROW: a candidate with its own saved turn is NEVER a twin by its words
+            # THE TWIN RULE (``turn_forget.twin_basis``): a candidate of another saved turn or of a non-turn source is NEVER
+            # a sibling by its words; the same saved turn, or a LEGACY candidate, goes on to the words criteria below
+            if not turn_forget.twin_basis(meta, m):
                 continue
             same_turn = False
             if ex_a and ex_b:
