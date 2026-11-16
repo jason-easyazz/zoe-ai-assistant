@@ -426,6 +426,35 @@ def _wait(pred, timeout=3.0):
     return False
 
 
+def test_a_slow_listing_is_stamped_when_it_completes_so_no_hold_is_skipped(daemon):
+    """Review of #2572: the read was stamped BEFORE the listing ran, so a first read that took 1.1 s was already "1.1 s clean"
+    and skipped the clean hold; a disappearance seen by a slow read had its hold shortened the same way."""
+    t = {"now": 100.0}
+    box = {"text": "", "slow": 1.1}
+
+    def _slow_list():
+        t["now"] += box["slow"]                              # the listing itself takes this long
+        return box["text"]
+
+    w = daemon._MediaWatch(list_inputs=_slow_list, spawn_subscribe=lambda: pytest.fail("spawn"), clock=lambda: t["now"],
+                           own_pid=OWN, parent_of=PARENTS.get)
+    w._thread = _Alive()
+    w.refresh()                                              # first read: clean, and it finished just now
+    assert w.snapshot() == (None, 0)                         # not (False, 1100): the clean hold has only begun
+    t["now"] += daemon._MEDIA_HOLD_MS / 1000.0 - 0.05
+    assert w.snapshot()[0] is None
+    t["now"] += 0.1
+    assert w.snapshot()[0] is False
+    box["text"] = _block(1, 7000)
+    w.refresh()
+    assert w.snapshot()[0] is True
+    box["text"] = ""
+    w.refresh()                                              # the foreign stream is gone, seen by a slow read
+    assert w.snapshot() == (True, 0)                         # the gone hold starts when the read completed
+    t["now"] += daemon._MEDIA_HOLD_MS / 1000.0 - 0.05
+    assert w.snapshot()[0] is True
+
+
 class _LiveSub:
     """A subscribe child that stays ALIVE: ``readline`` blocks until the test feeds a line (b"" = the child exits)."""
 
