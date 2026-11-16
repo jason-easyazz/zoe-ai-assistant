@@ -226,3 +226,19 @@ def test_a_token_issued_before_a_forget_never_writes_after_it(tmp_path):
     assert b.record(body(tok, win="followup", still_talking=1, talk_chunks=5), now=T0 + 1) is None
     assert b.record(body(tok, still_talking=1, talk_chunks=5), now=T0 + 1) is None     # nor through its household half
     assert b.states() == {} and "member-1" not in open(path).read()
+
+
+def test_a_child_turn_or_override_never_stores_below_the_floor_on_a_row_made_before_a_role_correction():
+    b = lp.Book()
+    b._states["panel-a|member-1"] = lp.State(level=-2)          # stored with the adult floor, before the role was corrected
+    tok = b.frame("panel-a", "member-1", now=T0, child=True)["token"]
+    b.record(body(tok, win="followup", still_talking=1, talk_chunks=5), now=T0 + 1)
+    s = b.states()["panel-a|member-1"]
+    assert s.floor == lp.CHILD_FLOOR and s.level >= lp.CHILD_FLOOR and s.events_half == lp.HALF
+    b._states["panel-a|member-2"] = lp.State(level=-2)
+    b.say("panel-a", "member-2", "quicker", now=T0, child=True)
+    s2 = b.states()["panel-a|member-2"]
+    assert s2.floor == lp.CHILD_FLOOR and s2.level == lp.CHILD_FLOOR
+    b._states["panel-a|member-3"] = lp.State(level=-2)
+    b.say("panel-a", "member-3", "quicker", now=T0)                   # an adult keeps its own floor
+    assert b.states()["panel-a|member-3"].level == -3

@@ -537,6 +537,15 @@ MAX_TOKENS = 512
 WINDOW_TTL_S = 30
 
 
+def _with_child_floor(s: State) -> State:
+    """``s`` under the CURRENT child role: a row stored with the adult floor (before a role correction) is raised to the child
+    floor before anything is folded into it, so no write can store a child below L0. ``s`` itself when already floored, so an
+    unchanged turn still persists nothing."""
+    if s.floor >= CHILD_FLOOR and s.level >= CHILD_FLOOR:
+        return s
+    return replace(s, floor=max(s.floor, CHILD_FLOOR), level=max(s.level, CHILD_FLOOR))
+
+
 class ListenPaceEraseError(RuntimeError):
     """A member forget removed the rows in memory but could not rewrite the file: NOT forgotten (a restart would reload them).
     The caller fails closed and retries; the retry rewrites the file."""
@@ -598,10 +607,13 @@ class Book:
                 if o is None or o.win == "barge":
                     return None
                 key, _lvl = ent[1]["wake" if o.win == "wake" else "window"]
+                child = ent[1]["child"] and not key.endswith("|" + HOUSEHOLD)
                 cur = self._states.get(key)
                 if cur is None:
                     lvl, _k, _s = level_for(self._states, key.split("|", 1)[0], None, now)
-                    cur = new_state(child=ent[1]["child"] and not key.endswith("|" + HOUSEHOLD), level=lvl)
+                    cur = new_state(child=child, level=lvl)
+                elif child:
+                    cur = _with_child_floor(cur)
                 nxt, ch = step(cur, o, now, reflex_on=reflex_on)
                 if nxt is not cur:
                     self._states[key] = nxt
@@ -619,7 +631,9 @@ class Book:
             lvl, key, _src = level_for(self._states, panel_id, member, now, child=child)
             if not key:
                 return None
-            cur = self._states.get(key) or new_state(child=child and not key.endswith("|" + HOUSEHOLD), level=lvl)
+            is_child = child and not key.endswith("|" + HOUSEHOLD)
+            cur = self._states.get(key)
+            cur = new_state(child=is_child, level=lvl) if cur is None else (_with_child_floor(cur) if is_child else cur)
             nxt, ch = override(cur, kind, now)
             if nxt is not cur:
                 self._states[key] = nxt
