@@ -147,15 +147,40 @@ def shadow_dir_violation():
     return _shadow_dir_violation
 
 
+_shadow_bad_uses: list = []        # the guard's record of THIS test: every shadow-dir read made while the env pointed at a real dir
+
+
+@pytest.fixture
+def shadow_guard_uses():
+    """The guard's record for this test (test_os_shadow_test_isolation.py's negative control reads and then clears it)."""
+    return _shadow_bad_uses
+
+
 @pytest.fixture(autouse=True)
 def _os_shadow_private_state(monkeypatch, tmp_path):
     """Each test: its own EMPTY shadow directory (no kernel ever provisioned: a forget is the flag-off no-op, nothing is parked), the
-    switch off unless the test turns it on. On teardown, a test that left the client on the live install fails (the guard)."""
+    switch off unless the test turns it on. The guard: ``os_shadow.state_dir`` (the ONE place the client, the authority and the speaker
+    find every path) is wrapped, and a test FAILS if the client read its state dir while the env pointed at the live install (unset,
+    empty, or under ~/.zoe). A test that clears the env on purpose without touching the client (the flag-default smoke test) is not
+    a violation: only a USE is."""
+    import os_shadow
+
     monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path / "os-shadow"))
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    del _shadow_bad_uses[:]
+    real = os_shadow.state_dir
+
+    def guarded_state_dir():
+        bad = _shadow_dir_violation()
+        if bad:
+            _shadow_bad_uses.append(bad)
+        return real()
+
+    monkeypatch.setattr(os_shadow, "state_dir", guarded_state_dir)
     yield
-    bad = _shadow_dir_violation()
-    assert not bad, f"this test left the Zoe OS shadow client on a real state dir: {bad}"
+    uses = list(_shadow_bad_uses)
+    del _shadow_bad_uses[:]
+    assert not uses, f"this test used the Zoe OS shadow client against a real state dir: {uses[0]}"
 
 
 @pytest.fixture(autouse=True)

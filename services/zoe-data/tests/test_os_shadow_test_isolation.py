@@ -75,3 +75,18 @@ def test_the_pin_is_an_assignment_never_a_setdefault():
         src = conftest.read_text("utf-8")
         block = src[src.index("# shadow-pin-start"):src.index("# shadow-pin-end")]
         assert "setdefault" not in block and 'os.environ["ZOE_OS_SHADOW_DIR"] =' in block, conftest
+
+
+
+@pytest.mark.parametrize("value", ["", "~/.zoe/os-shadow", None], ids=["empty", "live", "unset"])
+def test_the_guard_records_a_client_use_against_a_real_dir_negative_control(monkeypatch, value, shadow_guard_uses):
+    """A USE of the client while the env points at the live install is recorded (and would fail the test at teardown); clearing the
+    env alone, as the flag-default smoke test does, is not."""
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_SHADOW_DIR")
+    else:
+        monkeypatch.setenv("ZOE_OS_SHADOW_DIR", os.path.expanduser(value))
+    assert shadow_guard_uses == []                                       # cleared env, client untouched: nothing recorded
+    os_shadow.state_dir()                                                # the client reads its dir: recorded
+    assert len(shadow_guard_uses) == 1
+    del shadow_guard_uses[:]                                             # this test's own control must not fail its teardown

@@ -710,8 +710,8 @@ def test_every_park_file_change_fsyncs_its_directory(kernel, monkeypatch, member
     dir_fds = {}
     real_open = os.open
 
-    def track_open(path, flags, *a):
-        fd = real_open(path, flags, *a)
+    def track_open(path, flags, *a, **kw):                               # the runner's Python passes dir_fd=: pass everything through
+        fd = real_open(path, flags, *a, **kw)
         if str(path) == str(kernel.state):
             dir_fds[fd] = path
         return fd
