@@ -64,10 +64,8 @@ Each phase lists what it delivers, what must be proven to start it, what proves 
 - **Delivers:** every real list add, spoken list remove, reminder create and alarm create is also shown to a kernel process. The
   kernel records it and its verdict is compared with what production did. Production is still the only writer.
 - **Needs first:** the shadow PRs landed; a kernel service unit installed; the member roster written; a voice replay (the hook sits
-  on the voice path); the hook's cost on a turn re-measured (it must be a flag read and one queue put); and a test proving the
-  kernel's state directory is in **no** backup (implementation map WP-09a). Every erase entry point must already reach the kernel:
-  the Settings delete button (WP-24) and guardian forget, "forget that" and the MCP erase (WP-64) land before the switch goes on. The shadow holds real words, and until a forget can
-  reach backups a backed-up copy would outlive a forget.
+  on the voice path); the hook's cost on a turn re-measured (it must be a flag read and one queue put). Every erase entry point must already reach the kernel:
+  the Settings delete button (WP-24) and guardian forget, "forget that" and the MCP erase (WP-64) land before the switch goes on.
 - **Owner steps:** install the unit, set the shadow switch and the verb list, restart. Exact commands arrive with the PR.
 - **Proof it worked:** the per-verb report shows lines arriving, agreement near 100%, the kernel answering in under 10 ms at p90,
   and one deliberate "forget" and one demo-member delete seen to empty the kernel's record for that person.
@@ -181,8 +179,8 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 |---|---|---|
 | D1 | The pass mark for a verb | **Decided 2026-11-15 (owner accepted the recommendation):** the Phase 2 numbers, reached by synthetic day + corpus replay + real use, not by waiting 14 days |
 | D2 | Kernel as its own service, or inside the main service | **Decided 2026-11-15:** its own service: a kernel fault must not take Zoe down, and it is the only way to a real trust boundary |
-| D3 | Where the kernel's database lives | **Decided 2026-11-15 (owner: "option a"):** its own database file (never tables in the main database: only the kernel process opens it, which is what makes a receipt trustworthy), in a permanent location beside Zoe's other data rather than the experiment folder, and in the nightly backup once a forget can reach backups (see D4). The exact path is settled when the service unit is written |
-| D4 | Back it up | **Decided with D3:** yes, it belongs in the nightly backup; it holds reminder notes, which are words. **Order, set by the owner's permanent-forget rule:** the kernel's state stays OUT of every backup until a forget can reach backups (implementation map 4.7, WP-09a and WP-09b), so it does not start on the day shadow goes on. Under shadow a lost kernel database is rebuilt from production. It joins the backup, with the backup-safe forget already built, before Phase 3 |
+| D3 | Where the kernel's database lives | **Decided 2026-11-15 (owner: "option a"):** its own database file (never tables in the main database: only the kernel process opens it, which is what makes a receipt trustworthy), in a permanent location beside Zoe's other data rather than the experiment folder, and in the nightly backup. The exact path is settled when the service unit is written |
+| D4 | Back it up | **Decided with D3:** yes, in the nightly backup from the day shadow goes on; it holds reminder notes, which are words. Backups keep their data and a restore brings back everything, including things forgotten since (owner, 2026-11-16): backups and restores are the stated exception to permanent forgetting, so no backup-safe forget is owed |
 | D5 | Who runs the retention sweep | **Decided 2026-11-15:** the night window, after a daytime rehearsal |
 | D6 | How the kernel learns of members | **Decided 2026-11-15:** the main service pushes add and remove; the kernel never reads the member table itself |
 | D7 | A child's permissions | **Decided 2026-11-15:** a guardian grants on the child's behalf; until decided, kernel authority falls back to today's rule for children |
@@ -193,7 +191,7 @@ The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first
 
 | Question | Decision |
 |---|---|
-| Does removing an account erase that person's data | Yes: everything, **except** items that were shared with other members and accepted into their data, which stay with those members. The Settings delete button must run the full erase, not only remove the sign-in account. What counts as "shared and accepted" has to be defined in the data model (an author and an accepted-by record) before the exception can be honoured; until then nothing may be kept on a guess |
+| Does removing an account erase that person's data | Yes: everything, **except** what another member explicitly kept (a "keep it", or a yes to an invitation); someone who only added to a shared list or event keeps their own additions. The administrator is asked at removal: "Do you want to delete all shared content?" (owner, 2026-11-16). No record means delete; a record that cannot be read means stop and retry. The Settings delete button must run the full erase, not only remove the sign-in account. The author and kept-by records have to exist in the data model before anything can be kept; until then nothing is kept on a guess |
 | Does a spoken "remove X from the list" tick the item or delete it | Delete it. The paths that tick it are wrong for that request |
 | How does the kernel learn who lives in the house | Automatically, from the accounts Zoe already has. The owner keeps no second list |
 | Where should the kernel live, and how much should go through it | Open: an architecture study is under way. The owner's expectation is that most things go through the kernel; the study must state the boundary and justify every exception |
@@ -206,7 +204,7 @@ Record: `docs/architecture/zoe-os-architecture.md` (its section on the owner's c
 |---|---|
 | The kernel is briefly down after an action's old rule code has been removed | Zoe refuses list, reminder and alarm changes for that moment and says so; reads keep working. The duplicate rules are not kept forever as a spare |
 | Devices that need a spoken yes every time, and do nothing while the kernel is down | Door locks, garage doors, the security alarm, and anything that heats |
-| What a guardian can see and manage of a child's data | The child's reminders, alarms and lists. Not their private notes or journal |
+| What a guardian can see and manage | A guardian is a carer, for a child or an adult in care (owner, 2026-11-16). Organising: that person's reminders, alarms, lists, routines and calendar, unless an item is marked private; not their private notes or journal. Memory care, a separate named power: correcting or removing what Zoe has remembered about that person, and fixing a fact in place |
 | Changes to the kernel's own code, its "what the kernel owns" table and its budgets | Need a one-tap approval from the owner, even after clean reviews |
 | Things found in pendant recordings, messages, calendars or web pages | Suggestions by default; a per-person "act on my pendant" switch; never automatic for web pages. The pendant itself needs new firmware and a phone app before it is useful: later work, not part of this programme |
 
@@ -217,13 +215,11 @@ Record: `docs/research/zoe-os-prior-art-2026-11-15.md`. These are adopted and be
 | Decision | Why | When |
 |---|---|---|
 | Two durability levels, stated: everyday actions survive a killed process; permissions, forgets and receipts for consequential actions are also synced to survive a power cut, after measuring the cost on this box | the database's normal sync level can lose a committed write on power loss; the one-line rule over-promised | before Phase 3 |
-| A small forget ledger kept OUTSIDE the kernel's database and replayed after any restore | a restored backup would otherwise bring forgotten data back | before the kernel joins a backup (WP-09b, before Phase 3) |
 | Every proposal carries an idempotency key, and the fallback path carries the same key | after a timeout the old path writes; if the kernel then commits late, the same item could be written twice | before Phase 3 |
 | The kernel resolves names to ids and checks ownership itself; it never trusts the model's arguments or matches patterns over free text | the model's arguments can come from text it read | Phase 3 onward |
 | Permissions are small objects with a parent, an expiry and a narrowing; revoking a parent revokes its children; the last adult can never be locked out | guardians, guests and "just for tonight" need it | with the children and guests model |
 | Every driver declares whether it is safe to repeat, readable, or fire-and-forget; actions are absolute ("set to 21"), never relative | makes "uncertain" resolvable by reading back | Phase 4 |
 | Add a schema version and an origin field to stored events now | cheap now, expensive later | with the next kernel change |
-| Per-person encryption keys are prototyped in the lab as a safety net UNDER deletion, not instead of it | it makes content unreadable in every copy, but not metadata, and needs its own key backup | later, lab only |
 | No tamper-evidence chain over readable text | a hash chain over text would fight forget | noted |
 
 ## 7. Risks, and what answers each
@@ -250,7 +246,7 @@ The kernel does not land in a vacuum. These existing tools and open changes need
 | Deploy | [code] `deploy.yml` restarts the main service only; it does not install, update or restart a kernel, so a kernel would keep running old code after a deploy | before Phase 1 |
 | Voice replay gate | The regression probe has no kernel. With the authority flag on it would only ever exercise the fallback. It needs a kernel in the probe's environment and a said-versus-did check for a kernel-decided add | before Phase 3 |
 | Ground truth script | [code] `zoe_ground_truth.sh` reports nothing about the kernel: unit state, shadow and authority flags, last agreement figures | Phase 1 |
-| Nightly backup and restore drill | The kernel's database is in no backup job and no restore drill. Decided: add it, but only after the backup-safe forget (D4); until then a test pins that it stays out | pin in Phase 1; backup and drill before Phase 3 |
+| Nightly backup and restore drill | The kernel's database is in no backup job and no restore drill. Decided: add it (D4) | Phase 1 |
 | Night window | The orchestrator does not know the kernel: whether it stops, when its retention sweep runs, and that neither collides with the brain window | Phase 4 |
 | Memory protection | The kernel unit needs a memory ceiling and must never pressure the voice stack | Phase 1 |
 | Forget and text inventories | The kernel's stores must be listed with their reach (the shadow PR lists its store; the authority and later stores must follow) | each phase |
