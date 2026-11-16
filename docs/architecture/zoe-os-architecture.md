@@ -634,8 +634,11 @@ fingerprints.
 1. **Kernel suite** in CI (WP-02) on every change.
 2. **Decision replay.** The new kernel is started on a copy of the live kernel database and replays the last 14 days of proposals
    from the record; every decision must equal the one recorded, or the difference is listed and explained in the pull request. This
-   is the strongest guard against an upgrade changing the household's rules by accident. Because the kernel holds no words (A.6),
-   the copy is safe to rehearse on.
+   is the strongest guard against an upgrade changing the household's rules by accident. The copy is household data, not a harmless file: the kernel's database holds schedules, relationships and, for now, the
+   words in its rows (status note at the top). So the rehearsal is protected: a scratch copy made on the box, readable only by
+   the kernel's own user, used for this replay alone, deleted when it finishes whether it passes or fails, never written to a
+   backup, a log or an artefact, and never leaving the box. A forget that lands while the copy exists is applied to the copy
+   or the copy is discarded.
 3. **The household twin** plays a week through the new kernel (plan Phase 2).
 4. **Voice replay** with a scratch kernel for any kernel change on the voice path (WP-07).
 5. **Rollout:** deploy restarts the kernel before the main service (additive wire, so the old client keeps working); a health
@@ -755,9 +758,10 @@ kernel.
    only deactivates), it is needed before the kernel holds anything of a person (plan rule 5), and it needs no kernel.
 2. **One write function per action.** Converge list insert (WP-20) and list remove-as-delete (WP-27). Every kernel step measures
    the wrong thing until this is done: today authority would cover a minority of list adds (map R1).
-3. **Re-cut the authority kernel** to decisions-not-content with settle and the idempotency key, move it to `services/zoe-os/`,
-   and give it its own user. After this, list add can go through Phase 1 to 3 on a kernel that is small, low-risk to back up, and
-   out of reach of everything but the main service.
+3. **Make the kernel fit the charter (A.7), move it to `services/zoe-os/`, and give it its own user.** After this, list add can
+   go through Phase 1 to 3 on a kernel that is out of reach of everything but the main service. Re-cutting it to
+   decisions-not-content (with settle and the idempotency key) is deferred until its action protocol is written and reviewed
+   (status note at the top, G.1 and G.2); it is not one of the first three.
 
 ---
 
