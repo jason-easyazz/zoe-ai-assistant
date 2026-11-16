@@ -105,10 +105,31 @@ def test_holder_on_applies_window_until_ttl_or_wake(tmp_path):
     assert h.choose("wake", 301.0)[1] == "panel"
 
 
+def test_a_profile_choose_refused_is_never_cached(tmp_path):
+    """Local shadow + a server frame that says apply: choose() uses today's tails, so the cache must not learn the profile
+    (a restart in "on" would otherwise apply a profile that was never used)."""
+    path = str(tmp_path / "c.json")
+    sh = P.PaceHolder(mode="shadow", path=path)
+    assert sh.note_frame(frame(apply=True), 0.0)
+    assert sh.choose("wake", 1.0) == (None, "env")
+    assert not Path(path).exists()
+
+
+def test_a_profile_is_cached_when_it_is_first_applied_not_when_it_first_arrived(tmp_path):
+    path = str(tmp_path / "c.json")
+    h = P.PaceHolder(mode="on", path=path)
+    h.note_frame(frame(apply=False), 0.0)                              # the server in shadow: received, not applied
+    assert h.choose("wake", 1.0) == (None, "env") and not Path(path).exists()
+    h.note_frame(frame(apply=True), 2.0)                               # the same profile, now applied
+    assert h.choose("wake", 3.0) == (P.parse_profile(PANEL), "panel")
+    assert P.load_cache(path) == P.parse_profile(PANEL)
+
+
 def test_the_cache_survives_a_restart_and_is_0600(tmp_path):
     path = str(tmp_path / "sub" / "listen_pace.json")
     h = P.PaceHolder(mode="on", path=path)
     h.note_frame(frame(), 0.0)
+    assert h.choose("wake", 0.5)[1] == "panel"                        # cached when it is applied
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     cached = P.load_cache(path)
     assert cached == P.parse_profile(PANEL)

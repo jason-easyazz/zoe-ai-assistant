@@ -2,7 +2,7 @@
 the Pi with nothing from zoe-data). SSOT: ``docs/knowledge/voice-listen-pace.md``.
 
 The server owns the state and the controller (``services/zoe-data/listen_pace.py``). The panel only APPLIES a tiny profile it
-was handed in the done frame, remembers the last panel profile across restarts (``~/.zoe-voice/listen_pace.json``, 0600), and
+was handed in the done frame, keeps the last panel profile it APPLIED over restarts (``~/.zoe-voice/listen_pace.json``, 0600), and
 reports one turn's numbers back up. This module decides nothing about levels and touches no device, audio or network:
 
 * ``parse_listen(done_frame)`` validates the optional ``listen`` key; anything malformed is ``None`` (today's tails);
@@ -198,9 +198,11 @@ class PaceHolder:
         self.window_until = 0.0
         self.apply = False
         self.token = ""
+        self._on_disk: Optional[Profile] = cached      # the panel profile the cache file holds (what a restart would apply)
 
     def note_frame(self, frame, now: float) -> bool:
-        """Take a done frame's ``listen`` key. Returns True when one was taken; a malformed one changes nothing."""
+        """Take a done frame's ``listen`` key. Returns True when one was taken; a malformed one changes nothing. Nothing is
+        cached here: receiving a profile is not using it (``choose`` caches what it actually applies)."""
         if self.mode == "off":
             return False
         lst = parse_listen(frame, speculative_tail_ms=self.spec)
@@ -208,10 +210,7 @@ class PaceHolder:
             return False
         self.apply, self.token = lst.apply, lst.token
         if lst.panel is not None:
-            changed = lst.panel != self.panel
             self.panel = lst.panel
-            if changed and lst.apply:          # a shadow frame is never cached: a restart in "on" must not apply it
-                save_cache(self.path, lst.panel)
         if lst.next is not None and math.isfinite(now):
             self.window, self.window_until = lst.next, now + lst.ttl_s
         else:
@@ -233,12 +232,16 @@ class PaceHolder:
 
     def choose(self, win: str, now: float) -> "tuple[Optional[Profile], str]":
         """(profile actually to use, src). Only ``LISTEN_PACE=on`` with a server frame that said ``apply`` uses a profile; a
-        cached profile applies only in ``on`` (the server said apply before). Everything else is today's tails."""
+        cached profile applies only in ``on`` (the server said apply before). Everything else is today's tails.
+        The cache follows APPLICATION: a panel profile returned here is written to it when it differs from what the file holds
+        (a shadow or refused profile never is, so a restart only ever re-applies a profile that was really used)."""
         if self.mode != "on":
             return None, "env"
         prof, src = self.would(win, now)
         if prof is None or (src != "cache" and not self.apply):
             return None, "env"
+        if src == "panel" and prof != self._on_disk and save_cache(self.path, prof):
+            self._on_disk = prof               # a failed write is retried at the next application
         return prof, src
 
 
