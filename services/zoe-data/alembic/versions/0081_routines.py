@@ -24,8 +24,9 @@ FORGET. Every table is REACHED by both forget paths (``forget_reach.py``): the m
 else's; the entity forget (``routines_store.erase_entity``, a step of ``memory_forget_cascade``) deletes a routine, step or day line
 whose words name the forgotten entity. Readings, carer links and the carer outbox are NOT here: they arrive with their own PRs.
 
-Every statement is guarded (``IF NOT EXISTS``), so a rerun is a no-op. CHAIN: on 0079 (0080 / 0081 are reserved by other branches);
-renumber at merge if the heads move. The downgrade drops the four tables (their rows are lost).
+Every statement is guarded (``IF NOT EXISTS``), so a rerun is a no-op. CHAIN: 0081, on 0080 (``0080_memory_value_registry``, main's
+head when this was built); whichever open migration lands second re-parents at landing. The downgrade drops the four
+tables (their rows are lost).
 """
 
 from __future__ import annotations

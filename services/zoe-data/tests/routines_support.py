@@ -17,6 +17,8 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 import db_compat
+import memory_forgotten
+import memory_tombstones
 import routines_store as rs
 import user_erase_gate
 from db_pool import _Cursor, _ExecResult
@@ -26,6 +28,8 @@ MIGRATION = SVC / "alembic" / "versions" / "0081_routines.py"
 ALEX, SAM, RILEY = "m-alex", "m-sam", "m-riley"
 #: a fixed household morning (UTC household clock in these tests): Thursday 2026-11-12, 07:30
 THU = datetime(2026, 11, 12, 7, 30, tzinfo=timezone.utc)
+#: a synthetic ledger secret (tests only): the forget ledger is CONFIGURED in every routines test, over an in-memory backend
+LEDGER_SALT = "routines-unit-test-ledger-secret-0123456789"
 
 
 class Sqlite:
@@ -79,9 +83,28 @@ def store(monkeypatch, tmp_path):
 
     monkeypatch.setattr(db_compat, "get_compat_db", fake_db)
     monkeypatch.setenv("ZOE_TIMEZONE", "UTC")
+    monkeypatch.setenv(memory_forgotten.SALT_ENV, LEDGER_SALT)
     monkeypatch.setattr(rs, "_now_utc", lambda: THU)
+    memory_forgotten.set_backend(memory_forgotten.MemoryBackend())
+    memory_tombstones.clear_all()
     getattr(rs, "reset_walks", lambda: None)()
     user_erase_gate.reset()
     yield db
     getattr(rs, "reset_walks", lambda: None)()
     user_erase_gate.reset()
+    memory_tombstones.clear_all()
+    memory_forgotten.set_backend(None)
+
+
+def seed_day(db: "Sqlite", routine_id: str, subject: str, texts, *, day: str = "2026-11-12", actor=None) -> str:
+    """A day copy with lines, written straight into BOTH day tables (this slice has no day writer; the forget tests must still prove
+    both tables are erased)."""
+    did = f"{routine_id}:{day}"
+    db.conn.execute("INSERT INTO routine_days (id, routine_id, user_id, day, snapshot_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (did, routine_id, subject, day, "2026-11-12T00:00:00+00:00", "2026-11-12T00:00:00+00:00"))
+    for i, text in enumerate(texts, 1):
+        db.conn.execute("INSERT INTO routine_day_steps (id, day_id, step_id, origin, text, kind, position, state, actor_user_id, prompts, "
+                        "created_at, updated_at) VALUES (?, ?, NULL, 'one_off', ?, 'check', ?, 'done', ?, 0, ?, ?)",
+                        (f"{did}:{i}", did, text, i, actor, "2026-11-12T00:00:00+00:00", "2026-11-12T00:00:00+00:00"))
+    db.conn.commit()
+    return did

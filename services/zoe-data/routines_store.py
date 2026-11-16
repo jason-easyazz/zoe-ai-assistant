@@ -21,6 +21,14 @@ THE RULES (each a store-level check, not a caller convention):
     panel sees family routines only. Personal = subject only for every write; family = any member, and a household tap may tick,
     skip or snooze a non-medicine line (the fridge rule).
 
+FORGET WINS EVERY RACE (the store-wide write rule, pinned by a structural test that enumerates this module's writers): every write
+path names its SUBJECT member (whose routine), its ACTOR member(s) (who acts; a household tap has none) and the ENTITY text it
+carries, and runs inside ``_guarded_write``, which holds the erase gate of each member involved (sorted id order) and, inside ONE
+real transaction with the same per-member advisory locks the erasers take, re-checks each member's erase mark (a write that began
+before a member erase is refused, ``erased``) and the entity shield (the in-flight tombstone and the durable ``memory_forgotten``
+ledger, exact words, fail closed: a forgotten name is never written, ``names_forgotten``). Reads apply no forgotten-entity filter:
+the shield on write plus the gated erasers leave nothing to hide, and a failed erase fails the cascade (it is retried).
+
 LOGS: one marker per event, codes and counts only - ``ROUTINE event=<prompted|ticked|skipped|snoozed|undo|missed|refused|created|
 step_added|one_off> kind=<k> via=<said|tapped|-> verified=<0|1> member=<hash8> routine=<hash8>``; never a step's text or a name.
 ``undo quick=1`` (an undo within ``QUICK_UNDO_S`` of the tick) is the wrong-tick measure, which must stay 0.
@@ -162,16 +170,113 @@ def _log(event: str, *, kind: str = "-", via: str = "-", verified: Optional[bool
                 "-" if verified is None else int(bool(verified)), h8(member) if member else "-", h8(routine) if routine else "-", tail)
 
 
-@contextlib.asynccontextmanager
-async def _write_gate(owner: str):
-    """Hold the subject's erase gate through the write: a write that races ``forget_user`` lands before it (and is erased) or is
-    dropped after it - never re-creates what was just forgotten."""
+# -- the ONE write gate (every write path in this module goes through it; a structural test enumerates them) -----------------
+def _start() -> dict:
+    """Every member's erase generation NOW: taken at the START of a write, before its first read. A whole-member erase after this
+    point makes the write stale for good (``_guarded_write`` refuses it), however long it then waits."""
     import user_erase_gate as erase_gate
 
-    async with erase_gate.writing(owner, erase_gate.generation(owner)) as live:
-        if not live:
-            raise StoreError("erased", 409)
+    return erase_gate.snapshot()
+
+
+class _Write:
+    """What a guarded write holds: ``db`` (inside ONE real transaction on Postgres) and the shield over the members' forgotten
+    entities, fetched under the gate before the connection was borrowed (``forgotten`` is pure, so it may be asked mid-transaction)."""
+
+    def __init__(self, members: list, hashes: dict):
+        self.members, self._hashes, self.db = members, hashes, None
+
+    def forgotten(self, text) -> bool:
+        if not text:
+            return False
+        import memory_forgotten
+        import memory_tombstones
+
+        for m in self.members:
+            if memory_tombstones.matching_tombstone(m, str(text)):
+                return True
+            wanted = self._hashes.get(m)
+            if wanted and memory_forgotten.spans_in(m, str(text), wanted, near=False)[0]:
+                return True
+        return False
+
+    def refuse_forgotten(self, *texts) -> None:
+        if any(self.forgotten(t) for t in texts):
+            raise StoreError("names_forgotten", 409)
+
+
+async def _forgotten_hashes(member: str) -> frozenset:
+    import memory_forgotten
+
+    if not memory_forgotten.configured():
+        return frozenset()                       # unconfigured: nothing can have been forgotten durably (the tombstone still holds)
+    try:
+        return await memory_forgotten.active_hashes(member, strict=True)
+    except memory_forgotten.LedgerUnavailable:
+        raise StoreError("ledger_unavailable", 503) from None   # fail closed: an outage never lets a forgotten name be written
+
+
+@contextlib.asynccontextmanager
+async def _txn(db, members):
+    """ONE real transaction holding a per-member advisory lock (``list_service.list_write_txn``'s pattern), so an eraser and a writer
+    serialise across PROCESSES too (``db_pool.AsyncpgCompat.commit`` is a no-op: without this every statement autocommits). Locks are
+    taken in sorted member order. A DB shim without ``transaction`` (the SQLite tests) runs unwrapped."""
+    txn = getattr(db, "transaction", None)
+    if not callable(txn):
         yield
+        return
+    async with txn():
+        for m in sorted(members):
+            await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"routines|{m}",))
+        yield
+
+
+def _erased(seen: dict, member: str) -> bool:
+    import user_erase_gate as erase_gate
+
+    return erase_gate.generation(member) != seen.get(member, 0) or erase_gate.in_progress(member)
+
+
+@contextlib.asynccontextmanager
+async def _guarded_write(seen: dict, *, subject: str, actors=(), texts=()):
+    """THE write gate. ``seen`` = ``_start()`` taken before the write's first read; ``subject`` = whose routine; ``actors`` = who is
+    acting (a member id; None / a guest = a household tap); ``texts`` = the entity text the write carries.
+
+    1. the erase gate of EVERY member involved (subject and actors), in sorted id order (the one global order: a writer never waits
+       on a lower id while holding a higher one; an eraser holds one member's gate only, so no cycle can form);
+    2. each member's erase mark: moved since ``seen`` or a whole-member erase running = ``StoreError("erased")`` (a stale write);
+    3. the entity shield (in-flight tombstone + the durable ``memory_forgotten`` ledger, exact words, fail closed) over ``texts``
+       for every member: a forgotten name is never written (``StoreError("names_forgotten")``);
+    4. the connection, ONE transaction, the per-member advisory locks (same order), then (2) again immediately before the write.
+    The erasers (``forget_user`` / ``erase_entity``) take the same gate and the same advisory lock, so a write lands wholly before
+    an erase (and is erased) or wholly after it (and is refused)."""
+    import user_erase_gate as erase_gate
+
+    members = sorted({m for m in (subject, *actors) if m and not _guest(m)})
+    async with contextlib.AsyncExitStack() as stack:
+        for m in members:
+            live = await stack.enter_async_context(erase_gate.writing(m, seen.get(m, 0)))
+            if not live or _erased(seen, m):
+                raise StoreError("erased", 409)
+        w = _Write(members, {m: await _forgotten_hashes(m) for m in members})   # before a connection is borrowed (the ledger may borrow one)
+        w.refuse_forgotten(*texts)
+        w.db = await stack.enter_async_context(_db())
+        await stack.enter_async_context(_txn(w.db, members))
+        if any(_erased(seen, m) for m in members):
+            raise StoreError("erased", 409)
+        yield w
+        await w.db.commit()
+
+
+@contextlib.asynccontextmanager
+async def _guarded_erase(member: str, *, whole: bool):
+    """The erasers' half of the gate: the member's erase gate (``whole`` bumps the generation: every write scheduled before it is
+    stale), the connection, one transaction with the member's advisory lock."""
+    import user_erase_gate as erase_gate
+
+    async with erase_gate.erasing(member, bump=whole), _db() as db, _txn(db, [member]):
+        yield db
+        await db.commit()
 
 
 def _guest(user_id: Optional[str]) -> bool:
@@ -232,6 +337,7 @@ async def create_routine(owner: str, name: str, anchor: str, *, created_by: Opti
                          window_start: Optional[str] = None, window_end: Optional[str] = None, days_rule: Optional[str] = None,
                          prompt_mode: str = "card", steps=()) -> dict:
     """A new routine for ``owner`` (the subject) with its template steps (``(text, kind)`` pairs or bare texts). Raises StoreError."""
+    seen = _start()
     if _guest(owner):
         raise StoreError("guest_owns_nothing", 403)
     _check_text(name, MAX_NAME)
@@ -252,7 +358,8 @@ async def create_routine(owner: str, name: str, anchor: str, *, created_by: Opti
         _check_text(text)
         _check_kind(kind, visibility)
     rid, now = str(uuid.uuid4()), _iso()
-    async with _write_gate(owner), _db() as db:
+    async with _guarded_write(seen, subject=owner, actors=(created_by or owner,), texts=(name, *(t for t, _ in pairs))) as w:
+        db = w.db
         await db.execute(
             "INSERT INTO routines (id, user_id, created_by, name, anchor, window_start, window_end, days_rule, visibility, prompt_mode, "
             "enabled, deleted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)",
@@ -260,7 +367,6 @@ async def create_routine(owner: str, name: str, anchor: str, *, created_by: Opti
         for pos, (text, kind) in enumerate(pairs, 1):
             await db.execute("INSERT INTO routine_steps (id, routine_id, position, text, kind, deleted, created_at, updated_at) "
                              "VALUES (?, ?, ?, ?, ?, 0, ?, ?)", (str(uuid.uuid4()), rid, pos, text, kind, now, now))
-        await db.commit()
     _log("created", member=owner, routine=rid, steps=len(pairs))
     return await get_routine(owner, rid)
 
@@ -303,6 +409,7 @@ async def list_routines(viewer: Optional[str]) -> list[dict]:
 
 
 async def add_step(actor: str, routine_id: str, text: str, kind: str = "check") -> dict:
+    seen = _start()
     _check_text(text)
     async with _db() as db:
         r = await _load(db, routine_id)
@@ -312,14 +419,15 @@ async def add_step(actor: str, routine_id: str, text: str, kind: str = "check") 
         raise StoreError("not_allowed", 403)
     _check_kind(kind, r["visibility"])
     sid, now = str(uuid.uuid4()), _iso()
-    async with _write_gate(r["user_id"]), _db() as db:
-        top = await _rows(db, "SELECT COALESCE(MAX(position), 0), COUNT(*) FROM routine_steps WHERE routine_id = ? AND deleted = 0",
+    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
+        if await _load(w.db, routine_id) is None:              # erased or deleted since the read above
+            raise StoreError("not_found", 404)
+        top = await _rows(w.db, "SELECT COALESCE(MAX(position), 0), COUNT(*) FROM routine_steps WHERE routine_id = ? AND deleted = 0",
                           (routine_id,))
         if int(top[0][1]) >= MAX_STEPS:
             raise StoreError("too_many_steps")
-        await db.execute("INSERT INTO routine_steps (id, routine_id, position, text, kind, deleted, created_at, updated_at) "
-                         "VALUES (?, ?, ?, ?, ?, 0, ?, ?)", (sid, routine_id, int(top[0][0]) + 1, text, kind, now, now))
-        await db.commit()
+        await w.db.execute("INSERT INTO routine_steps (id, routine_id, position, text, kind, deleted, created_at, updated_at) "
+                           "VALUES (?, ?, ?, ?, ?, 0, ?, ?)", (sid, routine_id, int(top[0][0]) + 1, text, kind, now, now))
     _log("step_added", kind=kind, member=r["user_id"], routine=routine_id)
     return {"id": sid, "text": text, "kind": kind}
 
@@ -329,9 +437,13 @@ def _day_id(routine_id: str, day: date) -> str:
     return f"{routine_id}:{day.isoformat()}"
 
 
-async def _ensure_day(db, r: dict, day: date, today: date) -> str:
+async def _ensure_day(w, r: dict, day: date, today: date) -> str:
     """The (routine, day) row, made if missing (deterministic id + ON CONFLICT: two racing callers make ONE). Template steps are
-    copied in once the day has come; earlier days of the routine still open are settled (``missed``) on the way."""
+    copied in once the day has come; earlier days of the routine still open are settled (``missed``) on the way. Runs INSIDE the
+    caller's ``_guarded_write``: the template is read and copied under the same gate and transaction the erasers take, so an entity
+    erase lands wholly before the read (nothing to copy) or wholly after the copy (and erases it); a line naming a forgotten entity
+    is never copied (the shield)."""
+    db = w.db
     did, now = _day_id(r["id"], day), _iso()
     await db.execute("INSERT INTO routine_days (id, routine_id, user_id, day, created_at) VALUES (?, ?, ?, ?, ?) "
                      "ON CONFLICT DO NOTHING", (did, r["id"], r["user_id"], day.isoformat(), now))
@@ -339,13 +451,14 @@ async def _ensure_day(db, r: dict, day: date, today: date) -> str:
         snap = await _rows(db, "SELECT snapshot_at FROM routine_days WHERE id = ?", (did,))
         if snap and snap[0][0] is None:
             for s in await _steps(db, r["id"]):
+                if w.forgotten(s["text"]):
+                    continue
                 await db.execute(
                     "INSERT INTO routine_day_steps (id, day_id, step_id, origin, text, kind, position, state, prompts, created_via, "
                     "created_at, updated_at) VALUES (?, ?, ?, 'template', ?, ?, ?, 'pending', 0, NULL, ?, ?) ON CONFLICT DO NOTHING",
                     (f"{did}:{s['id']}", did, s["id"], s["text"], s["kind"], s["position"], now, now))
             await db.execute("UPDATE routine_days SET snapshot_at = ? WHERE id = ? AND snapshot_at IS NULL", (now, did))
         await _settle_before(db, r, day)
-    await db.commit()
     return did
 
 
@@ -363,15 +476,24 @@ async def _settle_before(db, r: dict, day: date) -> None:
 async def day_copy(viewer: Optional[str], routine_id: str, day: Optional[date] = None, *, now: Optional[datetime] = None) -> Optional[dict]:
     """``viewer``'s view of one routine's copy for ``day`` (default today), made on first need. None = not visible / not found / the
     routine does not run that day. ``{"routine", "day", "day_id", "steps": [...]}``, steps in order with their states."""
+    seen = _start()
     today = household_today(now)
     day = day or today
     async with _db() as db:
         r = await _load(db, routine_id)
     if r is None or not can_see(r, viewer) or not r["enabled"] or not runs_on(r, day):
         return None
-    async with _write_gate(r["user_id"]), _db() as db:
-        did = await _ensure_day(db, r, day, today)
-        rows = await _rows(db, f"SELECT {', '.join(_DS_COLS)} FROM routine_day_steps WHERE day_id = ? ORDER BY position", (did,))
+    try:
+        async with _guarded_write(seen, subject=r["user_id"], actors=(viewer,)) as w:
+            if await _load(w.db, routine_id) is None:
+                return None
+            did = await _ensure_day(w, r, day, today)
+            rows = await _rows(w.db, f"SELECT {', '.join(_DS_COLS)} FROM routine_day_steps WHERE day_id = ? ORDER BY position",
+                               (did,))
+    except StoreError as exc:
+        if exc.code == "erased":
+            return None                                   # the subject or the viewer is being forgotten: nothing to show
+        raise
     steps = [dict(zip(_DS_COLS, x)) for x in rows]
     for s in steps:
         s["today_only"] = s["origin"] == "one_off"
@@ -382,6 +504,7 @@ async def add_one_off(actor: str, routine_id: str, day: date, text: str, *, kind
                       now: Optional[datetime] = None) -> dict:
     """One extra line on ONE day's copy ("take the drill", tomorrow's morning). Refused for a past day, a day the routine does not run,
     a medicine kind (a medicine line is a template step, never a one-off), or someone who may not edit the routine."""
+    seen = _start()
     _check_text(text)
     if kind not in ONE_OFF_KINDS:
         raise StoreError("bad_kind")
@@ -397,17 +520,20 @@ async def add_one_off(actor: str, routine_id: str, day: date, text: str, *, kind
     if not r["enabled"] or not runs_on(r, day):
         raise StoreError("not_that_day")
     stamp = _iso()
-    async with _write_gate(r["user_id"]), _db() as db:
-        did = await _ensure_day(db, r, day, today)
-        n = (await _rows(db, "SELECT COUNT(*) FROM routine_day_steps WHERE day_id = ? AND origin = 'one_off'", (did,)))[0][0]
+    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
+        if await _load(w.db, routine_id) is None:
+            raise StoreError("not_found", 404)
+        did = await _ensure_day(w, r, day, today)
+        if (await _rows(w.db, "SELECT closed_at FROM routine_days WHERE id = ?", (did,)))[0][0] is not None:
+            raise StoreError("day_closed", 409)
+        n = (await _rows(w.db, "SELECT COUNT(*) FROM routine_day_steps WHERE day_id = ? AND origin = 'one_off'", (did,)))[0][0]
         if int(n) >= MAX_STEPS:
             raise StoreError("too_many_steps")
         dsid = f"{did}:o{uuid.uuid4().hex[:12]}"
-        await db.execute(
+        await w.db.execute(
             "INSERT INTO routine_day_steps (id, day_id, step_id, origin, text, kind, position, state, prompts, created_via, created_at, "
             "updated_at) VALUES (?, ?, NULL, 'one_off', ?, ?, ?, 'pending', 0, ?, ?, ?)",
             (dsid, did, text, kind, ONE_OFF_BASE + int(n) + 1, created_via, stamp, stamp))
-        await db.commit()
     _log("one_off", kind=kind, member=r["user_id"], routine=routine_id, via=created_via)
     return {"id": dsid, "day_id": did, "day": day.isoformat(), "text": text, "kind": kind}
 
@@ -441,16 +567,22 @@ async def note_named(session_id: str, member: str, day_step_id: str, *, dry: boo
     ``WALK_S``. Counts the prompt (``prompts`` + 1, ``event=prompted``)."""
     if not session_id or not member:
         return
+    seen = _start()
     _bounded(_NAMED, session_id, Named(member, day_step_id, _mono()))
     if dry:
         return
     async with _db() as db:
         rows = await _rows(db, "SELECT ds.kind, d.routine_id, d.user_id FROM routine_day_steps ds JOIN routine_days d ON d.id = ds.day_id "
                                "WHERE ds.id = ?", (day_step_id,))
-        if not rows:
-            return
-        await db.execute("UPDATE routine_day_steps SET prompts = prompts + 1, last_prompt_at = ? WHERE id = ?", (_iso(), day_step_id))
-        await db.commit()
+    if not rows:
+        return
+    try:
+        async with _guarded_write(seen, subject=rows[0][2], actors=(member,)) as w:
+            await w.db.execute("UPDATE routine_day_steps SET prompts = prompts + 1, last_prompt_at = ? WHERE id = ?",
+                               (_iso(), day_step_id))
+    except StoreError:
+        close_walk(session_id)                            # erased meanwhile: nothing is counted and nothing stays named
+        return
     _log("prompted", kind=rows[0][0], member=rows[0][2], routine=rows[0][1])
 
 
@@ -459,7 +591,16 @@ def named_step(session_id: str, member: str) -> Optional[str]:
     n = _NAMED.get(session_id or "")
     if n is None or n.member != member or _mono() - n.at > WALK_S:
         return None
+    parts = n.day_step_id.split(":")
+    if len(parts) < 2 or parts[1] != household_today().isoformat():
+        return None                                       # named on another household day (a walk across midnight): stale
     return n.day_step_id
+
+
+def walk_entry(session_id: str) -> Optional["Named"]:
+    """The session's current walk entry (identity only: a caller compares it before / after a turn to see whether that turn named a
+    step)."""
+    return _NAMED.get(session_id or "")
 
 
 def walk_open(session_id: str, member: str) -> bool:
@@ -472,7 +613,9 @@ def close_walk(session_id: str) -> None:
 
 async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, verified: bool) -> dict:
     """Change one day line: done | skip | snooze (from pending / snoozed) or undo (back to pending). Every visibility and medicine
-    rule is checked HERE, so neither the voice tier nor a card route can skip them."""
+    rule is checked HERE, so neither the voice tier nor a card route can skip them. A closed day is settled: nothing on it changes
+    (``day_closed``). The write is gated on the SUBJECT's and the ACTOR's erasure (``_guarded_write``)."""
+    seen = _start()
     async with _db() as db:
         rows = await _rows(db, "SELECT ds.state, ds.kind, d.routine_id, d.closed_at FROM routine_day_steps ds "
                                "JOIN routine_days d ON d.id = ds.day_id WHERE ds.id = ?", (ds_id,))
@@ -480,6 +623,8 @@ async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, ver
     if not rows or r is None or not can_see(r, actor):
         raise StoreError("not_found", 404)
     state, kind = rows[0][0], rows[0][1]
+    if rows[0][3] is not None:
+        raise StoreError("day_closed", 409)
     refusal = can_tick(r, kind, actor, verified=verified)
     if refusal:
         _log("refused", kind=kind, via=via, verified=verified, member=r["user_id"], routine=r["id"], reason=refusal)
@@ -496,14 +641,13 @@ async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, ver
             raise StoreError("bad_action")
     until = _iso(_now_utc() + timedelta(minutes=SNOOZE_MIN)) if new == "snoozed" else None
     known = None if new == "pending" else via
-    async with _write_gate(r["user_id"]), _db() as db:
-        cur = await db.execute(
+    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,)) as w:
+        cur = await w.db.execute(
             "UPDATE routine_day_steps SET state = ?, snooze_until = ?, known_by = ?, actor_user_id = ?, verified = ?, updated_at = ? "
-            "WHERE id = ? AND state = ?",
+            "WHERE id = ? AND state = ? AND day_id IN (SELECT id FROM routine_days WHERE closed_at IS NULL)",
             (new, until, known, None if _guest(actor) else actor, int(bool(verified)), _iso(), ds_id, state))
         if int(getattr(cur, "rowcount", 1) or 0) == 0:
-            raise StoreError("changed_meanwhile", 409)       # a tap and a voice raced: the second never double-acts
-        await db.commit()
+            raise StoreError("changed_meanwhile", 409)       # a tap and a voice raced (or the day closed): never a double act
     event = {"done": "ticked", "skipped": "skipped", "snoozed": "snoozed", "pending": "undo"}[new]
     _log(event, kind=kind, via=via, verified=verified, member=r["user_id"], routine=r["id"],
          **({"was": state} if new == "pending" else {}))
@@ -563,17 +707,14 @@ async def forget_user(user_id: str) -> int:
     uid = str(user_id or "").strip()
     if not uid:
         return 0
-    import user_erase_gate as erase_gate
-
     try:
-        async with erase_gate.erasing(uid), _db() as db:
+        async with _guarded_erase(uid, whole=True) as db:
             ids = [r[0] for r in await _rows(db, "SELECT id FROM routines WHERE user_id = ?", (uid,))]
             n = await _delete_routines(db, ids)
             await db.execute("DELETE FROM routine_day_steps WHERE day_id IN (SELECT id FROM routine_days WHERE user_id = ?)", (uid,))
             await db.execute("DELETE FROM routine_days WHERE user_id = ?", (uid,))
             await db.execute("UPDATE routine_day_steps SET actor_user_id = NULL WHERE actor_user_id = ?", (uid,))
             await db.execute("UPDATE routines SET created_by = user_id WHERE created_by = ?", (uid,))
-            await db.commit()
     except Exception as exc:  # noqa: BLE001
         if _no_store(exc):
             return 0
@@ -585,10 +726,13 @@ async def forget_user(user_id: str) -> int:
 
 async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:
     """"Forget Dana": in the member's own routines, a routine whose NAME names the entity goes whole; a template step or a day line
-    whose words name it is deleted. Counts only are logged. ``strict`` raises on a failure (the cascade's contract)."""
+    whose words name it is deleted. Counts only are logged. ``strict`` raises on a failure (the cascade's contract).
+
+    Under the member's erase gate and advisory lock (``_guarded_erase``, no generation bump): a write in flight lands first and is
+    erased here; one queued behind this sees the forgotten ledger (written by the forget BEFORE the cascade runs) and is refused."""
     try:
         n = 0
-        async with _db() as db:
+        async with _guarded_erase(user_id, whole=False) as db:
             mine = await _rows(db, "SELECT id, name FROM routines WHERE user_id = ?", (user_id,))
             n += await _delete_routines(db, [rid for rid, name in mine if rx.search(name or "")])
             keep = [rid for rid, name in mine if not rx.search(name or "")]
@@ -602,7 +746,6 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                     if rx.search(text or ""):
                         await db.execute("DELETE FROM routine_day_steps WHERE id = ?", (dsid,))
                         n += 1
-            await db.commit()
         logger.info("ROUTINE event=erase_entity removed=%d", n)
         return n
     except Exception as exc:  # noqa: BLE001
