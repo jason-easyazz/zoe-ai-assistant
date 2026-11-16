@@ -748,7 +748,8 @@ def detect_intent(
 ) -> Optional[Intent]:
     try:
         import local_text_logs as _ltl_epoch
-        _miss_epoch: Optional[int] = _ltl_epoch.erase_epoch()   # BEFORE detection: an erase finishing mid-detect drops the miss append
+        # the TURN's epoch (read before STT on a voice turn, at entry for typed text), else now: an erase finishing after it drops the miss
+        _miss_epoch: Optional[int] = _ltl_epoch.writer_epoch()
     except Exception:  # noqa: BLE001 - unreadable guard: append stays in-progress-guarded only
         _miss_epoch = None
     t = _normalize_chat_intent_text(text)
@@ -4068,9 +4069,12 @@ def _forget_preview(text: str) -> str:
 
 
 async def _execute_forget_last(user_id: str) -> str:
-    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - the rows written from it, its in-flight capture
-    (refused from now on), its exact-words index entry and its transcript row (flagged off the record for the nightly
-    readers). Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. Never raises."""
+    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - its in-flight capture is refused from here on, then ONE
+    forget record (forget_record) of everything it left: the rows written from it and their twins (hidden, then erased), its
+    transcript row (flagged off the record), its exact-words entries, observations, notes, the card citing its rows and the
+    registry entries. Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. A step that fails
+    leaves the record open: "forget that" again finishes it from the record. Never raises."""
+    import forget_record
     import turn_forget
 
     turn = turn_forget.previous_turn(user_id)
@@ -4079,107 +4083,44 @@ async def _execute_forget_last(user_id: str) -> str:
         return FORGET_WHICH_REPLY
     if not turn.text:
         return FORGET_ALREADY_REPLY
-    text, ts = turn.text, turn.ts
+    text = turn.text
     # FIRST: from here on nothing this turn's capture writes can land (the digest may still be minutes away)
     turn_forget.retract(user_id, turn)
+    seen: list = []
+
+    async def resolve():
+        plan, rows = await turn_forget.resolve_turn(svc, user_id, turn)
+        seen.extend(rows)
+        return plan
+
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
-        # a turn noted with no committed id (its insert failed, no recovery yet): a LEGACY target - its words resolve to the saved
-        # turns holding them FIRST, so every row bound to those turns goes too
-        resolved = not turn.mids
-        import exact_words as _xw_copies
-
-        mids = (tuple(await _xw_copies.turn_copies(user_id, turn.mids)) if turn.mids   # every committed copy of the turn
-                else await turn_forget.resolve_legacy_ids(user_id, (text,)))
-        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts, mids=mids)
-        # rows an EARLIER attempt at this turn could not reject (kept with the turn): they may no longer be findable by it (their
-        # source row was rejected and erased), so they are carried, not rediscovered
-        have = {r.id for r in rows}
-        for rid in turn_forget.pending_rows(user_id, turn):
-            ref = await svc.get(rid) if rid not in have else None
-            if ref is not None and str((ref.metadata or {}).get("status") or "approved").lower() in ("approved", "pending"):
-                rows.append(ref)
-                have.add(rid)
-        # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too - looked up NOW,
-        # before anything is rejected, so the whole set is known for the card step and nothing is found only afterwards
-        import ask_to_remember as _atr_f
-
-        for r in list(rows):
-            for _sib in await _atr_f.siblings_of(svc, user_id, r):
-                if _sib.id not in have:
-                    have.add(_sib.id)
-                    rows.append(_sib)
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
-    try:   # BEFORE the rejects (they make the rows undiscoverable by this turn): the stored card citing ANY of them, their registry
-        await turn_forget.erase_turn_words(user_id, (), (), row_ids=[r.id for r in rows])     # entries - the whole set, siblings too
-    except Exception as exc:  # noqa: BLE001 - nothing rejected yet; the turn is kept, so "forget that" again finishes it
-        logger.info("memory_forget_last: card / registry erase failed (%s)", type(exc).__name__)
-        turn_forget.note_pending_rows(user_id, turn, [r.id for r in rows])
-        return FORGET_STORE_DOWN_REPLY
-    gone: list = []
-    failed = 0
-
-    async def _reject(row) -> bool:
-        try:
-            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
-            return False
-
-    left: list = []
-    for r in rows:
-        if await _reject(r):
-            gone.append(r)
-        else:
-            failed += 1
-            left.append(r.id)
-    if left:   # kept WITH the turn: the retry rejects them even if nothing it can still find points at them
-        turn_forget.note_pending_rows(user_id, turn, left)
-    # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
-    # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
-    if gone and hasattr(svc, "erase_rows"):
-        try:
-            from memory_service import physical_erase_enabled
-            if physical_erase_enabled():
-                await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
-    try:    # BY the turn's saved-turn ids (its words are never compared); a turn noted with none, by its words, legacy rows only
-        # (the turn keeps its ids in the notes: a retry reaches all); the conversation notes of the turn (by their own turn ids, a
-        # legacy note by these words or the turn's time) and the rejected rows' stored card / registry entries go in the same call
-        await turn_forget.erase_turn_words(user_id, mids, (text,), resolved=resolved, at=ts)
-    except Exception as exc:  # noqa: BLE001 - NOT erased: the reply below says so and "forget that" again finishes it
-        logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
-        failed += 1
-    # THE RULE: an eraser of STORED words (the rows above, the exact-words index, the transcript flag, the night mind, the notes,
-    # the registry) failing fails the forget - not confirmed, the turn kept for a retry; an IN-PROCESS cache clear (this one) failing
-    # never does: it holds nothing that outlives the process, and the stored erase already ran
-    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
+    out = await forget_record.forget(user_id, code="forget_last", key=turn_forget.record_key(turn), resolve=resolve, svc=svc)
+    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED): holds nothing that outlives the process
         import value_correction
         value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
         value_correction.forget_in_texts(user_id, [text])
     except Exception:  # noqa: BLE001
         pass
-    try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
-        import memory_value_registry
-        await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])
-    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
-        logger.warning("memory_forget_last: value registry erase failed (%s)", type(exc).__name__)
-        failed += 1
-    logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
-    if failed:
-        # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
-        return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
-    if gone:
+    rows = list(out.plan.rows) if out.plan is not None else []
+    logger.info("memory_forget_last: user=%s rows=%d complete=%s failed=%s", user_id, len(rows), out.complete, ",".join(out.failed))
+    if not out.complete:
+        # some of it is still saved: say so; the record stays open, so "forget that" again finishes the same turn
+        return FORGET_PARTIAL_REPLY if rows and out.started and "reject" not in out.failed else FORGET_STORE_DOWN_REPLY
+    if rows:
         # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
         # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
         turn_forget.mark_forgotten(user_id, turn)
-        more = len(gone) - 1
+        first = next((r.text for r in seen if r.id == rows[0]), "")
+        if not first:
+            return "Done — I forgot what you said there."
+        more = len(rows) - 1
         tail = f" (and {more} more from what you said there)" if more > 0 else ""
-        return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
+        return f"Done — I forgot: \"{_forget_preview(first)}\"{tail}."
     if text.rstrip().endswith("?"):
         return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
     return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."

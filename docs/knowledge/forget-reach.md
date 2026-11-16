@@ -36,6 +36,12 @@ A store can be reached by one path and not the other; that asymmetry is what `st
 |---|---|---|---|
 | router shadow log | `services/zoe-data/data/router_head_shadow.jsonl` (+ `.N` segments) | **strips** `utt_text`; the hash and routing features stay | entity: the record naming the entity is dropped whole; member: the text layer of every record is cleared |
 | intent-miss log | `~/training/data/intent-misses.jsonl` | **drops** the record | same |
+| voice STT log (flag-dark) | `$ZOE_VOICE_STT_LOG` (`~/.zoe-voice/voice_stt.jsonl` + `.1`) | **drops** the record (ISO `ts`) | same; only while `ZOE_FORGET_REACH_EXTRA=on` (default off), which also reaches the opt-in Telegram STT capture dir (`erase_capture`: a pair naming the entity, every pair on a member erase) |
+
+STT rotation and append share the eraser's thread lock and file lock, covering the whole segment pass.
+The capture writer and eraser share one resolver: `ZOE_TELEGRAM_STT_CAPTURE_DIR` must expand to an absolute, non-root path without
+parent traversal (relative settings are refused). Capture operations open directory components without following symlinks and
+use the resulting directory descriptor for file operations, including deletes; a renamed directory cannot redirect the sweep.
 
 - **Retention:** `ZOE_TEXT_LOG_RETENTION_DAYS`, default **30** (`keep` = no limit, `0` = keep none). The hourly `zoe-log-rotate` job applies it
   (`scripts/maintenance/rotate_service_logs.py`); `scripts/maintenance/redact_router_shadow.py` does the same once, with a backup and
@@ -132,7 +138,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-135 stores: 67 reached, 30 out of scope, 38 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+136 stores: 68 reached, 30 out of scope, 38 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -246,7 +252,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `intent_miss_log` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | Same module and rules as the router shadow log (records are dropped, not stripped). |
 | `recall_gate_trace` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | ~/.zoe/recall-gate-trace/: the owner's opt-in trace (ZOE_RECALL_GATE_TRACE, default off) - the owner's words + row text per gate decision, 0600, 7-day retention, never off-box. A member erase clears it household-wide (via local_text_logs.erase_all_text), an entity forget drops every line naming the entity (via local_text_logs.erase_entity, cascade step text_logs); both inside that module's erase barrier, which the trace's appends honour. |
 | `production_feedback_log` | file | words | out_of_scope | - | Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in. |
-| `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
+| `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on. |
 | `flue_session_log` | file | words | gap | - | The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget cascade (conversation_notes.erase_entity); the log itself is outside the cascade. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py). |
 | `flue_session_store` | db | words | out_of_scope | - | labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own. |
@@ -260,6 +266,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
 | `account_secrets` | vault | config | reached | member: `connected_accounts.forget_user` | Connected-account credentials (account_secrets.py seam). No backend is configured yet, so nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user. |
 | `reminder_phone_ledger` | db | metadata | reached | member: `reminder_delivery.forget_user` | app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows. |
+| `forget_records` | db | metadata | reached | member: `forget_record.forget_user` | app_settings rows forget_rec:<member>:<hash> = an OPEN forget's write-ahead record (forget_record.py): row / saved-turn / entry / observation / note / registry / offer ids and step codes, never words. Closed (deleted) when every step is done; delete_user removes the member's open records. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
 | `device_audit_logs` | file | metadata | out_of_scope | - | Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words. |
 | `pi_intent_evidence` | file | words | gap | - | ~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated (ZOE_PI_INTENT_*), outside the cascade, no retention. |

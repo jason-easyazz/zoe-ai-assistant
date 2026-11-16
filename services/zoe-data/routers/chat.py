@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
+import local_text_logs
 import panel_principal
 import untrusted_content
 import user_erase_gate as _erase_gate
@@ -2399,6 +2400,10 @@ def _resolve_channel(body: dict) -> str:
 @router.post("/")
 async def chat(request: Request, user: dict = Depends(resolve_acting_user), stream: bool = True):
     body = await request.json()
+    # The turn's erase epoch, read where typed words enter this process - or the one a messaging bridge carries back from the
+    # transcription of a voice note (``erase_token``; any other value only makes the turn's writes refuse). Every erasable write
+    # of the turn checks its append against it. In memory only.
+    local_text_logs.begin_turn(body.get("erase_token") if isinstance(body, dict) else None)
     message = body.get("message", "")
     user_id = user["user_id"]
     req_panel_id: str | None = body.get("panel_id") or None

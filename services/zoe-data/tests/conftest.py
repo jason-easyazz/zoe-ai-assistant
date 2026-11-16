@@ -103,6 +103,29 @@ os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER
 
 import pytest  # noqa: E402
 
+# Collection-time pin precedes every service import; the fixture then isolates
+# each test, including tests that inherit extra reach enabled from the shell.
+_ERASE_PATHS = {
+    "ZOE_ROUTER_HEAD_LOG": "router_head_shadow.jsonl",
+    "ZOE_INTENT_MISS_LOG": "intent-misses.jsonl",
+    "ZOE_VOICE_STT_LOG": "voice_stt.jsonl",
+    "ZOE_TELEGRAM_STT_CAPTURE_DIR": "telegram-capture",
+    "ZOE_RECALL_GATE_TRACE_DIR": "recall-gate-trace",
+    "ZOE_ADHOC_BACKUP_DIR": "adhoc-backups",
+}
+for _var, _leaf in _ERASE_PATHS.items():
+    os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+
+
+@pytest.fixture(autouse=True)
+def _local_erase_paths_are_per_test(monkeypatch, tmp_path):
+    for name, leaf in _ERASE_PATHS.items():
+        monkeypatch.setenv(name, str(tmp_path / "zoe-test-stores-local" / leaf))
+    # A sync test that runs a route helper directly holds a per-turn erase epoch in the main thread's context: the next test starts
+    # as a fresh request does, with none.
+    import local_text_logs
+    local_text_logs._TURN_EPOCH.set(None)
+
 
 @pytest.fixture(autouse=True)
 def _exact_words_in_process_index():
@@ -117,6 +140,8 @@ def _exact_words_in_process_index():
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     struggle_detector.set_backend(struggle_detector.MemoryBackend())   # struggle_events too (delete_user / forget fail closed)
+    import forget_record
+    forget_record.set_backend(forget_record.MemoryBackend())   # open forget records: app_settings in production, in process here
     yield
     erase_watermark.set_backend(None)
     exact_words.set_backend(None)

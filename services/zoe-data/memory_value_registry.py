@@ -548,7 +548,8 @@ async def _gate_already_held():
     yield
 
 
-async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str, *, gate_held: bool = False) -> int:
+async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str, *, gate_held: bool = False,
+                       dry: Optional[list] = None, ids_in: frozenset = frozenset()) -> int:
     """Read, select and delete under the member's erase gate - the lock ``record`` holds from before its connection to after its
     commit - so a record in flight lands first and is erased here, and the partial epoch (bumped before the gate is awaited)
     drops any record scheduled before this erase that has not written yet.
@@ -574,8 +575,11 @@ async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str,
                     tied = set(json.loads(r[3] or "[]"))
                 except (TypeError, ValueError):
                     tied = None                        # unreadable: over-forget, the safe error
-                if tied is None or doomed((str(r[1]), names.get(str(r[1]), ""), r[2], tied)):
+                if tied is None or doomed((str(r[1]), names.get(str(r[1]), ""), r[2], tied)) or str(r[0]) in ids_in:
                     ids.append(str(r[0]))
+            if dry is not None:          # resolution only (a forget record): collect, delete nothing
+                dry.extend(ids)
+                return 0
             n = await _drop_entries(db, uid, ids)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -623,6 +627,32 @@ async def erase_for_turn(user_id: str, turn_text: str, *, row_ids: Iterable[str]
         return (tid is not None and turn == tid) or bool(tied & gone)
 
     return await _erase_where(user_id, doomed, "turn", gate_held=gate_held)
+
+
+async def ids_for_names(user_id: str, name_matches: Callable[[str], bool]) -> list:
+    """The ids of the member's entries about a person whose name ``name_matches`` (a topic forget's people), resolved by a forget
+    record BEFORE anything is erased. RAISES on a store failure."""
+    out: list = []
+    await _erase_where(user_id, lambda r: r[0] != SELF and bool(r[1]) and bool(name_matches(r[1])), "resolve", dry=out)
+    return out
+
+
+async def erase_ids(user_id: str, ids: Iterable[str], *, gate_held: bool = False) -> int:
+    """Delete these entries by id (a forget record's resolved entries). Idempotent; RAISES on a store failure."""
+    want = frozenset(str(i) for i in ids or () if i)
+    if not want:
+        return 0
+
+    return await _erase_where(user_id, lambda _r: False, "ids", gate_held=gate_held, ids_in=want)
+
+
+async def erase_for_turn_ids(user_id: str, content_ids: Iterable[str], *, gate_held: bool = False) -> int:
+    """Entries recorded FROM these turns (their content ids, ``people_graph.content_turn_id``: what "forget that" resolved its turn
+    to). RAISES on a store failure."""
+    want = {str(i) for i in content_ids or () if i}
+    if not want:
+        return 0
+    return await _erase_where(user_id, lambda r: r[2] in want, "turn", gate_held=gate_held)
 
 
 async def erase_for_rows(user_id: str, row_ids: Iterable[str], *, gate_held: bool = False) -> int:

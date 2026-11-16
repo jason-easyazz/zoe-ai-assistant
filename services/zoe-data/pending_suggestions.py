@@ -211,11 +211,8 @@ async def _drop_offer(db, offer_id) -> None:
         logger.warning("pending_suggestions: forgotten offer delete failed - still withheld at read time (%s)", type(exc).__name__)
 
 
-async def withdraw_matching(user_id: str, matches) -> int:
-    """Delete the member's un-resolved offers whose words satisfy ``matches(text) -> bool`` (a TOPIC forget: "forget that I told
-    you about my sister" left "add Bea (your sister) as a contact?" pending, QA round 9). The topic is not a name, so the
-    forgotten-entity filter above never saw it. RAISES on a store failure (the forget is then not confirmed)."""
-    gone = 0
+async def _offers(user_id: str, matches, *, delete: bool) -> list:
+    out: list = []
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
@@ -224,16 +221,42 @@ async def withdraw_matching(user_id: str, matches) -> int:
             for r in rows:
                 if str(r["action_type"] or "") in _FORGET_EXEMPT:
                     continue
-                if matches("\n".join(str(r[k] or "") for k in ("description", "offer_phrase", "pre_filled_slots"))):
-                    await db.execute("DELETE FROM pending_suggestions WHERE id = $1", r["id"])
-                    gone += 1
+                if matches(r):
+                    if delete:
+                        await db.execute("DELETE FROM pending_suggestions WHERE id = $1", r["id"])
+                    out.append(r["id"])
     except RuntimeError as exc:
         from db_pool import pool_ever_initialised
 
         if "not initialised" in str(exc) and not pool_ever_initialised():
-            return 0            # a process that never had a database (a lab / bare unit run) holds no offers; a LOST pool raises
+            return []           # a process that never had a database (a lab / bare unit run) holds no offers; a LOST pool raises
         raise
-    return gone
+    return out
+
+
+def _offer_text(r) -> str:
+    return "\n".join(str(r[k] or "") for k in ("description", "offer_phrase", "pre_filled_slots"))
+
+
+async def ids_matching(user_id: str, matches) -> list:
+    """The ids of the member's un-resolved offers whose words satisfy ``matches(text) -> bool``: what a TOPIC forget resolves to
+    before it erases anything (``forget_record``). RAISES on a store failure."""
+    return [str(i) for i in await _offers(user_id, lambda r: matches(_offer_text(r)), delete=False)]
+
+
+async def withdraw_ids(user_id: str, ids) -> int:
+    """Delete these un-resolved offers of the member by id (a forget record's resolved offers). Idempotent; RAISES on a store failure."""
+    want = {str(i) for i in (ids or ()) if str(i)}
+    if not want:
+        return 0
+    return len(await _offers(user_id, lambda r: str(r["id"]) in want, delete=True))
+
+
+async def withdraw_matching(user_id: str, matches) -> int:
+    """Delete the member's un-resolved offers whose words satisfy ``matches(text) -> bool`` (a TOPIC forget: "forget that I told
+    you about my sister" left "add Bea (your sister) as a contact?" pending, QA round 9). The topic is not a name, so the
+    forgotten-entity filter above never saw it. RAISES on a store failure (the forget is then not confirmed)."""
+    return len(await _offers(user_id, lambda r: matches(_offer_text(r)), delete=True))
 
 
 def person_suggestions_enabled() -> bool:
@@ -883,11 +906,11 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
                 visibility,
             )
         item_id = str(uuid.uuid4())
-        await conn.execute(
-            "INSERT INTO list_items (id, list_id, text) VALUES ($1,$2,$3)",
-            item_id,
-            list_id,
-            text,
+        from list_service import create_item_record
+
+        await create_item_record(
+            conn, item_id=item_id, list_id=list_id, text=text,
+            raw_asyncpg=True, normalize_text=False, defaults_only=True,
         )
         return {"item_id": item_id, "list_id": list_id, "text": text}
 

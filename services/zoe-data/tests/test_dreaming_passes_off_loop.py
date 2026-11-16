@@ -22,7 +22,6 @@ import memory_service as ms
 pytestmark = pytest.mark.ci_safe
 
 UID = "u-test"
-TODAY = datetime.datetime.utcnow().date().isoformat()
 
 
 class Store:
@@ -83,10 +82,13 @@ class Svc:
 
 
 def _seed() -> dict:
+    # "today" read when the rows are seeded, not at import: collection can run before midnight UTC and the test after it (CI did:
+    # the REM pass then saw no row of ITS today and wrote nothing)
+    today = datetime.datetime.utcnow().date().isoformat()
     rows = {}
     for n in range(6):
         rows[f"m{n}"] = (f"User fact number {n}.", {"user_id": UID, "status": "approved", "source": "chat",
-                                                    "added_at": f"{TODAY}T0{n}:00:00Z" if n < 2 else "2020-01-01T00:00:00Z",
+                                                    "added_at": f"{today}T0{n}:00:00Z" if n < 2 else "2020-01-01T00:00:00Z",
                                                     "concept_tags": "tea" if n >= 1 else "", "consolidation_count": 0,
                                                     "unique_query_count": 5 if n == 3 else 0})
     rows["p1"] = ("User is pending.", {"user_id": UID, "status": "pending", "added_at": "2020-01-01T00:00:00Z",

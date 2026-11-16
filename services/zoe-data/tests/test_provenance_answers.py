@@ -1217,12 +1217,16 @@ class _Transcript:
     async def setmeta(self, rid, meta):
         self.rows[rid][1] = meta
 
+    async def by_id(self, user_id, mids):          # a forget record flags the turns its words RESOLVED to, by id
+        return [(rid, m) for rid, (_c, m) in self.rows.items() if rid in mids]
+
 
 @pytest.fixture
 def transcript(monkeypatch):
     t = _Transcript([("m1", GATE, None), ("m2", "what time is it", None)])
     monkeypatch.setattr(xw, "_transcript_candidates", t.candidates)
     monkeypatch.setattr(xw, "_set_transcript_metadata", t.setmeta)
+    monkeypatch.setattr(xw, "_transcript_rows_by_id", t.by_id)
     monkeypatch.setattr(xw, "SqlBackend", type(xw.get_backend()))          # the lab backend stands in for the SQL one
     return t
 
@@ -1238,16 +1242,16 @@ def test_forget_it_flags_the_saved_turn_so_the_nightly_catch_up_cannot_reindex_i
 def test_a_failed_word_erase_is_not_reported_as_forgotten_and_the_retry_finishes_the_job(svc, monkeypatch):
     ref = explained_state(svc)
     run(xw.get_backend().add(UID, "xw-9", NOW - 3 * 86400, SAY_SISTER, xw.tokens_column(SAY_SISTER), "chat"))
-    real = xw.erase_text
+    real = xw.erase_entries                        # the forget record's exact-words step erases the resolved entries by id
     calls = {"n": 0}
 
-    async def flaky(user_id, text):
+    async def flaky(user_id, ids):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("store down")
-        return await real(user_id, text)
+        return await real(user_id, ids)
 
-    monkeypatch.setattr(xw, "erase_text", flaky)
+    monkeypatch.setattr(xw, "erase_entries", flaky)
     assert say("forget it") == pa.STORE_DOWN_REPLY                         # never "Done - I forgot"
     assert run(xw.get_backend().count(UID)) == 1                           # the words are still there
     out = say("Yes, forget that")                                          # the retry still has its target
@@ -1261,7 +1265,7 @@ def test_a_shortened_quote_still_erases_the_indexed_turn(svc):
     quote = pa.trim(long_turn, pa.QUOTE_MAX_CHARS)
     assert quote.endswith("...") and len(quote) < len(long_turn)
     exp = mp.Explained(seq=1, row_id="", ts=NOW, text=long_turn, quote=quote, turn_id="xw-long")
-    assert run(pa._erase_words(UID, exp)) >= 1
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")       # the entry by its id, whatever the quote shows
     assert run(xw.get_backend().count(UID)) == 0
     run(xw.get_backend().add(UID, "xw-long", NOW - 86400, long_turn, xw.tokens_column(long_turn), "chat"))
     assert run(xw.erase_text(UID, quote)) == 1                              # and the displayed prefix alone matches too

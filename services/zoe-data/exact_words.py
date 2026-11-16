@@ -639,21 +639,32 @@ def _needle(key: str) -> str:
     return max((t for t in re.findall(r"[a-z0-9']+", key) if t != _REDACT_WORD), key=len, default="")
 
 
-async def erase_text(user_id: str, text: str) -> int:
-    """Delete this user's LEGACY indexed turns (written before saved-turn ids: ``partition``) whose words ARE ``text`` or contain
-    it, as said or as the boundary would have redacted it (``_legacy_forms``) - "forget it" after "why did you say that?" removes
-    the owner's old turn that was just quoted back. A bound entry is never matched here (``erase_turns``). Over-inclusive by
-    design for legacy entries only: a look-alike that redacts alike goes too (``EXACT_WORDS_FORGET code=legacy_text n=``). A store
-    failure is RAISED. 0 = nothing matched."""
+async def legacy_entry_ids(user_id: str, text: str) -> list[str]:
+    """The ids of this user's LEGACY indexed turns (written before saved-turn ids: ``partition``) whose words ARE ``text`` or contain
+    it, as said or as the boundary would have redacted it (``_legacy_forms``): what a forget of those words resolves to BEFORE it
+    erases anything (``forget_record``). A bound entry is never matched here (``erase_turns``). Over-inclusive by design for legacy
+    entries only (``EXACT_WORDS_FORGET code=legacy_text n=``). A store failure is RAISED."""
     forms = _legacy_forms(text)
     if not (user_id or "").strip() or not forms:
-        return 0
-    backend = get_backend()
-    _bound, legacy = partition(await backend.rows_matching(user_id, ""))   # a bound entry is NEVER matched by its words
+        return []
+    _bound, legacy = partition(await get_backend().rows_matching(user_id, ""))   # a bound entry is NEVER matched by its words
     ids = [tid for tid, t in legacy if any(k in _squash(t or "").lower() for k in forms)]
     if ids:
         logger.info("EXACT_WORDS_FORGET code=legacy_text n=%d", len(ids))
-    return int(await backend.delete(user_id, ids) or 0) if ids else 0
+    return ids
+
+
+async def erase_entries(user_id: str, ids: Iterable[str]) -> int:
+    """Delete these indexed turns by id (a forget record's resolved entries). Idempotent; a store failure is RAISED."""
+    want = list(dict.fromkeys(str(i) for i in (ids or ()) if i))
+    if not (user_id or "").strip() or not want:
+        return 0
+    return int(await get_backend().delete(user_id, want) or 0)
+
+
+async def erase_text(user_id: str, text: str) -> int:
+    """Delete the LEGACY indexed turns ``legacy_entry_ids`` names. A store failure is RAISED. 0 = nothing matched."""
+    return await erase_entries(user_id, await legacy_entry_ids(user_id, text))
 
 
 async def _transcript_candidates(user_id: str, needle: str) -> list[tuple]:

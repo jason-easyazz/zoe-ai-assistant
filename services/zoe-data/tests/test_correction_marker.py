@@ -427,18 +427,21 @@ async def test_topic_forget_flags_the_transcript_before_its_final_clear(monkeypa
 
     order, real_clear = [], cm.forget_user
 
-    async def erase_words(user_id, groups):
+    import exact_words
+    import turn_forget
+
+    async def flag(user_id, mids):                     # the forget record's transcript step
         order.append("flag")
-        return 1, 1
+        return 1
 
     def clear(user_id, reason="forget"):
         order.append("clear")
         return real_clear(user_id, reason)
+    turn_forget.note_user_turn(MEMBER, "the book club meets on tuesdays now", mid="m-book-club")
     monkeypatch.setattr(forget_topic, "_owned_rows", lambda *a: _ret([]))
     monkeypatch.setattr(forget_topic, "_index_hits", lambda *a: _ret({}))
-    monkeypatch.setattr(forget_topic, "_withdraw_offers", lambda *a: _ret(0))
-    monkeypatch.setattr(forget_topic, "_erase_words", erase_words)
-    monkeypatch.setattr(conversation_notes, "erase_topic", lambda *a: _ret(0))
+    monkeypatch.setattr(exact_words, "flag_transcript_turns", flag)
+    monkeypatch.setattr(conversation_notes, "ids_for_topic", lambda *a: _ret([]))
     monkeypatch.setattr(cm, "forget_user", clear)
     await forget_topic.forget(object(), MEMBER, "the book club")
     assert "flag" in order and order[-1] == "clear" and order.index("flag") < len(order) - 1

@@ -138,7 +138,7 @@ TABLES: tuple[Store, ...] = (
        entity="forget_redact.on_forget"),
     _t("chat_feedback", WORDS, GAP, "Holds a corrected_response (words); neither path reaches it."),
     _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
-    _t("pending_suggestions", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),   # Zoe's offers; topic forget: forget_topic._withdraw_offers
+    _t("pending_suggestions", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),   # Zoe's offers; topic forget: the forget record's offers step (forget_record._offers)
     # --- member-owned product data: the member's own lists, notes, calendar, journal, money ---
     _t("notes", WORDS, GAP, _OWN + " Holds free text."),
     _t("journal_entries", WORDS, GAP, _OWN + " Holds free text."),
@@ -222,7 +222,8 @@ OTHER: tuple[Store, ...] = (
     Store("production_feedback_log", "file", WORDS, OUT_OF_SCOPE, "Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and "
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
-          "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
+          "no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into "
+          "retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on.", markers=("voice_stt.jsonl",)),
     Store("flue_session_log", "file", WORDS, GAP, "The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
@@ -277,6 +278,10 @@ OTHER: tuple[Store, ...] = (
     Store("reminder_phone_ledger", "db", METADATA, REACHED, "app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the "
           "at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows.",
           member="reminder_delivery.forget_user", markers=("reminder_phone:",)),
+    Store("forget_records", "db", METADATA, REACHED, "app_settings rows forget_rec:<member>:<hash> = an OPEN forget's write-ahead record "
+          "(forget_record.py): row / saved-turn / entry / observation / note / registry / offer ids and step codes, never words. Closed (deleted) "
+          "when every step is done; delete_user removes the member's open records.",
+          member="forget_record.forget_user", markers=("forget_rec:",)),
     Store("omi_audio_files", "file", BIOMETRIC, REACHED, "Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files).",
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",
