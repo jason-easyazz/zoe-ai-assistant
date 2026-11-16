@@ -112,14 +112,17 @@ def test_with_the_last_member_removed_or_an_unreadable_roster_the_daemon_starts_
     d.stop()
     (state[0] / "people.json").write_text(roster)                      # the last member left (or the file is damaged)
     again = start(state)
-    assert known(state[0]) == [A]                                      # loaded from the record, for forget only
+    # loaded from the record, for forget only: A (their words) and B (B's grant record names them; main's forget reaches it)
+    assert known(state[0]) == sorted([A, B])
     said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
     with pytest.raises(Refused, match="no grant"):                     # nothing can be proposed or acted for anyone
         again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq},
                          caused_by=[said.seq])
     assert holding(state[0], MARK)
     assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
-    assert holding(state[0], MARK) == [] and known(state[0]) == []
+    assert holding(state[0], MARK) == [] and known(state[0]) == [B]
+    assert again.panel.call("forget", subject=B, actor=B)["count"] >= 1  # B's grant record: reached, and B leaves too
+    assert known(state[0]) == []
     err = again.stop()
     unreadable = "zoe-os shadow kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served"
     assert (unreadable in err) is (roster != '{"people": []}')         # one fixed line, and only for a damaged roster
