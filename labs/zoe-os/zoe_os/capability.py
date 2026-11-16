@@ -69,6 +69,7 @@ class Grant:
     acts: frozenset[str]
     guardian: str | None = None
     active: bool = True
+    record_seq: int | None = None
 
 
 def _covers(level: Visibility | None, wanted: Visibility) -> bool:
@@ -86,6 +87,7 @@ class GrantStore:
         self._grants: dict[str, dict[str, Grant]] = {}     # skill -> person -> grant
         self._ids = itertools.count(1)
         self.on_change = on_change
+        self.record_live = None
 
     def install(self, manifest: Manifest | Mapping) -> Manifest:
         m = manifest if isinstance(manifest, Manifest) else Manifest.from_dict(manifest)
@@ -129,10 +131,12 @@ class GrantStore:
         return True
 
     def of(self, skill: str, person: str | None) -> Grant | None:
-        return self._grants.get(skill, {}).get(person or "")
+        g = self._grants.get(skill, {}).get(person or "")
+        return g if g and g.active and (self.record_live is None or
+                                        self.record_live(g.record_seq)) else None
 
     def all_for(self, skill: str) -> list[Grant]:
-        return list(self._grants.get(skill, {}).values())
+        return [g for p in self._grants.get(skill, {}) if (g := self.of(skill, p)) is not None]
 
 
 class Enforcer:

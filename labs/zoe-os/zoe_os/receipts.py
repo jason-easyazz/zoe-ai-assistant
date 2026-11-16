@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .events import Event, Kind, Visibility
+from .provenance import subject_of
 from .spine import KERNEL, Spine, Refused
 
 Do = Callable[[str, dict], Any]                    # (person, args) -> result
@@ -45,6 +46,25 @@ Verify = Callable[[str, dict, Any], "dict | None"]   # independent read-back, No
 Snapshot = Callable[[str, dict], "dict | None"]    # (person, args) -> the state this would change
 Undo = Callable[[str, dict, dict], Any]            # (person, args, before) -> put ``before`` back
 UNDO = "undo"
+
+
+def snapshot_sources(payload: dict) -> tuple[set[int], bool]:
+    """Provenance for saved state AND undo read-back; no copied text in the index."""
+    sources, opaque = set(), False
+    for holder, key in ((payload.get('undo'), 'before'), (payload.get('proof'), 'restored')):
+        if not holder or key not in holder:
+            continue
+        before = holder[key]
+        if scrub_snapshot(before, set()) is None:
+            # The bench's scalar slot has no text when numeric/empty. All other opaque
+            # shapes (including unknown dictionary keys) fail closed for that person.
+            numeric_slot = (isinstance(before, dict) and set(before) == {'value'}
+                            and (before['value'] is None or isinstance(before['value'], (int, float))))
+            opaque |= not numeric_slot
+        else:
+            rows = before.get('rows', [before.get('alarm')])
+            sources.update(row['asked'] for row in rows if row is not None)
+    return sources, opaque
 
 
 def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
@@ -123,11 +143,12 @@ class Dispatcher:
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
         self._purges: dict[str, tuple[str, str]] = {}
+        self._purge_do: dict[str, Do] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
                  doc: str = "", params: dict | None = None,
-                 purge_key: tuple[str, str] | None = None) -> None:
+                 purge_key: tuple[str, str] | None = None, purge: Do | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -136,12 +157,20 @@ class Dispatcher:
         ``minimum`` / ``maximum`` for a number). With it, ``act`` refuses (and records) any
         arguments that are not exactly that shape BEFORE the driver runs, and ``catalog``
         can describe the action to a caller. Without it nothing is checked and the action is
-        not described (the behaviour every earlier action has)."""
+        not described (the behaviour every earlier action has).
+
+        ``purge`` is the driver the erasure duty runs (default: ``do``). A store whose ``do`` acts
+        only on the person's OWN rows gives its owner-blind delete here: an action reaches one
+        person's rows, an erasure notice reaches the erased requests of every owner."""
         self._actions[action] = (do, verify, needs_accept)
         if purge_key is not None:
             self._purges[action] = purge_key
         else:
             self._purges.pop(action, None)
+        if purge is not None and purge_key is not None:
+            self._purge_do[action] = purge
+        else:
+            self._purge_do.pop(action, None)
         self._meta[action] = (doc, params)
         if snapshot is not None and undo is not None:
             self._reverse[action] = (snapshot, undo)
@@ -163,8 +192,13 @@ class Dispatcher:
             if set(args) != {key} or args[key] not in {f'{prefix}{s}' for s in live.payload.get('seqs', ())}:
                 raise Refused('invalid purge id')
             do, verify, _ = self._actions[action]
-            result = do(live.payload['subject'], args)
-            if not verify(live.payload['subject'], args, result):
+            person = subject_of(live, self.enforcer.store.people, self.spine._owner)
+            if person is None:
+                # An anonymous notice whose subject hash names no known person: the driver is never run for nobody, and
+                # the purge is not confirmed (the caller keeps its target and retries).
+                raise Refused('purge unresolved')
+            result = self._purge_do.get(action, do)(person, args)
+            if not verify(person, args, result):
                 raise Refused('purge unconfirmed')
 
     def act(self, skill: str, action: str, on_behalf_of: str, args: dict, *,
@@ -243,7 +277,7 @@ class Dispatcher:
         for seq in caused_by:
             ev = self.spine._get(seq)
             if ev is not None and (ev.subject == person or (
-                    ev.kind is Kind.FORGET and ev.payload.get("subject") == person)):
+                    ev.kind is Kind.FORGET and subject_of(ev) == person)):
                 return True
         return False
 
@@ -262,8 +296,11 @@ class Dispatcher:
         return self.spine._db.execute("SELECT 1 FROM intents WHERE undoes = ?", (seq,)).fetchone() is not None
 
     def last_action(self, person: str) -> Event | None:
-        return next((e for e in self.spine._newest(frozenset({Kind.ACTION_RECEIPT}), person)
-                     if e.subject == person), None)
+        # Exact subject, not mentions; the partial index also handles an empty history.
+        row = self.spine._db.execute(
+            "SELECT seq FROM events INDEXED BY latest_receipt WHERE subject = ? AND kind = 'action_receipt'"
+            " AND tombstoned = 0 ORDER BY seq DESC LIMIT 1", (person,)).fetchone()
+        return self.spine._get(row[0]) if row else None
 
     def undo(self, person: str, *, actor: str) -> Receipt:
         """Reverse ``person``'s last action. Raises ``Refused`` (recorded) when it may not or cannot."""

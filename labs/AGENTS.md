@@ -560,7 +560,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   shield), skill manifests and per-person grants with one enforcer, an action dispatcher with read-back receipts and
   a claim-without-receipt detector, a per-person attention router, three toy skills (one deliberately malicious) and
   thin bridge adapters for five production call sites. Never imported by production, no flag, no unit; in-process, so
-  it proves the rules and NOT isolation. Regression net (hand-run under the test-lane rules, never CI):
+  it proves the rules and NOT isolation. Regression net: its ~510 tests are in the REQUIRED `validate` gate (2026-11-15):
+  `labs/zoe-os/conftest.py` marks every test under it `ci_safe`, and `validate.yml`'s `tests/unit` shards + `collect` take the path
+  `labs/zoe-os/tests` beside `tests/unit`. Keep them hosted-runner safe (no network, model, household data, root); the
+  second-OS-user tests self-skip off root. `brain-lab-app` Node tests are NOT in CI yet. Hand-run:
   `python3 -m pytest -p no:cacheprovider -q labs/zoe-os/tests`; every guarantee has a monkeypatched negative control
   (README table). `bench.py` is one capped benchmark (60 s, 100k events). README is a record, not a contract.
   `zoe_os/brain/` is the brain bridge (`docs/architecture/zoe-os-brain-bridge.md`): an adapter that presents the kernel's
