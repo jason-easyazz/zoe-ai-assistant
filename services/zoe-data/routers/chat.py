@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 import panel_principal
 import untrusted_content
 import user_erase_gate as _erase_gate
+from erase_watermark import held_at_call as _erase_watermark_held_at_call
 import voice_phrases
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, Intent
 from browser_broker import create_default_browser_broker
@@ -915,7 +916,10 @@ def _extract_memory_candidates(user_message: str, assistant_response: str):
 
 
 # The member's erase generation is read HERE, when the turn queues this task (``ensure_future(_persist_memory_candidates(...))``):
-# every memory write the passes below make is dropped if the member is erased after that (``user_erase_gate.scheduled``).
+# every memory write the passes below make is dropped if the member is erased after that (``user_erase_gate.scheduled``). It also
+# HOLDS the session's chat turn from that moment until it finishes (``erase_watermark.held_at_call``): a member delete waits for the
+# passes (the person extractor's Postgres writes, the latent-intent offers, the dispute questions) instead of racing them.
+@_erase_watermark_held_at_call("session_id")
 @_erase_gate.scheduled_at_call("user_id")
 async def _persist_memory_candidates(user_id: str, session_id: str, user_message: str, assistant_response: str):
     """Single post-turn memory hook.

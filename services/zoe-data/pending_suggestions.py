@@ -264,6 +264,11 @@ async def store_suggestions(
         json.dumps(s.get("pre_filled_slots") or {}, default=str))]
     if not suggestions:
         return 0
+    # Member delete, the late-write rule: every writer of an offer (the latent-intent detector, the memory-dispute questions, the
+    # backfill) runs from a turn's background work; an offer for a member erased since that work was scheduled (the erase gate's
+    # snapshot) or since its turn began (the durable mark) is never stored, and one that lands across the delete is taken out again.
+    if await _late_for_erased(user_id):
+        return 0
     now = datetime.now(timezone.utc).isoformat()
     stored = 0
     try:
@@ -350,7 +355,18 @@ async def store_suggestions(
         # propose-on-mention failure for a long time. Any orphan users row from a
         # partial write is benign (a valid user is a prerequisite, no PII).
         logger.warning("pending_suggestions.store failed (stored=%d): %s", stored, exc)
+    if stored and await _late_for_erased(user_id):
+        async with get_db_ctx() as db:
+            await db.execute("DELETE FROM pending_suggestions WHERE user_id = $1", user_id)   # the member is erased: all of theirs
+        return 0
     return stored
+
+
+async def _late_for_erased(user_id: str) -> bool:
+    import erase_watermark
+    import user_erase_gate
+
+    return user_erase_gate.erased_since_scheduled(user_id) or await erase_watermark.turn_write_refused(None, "pending_suggestion", user_id)
 
 
 async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> str:

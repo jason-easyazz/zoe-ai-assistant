@@ -511,6 +511,8 @@ def test_a_cancel_tap_reaches_the_running_enrolment(daemon):
 def test_a_forget_command_drops_that_members_profile_from_memory_and_disk_at_once(daemon, monkeypatch, tmp_path):
     cache_file = tmp_path / ".zoe-voice" / "speaker_profiles.json"
     monkeypatch.setattr(daemon, "_PROFILE_CACHE_PATH", str(cache_file))
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(tmp_path / ".zoe-voice" / "speaker_shadow_metrics.jsonl"))   # the purge prunes it
+    monkeypatch.setattr(daemon, "_SHADOW_FORGOTTEN", set(), raising=False)
     synced = []
     monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: synced.append(force))
     with daemon._profile_cache_lock:

@@ -71,19 +71,18 @@ def current_clip() -> Optional[str]:
     return (_HOLDER.get() or {}).get("path")
 
 
-def drop_current() -> bool:
-    """Remove the clip THIS turn saved and its label (a member delete landed during the turn: the clip is neither labelled with, nor
-    kept for, the deleted member - and not kept unattributed either). True when there was one. Never raises."""
+def drop_current(member: str = "") -> bool:
+    """Remove the clip THIS turn saved (a member delete landed during the turn: the clip is neither kept for the deleted member nor
+    kept unattributed). The clip is first LABELLED as ``member``'s (when given and not labelled yet), then removed WAV FIRST and the
+    label LAST (``_remove_strict``): a removal that fails RAISES and leaves the clip labelled as theirs, so any re-run of their erase
+    (``erase_member``) still finds it. True when there was a clip; "already gone" is fine."""
     clip = current_clip()
     if not clip:
         return False
-    for p in (sidecar_path(clip), clip):
-        try:
-            os.unlink(p)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.warning("voice_clips: a clip of a deleted member could not be dropped (%s)", type(exc).__name__)
+    side = sidecar_path(clip)
+    if member and not os.path.exists(side):
+        _write(side, dict(v=1, kind="member", id=str(member)[:64], cluster="", ts=int(time.time())))
+    _remove_strict(side, clip)
     _HOLDER.set({})
     return True
 
@@ -141,9 +140,14 @@ def _labelled(d: str):
 
 
 def _remove(side: str, wav: str) -> bool:
+    """LENIENT removal (retention sweep, guest forget): the WAV first, the label only once the WAV is gone - a WAV that cannot be
+    removed keeps its label, so the next sweep / forget finds it again (``isfile`` was not used: it reads an unreadable WAV as absent
+    and dropped the label of a clip that stayed). A failure is logged and returns False."""
     try:
-        if os.path.isfile(wav):
+        try:
             os.unlink(wav)
+        except FileNotFoundError:
+            pass
         os.unlink(side)
         return True
     except OSError as exc:

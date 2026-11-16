@@ -177,12 +177,17 @@ async def _label_member_clip(member: str) -> None:
     import voice_clips as _vc
 
     _ew.turn_identify(member)
-    if await _ew.turn_write_refused(None, "voice_clip", member):
-        _vc.drop_current()
-        return
-    _vc.record("member", member)
-    if await _ew.turn_write_refused(None, "voice_clip", member):
-        _vc.drop_current()
+    refused = await _ew.turn_write_refused(None, "voice_clip", member)
+    if not refused:
+        _vc.record("member", member)
+        refused = await _ew.turn_write_refused(None, "voice_clip", member)
+    if refused:
+        try:
+            _vc.drop_current(member)       # labelled as theirs first, then WAV first and the label last: a failure keeps the label
+        except OSError as exc:
+            # the turn goes on (a reply never fails on a clip); the clip stays LABELLED as the deleted member's, so a re-run of their
+            # delete (idempotent) removes it
+            logger.error("VOICE_CLIP_DROP_FAILED reason=%s - the clip keeps its owner label for the delete's re-run", type(exc).__name__)
 
 
 async def _release_turn_after(gen, held):
@@ -7316,6 +7321,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
 
 
 @router.post("/ambient")
+@_member_turn
 async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Receive an ambient audio segment from the Pi daemon, transcribe it, and store in DB.
 
@@ -7351,6 +7357,9 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         # unidentified one is the expected case, not a fault.
         logger.debug("ambient_memory: unidentified speaker on panel=%s - not transcribed, not stored", panel_id)
         return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
+    import erase_watermark as _ew_amb
+
+    _ew_amb.turn_identify(ambient_user_id)           # the speaker is known: a member delete waits for this request from here
 
     import uuid as _uuid
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -7374,6 +7383,14 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
     # Store in ambient_memory, scoped to the segment's own speaker (resolved above).
     stored = False
+    import erase_watermark as _ew
+
+    # Member delete, the late-write rule: the speaker deleted since this request BEGAN (``_member_turn``; the delete waits for it once
+    # the speaker is known) gets no row - checked before the insert and again after it (then the member's rows are taken out: they
+    # are erased anyway). Only an attributed segment is ever stored, so every row is checked for the member it is written as.
+    _ew.turn_identify(ambient_user_id)
+    if await _ew.turn_write_refused(None, "ambient_memory", ambient_user_id):
+        return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
     try:
         from db_compat import get_compat_db as _get_compat_db
 
@@ -7385,6 +7402,10 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
             )
             await db.commit()
             stored = True
+            if await _ew.turn_write_refused(None, "ambient_memory", ambient_user_id):
+                await db.execute("DELETE FROM ambient_memory WHERE user_id = ?", (ambient_user_id,))
+                await db.commit()
+                return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
             logger.debug(
                 "ambient_memory: panel=%s user=%s chars=%d",
                 panel_id, ambient_user_id, len(transcript),

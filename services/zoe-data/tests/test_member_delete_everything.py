@@ -32,7 +32,7 @@ CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERE
 CREATE TABLE chat_ag_ui_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, run_id TEXT, events TEXT);
 CREATE TABLE chat_feedback (id TEXT PRIMARY KEY, interaction_id TEXT, user_id TEXT, corrected_response TEXT);
 CREATE TABLE background_tasks (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, task TEXT NOT NULL, result TEXT);
-CREATE TABLE ui_actions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT);
+CREATE TABLE ui_actions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT, status TEXT, created_at TEXT);
 CREATE TABLE ui_action_ledger (id TEXT PRIMARY KEY, action_id TEXT NOT NULL REFERENCES ui_actions(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
     panel_id TEXT, event_type TEXT NOT NULL, event_data TEXT);
 CREATE TABLE memory_consolidation_state (session_id TEXT PRIMARY KEY, user_id TEXT, last_consolidated_at TEXT, turns_consolidated INTEGER);
@@ -1307,7 +1307,7 @@ def test_a_toast_queued_for_the_member_on_a_guest_kiosk_goes_with_its_ledger_and
     async def seed():
         x = store.execute
         for aid, origin in (("ua-guest-a", A), ("ua-guest-b", B)):
-            await x("INSERT INTO ui_actions VALUES (?, 'guest', ?)", (aid, json.dumps({"message": "synthetic words"})))
+            await x("INSERT INTO ui_actions (id, user_id, payload) VALUES (?, 'guest', ?)", (aid, json.dumps({"message": "synthetic words"})))
             await x("INSERT INTO ui_action_ledger VALUES (?, ?, 'guest', 'kiosk-1', 'queued', ?)",
                     ("l-" + aid, aid, json.dumps({"action_type": "panel_announce", "payload": {"message": "synthetic words"},
                                                   "origin_user_id": origin})))
@@ -1341,3 +1341,27 @@ def test_a_surviving_session_titled_by_the_members_first_turn_loses_their_words_
     (title,), = _q(store, "SELECT title FROM chat_sessions WHERE id = 's-bt'")
     assert "surprise" not in title.lower() and title == derive_session_title("What should we cook for dinner tonight")
     assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-bown'") == [("A title B typed for their own chat",)]
+
+
+def test_pre_upgrade_kiosk_actions_without_an_origin_go_when_they_name_the_member_or_can_never_be_shown(env, store):
+    """Rows queued before origin_user_id was recorded: one whose payload names the member goes, one naming another member stays,
+    and an origin-less row still queued and older than the stale limit (never shown again, attributable to nobody) goes too."""
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        rows = (("pre-a", {"target_user_id": A, "message": "synthetic words"}, None, None),
+                ("pre-b", {"target_user_id": B, "message": "synthetic words"}, None, None),
+                ("pre-old", {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
+                ("pre-fresh", {"message": "synthetic words"}, "queued", "2999-01-01T00:00:00Z"))
+        for aid, payload, status, made in rows:
+            await x("INSERT INTO ui_actions (id, user_id, payload, status, created_at) VALUES (?, 'guest', ?, ?, ?)",
+                    (aid, json.dumps(payload), status, made))
+            await x("INSERT INTO ui_action_ledger VALUES (?, ?, 'guest', 'kiosk-1', 'queued', ?)",
+                    ("l-" + aid, aid, json.dumps({"action_type": "show_card", "payload": payload})))   # no origin_user_id
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
+    assert left == {"pre-b", "pre-fresh"}, left
+    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-fresh"}

@@ -337,3 +337,188 @@ def test_a_tool_write_inside_a_turn_lands_before_the_delete_erases_so_nothing_su
         await d
     asyncio.run(go())
     assert order == ["tool", "erase"] and store["reminders"] == set()
+
+
+# ── the ambient lane and the post-turn background writers ─────────────────────────────────────────────────────────────────────
+
+class _AmbientDB:
+    def __init__(self, hook=None):
+        self.rows, self.hook = [], hook
+
+    async def execute(self, sql, params=()):
+        s = " ".join(sql.split())
+        if s.startswith("INSERT INTO ambient_memory"):
+            if self.hook:
+                h, self.hook = self.hook, None
+                await h()
+            self.rows.append(params[-1])
+        elif s.startswith("DELETE FROM ambient_memory WHERE user_id = ?"):
+            self.rows = [u for u in self.rows if u != params[0]]
+
+    async def commit(self):
+        pass
+
+
+@pytest.mark.parametrize("gap", ["during_transcription", "during_the_insert"])
+def test_a_delete_while_an_ambient_segment_is_in_flight_stores_nothing_of_the_speaker(monkeypatch, gap):
+    import db_compat
+    import erase_watermark
+    import routers.voice_tts as vt
+
+    db = _AmbientDB()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    async def claim(payload, caller):
+        return payload.get("who")
+
+    async def transcribe(_path):
+        if gap == "during_transcription" and current["who"] == A:
+            assert erase_watermark.inflight_turns(A) == 1, "the delete would wait for this request"
+            await erase_watermark.record(A)
+        return "the kettle is broken again"
+    current = {}
+    monkeypatch.setattr(db_compat, "get_compat_db", ctx)
+    monkeypatch.setattr(vt, "_accepted_voice_claim", claim)
+    monkeypatch.setattr(vt, "_turn_own_identity", lambda caller, claimed: claimed)
+    monkeypatch.setattr(vt, "_transcribe_audio_impl", transcribe)
+    monkeypatch.setattr(vt, "_lane_panel_id", lambda payload, caller, lane: "p1")
+
+    async def post(who):
+        current["who"] = who
+        if gap == "during_the_insert" and who == A:
+            async def land():
+                await erase_watermark.record(A)
+            db.hook = land
+        return await vt.voice_ambient({"audio_base64": "UklGRg==", "who": who}, caller={"source": "device"})
+
+    async def go():
+        return await post(A), await post(B)
+    out_a, out_b = asyncio.run(go())
+    assert out_a["stored"] is False and A not in db.rows, "nothing of the deleted speaker"
+    assert out_b["stored"] is True and db.rows == [B], "another member's segment is stored as before"
+
+
+def test_an_offer_queued_by_a_turn_pass_is_not_stored_for_a_member_erased_since(monkeypatch):
+    """latent_intent_detector and memory_disputes both store through pending_suggestions.store_suggestions: an offer from a pass the
+    member's erase outran is never stored; one that lands across the erase is taken out again."""
+    import pending_suggestions as ps
+    import user_erase_gate as gate
+
+    rows = []
+
+    class _DB:
+        def __init__(self, hook=None):
+            self.hook = hook
+
+        async def execute(self, sql, *args):
+            s = " ".join(sql.split())
+            if s.startswith("INSERT INTO pending_suggestions"):
+                if self.hook:
+                    h, self.hook = self.hook, None
+                    h()
+                rows.append(args[1])
+            elif s.startswith("DELETE FROM pending_suggestions WHERE user_id"):
+                rows[:] = [u for u in rows if u != args[0]]
+
+        async def fetch(self, *a, **k):
+            return []
+    holder = {"db": _DB()}
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield holder["db"]
+
+    async def no(*_a, **_k):
+        return False
+
+    async def nothing(*_a, **_k):
+        return lambda *_texts: False                    # the forget filter: no offer names a forgotten entity
+    monkeypatch.setattr(ps, "get_db_ctx", ctx)
+    monkeypatch.setattr(ps, "contact_offers_declined", no)
+    monkeypatch.setattr(ps, "_filter_or_withhold", nothing)
+    offer = [{"action_type": "reminder_create", "description": "remind you about the dentist", "offer_phrase": "want a reminder?"}]
+
+    async def go():
+        snap = gate.generation(A)
+        with gate.erase_span(A):                       # the member delete ran after the pass was queued
+            pass
+        with gate.scheduled(A, snap):
+            first = await ps.store_suggestions(A, "s-1", offer)
+        snap_b = gate.generation(B)
+        def b_erased():                                # B's delete lands INSIDE the insert (a whole erase span: enter and exit)
+            with gate.erase_span(B):
+                pass
+        holder["db"] = _DB(hook=b_erased)
+        with gate.scheduled(B, snap_b):
+            second = await ps.store_suggestions(B, "s-2", offer)
+        return first, second
+    first, second = asyncio.run(go())
+    assert first == 0 and second == 0 and rows == [], rows
+
+
+def test_the_person_extractors_writes_are_refused_for_a_member_erased_since_the_pass_was_queued(monkeypatch):
+    import person_extractor as pe
+    import user_erase_gate as gate
+
+    reached = []
+
+    async def opted_out(*_a, **_k):
+        reached.append("past the gate")
+        return True
+    monkeypatch.setattr(pe, "_opted_out", opted_out)
+
+    async def go():
+        snap = gate.generation(A)
+        with gate.erase_span(A):
+            pass
+        with gate.scheduled(A, snap):
+            n = await pe.process_text("my sister Mara lives in Perth", user_id=A, source="conversation")
+            ok = await pe.apply_person_fact("Mara", "lives_in", "Perth", user_id=A, source="conversation")
+            edge = await pe._write_relationship(A, "Mara", "Tove", "sister", "family", db=None)
+        return n, ok, edge
+    assert asyncio.run(go()) == (0, False, None) and reached == [], "no write path was even entered"
+
+
+def test_a_chat_turns_post_turn_passes_hold_the_turn_so_the_delete_waits_for_them():
+    import erase_watermark
+    import routers.chat as chat_mod
+
+    token = erase_watermark.turn_open("s-hold", A)
+    coro = chat_mod._persist_memory_candidates(A, "s-hold", "hello", "hi")   # queued from inside the turn
+    erase_watermark.turn_close(token)                                       # the turn's stream ended
+    try:
+        assert erase_watermark.inflight_turns(A) == 1, "its passes still hold it: the member delete waits"
+    finally:
+        coro.close()
+        erase_watermark._TURNS.clear()
+
+
+def test_a_clip_whose_wav_cannot_be_dropped_keeps_its_owner_label_and_the_retry_removes_both(monkeypatch, tmp_path):
+    """drop_current: labelled as the member's first, then the WAV first and the label last. A WAV unlink that fails RAISES and leaves
+    the label naming the member, so their erase (a re-run of the delete) still finds and removes both."""
+    import os as _os
+
+    import voice_clips
+
+    monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(tmp_path))
+    voice_clips.begin()
+    wav = tmp_path / "turn-a.wav"
+    wav.write_bytes(b"RIFF")
+    voice_clips.note_saved(str(wav))
+    real = _os.unlink
+    fails = {"n": 1}
+
+    def flaky(path, *a, **k):
+        if str(path).endswith(".wav") and fails["n"]:
+            fails["n"] -= 1
+            raise PermissionError("busy")
+        return real(path, *a, **k)
+    monkeypatch.setattr(voice_clips.os, "unlink", flaky)
+    with pytest.raises(PermissionError):
+        voice_clips.drop_current(A)                            # the caller is told
+    side = tmp_path / "turn-a.verdict.json"
+    assert wav.exists() and side.exists() and '"ann"' in side.read_text(), "the audio keeps its owner label"
+    assert voice_clips.erase_member(A) == 1 and not wav.exists() and not side.exists(), "the retry removes both"

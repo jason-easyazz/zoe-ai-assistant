@@ -325,9 +325,74 @@ async def _originated_ui_actions(r: _Run, user_id: str) -> None:
             origin = None
         if origin == user_id and action_id:
             mine.append(str(action_id))
-    mine = sorted(set(mine))
+    mine = set(mine) | await _preupgrade_ui_actions(r, user_id)
+    mine = sorted(mine)
     await r.by_ids("DELETE FROM ui_action_ledger WHERE action_id", mine)
     await r.by_ids("DELETE FROM ui_actions WHERE id", mine)
+
+
+#: a queued panel action older than this is stale (``routers/ui_actions.get_pending_ui_actions`` fails it): never shown again
+UI_ACTION_STALE_S = 3600
+
+
+def _names_member(value: Any, user_id: str) -> bool:
+    """Whether any string anywhere in a parsed JSON value IS the member's id (a payload's / ledger event's target, recipient, user)."""
+    if isinstance(value, str):
+        return value == user_id
+    if isinstance(value, dict):
+        return any(_names_member(v, user_id) for v in value.values())
+    if isinstance(value, list):
+        return any(_names_member(v, user_id) for v in value)
+    return False
+
+
+async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
+    """Actions queued BEFORE ``origin_user_id`` was recorded (no origin in their queued ledger event): (1) every one whose payload or
+    any ledger event names the member's id as a value (found by a text prefilter on the JSON-quoted id, each confirmed by parsing), and
+    (2) every one still QUEUED and older than ``UI_ACTION_STALE_S``, whoever it was for - an un-attributable pre-upgrade row that can
+    never be shown again (the poll fails it as stale); erring toward erasing, on every panel. An action WITH an origin is decided by
+    its origin only (``_originated_ui_actions``)."""
+    import time
+
+    import erase_watermark
+
+    quoted = f"%{json.dumps(str(user_id))}%"
+    cand = {str(x[0]) for x in await r.rows("SELECT id FROM ui_actions WHERE payload LIKE ?", (quoted,)) if x[0]}
+    cand |= {str(x[0]) for x in await r.rows("SELECT action_id FROM ui_action_ledger WHERE event_data LIKE ?", (quoted,)) if x[0]}
+    cutoff = time.time() - UI_ACTION_STALE_S
+    stale = set()
+    for aid, made in await r.rows("SELECT id, created_at FROM ui_actions WHERE status = 'queued'", ()):
+        t = erase_watermark.instant(made)
+        if aid and t is not None and t.timestamp() < cutoff:
+            stale.add(str(aid))
+    ids = sorted(cand | stale)
+    out = set()
+    for at in range(0, len(ids), _CHUNK):
+        part = ids[at:at + _CHUNK]
+        marks = ", ".join("?" * len(part))
+        events: dict = {}
+        for aid, etype, data in await r.rows(f"SELECT action_id, event_type, event_data FROM ui_action_ledger WHERE action_id IN ({marks})",
+                                             tuple(part)):
+            try:
+                events.setdefault(str(aid), []).append((str(etype or ""), json.loads(data) if isinstance(data, str) else None))
+            except ValueError:
+                events.setdefault(str(aid), []).append((str(etype or ""), None))
+        payloads = {str(x[0]): x[1] for x in await r.rows(f"SELECT id, payload FROM ui_actions WHERE id IN ({marks})", tuple(part))}
+        for aid in part:
+            evs = events.get(aid, [])
+            if any(t == "queued" and isinstance(d, dict) and "origin_user_id" in d for t, d in evs):
+                continue                                        # recorded after the upgrade: its origin decides
+            if aid in stale:
+                out.add(aid)
+                continue
+            try:
+                payload = json.loads(payloads.get(aid) or "null")
+            except ValueError:
+                payload = payloads.get(aid)                      # unparseable: the text prefilter matched the quoted id itself
+            if _names_member(payload, user_id) or any(_names_member(d, user_id) for _, d in evs) or (
+                    isinstance(payload, str) and json.dumps(str(user_id)) in payload):
+                out.add(aid)
+    return out
 
 
 async def _retitle(r: _Run, sessions: list) -> None:

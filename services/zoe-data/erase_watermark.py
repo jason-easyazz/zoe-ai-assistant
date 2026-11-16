@@ -499,3 +499,38 @@ async def turn_write_refused(session_id: Optional[str], lane: str, user_id: Opti
         return await send_refused(uid, began, lane)
     except Unavailable:
         return False
+
+
+def hold_session_turn(session_id: Optional[str]) -> Optional[str]:
+    """One more piece of work of the chat turn in flight on ``session_id`` (its post-turn passes, queued from inside the turn): the
+    turn stays in flight - the member delete waits - until the work releases it (``turn_release``). None when no turn is open there."""
+    for token, entry in list(_TURNS.items()):
+        if session_id and entry["session"] == str(session_id):
+            entry["refs"] += 1
+            return token
+    return None
+
+
+def held_at_call(session_arg: str):
+    """Decorate an async post-turn writer queued from inside a chat turn: at the CALL (the moment it is queued, before the turn can
+    end) the turn on the session named by argument ``session_arg`` is held, and released when the writer finishes."""
+    import functools
+    import inspect
+
+    def wrap(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            bound = sig.bind_partial(*args, **kwargs)
+            token = hold_session_turn(bound.arguments.get(session_arg))
+            inner = fn(*args, **kwargs)        # created NOW: an inner call-time wrapper (the erase gate's snapshot) reads at queue time
+
+            async def run():
+                try:
+                    return await inner
+                finally:
+                    turn_release(token)
+            return run()
+        return call
+    return wrap

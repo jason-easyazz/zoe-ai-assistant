@@ -357,6 +357,13 @@ async def test_a_guest_kiosk_toast_for_the_member_goes_and_a_title_their_turn_ma
                 aid, json.dumps({"message": "synthetic words"}))
         await x("INSERT INTO ui_action_ledger (id, action_id, user_id, panel_id, event_type, event_data) VALUES ($1, $2, 'guest', 'kiosk-1', "
                 "'queued', $3)", "l-" + aid, aid, json.dumps({"payload": {"message": "synthetic words"}, "origin_user_id": origin}))
+    # pre-upgrade kiosk rows (no origin_user_id): one naming A in its payload, one naming B, one origin-less still queued and stale
+    for aid, payload, made in (("pre-a", {"target_user_id": a}, None), ("pre-b", {"target_user_id": b}, None),
+                               ("pre-old", {"message": "synthetic words"}, "2020-01-01T00:00:00Z")):
+        await x("INSERT INTO ui_actions (id, user_id, panel_id, action_type, payload, created_at) VALUES "
+                "($1, 'guest', 'kiosk-1', 'show_card', $2, COALESCE($3, NOW()::TEXT))", aid, json.dumps(payload), made)
+        await x("INSERT INTO ui_action_ledger (id, action_id, user_id, panel_id, event_type, event_data) VALUES ($1, $2, 'guest', "
+                "'kiosk-1', 'queued', $3)", "l-" + aid, aid, json.dumps({"payload": payload}))
     await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-bt', $1, 'Planning the surprise party')", b)
     await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('bt-1', 's-bt', 'user', "
             "'Planning the surprise party', $1, '2026-01-01 00:00:01')", _meta(a))
@@ -365,4 +372,6 @@ async def test_a_guest_kiosk_toast_for_the_member_goes_and_a_title_their_turn_ma
     await mof.forget_user(a)
     assert "ug-a" not in await world.ids("ui_actions") and "ug-b" in await world.ids("ui_actions")
     assert await world.ids("ui_action_ledger", "action_id LIKE 'ug-%'") == {"l-ug-b"}
+    assert await world.ids("ui_actions", "id LIKE 'pre-%'") == {"pre-b"}, "pre-upgrade: A's and the stale origin-less one go"
+    assert await world.ids("ui_action_ledger", "action_id LIKE 'pre-%'") == {"l-pre-b"}
     assert await c.fetchval("SELECT title FROM chat_sessions WHERE id = 's-bt'") == derive_session_title("What should we cook for dinner tonight")
