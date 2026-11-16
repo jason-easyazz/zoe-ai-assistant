@@ -199,6 +199,20 @@ def _db_pool_never_initialised(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_member_is_barred_between_tests():
+    """``auth._BARRED`` (members a removal has put behind its barrier in this process) is process-global: a member barred by one test's
+    removal must not be refused in the next test that reuses the same id (it made six unrelated suites fail in one run)."""
+    try:
+        import auth
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    auth._BARRED.clear()
+    yield
+    auth._BARRED.clear()
+
+
+@pytest.fixture(autouse=True)
 def _contact_offer_policy_starts_empty():
     """``contact_offer_policy``'s per-user cooldown is process-global: an offer voiced in one test must not be cooling down in the next."""
     try:
