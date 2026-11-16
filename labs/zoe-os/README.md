@@ -35,7 +35,7 @@ is invented.
 | `zoe_os/explain.py` | "why did you do that?": the chain behind an action, refusal or offer, and one sentence built by code |
 | `zoe_os/replay.py` | the replay harness: a recorded day in, a deterministic report out, a diff between two skill versions |
 | `zoe_os/retention.py` | full, then a skeleton, then a count. The owner chose the "balanced" policy (2026-11-14); nothing sweeps by itself |
-| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store |
+| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store that acts only on the person's own rows (the erasure `purge` reaches every owner) |
 | `zoe_os/twin/days.py` | the household twin's day generator: synthetic days for a seed, awkward days on purpose |
 | `zoe_os/twin/baseline.py` | the twin skill: what is normal per person, as counts; "not enough days yet" below ten working days |
 | `zoe_os/twin/rehearse.py` | a changed skill against generated and recorded days: privacy failures first, then every difference |
@@ -78,6 +78,7 @@ bad outcome.
 | a forgotten event is withdrawn from a live queue | `test_forget.py` | `Subscription._purge_forgotten` a no-op: the queued sentinel is delivered |
 | the forget reaches everything derived | `test_forget.py` | `Spine._closure` returns only the seed: a derived copy survives |
 | forgotten words cannot be re-published by a skill | `test_forget.py`, `test_attack.py` | `Spine._shielded` always no: the words are back on the spine |
+| per-person shields allow unrelated private reuse by B; forgetting grant/refusal records removes consent | `test_forget_owner.py` (verification pending) | old global text shield refuses B; omitting payload-reference indexing leaves grant/refusal rows naming A |
 | action arguments and undo state cannot restore shielded words or names (validation pending) | `test_forget_action_arguments.py`, `test_forget_receipts_notices.py` | disabling `Dispatcher._check_arguments` makes the resurrection regression fail; disabling snapshot scrub AND this guard permits restoration |
 | the bytes are gone from disk | `test_forget.py`, `test_attack.py` | positive control: the sentinel is in the files before the forget |
 | no action without the manifest and that person's grant | `test_receipts.py`, `test_attack.py` | `Dispatcher._authorize` always yes: the light is toggled for someone who never agreed |
@@ -111,7 +112,8 @@ bad outcome.
 | an explanation never shows another person's private event, not even its number | `test_explain.py` | no visibility check: the private words are in the answer |
 | undo is for the person (or a child's guardian), once, and never faked | `test_undo.py` | no ownership check; no once rule; "the last reversible action" instead of "the last action" |
 | the same recording gives the same report, byte for byte | `test_replay.py` | (checked across three processes with different hash seeds and time zone) |
-| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the rule-free store moves it |
+| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the store moves it |
+| an action for one person cannot snooze, ack, delete or overwrite another person's reminder by id; a foreign id answers like a missing one | `test_reminder_owner.py` | `ReminderStore._own` ignores the owner: SAM's action changes ALEX's reminder |
 | a forget still reaches what derived from an event that aged out | `test_retention.py` | expiry that drops the links, or retires a skeleton early: the copy survives |
 
 ### The brain bridge ([record](../../docs/architecture/zoe-os-brain-bridge.md))
@@ -121,6 +123,7 @@ bad outcome.
 | an action's declared arguments are checked before its driver runs | `test_describe_params.py` | `check_params` always yes: the driver runs on malformed arguments |
 | an action for a person must cite an event about that person | `test_cause_binding.py` | `Dispatcher._concerns` always yes: a deputy acts for one person on another's word |
 | the brain's tools are derived from the kernel; the turn's own values are hidden from the model | `test_brain_bridge.py` | a bridge that shows every parameter, or accepts `asked` from the model |
+| a tool call is bound to the turn it came from: a late call from an earlier turn is refused `stale_turn` and reaches no driver | `test_turn_binding.py` | `BridgeServer._bound` returns whatever turn is open: turn N's call writes into turn N+1's person's list |
 | forgetting a person removes the effect in the stores, not only the events | `test_brain_bridge.py` | a keeper that ignores the notice |
 | kernel down or lost mid-call is said honestly and writes nothing half-way | `test_brain_bridge.py` | (a kill between write and receipt is `uncertain`, never done) |
 
@@ -304,10 +307,17 @@ a name or a pronoun (`test_HONEST_LIMIT_reworded_content_...` asserts three of t
 "Durable" means against a killed process, not power loss. An `uncertain` receipt has no resolution step.
 Grants, manifests and credentials are in memory: a restart denies everything until granted again.
 
-A skill's own store is outside the kernel: a skill that ignores a forget notice keeps the words
-(`test_HONEST_LIMIT_a_skill_that_ignores_the_notice_...`). A forget by entity or topic cannot match an event
+A skill's arbitrary private memory is outside the kernel. A registered store is purged directly by
+the kernel even if its skill ignores the notice (`test_kernel_purges_store_even_when_skill_ignores_the_notice`).
+A forget by entity or topic cannot match an event
 whose content has aged out (`test_HONEST_LIMIT_a_scoped_forget_...`). Retention has a chosen policy (record,
 section 9) and no scheduler: nothing expires until something calls the sweep.
+
+Whole-member forget erases consent records too. The kernel purges the reminder store and verifies it
+before erasing consent; the skill then drops its cache without acting through the former grant.
+The kernel-side brain keeper erases its stores directly without consulting a skill grant. Per-person shield
+and legacy-store rules, including anonymous whole-member notices, are in the architecture record §2.3–2.4.
+Trusted origins can no longer reassert forgotten text for the forgetting member.
 
 When two people enable the same skill, the kernel lets it derive something for one from the other's private
 event; the rehearsal reports that, the kernel does not stop it. A forget by name does not reach the twin's
@@ -328,7 +338,100 @@ One kernel process, one lock. No rate limit on failed handshakes. Presence, memo
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
 
+## Offline load evidence [code]
+
+`bench_kernel.py` owns latency (all nine verbs), 1/4/16-client concurrency, a seeded
+20,000-operation soak (290 s cap), 50 SIGKILL/restart trials, and cold start to the
+first authenticated answer. `bench_support.py` starts one scratch kernel child;
+clients use threads, never additional worker processes. It uses the SAME `Client`,
+`KernelServer`, wire, consent, dispatcher and record as the brain bridge. Effects
+are **durable synthetic SQLite drivers**, not the brain's in-memory example stores.
+No model is loaded or contacted. No service or environment setting is changed.
+Scratch files stay inside this directory and are removed on exit.
+
+When the host's memory/probe rules allow, on a host permitting Unix socket bind:
+
+```sh
+python3 -B labs/zoe-os/bench_kernel.py --mode all --seed 7 --n 100 --soak-n 20000 --crashes 50 --out labs/zoe-os/bench-results.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --history-n 20000 --out labs/zoe-os/bench-history.json
+python3 -B labs/zoe-os/bench_kernel.py --mode latency --seed 7 --n 100 --profile --history-n 20000 --out labs/zoe-os/bench-profile.json
+python3 -B -m pytest -p no:cacheprovider -q labs/zoe-os/test_bench_kernel.py
+```
+
+Numbers and fixed statuses only leave the harness: never credentials or payloads.
+A failure writes its exception CLASS, exits nonzero, and does not masquerade as a
+completed measurement. CLI modes run independently so all failures are recorded.
+Keep baseline/after JSON from identical parameters and a comparable host load.
+Do not compare profiled timings to unprofiled timings. `--profile` writes a top-level
+`profile` object (also under `latency`), with one extra call per verb and `phases_us`
+for decode, consent, SQL, commit and receipt. Fixture setup precedes the counter reset.
+`--history-n` preloads at least that many action-history events through real calls,
+excluded from timing, so links and completed intents also grow. Counters are inclusive,
+not additive: `receipt_inclusive` contains append/SQL timings; JSON decoding includes
+wire parsing and DB payload decoding. SQL commit/autocommit include SQLite sync work;
+**fsync is not separately timed**. Cursor stepping is included in SQL time;
+supervisor commands are excluded from JSON decode counters. This is instrumentation,
+not an fsync attribution. Zero is an unused phase; receipt overlaps SQL and commit.
+
+Crash trials shuffle all six semantic crash points once per block, deterministically
+for the seed. The supervisor waits for a hook INSIDE the selected phase before
+SIGKILL; it does not hope a timer hits a write. It checks SQLite integrity, closed
+intent/receipt correspondence, payload completeness, acknowledged receipts AND actual
+effects, persistent survival sentinels, and undo after every restart. A volatile effect
+store must fail that same oracle. A driver that writes to the wrong member must fail
+the concurrency oracle even if its own read-back is unverified. The seeded workload
+is repeatable; thread schedules and timings are not. Process kill is not power loss.
+
+Forget timings cover a scoped isolated event, not deletion of a large member history
+or asynchronous erasure from external stores. Setup calls are excluded from per-verb
+latency; total concurrency wall time includes both successful writes and adversarial
+cross-member calls. Tail latency describes successful writes. Soak counts mixed
+operations separately from wire calls including fixture setup. RSS is the child process,
+not the controller, and disk growth includes the SQLite database, WAL and SHM files.
+Cold start includes Python imports, schema, synthetic grants, authentication and describe.
+
+[lab, coordinator] Seed-7 baseline numbers and the failed 20,000-call soak are recorded
+in the architecture document's “Load, soak and crash results”. New indexed lookups are
+unmeasured until the coordinator reruns them. The 290 s cap remains: baseline medians
+plus fixture setup imply about 75 s at steady cost. Timeout now retains partial
+measurements with a failure status. Each requested-history quarter reports per-verb
+percentiles and sequence boundaries, including any partially completed quarter.
+
+The builder sandbox cannot bind AF_UNIX; wire, concurrency, crash and the original
+oversized-frame scenario must be rerun by the coordinator. Socket-free complexity
+guards live in `tests/test_history_cost.py` (200/5,000 events, fixed SQLite VM-step
+budgets, deliberate scans as failing controls). VM steps measure SQL work, not storage
+latency. Scoped ID forget is bounded by affected rows; broad/entity/topic forget and
+pending-intent cause inspection still scale with their candidates. WAL truncation
+remains synchronous. Additive `CREATE INDEX IF NOT EXISTS` statements apply on opening
+an existing lab store; there is no production migration or new environment variable.
+
+Owner-decision repair: forget counts all erased event rows (including grants,
+refusals and named scoped notices). Shield controls restore explicit consent before
+turning off the shield, so erasing consent cannot mask the control's attack. Text
+reassertion and explicit entity release remain blocked pending the owner's decision
+on deliberate relearning. Trusted bootstrap can register idempotent store purges and
+independent read-back with the kernel; forget runs them before erasing consent.
+The reminder store is purged synchronously even if the skill ignores its notice.
+Store-purge registration is absent from Context and the wire/action catalog.
+Context's replay delete is restricted to driver-opted-in IDs from a live forget notice;
+it cannot erase arbitrary rows or supply a replacement grant. The architecture document
+records the failure/retry boundary and the outstanding owner question.
+
+Fresh scratch schemas use `WITHOUT ROWID` for cursors, metadata and retired counts,
+eliminating three redundant primary-key B-trees. Person and cause links are sets
+with composite primary keys, replacing each link table's separate lookup B-tree.
+The named `people_seq` and `latest_receipt` indexes remain, as do the cause lookup
+and all intent indexes; repeated links are ignored rather than stored twice.
+The oversized-frame oracle checks that no 4096-byte run of the 200,000-byte body
+is on disk and that DB/WAL/SHM total stays below twice its length, matching the
+boundary test. SQL complexity budgets stay unchanged.
+The socket-free disk oracle now includes the launcher's initial audit grant; the
+former empty-spine fixture understated WAL growth. Existing scratch tables retain
+their layout; these DDL changes compact fresh stores, without rewriting old ones.
 Review correction: authorised explainer and twin display results retain household content;
 tool reports and bridge logs retain codes, IDs and counts only. A whole-person forget
 also clears the owner's reduced twin facts through its watermark after source retention,
-while cross-owner cleanup matches explicit erased request sequences.
+while cross-owner cleanup matches explicit erased request sequences. It also erases events about
+another member whose payload names the forgotten member's id (record, "Combined forget transaction"), and a remote skill that
+cannot resolve the anonymous notice keeps only state whose source it can still read.

@@ -97,18 +97,31 @@ def state_dir(arg: str | None) -> Path:
 KNOWN = "known-people.json"
 
 
-def recorded_people(db: Path) -> set:
-    """Every id the kernel still holds a record for: its ``people`` links, exactly what a whole-person forget seeds from. Any error
-    but "no database / no table yet" RAISES: the daemon refuses to start rather than lose who it can still forget."""
+#: identities that are never people: the daemon's own credentials, the kernel, an unverified peer. The kernel's record links them in
+#: its bookkeeping (a refusal names ``who`` asked; a grant change names the skill ``with``), and they must not become "people".
+IDENTITIES = frozenset({"kernel", "unverified-peer", "voice", "panel", "brain", "presence", "routines", "calendar", "audit",
+                        "eraser", "reconciler"})
+
+
+def recorded_people(db: Path, identities=IDENTITIES) -> set:
+    """Every MEMBER id the kernel still holds a live record for: what a whole-person forget seeds from (its ``people`` links, and
+    ``nested_people`` where the kernel has that table: an id named inside another record). Not a FORGET notice (bookkeeping about a
+    forget, not a record of the person: a forgotten member must leave), and never an identity (``identities``). Any error but "no
+    database / no table yet" RAISES: the daemon refuses to start rather than lose who it can still forget."""
     if not db.exists():
         return set()
     con = sqlite3.connect(str(db))
     try:
-        return {r[0] for r in con.execute("SELECT DISTINCT person FROM people")}
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc):
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "people" not in tables:
             return set()
-        raise
+        found = set()
+        for table in ("people", "nested_people"):
+            if table in tables:
+                found |= {r[0] for r in con.execute(
+                    f"SELECT DISTINCT p.person FROM {table} p JOIN events e ON e.seq = p.seq"
+                    " WHERE e.tombstoned = 0 AND e.kind != 'forget'")}
+        return found - set(identities)
     finally:
         con.close()
 

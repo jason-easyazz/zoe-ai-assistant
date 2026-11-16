@@ -46,8 +46,9 @@ def test_every_op_round_trips_over_the_socket(box):
     why = ok(helper, "explain", seq=said["seq"])
     assert why["event"] == said and why["causes"] == []
     assert [g["person"] for g in ok(helper, "explain")["grants"]] == [SAM]
+    # Grant and refusal records "should be forgotten too": count every erased row.
     assert ok(panel, "forget", subject=SAM, actor=SAM, speaker=box.assertion(SAM, "forget.person")) == {
-        "count": 2, "upto": receipt["seq"]}
+        "count": 3, "upto": receipt["seq"]}
     assert [e["kind"] for e in ok(helper, "poll", sub=sub, max=8)["events"]] == ["forget"]
     assert ok(panel, "revoke", person=SAM, skill=HELPER, speaker=box.assertion(SAM, "revoke")) == {"revoked": True}
     assert box.audit() == []

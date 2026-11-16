@@ -28,8 +28,9 @@ import sqlite3
 import threading
 import time
 from dataclasses import replace
+from types import MappingProxyType
 from collections import deque
-from typing import Callable, Iterable, Iterator, NamedTuple, Protocol
+from typing import Callable, Iterable, Iterator, Mapping, NamedTuple, Protocol
 
 from . import forget_match as fm
 from .events import CONTENT_KEYS, KERNEL_ONLY, Event, Kind, Visibility
@@ -45,14 +46,36 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT, mentions TEXT, caused_by TEXT,
   tombstoned INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS people (seq INTEGER NOT NULL, person TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
-CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS people (
+  seq INTEGER NOT NULL, person TEXT NOT NULL, PRIMARY KEY (person, seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS people_seq ON people(seq);
+CREATE TABLE IF NOT EXISTS nested_people (
+  seq INTEGER NOT NULL, person TEXT NOT NULL, PRIMARY KEY (person, seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS nested_people_seq ON nested_people(seq);
+CREATE TABLE IF NOT EXISTS nested_members (owner BLOB PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS causes (
+  seq INTEGER NOT NULL, cause INTEGER NOT NULL, PRIMARY KEY (seq, cause)
+) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
 CREATE TABLE IF NOT EXISTS reversals (seq INTEGER NOT NULL, target INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS reversals_target ON reversals(target);
 CREATE INDEX IF NOT EXISTS reversals_seq ON reversals(seq);
-CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS latest_receipt ON events(subject, seq DESC)
+  WHERE kind = 'action_receipt' AND tombstoned = 0;
+CREATE INDEX IF NOT EXISTS live_kind ON events(kind, seq) WHERE tombstoned = 0;
+CREATE TABLE IF NOT EXISTS snapshot_dependencies (
+  source_seq INTEGER NOT NULL, receipt_seq INTEGER NOT NULL,
+  PRIMARY KEY (source_seq, receipt_seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS snapshot_receipt ON snapshot_dependencies(receipt_seq);
+CREATE TABLE IF NOT EXISTS opaque_snapshots (
+  person TEXT NOT NULL, receipt_seq INTEGER NOT NULL,
+  PRIMARY KEY (person, receipt_seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS opaque_receipt ON opaque_snapshots(receipt_seq);
+CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS consumed_receipts (
   receipt_seq INTEGER PRIMARY KEY, claim_seq INTEGER NOT NULL
 );
@@ -60,17 +83,28 @@ CREATE TABLE IF NOT EXISTS forget_ledger (
   id INTEGER PRIMARY KEY, subject TEXT NOT NULL, upto INTEGER NOT NULL, ts REAL NOT NULL,
   count INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY);
-CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (subject, fp));
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS forget_subject ON forget_ledger(subject);
+CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS scoped_shield (
+  owner BLOB NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (fp, owner)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS scoped_entities (
+  owner BLOB NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (fp, owner)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (subject, fp)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS retired_counts (
   day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, kind)
-);
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS intents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, skill TEXT NOT NULL, action TEXT NOT NULL,
   person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER,
   undoes INTEGER
 );
+CREATE INDEX IF NOT EXISTS intent_receipt ON intents(receipt_seq);
+CREATE INDEX IF NOT EXISTS intent_person ON intents(person);
+CREATE INDEX IF NOT EXISTS intent_accept ON intents(accept_seq) WHERE accept_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS intent_undo ON intents(undoes) WHERE undoes IS NOT NULL;
 """
 
 
@@ -118,8 +152,16 @@ class Refused(Exception):
         self.wire = wire      # set only by Spine._refuse, from kernel vocabulary; the one text that may cross the socket
 
 
+class Skeleton(NamedTuple):
+    """An erased event whose body has already aged out: the sequence number and kind are all
+    that is left, and all a store purge keyed by request seq needs."""
+    seq: int
+    kind: Kind
+    payload: Mapping = MappingProxyType({})
+
+
 class ForgetResult(NamedTuple):
-    count: int      # events erased, including derived ones
+    count: int      # rows erased, including derived events, grants, refusals and scoped notices
     upto: int       # the forget covers everything up to this sequence number
 
 
@@ -205,7 +247,8 @@ def _keys_and_strings(node):
         yield node
     elif isinstance(node, dict):
         for key, value in node.items():
-            yield key
+            if isinstance(key, str):
+                yield key
             yield from _keys_and_strings(value)
     elif isinstance(node, (list, tuple)):     # a tuple is a JSON array on disk
         for value in node:
@@ -223,6 +266,24 @@ def _content(node):
     elif isinstance(node, (list, tuple)):     # a tuple is a JSON array on disk
         for value in node:
             yield from _content(value)
+
+
+def _nested_ids(kind, payload: dict, people, members) -> set[str]:
+    """Known member ids a payload names as a WHOLE string value or a dict key, at any depth,
+    other than the event's own subject and mentions. Exact match only: an id inside longer
+    free text is the name shield's and the entity forget's job, not this index's. A receipt's
+    saved before-state is a copy whose source rows carry their own links (the snapshot scrub
+    reaches it when they die); indexing it would erase an unrelated surviving action."""
+    if not members:
+        return set()
+    if kind is Kind.ACTION_RECEIPT and (isinstance(payload.get('undo'), dict) or
+                                        isinstance(payload.get('proof'), dict)):
+        payload = dict(payload)
+        if isinstance(payload.get('undo'), dict):
+            payload['undo'] = {'args': payload['undo'].get('args', {})}
+        if isinstance(payload.get('proof'), dict):
+            payload['proof'] = {k: v for k, v in payload['proof'].items() if k != 'restored'}
+    return {s for s in _keys_and_strings(payload) if s in members} - set(people)
 
 
 def _chunks(items: list, size: int = 500):
@@ -246,8 +307,13 @@ _COLS = "seq, ts, kind, source, subject, visibility, payload, mentions, caused_b
 
 class Spine:
     def __init__(self, path: str, authorizer: Authorizer | None = None, *,
-                 queue_size: int = 256, clock: Callable[[], float] = time.time) -> None:
+                 queue_size: int = 256, clock: Callable[[], float] = time.time,
+                 members: Iterable[str] | None = None) -> None:
         self.authorizer: Authorizer = authorizer or DenyAll()
+        # The member ids a payload can name (``_nested_ids``): the kernel's people by default.
+        store = getattr(self.authorizer, 'store', None)
+        self._members: frozenset[str] = frozenset(
+            members if members is not None else getattr(store, 'people', None) or ())
         self.queue_size = queue_size
         self._clock = clock
         self._lock = threading.RLock()
@@ -275,6 +341,7 @@ class Spine:
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
+        self._backfill_snapshots()
         # Upgrade extant claims without retaining any person or payload in bookkeeping.
         self._db.execute("""
             INSERT OR IGNORE INTO consumed_receipts
@@ -287,18 +354,31 @@ class Spine:
             GROUP BY r.seq
         """)
         self._subs: list[Subscription] = []
+        self._before_forget = None  # trusted kernel store cleanup, never a skill/wire operation
         self._epoch = 0     # bumped by every forget; a subscription re-checks its queue on a change
         key = self._db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()
         if key is None:
             key = (os.urandom(32),)
             self._db.execute("INSERT INTO meta VALUES ('shield_key', ?)", key)
         self._shield_key: bytes = key[0]
+        # Upgrade old bookkeeping references once, using the kind index, never a
+        # history scan on forget. Legacy shields deliberately remain global.
+        if not self._db.execute("SELECT 1 FROM meta WHERE key='record_people_v1'").fetchone():
+            for seq, kind, payload in self._db.execute(
+                    "SELECT seq, kind, payload FROM events INDEXED BY live_kind "
+                    "WHERE tombstoned=0 AND kind IN ('grant_change','refusal','forget')").fetchall():
+                self._index_record(seq, Kind(kind), json.loads(payload or '{}'))
+            self._db.execute("INSERT INTO meta VALUES ('record_people_v1', 1)")
+        self._backfill_nested()
         self._shield: set[bytes] = {r[0] for r in self._db.execute("SELECT fp FROM shield")}
         self._entities: dict[str, set[bytes]] = {}      # person -> keyed hashes of forgotten names
         for person, fp in self._db.execute("SELECT subject, fp FROM entity_shield"):
             self._entities.setdefault(person, set()).add(fp)
         self.refusals = 0
         self.last_seq = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+        # Schema/index creation uses autocommit. Do not retain all its intermediate
+        # page images in WAL (also keeps the oversized-frame disk guard meaningful).
+        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def close(self) -> None:
         with self._lock:
@@ -318,9 +398,6 @@ class Spine:
                 reason = self._publish_refusal(ev) or self._claim_refusal(ev, claimed)
                 if reason:
                     self._refuse(ev.source, f"publish {ev.kind.value}", reason)
-            for ev in events:
-                if self._shield and self.authorizer.is_origin(ev.source):
-                    self._reassert(ev.payload)
             return self._append(events)
 
     def _claim_refusal(self, ev: Event, claimed: set) -> str:
@@ -345,13 +422,13 @@ class Spine:
         if not ev.caused_by and not self.authorizer.is_origin(ev.source):
             return "a skill must say which events its event derives from"
         reason = self._cause_refusal(ev.source, ev.caused_by)
-        if not reason and not self.authorizer.is_origin(ev.source):
+        if not reason:
             reason = self._payload_refusal(ev)
         return reason
 
     def _payload_refusal(self, ev: Event) -> str:
         """Shared publish/action shield semantics, including nested arrays and dictionary keys."""
-        if self._shielded(ev.payload):
+        if self._shielded(ev):
             return "carries forgotten content"
         if self._names_forgotten(ev):
             return "names a forgotten entity"
@@ -382,11 +459,20 @@ class Spine:
                 self._refuse(KERNEL, "kernel_write", "forgotten_kernel_content")
             return self._append([event], then)[0]
 
-    def _append(self, events: list[Event], then: Callable[[int], None] | None = None) -> list[Event]:
+    def _index_record(self, seq, kind, payload):
+        keys = {Kind.GRANT_CHANGE: ('person', 'guardian', 'with'), Kind.REFUSAL: ('who',),
+                Kind.FORGET: ('subject',)}.get(kind, ())
+        self._db.executemany("INSERT OR IGNORE INTO people VALUES (?,?)",
+                             [(seq, payload[k]) for k in keys if payload.get(k)])
+
+    def _append(self, events: list[Event], then: Callable[[int], None] | None = None,
+                *, before: Callable[[], None] | None = None) -> list[Event]:
         out: list[Event] = []
         now = self._clock()
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            if before is not None:
+                before()
             for ev in events:
                 cur = self._db.execute(
                     "INSERT INTO events (ts, kind, source, subject, visibility, payload, mentions,"
@@ -396,16 +482,23 @@ class Spine:
                      json.dumps(ev.mentions) if ev.mentions else None,
                      json.dumps(ev.caused_by) if ev.caused_by else None))
                 seq = cur.lastrowid
+                self._index_record(seq, ev.kind, ev.payload)
+                nested = _nested_ids(ev.kind, ev.payload, ev.people, self._members)
+                if nested:
+                    self._db.executemany("INSERT OR IGNORE INTO nested_people VALUES (?,?)",
+                                         [(seq, p) for p in nested])
+                if ev.kind is Kind.ACTION_RECEIPT:
+                    self._index_snapshot(seq, ev.subject, ev.payload)
                 if ev.kind is Kind.CLAIM:
                     from .receipts import ClaimAuditor
                     if ClaimAuditor(self, self.authorizer).backed(replace(ev, seq=seq)):
                         self._db.execute("INSERT INTO consumed_receipts VALUES (?, ?)",
                                          (ev.payload['receipt_seq'], seq))
                 if ev.people:
-                    self._db.executemany("INSERT INTO people VALUES (?,?)",
+                    self._db.executemany("INSERT OR IGNORE INTO people VALUES (?,?)",
                                          [(seq, p) for p in ev.people])
                 if ev.caused_by:
-                    self._db.executemany("INSERT INTO causes VALUES (?,?)",
+                    self._db.executemany("INSERT OR IGNORE INTO causes VALUES (?,?)",
                                          [(seq, c) for c in ev.caused_by])
                 if ev.kind is Kind.ACTION_RECEIPT:
                     self._index_reversal(seq, ev.subject, ev.payload)
@@ -432,8 +525,13 @@ class Spine:
             if store is not None and who not in store.manifests and who not in store.people and who != KERNEL:
                 who = 'unverified-peer'
             self.refusals += 1
-            self._append([Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL,
-                                payload={"who": who, "attempted": attempted, "reason": reason})])
+            record = Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL,
+                           payload={"who": who, "attempted": attempted, "reason": reason})
+            # Even fixed refusal codes can equal a forgotten sentence. Keep an
+            # anonymous refusal marker rather than publishing those words again.
+            if self._shielded(record) or self._names_forgotten(record):
+                record = Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL)
+            self._append([record])
         text = f"{who}: {attempted}: {reason}"
         raise Refused(text, reason=reason, wire=text)
 
@@ -460,37 +558,100 @@ class Spine:
             if (entity is not None and not key) or (topic is not None and not groups):
                 self._refuse(actor, "forget", "nothing to match")
             upto = self.last_seq
-            seed = {r[0] for r in self._db.execute(
-                "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto))}
-            if seqs is not None:
-                seed &= set(seqs)
-            if key or groups:
-                seed = self._matching(seed, key, groups)
-                if groups and len(seed) > MAX_TOPIC_EVENTS:
-                    self._refuse(actor, "forget", "too many events match: say which part")
-            dead = sorted(self._closure(seed))
+            selected = None if seqs is None else sorted(set(seqs))
+            owner = self._owner(subject)
+            whole = selected is None and not key and not groups
+            dead: list[int] = []
+            notices: list[Event] = []
             scope = "entity" if key else "topic" if groups else "seqs" if seqs is not None else "person"
-            # One append transaction persists ALL chunks before any subscriber can see one.
-            batches = list(_chunks(dead, MAX_NOTICE_SEQS)) or [[]]
+
+            def prepare():
+                # Select under the same write transaction as erasure and every notice.
+                seed = set()
+                if selected is None:
+                    seed.update(r[0] for r in self._db.execute(
+                        "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto)))
+                    if whole:     # an event about someone else whose payload names this member
+                        seed.update(r[0] for r in self._db.execute(
+                            "SELECT seq FROM nested_people WHERE person = ? AND seq <= ?", (subject, upto)))
+                else:
+                    for chunk in _chunks(selected):
+                        marks = ','.join('?' * len(chunk))
+                        seed.update(r[0] for r in self._db.execute(
+                            f"SELECT seq FROM people INDEXED BY people_seq WHERE person = ?"
+                            f" AND seq <= ? AND seq IN ({marks})", [subject, upto, *chunk]))
+                if key or groups:
+                    seed = self._matching(seed, key, groups)
+                    if groups and len(seed) > MAX_TOPIC_EVENTS:
+                        raise Refused("too many events match: say which part")
+                dead.extend(sorted(self._closure(seed)))
+                # An earlier notice erased here (a scoped one names its subject in clear) may not
+                # have reached every subscriber yet: carry the ids it listed, so its duty is
+                # re-delivered. Its list already holds whatever it carried, so one level is
+                # transitive. Reads only the erased notices' own rows.
+                carried = self._carried(dead)
+                if self._before_forget is not None:
+                    self._before_forget(subject, dead, whole)
+                erase(None)
+                batches = list(_chunks(sorted(set(dead) | carried), MAX_NOTICE_SEQS)) or [[]]
+                identity = {'subject_hash': owner.hex()}
+                if not whole:
+                    identity['subject'] = subject
+                notices.extend(Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
+                                     payload={**identity, "upto": upto, "count": len(dead),
+                                              "scope": scope, "seqs": batch}) for batch in batches)
+
             def erase(_seq):
-                self._tombstone(dead)   # joins the notice transaction: no erase/notice crash gap
+                records = set()
+                fingerprints = set()
+                for chunk in _chunks(dead):
+                    marks = ','.join('?' * len(chunk))
+                    for seq, payload in self._db.execute(
+                            f"SELECT seq, payload FROM events WHERE seq IN ({marks})"
+                            " AND kind IN ('grant_change','refusal')", chunk):
+                        records.add(seq)
+                        fingerprints.update(self._fp(t) for t in _content(json.loads(payload or '{}')))
+                fingerprints.update(self._tombstone([s for s in dead if s not in records]) or ())
+                self._db.executemany('INSERT OR IGNORE INTO scoped_shield VALUES (?,?)',
+                                     [(owner, fp) for fp in fingerprints])
                 if key:
-                    self._shield_entity(subject, key)
+                    self._db.execute('INSERT OR IGNORE INTO scoped_entities VALUES (?,?)',
+                                     (owner, self._fp(key)))
+                if records:
+                    self._tombstone(sorted(records))
+                if whole:
+                    self._db.execute('DELETE FROM intents WHERE person=?', (subject,))
+                    self._db.execute('DELETE FROM cursors WHERE reader=?', (subject,))
+                    self._db.execute('DELETE FROM forget_ledger WHERE subject=?', (subject,))
+                    self._anonymize_legacy_entities(subject)
                 self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
-                                 (subject, upto, self._clock(), len(dead)))
+                                 (owner.hex(), upto, self._clock(), len(dead)))
             try:
-                self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
-                                    payload={"subject": subject, "upto": upto, "count": len(dead),
-                                             "scope": scope, "seqs": batch}) for batch in batches], erase)
-            except BaseException:
+                self._append(notices, before=prepare)
+            except BaseException as exc:
                 self._shield = {r[0] for r in self._db.execute('SELECT fp FROM shield')}
                 self._entities = {}
                 for person, fp in self._db.execute('SELECT subject, fp FROM entity_shield'):
                     self._entities.setdefault(person, set()).add(fp)
+                if isinstance(exc, Refused):
+                    self._refuse(actor, "forget", str(exc))
                 raise
+            if whole:
+                self._entities.pop(subject, None)
             self._epoch += 1
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             return ForgetResult(len(dead), upto)
+
+    def _carried(self, dead: list[int]) -> set[int]:
+        """The ids listed by the forget notices among ``dead`` (primary-key reads of those rows)."""
+        carried: set[int] = set()
+        for chunk in _chunks(dead):
+            marks = ','.join('?' * len(chunk))
+            for (raw,) in self._db.execute(
+                    f"SELECT payload FROM events WHERE seq IN ({marks}) AND kind = 'forget'"
+                    " AND tombstoned = 0", chunk):
+                carried.update(s for s in json.loads(raw or '{}').get('seqs', ()) if type(s) is int)
+        return carried
 
     def _matching(self, seed: set[int], key: str, groups: list) -> set[int]:
         """The seed events whose payload names the entity / holds the whole topic."""
@@ -515,36 +676,34 @@ class Spine:
     def _efp(self, person: str, key: str) -> bytes:
         return hmac.new(self._shield_key, f"entity\0{person}\0{key}".encode(), hashlib.sha256).digest()
 
-    def _shield_entity(self, subject: str, key: str) -> None:
-        fp = self._efp(subject, key)
-        self._entities.setdefault(subject, set()).add(fp)
-        self._db.execute("INSERT OR IGNORE INTO entity_shield VALUES (?, ?)", (subject, fp))
+    def _anonymize_legacy_entities(self, subject):
+        # There is no safe hash conversion. A permanent fail-closed legacy
+        # marker refuses named content globally rather than losing protection.
+        if self._db.execute("SELECT 1 FROM entity_shield WHERE subject=? LIMIT 1",
+                            (subject,)).fetchone():
+            self._db.execute("INSERT OR IGNORE INTO scoped_entities VALUES (?,?)", (b'', b''))
+            self._db.execute("DELETE FROM entity_shield WHERE subject=?", (subject,))
 
     def _names_forgotten(self, ev: Event) -> bool:
         """Does a skill's event name something a person it is about asked to forget? An event
         about nobody in particular is checked against everyone's forgotten names."""
-        watched = [(p, self._entities[p]) for p in (ev.people or self._entities) if self._entities.get(p)]
-        if not watched:
-            return False
-        return any(self._efp(person, run) in fps
-                   for text in _keys_and_strings(ev.payload) for run in fm.runs(fm.words(text))
+        if self._db.execute("SELECT 1 FROM scoped_entities WHERE fp=? AND owner=?",
+                            (b'', b'')).fetchone() and (ev.people or any(_keys_and_strings(ev.payload))):
+            return True
+        watched = list(self._entities.items())  # legacy rows fail closed, household-wide
+        return self._scoped_hit('scoped_entities', ev,
+                                (self._fp(run) for text in (*ev.people, *_keys_and_strings(ev.payload))
+                                 for run in fm.runs(fm.words(text)))) or any(self._efp(person, run) in fps
+                   for text in (*ev.people, *_keys_and_strings(ev.payload)) for run in fm.runs(fm.words(text))
                    for person, fps in watched)
 
     def release(self, subject: str, entity: str, *, actor: str) -> bool:
-        """The person explicitly teaches the name again: lift the shield. Never automatic: a
-        first-hand mention by an adapter is recorded but does NOT lift it."""
+        """Fail closed until the owner defines whether deliberate relearning is allowed."""
         with self._lock:
             verdict = self.authorizer.may_forget(actor, subject)
             if not verdict.allowed:
                 self._refuse(actor, "release", verdict.reason or "not theirs to release")
-            if len(fm.words(entity)) > fm.MAX_KEY_TOKENS:
-                self._refuse(actor, "release", "entity has too many words")
-            fp = self._efp(subject, fm.entity_key(entity))
-            if fp not in self._entities.get(subject, ()):
-                return False
-            self._entities[subject].discard(fp)
-            self._db.execute("DELETE FROM entity_shield WHERE subject = ? AND fp = ?", (subject, fp))
-            return True
+            self._refuse(actor, "release", "forgotten means forever")
 
     def _closure(self, seed: set[int]) -> set[int]:
         """The seed plus every event that derives from it, to any depth, plus the REVERSAL links both ways.
@@ -628,7 +787,7 @@ class Spine:
                 out.add(p["undoes"])
         return out
 
-    def _tombstone(self, seqs: list[int]) -> None:
+    def _tombstone(self, seqs: list[int]) -> set[bytes]:
         """Erase the rows in place, remember a keyed hash of their free text: first-hand AND
         derived (text that only ever lived in a derived event is forgotten too)."""
         fps: set[bytes] = set()
@@ -644,31 +803,37 @@ class Spine:
                     if payload:
                         body = json.loads(payload)
                         if kind == Kind.ACTION_RECEIPT.value:
-                            # Copies belong to their provenance, not this action: a receipt's
-                            # before-state may hold OTHER, surviving rows, which must not be
-                            # shielded. The transactional snapshot scrub erases dead sources.
+                            # Copies belong to their provenance, not this action. In
+                            # particular A's before-state may contain surviving B.
+                            # The transactional snapshot scrub erases dead sources.
                             if isinstance(body.get('undo'), dict):
                                 body['undo'] = {'args': body['undo'].get('args', {})}
                             if isinstance(body.get('proof'), dict):
                                 body['proof'].pop('restored', None)
                         fps.update(self._fp(text) for text in _content(body))
                 self._db.execute(
-                    "UPDATE events SET tombstoned = 1, payload = NULL, mentions = NULL, subject = NULL,"
+                    "UPDATE events SET tombstoned = 1, source = '', payload = NULL, mentions = NULL, subject = NULL,"
                     f" caused_by = NULL WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM nested_people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM reversals WHERE seq IN ({marks}) OR target IN ({marks})", chunk * 2)
+                self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
             self._scrub_intents(set(seqs))
-            self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
+            if not outer:
+                self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
             if not outer:
                 self._db.execute("COMMIT")
         except BaseException:
             if not outer:
                 self._db.execute("ROLLBACK")
             raise
-        self._shield |= fps
         if not outer:
+            self._shield |= fps
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # old page images leave the WAL file
+        return fps
 
     def _scrub_snapshots(self, dead: set[int]) -> None:
         """Scrub copies in surviving receipts inside the erase transaction.
@@ -682,9 +847,17 @@ class Spine:
             marks = ','.join('?' * len(chunk))
             people.update(r[0] for r in self._db.execute(
                 f"SELECT person FROM people WHERE seq IN ({marks})", chunk))
-        for seq, person, raw in self._db.execute(
-                "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt'"
-                " AND tombstoned = 0").fetchall():
+        receipts = set()
+        for chunk in _chunks(sorted(dead)):
+            marks = ','.join('?' * len(chunk))
+            receipts.update(r[0] for r in self._db.execute(
+                f"SELECT receipt_seq FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk))
+        for person in people:
+            receipts.update(r[0] for r in self._db.execute(
+                'SELECT receipt_seq FROM opaque_snapshots WHERE person = ?', (person,)))
+        for seq in sorted(receipts - dead):
+            person, raw = self._db.execute(
+                'SELECT subject, payload FROM events WHERE seq = ? AND tombstoned = 0', (seq,)).fetchone()
             if seq in dead or not raw:
                 continue
             p = json.loads(raw)
@@ -717,6 +890,60 @@ class Spine:
             if changed:
                 self._db.execute('UPDATE events SET payload = ? WHERE seq = ?',
                                  (json.dumps(p, sort_keys=True), seq))
+                self._db.execute('DELETE FROM snapshot_dependencies WHERE receipt_seq = ?', (seq,))
+                self._db.execute('DELETE FROM opaque_snapshots WHERE receipt_seq = ?', (seq,))
+                self._index_snapshot(seq, person, p)
+
+    def _index_snapshot(self, seq: int, person: str | None, payload: dict) -> None:
+        """IDs only, in the receipt transaction; opaque text fails closed per person."""
+        from .receipts import snapshot_sources
+        sources, opaque = snapshot_sources(payload)
+        self._db.executemany('INSERT OR IGNORE INTO snapshot_dependencies VALUES (?, ?)',
+                             [(source, seq) for source in sources])
+        if opaque and person is not None:
+            self._db.execute('INSERT OR IGNORE INTO opaque_snapshots VALUES (?, ?)', (person, seq))
+
+    def _backfill_snapshots(self) -> None:
+        """One atomic upgrade, bounded to 256 receipt bodies in memory; never per forget."""
+        if self._db.execute("SELECT 1 FROM meta WHERE key = 'snapshot_index_v1'").fetchone():
+            return
+        self._db.execute('BEGIN IMMEDIATE')
+        try:
+            cursor = self._db.execute("SELECT seq, subject, payload FROM events"
+                                      " WHERE kind = 'action_receipt' AND tombstoned = 0")
+            while batch := cursor.fetchmany(256):
+                for seq, person, raw in batch:
+                    self._index_snapshot(seq, person, json.loads(raw or '{}'))
+            self._db.execute("INSERT INTO meta VALUES ('snapshot_index_v1', 1)")
+            self._db.execute('COMMIT')
+        except BaseException:
+            self._db.execute('ROLLBACK')
+            raise
+
+    def _backfill_nested(self) -> None:
+        """Index nested member ids in rows written before this index, or before a member was
+        known. Once per member at open (a keyed hash marks it done, never the id), 256 bodies
+        at a time; never per write or per forget. Expired and forgotten rows hold no payload."""
+        missing = {m for m in self._members if not self._db.execute(
+            "SELECT 1 FROM nested_members WHERE owner = ?", (self._owner(m),)).fetchone()}
+        if not missing:
+            return
+        self._db.execute('BEGIN IMMEDIATE')
+        try:
+            cursor = self._db.execute("SELECT seq, kind, subject, mentions, payload FROM events"
+                                      " WHERE tombstoned = 0 AND payload IS NOT NULL")
+            while batch := cursor.fetchmany(256):
+                for seq, kind, subject, mentions, raw in batch:
+                    people = {subject, *(json.loads(mentions) if mentions else ())}
+                    nested = _nested_ids(Kind(kind), json.loads(raw), people, missing)
+                    self._db.executemany("INSERT OR IGNORE INTO nested_people VALUES (?,?)",
+                                         [(seq, p) for p in nested])
+            self._db.executemany("INSERT OR IGNORE INTO nested_members VALUES (?)",
+                                 [(self._owner(m),) for m in missing])
+            self._db.execute('COMMIT')
+        except BaseException:
+            self._db.execute('ROLLBACK')
+            raise
 
     def _scrub_intents(self, dead: set[int]) -> None:
         """Forget reaches the action bookkeeping (``receipts.Dispatcher``): an intent tied to an
@@ -751,16 +978,48 @@ class Spine:
         norm = " ".join(text.casefold().split()).encode()
         return hmac.new(self._shield_key, norm, hashlib.sha256).digest()
 
-    def _shielded(self, payload: dict) -> bool:
-        """Does this payload carry, anywhere, a string a person asked to forget?"""
-        return bool(self._shield) and any(self._fp(s) in self._shield for s in _keys_and_strings(payload))
+    def _owner(self, person: str) -> bytes:
+        """The keyed hash of one EXACT person id. Never normalised: two ids that fold or
+        tokenise alike are two people. Name normalisation belongs to entity forgets only."""
+        return hmac.new(self._shield_key, b'owner\0' + person.encode(), hashlib.sha256).digest()
 
-    def _reassert(self, payload: dict) -> None:
-        """A trusted adapter recorded these words again first-hand: that is new reality."""
-        again = {self._fp(text) for text in _content(payload)} & self._shield
-        if again:
-            self._shield -= again
-            self._db.executemany("DELETE FROM shield WHERE fp = ?", [(fp,) for fp in again])
+    def _payload_owners(self, payload: dict) -> set[bytes]:
+        """Owners a payload names: an exact id held as a whole string or key, an exact id that is
+        one word run of its text, or a known member whose name key is a run of its text (two
+        members whose ids fold alike are then BOTH named: the text cannot tell them apart)."""
+        strings = set(_keys_and_strings(payload))
+        found = set(strings)
+        run_set = {run for text in strings for run in fm.runs(fm.words(text))}
+        found |= run_set
+        found |= {m for m in self._members if fm.entity_key(m) in run_set}
+        return {self._owner(p) for p in found}
+
+    def _scoped_hit(self, table: str, ev: Event, fps) -> bool:
+        if not self._db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+            return False
+        # Payload identities count even if a publisher omitted mentions. Household
+        # and kernel visibility may reach A regardless of their declared subject.
+        owners = {self._owner(p) for p in (*ev.people, ev.source)} | {b''}
+        owners |= self._payload_owners(ev.payload)
+        for fp in fps:
+            if ev.visibility is not Visibility.PRIVATE:
+                if self._db.execute(f"SELECT 1 FROM {table} WHERE fp=? LIMIT 1", (fp,)).fetchone():
+                    return True
+            else:
+                for owner in owners:
+                    if self._db.execute(f"SELECT 1 FROM {table} WHERE fp=? AND owner=?",
+                                        (fp, owner)).fetchone():
+                        return True
+        return False
+
+    def _shielded(self, ev: Event | dict) -> bool:
+        """Does this payload carry, anywhere, a string a person asked to forget? A bare payload (no event, so no owner to scope
+        by) is checked against the household-wide shield only."""
+        if isinstance(ev, dict):
+            return any(self._fp(s) in self._shield for s in _keys_and_strings(ev))
+        return any(self._fp(s) in self._shield for s in _keys_and_strings(ev.payload)) or \
+            self._scoped_hit('scoped_shield', ev,
+                             (self._fp(s) for s in _keys_and_strings(ev.payload)))
 
     def _tombstoned(self, seqs: list[int]) -> set[int]:
         """Of these, the ones no longer live: forgotten, expired, or retired to a count."""
@@ -783,6 +1042,8 @@ class Spine:
                     self._db.execute(
                         f"UPDATE events SET tombstoned = {EXPIRED}, payload = NULL, mentions = NULL,"
                         f" subject = NULL WHERE tombstoned = 0 AND seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -802,8 +1063,10 @@ class Spine:
                         "INSERT INTO retired_counts (day, kind, n) SELECT date(ts, 'unixepoch'), kind,"
                         f" COUNT(*) FROM events WHERE tombstoned = {EXPIRED} AND seq IN ({marks})"
                         " GROUP BY 1, 2 ON CONFLICT(day, kind) DO UPDATE SET n = n + excluded.n", chunk)
-                    for table in ("events", "people", "causes"):
+                    for table in ("events", "people", "nested_people", "causes"):
                         self._db.execute(f"DELETE FROM {table} WHERE seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
+                    self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -811,6 +1074,19 @@ class Spine:
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     # ---- read ---------------------------------------------------------------------
+    def _erased_events(self, seqs: Iterable[int]) -> tuple:
+        """The events a forget is about to erase, in order: live ones in full, expired ones as a
+        ``Skeleton``. Primary-key reads of these seqs only, never a history scan."""
+        out: dict[int, object] = {}
+        with self._lock:
+            for chunk in _chunks(sorted(set(seqs))):
+                marks = ','.join('?' * len(chunk))
+                for row in self._db.execute(
+                        f"SELECT {_COLS}, tombstoned FROM events WHERE seq IN ({marks})"
+                        f" AND tombstoned IN (0, {EXPIRED})", chunk):
+                    out[row[0]] = _row_to_event(row[:-1]) if row[-1] == 0 else Skeleton(row[0], Kind(row[2]))
+        return tuple(out[s] for s in sorted(out))
+
     def _get(self, seq: int) -> Event | None:
         """One live event by sequence number (kernel-internal: no capability check)."""
         with self._lock:

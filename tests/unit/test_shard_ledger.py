@@ -233,3 +233,40 @@ def test_the_cli_fails_closed_on_a_missing_full_ledger(tmp_path):
     # a shard path that does not exist is not silently treated as a shard
     assert sl.main(["verify", "--lane", "l", "--full", str(tmp_path / "full.json"), "--expect-shards", "1",
                     str(tmp_path / "s9.json")]) == 1
+
+
+# --- the zoe-os kernel's tests ride the tests/unit shards (labs/zoe-os/conftest.py marks them ci_safe) ----------
+
+LAB = "labs/zoe-os/tests"
+
+
+def _ok(ids, **kw):
+    return {"selected": ids, "ran": ids, "exitstatus": 0, "collect_only": False, **kw}
+
+
+def test_the_workflow_names_the_lab_path_in_both_the_unit_shards_and_the_collect_reference():
+    """If only one of the two names it, the ledger proof compares different trees: pin that they agree."""
+    wf = (REPO / ".github/workflows/validate.yml").read_text()
+    for step in ("Lane — tests/unit (ci_safe) shard", "Collect — tests/unit (ci_safe), full selection"):
+        body = wf.split(f"- name: {step}")[1].split("\n      - name:")[0]
+        assert f"{LAB} tests/unit -m ci_safe" in body, step
+
+
+def test_a_kernel_test_collected_but_run_in_no_shard_fails_the_ledger():
+    a, b = f"{LAB}/test_spine.py::test_one", f"{LAB}/test_spine.py::test_two"
+    full = _ok([a, b], collect_only=True)
+    assert sl.verify("tests/unit", full, [("1", _ok([a])), ("2", _ok([]))], 2) != []
+    errs = sl.verify("tests/unit", full, [("1", _ok([a])), ("2", _ok([b]))], 2)
+    assert errs == []
+
+
+def test_a_failing_kernel_test_makes_its_shard_non_zero_so_the_gate_is_red():
+    a = f"{LAB}/test_spine.py::test_one"
+    errs = sl.verify("tests/unit", _ok([a], collect_only=True), [("1", _ok([a], exitstatus=1))], 1)
+    assert any("not 0" in e for e in errs)
+
+
+def test_lab_tests_are_weighted_so_the_slices_stay_balanced():
+    files = json.loads((CI_DIR / "shard_weights.json").read_text())["files"]
+    lab = [f for f in files if f.startswith(LAB + "/")]
+    assert len(lab) >= 20, "run `tools/ci/shard_ledger.py weights` on a lab ledger and merge it in"
