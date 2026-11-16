@@ -834,7 +834,7 @@ The open-PR list was read 2026-11-15 (102 open). Every PR that touches a seam ab
 | WP-42 | Shadow the reminder edit, snooze, done and delete at WP-40's functions; `os_shadow.kernel_args` stops refusing recurrence, date-only and range | `zd/os_shadow.py`, `zd/reminder_service.py` | WP-40, WP-41a-c | WP-51 | SA, R | yes | M | 5.2 | G |
 | WP-43 | Reminder create under kernel authority (the list-add pattern) | `zd/reminder_service.py`, `zd/os_authority.py` | WP-42, D1 pass mark | — | T, R, SA, LV | yes | M | 5.2 | G |
 | WP-44 | **One quiet-hours function:** Q1 (engine) and Q2 (comm_prefs) become one, with per-member override, read per call; tests that every consumer agrees | `zd/proactive/engine.py:34-77`, `zd/comm_prefs.py:160-185`, the consumers in 2.6 | none | everything | T | yes (timer-done speech) | M | 5.2/5.6 prereq | G3 |
-| WP-45 | Firing asks the kernel "deliver now?" in shadow (`attention.route`), compared with the engine's decision | `zd/proactive/engine.py:80-215`, kernel attention | WP-44, WP-60 | — | SA | no | M | 5.2 | G |
+| WP-45 | Firing asks the kernel "deliver now?" in shadow (`attention.route`), compared with the engine's decision | `zd/proactive/engine.py:80-215`, kernel attention | WP-44, WP-60 | — | SA | no | M | 5.5 (after WP-60) | G |
 | WP-50a | Kernel alarms: durable store, several per person (cap 30), labels, repeat rules, once-date, enabled, household owner | kernel alarm driver | WP-01 | WP-41 | KS | no | M | 4 | K |
 | WP-50b | Kernel alarm edit, delete, snooze (1-30 min, 8 max), dismiss, overrides; "the panel may silence" | kernel | WP-50a | WP-41c | KS | no | M | 4 | K |
 | WP-51 | Alarm receipts inside `alarms.py` functions, not callers (REST, anticipation, delete, snooze and dismiss today record nothing) | `zd/alarms.py`, `zd/alarm_voice.py` | none | all | T | yes | S | 5.3/5.4 | C |
@@ -892,8 +892,10 @@ pole is the test lane: the kernel suite is heavy and runs only in coordinator wi
    Each one is KS-proven. WP-23a/WP-23b and WP-15 run beside them; Phase 4 needs the roster push and retention before more verbs go
    authoritative.
 3. **Shadow:** WP-42 and WP-52; then Phase 2 for each verb.
-4. **Authority:** WP-43 for reminder create first, then snooze and done; firing last through WP-45 and WP-61; then alarms on the
-   same pattern.
+4. **Authority:** WP-43 for reminder create first, then snooze and done. **Firing waits for the attention work:** WP-60 (the
+   kernel's attention service) and WP-61 (the one "may Zoe speak or send now" function) land first, then WP-45 asks the kernel
+   "deliver now?" in shadow, and only then does firing go under authority. **Alarms follow the same pattern and also wait for
+   WP-61**, because a ringing alarm is unprompted sound.
 5. **Gate:** each step is replay-gated, and list add must have run a clean week first (plan Phase 3 → 5).
 
 **Longest chain:**
