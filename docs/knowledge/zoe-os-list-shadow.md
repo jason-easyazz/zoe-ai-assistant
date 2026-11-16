@@ -86,7 +86,8 @@ The kernel record holds list items (household words) in the spine, in receipts (
   (`ShadowForgetUnavailable`) instead of letting it say done. **A missing `creds.json` is not proof of nothing to forget** (the kernel's
   store can outlive it): the ONLY no-op is the flag off AND no shadow state at all, decided by `os_shadow.shadow_state_exists()`: the
   state directory is absent, or holds none of `creds.json`, `people.json`, `known-people.json`, `kernel/`, `pending-forgets.json`; a
-  directory that cannot be read, or a state path that is not a directory, counts as state.
+  directory that cannot be read, or a state path that is not a directory, counts as state. The check runs in a thread (`asyncio.to_thread`), never on
+  the event loop, like the park; a forget's only work on the loop is a flag read, a non-blocking queue put and the wait.
 * **A parked forget always reaches the kernel before any later add for that member** (`test_os_shadow_forget.py`, "forgotten means
   forever"): the worker replays the park file before EVERY job while anything is parked (an in-memory copy of the parked ids is kept in
   step with the file under its lock, so a known-empty park costs one global read per job and no file I/O; a new process reads the file

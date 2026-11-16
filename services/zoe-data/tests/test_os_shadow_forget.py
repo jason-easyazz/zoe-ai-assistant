@@ -98,11 +98,24 @@ async def test_shadow_on_fails_closed_when_the_kernel_cannot_confirm(kernel):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_with_no_kernel_ever_installed_touches_nothing(kernel, monkeypatch):
+@pytest.mark.parametrize("where", ["absent", "empty"])
+async def test_flag_off_with_no_shadow_state_at_all_touches_nothing(kernel, monkeypatch, tmp_path, where):
+    """The ONE no-op branch: the flag off and no state (an absent or empty state directory). Removing only creds.json is NOT this
+    branch (people.json etc. still count as state: parked, see the credential-gone tests)."""
+    import threading
+
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
-    (kernel.state / "creds.json").unlink()
-    assert await os_shadow.forget_user(MEMBER) == 0
+    d = tmp_path / "state"
+    if where == "empty":
+        d.mkdir()
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(d))
+    os_shadow._reset_for_tests()                                       # no worker before the call
+    for call in (lambda: os_shadow.forget_user(MEMBER), lambda: os_shadow.erase_entity(MEMBER, "Dana"),
+                 lambda: os_shadow.erase_topic(MEMBER, "garden shed")):
+        assert await call() == 0
     assert kernel.connections == 0 and kernel.calls == []
+    assert (not d.exists()) if where == "absent" else list(d.iterdir()) == []          # no file was created
+    assert os_shadow._worker is None and "os-shadow" not in [t.name for t in threading.enumerate()]   # no worker was started
 
 
 @pytest.mark.asyncio
@@ -215,7 +228,10 @@ async def test_the_entity_cascade_step_reaches_the_kernel_and_a_failure_is_recor
     n = len(forgets(kernel))
     res = cascade.CascadeResult()
     await cascade._clear(MEMBER, None, None, res, only=frozenset({"os_shadow"}))      # the retry: no name stored -> whole member
-    assert res.failed == [] and forgets(kernel)[n][1] == {"subject": MEMBER, "actor": MEMBER}
+    # since round 3 the refused forget was also PARKED, so the worker replays it (whole member) before the retry; the retry itself
+    # is the LAST forget and is a whole-member one too, and nothing is left parked
+    assert res.failed == [] and forgets(kernel)[-1][1] == {"subject": MEMBER, "actor": MEMBER}
+    assert len(forgets(kernel)) == n + 2 and not (kernel.state / "pending-forgets.json").exists()
     assert "os_shadow" in cascade.ALL_LABELS
 
 
@@ -361,7 +377,9 @@ def test_no_forget_coroutine_makes_a_blocking_queue_or_park_call():
         for c in ast.walk(fn):
             if isinstance(c, ast.Call):
                 name = getattr(c.func, "attr", getattr(c.func, "id", ""))
-                assert name not in ("put", "get", "_pending_add", "_pending_done", "_pending_write", "join", "sleep"), (fn.name, name)
+                assert name not in ("put", "get", "_pending_add", "_pending_done", "_pending_write", "join", "sleep",
+                                    "shadow_state_exists", "provisioned", "_pending_read", "stat", "iterdir", "exists", "is_dir",
+                                    "open", "read_text", "write_text", "flock", "fsync"), (fn.name, name)
 
 
 # ---- an add stamped BEFORE a forget never reaches the kernel AFTER it ----------------------------------------------------------------
@@ -478,3 +496,51 @@ async def test_only_a_state_directory_with_nothing_in_it_is_a_no_op(kernel, monk
     assert os_shadow.shadow_state_exists() is True                       # unreadable / not a directory: counts as state
     with pytest.raises(os_shadow.ShadowForgetUnavailable):               # and since it cannot be parked there either: fails closed
         await os_shadow.forget_user(MEMBER)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["off", "shadow"])
+async def test_the_state_check_and_the_park_never_run_on_the_event_loop(kernel, monkeypatch, flag):
+    """A slow disk: the state check (flag off) and the park (both flags, the kernel down) each take 200 ms. Ticks are counted DURING the
+    forget; a blocked loop gets none."""
+    import asyncio
+
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", flag)
+    _creds(kernel, str(kernel.dir / "gone.sock"))                        # the kernel cannot confirm: the forget parks
+    real_check, real_park = os_shadow.shadow_state_exists, os_shadow._pending_add
+    calls, spans = [], {}
+
+    def slow(name, fn):
+        def run(*a):
+            t = time.perf_counter()
+            time.sleep(0.2)
+            spans[name] = (t, time.perf_counter())
+            calls.append(name)
+            return fn(*a)
+        return run
+
+    monkeypatch.setattr(os_shadow, "shadow_state_exists", slow("check", real_check))
+    monkeypatch.setattr(os_shadow, "_pending_add", slow("park", real_park))
+    ticks = []
+
+    async def ticker():
+        while True:
+            ticks.append(time.perf_counter())
+            await asyncio.sleep(0.005)
+
+    t = asyncio.create_task(ticker())
+    await asyncio.sleep(0.02)
+    t0 = time.perf_counter()
+    if flag == "off":
+        assert await os_shadow.forget_user(MEMBER) == 0
+    else:
+        with pytest.raises(os_shadow.ShadowForgetUnavailable):
+            await os_shadow.forget_user(MEMBER)
+    t1 = time.perf_counter()
+    t.cancel()
+    assert t1 - t0 >= (0.4 if flag == "off" else 0.2)                     # the slow check / park really ran inside the forget
+    assert calls == (["check", "park"] if flag == "off" else ["park"]) and _pending(kernel) == [MEMBER]
+    for name, (a, b) in spans.items():                                    # ticks DURING each slow step: a blocked loop gets none
+        during = sum(1 for x in ticks if a < x < b)
+        assert during >= 15, f"only {during} ticks during the {name}: it ran on the event loop"
