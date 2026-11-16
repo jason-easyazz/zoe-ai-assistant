@@ -20,7 +20,7 @@ SVC = Path(__file__).resolve().parents[1]
 CHECKS = {"refused", "withdrawn", "send_refused", "refuse_send"}
 
 #: Telegram: every call of the send function (or of a sender a module injects) anywhere in the service
-TELEGRAM_CALLS = {"telegram_notify.send", "c.sender", "_send_telegram"}
+TELEGRAM_CALLS = {"telegram_notify.send", "c.sender", "_send_telegram", "_telegram_send"}
 #: thin wrappers that only forward to the send; their single caller is checked instead
 TELEGRAM_WRAPPERS = {
     ("reminder_delivery.py", "_send_telegram"): "wraps telegram_notify.send; its caller _channel checks right before calling it",
@@ -212,7 +212,7 @@ def test_every_telegram_send_in_the_service_is_preceded_by_the_erase_check():
             problems += [f"{rel} {b}" for b in bad]
     assert not problems, problems
     assert {("day_review_raise.py", "send_to_phone"), ("omi_review_digest.py", "send_for"), ("change_notices.py", "_send"),
-            ("reminder_delivery.py", "_channel")} <= set(checked), checked
+            ("reminder_delivery.py", "_channel"), ("auth_handoff.py", "send_to_phone")} <= set(checked), checked
 
 
 def test_every_engine_lane_and_phone_channel_checks_after_its_last_await():
@@ -351,11 +351,15 @@ def test_a_delete_during_the_toast_queue_write_withdraws_it_and_pushes_nothing(m
     assert panel == "refused:erased" and daemon == "refused:erased"
 
 
-def test_a_spoken_line_queued_after_a_delete_that_landed_mid_delivery_is_never_claimed(tmp_path):
+def test_a_spoken_line_queued_after_a_delete_that_landed_mid_delivery_is_never_claimed(tmp_path, monkeypatch):
     """The delete lands between the sender's last check and the queue insert: the row is stamped with the DELIVERY's start, so the
-    panel's claim refuses it (the insert time would be after the mark, and the old code served it)."""
+    panel's claim refuses it (the insert time would be after the mark, and the old code served it). The insert is held 3 s after the
+    mark (the stamp has whole-second resolution, so a same-second insert would be refused by rounding alone)."""
     import erase_watermark
     import voice_announce
+
+    real_now = voice_announce._now
+    monkeypatch.setattr(voice_announce, "_now", lambda: real_now() + timedelta(seconds=3))
 
     async def go():
         db = await aiosqlite.connect(str(tmp_path / "va.db"))

@@ -196,7 +196,9 @@ TABLES: tuple[Store, ...] = (
     _t("agent_cost_events", METADATA, OUT_OF_SCOPE, "Token counts and cost per call."),
     _t("llm_call_log", METADATA, OUT_OF_SCOPE, "Latency and token counts per call."),
     _t("ui_actions", WORDS, REACHED, member=_OWNED_M),
-    _t("ui_action_ledger", METADATA, OUT_OF_SCOPE, "Event ledger for UI actions: type and ids."),
+    _t("ui_action_ledger", WORDS, REACHED, "Event ledger for UI actions: its 'queued' event holds the action's payload (a toast's words), "
+       "its 'ack' event the panel's ui_context. delete_user removes the member's rows before their actions (and the actions' "
+       "ON DELETE CASCADE takes the rest).", member=_OWNED_M),
     _t("engineering_tasks", METADATA, OUT_OF_SCOPE, "The household's engineering pipeline (tickets about the code, owner-authored), not member memory."),
     _t("openclaw_approvals", WORDS, REACHED, member=_OWNED_M),   # dead since OpenClaw was retired; the table drop is the OpenClaw removal PR
     _t("openclaw_run_state", WORDS, REACHED, member=_OWNED_M),

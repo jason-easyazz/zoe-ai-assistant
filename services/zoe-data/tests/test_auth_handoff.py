@@ -314,6 +314,25 @@ async def test_send_to_phone_delivers_the_link_to_the_linked_chat(hdb, monkeypat
     assert len(calls) == 1
 
 
+async def test_a_handoff_started_before_its_member_was_deleted_is_never_sent(hdb, monkeypatch):
+    """A stale pending hand-off of a member whose delete has completed: asked for again (a session that still authenticates), the
+    link does not leave - the last step checks the member's durable erase mark against when the hand-off was started."""
+    import erase_watermark
+
+    monkeypatch.setenv("ZOE_TELEGRAM_BOT_TOKEN", "123:abc")
+    _link_telegram(hdb.path)
+    calls = []
+
+    async def fake_send(chat_id, text, url):
+        calls.append(chat_id)
+        return True
+    monkeypatch.setattr(auth_handoff, "_telegram_send", fake_send)
+    h = await _start()
+    await erase_watermark.record("jason")                 # the delete completes after the hand-off was started
+    assert (await auth_handoff.send_to_phone(h["id"]))["status"] == "unavailable"
+    assert calls == []
+
+
 async def test_send_to_phone_after_a_restart_says_start_again(hdb, monkeypatch):
     monkeypatch.setenv("ZOE_TELEGRAM_BOT_TOKEN", "123:abc")
     _link_telegram(hdb.path)

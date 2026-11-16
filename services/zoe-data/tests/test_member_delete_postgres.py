@@ -54,6 +54,8 @@ _TABLES = (
     ("0052_calendar_data_model.py", "event_attendees"),
     ("0001_initial_schema.py", "push_subscriptions"),
     ("0001_initial_schema.py", "ui_panel_sessions"),
+    ("0001_initial_schema.py", "ui_actions"),
+    ("0001_initial_schema.py", "ui_action_ledger"),
 )
 #: the migrations' ALTER statements for the columns the erase reads (0012: the claim; 0006: a note's contact link)
 _ALTERS = (
@@ -182,6 +184,10 @@ async def _seed(w: World) -> None:
         await x("INSERT INTO push_subscriptions (user_id, endpoint, keys_p256dh, keys_auth) VALUES ($1, $2, 'k', 'a')",
                 u, "https://push.invalid/" + u)
         await x("INSERT INTO ui_panel_sessions (panel_id, user_id) VALUES ($1, $2)", f"panel-{u}", u)
+        await x("INSERT INTO ui_actions (id, user_id, panel_id, action_type, payload) VALUES ($1, $2, $3, 'panel_announce', $4)",
+                f"ua-{u}", u, f"panel-{u}", json.dumps({"message": "synthetic words"}))
+        await x("INSERT INTO ui_action_ledger (id, action_id, user_id, panel_id, event_type, event_data) VALUES ($1, $2, $3, $4, 'queued', $5)",
+                f"ual-{u}", f"ua-{u}", u, f"panel-{u}", json.dumps({"payload": {"message": "synthetic words"}}))
     # B's note pointing at A's private contact (0006: a plain REFERENCES people(id), no ON DELETE)
     await x("INSERT INTO notes (id, user_id, content, person_id) VALUES ('note-b-on-a', $1, 'B wrote this', $2)", b, f"pc-{a}")
     # A's household-SHARED objects (kept: item 1 of the review is an owner question), with an item assigned to A
@@ -220,6 +226,8 @@ async def test_the_erase_leaves_nothing_of_the_member_and_everything_of_the_othe
     assert await c.fetchval("SELECT assigned_to FROM list_items WHERE id = 'li-fam'") is None
     assert {r[0] for r in await c.fetch("SELECT user_id FROM push_subscriptions")} == {b}
     assert {r[0] for r in await c.fetch("SELECT user_id FROM ui_panel_sessions")} == {b}
+    assert await world.ids("ui_actions") == {f"ua-{b}"}
+    assert await world.ids("ui_action_ledger") == {f"ual-{b}"}, "the ledger holds a toast's words: A's rows go"
 
 
 # (b) atomicity: a failure late in the transaction rolls EVERY statement back (they did not commit one by one); the retry finishes

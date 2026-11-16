@@ -184,7 +184,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-134 stores: 99 reached, 26 out of scope, 9 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+136 stores: 102 reached, 25 out of scope, 9 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -268,7 +268,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `proactive_responses` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `voice_announcements` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
 | `speaker_profiles` | pg_table | biometric | reached | member: `member_owned_forget.forget_user` | delete_user removes the member's rows (and the adapted vector on them) and tells every panel to drop its copy; present in Postgres dumps (age out in <= 35 days). |
-| `face_profiles` | pg_table | biometric | reached | member: `member_owned_forget.forget_user` | delete_user removes the member's rows and tells every panel to drop its copy (face_profile_forget: the voice daemon trims ~/.zoe-voice/face_profiles.json, which only an enrolment run re-syncs; 24 h on the queue); present in Postgres dumps (age out in <= 35 days). |
+| `face_profiles` | pg_table | biometric | reached | member: `member_owned_forget.forget_user` | delete_user removes the member's rows and tells every panel to drop its copy (face_profile_forget: the voice daemon trims ~/.zoe-voice/face_profiles.json, which only an enrolment run re-syncs; 24 h on the queue) and, for a panel that missed it, drops them at its next start or hourly profile sync (the sync's face roster); present in Postgres dumps (age out in <= 35 days). |
 | `enrollment_offers` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `member_register` | pg_table | words | reached | member: `member_register.forget_user` | - |
 | `alarms` | pg_table | words | reached | member: `alarms.forget_user` | - |
@@ -288,7 +288,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `agent_cost_events` | pg_table | metadata | out_of_scope | - | Token counts and cost per call. |
 | `llm_call_log` | pg_table | metadata | out_of_scope | - | Latency and token counts per call. |
 | `ui_actions` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
-| `ui_action_ledger` | pg_table | metadata | out_of_scope | - | Event ledger for UI actions: type and ids. |
+| `ui_action_ledger` | pg_table | words | reached | member: `member_owned_forget.forget_user` | Event ledger for UI actions: its 'queued' event holds the action's payload (a toast's words), its 'ack' event the panel's ui_context. delete_user removes the member's rows before their actions (and the actions' ON DELETE CASCADE takes the rest). |
 | `engineering_tasks` | pg_table | metadata | out_of_scope | - | The household's engineering pipeline (tickets about the code, owner-authored), not member memory. |
 | `openclaw_approvals` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
 | `openclaw_run_state` | pg_table | words | reached | member: `member_owned_forget.forget_user` | - |
@@ -298,6 +298,8 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `intent_miss_log` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | Same module and rules as the router shadow log (records are dropped, not stripped). |
 | `recall_gate_trace` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | ~/.zoe/recall-gate-trace/: the owner's opt-in trace (ZOE_RECALL_GATE_TRACE, default off) - the owner's words + row text per gate decision, 0600, 7-day retention, never off-box. A member erase clears it household-wide (via local_text_logs.erase_all_text), an entity forget drops every line naming the entity (via local_text_logs.erase_entity, cascade step text_logs); both inside that module's erase barrier, which the trace's appends honour. |
 | `production_feedback_log` | file | words | out_of_scope | - | Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in. |
+| `panel_speaker_shadow_log` | file | biometric | reached | member: `member_owned_forget.forget_user` | On each PANEL: ~/.zoe-voice/speaker_shadow_metrics.jsonl (SPEAKER_ID_SHADOW_LOG), one speaker-ID prediction per turn naming the claimed member (id + score, never audio or a vector), 0600, no retention of its own. A member delete reaches it twice: the queued voice_profile_forget drops every row naming the member, and every profile sync (start + hourly) drops the rows of anyone no longer on the server's voice roster, so a panel that missed the command (offline > 24 h, an older daemon) still drops them on its next start. Needs the panel daemon deployed. |
+| `panel_face_cache` | file | biometric | reached | member: `member_owned_forget.forget_user` | On each PANEL: ~/.zoe-voice/face_profiles.json, the face embeddings zoe_face_id.py matches against (re-synced only by an enrolment run). A member delete reaches it twice: the queued face_profile_forget, and every profile sync (start + hourly) drops the rows of anyone no longer on the server's face roster. Needs the panel daemon deployed. |
 | `voice_stt_log` | file | words | gap | - | No member id: ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
 | `flue_session_log` | file | words | gap | - | No member id: the Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget cascade (conversation_notes.erase_entity); the log itself is outside the cascade. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | No member id: a clip without a verdict sidecar names nobody. ~/.zoe-voice-samples: the owner's regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). A clip is located only by its verdict sidecar (written while ZOE_VOICE_CLIP_VERDICT is on): a member delete removes every clip whose sidecar names the member (voice_clips.erase_member, via member_owned_forget), a guest forget every clip labelled as that guest (voice_clips.erase_guests), and with ZOE_VOICE_CLIP_RETENTION on, guest / unknown clips older than 30 days go (voice_clips.sweep). What stays: a clip with no sidecar (saved before or without ZOE_VOICE_CLIP_VERDICT): no forget can find it. |

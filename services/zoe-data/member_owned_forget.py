@@ -30,7 +30,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: single-author tables: every row whose ``user_id`` is the member goes (children before parents where they reference each other)
-OWNED = ("chat_feedback", "background_tasks", "ui_actions", "notes", "journal_entries", "reminders", "transactions",
+OWNED = ("chat_feedback", "background_tasks",
+         # the UI-action ledger BEFORE its actions (alembic 0001: action_id REFERENCES ui_actions ON DELETE CASCADE): its ``queued``
+         # event holds the action's payload (a toast's words) and its ``ack`` event the panel's ui_context
+         "ui_action_ledger", "ui_actions", "notes", "journal_entries", "reminders", "transactions",
          "voice_announcements", "openclaw_approvals", "openclaw_run_state", "memory_consolidation_state",
          "person_activities", "person_bucket_list", "person_gift_ideas", "person_important_dates", "person_relationships",
          "event_attendees",

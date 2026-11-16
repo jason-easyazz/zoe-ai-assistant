@@ -33,6 +33,8 @@ CREATE TABLE chat_ag_ui_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFE
 CREATE TABLE chat_feedback (id TEXT PRIMARY KEY, interaction_id TEXT, user_id TEXT, corrected_response TEXT);
 CREATE TABLE background_tasks (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, task TEXT NOT NULL, result TEXT);
 CREATE TABLE ui_actions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT);
+CREATE TABLE ui_action_ledger (id TEXT PRIMARY KEY, action_id TEXT NOT NULL REFERENCES ui_actions(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
+    panel_id TEXT, event_type TEXT NOT NULL, event_data TEXT);
 CREATE TABLE memory_consolidation_state (session_id TEXT PRIMARY KEY, user_id TEXT, last_consolidated_at TEXT, turns_consolidated INTEGER);
 CREATE TABLE notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT, visibility TEXT NOT NULL DEFAULT 'personal',
     person_id TEXT REFERENCES people(id));
@@ -94,6 +96,8 @@ async def _seed(db):
         await x("INSERT INTO proactive_scheduled (id, user_id, message, apscheduler_job_id) VALUES (?, ?, 'take the bins out', ?)",
                 (f"ps-{u}", u, f"job-{u}"))
         await x("INSERT INTO memory_consolidation_state VALUES (?, ?, 'now', 1)", (f"state-{u}", u))
+        await x("INSERT INTO ui_action_ledger VALUES (?, ?, ?, 'p1', 'queued', ?)",      # the queued event carries the toast's words
+                (f"uil-{u}", f"ui_actions-{u}", u, json.dumps({"payload": {"message": "synthetic words"}})))
         await x("INSERT INTO ambient_memory (transcript, user_id) VALUES ('overheard words', ?)", (u,))
         await x("INSERT INTO speaker_profiles VALUES (?, ?, x'00', 'now', 'resemblyzer')", (f"spk-{u}", u))
         await x("INSERT INTO face_profiles VALUES (?, ?, x'00', 1)", (f"face-{u}", u))
@@ -200,6 +204,8 @@ def test_a_member_delete_removes_every_single_author_row_of_the_member_and_none_
     assert _ids(store, "panel_voice_samples") == {"pvs-" + B}
     assert {r[0] for r in _q(store, "SELECT transcript FROM ambient_memory")} == {"overheard words", "legacy words"}
     assert len(_q(store, "SELECT id FROM ambient_memory")) == 2, "B's two recordings (by user_id and by B's speaker profile) stay"
+    assert _ids(store, "ui_action_ledger") == {"uil-" + B}, "the UI-action ledger holds a toast's words: A's rows go, B's stay"
+    assert "ui_action_ledger" in mof.last_order and mof.last_order.index("ui_action_ledger") < mof.last_order.index("ui_actions")
 
 
 def test_the_transcript_goes_with_no_orphans_and_shared_sessions_keep_the_other_members_turns(env, store):
