@@ -355,3 +355,15 @@ def test_a_receipt_over_a_row_with_nothing_to_judge_by_is_hidden():
     rem = DurableReminders(None, lambda: 0.0, type("G", (), {"people": {A: Person(A, ADULT)}})())
     assert rem.reach_of(A, {"action": "remind.edit", "proof": {"id": "rem9", "row": None}}) is False
     assert rem.reach_of(A, {"action": "list.add", "proof": {"id": "l1"}}) is None
+
+
+def test_an_undo_cut_short_by_a_dead_kernel_stays_hidden_from_a_removed_carer(house):
+    house.act(A, "remind.set", note="synthetic marker <pack>", time="07:45", mentions=(K,), **{"for": K})
+    house.k.actions.undo(A, actor=A)
+    house.k.spine._db.execute("UPDATE intents SET receipt_seq = NULL WHERE undoes IS NOT NULL")   # died mid-undo
+    (recovered,) = house.k.actions.recover()
+    assert recovered.payload["of"] == "remind.set"
+    assert house.k.explainer.why(recovered.seq, person=A)["seq"] == recovered.seq
+    house.k.grants.people[K] = Person(K, CHILD, guardians=())                 # A is no longer K's carer
+    with pytest.raises(Refused):
+        house.k.explainer.why(recovered.seq, person=A)

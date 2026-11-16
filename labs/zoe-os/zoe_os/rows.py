@@ -114,6 +114,11 @@ class DurableRows:
         """For an explainer: may ``person`` see a receipt over one of these rows NOW? ``None``: not a receipt over these rows. The
         row as it stands, else as the receipt recorded it (its proof, an undo's restored snapshot, the snapshot before), else
         whom it was for, decides. Nothing to judge by: NO (fail closed)."""
+        undone = payload.get("undoes")
+        if type(undone) is int and payload.get("of") in self.actions:     # an undo: judged as what it reversed, while kept
+            ev = self.spine._get(undone)
+            if ev is not None and ev.payload.get("action") in self.actions:
+                return self.reach_of(person, ev.payload)
         proof = payload.get("proof") or {}
         snaps = [s for s in (proof, proof.get("restored"), (payload.get("undo") or {}).get("before")) if isinstance(s, dict)]
         rid = next((s["id"] for s in snaps if s.get("id") is not None), None)

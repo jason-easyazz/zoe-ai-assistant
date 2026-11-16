@@ -410,6 +410,9 @@ class Dispatcher:
                 payload = self._uncertain(action, skill, grant_id) | {"reversible": False}
                 if undoes is not None:          # an undo in flight: just as uncertain, and spent
                     payload["undoes"] = undoes
+                    undone = self.spine._get(undoes)
+                    if undone is not None:      # what it reversed, so a store can judge who may see it (``rows.reach_of``)
+                        payload["of"] = undone.payload.get("action")
                 ev = self._close_intent(intent, Event(
                     Kind.ACTION_RECEIPT, KERNEL, subject=person, caused_by=causes, payload=payload))
                 self.spine._kernel_append(Event(
