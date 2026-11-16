@@ -54,7 +54,8 @@ ALLOWED = {
                          "dropped_erased", "queue_full", "live_noop", "no_input", "shadow_error"}),
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
-                         "recurring", "no_time", "range", "time", "parse", "hook", "worker", "code", "pending_forget", "crossed", "forgotten_before"}),
+                         "recurring", "no_time", "range", "time", "parse", "hook", "worker", "code", "pending_forget", "crossed", "forgotten_before",
+                         "old_kernel"}),
 }
 NUMBERS = ("hop_ms", "q_ms")
 #: a number above this is not a measurement (the add's whole budget is 1.5 s; a day in the queue is already absurd): rejected
@@ -193,8 +194,9 @@ def _verb_verdict(recs: list[dict], b: Counter, unexplained: int, hop_p90: float
 def _pass_line(v: dict) -> str:
     vd = v["verdict"]
     if vd["status"] == "not_comparable":
+        old = f" (an older kernel without due_at on {v['old_kernel']} of {v['seen']})" if v.get("old_kernel") else ""
         return ("NOT COMPARABLE YET (" + "; ".join(vd["fails"]) + "): cannot meet the pass mark yet: the kernel does not report when a "
-                "reminder is due")
+                "reminder is due" + old)
     return "PASS" if vd["pass"] else "NOT YET (" + "; ".join(vd["fails"]) + ")"
 
 
@@ -206,7 +208,7 @@ def verb_summary(recs: list[dict]) -> dict:
     unexplained = sum(1 for r in recs if bucket(r["result"]) == "disagree"
                       and (r["result"] == UNKNOWN or r.get("reason", "-") in UNNAMED_REASONS))
     return {
-        "compared": judged, "unexplained": unexplained,
+        "compared": judged, "unexplained": unexplained, "old_kernel": sum(1 for r in recs if r.get("reason") == "old_kernel"),
         "unavailable_rate": round(b["unavailable"] / asked, 4) if asked else None,
         "verdict": _verb_verdict(recs, b, unexplained, pct(hops, 90)),
         "seen": len(recs), "agree": b["agree"], "disagree": b["disagree"], "unavailable": b["unavailable"],

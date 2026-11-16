@@ -139,7 +139,7 @@ def test_the_verb_and_not_expressible_allowlists_are_the_clients():
     fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "kernel_args")
     why = {e.elts[1].value for e in ast.walk(fn) if isinstance(e, ast.Tuple) and len(e.elts) == 2
            and isinstance(e.elts[0], ast.Constant) and e.elts[0].value is None}
-    assert why == {"recurring", "no_time", "range", "time"} and why | {"parse"} <= rep.ALLOWED["reason"]
+    assert why == {"recurring", "no_time", "time"} and why | {"parse", "range", "old_kernel"} <= rep.ALLOWED["reason"]
 
 
 def test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted(tmp_path, capsys):
@@ -346,3 +346,20 @@ def test_a_marker_line_cut_short_anywhere_is_counted_as_rejected(cut, tmp_path, 
     f = tmp_path / "log"
     f.write_text(line() + "\n" + cut)                                 # the cut line LAST in the file, newline or not
     assert rep.main([str(f)]) == 0 and "rejected lines 1" in capsys.readouterr().out
+
+
+def test_an_older_kernel_is_named_on_the_not_comparable_line(tmp_path, capsys):
+    lines = [act("reminder_create", "schedule_unproven", reason="old_kernel", hop=1.0)] * 30 + [act("reminder_create", hop=1.0)] * 5
+    f = tmp_path / "log"
+    f.write_text("\n".join(lines) + "\n")
+    rep.main([str(f)])
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith("reminder_create: "))
+    assert line.startswith("reminder_create: NOT COMPARABLE YET (schedule_unproven: 30)")
+    assert line.endswith("(an older kernel without due_at on 30 of 35)")
+
+
+@pytest.mark.parametrize("cut", ["OS_SHADOW_ACT", "OS_SHADOW_ACT\n", "x OS_SHADOW_ACT verb=reminder_create src=service cls=on",
+                                 "x OS_SHADOW_ACT verb=reminder_create src=service cls=once live=added kernel=verified result=mat"])
+def test_a_cut_verb_line_is_rejected_too(cut):
+    assert rep.parse_counted([act("alarm_create"), cut])[1] == 1
