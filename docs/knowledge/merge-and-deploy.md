@@ -190,7 +190,7 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
    above), then in the Kokoro-paused window, under `flock /tmp/zoe-voice-harness.lock`,
    with `--service-dir <worktree>/services/zoe-data`. The window: `systemctl --user stop kokoro-tts`, run the probe, then
    `systemctl --user start kokoro-tts`; afterwards `curl http://localhost:10201/health` must show `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
-   `dependencies.tts` must name the `kokoro-sidecar` provider (`tts.ok` alone is not enough: it also goes green on the espeak/edge fallback or a CPU-mode Kokoro).
+   `dependencies.tts` must name the `kokoro-sidecar` provider (`tts.ok` alone is not enough: it also goes green on a legacy-mode espeak fallback or a CPU-mode Kokoro).
    The window frees ~2 GB; hold the other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again. The PR's `voice-gate` check re-runs green
    (`--expect-revision <head> --allow-reuse`).
 3. **Nothing may overwrite the artifact** before the deploy reads it — it is a single shared slot
