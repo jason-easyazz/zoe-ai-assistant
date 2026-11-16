@@ -875,7 +875,11 @@ def _pending_write(members: list) -> None:
     """Atomic and durable: a unique temp file, fsync, rename, fsync of the directory. Raises on any failure (never swallowed)."""
     path = _pending_path()
     if not members:
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return                    # nothing was parked: nothing to make durable
+        _fsync_dir(path.parent)       # the unlink is a directory change: durable too, or a crash could bring the file back
         return
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -889,7 +893,11 @@ def _pending_write(members: list) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    dfd = os.open(path.parent, os.O_RDONLY)
+    _fsync_dir(path.parent)
+
+
+def _fsync_dir(directory: Path) -> None:
+    dfd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(dfd)
     finally:

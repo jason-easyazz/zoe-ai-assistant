@@ -13,8 +13,8 @@ superset of the trio's columns; voice-path callers that only supply a subset
 get the same NULLs / defaults their narrower INSERTs produced (``priority``
 defaults to the DB's own ``'normal'``).
 
-Follow-up (out of scope here): skybridge_service.py and pending_suggestions.py
-still carry their own list INSERTs.
+Skybridge and accepted suggestions also use create_item_record for item rows;
+their list creation, access checks and side effects remain caller-owned.
 """
 
 from __future__ import annotations
@@ -386,20 +386,36 @@ async def create_item_record(
     quantity: Optional[str] = None,
     parent_id: Optional[str] = None,
     assigned_to: Optional[str] = None,
+    item_id: Optional[str] = None,
+    raw_asyncpg: bool = False,
+    normalize_text: bool = True,
+    defaults_only: bool = False,
 ) -> dict:
     """Insert one row into ``list_items`` and return a record dict.
 
     Same contract as :func:`create_list_record`: row write only, no access
     checks, no notify, no commit. ``priority`` defaults to ``'normal'`` — the
     DB default the narrower voice/MCP INSERTs relied on by omitting the column.
+    ``raw_asyncpg`` selects the native $n/varargs driver contract. ``item_id``
+    preserves caller-owned id generation. Suggestions pass ``normalize_text=False``
+    and ``defaults_only=True`` to retain verbatim text and database defaults for
+    omitted columns. These options do not change transaction ownership.
     """
-    item_id = str(uuid.uuid4())
-    text = normalize_item_text(text) or text
-    await db.execute(
-        """INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (item_id, list_id, text, priority, category, quantity, parent_id, assigned_to),
-    )
+    item_id = item_id if item_id is not None else str(uuid.uuid4())
+    if normalize_text:
+        text = normalize_item_text(text) or text
+    columns = "id, list_id, text"
+    values = (item_id, list_id, text)
+    if not defaults_only:
+        columns += ", priority, category, quantity, parent_id, assigned_to"
+        values += (priority, category, quantity, parent_id, assigned_to)
+    placeholders = ", ".join(f"${i + 1}" if raw_asyncpg else "?" for i in range(len(values)))
+    # WP-22 seam: every list-item row write passes here, inside the caller's transaction.
+    sql = f"INSERT INTO list_items ({columns}) VALUES ({placeholders})"
+    if raw_asyncpg:
+        await db.execute(sql, *values)
+    else:
+        await db.execute(sql, values)
     return {
         "id": item_id,
         "list_id": list_id,

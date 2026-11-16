@@ -83,7 +83,8 @@ _REPO = Path(__file__).resolve().parents[2]
 #: env files that configure zoe-data, in the order its unit loads them (later wins)
 ENV_FILES = (_REPO / ".env", _REPO / "services" / "zoe-data" / ".env")
 #: the only names the sweep takes from them - nothing else in those files (they hold secrets) is read into this process
-SWEEP_ENV_KEYS = ("ZOE_TEXT_LOG_RETENTION_DAYS", "ZOE_ROUTER_HEAD_LOG", "ZOE_INTENT_MISS_LOG", "ZOE_ADHOC_BACKUP_DIR")
+SWEEP_ENV_KEYS = ("ZOE_TEXT_LOG_RETENTION_DAYS", "ZOE_ROUTER_HEAD_LOG", "ZOE_INTENT_MISS_LOG", "ZOE_ADHOC_BACKUP_DIR",
+                  "ZOE_FORGET_REACH_EXTRA", "ZOE_VOICE_STT_LOG", "ZOE_TELEGRAM_STT_CAPTURE_DIR")
 _NEVER = {"zoe-data.app.log"}
 
 
