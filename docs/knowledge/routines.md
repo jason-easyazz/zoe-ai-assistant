@@ -53,7 +53,9 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
   (`note_named`) for the same member in the same session within 120 s, and nothing else. A TAP (`act_tapped`) names its row.
   A `medicine` line is ticked only by its subject with a verified voice or the subject's own member session; a family routine may
   not hold one; a household tap at the panel can tick, skip or snooze a family routine's line (the lists "fridge rule") and never
-  a personal one. Two racing changes never double-act (`WHERE state = <the state read>`).
+  a personal one. Two racing changes never double-act (`WHERE state = <the state read>`). A closed day is settled: no tick, skip, snooze, undo or
+  one-off changes it (`day_closed`). The walk is honoured only for the member it was named to, on the household day of the named
+  line (a walk across midnight is stale). A tick is gated on the SUBJECT's and the ACTOR's erasure (both members' gates, sorted).
 - **Visibility** matches lists and reminders: `visibility = 'family' OR user_id = <viewer>`; a guest or an unidentified panel sees
   family routines only; a personal routine is invisible (not 403) to anyone else.
 - **Verbatim.** Step text, one-off text and routine names are stored and returned exactly as entered: no strip, no re-case, no

@@ -298,7 +298,7 @@ def test_every_write_path_goes_through_the_one_gate():
     assert _ungated_writers(src) == []
     tree = ast.parse(src)
     fns = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    assert {"create_routine", "add_step", "forget_user", "erase_entity"} <= fns          # the enumeration is not vacuous
+    assert {"create_routine", "add_step", "forget_user", "erase_entity", "day_copy", "add_one_off", "note_named", "_apply"} <= fns
     # negative control: a writer that skips the gate is caught, directly or through a db helper
     rogue = src + (
         "\n\nasync def rename_routine(actor, rid, name):\n    async with _db() as db:\n"
@@ -522,3 +522,82 @@ def test_erase_entity_also_deletes_day_lines_that_name_the_entity(store):
     assert "Quinn" not in left and "bins" in left                                  # control: the other line stays
 
 
+
+
+# -- the day under the one gate (1b) ------------------------------------------------------------------------------------------------
+def test_an_entity_erase_between_the_template_read_and_the_copy_leaves_no_line_naming_it(store, monkeypatch):
+    """The snapshot reads the template, then inserts the day lines. Old code: the erase did not share the snapshot's gate, ran whole
+    in that gap (template step deleted, nothing on the day yet), and the copy then inserted the text it had already read."""
+    r = _mk(steps=("call Quinn", "bins"))
+    rx = re.compile(r"\bquinn\b", re.I)
+    real, task = rs._steps, []
+
+    async def steps(db, rid):
+        out = await real(db, rid)
+        if not task:
+            async def forget():
+                await memory_forgotten.add(ALEX, "Quinn")
+                await rs.erase_entity(ALEX, rx, strict=True)
+            task.append(asyncio.ensure_future(forget()))
+            for _ in range(60):
+                await asyncio.sleep(0)
+        return out
+    monkeypatch.setattr(rs, "_steps", steps)
+
+    async def scenario():
+        await rs.day_copy(ALEX, r["id"])
+        await task[0]
+    run(scenario())
+    for table, col in (("routine_steps", "text"), ("routine_day_steps", "text")):
+        assert not [t for (t,) in store.q(f"SELECT {col} FROM {table}") if rx.search(t)], table
+    assert [t for (t,) in store.q("SELECT text FROM routine_day_steps")] == ["bins"]
+
+
+def test_an_actors_own_delete_between_their_tick_and_its_write_writes_nothing_of_theirs(store, monkeypatch):
+    """Sam ticks Alex's family routine; Sam's member delete runs between the tick's read and its write. Old code took only Alex's
+    gate, so the pending tick wrote Sam's id back after Sam's erase had blanked it."""
+    fam = run(rs.create_routine(ALEX, "House", "dinner", visibility="family", steps=("feed the dog",)))
+    ds = _first(fam, SAM)
+
+    async def scenario():
+        _hook_rows(monkeypatch, "SELECT ds.state", lambda: rs.forget_user(SAM))
+        with pytest.raises(rs.StoreError) as e:
+            await rs.act_tapped(SAM, ds, "done", verified=True)
+        assert e.value.code == "erased"
+    run(scenario())
+    assert store.q("SELECT state, actor_user_id FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending", None)]
+    assert _count(store, "routine_day_steps", "actor_user_id = ?", (SAM,)) == 0
+
+
+def test_a_closed_day_is_settled_nothing_on_it_changes(store, monkeypatch):
+    r = _mk()
+    ds = _first(r)
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(days=1))
+    run(rs.day_copy(ALEX, r["id"]))                                                # opening tomorrow closes today
+    for action in ("done", "skip", "snooze", "undo"):
+        with pytest.raises(rs.StoreError) as e:
+            run(rs.act_tapped(ALEX, ds, action, verified=True))
+        assert e.value.code == "day_closed"
+    assert store.q("SELECT state FROM routine_day_steps WHERE id = ?", (ds,)) == [("pending",)]
+    assert run(rs.act_tapped(ALEX, _first(r), "done", verified=True))["state"] == "done"   # control: the open day still ticks
+
+
+def test_a_walk_named_yesterday_ticks_nothing_today(store, monkeypatch):
+    r = _mk()
+    ds = _first(r)
+    run(rs.note_named("s1", ALEX, ds))
+    t0 = rs._mono()
+    monkeypatch.setattr(rs, "_mono", lambda: t0 + 5)                               # well inside WALK_S ...
+    monkeypatch.setattr(rs, "_now_utc", lambda: THU + timedelta(hours=17))         # ... but past household midnight
+    assert rs.named_step("s1", ALEX) is None
+    with pytest.raises(rs.StoreError):
+        run(rs.act_said("s1", ALEX, "done", verified=True))
+
+
+def test_a_one_off_naming_a_forgotten_entity_is_refused(store):
+    r = _mk()
+    _forget(ALEX, "Quinn")
+    with pytest.raises(rs.StoreError) as e:
+        run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take Quinn's book"))
+    assert e.value.code == "names_forgotten"
+    assert run(rs.add_one_off(ALEX, r["id"], TOMORROW, "take the book"))["text"] == "take the book"
