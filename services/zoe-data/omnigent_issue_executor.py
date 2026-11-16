@@ -66,6 +66,23 @@ def _omnigent_container() -> str:
     return os.environ.get("ZOE_OMNIGENT_CONTAINER", "zoe-omnigent")
 
 
+# P0-2 (docs/architecture/p0-deroot.md section 8, B4): after P0-3 `zoe` has no Docker socket; exec goes through the
+# root helper once it is installed AND sudo allows it, else `docker exec` exactly as before. The helper takes the
+# docker-exec argv minus `docker exec` (pinned by tests/unit/test_omnigent_exec_routing.py).
+OMNIGENT_EXEC_HELPER = "/usr/local/libexec/zoe-priv/zoe-omnigent-exec"
+
+
+def _docker_exec_prefix(helper: str | None = None) -> list[str]:
+    helper = helper or OMNIGENT_EXEC_HELPER
+    try:
+        if os.access(helper, os.X_OK) and subprocess.run(
+                ["sudo", "-n", "-l", helper], capture_output=True, timeout=10, check=False).returncode == 0:
+            return ["sudo", "-n", helper]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ["docker", "exec"]
+
+
 # REQUIRE the explicit `PR_URL=` prefix the brief instructs the agent to print
 # (NOT a bare github PR url anywhere in the log): a stray PR link in the issue
 # body or tool output could otherwise be mistaken for the agent's PR — the same
@@ -191,7 +208,7 @@ def kick_omnigent(issue: dict) -> str:
     # the kick text is JSON-quoted, so the sh -c string has no injection surface.
     server = _omnigent_url()
     subprocess.run(
-        ["docker", "exec", "-d", _omnigent_container(), "sh", "-c",
+        [*_docker_exec_prefix(), "-d", _omnigent_container(), "sh", "-c",
          f"cd /workspace && omnigent run --server {server} --harness claude-sdk "
          f"-r {sid} -p {json.dumps(kick)} --no-log > /tmp/omni-impl-{sid}.log 2>&1"],
         check=False, timeout=30,
@@ -217,7 +234,7 @@ def poll_for_pr_url(sid: str, *, timeout_s: float, poll_s: float = 15.0) -> str 
             if matches:
                 return matches[-1][0]  # group(1): the full url of the last PR_URL=
             tail = subprocess.run(
-                ["docker", "exec", _omnigent_container(), "sh", "-c",
+                [*_docker_exec_prefix(), _omnigent_container(), "sh", "-c",
                  f"tail -c 300 /tmp/omni-impl-{sid}.log 2>/dev/null"],
                 capture_output=True, text=True, timeout=15,
             ).stdout

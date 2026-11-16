@@ -190,7 +190,7 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
    above), then in the Kokoro-paused window, under `flock /tmp/zoe-voice-harness.lock`,
    with `--service-dir <worktree>/services/zoe-data`. The window: `systemctl --user stop kokoro-tts`, run the probe, then
    `systemctl --user start kokoro-tts`; afterwards `curl http://localhost:10201/health` must show `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
-   `dependencies.tts` must name the `kokoro-sidecar` provider (`tts.ok` alone is not enough: it also goes green on the espeak/edge fallback or a CPU-mode Kokoro).
+   `dependencies.tts` must name the `kokoro-sidecar` provider (`tts.ok` alone is not enough: it also goes green on a legacy-mode espeak fallback or a CPU-mode Kokoro).
    The window frees ~2 GB; hold the other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again. The PR's `voice-gate` check re-runs green
    (`--expect-revision <head> --allow-reuse`).
 3. **Nothing may overwrite the artifact** before the deploy reads it — it is a single shared slot
@@ -207,6 +207,21 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
 - The runner resets to the **gate-checked `$target`**, not a re-read `FETCH_HEAD` — a concurrent fetch
   on the shared `.git` could otherwise advance the tree to a commit pushed *after* the gate ran, a
   silent bypass. (Same fix as #1344 on the manual path.)
+
+### Landing a panel-program PR (owner, 2026-11-15: "panel programs should be tested")
+
+The panel's own voice programs (`scripts/setup/zoe_voice_*.py`, `zoe_enroll_flow.py`, the
+`zoe-voice.service` unit, `deploy-pi-voice.sh`, `pi_voice_daemon_install.sh`, `pi-requirements.txt`)
+are voice scope (`VOICE_PATH_WIDE_PATTERNS` in `scripts/maintenance/voice_gate_check.py`), so they land
+through the voice lander with a replay, never through the docs chain on CI alone. The replay proves the
+server side the panel talks to; the panel program itself is proven by its own tests in CI and then by
+the deploy, which is a separate step on the Pi and goes in this order:
+
+1. `DRY_RUN=1 bash scripts/setup/deploy-pi-voice.sh` from a clean checkout of the merged `main`: read
+   the plan (the files it would ship, the backup suffix, any unit it would install).
+2. Only then the real `bash scripts/setup/deploy-pi-voice.sh`, then on the Pi
+   `systemctl --user restart zoe-voice` and one spoken turn (wake word, a short command, a reply).
+3. Rollback is the deploy's own `.bak-<suffix>` copies.
 
 ### Reusing replay evidence across a voice-free update (since 2026-11-11)
 
@@ -673,6 +688,7 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
   uneven, refresh the weights from a run's ledgers: download the `shard-ledger-*` artifacts, then
   `python3 tools/ci/shard_ledger.py weights --out tools/ci/shard_weights.json <ledger>.json…` (by hand, never per PR).
 
+- **Lab tests in `validate` (2026-11-15):** the Zoe OS kernel suite (`labs/zoe-os/tests`, ~510 tests, ~55 s on the Jetson) is selected by the `ci_safe` marker its `conftest.py` applies and by its path being listed beside `tests/unit` in the unit shards and the `collect` job, so the shard ledger counts it in the `tests/unit` lane exactly once. Its weights live in `shard_weights.json`. Skipped, not dropped: the second-OS-user tests (need root). Not yet in CI: the `brain-lab-app` Node test.
 - Parts of `validate.yml` run an **explicit, enumerated list of test files**, not pytest
   path-discovery. A new `tests/**` file **silently does not run in CI** unless its lane picks it up —
   so a brand-new regression test can "pass" by never executing.

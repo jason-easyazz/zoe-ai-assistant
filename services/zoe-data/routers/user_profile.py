@@ -176,25 +176,37 @@ async def set_telegram_link(
 
 
 # ─── Reminders on my phone (reminder_delivery.py; docs/knowledge/reminder-phone-delivery.md) ───
+async def _phone_delivery_eligible(user_id: str) -> bool:
+    """The ONE rule for who may opt in: POSITIVELY an adult member. The PUT refuses (403) and the GET reports ``eligible`` from
+    this, so the two never disagree. A failed or unknown lookup is not eligible."""
+    try:
+        from enrollment_state import audience_of
+
+        return await audience_of(user_id) == "adult"
+    except Exception:  # noqa: BLE001 - not knowing who someone is means no phone delivery
+        return False
+
+
 @router.get("/reminder-delivery")
 async def get_reminder_delivery(user: dict = Depends(get_current_user), db=Depends(get_db)):
-    """The caller's own phone-delivery choice for reminders; ``channels`` empty = none (the default)."""
+    """The caller's own phone-delivery choice for reminders; ``channels`` empty = none (the default). ``eligible`` = the PUT
+    would accept this caller (an adult member); the Settings page shows the controls only when it is true."""
     import reminder_delivery
 
     await require_feature_access(db, user, feature="user_profile", action="read")
     prefs = await _read_prefs(db, user["user_id"])
     doc = reminder_delivery.validate(prefs.get(reminder_delivery.PREF_KEY))
-    return {**doc, "telegram_linked": bool(prefs.get("telegram_id")), "mode": reminder_delivery.mode()}
+    return {**doc, "telegram_linked": bool(prefs.get("telegram_id")), "mode": reminder_delivery.mode(),
+            "eligible": await _phone_delivery_eligible(user["user_id"])}
 
 
 @router.put("/reminder-delivery")
 async def set_reminder_delivery(request: Request, user: dict = Depends(require_member), db=Depends(get_db)):
     """Body ``{"channels": ["telegram", "web_push"], "full_text": false}``. Own profile only (user_id from the session); adults only."""
     import reminder_delivery
-    from enrollment_state import audience_of
 
     await require_feature_access(db, user, feature="user_profile", action="analyze")
-    if await audience_of(user["user_id"]) != "adult":
+    if not await _phone_delivery_eligible(user["user_id"]):
         raise HTTPException(status_code=403, detail="phone delivery of reminders is for adult members")
     doc = reminder_delivery.validate(await request.json())
     await set_pref(user["user_id"], reminder_delivery.PREF_KEY, doc, db=db)

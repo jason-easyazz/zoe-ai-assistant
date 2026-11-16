@@ -22,7 +22,7 @@ import os
 import re
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import brain_slot_guard
 import digest_pack
@@ -31,6 +31,8 @@ from llm_json import strip_code_fence
 import memory_authority
 import own_words
 import trait_challenge
+import erase_watermark as _erase_watermark
+import user_erase_gate as erase_gate
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
@@ -148,6 +150,94 @@ def _name_from_pending_slug(entity_id: str) -> str:
     return s.replace("_", " ").strip()
 
 
+async def _store(call: Callable, /, **kw: Any) -> Any:
+    """One ``leased_drawers`` read OFF the event loop (A6 step 2): ``MemoryService._run_sync``, the executor + lease
+    search and ingest use, so the store call (and any compaction-gate wait) no longer holds the single worker."""
+    from memory_service import MemoryService
+    return await MemoryService._run_sync(functools.partial(call, **kw))
+
+
+_WRITE_ADMIT_S = 0.5   # under the owner lock a write waits at most this long for the store's lease, never for a compaction
+_WRITE_TRIES = 3
+
+
+def _live_ids(col: Any, user_id: str, ids: list, prior_status: list) -> set:
+    """The ids that are still live for ``user_id`` NOW, by the read path's own predicate (``MemoryService._filter_visible``:
+    expiry, owner visibility, status). A row whose status is the one the pass read (deep sleep reads ``pending`` rows) counts
+    as unchanged; any other non-readable status - rejected (a soft forget), archived, superseded, disputed - is skipped."""
+    import datetime as _dt
+    from memory_service import MemoryService
+
+    cur = col.get(ids=list(ids), include=["documents", "metadatas"])
+    want = dict(zip(ids, prior_status))
+    metas = []
+    for rid, meta in zip(cur.get("ids") or [], cur.get("metadatas") or []):
+        m = dict(meta or {})
+        if str(m.get("status", "approved") or "approved").strip().lower() == want.get(rid):
+            m["status"] = "approved"   # unchanged since the pass read it: judge it as the row the pass is updating
+        metas.append(m)
+    probe = {"ids": cur.get("ids") or [], "documents": cur.get("documents") or [], "metadatas": metas}
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return {r.id for r in MemoryService._filter_visible(probe, user_id, now)}
+
+
+def _upsert_rows(col: Any, ids: list, docs: list, metas: list) -> None:
+    col.upsert(ids=ids, documents=docs, metadatas=metas)
+
+
+def _status_of(meta: Any) -> str:
+    return str((meta or {}).get("status", "approved") or "approved").strip().lower()
+
+
+async def _under_owner_lock(svc: Any, user_id: str, fn: Callable[[], Any]) -> Any:
+    """Run ``fn`` in the executor under the owner's memory lock (``svc._user_locks[user_id]``, the key ``erase_rows`` and
+    ``review`` take), BOUNDED: the compaction gate is waited for OUTSIDE the lock, and inside it the lease admission gives up
+    after ``_WRITE_ADMIT_S`` (then the lock is released and the gate waited for again). So a forget never queues behind a
+    store maintenance wait, only behind one admitted re-check + write."""
+    from memory_service import MemoryServiceError, _wait_for_maintenance_gate, collection_op
+
+    def _bounded() -> Any:
+        with collection_op(timeout=_WRITE_ADMIT_S):
+            return fn()
+
+    loop = asyncio.get_running_loop()
+    locks = getattr(svc, "_user_locks", None)
+    for attempt in range(_WRITE_TRIES):
+        await loop.run_in_executor(None, _wait_for_maintenance_gate)
+        try:
+            if locks is None:
+                return await loop.run_in_executor(None, _bounded)
+            async with locks.setdefault(user_id, asyncio.Lock()):
+                return await loop.run_in_executor(None, _bounded)
+        except MemoryServiceError:
+            if attempt == _WRITE_TRIES - 1:
+                raise
+
+
+async def _store_upsert(svc: Any, user_id: str, col: Any, *, ids: list, documents: list, metadatas: list,
+                        prior_status: Optional[list] = None, update_only: bool = False) -> None:
+    """A pass's ``col.upsert`` off the loop: re-checked and written under the owner's lock (``_under_owner_lock``), only
+    for rows still live (``_live_ids``). Off the loop a pass's write can interleave with a forget, so a row erased or
+    soft-forgotten since the pass read it is never written back (forgotten means forever); a live row gets exactly the
+    old write. ``prior_status`` = each row's status as the pass READ it (default: the status being written). ``update_only``:
+    rewrite rows that EXIST (``_update_existing``), never create one - for a pass that only modifies (the night-write rule)."""
+    prior = list(prior_status) if prior_status is not None else [_status_of(m) for m in metadatas]
+    # The lock is keyed by the row's STORED owner - the key ``review`` (soft forget) takes from the row and ``erase_rows`` is
+    # called with - so an alias spelling of the pass's user id still serialises with a forget of the same rows.
+    owners: dict = {}
+    for k, m in enumerate(metadatas):
+        owners.setdefault(str((m or {}).get("user_id") or (m or {}).get("wing") or user_id), []).append(k)
+    for owner, idx in owners.items():
+        def _write(idx: list = idx) -> None:
+            live = _live_ids(col, user_id, [ids[k] for k in idx], [prior[k] for k in idx])
+            keep = [k for k in idx if ids[k] in live]
+            if keep:
+                put = _update_existing if update_only else _upsert_rows
+                put(col, [ids[k] for k in keep], [documents[k] for k in keep], [metadatas[k] for k in keep])
+
+        await _under_owner_lock(svc, owner, _write)
+
+
 async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
     """Idle pass: re-link ``person_pending`` facts to a real ``people.id``.
 
@@ -180,7 +270,8 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
         svc = get_memory_service()
         col = leased_drawers(svc)   # per-call lease: never a handle across an await
         # Owner + status scoped scan: only THIS user's still-pending person facts.
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"entity_type": {"$eq": "person_pending"}},
@@ -209,7 +300,7 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
                     mem_id, person_uuid, user_id,
                 )
     except Exception as exc:
-        logger.warning("link_resolver: scan failed user=%s: %s", user_id, exc)
+        logger.warning("link_resolver: scan failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     finally:
         if opened and _db is not None:
             try:
@@ -524,20 +615,31 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
-#: A row's wording is logged whole up to this many characters (a distilled sentence is <= 150 by the extractor prompt).
-_ROW_LOG_WORDING_MAX = 200
+_LABELS = ("promote", "anchor", "hold")
+
+
+def _closed(value: Any, allowed: tuple[str, ...]) -> str:
+    """``value`` if it is one of the CLOSED set ``allowed``, else the fixed word ``other``: extractor output reaches a log
+    line only through this clamp (a claim row's fields come from model JSON, and ``pred`` can carry free text after ``kin:``)."""
+    return value if isinstance(value, str) and value in allowed else "other"
 
 
 def _claim_label(md: dict) -> str:
     """``<pred>/<pol>/<mod>/<tense>:<lexical>><structural>`` of a row's claim row, or ``-``: what the extractor read and what
-    each floor made of it (labels only)."""
+    each floor made of it. Every part is clamped to its closed vocabulary (``structural_claims.PREDICATES`` /
+    ``POLARITIES`` / ``MODALITIES`` / ``TENSES``; the lexical / structural labels are promote|anchor|hold) with anything else
+    logged as ``other``; a ``kin:<code>`` predicate logs as ``kin`` (its code is model text). Never the obj / subj / quote."""
     raw = md.get("claim")
     if not raw:
         return "-"
     try:
+        import structural_claims as sc
         c = json.loads(raw) if isinstance(raw, str) else dict(raw)
-        return "%s/%s/%s/%s:%s>%s" % (c.get("pred"), c.get("pol"), c.get("mod"), c.get("tense"),
-                                      md.get("claim_lexical") or "-", md.get("claim_structural") or "-")
+        pred = str(c.get("pred") or "")
+        pred = "kin" if pred.startswith("kin:") else _closed(pred, sc.PREDICATES)
+        return "%s/%s/%s/%s:%s>%s" % (pred, _closed(c.get("pol"), sc.POLARITIES), _closed(c.get("mod"), sc.MODALITIES),
+                                      _closed(c.get("tense"), sc.TENSES), _closed(md.get("claim_lexical") or "-", _LABELS + ("-",)),
+                                      _closed(md.get("claim_structural") or "-", _LABELS + ("-",)))
     except Exception:  # noqa: BLE001
         return "-"
 
@@ -548,29 +650,33 @@ def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
 
         MEMORY_ROW lane=<turn_digest|digest|emotional> outcome=<stored|parked|edited|held> user=<id> id=<row id>
         class=<authority class> promoted=<yes|no> basis=<authority basis> status=<row status> type=<memory type>
-        wording='<the ROW text, as stored>'
+        row=len=<chars> utt=<12 hex>
+
+    ``row`` is ``log_redaction.utterance_tag`` of the stored row text - the length and an equality key, NEVER the words: the
+    service log sits outside the forget cascade and rotates by size, so household memory text must not be written to it
+    (privacy sweep 2026-11-14; the line used to carry ``wording='<row text>'``). Read the row itself by ``id`` from the store.
 
     ``promoted`` is the promotion verdict: yes = the owner's one verbatim sentence ENTAILED the fact
     (``memory_authority.VERBATIM_BASIS``), so a retraction earns the standing of the owner's own words; no = it did
-    not (a candidate is parked as a dispute instead). The wording is the row's own text - the extractor's distilled
-    sentence after the write boundary's scrub - never the owner's turn (no ``source_excerpt`` / anchor is read here).
-    Post-turn only (the background digest); never raises; ``%r`` so a newline in a wording cannot forge a line."""
+    not (a candidate is parked as a dispute instead). The tag covers the row's own text, never the owner's turn (no
+    ``source_excerpt`` / anchor is read here). Post-turn only (the background digest); never raises; the tag is
+    hex and digits, so a newline in the text cannot forge a line."""
     try:
         if ref is None:
             return
         md = getattr(ref, "metadata", None) or {}
         basis = str(md.get("authority_basis") or "-")
-        wording = " ".join(str(getattr(ref, "text", "") or "").split())[:_ROW_LOG_WORDING_MAX]
         logger.info(
-            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s wording=%r",
+            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s row=%s",
             lane, outcome, user_id, getattr(ref, "id", "-"), md.get("authority_class") or "-",
             "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
-            md.get("status") or "-", md.get("memory_type") or "-", wording)
-        label = _claim_label(md)
-        if label != "-":
+            md.get("status") or "-", md.get("memory_type") or "-",
+            _log_redaction.utterance_tag(getattr(ref, "text", "") or ""))
+        clamped = _claim_label(md)  # every part is from a closed vocabulary (see _closed); never raw extractor text
+        if clamped != "-":
             # the claim row's own line (the MEMORY_ROW format above is a pinned contract): what the extractor read, and what each
             # floor made of it
-            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), label)
+            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), clamped)
     except Exception:  # noqa: BLE001 - a log line must never fail a digest
         pass
 
@@ -840,13 +946,15 @@ async def _quote_retire_pass(result: dict, user_id: str, user_message: str, sour
 
 def _then_quote_retire(fn):
     """Run ``fn`` (the per-turn digest, unchanged), then ``_quote_retire_pass``. ``functools.wraps`` keeps ``run_turn_digest``'s own source,
-    signature and name (``inspect.getsource`` follows ``__wrapped__``)."""
+    signature and name (``inspect.getsource`` follows ``__wrapped__``). Both halves run as work scheduled for ``user_id``
+    (``user_erase_gate.scheduled_here``): the post-turn task's own snapshot, taken when the turn's work was queued, when it has one."""
     @functools.wraps(fn)
     async def wrapper(user_id, user_message, assistant_response="", *, session_id=None, source="turn_digest",
                       speaker_verified=None):
-        result = await fn(user_id, user_message, assistant_response, session_id=session_id, source=source,
-                          speaker_verified=speaker_verified)
-        return await _quote_retire_pass(result, user_id, user_message, source, speaker_verified)
+        with erase_gate.scheduled_here(user_id):
+            result = await fn(user_id, user_message, assistant_response, session_id=session_id, source=source,
+                              speaker_verified=speaker_verified)
+            return await _quote_retire_pass(result, user_id, user_message, source, speaker_verified)
     return wrapper
 
 
@@ -884,6 +992,14 @@ async def run_turn_digest(
     if is_unidentified(user_id):
         result["skipped_reason"] = "unidentified"
         _count_drop(source, "unidentified", gate=False)
+        return result
+    # The member was erased after this turn's work was scheduled: nothing of it is mined (the model call is saved; every store below
+    # is also checked under the store's own lock, for an erase that lands while the model runs).
+    if erase_gate.erased_since_scheduled(user_id):
+        result["skipped_reason"] = "erased_since_scheduled"
+        from memory_service import _log_erase_drop
+
+        _log_erase_drop(source)
         return result
 
     # BM5: an off-the-record turn is never digested.
@@ -985,7 +1101,7 @@ async def run_turn_digest(
                 # the claim row costs output tokens on the brain's one slot: log the call so the delta is measurable
                 logger.info("STRUCTURAL_EXTRACT lane=%s ms=%d max_tokens=%d", source, int((time.monotonic() - _t_llm) * 1000), _max_tokens)
         except Exception as exc:
-            logger.debug("turn_digest: LLM call failed for %s: %s", user_id, exc)
+            logger.debug("turn_digest: LLM call failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
             return result
 
         # Parse JSON array from response
@@ -1256,7 +1372,7 @@ async def run_turn_digest(
                             changed_refs.append(new_ref)
                         continue
                 except Exception as exc:
-                    logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
+                    logger.warning("turn_digest: supersede failed (%s) — plain ingest", _log_redaction.exc_tag(exc))
             try:
                 fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence, user_message)
                 ref = await svc.ingest(
@@ -1291,7 +1407,7 @@ async def run_turn_digest(
                     if fact_changes:
                         changed_refs.append(ref)
             except MemoryServiceError as exc:
-                logger.debug("turn_digest: ingest failed for %s: %s", user_id, exc)
+                logger.debug("turn_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
 
         if memory_authority.enabled() and session_id:
             import memory_disputes
@@ -1320,8 +1436,8 @@ async def run_turn_digest(
                 await rebuild_user_model_card(user_id)
 
     except Exception as exc:
-        logger.warning("turn_digest: unexpected error for %s: %s", user_id, exc)
-        result["error"] = str(exc)
+        logger.warning("turn_digest: unexpected error for %s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["error"] = _error_field(exc)
 
     if result.get("new", 0) > 0:
         try:
@@ -1333,6 +1449,8 @@ async def run_turn_digest(
     return result
 
 
+@erase_gate.scheduled_at_call("user_id")      # an on-demand run is scheduled when called; the nightly pass's earlier snapshot wins
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 
@@ -1378,7 +1496,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             # malformed fact reply must not cost the night's emotional moments
             # (Greptile P1 on #1682); both outcomes are recorded on the row.
             result["error"] = f"extractor_failed:{exc.kind}"
-            logger.warning("memory_digest: extractor failed for %s: %s", user_id, exc)
+            logger.warning("memory_digest: extractor failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
             facts = []
         result["extracted"] = len(facts)
 
@@ -1458,7 +1576,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                                 if held is not None and memory_authority.is_candidate(held):
                                     result["candidates"] = result.get("candidates", 0) + 1
                             except MemoryServiceError as exc:
-                                logger.debug("memory_digest: held observation not stored: %s", exc)
+                                logger.debug("memory_digest: held observation not stored: %s", _log_redaction.exc_tag(exc))
                         continue
                     fact = verdict.text
                     if verdict.basis == memory_authority.CITED_BASIS:
@@ -1477,7 +1595,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             try:
                 related = await svc.search(fact, user_id=user_id, limit=3, timeout_s=1.5)
             except Exception as exc:
-                logger.debug("memory_digest: contradiction-search failed: %s", exc)
+                logger.debug("memory_digest: contradiction-search failed: %s", _log_redaction.exc_tag(exc))
                 related = []
             for candidate in related:
                 existing_fact = (candidate.text or "").strip()
@@ -1505,7 +1623,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
-                        "memory_digest: supersede failed for %s: %s", user_id, exc
+                        "memory_digest: supersede failed for %s: %s", user_id, _log_redaction.exc_tag(exc)
                     )
                     continue
                 if new_ref is not None:
@@ -1561,7 +1679,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         logger.info("memory_digest: superseded %s with %s", target_id, _log_redaction.utterance_tag(fact))
                         continue
                 except Exception as exc:
-                    logger.warning("memory_digest: supersede failed (%s) — plain ingest", exc)
+                    logger.warning("memory_digest: supersede failed (%s) — plain ingest", _log_redaction.exc_tag(exc))
             try:
                 ref = await svc.ingest(
                     fact,
@@ -1576,7 +1694,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     user_turn_id=turn_id,
                 )
             except MemoryServiceError as exc:
-                logger.warning("memory_digest: ingest failed for %s: %s", user_id, exc)
+                logger.warning("memory_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
                 continue
             if ref is not None and memory_authority.is_candidate(ref):
                 result["candidates"] = result.get("candidates", 0) + 1
@@ -1593,8 +1711,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             emotional_new = await _emotional_memory_pass(user_id, chat_text, svc)
             result["emotional_new"] = emotional_new
         except Exception as exc:
-            result["emotional_error"] = f"{type(exc).__name__}: {exc}"
-            logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, exc)
+            result["emotional_error"] = type(exc).__name__
+            logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
         # ── Night mind (ZOE_NIGHT_MIND, default OFF) ─────────────────────────
         # The chunked, cited reflection over the WHOLE day's own-words turns (the extractors above cut the transcript at 3,000 characters).
@@ -1609,8 +1727,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             logger.warning("memory_digest: night mind failed (non-fatal) user=%s: %s", user_id, type(exc).__name__)
 
     except Exception as exc:
-        logger.error("memory_digest: failed for %s: %s", user_id, exc, exc_info=True)
-        result["error"] = str(exc)
+        logger.error("memory_digest: failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["error"] = _error_field(exc)
     finally:
         digest_pack.end_run(run_token)
         if run_cov.passes:
@@ -1641,7 +1759,7 @@ async def _emotional_call(transcript: str, timeout: float) -> "list | None":
             resp.raise_for_status()
             raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]").strip()
     except Exception as exc:
-        logger.debug("emotional_pass: LLM call failed: %s", exc)
+        logger.debug("emotional_pass: LLM call failed: %s", _log_redaction.exc_tag(exc))
         return None
 
     # Parse JSON
@@ -1716,7 +1834,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
         try:
             from memory_quality import user_relationship_claim_unsupported
             if user_relationship_claim_unsupported(moment, ""):
-                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %r", moment[:70])
+                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %s", _log_redaction.utterance_tag(moment))
                 continue
         except Exception:
             pass
@@ -1733,9 +1851,9 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
             if ref is not None:
                 stored += 1
                 log_row("emotional", user_id, ref, "stored")
-                logger.info("emotional_pass: stored user=%s [%s] %s", user_id, emotion, moment[:60])
+                logger.info("emotional_pass: stored user=%s %s", user_id, _log_redaction.utterance_tag(moment))
         except MemoryServiceError as exc:
-            logger.debug("emotional_pass: ingest failed: %s", exc)
+            logger.debug("emotional_pass: ingest failed: %s", _log_redaction.exc_tag(exc))
     return stored
 
 
@@ -1782,6 +1900,14 @@ class TranscriptLoadError(RuntimeError):
     def __init__(self, cause: BaseException):
         self.kind = type(cause).__name__
         super().__init__(f"load_failed:{self.kind}")
+
+
+def _error_field(exc: BaseException) -> str:
+    """The value a digest RESULT dict carries for a failed step: ``load_failed:<cause type>`` for a ``TranscriptLoadError`` (its
+    message is built from the cause's class name alone, so it is message-free by construction; ``memory_metrics`` and the
+    nightly CLI read that shape), else the exception's TYPE name - never ``str(exc)``, which can quote stored text and reaches
+    the log through ``logger.info("memory_digest: %s", result)``."""
+    return str(exc) if isinstance(exc, TranscriptLoadError) else type(exc).__name__
 
 
 _LEGACY_TURN_LIMIT = 200
@@ -1840,15 +1966,18 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
                            user_id, _turn_limit())
         return await _transcript_from_rows(user_id, rows)
     except Exception as exc:
-        logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
+        logger.warning("memory_digest: could not load messages for %s: %s", user_id, _log_redaction.exc_tag(exc))
         raise TranscriptLoadError(exc) from exc
 
 
 async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     """``(content, id, created_at)`` chat rows -> the day's ``Transcript`` of the OWNER's own words: pasted / third-person text is cut away (``own_words``),
-    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time."""
+    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time. Turns at or before the member's erase
+    watermark are never read (``erase_watermark``; an unreadable one RAISES, which the loaders turn into ``TranscriptLoadError``)."""
+    import erase_watermark
     from exact_words import speaker_rejected
 
+    rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[2] if len(r) > 2 else None, reader="digest")
     pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""),
               (str(row[2]) if len(row) > 2 and row[2] is not None else ""))
              for row in rows if row[0] and not distress_handoff.guarded_text(str(row[0]))]
@@ -1914,7 +2043,7 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
                 rows = await (await _db.execute(sql, params)).fetchall()
         return await _transcript_from_rows(user_id, rows) if rows else ""
     except Exception as exc:
-        logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, exc)
+        logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, _log_redaction.exc_tag(exc))
         raise TranscriptLoadError(exc) from exc
 
 
@@ -1955,8 +2084,18 @@ async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:
     "nothing is forgotten", because the ingest guard behind this one is also lenient on an outage. Each caller defers
     the affected turns to a later run rather than mining them: the transcript readers surface it as a
     ``TranscriptLoadError`` (the existing retried-next-run path), idle consolidation leaves its watermark un-advanced,
-    and the per-fact / per-loop / per-turn callers drop the item for this run."""
+    and the per-fact / per-loop / per-turn callers drop the item for this run.
+
+    A turn that IS a forget command (``turn_forget.is_forget_instruction``) is skipped too, whatever the ledger says: a TOPIC
+    forget writes no ledger entry, so "forget that I told you about my brother" was re-mined into a row about the brother (QA
+    round 10a). New command rows are saved off the record; this also covers the rows saved before that, inside the lookback."""
     import memory_forgotten
+    import turn_forget
+
+    commands = sum(1 for t in turns if isinstance(t, str) and turn_forget.is_forget_instruction(t))
+    if commands:
+        turns = [t for t in turns if not (isinstance(t, str) and turn_forget.is_forget_instruction(t))]
+        logger.info("memory_digest: %s skipped %d forget-command turn(s) user=%s", reader, commands, user_id)
     try:
         kept, dropped = await memory_forgotten.keep_unforgotten(user_id, turns, strict=True)
     except Exception as exc:  # noqa: BLE001
@@ -2123,10 +2262,10 @@ async def _facts_call(transcript: str, timeout: float) -> list[dict]:
     except ExtractorError:
         raise
     except json.JSONDecodeError as je:
-        logger.warning("memory_digest: JSON parse error: %s", je)
+        logger.warning("memory_digest: JSON parse error: %s", _log_redaction.exc_tag(je))
         raise ExtractorError(type(je).__name__, str(je)) from je
     except Exception as exc:
-        logger.warning("memory_digest: LLM call failed: %s", exc)
+        logger.warning("memory_digest: LLM call failed: %s", _log_redaction.exc_tag(exc))
         raise ExtractorError(type(exc).__name__, str(exc)) from exc
 
 
@@ -2274,7 +2413,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         parsed = json.loads(text[start:end])
         return bool(parsed.get("contradicts"))
     except Exception as exc:
-        logger.debug("memory_digest: contradiction judge failed: %s", exc)
+        logger.debug("memory_digest: contradiction judge failed: %s", _log_redaction.exc_tag(exc))
         return False
 
 
@@ -2355,7 +2494,7 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
                         merged += 1
                 except Exception as exc:
                     logger.debug(
-                        "consolidation: merge skipped id=%s: %s", ref.id, exc
+                        "consolidation: merge skipped id=%s: %s", ref.id, _log_redaction.exc_tag(exc)
                     )
                 matched = True
                 break
@@ -2415,7 +2554,7 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
                     resolved += 1
             except Exception as exc:
                 logger.debug(
-                    "consolidation: supersede skipped id=%s: %s", older.id, exc
+                    "consolidation: supersede skipped id=%s: %s", older.id, _log_redaction.exc_tag(exc)
                 )
     return resolved
 
@@ -2439,6 +2578,7 @@ async def _implicit_conflict_pass(user_id: str) -> dict | None:
     return await memory_supersede.nightly_conflict_pass(get_memory_service(), user_id)
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_weekly_consolidation(user_id: str) -> dict:
     """Per-user Sunday pass: merge duplicates, resolve contradictions, soft-archive.
 
@@ -2457,22 +2597,22 @@ async def run_weekly_consolidation(user_id: str) -> dict:
     try:
         summary["merged"] = await _merge_near_duplicates(svc, user_id)
     except Exception as exc:
-        logger.warning("consolidation: merge failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: merge failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
         summary["resolved_contradictions"] = await _resolve_contradictions(svc, user_id)
     except Exception as exc:
-        logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
         import memory_disputes
 
         summary["stale_disputes"] = await memory_disputes.expire_stale(svc, user_id)
     except Exception as exc:
-        logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
         archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep")
         summary["archived"] = len(archived_ids)
     except Exception as exc:
-        logger.warning("consolidation: sweep failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: sweep failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     logger.info("consolidation: %s", summary)
     return summary
 
@@ -2507,7 +2647,7 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
             _message_owner_users_sql(today_only=False), db=db
         )
     except Exception as exc:
-        logger.error("consolidation: could not list users: %s", exc)
+        logger.error("consolidation: could not list users: %s", _log_redaction.exc_tag(exc))
         return []
     user_ids = drop_synthetic_users(user_ids, pass_name="consolidation", log=logger)
     results = []
@@ -2565,7 +2705,7 @@ async def newest_owned_user_turn_age_hours(db=None, cutoff=None) -> float | None
             return NO_OWNED_TURNS
         return float(row[0])
     except Exception as exc:
-        logger.warning("memory_digest: newest-turn probe failed (non-fatal): %s", exc)
+        logger.warning("memory_digest: newest-turn probe failed (non-fatal): %s", _log_redaction.exc_tag(exc))
         return None
 
 
@@ -2590,6 +2730,7 @@ async def run_digest_for_all_active_users(db=None, cutoff=None) -> list[dict]:
     nightly pass binds the same instant to the input probe).
     """
     results = []
+    seen = erase_gate.snapshot()      # the pass is scheduled NOW: a member erased while it runs keeps nothing it writes for them
     try:
         if cutoff is not None:
             sql = _message_owner_users_sql(
@@ -2600,11 +2741,12 @@ async def run_digest_for_all_active_users(db=None, cutoff=None) -> list[dict]:
             params = (_DIGEST_LOOKBACK_HOURS,)
         user_ids = await _list_user_ids(sql, params, db=db)
     except Exception as exc:
-        logger.error("memory_digest: could not list active users: %s", exc)
+        logger.error("memory_digest: could not list active users: %s", _log_redaction.exc_tag(exc))
         return []
 
     for uid in user_ids:
-        result = await run_memory_digest(uid, db=db)
+        with erase_gate.scheduled(uid, seen.get(uid, 0)):
+            result = await run_memory_digest(uid, db=db)
         results.append(result)
         logger.info("memory_digest: %s", result)
     return results
@@ -2677,8 +2819,20 @@ async def _extract_concept_tags(fact: str) -> list[str]:
             tags = json.loads(text[start:end])
             return [str(t).lower().strip()[:30] for t in tags if t][:5]
     except Exception as exc:
-        logger.debug("concept extraction failed: %s", exc)
+        logger.debug("concept extraction failed: %s", _log_redaction.exc_tag(exc))
     return []
+
+
+def _update_existing(col, ids: list, docs: list, metas: list) -> None:
+    """Rewrite rows that EXIST; an id that is gone stays gone (Chroma ``update`` skips unknown ids; ``upsert`` would re-create a row a
+    member erase in another process just removed). A store without ``update`` (a lab stand-in) gets an upsert of the ids still there."""
+    if callable(getattr(col, "update", None)):
+        col.update(ids=list(ids), documents=list(docs), metadatas=list(metas))
+        return
+    there = set(col.get(ids=list(ids), include=[]).get("ids") or [])
+    keep = [k for k, i in enumerate(ids) if i in there]
+    if keep:
+        col.upsert(ids=[ids[k] for k in keep], documents=[docs[k] for k in keep], metadatas=[metas[k] for k in keep])
 
 
 async def _rem_reinforce_pass(user_id: str) -> dict:
@@ -2704,7 +2858,8 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
         # ChromaDB $gte only supports int/float — filter by user_id only, then
         # post-filter by added_at date in Python (ISO strings compare correctly
         # lexicographically for same-length prefix matching).
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"user_id": {"$eq": user_id}},
             include=["documents", "metadatas"],
         )
@@ -2742,37 +2897,48 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             # Exclude self
             neighbour_ids = [n.id for n in neighbours if n.id != mem_id][:5]
 
-            if neighbour_ids:
-                # Bump access on neighbours (reinforcement)
-                await svc.tick_access(user_id, neighbour_ids)
+            # the upserts write back rows READ before the awaits above: after a member erase (another process) they would recreate
+            # them, so they run through the night-write rule (checked right before and right after; what was written is undone)
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, neighbour_ids=neighbour_ids) -> list:
+                nonlocal linked
+                if neighbour_ids:
+                    # Bump access on neighbours (reinforcement)
+                    await svc.tick_access(user_id, neighbour_ids)
 
-                # Write related_ids on new memory
-                existing_related = set((meta.get("related_ids") or "").split(","))
-                existing_related.update(neighbour_ids)
-                meta["related_ids"] = ",".join(i for i in existing_related if i)
-                linked += 1
+                    # Write related_ids on new memory
+                    existing_related = set((meta.get("related_ids") or "").split(","))
+                    existing_related.update(neighbour_ids)
+                    meta["related_ids"] = ",".join(i for i in existing_related if i)
+                    linked += 1
 
-                # Write related_ids on neighbours (bidirectional)
-                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
-                nb_ids = nb_result.get("ids") or []
-                nb_docs = nb_result.get("documents") or []
-                nb_metas = nb_result.get("metadatas") or []
-                new_nb_metas = []
-                for nm in nb_metas:
-                    nm = dict(nm) if nm else {}
-                    nb_related = set((nm.get("related_ids") or "").split(","))
-                    nb_related.add(mem_id)
-                    nm["related_ids"] = ",".join(i for i in nb_related if i)
-                    new_nb_metas.append(nm)
-                if nb_ids:
-                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+                    # Write related_ids on neighbours (bidirectional)
+                    nb_result = await _store(col.get, ids=neighbour_ids, include=["metadatas", "documents"])
+                    nb_ids = nb_result.get("ids") or []
+                    nb_docs = nb_result.get("documents") or []
+                    nb_metas = nb_result.get("metadatas") or []
+                    new_nb_metas = []
+                    for nm in nb_metas:
+                        nm = dict(nm) if nm else {}
+                        nb_related = set((nm.get("related_ids") or "").split(","))
+                        nb_related.add(mem_id)
+                        nm["related_ids"] = ",".join(i for i in nb_related if i)
+                        new_nb_metas.append(nm)
+                    if nb_ids:
+                        await _store_upsert(svc, user_id, col, ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas,
+                                            update_only=True)
 
-            # Mark as REM-processed
-            meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                # Mark as REM-processed
+                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], update_only=True)
+                return []                    # MODIFIED existing rows only: nothing created, so nothing is ever undone
+
+            async def _undo(_created: list) -> None:
+                raise AssertionError("REM creates no row: it has nothing to undo")
+            if await _erase_watermark.guarded_write(user_id, "rem", _write, _undo) is None:
+                break
 
     except Exception as exc:
-        logger.warning("REM reinforce pass failed user=%s: %s", user_id, exc)
+        logger.warning("REM reinforce pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     summary = {"user_id": user_id, "linked": linked, "tagged": tagged}
     logger.info("dreaming/rem: %s", summary)
@@ -2844,7 +3010,8 @@ async def _deep_sleep_pass(user_id: str) -> dict:
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=14)).isoformat() + "Z"
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [{"user_id": {"$eq": user_id}}, {"status": {"$eq": "pending"}}]},
             include=["documents", "metadatas"],
         )
@@ -2860,20 +3027,32 @@ async def _deep_sleep_pass(user_id: str) -> dict:
 
             if meta.get("challenged_by_turn"):
                 continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
-
             if score >= 0.8 and uqc >= 3:
-                meta["status"] = "approved"
-                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
-                promoted += 1
+                new_status = "approved"
             elif added_at and added_at < cutoff:
-                meta["status"] = "archived"
+                new_status = "archived"
+            else:
+                continue
+
+            # an upsert of a row read before a member erase (another process) recreates it: the night-write rule
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, new_status=new_status) -> list:
+                meta["status"] = new_status
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], prior_status=["pending"],
+                                    update_only=True)
+                return []                    # MODIFIED an existing row: nothing created, so nothing is ever undone
+
+            async def _undo(_created: list) -> None:
+                raise AssertionError("deep sleep creates no row: it has nothing to undo")
+            if await _erase_watermark.guarded_write(user_id, "deep_sleep", _write, _undo) is None:
+                break
+            if new_status == "approved":
+                promoted += 1
+            else:
                 archived += 1
 
     except Exception as exc:
-        logger.warning("deep sleep pass failed user=%s: %s", user_id, exc)
+        logger.warning("deep sleep pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     summary = {"user_id": user_id, "promoted": promoted, "archived": archived}
     logger.info("dreaming/deep_sleep: %s", summary)
@@ -2933,7 +3112,8 @@ async def _synthesis_pass(user_id: str) -> dict:
     synthesized = 0
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"status": {"$eq": "approved"}},
@@ -2981,6 +3161,15 @@ async def _synthesis_pass(user_id: str) -> dict:
                     logger.debug("synthesis: dropped non-fact insight: %s", _log_redaction.utterance_tag(synthesis_text))
                     continue
 
+                # Every source must still be live right before a memory DERIVED from them is made (a forget since the scan
+                # wins). Ingest takes the owner lock itself: the post-check below closes the gap after this pre-check.
+                source_ids = [mid for mid, _ in sample]
+                live = await _under_owner_lock(
+                    svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                if set(source_ids) - set(live or ()):
+                    logger.info("synthesis: skipped, a source is no longer live user=%s n=%d", user_id, len(source_ids))
+                    continue
+                created_ids: list[str] = []
                 ref = await svc.ingest(
                     synthesis_text,
                     user_id=user_id,
@@ -2989,22 +3178,48 @@ async def _synthesis_pass(user_id: str) -> dict:
                     confidence=0.85,
                     status="approved",
                     tags=[tag, "synthesis"],
+                    created_ids=created_ids,
                 )
                 if ref:
+                    # The SOURCE post-check, beside ingest's own member-mark post-check (erase_watermark.guarded_write): ingest
+                    # released the owner lock before writing, so a forget/reject of a source can land in the gap. Same rule:
+                    # undo only on POSITIVE evidence (a source gone or no longer live by the pre-check's own ``_live_ids``) and
+                    # only a row THIS ingest created; an unreadable re-check keeps the row.
+                    try:
+                        live = await _under_owner_lock(
+                            svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                    except Exception as exc:
+                        logger.warning("SYNTHESIS_SOURCE_UNKNOWN code=%s", type(exc).__name__)
+                    else:
+                        if set(source_ids) - set(live or ()):
+                            if created_ids:
+                                # Outside the memory lock: erase_rows takes the erase gate before its memory lock.
+                                await svc.erase_rows(user_id, created_ids, actor="synthesis_undo",
+                                                     reason="synthesis source no longer live")
+                                logger.info("SYNTHESIS_SOURCE_COMPENSATED n=%d", len(created_ids))
+                            continue
                     # Link synthesized memory back to source cluster
-                    source_ids = [mid for mid, _ in sample]
-                    col_result = col.get(ids=[ref.id], include=["metadatas", "documents"])
+                    col_result = await _store(col.get, ids=[ref.id], include=["metadatas", "documents"])
                     if col_result.get("ids"):
                         sm = dict((col_result["metadatas"] or [{}])[0])
                         sm["related_ids"] = ",".join(source_ids)
                         sm["concept_tags"] = tag
-                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+
+                        async def _link(rid=ref.id, sm=sm, text=synthesis_text) -> list:
+                            # the row ingest just kept: modified (off the loop, re-checked live), never re-created
+                            await _store_upsert(svc, user_id, col, ids=[rid], documents=[text], metadatas=[sm], update_only=True)
+                            return []
+
+                        async def _unlink(_created: list) -> None:
+                            raise AssertionError("the synthesis link creates no row: it has nothing to undo")
+                        if await _erase_watermark.guarded_write(user_id, "synthesis", _link, _unlink) is None:
+                            continue
                     synthesized += 1
             except Exception as exc:
-                logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
+                logger.warning("synthesis failed for tag=%s user=%s: %s", _log_redaction.utterance_tag(tag), user_id, _log_redaction.exc_tag(exc))
 
     except Exception as exc:
-        logger.warning("synthesis pass failed user=%s: %s", user_id, exc)
+        logger.warning("synthesis pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     summary = {"user_id": user_id, "synthesized": synthesized}
     logger.info("dreaming/synthesis: %s", summary)
@@ -3158,7 +3373,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 )
             result["discarded_meta"] = len(junk)
             async with _db.execute(
-                f"""SELECT cm.content FROM chat_messages cm
+                f"""SELECT cm.content, cm.created_at FROM chat_messages cm
                    JOIN chat_sessions cs ON cm.session_id = cs.id
                    WHERE {_message_owner_expr()} = ? AND cm.role = 'user'
                      AND {_off_record_sql("cm")}
@@ -3172,10 +3387,16 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
             ) as cur:
                 rows = await cur.fetchall()
     except Exception as exc:
-        logger.warning("open_loops: message load failed user=%s: %s", user_id, exc)
+        logger.warning("open_loops: message load failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
         return _done("load_error")
 
     rows = [r for r in rows if not distress_handoff.guarded_text(str(r[0]))]   # a distress hand-off turn is never mined for open loops
+    try:   # ... nor a turn at or before the member's erase watermark (erase_watermark). Fail closed: unreadable = no loops tonight.
+        import erase_watermark
+        rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[1], reader="open_loops")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("open_loops: erase watermark unreadable (%s) - deferred", type(exc).__name__)
+        return _done("load_error")
     # A turn naming a forgotten entity is skipped, not re-mined (memory_forgotten; ZMB F3).
     try:
         import memory_forgotten
@@ -3245,7 +3466,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"] or ""
         except Exception as exc:
-            logger.warning("open_loops: LLM call failed user=%s: %s: %s", user_id, type(exc).__name__, exc)
+            logger.warning("open_loops: LLM call failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
             cov.failed += 1
             llm_failed += 1
             continue
@@ -3309,6 +3530,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     result["extracted"] = len(candidates)
     if not candidates:
         return _done("ok")
+    import erase_watermark
 
     try:
         async with _get_compat_db() as _db:
@@ -3319,28 +3541,43 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 (user_id,),
             ) as cur:
                 seen = [_content_tokens(r[0]) for r in await cur.fetchall()]
-            for text, hint, weight, days in candidates:
-                tokens = _content_tokens(text)
-                if _loop_is_dup(tokens, seen):
-                    result["skipped_dup"] += 1
-                    continue
-                await _db.execute(
-                    """INSERT INTO open_loops
-                       (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
-                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
-                    (user_id, text, hint, weight, days),
-                )
-                result["inserted"] += 1
-                seen.append(tokens)
+
+            async def write() -> list:
+                wrote = []
+                for text, hint, weight, days in candidates:
+                    tokens = _content_tokens(text)
+                    if _loop_is_dup(tokens, seen):
+                        result["skipped_dup"] += 1
+                        continue
+                    await _db.execute(
+                        """INSERT INTO open_loops
+                           (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
+                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
+                        (user_id, text, hint, weight, days),
+                    )
+                    result["inserted"] += 1
+                    seen.append(tokens)
+                    wrote.append(text)
+                return wrote
+
+            async def undo(texts: list) -> None:      # exactly the loops this pass inserted (an unresolved loop text is unique per member)
+                for text in texts:
+                    await _db.execute("DELETE FROM open_loops WHERE user_id = ? AND loop_text = ? AND resolved IS NOT TRUE", (user_id, text))
+                await _db.commit()
+                result["inserted"] = 0
+            # erased since the night pass began (its reads are stale): checked right before and right after the inserts
+            if await erase_watermark.guarded_write(user_id, "open_loops", write, undo) is None:
+                return _done("erased_since_cycle")
     except Exception as exc:
         # Class + constraint only: a driver message can echo a bound value.
-        logger.warning("open_loops: DB write failed user=%s: %s constraint=%s", user_id,
-                       type(exc).__name__, getattr(exc, "constraint_name", "") or "-")
+        constraint = getattr(exc, "constraint_name", "") or "-"     # a schema identifier, never a bound value
+        logger.warning("open_loops: DB write failed user=%s: %s constraint=%s", user_id, type(exc).__name__, constraint)
         return _done("db_error")
 
     return _done("ok")
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool = True) -> dict:
     """Run the full dreaming cycle for a user.
 
@@ -3369,7 +3606,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if link_result.get("scanned") or link_result.get("relinked"):
             result["link_resolver"] = link_result
     except Exception as exc:
-        logger.warning("dreaming: link resolver failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: link resolver failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.5: Open loops extraction — runs nightly so loops are detected the same
     # day they're mentioned, not deferred until Sunday.
@@ -3377,8 +3614,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         loops_result = await _extract_open_loops(user_id, db=db)
         result["open_loops"] = loops_result
     except Exception as exc:
-        logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
-        result["open_loops"] = {"status": "error", "error": str(exc)}
+        logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["open_loops"] = {"status": "error", "error": type(exc).__name__}
 
     # Phase 1.55: conversation notes (ZOE_CONVERSATION_NOTES, default OFF - a no-op without I/O when off): one short note per
     # finished conversation of this member (and of the named guests they enrolled), in their own layer, so Zoe can pick a topic
@@ -3390,7 +3627,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if notes_result.get("status") != "off":
             result["conversation_notes"] = notes_result
     except Exception as exc:
-        logger.warning("dreaming: conversation notes failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: conversation notes failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.6: proactivity selector (ZOE_PROACTIVE_SELECTOR, default OFF — a
     # no-op without I/O when off). Ranks tonight's loops/moments/events.
@@ -3401,7 +3638,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if selected is not None:
             result["proactive_select"] = selected
     except Exception as exc:
-        logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.65: anticipation offers from the member's calendar (ZOE_ANTICIPATION, default
     # off — a no-op without I/O when off). Code only: no model call, no network.
@@ -3412,7 +3649,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if anticipated is not None:
             result["anticipation"] = anticipated
     except Exception as exc:
-        logger.warning("dreaming: anticipation failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: anticipation failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.7: implicit-conflict pass (ZOE_MEMORY_IMPLICIT_SUPERSEDE, default OFF — a
     # no-op without I/O when off). Before the Sunday portrait and the
@@ -3422,7 +3659,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if conflicts is not None:
             result["implicit_conflicts"] = conflicts
     except Exception as exc:
-        logger.warning("dreaming: implicit-conflict pass failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: implicit-conflict pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     if is_sunday:
         deep = await _deep_sleep_pass(user_id)
@@ -3437,8 +3674,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
             portrait = await run_portrait_synthesis(user_id, db=db)
             result["portrait"] = portrait
         except Exception as exc:
-            logger.warning("dreaming: portrait synthesis failed user=%s: %s", user_id, exc)
-            result["portrait"] = {"status": "error", "error": str(exc)}
+            logger.warning("dreaming: portrait synthesis failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
+            result["portrait"] = {"status": "error", "error": type(exc).__name__}
 
         # Phase 5: Agent sync is system-wide, not per-user.  Callers that
         # iterate users should run it once for the first user only.
@@ -3448,8 +3685,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
                 sync_result = await run_agent_sync()
                 result["agent_sync"] = sync_result
             except Exception as exc:
-                logger.warning("dreaming: agent_sync failed: %s", exc)
-                result["agent_sync"] = {"status": "error", "error": str(exc)}
+                logger.warning("dreaming: agent_sync failed: %s", _log_redaction.exc_tag(exc))
+                result["agent_sync"] = {"status": "error", "error": type(exc).__name__}
 
     # Nightly: rebuild the user-model card (user_model_card.py; deterministic, no LLM) so
     # the always-present block tracks the store day by day. On Sundays the portrait
@@ -3484,8 +3721,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
                 user_id, report.scanned, report.total,
             )
     except Exception as exc:
-        logger.warning("dreaming: lint pass failed user=%s: %s", user_id, exc)
-        result["lint"] = {"status": "error", "error": str(exc)}
+        logger.warning("dreaming: lint pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["lint"] = {"status": "error", "error": type(exc).__name__}
 
     logger.info("dreaming cycle complete: %s", result)
     return result
@@ -3499,7 +3736,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
             _message_owner_users_sql(today_only=False), db=db
         )
     except Exception as exc:
-        logger.error("dreaming: could not list users: %s", exc)
+        logger.error("dreaming: could not list users: %s", _log_redaction.exc_tag(exc))
         return []
     user_ids = drop_synthetic_users(user_ids, pass_name="dreaming", log=logger)
 
@@ -3516,6 +3753,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
 # and genres by play/skip behaviour, and writes preference facts to MemPalace.
 # ═══════════════════════════════════════════════════════════════════════════
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_music_taste_digest(user_id: str) -> dict:
     """Consolidate 30 days of music events into MemPalace preference memories.
 
@@ -3567,8 +3805,8 @@ async def run_music_taste_digest(user_id: str) -> dict:
                 )
             ).fetchall()
     except Exception as exc:
-        logger.warning("music_taste_digest: could not load events for %s: %s", user_id, exc)
-        result["error"] = str(exc)
+        logger.warning("music_taste_digest: could not load events for %s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["error"] = type(exc).__name__
         return result
 
     if not events:
@@ -3644,8 +3882,8 @@ async def run_music_taste_digest(user_id: str) -> dict:
         from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
         svc = get_memory_service()
     except Exception as exc:
-        logger.warning("music_taste_digest: memory service unavailable: %s", exc)
-        result["error"] = str(exc)
+        logger.warning("music_taste_digest: memory service unavailable: %s", _log_redaction.exc_tag(exc))
+        result["error"] = type(exc).__name__
         return result
 
     for fact_text, mem_type in facts:
@@ -3663,7 +3901,7 @@ async def run_music_taste_digest(user_id: str) -> dict:
                 result["facts_ingested"] += 1
                 logger.info("music_taste_digest: stored for %s: %s", user_id, _log_redaction.utterance_tag(fact_text))
         except Exception as exc:
-            logger.warning("music_taste_digest: ingest failed for %s: %s", user_id, exc)
+            logger.warning("music_taste_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
 
     logger.info("music_taste_digest: %s", result)
     return result
@@ -3677,7 +3915,7 @@ async def run_music_taste_digest_for_all(db=None) -> list[dict]:
             "SELECT DISTINCT user_id FROM music_listening_events", db=db
         )
     except Exception as exc:
-        logger.error("music_taste_digest: could not list users: %s", exc)
+        logger.error("music_taste_digest: could not list users: %s", _log_redaction.exc_tag(exc))
         return []
     user_ids = drop_synthetic_users(user_ids, pass_name="music_taste_digest", log=logger)
 

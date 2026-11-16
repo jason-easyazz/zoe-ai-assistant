@@ -378,7 +378,7 @@ def test_the_real_sidecar_takes_the_newest_turn_and_never_an_older_members(sent,
 # -- the wiring itself ---------------------------------------------------------------------------------------------
 def test_the_seam_has_one_construction_site_and_the_sidecar_mirrors_the_prefix():
     src = Path(zc.__file__).read_text()
-    assert src.count("_wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))") == 1
+    assert src.count('_wrap_message_with_manner(\n        outbound_message, await _pre.take("manner", lambda: _manner_context_block(uid, message)))') == 1
     ts = (LAB / "src" / "manner.ts").read_text()
     assert "MANNER_ENVELOPE_PREFIX = '%s'" % zc._MANNER_ENVELOPE_PREFIX in ts
     assert "MANNER_MAX_CHARS = MANNER_MAX_TOKENS * 4" in ts and mb.WIRE_MAX_CHARS <= 200 * 4
