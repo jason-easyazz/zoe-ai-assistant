@@ -302,3 +302,30 @@ def test_a_word_that_is_not_in_the_dictionary_never_leaves(raw, gone):
 def test_a_missing_allow_list_fails_closed(monkeypatch):
     monkeypatch.setattr(ws, "allow_words", lambda: frozenset())
     assert not scrub_query("weather forecast tomorrow").send
+
+
+def test_truncation_never_cuts_a_word():
+    r = scrub_query(" ".join(["internationalization internationalisation"] * 3))
+    assert r.send and all(w in ("internationalization", "internationalisation") for w in r.query.split()), r
+
+
+def test_letters_spelled_out_with_dots_never_leave():
+    r = scrub_query("p.r.i.c.e reviews today")
+    assert "p.r.i.c.e" not in r.query, r
+
+
+@pytest.mark.parametrize("raw,gone", [("12zz reviews today", "12zz"), ("7qx tracking parcel", "7qx")])
+def test_only_listed_units_follow_a_number(raw, gone):
+    assert gone not in scrub_query(raw).query
+
+
+def test_listed_units_and_decimals_still_leave():
+    assert scrub_query("4k tv 5g phone 3rd party").query == "4k tv 5g phone 3rd party"
+    assert scrub_query("what is 3.5 times 2").query == "what 3.5 times 2"
+
+
+@pytest.mark.parametrize("raw", ["2026", "4k 5g", "weather forecast tomorrow"])
+def test_a_missing_allow_list_refuses_even_numbers(monkeypatch, raw):
+    monkeypatch.setattr(ws, "allow_words", lambda: frozenset())
+    r = scrub_query(raw)
+    assert not r.send and r.reason == ws.REASON_NO_ALLOW_LIST, r

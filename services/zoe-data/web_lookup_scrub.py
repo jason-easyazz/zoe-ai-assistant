@@ -52,6 +52,7 @@ REASON_MIXED_SCRIPT = "mixed_script"
 REASON_MEMORY_HEAVY = "memory_heavy"
 REASON_PRIVATE_ONLY = "private_only"
 REASON_TRIPWIRE = "tripwire"
+REASON_NO_ALLOW_LIST = "no_allow_list"
 
 _LEXICON_DIR = Path(__file__).resolve().parent / "lexicons_data"
 _WORD_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
@@ -99,7 +100,7 @@ def load_lexicon() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not data.get("enabled"):
             continue
-        for key in ("drop_words", "question_words", "relation_words", "naming_words", "street_types", "possessive_words"):
+        for key in ("drop_words", "question_words", "relation_words", "naming_words", "street_types", "possessive_words", "unit_suffixes"):
             out[key] = frozenset(out.get(key, frozenset())) | {fold(w) for w in data.get(key, [])}
         out["instruction_cues"] = list(out["instruction_cues"]) + list(data.get("instruction_cues", []))
         out["answer"].setdefault(data.get("lang", path.stem), data.get("answer", {}))
@@ -252,6 +253,8 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
         if run >= 3:
             return ScrubResult(False, "", REASON_SPELLED_OUT)
 
+    if not allow_words():  # no list, no lookup: nothing at all can be checked, so nothing leaves
+        return ScrubResult(False, "", REASON_NO_ALLOW_LIST)
     singles, phrases, _names = _private_singles(terms, lex)
     glue = _memory_glue(terms, lex)
     rx = _glue_rx(singles)
@@ -296,8 +299,9 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     # above did not recognise (a name, a code, an invented spelling, a glued or split private term) is dropped,
     # so a new trick has to produce real dictionary words to get anything out.
     allow = allow_words()
+    units = lex.get("unit_suffixes", frozenset())
     for i, tok in enumerate(tokens):
-        if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(tok, allow):
+        if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(tok, allow, units):
             drop[i] = "unknown"
 
     def _content(idx: Iterable[int]) -> int:
@@ -321,9 +325,17 @@ def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict
     for i in kept_idx:
         w = words[i].casefold()
         w = re.sub(r"['’]s$", "", w)
+        # The word that LEAVES is checked again as written, part by part ("p.r.i.c.e" folds to price but is sent
+        # as five single letters, which is not a dictionary word).
+        if not _emit_ok(w, allow, units):
+            continue
         if not out or out[-1] != w:
             out.append(w)
-    query = " ".join(out[:MAX_WORDS])[:MAX_CHARS].strip()
+    query = ""
+    for w in out[:MAX_WORDS]:  # cut at whole words only: a cut word is not a dictionary word
+        if len(query) + len(w) + (1 if query else 0) > MAX_CHARS:
+            break
+        query = f"{query} {w}" if query else w
     # Belt and braces: the query that is about to leave is checked again, whole and with spaces removed.
     # ...and once more with look-alike digits read as letters ("m1 ra bel").
     plain_query = query.translate(_LOOKALIKE)
@@ -356,22 +368,35 @@ def allow_words() -> frozenset:
 
 
 _WORD_NUMBER = re.compile(r"^([a-z]{3,})(\d{1,4})$")    # a dictionary word and a short number: covid19, iphone17
-_NUMBER_UNIT = re.compile(r"^\d{1,4}[a-z]{1,2}$")        # a short number and a unit: 4k, 5g, 10mm
+_NUMBER_UNIT = re.compile(r"^(\d{1,4})([a-z]{1,3})$")    # a short number and a LISTED unit: 4k, 5g, 10mm, 3rd
 
 
-def _allowed_part(x: str, allow: frozenset) -> bool:
-    if (x.isdigit() and len(x) <= 4) or x in allow or _NUMBER_UNIT.match(x):
+def _allowed_part(x: str, allow: frozenset, units: frozenset) -> bool:
+    if (x.isdigit() and len(x) <= 4) or x in allow:
         return True
+    u = _NUMBER_UNIT.match(x)
+    if u:
+        return u.group(2) in units
     m = _WORD_NUMBER.match(x)
     return bool(m) and m.group(1) in allow
 
 
-def _allowed(tok: str, allow: frozenset) -> bool:
+def _allowed(tok: str, allow: frozenset, units: frozenset = frozenset()) -> bool:
     """A token is allowed when every part of it (split on . - and apostrophes) is a dictionary word, a short number,
-    a dictionary word followed by a short number, or a short number with a one- or two-letter unit. Anything else
-    (a code like x7k2, a name, an invented spelling) is not."""
+    a dictionary word followed by a short number, or a short number with a unit from the lexicon's list. Anything
+    else (a code like x7k2, a name, an invented spelling, 12zz) is not."""
     parts = [x for x in re.split(r"[.\-'’]", tok) if x]
-    return bool(parts) and all(_allowed_part(x, allow) for x in parts)
+    return bool(parts) and all(_allowed_part(x, allow, units) for x in parts)
+
+
+def _emit_ok(word: str, allow: frozenset, units: frozenset) -> bool:
+    """The outgoing word as written: one part may be anything _allowed accepts; a word built of several parts
+    (around . - or apostrophes) needs every part to be a dictionary word of two or more letters or a short number,
+    so letters spelled out with dots (p.r.i.c.e) never pass."""
+    parts = [x for x in re.split(r"[.\-'’]", word) if x]
+    if len(parts) <= 1:
+        return _allowed(word, allow, units)
+    return all((x.isdigit() and len(x) <= 4) or (len(x) >= 2 and x in allow) for x in parts)
 
 
 def _split_exactly(query: str, single: str) -> bool:
