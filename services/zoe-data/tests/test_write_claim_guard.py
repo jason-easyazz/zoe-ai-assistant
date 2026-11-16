@@ -442,6 +442,11 @@ async def test_add_item_to_list_records_a_receipt_for_new_and_replayed_adds(monk
         return None
 
     monkeypatch.setattr(list_service, "find_list_id", fake_find)
+
+    async def fake_find_with_name(db, *, user_id, list_type, name):      # add_item_to_list resolves through find_list (id + name)
+        return "list-1", name
+
+    monkeypatch.setattr(list_service, "find_list", fake_find_with_name)
     monkeypatch.setattr(list_service, "_find_recent_duplicate", no_dup)
     out = await list_service.add_item_to_list(_FakeDB(), user_id="jason", list_type="shopping", list_name="Shopping",
                                               text="oat milk", new_list_visibility="family", dedup_window_s=10)
