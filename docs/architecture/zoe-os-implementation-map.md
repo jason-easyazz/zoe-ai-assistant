@@ -641,10 +641,11 @@ needs no install step. The first unit install is an owner step.
 - **Forget and backups.** Backups are kept 35 days, and a backup taken before a forget still holds the forgotten words. So today an
   erase is **not complete until the 35-day window has passed**; re-issuing the delete after a restore keeps the words out of the
   live store, but it does not remove them from the backup files. That falls short of "forgotten means forever", and the kernel must
-  not inherit the gap silently. **Owner decision needed before cut-over** (it applies to Postgres backups as much as the kernel's):
-  either backups are encrypted with a per-member key that a forget destroys, so the old words become unreadable at once, or the
-  forget is backup-aware and rewrites or drops the affected backups, or the 35-day delay is accepted and said plainly to the
-  household. Whichever is chosen is written in the kernel's store entry in `forget_reach.py`, and a restore always re-issues every
+  not inherit the gap silently. Waiting out the window is not an option: the owner's standing rule is that a forget is permanent by
+  default. So one of two builds must be in place before cut-over (it applies to Postgres backups as much as the kernel's), and
+  **erase is not complete until one of them is**: backups encrypted with a per-member key that a forget destroys, so the old
+  words become unreadable at once, or a backup-aware forget that rewrites or drops the affected backups. Which of the two is an
+  owner choice. The one chosen is written in the kernel's store entry in `forget_reach.py`, and a restore always re-issues every
   forget recorded since the backup was taken before the kernel serves a read.
 - **Open PRs on the same files:** #2516 (off-box backup) and #2514 both touch `zoe_offbox.py` and `zoe_restore_drill.py`. Build this
   after them.
@@ -820,7 +821,7 @@ The open-PR list was read 2026-11-15 (102 open). Every PR that touches a seam ab
 | WP-24 | **The UI member delete reaches zoe-data's erase** (and so the kernel), failing closed | `services/zoe-auth/api/admin.py:246-309` or `ui/settings.html:1783` | Q1 | all | T; a live demo-member delete | no | S | 1 (rule 5) | G |
 | WP-25 | Kernel list model: list id, type, visibility, household owner, the `__household__` actor with the fridge rule, guests | kernel `brain/drivers.py` list driver, `authority.py` | WP-01 | WP-23a | KS | no | L | 4/5.1 | K |
 | WP-26 | `created_by` on `list_items` (migration, the next free number after 0083); every insert path sets it | `zd/alembic/versions/`, `zd/list_service.py` (after WP-20) | WP-20 | WP-22 | T; migration up/down | yes | S | 3 | G |
-| WP-27 | **Converge remove, tick, untick and delete item** into `list_service` functions. Settle the meaning: spoken "remove" ticks or deletes, one rule, owner decision Q4. Record `list_removed` receipts at the one site | `zd/skybridge_service.py:5023-5110,5184-5250`, `zd/intent_router.py:3128-3210`, `zd/mcp_server.py:1555-1590`, `zd/routers/lists.py:438-560`, `zd/list_service.py` | WP-20, Q4 | WP-40 | T, R | yes | L | 5.1 prereq | G2 |
+| WP-27 | **Converge remove, tick, untick and delete item** into `list_service` functions. The meaning is settled: spoken "remove" deletes (owner decision Q4, answered 2026-11-15); the tick paths change to delete. Record `list_removed` receipts at the one site | `zd/skybridge_service.py:5023-5110,5184-5250`, `zd/intent_router.py:3128-3210`, `zd/mcp_server.py:1555-1590`, `zd/routers/lists.py:438-560`, `zd/list_service.py` | WP-20, Q4 | WP-40 | T, R | yes | L | 5.1 prereq | G2 |
 | WP-28 | Shadow `list_remove` at WP-27's seam (replaces #2631's skybridge-only hook) | `zd/os_shadow.py`, `zd/list_service.py` | WP-27, #2631 | WP-41 | SA | yes | S | 5.1 | G2 |
 | WP-29 | REST visibility goes through `set_list_visibility` (owner rule, heads-up); REST rename and delete get one store function | `zd/routers/lists.py:239-340`, `zd/list_sharing.py` | none | all | T | no | S | 5.1 prereq | C |
 | WP-30 | `write_receipts.record` publishes to the kernel in shadow; write the three declared-but-unwritten removal kinds at their sites | `zd/write_receipts.py`, `zd/os_shadow.py`, removal sites | #2631 | all | T; SA (receipts agree) | yes | M | 5.4 | G |
@@ -926,10 +927,10 @@ The constraints: one test lane, tests only in memory windows, three general buil
 | R2 | The kernel round-trip runs while the per-list advisory lock and the DB transaction are held | K-prod `zd/list_service.py:582,601,628`; timeout 150 ms (`zd/os_authority.py:37`) | measure lock-hold under a slow kernel; consider proposing before the lock and re-checking dedup after [inferred] |
 | R3 | The kernel can record a verified receipt for an add whose read-model INSERT then fails or rolls back | the receipt is decided before the row (`:601`); the transaction can still fail after | #2639 reconcile catches `kernel_only`. Add a compensating `undo`, or an uncertain-receipt settlement (G18) |
 | R4 | After a member delete, kernel and read model disagree about family-list items | #2598 keeps family-list items (no author); the kernel's `erase_member` tombstones the member's events | one rule (Q2); WP-26 `created_by` makes them agree |
-| R5 | The Settings UI's member delete never reaches zoe-data or the kernel | `ui/settings.html:1783` → `services/zoe-auth/api/admin.py:246-309`, no zoe-data call | WP-24 (Q1) |
+| R5 | The Settings UI's member delete never reaches zoe-data or the kernel | `ui/settings.html:1783` → `services/zoe-auth/api/admin.py:246-309`, no zoe-data call | WP-24 (Q1 is answered: the button runs the full erase) |
 | R6 | D6 has no source to push from | members change in zoe-auth; child status lives in `member_modes`; zoe-data's `users` is a lazy mirror (`zd/database.py:91`) | WP-23b (Q3) |
 | R7 | Today's child rule is not one rule | `zd/guest_policy.py:211-216` turns an unknown role (incl. `child`, `family_member`) into `guest` for REST checks [inferred, verify]; `zd/manner_block.py:111-120` uses `member_modes` + role; `zd/household_authority.py:282-299` treats a lookup failure as child | D7's "fall back to today's rule" needs today's rule written down per verb first; a kernel must not copy a fifth version |
-| R8 | "Remove" means two different things today | delete in skybridge and REST, tick in intents and MCP (2.1) | Q4 before WP-27; shadow agreement on `list_remove` is meaningless until then |
+| R8 | "Remove" means two different things today | delete in skybridge and REST, tick in intents and MCP (2.1) | WP-27 (Q4 is answered: remove deletes); shadow agreement on `list_remove` is meaningless until WP-27 lands |
 | R9 | The shadow remove hook watches one remove path of four | K-shadow `zd/skybridge_service.py:5108` only | WP-28 |
 | R10 | Gate lists deploy one landing late | `voice_gate_check.py:604-605` runs the deployed copy | WP-06 lands and deploys before shadow goes on |
 | R11 | A replay with authority on would measure only the fallback | no kernel in the probe (4.5) | WP-07 |
@@ -947,14 +948,16 @@ The constraints: one test lane, tests only in memory windows, three general buil
 
 ## 8. Questions for the owner
 
-1. **Q1, the member delete button.** Should deleting a member in Settings run the full erase (zoe-data's `delete_user`, and so the
-   kernel), not only the account deactivation it does today? Recommendation: yes; it is what "delete everything" means.
+1. **Q1, the member delete button. ANSWERED (2026-11-15, cut-over plan "Further owner decisions"):** yes. The Settings delete
+   button runs the full erase (zoe-data's `delete_user`, and so the kernel), not only the account deactivation; items shared
+   with other members and accepted into their data stay with those members. WP-24 builds it; do not reopen.
 2. **Q2, family-list items after a member delete.** #2598 keeps them because they record no author. The kernel knows the author.
    Recommendation: add `created_by` (WP-26). Then the member's items on a family list go too, or stay by choice; but one rule for
    both.
 3. **Q3, the roster source.** D6 says zoe-data pushes members, but accounts live in zoe-auth. Options: zoe-auth calls zoe-data on
    every change, or zoe-data reconciles `auth_users` and `member_modes` on a short timer. Recommendation: the timer reconcile plus a
    push on the paths zoe-data owns. It is offline and has no new cross-service call.
-4. **Q4, spoken "remove".** Today it ticks on two paths and deletes on two. Which should it do?
+4. **Q4, spoken "remove". ANSWERED (2026-11-15, same table):** it deletes the item. The two paths that tick it are wrong for
+   that request. WP-27 converges on delete; do not reopen.
 5. **Q5, the kernel's home.** `services/zoe-os/`, with an `AGENTS.md` that says the household-concepts rule does not apply to it?
 6. **Q6, timers.** Do timers move to the kernel at all, or do they stay as ephemeral objects with receipts only?
