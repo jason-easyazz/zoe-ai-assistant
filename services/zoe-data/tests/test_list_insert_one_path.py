@@ -191,3 +191,22 @@ def test_only_one_item_insert_function():
 def test_scan_negative_control(tmp_path, sql, method):
     (tmp_path / "planted.py").write_text(f"async def rogue(db):\n    await db.{method}({sql}, [])\n")
     assert _insert_sites(tmp_path) == {("planted.py", "rogue")}
+
+
+@pytest.mark.asyncio
+async def test_the_spoken_skybridge_add_shadows_the_list_it_landed_on(monkeypatch):
+    """The panel's "add X to the shopping list" can land on a household list called something else ("Groceries"): the Zoe OS shadow
+    is told THAT list (``landed_name``), while the split rule keeps the spoken name exactly as before."""
+    import os_shadow
+
+    seen = []
+    monkeypatch.setattr(os_shadow, "note_add", lambda *a, **k: seen.append(k["list_name"]))
+    db = NativeDB(recent=None, opened=[])
+    call = _function("skybridge_service.py", "_add_spoken_items",
+                     _maybe_commit=AsyncMock(), _audit_list_item=lambda *a: None,
+                     write_receipts=SimpleNamespace(record=lambda *a: None),
+                     panel_principal=SimpleNamespace(HOUSEHOLD_VIEWER="__household__"),
+                     logger=logging.getLogger("wp20"))
+    await call(db, "u1", "L1", "shopping", "Shopping", "milk", landed_name="Groceries")
+    await call(db, "u1", "L1", "shopping", "Shopping", "bread")                     # no resolved name given: the spoken one
+    assert seen == ["Groceries", "Shopping"]
