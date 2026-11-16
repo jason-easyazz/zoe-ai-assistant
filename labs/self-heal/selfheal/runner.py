@@ -33,7 +33,8 @@ from .sandbox import Sandbox
 AUDIT_KEYS = {"ts", "run", "step", "outcome", "ticket", "dispatch", "landing", "engine",
               "rule", "reason", "found", "skipped", "fault_class", "fault_key", "test", "plan",
               "seconds", "rc", "files", "lines", "gates", "sha", "branch", "pr", "review", "snapshot",
-              "applied", "restored", "verify", "issue", "chosen", "checkpoint", "error", "bins", "sandbox"}
+              "applied", "restored", "verify", "issue", "chosen", "checkpoint", "error", "bins", "sandbox",
+              "proof", "merge"}
 _TOKEN = re.compile(r"^[A-Za-z0-9_./:@+=,#\[\]-]{0,240}$")
 
 
@@ -69,7 +70,7 @@ class LandCtx:
 
 
 class Runner:
-    def __init__(self, cfg: Config, *, engine=None, applier=None, now=None, board="auto"):
+    def __init__(self, cfg: Config, *, engine=None, applier=None, now=None, board="auto", landing=None):
         cfg.validate()   # the hard floor holds even for a Config built in code and then mutated
         self.cfg = cfg
         try:   # absolute, checked paths from a fixed trusted PATH, before anything runs
@@ -81,7 +82,7 @@ class Runner:
         if engine is None:
             engine, self.engine_skips = select_engine(cfg)
         self.engine = engine          # None = no engine linked: detect and report, never touch code
-        self.landing = make_landing(cfg, applier)
+        self.landing = landing or make_landing(cfg, applier)   # `landing`: an injected adapter (locallander)
         self.now = now or dt.datetime.now
         self.run_id = uuid.uuid4().hex[:8]
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
@@ -239,6 +240,12 @@ class Runner:
                 raise Refused(e.rule, "recover") from None
             if intent:
                 f = state.fault(rec["ticket"]["fault_key"])
+                finish = getattr(self.landing, "finish_intent", None)
+                if finish and finish(intent):   # proven + applied, only the health window was cut short: kept
+                    rec.update(landing_intent=None, status="healed", recovered=True)
+                    state.save()
+                    self.audit("recover", "healed", tid, sha=intent["to"])
+                    continue
                 try:
                     restored, err = self.landing.rollback_intent(intent), ""
                 except Exception as e:   # noqa: BLE001
