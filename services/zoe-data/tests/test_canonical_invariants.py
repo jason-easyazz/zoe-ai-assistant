@@ -140,20 +140,133 @@ def test_stt_live_default_arch_is_moonshine_medium():
     )
 
 
-def test_tts_live_waterfall_keeps_kokoro_before_edge_before_espeak():
+def test_tts_live_waterfall_keeps_kokoro_before_espeak():
     """In the live /synthesize waterfall the Kokoro rock must be attempted before the
-    Edge cloud fallback, which must precede the espeak-ng last resort."""
+    espeak-ng local last resort (reached only under an explicit legacy mode)."""
     src = _data_src("routers/voice_tts.py")
     start = src.index("async def synthesize(")
     body = src[start:src.index("\nasync def ", start + 1)]  # just the synthesize() route body
     i_kokoro = body.find("_synthesize_kokoro_sidecar")  # the Kokoro sidecar attempt
-    i_edge = body.find("_synthesize_edge_tts")
     i_espeak = body.find("_synthesize_espeak")
-    assert 0 <= i_kokoro < i_edge < i_espeak, (
-        f"TTS waterfall order drifted (kokoro@{i_kokoro}, edge@{i_edge}, espeak@{i_espeak}) — "
-        "Kokoro (the rock) must precede Edge TTS must precede espeak-ng in /synthesize"
+    assert 0 <= i_kokoro < i_espeak, (
+        f"TTS waterfall order drifted (kokoro@{i_kokoro}, espeak@{i_espeak}) — "
+        "Kokoro (the rock) must precede espeak-ng in /synthesize"
     )
     assert "Kokoro" in _rocks()["tts"]["name"], "TTS rock drifted off Kokoro"
+
+
+# ── No off-box voice: Edge TTS is retired and must stay out (owner, 2026-11-16) ──
+# Reply text must never leave the box to be spoken. Each finder takes TEXT so the
+# controls below can prove it fires on a reintroduction without touching the tree.
+_EDGE_IMPORT = re.compile(r"^\s*(?:import\s+edge_tts\b|from\s+edge_tts\b)", re.MULTILINE)
+_EDGE_DYNAMIC = re.compile(r"""(?:import_module|find_spec|__import__)\(\s*["']edge_tts["']""")
+_EDGE_REQUIREMENT = re.compile(r"^\s*edge[-_.]tts\b", re.MULTILINE | re.IGNORECASE)
+_URL = re.compile(r"""["'](?:https?|wss?)://([^/:"'\s]+)""")
+_LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+# The modules every TTS request runs through. Network-capable imports allowed in them:
+# httpx (Kokoro sidecar + the opt-in local sidecar, both loopback by default).
+_TTS_PATH = ("tts_waterfall.py",)
+_NET_LIBS = {"aiohttp", "websockets", "websocket", "requests", "urllib3", "socket", "edge_tts",
+             "http.client", "urllib.request", "azure", "gtts", "boto3", "google"}
+_MANIFESTS = (
+    "services/zoe-data/requirements.txt",
+    "services/zoe-data/requirements-py312.txt",
+    "scripts/setup/omi_repass_constraints.txt",
+)
+
+
+def _edge_imports(text: str) -> list[str]:
+    return _EDGE_IMPORT.findall(text) + _EDGE_DYNAMIC.findall(text)
+
+
+def _edge_requirement(text: str) -> list[str]:
+    return _EDGE_REQUIREMENT.findall(text)
+
+
+def _off_box_urls(text: str) -> list[str]:
+    return [h for h in _URL.findall(text) if h not in _LOOPBACK]
+
+
+def _net_imports(text: str) -> list[str]:
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(text)):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module]
+        found += [n for n in names if n in _NET_LIBS or n.split(".")[0] in _NET_LIBS - {"http", "urllib"}]
+    return found
+
+
+def _tts_route_bodies() -> str:
+    src = _data_src("routers/voice_tts.py")
+    bodies = []
+    for route in ("/synthesize", "/stream"):
+        m = re.search(rf"@router\.post\(\"{re.escape(route)}\"\).*?(?=\n\s*@router\.post\()", src, re.DOTALL)
+        assert m, f"voice_tts.py is missing the /api/voice{route} handler"
+        bodies.append(m.group(0))
+    return "\n".join(bodies)
+
+
+def test_no_edge_tts_import_anywhere():
+    """No Python file in the repo imports edge_tts (statically or dynamically)."""
+    hits = []
+    for top in ("services", "scripts", "tools", "labs", "tests"):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(REPO, top)):
+            dirnames[:] = [d for d in dirnames if d not in {"node_modules", ".venv", "venv", "__pycache__"}]
+            for fn in filenames:
+                if fn.endswith(".py"):
+                    path = os.path.join(dirpath, fn)
+                    if _edge_imports(open(path, encoding="utf-8", errors="replace").read()):
+                        hits.append(os.path.relpath(path, REPO))
+    assert not hits, f"edge_tts (off-box Microsoft TTS) is retired; it came back in {hits}"
+    # The venv build's import smoke list must not ask for it either.
+    assert '"edge_tts"' not in _read_repo("scripts/setup/build_py312_venv.sh")
+
+
+def test_edge_tts_absent_from_every_manifest():
+    for manifest in _MANIFESTS:
+        hits = _edge_requirement(_read_repo(manifest))
+        assert not hits, f"{manifest} pins edge-tts again: Edge TTS (off-box) is retired"
+
+
+def test_tts_path_opens_no_off_box_connection():
+    """Static: the TTS modules and the /synthesize + /stream handlers name no
+    non-loopback URL and import no network client but httpx; no Edge call survives."""
+    for mod in _TTS_PATH:
+        text = _data_src(mod)
+        assert not _off_box_urls(text), f"{mod} names an off-box URL: {_off_box_urls(text)}"
+        assert not _net_imports(text), f"{mod} imports a network client: {_net_imports(text)}"
+    bodies = _tts_route_bodies()
+    assert not _off_box_urls(bodies), f"TTS routes name an off-box URL: {_off_box_urls(bodies)}"
+    assert "_synthesize_edge_tts" not in bodies and "edge_tts_available" not in _data_src("main.py")
+
+
+def test_retired_off_box_modes_read_as_kokoro(monkeypatch):
+    import tts_waterfall
+
+    for retired in ("cloud", "edge", "EDGE", "typo"):
+        monkeypatch.setenv("ZOE_TTS_MODE", retired)
+        assert tts_waterfall.tts_mode() == tts_waterfall.TTS_MODE_KOKORO, retired
+    assert set(tts_waterfall.TTS_MODES) == {"kokoro", "hybrid", "local", "offline"}
+
+
+def test_control_off_box_finders_fire_on_a_reintroduction():
+    """Negative controls: each finder catches the thing it guards against."""
+    assert _edge_imports("import os\nimport edge_tts\n")
+    assert _edge_imports("    from edge_tts import Communicate\n")
+    assert _edge_imports('importlib.util.find_spec("' + 'edge_tts")')  # split: this file must not match itself
+    assert not _edge_imports("# the edge_tts package was retired\n")
+    assert _edge_requirement("fastapi==1\nedge-tts==7.3.1\n")
+    assert _edge_requirement("edge_tts>=7\n")
+    assert not _edge_requirement("# edge-tts was retired\n")
+    assert _off_box_urls('URL = "wss://speech.platform.example.com/tts"')
+    assert not _off_box_urls('URL = "http://127.0.0.1:10201"')
+    assert _net_imports("import aiohttp\n") and _net_imports("from websockets import connect\n")
+    assert not _net_imports("import httpx\nimport asyncio\n")
 
 
 # ── The rocks must match the LIVE wiring, not just the doc ────────────────────
@@ -229,7 +342,6 @@ def test_kokoro_tts_is_primary_live_voice_engine():
             )
         ]
 
-        edge_tts = body.find("_synthesize_edge_tts")
         espeak = body.find("_synthesize_espeak")
         local_service = body.find("_synthesize_local_service")
         assert primary_calls, (
@@ -239,11 +351,10 @@ def test_kokoro_tts_is_primary_live_voice_engine():
         assert local_service != -1, (
             f"local TTS sidecar fallback is missing from the live TTS waterfall for /api/voice{route}"
         )
-        assert edge_tts != -1, f"Edge TTS fallback is missing from /api/voice{route}"
-        assert espeak != -1, f"espeak-ng fallback is missing from /api/voice{route}"
-        assert first_primary < local_service < edge_tts < espeak, (
+        assert espeak != -1, f"espeak-ng local last resort is missing from /api/voice{route}"
+        assert first_primary < local_service < espeak, (
             f"/api/voice{route} waterfall must keep {tts['name']} primary before "
-            "local sidecar, then Edge TTS, then espeak-ng"
+            "local sidecar, then espeak-ng"
         )
 
 
