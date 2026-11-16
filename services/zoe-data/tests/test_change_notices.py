@@ -19,6 +19,7 @@ import pytest
 pytestmark = pytest.mark.ci_safe  # slim-dep green; opts into validate.yml's `-m ci_safe` lane
 
 import json
+import random
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -233,7 +234,7 @@ async def test_needs_owner_is_instant_and_three_at_once_are_batched():
     await run(gh, bot, at("13:00"))
     assert len(bot.delivered) == 2
     assert bot.delivered[1]["text"] == "Waiting on you:\n" + "\n".join(
-        f'• "N{n}" needs a look from you. (#{n})' for n in (31, 32, 33, 34))
+        f'• "N{n}" needs a look from you. (#{n})' for n in (31, 32, 33, 34)) + "\nNothing else for you to do."
 
 
 async def test_control_large_batch_threshold_sends_one_each(monkeypatch):
@@ -942,8 +943,7 @@ def test_a_revert_and_a_stuck_deploy_lead_plainly():
         "Also, two things went in this morning.\n"
         "• Long messages no longer make Zoe pause before she answers. (#2001)\n"
         "   By the numbers: scrubbing a long message 4.5 s → 0.03 s; tests that guard it 603.\n"
-        "Plus one bit of housekeeping (#2003).\n"
-        "Nothing else for you to do.")
+        "Plus one bit of housekeeping (#2003).")  # no closing line: the stuck deploy already says it needs a look
 
 
 def test_a_decision_is_one_question_with_its_default():
@@ -1001,12 +1001,20 @@ def test_size_bounds_hold_with_long_inputs():
                  + "; ".join(f"{'x' * 90} {k} -> {k + 1}" for k in range(5)) + "\nOwner-Step: " + "do " * 120)
            for n in range(40)]
     m = cn.render_instant(big, "technical", "o/r", turn=0, local=MORNING)
-    assert len(m.text) <= cn.CHUNK_CHARS and "more on GitHub." in m.text and len(m.keys) == 40
+    assert len(m.text) <= cn.CHUNK_CHARS and "more on GitHub." in m.text and 0 < len(m.keys) < 40
+    _assert_landed(big, _drain_instant(big))  # every step shown; the notices it could not hold follow up
     assert len(cn.render_instant(big[:1], "technical", "o/r").text) <= cn.CHUNK_CHARS
     msgs = cn.render_digest(big, [], comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r", local=EVENING)
     assert 1 < len(msgs) <= cn.MAX_CHUNKS and all(len(x.text) <= cn.CHUNK_CHARS for x in msgs)
-    assert sorted(k for x in msgs for k in x.keys) == sorted(i["key"] for i in big)  # every key in exactly one
-    assert "more on GitHub." in msgs[-1].text
+    assert msgs[-1].text.endswith(cn.FOLLOWS)  # every item here has a step: none is hidden in "...and N more"
+    rest, landed = list(big), []
+    while rest:  # what the next ticks do: the notices whose steps did not fit follow, each landing once
+        got = [k for x in cn.render_digest(rest, [], comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r")
+               for k in x.keys]
+        assert got
+        landed += got
+        rest = [i for i in rest if i["key"] not in got]
+    assert sorted(landed) == sorted(i["key"] for i in big)
 
 
 def test_rotation_is_deterministic_and_never_repeats_back_to_back():
@@ -1082,3 +1090,160 @@ async def test_no_recipients_audit_line_carries_the_reason():
     assert nr and {k: nr[0][k] for k in ("reason", "admins", "linked", "new")} == \
         {"reason": "no_link", "admins": 1, "linked": 0, "new": 1}
     assert bot.calls == 0
+
+
+# ── an owner step is never lost: every kind, every form, and through truncation ──
+STEP = "Restart the panel."
+REVERT_STEP = _live(2030, 'Revert "fix(panel): faster wake" (#2030)',
+                    f"For-The-Household: The panel wakes as it did before.\nOwner-Step: {STEP}")
+
+
+def test_a_revert_step_shows_in_every_form():
+    single = cn.render_instant([REVERT_STEP], "technical", "o/r", turn=0).text
+    assert single.endswith(f"One thing for you: {STEP}")
+    batch = cn.render_instant([REVERT_STEP, FIX, CHORE], "technical", "o/r", turn=0, local=MORNING).text
+    assert batch == ('Heads up first: "Faster wake" was rolled back and is no longer running. The panel wakes as it '
+                     "did before. (#2030)\n"
+                     "Also, two things went in this morning.\n"
+                     "• Long messages no longer make Zoe pause before she answers. (#2001)\n"
+                     "   By the numbers: scrubbing a long message 4.5 s → 0.03 s; tests that guard it 603.\n"
+                     "Plus one bit of housekeeping (#2003).\n"
+                     f"For you:\n• {STEP}")
+    for prefs in (comm_prefs.normalise(None, "admin"),
+                  comm_prefs.normalise({"categories": {c: {"detail": "plain"} for c in comm_prefs.CATEGORIES}},
+                                       "admin")):
+        text = "\n".join(m.text for m in cn.render_digest([REVERT_STEP, CHORE], [], prefs, opener=0, repo_name="o/r"))
+        assert f"For you to do:\n• {STEP}" in text and cn.NOTHING_TO_DO not in text
+
+
+def _long(n, step=True, hh=240):
+    body = f"For-The-Household: Item {n} " + "is a long household sentence " * (hh // 30) + "\n"
+    body += "Numbers: " + "; ".join(f"measure {k} {'x' * 40} {k} -> {k + 1}" for k in range(3)) + "\n"
+    if step:
+        body += f"Owner-Step: Step {n} " + "please do this thing " * 8 + "now."
+    return _live(4000 + n, f"fix: item {n}", body)
+
+
+def test_three_long_items_keep_all_three_steps():
+    items = [_long(1), _long(2), _long(3)]
+    m = cn.render_instant(items, "technical", "o/r", turn=0, local=MORNING)
+    assert len(m.text) <= cn.CHUNK_CHARS and len(m.keys) == 3
+    assert m.text == (
+        "Three things went in this morning.\n"
+        "• Item 1 is a long household sentence is a long household sentence is a long household sentence is a…"
+        " (#4001)\n"
+        "• Item 2 is a long household sentence is a long household sentence is a long household sentence is a…"
+        " (#4002)\n"
+        "• Item 3 is a long household sentence is a long household sentence is a long household sentence is a…"
+        " (#4003)\n"
+        "For you:\n" + "\n".join(f"• {i['owner_step']}" for i in items))
+
+
+def _drain_instant(items, detail="technical"):
+    """What ``_deliver_instant`` does with one batch, without its 3-message cap: send until every key lands."""
+    msgs, rest = [], list(items)
+    for turn in range(len(items) + 1):
+        if not rest:
+            break
+        m = cn.render_instant(rest, detail, "o/r", turn=turn, local=MORNING)
+        assert m.keys, "every message lands at least one notice"
+        msgs.append(m)
+        rest = [i for i in rest if i["key"] not in m.keys]
+    assert not rest
+    return msgs
+
+
+def _assert_landed(items, msgs):
+    landed = [k for m in msgs for k in m.keys]
+    assert sorted(landed) == sorted(i["key"] for i in items)  # (a) every key exactly once
+    by_key = {i["key"]: i for i in items}
+    for m in msgs:
+        assert len(m.text) <= cn.CHUNK_CHARS  # (c)
+        for k in m.keys:
+            step = by_key[k].get("owner_step")
+            assert not step or step in m.text, (k, m.text)  # (b) its step is in the message that landed it
+
+
+def test_steps_too_long_for_one_message_follow_up_and_land_once():
+    items = [_long(n, hh=400) for n in range(1, 7)]
+    msgs = cn.render_instant(items, "technical", "o/r", turn=0, local=MORNING)
+    assert 0 < len(msgs.keys) < 6  # not everything fits: the rest is NOT counted as landed
+    _assert_landed(items, _drain_instant(items))
+
+
+async def test_a_tick_sends_the_follow_up_and_marks_each_key_sent_once():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner()]
+    await run(gh, bot, at("09:00"), people=people)
+    for n in range(1, 7):
+        it = _long(n, hh=400)
+        body = f"For-The-Household: {it['household']}\nOwner-Step: {it['owner_step']}"
+        gh.merge(4100 + n, f"fix: item {n}", body, at=at("12:00"))
+    await run(gh, bot, at("12:05"), people=people)
+    assert 1 < len(bot.delivered) <= cn.MAX_CHUNKS
+    st = cn.load_state()
+    assert {d["status"] for k, d in st["deliveries"].items() if ":live" in k} == {"sent"}
+    text = "\n".join(d["text"] for d in bot.delivered)
+    for n in range(1, 7):
+        assert text.count(f"Step {n} please") == 1
+
+
+def test_property_random_batches_never_lose_a_step():
+    rnd = random.Random(20261116)
+    kinds = ("live", "revert", "chore", "decision", "stuck")
+    for trial in range(300):
+        items = []
+        for n in range(rnd.randint(2, 9)):
+            kind, num = rnd.choice(kinds), 5000 + trial * 10 + n
+            hh = "word " * rnd.randint(0, 70)
+            step = ("Do " + "this " * rnd.randint(1, 40)).strip() if rnd.random() < 0.6 else ""
+            body = (f"For-The-Household: {hh}\n" if hh.strip() else "") + (f"Owner-Step: {step}\n" if step else "")
+            body += "Numbers: " + "; ".join(f"m{k} {k} -> {k + 1}" for k in range(rnd.randint(0, 3)))
+            if kind == "stuck":
+                items.append({**_stuck_item(), "key": f"deploy:stuck:{num}"})
+            elif kind == "decision":
+                items.append({**_live(num, "feat: ask", body), "kind": "raised", "category": "decision",
+                              "key": f"pr:{num}:decision"})
+            else:
+                title = {"live": "fix: thing", "revert": 'Revert "feat: thing"', "chore": "chore: thing"}[kind]
+                items.append(_live(num, title, body if kind != "chore" else body.split("Numbers")[0]))
+        for detail in ("technical", "plain"):
+            _assert_landed(items, _drain_instant(items, detail))
+        prefs = comm_prefs.normalise(None, "admin")
+        rest, sent = list(items), []
+        for _round in range(len(items) + 1):
+            if not rest:
+                break
+            msgs = cn.render_digest(rest, [], prefs, opener=trial, repo_name="o/r")
+            assert len(msgs) <= cn.MAX_CHUNKS
+            got = {k for m in msgs for k in m.keys}
+            assert got, "every digest lands at least one notice"
+            sent += msgs
+            rest = [i for i in rest if i["key"] not in got]
+        assert not rest
+        for i in items:  # (b) for the digest: a step lands in the same chunk as its key
+            if i.get("owner_step"):
+                assert any(i["key"] in m.keys and i["owner_step"] in m.text for m in sent), i["key"]
+        landed = [k for m in sent for k in m.keys]
+        assert sorted(landed) == sorted(i["key"] for i in items) and all(len(m.text) <= cn.CHUNK_CHARS for m in sent)
+
+
+async def test_a_digest_whose_steps_overflow_follows_up_next_tick():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    for n in range(1, 31):
+        gh.merge(4200 + n, f"fix: item {n}", f"For-The-Household: Item {n} works.\nOwner-Step: Step {n} "
+                 + "please do this thing " * 7 + "now.", at=at("10:00"))
+    await run(gh, bot, at("19:30"))
+    first = len(bot.delivered)
+    assert first == cn.MAX_CHUNKS and cn.FOLLOWS in bot.delivered[-1]["text"]
+    for when in ("19:40", "19:50", "20:00", "20:10"):
+        await run(gh, bot, at(when))
+    text = "\n".join(d["text"] for d in bot.delivered)
+    for n in range(1, 31):
+        assert text.count(f"Step {n} please") == 1
+    st = cn.load_state()
+    assert {d["status"] for k, d in st["deliveries"].items() if ":live" in k} == {"sent"}
+    before = len(bot.delivered)
+    await run(gh, bot, at("20:20"))
+    assert len(bot.delivered) == before  # nothing more once all landed

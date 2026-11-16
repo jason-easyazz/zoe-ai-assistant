@@ -51,7 +51,7 @@ STATE_VERSION = 1
 MAX_CHUNKS = 3  # design 6: at most 3 messages a minute to one chat
 CHUNK_CHARS = 990  # the notify route caps text at 1000
 LINE_CHARS = 900  # one digest line, so a line plus the "...and N more" tail always fits a chunk
-MORE_RESERVE = 64  # "...and N more on GitHub." plus the closing "Nothing for you to do."
+MORE_RESERVE = 80  # "...and N more on GitHub." plus the closing line or FOLLOWS (LINE_CHARS + this <= CHUNK_CHARS)
 SAME_KIND_SPACING = timedelta(minutes=30)
 BATCH_AT = 3  # this many instant notices ready at once go out as ONE message
 MAX_ATTEMPTS = 8
@@ -422,6 +422,7 @@ _BATCH_HEADS = ("{N} things went in {when}.", "{When}, {n} changes went live.", 
 _DIGEST_OPENERS = ("Here's {period}:", "Here's how {period} went:", "Here's the round-up for {period}:")
 NOTHING_TO_DO = "Nothing for you to do."
 NOTHING_ELSE = "Nothing else for you to do."
+FOLLOWS = "The rest of what needs you follows shortly."
 POINTER_TEXT = "There's an update from Zoe for you. Ask me \"what's new?\" or look on the desktop."
 
 
@@ -508,18 +509,23 @@ def _single(item: dict, detail: str, turn: int) -> str:
     return "\n".join(lines)
 
 
-def _fit(lines: list[tuple[str, int]], limit: int = CHUNK_CHARS) -> str:
-    """Join, and when it is too long keep the first lines and count the rest of the items as "...and N more"."""
-    text = "\n".join(t for t, _ in lines)
-    if len(text) <= limit:
-        return text
-    out, used = [], 0
-    for idx, (t, _n) in enumerate(lines):
-        if used + len(t) + 1 > limit - MORE_RESERVE:
-            rest = sum(n for _, n in lines[idx:])
-            return "\n".join(out + ([f"…and {rest} more on GitHub."] if rest else []))
+def _fit(lines: list[tuple[str, int, bool]], limit: int = CHUNK_CHARS) -> Optional[str]:
+    """Fit by dropping only droppable lines (counted as "...and N more"); ``must`` lines (bad news, decisions, the
+    owner's steps) are never dropped. ``None`` = the must lines alone do not fit."""
+    room = limit - MORE_RESERVE - sum(len(t) + 1 for t, _, must in lines if must)
+    if room < 0:
+        return None
+    out: list[str] = []
+    dropped, at = 0, -1
+    for t, n, must in lines:
+        if not must and len(t) + 1 > room:
+            dropped += n
+            at = len(out) if at < 0 else at
+            continue
         out.append(t)
-        used += len(t) + 1
+        room -= 0 if must else len(t) + 1
+    if dropped:
+        out.insert(at, f"…and {dropped} more on GitHub.")
     return "\n".join(out)
 
 
@@ -527,59 +533,72 @@ def _word(n: int) -> str:
     return _WORDS[n] if n < len(_WORDS) else str(n)
 
 
-def _batch(items: list[dict], detail: str, turn: int, local: Optional[datetime],
-           numbers_on: bool) -> list[tuple[str, int]]:
-    """The batched instant message as (line, items it stands for): bad news, then waiting on you, then the rest."""
+def _batch(items: list[dict], detail: str, turn: int, local: Optional[datetime], *, numbers_on: bool = True,
+           hh_cap: int = 0) -> list[tuple[str, int, bool]]:
+    """The batched instant message as (line, items it stands for, must): bad news, then waiting on you, then the
+    rest, then every owner step (from any kind that carries one) or the closing line."""
     tech = detail == "technical"
     bad = [i for i in items if _is_bad(i)]
     waiting = [i for i in items if i["kind"] == "raised"]
     good = [i for i in items if not _is_bad(i) and i["kind"] != "raised"]
-    lines = [(_story(i, turn, lead=False) + _ref(i, tech and i["kind"] != "stuck"), 1) for i in bad]
+    lines = [(_story(i, turn, lead=False) + _ref(i, tech and i["kind"] != "stuck"), 1, True) for i in bad]
     if waiting:
-        lines.append(("Waiting on you:", 0))
-        lines += [("• " + _decision_line(i) + _ref(i, tech), 1) for i in waiting]
-    if not good:
-        return lines
-    n, when = len(good), _when(local)
-    head = (f"One change went in {when}." if n == 1 else
-            _pick(_BATCH_HEADS, turn).format(N=_cap(_word(n)), n=_word(n), when=when, When=_cap(when)))
-    lines.append((f"Also, {_low(head)}" if bad or waiting else head, 0))
+        lines.append(("Waiting on you:", 0, True))
+        lines += [("• " + _decision_line(i) + _ref(i, tech), 1, True) for i in waiting]
+    if good:
+        n, when = len(good), _when(local)
+        head = (f"One change went in {when}." if n == 1 else
+                _pick(_BATCH_HEADS, turn).format(N=_cap(_word(n)), n=_word(n), when=when, When=_cap(when)))
+        lines.append((f"Also, {_low(head)}" if bad or waiting else head, 0, True))
     stories = [i for i in good if i.get("household")]
     chores = [i for i in good if not i.get("household")]
     for i in stories:
-        extra = f"\n   {_numbers_line(i)}" if tech and numbers_on and i.get("numbers") else ""
-        lines.append((f"• {i['household']}{_ref(i, tech)}{extra}", 1))
+        hh = _clip_words(i["household"], hh_cap) if hh_cap else i["household"]
+        lines.append((f"• {hh}{_ref(i, tech)}", 1, False))
+        if tech and numbers_on and i.get("numbers"):
+            lines.append((f"   {_numbers_line(i)}", 0, False))
     refs = _refs(chores) if tech else ""
     if stories and chores:
-        lines.append((f"{_pick(('Plus', 'And'), turn)} {_count(len(chores), 'bit')} of housekeeping{refs}.", len(chores)))
+        lines.append((f"{_pick(('Plus', 'And'), turn)} {_count(len(chores), 'bit')} of housekeeping{refs}.",
+                      len(chores), False))
     elif len(chores) == 1:
-        lines.append((f"• {_story(chores[0], turn, lead=False)}{_ref(chores[0], tech)}", 1))
+        lines.append((f"• {_story(chores[0], turn, lead=False)}{_ref(chores[0], tech)}", 1, False))
     elif chores:
         who = "Both were" if len(chores) == 2 else f"All {_word(len(chores))} were"
-        lines.append((f"{who} housekeeping, nothing you will notice{refs}.", len(chores)))
-    steps = [i for i in good if i.get("owner_step")]
+        lines.append((f"{who} housekeeping, nothing you will notice{refs}.", len(chores), False))
+    steps = [i for i in bad + good if i.get("owner_step")]  # a decision's step is its question, on its own line
     if steps:
-        lines.append(("For you:", 0))
-        lines += [(f"• {i['owner_step']}", 0) for i in steps]  # its number is already on the item's line
-    else:
-        lines.append((NOTHING_ELSE if waiting else NOTHING_TO_DO, 0))
+        lines.append(("For you:", 0, True))
+        lines += [(f"• {i['owner_step']}", 0, True) for i in steps]  # its number is already on the item's line
+    elif not any(i["kind"] == "stuck" for i in bad):  # a stuck deploy already says it may need a look
+        lines.append((NOTHING_ELSE if waiting else NOTHING_TO_DO, 0, True))
     return lines
+
+
+def _must(item: dict) -> bool:
+    return bool(item.get("owner_step")) or _is_bad(item) or item["kind"] == "raised"
 
 
 def render_instant(items: list[dict], detail: str, repo_name: str, *, turn: int = 0,
                    local: Optional[datetime] = None) -> Message:
-    keys = [i["key"] for i in items]
+    """One message. Its ``keys`` are the notices it LANDS: a notice whose owner step could not be shown is left
+    out (the caller sends it in a follow-up), so a step is never lost to truncation."""
     if detail == "pointer":
-        return Message(POINTER_TEXT, keys)
-    if len(items) == 1:
-        it = items[0]
-        label = "Deploy runs" if it["kind"] == "stuck" else f"Open #{it['number']}" if it.get("number") else "Open"
-        return Message(_clip(_single(it, detail, turn)), keys, it.get("url"), label)
-    items = sorted(items, key=_priority)
-    lines = _batch(items, detail, turn, local, numbers_on=True)
-    if len("\n".join(t for t, _ in lines)) > CHUNK_CHARS:  # the numbers go first, then items become "...and N more"
-        lines = _batch(items, detail, turn, local, numbers_on=False)
-    return Message(_fit(lines), keys, f"https://github.com/{repo_name}/pulls", "Open on GitHub")
+        return Message(POINTER_TEXT, [i["key"] for i in items])
+    pending = sorted(items, key=_priority)
+    while len(pending) > 1:
+        tries = [_batch(pending, detail, turn, local, **kw)
+                 for kw in ({}, {"hh_cap": 100}, {"hh_cap": 100, "numbers_on": False})]
+        # household lines are shortened first, then the numbers go, then whole lines become "...and N more"
+        text = next(("\n".join(t for t, _, _ in ls) for ls in tries
+                     if len("\n".join(t for t, _, _ in ls)) <= CHUNK_CHARS), None) or _fit(tries[-1])
+        if text is not None:
+            return Message(text, [i["key"] for i in pending], f"https://github.com/{repo_name}/pulls",
+                           "Open on GitHub")
+        pending.remove([i for i in pending if _must(i)][-1])  # the steps do not fit: defer the last one
+    it = pending[0]
+    label = "Deploy runs" if it["kind"] == "stuck" else f"Open #{it['number']}" if it.get("number") else "Open"
+    return Message(_clip(_single(it, detail, turn)), [it["key"]], it.get("url"), label)
 
 
 def _clip(text: str, limit: int = CHUNK_CHARS) -> str:
@@ -613,41 +632,53 @@ def render_digest(items: list[dict], uncertain: list[dict], prefs: dict, *, open
         refs = ", ".join(f'"{subject(i.get("title", ""))}"{_ref(i, True)}' if i.get("number") else i["key"]
                          for i in uncertain)
         lines.append((f"This may not have reached you earlier: {refs}.", [i["key"] for i in uncertain]))
-    for i in (i for i in live if _is_bad(i)):
-        lines.append((_story(i, opener, lead=False) + _ref(i, tech(i) and i["kind"] != "stuck"), [i["key"]]))
+    bad = [i for i in live if _is_bad(i)]
+    good = [i for i in live if i["kind"] == "live" and not _is_bad(i)]
+    steps = [i for i in bad + good if i.get("owner_step")]
+    hold = {i["key"] for i in steps}  # these land only on their step's line; never inside "...and N more"
+
+    def own(i: dict) -> list[str]:  # the key rides on the item's own line unless its step line carries it
+        return [] if i["key"] in hold else [i["key"]]
+
+    for i in bad:
+        lines.append((_story(i, opener, lead=False) + _ref(i, tech(i) and i["kind"] != "stuck"), own(i)))
     waiting = [i for i in live if i["category"] == "decision"]
     if waiting:
         lines.append(("\nWaiting on you:", []))
         lines += [("• " + _decision_line(i) + _ref(i, tech(i)), [i["key"]]) for i in waiting]
-    good = [i for i in live if i["kind"] == "live" and not _is_bad(i)]
-    steps = [i for i in good if i.get("owner_step")]
+        hold |= {i["key"] for i in waiting if i.get("owner_step")}  # a decision's step is its question
     if steps:
         lines.append(("\nFor you to do:", []))
-        lines += [(f"• {i['owner_step']}", []) for i in steps]  # its number is on the item's line
+        lines += [(f"• {i['owner_step']}", [i["key"]]) for i in steps]  # its number is on the item's line
     stories = [i for i in good if i.get("household")]
     if stories and len(lines) > 1:
         lines.append(("\nWhat went in:", []))
     for i in stories:
         extra = f"\n   {_numbers_line(i)}" if tech(i) and i.get("numbers") else ""
-        lines.append((f"• {i['household']}{_ref(i, tech(i))}{extra}", [i["key"]]))
+        lines.append((f"• {i['household']}{_ref(i, tech(i))}{extra}", own(i)))
     chores = [i for i in good if not i.get("household")]
     if chores:
         refs = _refs([i for i in chores if tech(i)])
         lead = "Plus " if stories else ""
         word = _count(len(chores), "bit")
         lines.append((f"{_cap(lead + word)} of housekeeping{refs}{'' if stories else ', nothing you will notice'}.",
-                      [i["key"] for i in chores]))
+                      [k for i in chores for k in own(i)]))
     if raised and prefs.get("raised") == "list":
         lines.append((f"\nOpen and not merged yet ({len(raised)}){tail}:", []))
         for i in raised:
             lines.append((f"• {subject(i.get('title', ''))}{' (draft)' if i.get('draft') else ''}{_ref(i, tech(i))}",
                           [i["key"]]))
-    done = "" if steps or not n_live else NOTHING_ELSE if waiting else NOTHING_TO_DO
-    return _pack(lines, f"https://github.com/{repo_name}/pulls?q=is%3Apr+is%3Amerged", "Merged PRs on GitHub", done)
+    stuck = any(i["kind"] == "stuck" for i in bad)  # a stuck deploy already says it may need a look
+    done = "" if steps or stuck or not n_live else NOTHING_ELSE if waiting else NOTHING_TO_DO
+    return _pack(lines, f"https://github.com/{repo_name}/pulls?q=is%3Apr+is%3Amerged", "Merged PRs on GitHub", done,
+                 hold=hold)
 
 
-def _pack(lines: list[tuple[str, list[str]]], url: str, label: str, tail: str = "") -> list[Message]:
-    """Lines into at most ``MAX_CHUNKS`` messages; the last one ends "...and N more" (and ``tail``) on overflow."""
+def _pack(lines: list[tuple[str, list[str]]], url: str, label: str, tail: str = "",
+          hold: frozenset | set = frozenset()) -> list[Message]:
+    """Lines into at most ``MAX_CHUNKS`` messages; the last one ends "...and N more" (and ``tail``) on overflow.
+    A ``hold`` key (one with an owner step) lands only if its line is shown: on overflow it is left out of every
+    message, so the caller sends it in a follow-up instead of losing the step."""
     chunks: list[Message] = []
     cur, keys = "", []
     if tail:
@@ -657,8 +688,10 @@ def _pack(lines: list[tuple[str, list[str]]], url: str, label: str, tail: str = 
         last = len(chunks) == MAX_CHUNKS - 1
         if cur and len(cur) + 1 + len(text) > CHUNK_CHARS - (MORE_RESERVE if last else 0):
             if last:  # the last allowed message: everything left becomes one count line
-                rest = [k for _, ks in lines[idx:] for k in ks]
-                more = f"\n…and {len(rest)} more on GitHub." if rest else ""
+                rest = [k for _, ks in lines[idx:] for k in ks if k not in hold]
+                held = any(k in hold for _, ks in lines[idx:] for k in ks)
+                more = (f"\n…and {len(rest)} more on GitHub." if rest else "") + (
+                    f"\n{FOLLOWS}" if held else "")
                 chunks.append(Message(f"{cur}{more}{chr(10) + tail if tail else ''}", keys + rest, url, label))
                 return chunks
             chunks.append(Message(cur, keys))
@@ -991,13 +1024,20 @@ async def _deliver_instant(c: Ctx, r: Recipient) -> None:
     items.sort(key=_priority)  # bad news first, then what waits on the owner (stable within each)
     batches = [items] if len(items) >= BATCH_AT else [[i] for i in items]
     for batch in batches:
-        turn = int(st["opener"].get(r.user_id, -1)) + 1  # the same counter as the digest: two in a row never match
-        st["opener"][r.user_id] = turn
-        outcome = await _send(c, r, render_instant(batch, detail, c.repo, turn=turn, local=local))
-        if outcome in ("sent", "shadow", "uncertain"):
+        for _ in range(MAX_CHUNKS):  # a notice whose step did not fit follows at once; past 3, the next tick
+            turn = int(st["opener"].get(r.user_id, -1)) + 1  # the digest's counter: two in a row never match
+            st["opener"][r.user_id] = turn
+            msg = render_instant(batch, detail, c.repo, turn=turn, local=local)
+            outcome = await _send(c, r, msg)
+            if outcome not in ("sent", "shadow", "uncertain"):
+                break
             st["instant_sent"].setdefault(r.user_id, []).append(local.isoformat())
             for i in batch:
-                st["last_instant"][f"{r.user_id}|{i['category']}"] = _iso(c.now)
+                if i["key"] in msg.keys:
+                    st["last_instant"][f"{r.user_id}|{i['category']}"] = _iso(c.now)
+            batch = [i for i in batch if i["key"] not in msg.keys]
+            if not batch:
+                break
 
 
 def _due(c: Ctx, r: Recipient, lane: str) -> Optional[str]:
@@ -1044,7 +1084,10 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
                          period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
     outcomes = [await _send(c, r, m) for m in msgs]
-    if all(o != "retry" for o in outcomes):
+    landed = {k for m in msgs for k in m.keys}
+    if any(i["key"] not in landed for i in items):  # a step that did not fit: its notice follows next tick
+        audit("digest_follow_up", member=r.user_id, keys=[i["key"] for i in items if i["key"] not in landed])
+    elif all(o != "retry" for o in outcomes):
         st["digest_sent"][f"{r.user_id}|{lane}"] = period
 
 

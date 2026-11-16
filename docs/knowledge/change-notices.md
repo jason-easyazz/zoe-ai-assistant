@@ -54,7 +54,13 @@ update from an assistant". The rules, all in `change_notices.py` and pinned by e
   calendar test." Several are collapsed: "Plus two bits of housekeeping (#11, #12)."
 - **Bad news first and plainly**: a revert or a stuck deploy leads, never buried under good news in a batch.
 - **Every went-live message ends with what the owner must do**: the `Owner-Step:` sentence, or "Nothing for you to
-  do." A decision (`needs-owner`) is its own message: one question, and what happens if he leaves it.
+  do." A decision (`needs-owner`) is its own message: one question, and what happens if he leaves it. A step from a
+  revert counts the same as any other; a stuck deploy (no PR body, so no step) ends on "It may need a look."
+- **An owner step is never lost to truncation.** A long batch first shortens household lines, then drops the
+  numbers, then folds housekeeping and other lines into "...and N more"; bad news, decisions and steps are never
+  dropped. A notice counts as delivered only if its step was shown (or it has none): one whose step does not fit is
+  left queued and follows in the next message (instant: the same tick, up to 3 messages; digest: the next tick,
+  after "The rest of what needs you follows shortly.").
 - **Batches and digests in the same voice**: "Three things went in this morning." / "Good evening. Here's today: ...".
   Sections only where they help: "Waiting on you", "For you to do", "What went in". Every size bound holds (990
   characters a message, 3 messages, "...and N more on GitHub" so every notice lands in exactly one message), and the
