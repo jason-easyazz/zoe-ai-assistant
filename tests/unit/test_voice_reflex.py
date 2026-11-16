@@ -50,7 +50,7 @@ TAKES = ("mm_01", "mm_02", "mm_03", "mm_04")
 #: the otherwise-clean context: every explicit input states its safe value
 CLEAN = dict(rule="deep", speech_ms=1200, turn_kind="wake", local_hour=12, bank_voice="af_sky", current_voice="af_sky",
              takes=TAKES, committed=True, guest=False, speaker_accept=True, speaker_model=R.KNOWN_SPEAKER_MODELS[0],
-             verdict_ms=90, media_active=False)
+             verdict_ms=90, media_active=False, talking=False)
 
 
 def ok_ctx(**kw):
@@ -72,6 +72,7 @@ SKIP_CASES = {
     "capped": (dict(rule="max_duration"), ON),
     "short": (dict(speech_ms=400), ON),
     "muted": (dict(muted_ms=80), ON),
+    "talking": (dict(talking=True), ON),
     "busy": (dict(other_player=True), ON),
     "noisy": (dict(noise_dbfs=-20.0), ON),
     "night": (dict(local_hour=23), ON),
@@ -109,6 +110,7 @@ SITE_CASES = {
     "capped": (dict(rule="max_duration"), ON),
     "short": (dict(speech_ms=400), ON),
     "muted": (dict(muted_ms=80), ON),
+    "talking": (dict(talking=None), ON),
     "busy": (dict(other_player=True), ON),
     "media": (dict(media_active=None), ON),
     "noisy": (dict(noise_dbfs=-20.0), ON),
@@ -153,7 +155,7 @@ def _mutant(site: str):
 
 def test_every_guard_site_has_a_case():
     assert set(_sites()) == set(SITE_CASES) | {"except"}
-    assert len(_sites()) == 23
+    assert len(_sites()) == 24
 
 
 @pytest.mark.parametrize("site", sorted(SITE_CASES))
@@ -205,6 +207,8 @@ def test_the_explicit_inputs_fail_silent():
         assert R.decide(ok_ctx(committed=v), s=ON).skip == "not_committed"     # exactly True, nothing else
     for v in (None, True, 0, "no"):
         assert R.decide(ok_ctx(media_active=v), s=ON).skip == "media"
+    for v in (None, True, 0, "no"):                                              # never talk over the person: exactly False
+        assert R.decide(ok_ctx(talking=v), s=ON).skip == "talking"
     for v in (None, True, 0):
         assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
     # the model's own accept: exactly True, nothing else (a raw score or a truthy stand-in is not a decision)
@@ -318,6 +322,15 @@ def test_handshake_heard_shape_carries_no_text():
     assert b == {"kind": "heard", "take": "mm_03", "bank": "0a1b2c3d", "voice": "af_sky", "at_ms": 41, "dur_ms": 455}
     for v in b.values():
         assert isinstance(v, int) or (isinstance(v, str) and re.fullmatch(r"[a-z0-9_]{1,64}", v))
+
+
+def test_runtime_skips_are_logged_but_never_decided():
+    """``reply_first`` / ``player_failed`` are the daemon's own post-decision skips: accepted by the log enum and the handshake,
+    never returned by decide() (so test_every_skip_reason_has_a_case stays a statement about decide)."""
+    assert set(R.RUNTIME_SKIPS) == {"reply_first", "player_failed"} and not set(R.RUNTIME_SKIPS) & set(R.SKIPS)
+    for sk in R.RUNTIME_SKIPS:
+        assert R.handshake_block(R.Decision("none", None, sk), 0, 0, None, None) == {"kind": "none", "skip": sk}
+        assert all(R.decide(ok_ctx(**kw), s=s).skip != sk for kw, s in SKIP_CASES.values())
 
 
 def test_handshake_none_and_hostile_inputs():

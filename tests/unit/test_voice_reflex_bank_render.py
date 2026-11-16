@@ -133,7 +133,7 @@ def test_the_manifest_round_trips_through_the_panel_loader(tmp_path):
         assert key in man
     ctx = RX.Ctx(rule="deep", speech_ms=900, bank_voice=res.bank.voice, current_voice="af_sky", takes=res.bank.take_ids,
                  committed=True, guest=False, speaker_accept=True, speaker_model=RX.KNOWN_SPEAKER_MODELS[0], verdict_ms=100,
-                 media_active=False)
+                 media_active=False, talking=False)
     assert RX.decide(ctx, s=RX.Settings(enabled=True), seed=4).kind == "heard"
 
 

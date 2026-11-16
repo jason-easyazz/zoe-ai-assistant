@@ -48,6 +48,8 @@ def _fresh(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "_reflex", REFLEX)
     monkeypatch.setattr(daemon, "_rn34", RN34)
     monkeypatch.setattr(daemon, "REFLEX_MODE", "shadow")   # the post-hoc shadow runs only in shadow / on (off: nothing)
+    if hasattr(daemon, "_reflex_begin"):                   # the POST-HOC path: a turn the real-time controller did not take
+        monkeypatch.setattr(daemon, "_reflex_begin", lambda fs: None)
     for k in ("ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT", "ZOE_SPEAKER_RESNET34_THRESHOLD_LONG", "REFLEX_ENABLED",
               "ZOE_SPEAKER_RESNET34_TIER", "REFLEX_SILENT_MEMBERS"):
         monkeypatch.delenv(k, raising=False)
@@ -190,7 +192,7 @@ def test_reflex_mode_off_runs_no_reflex_work_and_logs_a_dash(daemon, monkeypatch
     calls = []
     monkeypatch.setattr(daemon, "REFLEX_MODE", "off")
     monkeypatch.setattr(REFLEX, "decide", lambda *a, **k: calls.append("decide") or pytest.fail("decide ran in off"))
-    monkeypatch.setattr(daemon, "_rms_dbfs", lambda *a, **k: calls.append("rms") or pytest.fail("rms ran in off"))
+    monkeypatch.setattr(daemon, "_rms_floor_dbfs", lambda *a, **k: calls.append("rms") or pytest.fail("rms ran in off"))
     ok, line, writes, posts = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))
     assert _f(line, "skip") == "-" and calls == [] and ok is True and len(writes) == 3
 
@@ -225,15 +227,12 @@ def test_the_forced_switch_is_load_bearing_and_local(daemon):
     assert REFLEX.settings().enabled is False
 
 
-def test_shadow_decide_never_plays_and_never_loads_a_bank(daemon, monkeypatch, caplog):
+def test_post_hoc_shadow_never_plays_and_never_loads_a_bank(daemon, monkeypatch, caplog):
     for name in ("load_bank", "load_bank_dir", "pick_take", "record", "handshake_block"):
         monkeypatch.setattr(REFLEX, name, lambda *a, **k: pytest.fail("the shadow reached the playback side"))
     ok, line, writes, posts = _turn(daemon, monkeypatch, caplog, claim_fn=lambda: _claim(daemon, 0.40))
     assert _f(line, "skip") == "no_bank"
-    src = DAEMON.read_text(encoding="utf-8")
-    for forbidden in ("_reflex.load_bank", "_reflex.record(", "_reflex.handshake_block", "_reflex.pick_take",
-                      "_ReflexPlayer", "REFLEX_DIR"):
-        assert forbidden not in src, forbidden
+    assert daemon._REFLEX_CUR is None and daemon._REFLEX_BANK is None   # the post-hoc path wires no controller, loads no bank
     assert ok is True and len(writes) == 3          # the reply's three chunks only: no extra player, no extra write
 
 
