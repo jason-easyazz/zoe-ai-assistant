@@ -197,10 +197,15 @@ os.unlink(AUTH_OLD)
 os.rename(AUTH_OLD + ".real", AUTH_OLD)
 ap = paths("apply", MAN, "--only", "lab-auth", "--container-stopped")
 AUTH_NEW = "/srv/zoe/lab-auth"
-sw = zoe(f"mv {AUTH_NEW} /srv/zoe/x; touch {AUTH_NEW}/crash")
-runtime.supervise(spec("auth-new", AUTH_NEW, ["data"]), restarts=0)  # a reboot: root starts it again
-cell("R2b-fix-root-owned-chain-closes", ap.returncode == 0 and sw.returncode != 0 and not root_marker("/root/p02-state"),
-     f"zoe: {sw.stderr.strip()[:160]}")
+# the COMPLETE swap the negative control below proves works when a parent is zoe-owned: rename the source away and
+# leave a symlink to /root in its place. With the root-owned chain it must be refused at the first step, the source
+# must still be the real directory, and the legitimate service must still start from it.
+sw = zoe(f"cd /srv/zoe && mv lab-auth lab-auth.away && ln -s /root lab-auth")
+rc_b, out_b = runtime.start(spec("auth-new", AUTH_NEW, ["data"]))  # a reboot: root starts it again
+cell("R2b-fix-root-owned-chain-closes", ap.returncode == 0 and sw.returncode != 0
+     and not os.path.islink(AUTH_NEW) and os.path.isdir(AUTH_NEW) and not os.path.lexists("/srv/zoe/lab-auth.away")
+     and rc_b == 0 and "synthetic-auth-conf" in out_b and not root_marker("/root/p02-state"),
+     f"zoe: {sw.stderr.strip()[:160]}; start rc={rc_b}")
 run("chown", "zoe", "/srv/zoe")  # NEGATIVE CONTROL: one PARENT component owned by the service user
 zoe(f"cd /srv/zoe && mv lab-auth lab-auth.away && ln -s /root lab-auth")
 runtime.start(spec("auth-new", AUTH_NEW, ["data"]))
