@@ -337,7 +337,6 @@ PINNED = {
     "routers/voice_tts.py": {"_skybridge_reply"},
     "stt_snap.py": set(),
     "device_confirm.py": set(),
-    "os_shadow.py": {"item", "text", "list_name", "name", "topic", "entity"},   # Zoe OS shadow: closed codes only
     "os_authority.py": {"item", "text", "list_name", "name", "list_type"},   # Zoe OS authority: closed codes only
     "child_safety_floor.py": {"text", "s"},   # one class-code line; the words and the age never ride it
 }
@@ -429,3 +428,52 @@ def test_kind_refusal_tag_is_a_safe_reducer():
     assert tag.startswith("KIND_FLIP_REFUSED code=kind_flip") and "fact=" in tag
     src = (Path(__file__).resolve().parents[1] / "person_extractor.py").read_text(encoding="utf-8")
     assert src.count('logger.info("person_extractor: %s", kind_refusal_tag(text))') == 2
+
+
+#: os_shadow.py: an ALLOWLIST, not a denylist. Every argument of every logger call there is one of these names, each mapped onto a
+#: closed set (or a number) by ``os_shadow._finish`` before the line is written, or ``type(exc).__name__`` (a program identifier).
+OS_SHADOW_LOG_FIELDS = {"verb", "source", "cls", "live", "kernel_state", "result", "reason", "hop_ms", "q_ms",
+                        "code"}     # the forget path: ``type(exc).__name__`` or ``"queue_full"`` (pinned below)
+
+
+def _os_shadow_log_args(src: str) -> list:
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in LOG_METHODS
+                and getattr(node.func.value, "id", "") == "logger"):
+            out += [(node.lineno, a) for a in node.args[1:]] + [(node.lineno, k.value) for k in node.keywords]
+    return out
+
+
+def _closed(arg) -> bool:
+    if isinstance(arg, ast.Name):
+        return arg.id in OS_SHADOW_LOG_FIELDS
+    return (isinstance(arg, ast.Attribute) and arg.attr == "__name__" and isinstance(arg.value, ast.Call)
+            and getattr(arg.value.func, "id", "") == "type")
+
+
+def test_os_shadow_logs_only_closed_code_fields():
+    bad = [ln for ln, a in _os_shadow_log_args((ROOT / "os_shadow.py").read_text("utf-8")) if not _closed(a)]
+    assert bad == [], f"os_shadow.py lines {bad}: a logger argument that is not a closed-code field"
+    planted = 'logger.info("x %s %s", item, list_name)\nlogger.info("y %s", str(exc))\nlogger.info("z %s", result)\n'
+    assert [ln for ln, a in _os_shadow_log_args(planted) if not _closed(a)] == [1, 1, 2]
+
+
+def test_os_shadow_maps_every_logged_field_onto_its_closed_set():
+    import os_shadow
+
+    src = (ROOT / "os_shadow.py").read_text("utf-8")
+    for name, closed in (("verb", "VERBS"), ("source", "SOURCES"), ("cls", "CLASSES"), ("live", "LIVE"), ("kernel_state", "KERNEL_STATES"),
+                         ("reason", "REASONS")):
+        assert f"{name} if {name} in {closed}" in src or f"in {closed} else" in src, name
+        assert isinstance(getattr(os_shadow, closed), (tuple, dict))
+
+
+def test_os_shadow_forget_code_is_a_class_name_or_queue_full():
+    tree = ast.parse((ROOT / "os_shadow.py").read_text("utf-8"))
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "code" for t in n.targets):
+            v = n.value
+            ok = (_closed(v) or (isinstance(v, ast.Constant) and v.value in ("", "queue_full"))
+                  or (isinstance(v, ast.IfExp) and isinstance(v.body, ast.Constant) and _closed(v.orelse)))
+            assert ok, n.lineno

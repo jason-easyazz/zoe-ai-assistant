@@ -86,92 +86,289 @@ async def test_one_proposal_per_row_that_really_landed(kernel):
     assert sorted(acts) == ["oat milk", "rice"] and os_shadow.counters() == {"match": 2}
 
 
-class _NameDB:
-    def __init__(self, row=None, boom=False):
-        self.sql, self.row, self.boom = [], row, boom
+class _AuthDB:
+    def __init__(self, row):
+        self.sql, self.row = [], row
 
     async def execute(self, sql, params=()):
         self.sql.append(sql)
-        if self.boom:
-            raise RuntimeError("db down")
         return _Cur([self.row] if self.row else [])
 
 
 @pytest.mark.asyncio
-async def test_the_rest_add_mirrors_a_custom_list_by_its_name_not_its_type(kernel, monkeypatch):
+async def test_the_rest_add_mirrors_a_custom_list_by_its_name_from_the_row_it_already_read():
     from routers import lists as lists_router
 
-    assert await lists_router._shadow_list_name(_NameDB({"name": "Camping gear"}), "L1") == "Camping gear"
-    assert await lists_router._shadow_list_name(_NameDB(None), "L1") is None
-    assert await lists_router._shadow_list_name(_NameDB(boom=True), "L1") is None          # never raises into the add
-    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
-    off = _NameDB({"name": "Camping gear"})
-    assert await lists_router._shadow_list_name(off, "L1") is None and off.sql == []       # off: no query at all
-    call = next(n for n in ast.walk(ast.parse((SVC / "routers/lists.py").read_text("utf-8")))
-                if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "note_add")
-    name_arg = next(k.value for k in call.keywords if k.arg == "list_name")
-    assert not (isinstance(name_arg, ast.Name) and name_arg.id == "list_type")             # the old bug: the type sent as the name
+    db = _AuthDB({"id": "L1", "user_id": MEMBER, "visibility": "family", "name": "Camping gear"})
+    row = await lists_router._require_list_item_mutation_access(db, "L1", "shopping", {"user_id": MEMBER, "role": "member"}, "add")
+    assert row["name"] == "Camping gear" and len(db.sql) == 1                     # the auth read IS the name read: no second query
+    fn = next(n for n in ast.parse((SVC / "routers/lists.py").read_text("utf-8")).body
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "add_item")
+    shadow_calls = [c for c in ast.walk(fn) if isinstance(c, ast.Call) and getattr(c.func, "value", None) is not None
+                    and getattr(c.func.value, "id", "") == "os_shadow"]
+    assert [c.func.attr for c in shadow_calls] == ["note_add"]                      # one hook call = one flag read on this path
+    name_arg = next(k.value for k in shadow_calls[0].keywords if k.arg == "list_name")
+    assert not any(isinstance(n, (ast.Await, ast.Call)) and not (isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "get")
+                   for n in ast.walk(name_arg)), "the list name must come from data in hand, not a query on the turn"
+    assert not (isinstance(name_arg, ast.Name) and name_arg.id == "list_type")      # the old bug: the type sent as the name
+
+
+# ---- the accepted suggestion: a member's yes is a real add ----------------------------------------------------------------------------
+class _Conn:
+    def __init__(self, boom=False):
+        self.boom, self.writes = boom, []
+
+    def transaction(self):
+        conn = self
+
+        class _T:
+            async def __aenter__(s):
+                return s
+
+            async def __aexit__(s, *a):
+                return False
+        return _T()
+
+    async def fetchrow(self, sql, *args):
+        if "FROM pending_suggestions" in sql:
+            return {"action_type": "list_add", "pre_filled_slots": '{"list_type": "shopping", "item": "oat milk"}'}
+        return {"id": "L1"}
+
+    async def execute(self, sql, *args):
+        if self.boom and "UPDATE pending_suggestions" in sql:
+            raise RuntimeError("commit failed")
+        self.writes.append(sql.split("(")[0].strip())
+
+
+class _Pool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        conn = self.conn
+
+        class _A:
+            async def __aenter__(s):
+                return conn
+
+            async def __aexit__(s, *a):
+                return False
+        return _A()
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_suggestion_add_is_shadowed_after_its_commit_and_a_failed_one_is_not(kernel, monkeypatch):
+    import pending_suggestions
+
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    conn = _Conn()
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    out = await pending_suggestions.execute_suggestion("s1", MEMBER)
+    assert out["ok"] and "INSERT INTO list_items" in conn.writes
+    settle(1)
+    assert [a["args"]["item"] for _, op, a in kernel.calls if op == "act"] == ["oat milk"] and os_shadow.counters() == {"match": 1}
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(_Conn(boom=True)))
+    assert not (await pending_suggestions.execute_suggestion("s2", MEMBER))["ok"]     # rolled back: nothing to shadow
+    import time
+    time.sleep(0.2)
+    assert os_shadow.counters() == {"match": 1}
 
 
 # ---- structure pins: every list-item WRITER FUNCTION calls the hook or is named -------------------------------------------------------
-def _fold(n):
-    """A string expression built from constants with ``+`` (f-string holes as ``?``), or None."""
+def _consts(tree) -> dict:
+    """Names bound to a string constant anywhere in the module (``table = "list_items"``): an f-string or ``+`` that uses the name
+    reads as its text."""
+    out: dict = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str):
+            out.update({t.id: n.value.value for t in n.targets if isinstance(t, ast.Name)})
+    return out
+
+
+def _fold(n, consts: dict):
+    """A string expression built from constants (and names bound to constants) with ``+`` or an f-string, or None. An f-string hole
+    that is not a known constant reads as ``?``."""
     if isinstance(n, ast.Constant) and isinstance(n.value, str):
         return n.value
+    if isinstance(n, ast.Name) and n.id in consts:
+        return consts[n.id]
     if isinstance(n, ast.JoinedStr):
-        return "".join(v.value if isinstance(v, ast.Constant) else "?" for v in n.values)
+        parts = []
+        for v in n.values:
+            if isinstance(v, ast.Constant):
+                parts.append(str(v.value))
+            else:
+                inner = _fold(v.value, consts) if isinstance(v, ast.FormattedValue) else None
+                parts.append(inner if inner is not None else "?")
+        return "".join(parts)
     if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
-        left, right = _fold(n.left), _fold(n.right)
+        left, right = _fold(n.left, consts), _fold(n.right, consts)
         return None if left is None or right is None else left + right
     return None
 
 
-def _strings(node) -> list:
-    """Every string a function could hand to SQL: each constant, each f-string, each ``+``-fold of constants."""
-    return [t for t in (_fold(n) for n in ast.walk(node) if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp))) if t is not None]
+_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _own_nodes(fn):
+    """The nodes of ``fn``'s own body, not descending into a nested function, lambda or class (each of those is its own unit)."""
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        n = stack.pop()
+        yield n
+        if not isinstance(n, _DEFS + (ast.ClassDef,)):
+            stack.extend(ast.iter_child_nodes(n))
+
+
+def _strings(node, consts: dict) -> list:
+    """Every string a unit could hand to SQL in its OWN body: each constant, each f-string, each ``+``-fold."""
+    return [t for t in (_fold(n, consts) for n in _own_nodes(node) if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp)))
+            if t is not None]
+
+
+def _refers(node, names) -> bool:
+    """``node`` names one of ``names``: ``h``, ``m.h``, ``getattr(m, "h")`` (a literal), ``partial(h, ...)`` /
+    ``functools.partial(h, ...)``."""
+    if isinstance(node, ast.Name):
+        return node.id in names
+    if isinstance(node, ast.Attribute):
+        return node.attr in names
+    if isinstance(node, ast.Call):
+        fname = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if fname == "getattr" and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            return node.args[1].value in names
+        if fname == "partial" and node.args:
+            return _refers(node.args[0], names)
+    return False
+
+
+def _bound(n, names) -> set:
+    """The names (or attribute names) ``n`` binds to something that refers to one of ``names``."""
+    pairs = []
+    if isinstance(n, ast.Assign):
+        for t in n.targets:
+            if isinstance(t, ast.Tuple) and isinstance(n.value, ast.Tuple):          # a, b = h, g
+                pairs += list(zip(t.elts, n.value.elts))
+            else:
+                pairs.append((t, n.value))
+    elif isinstance(n, (ast.AnnAssign, ast.NamedExpr)) and n.value is not None:      # w: Callable = h ; (w := h)
+        pairs.append((n.target, n.value))
+    elif isinstance(n, ast.arguments):                                                # def f(db, w=h)
+        pos = n.posonlyargs + n.args
+        pairs += list(zip(pos[len(pos) - len(n.defaults):], n.defaults))
+        pairs += [(a, d) for a, d in zip(n.kwonlyargs, n.kw_defaults) if d is not None]
+    out = set()
+    for target, value in pairs:
+        if _refers(value, names):
+            name = getattr(target, "id", None) or getattr(target, "attr", None) or getattr(target, "arg", None)   # x / self.x / arg
+            if name:
+                out.add(name)
+    return out
 
 
 def _aliases(tree, names: frozenset) -> frozenset:
-    """``names`` plus every local alias they were imported as (``from list_service import create_item_record as cir``)."""
+    """``names`` plus every alias of them, any scope: ``from m import h as x``; ``x = h`` / ``x = m.h``; ``x: T = h``; ``(x := h)``;
+    ``self.x = h``; ``a, b = h, g``; a default argument ``def f(w=h)``; ``x = partial(h, ...)``; ``x = getattr(m, "h")``; and
+    chains of those (``y = x``). Out of scope, said: a name built at run time (``getattr(m, name)``), a container lookup
+    (``table["w"]()``), and a helper reached through another module's re-export under a new name."""
     got = set(names)
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom):
             got |= {a.asname for a in n.names if a.name in names and a.asname}
+    changed = True
+    while changed:                      # x = h; y = x
+        changed = False
+        for n in ast.walk(tree):
+            new = _bound(n, got) - got
+            if new:
+                got |= new
+                changed = True
     return frozenset(got)
 
 
 def _calls_to(node, names: frozenset) -> bool:
-    return any(isinstance(n, ast.Call) and (getattr(n.func, "id", None) in names or getattr(n.func, "attr", None) in names)
-               for n in ast.walk(node))
+    """``node``'s OWN body calls one of ``names`` (a call inside a nested unit belongs to that unit), calls ``getattr(m, "h")(...)``
+    or ``partial(h, ...)(...)``, or HANDS one on as an argument (``retry(h, db)``, ``partial(h, db)``, ``run_in_executor(None, h)``)."""
+    for n in _own_nodes(node):
+        if not isinstance(n, ast.Call):
+            continue
+        if _refers(n.func, names) or any(_refers(a, names) for a in n.args) or any(_refers(k.value, names) for k in n.keywords):
+            return True
+    return False
+
+
+def _units(node, prefix: str):
+    """Every function at every nesting level, each its own unit: ``f``, ``C.m``, ``f.inner``, ``f.<lambda:12>``, ``f.Local.m``."""
+    for n in _own_nodes(node):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = f"{prefix}{n.name}"
+        elif isinstance(n, ast.Lambda):
+            name = f"{prefix}<lambda:{n.lineno}>"
+        elif isinstance(n, ast.ClassDef):
+            yield from _units(n, f"{prefix}{n.name}.")
+            continue
+        else:
+            continue
+        yield name, n
+        yield from _units(n, name + ".")
 
 
 def _functions(tree):
-    """Top-level functions and class methods (a nested function belongs to the function it is in)."""
-    for n in tree.body:
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield n.name, n
-        elif isinstance(n, ast.ClassDef):
-            yield from ((f"{n.name}.{m.name}", m) for m in n.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    """Every unit of ``tree`` (see ``_units``) plus ``<module>``, the top-level statements. A write is attributed to the INNERMOST unit
+    whose own body holds it, never to the function that encloses it."""
+    yield from _units(tree, "")
     yield "<module>", ast.Module(body=[n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))],
                                  type_ignores=[])
 
 
 def writer_sites(src: str, sql: "re.Pattern", helpers: frozenset = frozenset()) -> list:
-    """The names of the functions in ``src`` that write: a string matching ``sql``, or a call to a writer helper (any alias)."""
+    """The units of ``src`` (every nesting level) whose OWN body writes: a string matching ``sql``, or a call to a writer helper (any
+    alias)."""
     tree = ast.parse(src)
-    names = _aliases(tree, helpers)
-    return [name for name, fn in _functions(tree) if any(sql.search(t) for t in _strings(fn)) or (names and _calls_to(fn, names))]
+    names, consts = _aliases(tree, helpers), _consts(tree)
+    return [name for name, fn in _functions(tree)
+            if any(sql.search(t) for t in _strings(fn, consts)) or (names and _calls_to(fn, names))]
+
+
+def hooked(fn, hooks: frozenset) -> bool:
+    """``fn`` calls ``os_shadow.<hook>`` in its own body, or in a nested function its body (transitively) USES by name (calls it or
+    hands it on); a nested function nothing refers to does not count.
+
+    The rule looks DOWN only, never up: a nested WRITER is hooked by its own body (or what it uses), never because the function around
+    it holds a hook, since the scan cannot tell whether the parent runs it before, after or instead of the hooked path. A nested writer
+    whose hook really is its parent's names that parent in ``HOOKED_BY_CALLER`` (pinned: the parent is its only user and is hooked)."""
+    nested = {n.name: n for n in ast.walk(fn) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn}
+    todo, seen = [fn], set()
+    while todo:
+        f = todo.pop()
+        for n in _own_nodes(f):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in hooks
+                    and getattr(n.func.value, "id", "") == "os_shadow"):
+                return True
+            if isinstance(n, ast.Name) and n.id in nested and n.id not in seen:
+                seen.add(n.id)
+                todo.append(nested[n.id])
+    return False
 
 
 def unhooked(src: str, sql: "re.Pattern", helpers: frozenset, hooks: frozenset) -> list:
-    """Writer functions that do not call ``os_shadow.<hook>`` themselves (anywhere inside them, nested functions included)."""
-    tree = ast.parse(src)
-    fns = dict(_functions(tree))
+    """Writer functions that do not reach an ``os_shadow.<hook>`` call (see ``hooked``)."""
+    fns = dict(_functions(ast.parse(src)))
+    return [name for name in writer_sites(src, sql, helpers) if not hooked(fns[name], hooks)]
 
-    def hooked(fn) -> bool:
-        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in hooks
-                   and getattr(n.func.value, "id", "") == "os_shadow" for n in ast.walk(fn))
-    return [name for name in writer_sites(src, sql, helpers) if not hooked(fns[name])]
+
+def callers_of(src: str, name: str) -> set:
+    """The units of ``src`` whose own body uses ``name`` (the last part of a qualified unit name): calls it, or for a nested unit, also
+    hands it on by name."""
+    short = name.rsplit(".", 1)[-1]
+    nested = "." in name
+    out = set()
+    for fname, fn in _functions(ast.parse(src)):
+        if fname == name:
+            continue
+        if _calls_to(fn, frozenset({short})) or (nested and any(isinstance(n, ast.Name) and n.id == short for n in _own_nodes(fn))):
+            out.add(fname)
+    return out
 
 
 LIST_ADD_SQL = re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+[\"`]?(?:\w+[\"`]?\.[\"`]?)?list_items\b")
@@ -180,10 +377,15 @@ LIST_ADD_HELPERS = frozenset({"create_item_record"})
 #: "file::function" -> why that list-item writer is NOT shadowed. A new writer function must call the hook or join this table.
 NOT_SHADOWED = {
     "list_service.py::create_item_record": "the row helper itself: every caller is a writer (it calls create_item_record) and is scanned",
-    "pending_suggestions.py::_execute_action": "OUT OF SCOPE: Zoe's own offer, accepted by the member, not a member's add; shadowing it "
-                                               "compares the kernel with an offer, a later, separate decision",
     "anticipation.py::_do": "OUT OF SCOPE: the packing list Zoe starts for a trip, many items from one offer; no member add to compare",
 }
+#: "file::writer" -> the ONE function in that file that calls it and holds the hook (the write runs inside the caller's transaction,
+#: so the hook belongs after the caller's commit). Pinned: the caller is the writer's only caller and reaches the hook. A NESTED
+#: writer (``outer.inner``) whose hook is its parent's goes here too, with the parent as the caller, under the same pin.
+HOOKED_BY_CALLER = {"pending_suggestions.py::_execute_action": "execute_suggestion",
+                    # the new-list path: the parent runs it inside its transaction, then hooks after the commit (single add) or hands
+                    # the receipts to add_items_to_list, which hooks after ITS commit (that caller is scanned as a writer itself)
+                    "list_service.py::add_item_to_list._write_new_list_and_item": "add_item_to_list"}
 
 
 def _service_files():
@@ -205,10 +407,20 @@ def scan(sql, helpers, hooks, table: str) -> tuple[set, set]:
     return sites, bare
 
 
+def assert_hooked_by_caller(table: dict, hooks: frozenset) -> None:
+    for site, caller in table.items():
+        rel, writer = site.split("::")
+        src = (SVC / rel).read_text("utf-8")
+        assert callers_of(src, writer) == {caller}, f"{site}: its callers are {callers_of(src, writer)}, the hook is only in {caller}"
+        assert hooked(dict(_functions(ast.parse(src)))[caller], hooks), f"{rel}::{caller} does not reach os_shadow.{sorted(hooks)}"
+
+
 def test_every_list_item_writer_function_is_shadowed_or_named_with_a_reason():
     sites, bare = scan(LIST_ADD_SQL, LIST_ADD_HELPERS, frozenset({"note_add"}), "list_items")
-    assert bare == set(NOT_SHADOWED), ("a list-item writer function neither calls os_shadow.note_add nor is named in NOT_SHADOWED "
-                                       f"(out of scope must be SAID): {sorted(bare ^ set(NOT_SHADOWED))}")
+    named = set(NOT_SHADOWED) | set(HOOKED_BY_CALLER)
+    assert bare == named, ("a list-item writer function neither reaches os_shadow.note_add nor is named in NOT_SHADOWED / HOOKED_BY_CALLER "
+                           f"(out of scope must be SAID): {sorted(bare ^ named)}")
+    assert_hooked_by_caller(HOOKED_BY_CALLER, frozenset({"note_add"}))
     assert {"list_service.py::add_item_to_list", "skybridge_service.py::_add_spoken_items", "routers/lists.py::add_item"} <= sites - bare
 
 
@@ -236,5 +448,78 @@ def test_one_hooked_writer_does_not_hide_an_unhooked_one_in_the_same_file():
     src = ("async def a(db):\n    await db.execute('INSERT INTO list_items (id) VALUES (1)')\n    os_shadow.note_add('u', item='x')\n"
            "async def b(db):\n    await db.execute('insert into list_items (id) values (2)')\n")
     assert unhooked(src, LIST_ADD_SQL, LIST_ADD_HELPERS, frozenset({"note_add"})) == ["b"]
-    assert unhooked("async def a(db):\n    await db.execute('INSERT INTO list_items (id)')\n    def inner():\n        os_shadow.note_add(1)\n",
-                    LIST_ADD_SQL, LIST_ADD_HELPERS, frozenset({"note_add"})) == []
+    hook = frozenset({"note_add"})
+    called = ("async def a(db):\n    await db.execute('INSERT INTO list_items (id)')\n    def inner():\n        os_shadow.note_add(1)\n"
+              "    inner()\n")
+    assert unhooked(called, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == []
+    handed_on = ("async def a(db):\n    async def w():\n        os_shadow.note_add(1)\n"
+                 "    await db.execute('INSERT INTO list_items (id)')\n    await retry(w)\n")
+    assert unhooked(handed_on, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == []
+
+
+def test_a_nested_hook_nothing_calls_does_not_count():
+    never = "async def a(db):\n    await db.execute('INSERT INTO list_items (id)')\n    def inner():\n        os_shadow.note_add(1)\n"
+    assert unhooked(never, LIST_ADD_SQL, LIST_ADD_HELPERS, frozenset({"note_add"})) == ["a"]
+    in_lambda = "async def a(db):\n    await db.execute('INSERT INTO list_items (id)')\n    f = lambda: os_shadow.note_add(1)\n"
+    assert unhooked(in_lambda, LIST_ADD_SQL, LIST_ADD_HELPERS, frozenset({"note_add"})) == ["a"]
+
+
+def test_the_detector_reads_an_assigned_alias_of_the_helper():
+    for src in ("async def f(db):\n    writer = create_item_record\n    await writer(db, list_id='x', text='y')",
+                "import list_service\nWRITE = list_service.create_item_record\nasync def f(db):\n    await WRITE(db, list_id='x')",
+                "from list_service import create_item_record as c\nw = c\nasync def f(db):\n    await w(db)"):
+        assert writer_sites(src, LIST_ADD_SQL, LIST_ADD_HELPERS) == ["f"], src
+
+
+def test_the_detector_reads_a_table_name_held_in_a_variable():
+    for src in ("TABLE = 'list_items'\nasync def f(db, c):\n    await db.execute(f'INSERT INTO {TABLE} ({c}) VALUES (1)')",
+                "async def f(db):\n    t = 'list_items'\n    await db.execute('INSERT INTO ' + t + ' (id) VALUES (1)')"):
+        assert writer_sites(src, LIST_ADD_SQL) == ["f"], src
+    assert writer_sites("async def f(db, t):\n    await db.execute(f'INSERT INTO {t} (id)')", LIST_ADD_SQL) == []   # unknowable: not claimed
+
+
+def test_a_nested_writer_is_its_own_unit_and_a_hooked_parent_does_not_cover_it():
+    """Every function at every nesting level is scanned on its own: a write is the innermost unit's, and the hook rule looks down
+    only, so a hooked parent does not make an unhooked nested writer (an inner coroutine fired off, a closure) hooked."""
+    hook = frozenset({"note_add"})
+    fired = ("async def a(db):\n    async def w():\n        await db.execute('INSERT INTO list_items (id)')\n"
+             "    asyncio.create_task(w())\n    await db.execute('INSERT INTO list_items (id)')\n    os_shadow.note_add('u', item='x')\n")
+    assert writer_sites(fired, LIST_ADD_SQL, LIST_ADD_HELPERS) == ["a", "a.w"]
+    assert unhooked(fired, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["a.w"]
+    closure = ("def a(db):\n    os_shadow.note_add('u', item='x')\n    def w():\n        create_item_record(db, list_id='x', text='y')\n"
+               "    return w\n")
+    assert unhooked(closure, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["a.w"]
+    own = ("async def a(db):\n    async def w():\n        await db.execute('INSERT INTO list_items (id)')\n"
+           "        os_shadow.note_add('u', item='x')\n    await w()\n")
+    assert writer_sites(own, LIST_ADD_SQL, LIST_ADD_HELPERS) == ["a.w"] and unhooked(own, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == []
+    in_lambda = "def a(db):\n    os_shadow.note_add('u', item='x')\n    f = lambda: db.execute('INSERT INTO list_items (id)')\n"
+    assert unhooked(in_lambda, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["a.<lambda:3>"]
+    deep = ("class C:\n    def m(self, db):\n        def inner():\n            async def deeper():\n"
+            "                await db.execute('INSERT INTO list_items (id)')\n            return deeper\n        return inner\n")
+    assert unhooked(deep, LIST_ADD_SQL, LIST_ADD_HELPERS, hook) == ["C.m.inner.deeper"]
+    assert callers_of(fired, "a.w") == {"a"}                       # what HOOKED_BY_CALLER pins for a nested writer named there
+
+
+
+@pytest.mark.parametrize("src", [
+    "async def f(db):\n    writer: Callable = create_item_record\n    await writer(db)",                          # annotated alias
+    "async def f(db):\n    if (w := create_item_record):\n        await w(db)",                                   # walrus
+    "class C:\n    def __init__(self):\n        self.w = create_item_record\n    async def f(self, db):\n        await self.w(db)",
+    "async def f(db):\n    a, b = create_item_record, print\n    await a(db)",                                    # tuple unpacking
+    "async def f(db, w=create_item_record):\n    await w(db)",                                                    # default argument
+    "async def f(db, *, w=create_item_record):\n    await w(db)",                                                 # keyword-only default
+    "import functools\nasync def f(db):\n    w = functools.partial(create_item_record, db)\n    await w()",        # partial alias
+    "from functools import partial\nasync def f(db):\n    await partial(create_item_record, db)()",                # partial called
+    "import list_service\nasync def f(db):\n    w = getattr(list_service, 'create_item_record')\n    await w(db)",  # getattr literal
+    "import list_service\nasync def f(db):\n    await getattr(list_service, 'create_item_record')(db)",
+    "async def f(db):\n    await retry(create_item_record, db)",                                                  # handed on
+    "import list_service as ls\nasync def f(db):\n    await ls.create_item_record(db)",                              # import-as module
+])
+def test_the_detector_reads_every_handled_alias_form(src):
+    sites = writer_sites(src, LIST_ADD_SQL, LIST_ADD_HELPERS)
+    assert sites and all(s.endswith("f") for s in sites), (src, sites)
+
+
+def test_out_of_scope_alias_forms_are_not_claimed():
+    assert writer_sites("import list_service\nasync def f(db, n):\n    await getattr(list_service, n)(db)", LIST_ADD_SQL,
+                        LIST_ADD_HELPERS) == []          # a name built at run time: unknowable statically, not claimed

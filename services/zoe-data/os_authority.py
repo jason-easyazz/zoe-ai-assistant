@@ -134,9 +134,8 @@ def _kernel() -> "os_shadow._Kernel":
 def _call(skill: str, op: str, timeout: float, **args):
     k = _kernel()
     k.down_until = 0.0                     # this module keeps its own circuit
-    conn = k.conn(skill)
-    conn.sock.settimeout(timeout)
-    return k.call(skill, op, **args)
+    # ONE deadline for the whole call (connect, handshake, request, reply): the shadow client's ``until`` budget
+    return k.call(skill, op, time.monotonic() + timeout, **args)
 
 
 def _healthy() -> str:

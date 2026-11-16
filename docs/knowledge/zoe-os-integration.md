@@ -30,6 +30,7 @@ Per verb, from `scripts/maintenance/os_shadow_report.py` over the zoe-data logs:
 | unavailable | `kernel_unavailable` / `timeout`: no verdict; never counted in the rate |
 | agree rate | agree / (agree + disagree) |
 | hop p50 / p90 | publish + act round trip, over writes the kernel answered |
+| (not compared) `worker_down` | a turn found no live worker: dropped and counted, never a thread started on the turn |
 
 [code] Every logged write lands in exactly one bucket, and a result code the reader does not know is counted as disagree.
 [lab] The negative control `test_a_kernel_that_disagrees_on_purpose_is_disagree_for_every_verb_in_the_report` runs the same traffic
@@ -58,15 +59,44 @@ Where each verb is hooked (after the commit, never raises, one bounded queue put
 
 | verb | kernel action | live call site | not shadowed (named in the writer scan, with the reason) |
 |---|---|---|---|
-| `list_add` | `list.add` | `list_service.add_item_to_list` / `add_items_to_list`, `skybridge_service._add_spoken_items`, `routers/lists.py` REST add | `pending_suggestions`, `anticipation` (Zoe's own offers) |
+| `list_add` | `list.add` | `list_service.add_item_to_list` / `add_items_to_list`, `skybridge_service._add_spoken_items`, `routers/lists.py` REST add, an accepted suggestion (`pending_suggestions.execute_suggestion`, after its transaction) | `anticipation` (a packing list Zoe makes itself) |
 | `list_remove` | `list.remove` | `skybridge_service` spoken remove | REST delete (reads no item text), `rename_item`'s merge (a correction) |
-| `reminder_create` | `remind.set` | `reminder_service.create_reminder_record` | `pending_suggestions` (an accepted offer) |
+| `reminder_create` | `remind.set` | `reminder_service.create_reminder_record`, an accepted suggestion (`execute_suggestion`; it has no due time, so it reads `not_expressible:no_time`) | none |
 | `alarm_create` | `alarm.set` | `alarms.create_alarm` (every caller: REST, voice, anticipation) | none |
 
 What the kernel's verbs cannot express is counted as a disagreement, never sent: a recurring reminder, a date-only reminder (live
 fires it at the household default time), a reminder more than 7 days out (`remind.set` takes 1..10080 minutes), an alarm time that is
-not `HH:MM` [code]. The kernel's alarm is one time per person with no repeat rule; the repeat rule rides the `cls` field
-(`once`/`repeat`) so the report can split them [code]. That is a known gap to close before (d), not a pass.
+not `HH:MM`, and a REPEATING alarm (`alarm.set` is one time, once: `not_expressible reason=recurring`) [code]. The kernel's alarm is
+one time per person with no repeat rule; that is a known gap to close before (d), not a pass.
+
+**What "agree" means, per verb** (`os_shadow.VERBS`, `compare`) [code]: a `match` needs the receipt to be for the member
+(`on_behalf_of`, else `member_differs`) AND every read-back field that says WHAT and WHEN to equal what was sent:
+
+| verb | WHAT | WHEN | a field the read-back lacks |
+|---|---|---|---|
+| `list_add`, `list_remove` | `item` (`item_differs`); `list` when the driver reports it (`list_differs`) | none: a list item does not fire | `item` missing = `kernel_malformed`; `list` optional |
+| `reminder_create` | `note` (`item_differs`) | `due_at`, the ABSOLUTE due instant (UTC epoch seconds), within 60 s (`schedule_differs`) | `due_at` missing = `schedule_unproven` (a relative `in_minutes` read-back is no proof) |
+| `alarm_create` | the time is the whole value | `alarm` == `time`, an absolute wall-clock `HH:MM` already (no queue-delay weakness) (`schedule_differs`) | `kernel_malformed` |
+
+For whom, every verb: `on_behalf_of` must be the member (`member_differs`), and a receipt without it is `member_unproven`
+(`os_shadow.for_whom`, the one check).
+
+**Reminders are compared absolute to absolute** [code]: the due instant is computed once from the live row and the commit time; the
+wire still carries `in_minutes` (the kernel's `remind.set` takes only that and refuses an unknown argument,
+`labs/zoe-os/zoe_os/receipts.py check_params`), recomputed from the instant at SEND time, so a job that waited in the queue still asks
+for the same instant. **What the kernel side must add before reminders can be compared:** accept `due_at` (integer, UTC epoch
+seconds) on `remind.set` (alongside or instead of `in_minutes`), and return `proof.due_at` (integer, UTC epoch seconds: the stored due)
+in its read-back (`Reminders.added`). Then drop `due_at` from `os_shadow.LOCAL_ONLY` so it is sent.
+
+**The lab driver's `remind.set` read-back is `{"note"}` only** (`labs/zoe-os/zoe_os/brain/drivers.py` `Reminders.added`) [code], so
+against today's lab kernel every reminder reads `schedule_unproven` (a disagreement), never `match`: a reminder at the wrong time can
+no longer pass. The driver must report its schedule (`in_minutes`, or the due instant) before reminders can meet the pass mark.
+
+**The report judges each verb on its own** (`scripts/maintenance/os_shadow_report.py`): one row per verb (an unknown verb or code is
+its own counted row) and a `PASS` / `NOT YET (...)` line per verb from exactly the five numbers below, naming each one it fails; the
+list-add totals are over list-add lines only. A verb whose disagreements are ALL `schedule_unproven` reads `NOT COMPARABLE YET
+(schedule_unproven: n): cannot meet the pass mark yet: the kernel does not report when a reminder is due`, its agree rate not shown as
+a failure (the counts stay in the table); one disagreement of any other code makes it `NOT YET` again.
 
 **What the real run proved, and what it did not.** The 29-turn real run of 2026-11-15 drove list add (8/8), reminders (8/8) and
 alarms (6/6) through the kernel with the policy arm, refusals 3/3, zero false calls, hop about 1.4 ms p50 (brain-bridge record)
@@ -78,7 +108,8 @@ the shadow proves something different: that the kernel, given the live write, re
 ([zoe-os-list-shadow.md](zoe-os-list-shadow.md) section 7); `ZOE_OS_SHADOW_VERBS` is set to the verbs to watch.
 
 **Exit proof (to go to (c)) - owner decision D1.** Proposed: for list add, at least 14 days and at least 200 judged writes, agree
-rate at least 99.5%, every disagreement read and explained by its reason code, unavailable under 1% of seen, hop p90 under 10 ms,
+rate at least 99.5%, every disagreement read and explained by its reason code (the report checks the machine part: none with an
+unknown code or an `other` reason), unavailable under 1% of the writes the kernel was asked about, hop p90 under 10 ms,
 and one member erase and one entity forget during the window that reached the kernel (checked by the kernel's receipt count for the
 member going to zero). These numbers are a proposal, not a measurement.
 
