@@ -216,3 +216,48 @@ def test_ha_export_example_matches_the_installed_helper_line():
     assert len(re.findall(r"^HA_CONFIG = .*", helper, re.M)) == 1  # the sed in the example hits exactly one line
     assert re.search(r'^HA_CONFIG = "/srv/zoe/homeassistant"$', example, re.M)
     assert any(i[1] == "homeassistant" and i[3] == "/srv/zoe/homeassistant" for i in manifest_items())
+
+
+def _raced_tool(tmp_path):
+    """The tool with its up-front path check disabled: the state it sees is the one a service user who swaps a
+    component AFTER that check passed would leave. The pinned copy must still refuse on its own."""
+    text = TOOL.read_text()
+    check = "os.path.realpath(old) != os.path.normpath(old)"
+    assert text.count(check) == 1
+    t = tmp_path / "raced-tool"
+    t.write_text(text.replace(check, "False"))
+    return t
+
+
+def _raced(t, *args):
+    return subprocess.run([sys.executable, "-I", str(t), *args], capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("where", ["item", "ancestor"])
+def test_a_swap_after_the_check_cannot_redirect_the_root_copy(box, tmp_path, where):
+    root, man, common = box
+    secret = tmp_path / "root-only"
+    secret.mkdir()
+    (secret / "token").write_text("not for the service user\n")
+    if where == "item":            # old itself swapped for a link to a root-only directory
+        (root / "home/zoe/app").rename(root / "home/zoe/app.real")
+        (root / "home/zoe/app").symlink_to(secret)
+    else:                          # an ancestor swapped: /home/zoe -> a directory whose app is the root-only one
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        (decoy / "app").symlink_to(secret)
+        (root / "home/zoe").rename(root / "home/zoe.real")
+        (root / "home/zoe").symlink_to(decoy)
+    a = _raced(_raced_tool(tmp_path), "apply", str(man), *common, "--only", "app", "--container-stopped")
+    assert a.returncode != 0, a.stdout
+    assert not (root / "srv/zoe/app/token").exists(), "the root copy followed a swapped-in symlink"
+
+
+def test_a_symlink_inside_the_tree_is_copied_as_a_link(box, tmp_path):
+    root, man, common = box
+    (root / "home/zoe/app/sub/link").symlink_to("/etc/hostname")
+    a = tool("apply", str(man), *common, "--only", "app", "--container-stopped")
+    assert a.returncode == 0, a.stderr
+    copied = root / "srv/zoe/app/sub/link"
+    assert copied.is_symlink() and os.readlink(copied) == "/etc/hostname"
+    assert (root / "srv/zoe/app/sub/x").read_text() == "x\n"

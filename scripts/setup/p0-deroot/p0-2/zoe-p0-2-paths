@@ -34,7 +34,6 @@ import grp
 import json
 import os
 import pwd
-import shutil
 import stat
 import sys
 import time
@@ -134,6 +133,63 @@ def chown_tree(path, uid, gid):
             os.lchown(os.path.join(base, n), uid, gid)
 
 
+def open_nofollow(path, directory):
+    """An fd for `path`, opened one component at a time from / with O_NOFOLLOW, so no component (the item itself or
+    any ancestor) can be a symlink AT OPEN TIME. A check on the path string (realpath) can be raced by the service
+    user swapping a component between the check and the root copy; the copy below reads only through this fd."""
+    parts = [c for c in path.split("/") if c]
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for i, comp in enumerate(parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+            if i < len(parts) - 1 or directory:
+                flags |= os.O_DIRECTORY
+            try:
+                nfd = os.open(comp, flags, dir_fd=fd)
+            except OSError as exc:
+                raise RuntimeError(f"{path}: component {comp!r} is not a plain {'directory' if directory or i < len(parts) - 1 else 'file'} "
+                                   f"({exc.strerror}); refusing to copy") from None
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _copy_fd(src_fd, dst, mode):
+    with os.fdopen(os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600), "wb") as out:
+        while chunk := os.read(src_fd, 1 << 20):
+            out.write(chunk)
+    os.chmod(dst, mode, follow_symlinks=False)
+
+
+def copy_tree_pinned(src_fd, dst):
+    """copytree(symlinks=True) through pinned descriptors: every directory is entered by os.fwalk without following
+    symlinks (it re-checks each one against its lstat before descending), every file is opened O_NOFOLLOW relative
+    to its directory's fd, symlinks are recreated as links, and special files are skipped."""
+    os.mkdir(dst, 0o700)
+    for dirpath, dirnames, filenames, dirfd in os.fwalk(".", dir_fd=src_fd, follow_symlinks=False):
+        out = dst if os.path.normpath(dirpath) == "." else os.path.join(dst, os.path.normpath(dirpath))
+        for n in dirnames + filenames:
+            st = os.lstat(n, dir_fd=dirfd)
+            target = os.path.join(out, n)
+            if stat.S_ISLNK(st.st_mode):
+                os.symlink(os.readlink(n, dir_fd=dirfd), target)
+            elif stat.S_ISDIR(st.st_mode):
+                os.mkdir(target, 0o700)
+                os.chmod(target, stat.S_IMODE(st.st_mode))
+            elif stat.S_ISREG(st.st_mode):
+                fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dirfd)
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise RuntimeError(f"{target}: changed type during the copy; refusing")
+                    _copy_fd(fd, target, stat.S_IMODE(st.st_mode))
+                finally:
+                    os.close(fd)
+    os.chmod(dst, stat.S_IMODE(os.fstat(src_fd).st_mode))
+
+
 def apply_item(it, root, state):
     old, new = under(root, it["old"]), under(root, it["new"])
     uid, gid = uid_of(it["owner"]), gid_of(it["group"])
@@ -154,7 +210,11 @@ def apply_item(it, root, state):
     if not done:
         if it["kind"] == "dir":
             if os.path.isdir(old):
-                shutil.copytree(old, new, symlinks=True)  # a planted symlink is copied as a link, never followed
+                src = open_nofollow(old, directory=True)  # pinned: a swap after the check above cannot redirect it
+                try:
+                    copy_tree_pinned(src, new)            # a planted symlink is copied as a link, never followed
+                finally:
+                    os.close(src)
             else:
                 os.makedirs(new, exist_ok=True)
             open(os.path.join(new, STAMP), "w").close()
@@ -162,7 +222,13 @@ def apply_item(it, root, state):
         else:
             if not os.path.isfile(old) or os.path.islink(old):
                 raise RuntimeError(f"{old} is not a regular file; nothing to copy")
-            shutil.copyfile(old, new, follow_symlinks=False)
+            src = open_nofollow(old, directory=False)
+            try:
+                if not stat.S_ISREG(os.fstat(src).st_mode):
+                    raise RuntimeError(f"{old} is not a regular file; nothing to copy")
+                _copy_fd(src, new, stat.S_IMODE(os.fstat(src).st_mode))
+            finally:
+                os.close(src)
             os.chown(new, uid, gid)
     os.chown(new, uid, gid, follow_symlinks=False)  # re-assert the top only: the container owns what is inside
     os.chmod(new, it["mode"])
