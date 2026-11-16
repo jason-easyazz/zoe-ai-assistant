@@ -710,14 +710,15 @@ Each was checked with grep for callers across `services/`, `scripts/`, `labs/`, 
 | private deployment defaults (locations held privately) | replace with patterns | private review acceptance criteria |
 | `scripts/setup/openclaw-multica-wrapper.sh` | retired agent | `grep -rIl openclaw-multica-wrapper .` lists only itself |
 | `zd/OPENCLAW_AG_UI_STREAMING.md` | retired design note | no inbound reference |
-| `scripts/maintenance/retire_hermes_openclaw_board.py`, `migrate_hermes_env.py` (+ `tests/unit/test_migrate_hermes_env.py`, its line in `test_owner_scripts_help.py`, the ratchet entries), `multica_reassign_open_to_hermes.py`, `reset_engineering_boards.py`, `verify_kanban_github_auth.sh` | one-shot or retired-agent scripts | callers are only their own tests, a ratchet list and retired guides |
+| `scripts/maintenance/retire_hermes_openclaw_board.py`, `multica_reassign_open_to_hermes.py`, `reset_engineering_boards.py`, `verify_kanban_github_auth.sh` | one-shot or retired-agent scripts | callers are only their own tests, a ratchet list and retired guides |
+| `scripts/maintenance/migrate_hermes_env.py` (+ `tests/unit/test_migrate_hermes_env.py`, its line in `test_owner_scripts_help.py`, the ratchet entries) | **NOT deletable yet.** It is the supported way to move credentials out of the old environment file, an owner step still outstanding in `docs/knowledge/open-problems.md` | delete only after the owner has run it, the services load the new file, and that is verified; the open-problems entry is closed in the same change |
 | `docs/guides/HERMES_OPTIMIZATION_PLAYBOOK.md`, `HERMES_ENGINEERING_SKILLS.md`, `MULTICA_HERMES_PR_LOOP.md`, `KANBAN_GITHUB_AUTH.md`, `ENGINEERING_HARNESS_LOOP.md`; `docs/governance/OPENCLAW_ECOSYSTEM_UPDATE.md` | retired agents presented as live | no code caller; re-point the four `doc=` fields in `flag_registry.py` (`:134,308,437,1086`) first |
 | `skills/openclaw/` | `skills/AGENTS.md`: not wired | no runtime loader exists |
 | unused privileged code (locations held privately) | unused: delete | private review acceptance criteria; retain required production operations |
 | unused stub routes (security detail held privately) | unused: delete | retain coverage evidence in the private review |
 | `zd/calendar_ical.py:324` `to_ics` (unless publishing is planned) | no production caller | tests only |
 | the `reminder_cancel` branch and the other dead coreference names (R02, R03), unless WP-40 wires them | no executor | a new test: every name `resolve_coreference` can emit has an executor |
-| `zd/autoresearch_bridge.py`, `zd/zoe_capability_profile_promotion_handoff.py` and their tests | no importer | `grep -rlE "(from\|import) autoresearch_bridge"` finds only its test |
+| `zd/autoresearch_bridge.py`, `zd/zoe_capability_profile_promotion_handoff.py` and their tests | no importer, **but a documented entry point**: `skills/autoresearch-engineer/SKILL.md` calls `prepare_promotion(<run_dir>)` and the module has its own command line | keep until that promotion workflow is explicitly retired or replaced in the same change; "no importer" alone does not make it unused |
 | graphify residue (X05) | graphify retired | the enum values and capability id have no reader outside the cluster |
 | `RESTART_SERVICES.sh:16` retired unit names; `scripts/setup/jetson/zoe-self-review.*` | units that no longer exist | no installer references them |
 | retired scheduled jobs (locations held privately) | unused: delete | private review acceptance criteria |
@@ -751,7 +752,10 @@ Tracked as one number: duplicate rule copies removed per verb, starting from the
 
 ## 4. Definition of done for a kernel work package
 
-A builder ticks every line before asking for review; the reviewer ticks it again and refuses the PR on any blank.
+**Proposed, not yet binding.** This checklist becomes a rule only when it is written into the owning contract
+(`labs/zoe-os/AGENTS.md`, and `services/zoe-os/AGENTS.md` after the move), which this record does not change. Until then it is
+the list a builder and a reviewer are asked to use: a builder ticks every line before asking for review; the reviewer ticks it
+again and questions any blank.
 
 - [ ] Every duplicate at the seam is removed, or has a register row with the phase that removes it.
 - [ ] Every bug found at the seam is fixed with a negative control, or has a register row (here or in the ledger).
