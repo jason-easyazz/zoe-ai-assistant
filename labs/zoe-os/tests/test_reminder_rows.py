@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import pytest
 
 from authority import AUTH_ACTS, AUTHORITY_BRAIN, ADAPTERS, DurableKeeper, DurableLists
-from zoe_os.capability import CHILD, Person
+from zoe_os.capability import ADULT, CHILD, Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.kernel import Kernel
 from zoe_os.reminder_rows import DurableReminders
@@ -22,7 +22,7 @@ T0 = datetime(2030, 1, 7, 12, 0, tzinfo=timezone.utc).timestamp()          # a M
 
 class House:
     def __init__(self, path, clock, default_time="09:00"):
-        self.k = Kernel(str(path), [Person(A), Person(B), Person(K, CHILD, guardians=(A,))], clock=lambda: clock[0])
+        self.k = Kernel(str(path), [Person(A, ADULT), Person(B, ADULT), Person(K, CHILD, guardians=(A,))], clock=lambda: clock[0])
         self.lists = DurableLists(self.k.spine).register(self.k)
         self.rem = DurableReminders(self.k.spine, lambda: clock[0], self.k.grants, default_time=default_time).register(self.k)
         self.rem.rebuild()

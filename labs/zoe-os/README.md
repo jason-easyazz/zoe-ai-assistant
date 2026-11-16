@@ -43,7 +43,7 @@ is invented.
 | `zoe_os/brain/bridge.py` | the brain's adapter: tool list derived from the kernel's `describe`, one tool call = one `act`, one sentence back |
 | `zoe_os/brain/drivers.py` | kernel-side drivers for the brain's three actions (lists, reminders, alarms) and the keeper that erases them on forget |
 | `zoe_os/brain/drive.py` | the scripted agent and the recorded-stream replay (no model) |
-| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's shadow (list add, list remove, reminder create, alarm create) (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only. An EMPTY or unreadable `people.json` starts it with nobody granted and forget of recorded people still served; a missing one refuses the start. `tests/test_shadow_daemon.py` proves its forget / known-people / roster behaviour on the wire with the lab's own client |
+| `shadow_daemon.py` | the kernel as a long-running SHADOW process for zoe-data's shadow (list add, list remove, reminder create, alarm create) (`docs/knowledge/zoe-os-list-shadow.md`): roster in, credentials + socket out; owner-installed unit only. The roster (`people.json`) states roles: `{"people": [{"id": "<member>", "role": "adult"}, {"id": "<child>", "role": "child", "guardians": ["<member>"]}]}`; a plain id, a missing or unknown role, or an entry the loader cannot fully read is LEAST access (`capability.LEAST`: no consent, no shared reads), never adult; the shadow still RECORDS that member's adds (a record-only grant, refused anywhere but the shadow). An EMPTY or unreadable `people.json` starts it with nobody granted and forget of recorded people still served; a missing one refuses the start. `tests/test_shadow_daemon.py` proves its forget / known-people / roster behaviour on the wire with the lab's own client |
 | `bench_brain.py` | latency of the kernel hop per brain action |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
@@ -284,11 +284,11 @@ job that already snapshots a live SQLite file with Python's online backup API (t
     fi
 
 Never `cp` the live `.db` (its `-wal` holds committed adds the main file does not have yet). `creds.json` and `k.sock` are re-made at
-every start and are never backed up; `people.json` is re-written from `users`. **Restore check** (run on the copy, kernel stopped):
+every start and are never backed up; `people.json` is re-written from `users`, each entry with its role stated
+(`{"id", "role": "adult"|"child"|"guest", "guardians"}`: a plain id is least access, never adult). **Restore check** (run on the copy, kernel stopped):
 `gunzip` it to the `--db` path, then the integrity check above, then start the daemon and read `health` (`schema` 1, `last_write_ok`
-true) and `scripts/maintenance/os_authority_reconcile.py` (`kernel_only=0`). A restore older than a forget must re-apply the forget
-(the repo-wide backup rule in `services/zoe-data/forget_reach.py`): re-run `delete_user` / the entity forget for anything forgotten
-after the backup's date. The backup holds the same words the kernel does, so it ages out with the 35-day rule.
+true) and `scripts/maintenance/os_authority_reconcile.py` (`kernel_only=0`). A restore brings back everything the backup holds (owner
+decision 2026-11-16). The backup holds the same words the kernel does, so it ages out with the 35-day rule.
 
 **Not done here.** Retention (a sweep as written would drop list rows: their receipts must be exempt first, D5), power loss (WAL with
 `synchronous=NORMAL` survives a kill, not necessarily a power cut), the roster push (D6), the guardian model (D7).

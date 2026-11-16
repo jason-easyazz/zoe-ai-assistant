@@ -495,7 +495,9 @@ new run has a new generation and refuses every token minted for an earlier one, 
 even under a provisioned secret. Within a run, verification time never goes back (`max(last seen, wall)`), and
 a wall clock seen to step back past the skew rolls the generation mid-run (republished at once), so an
 accepted token is never accepted again for any sequence of wall-clock values. A guardian link grants reach (forget, undo, seeing private events, signing a
-grant) only while the kernel's own roster says the subject is a child. There is no setting
+grant) only while the kernel's own roster says the subject is a child. Organising never includes forget, undo or explain;
+forgetting on someone's behalf is a separate named power, today offered only to a child's guardian, to be replaced by
+memory care (not built yet). A person with no stated or an unknown role is LEAST access, never adult. There is no setting
 that turns the check off. What it does not defend: a process holding the identity secret can mint for anyone,
 so that secret must live only with the code that verifies people.
 
@@ -601,7 +603,7 @@ Two rules: the bridge carries **ids and labels only** (no utterance, reply, titl
 Order of work, each step its own small change behind the flag:
 1. the spine as a module inside the service with no publisher (the registry row for forget goes in here);
 2. call sites 2 and 3 (off the voice path), then read the log for a week: volumes, no errors, no latency;
-3. call site 4, with a restore-and-replay drill of the forget on a copy;
+3. call site 4, with a restore drill on a copy;
 4. call sites 1 and 5 (voice path: replay-gated);
 5. only then a first subscriber, in shadow: the claim auditor, which reads and reports and changes nothing.
 
@@ -1098,8 +1100,9 @@ decided before anything is written: a past day, a repeat outside the subset, a r
 may edit or cancel a family one; only the owner snoozes or marks it done, and only the owner changes who sees it (a
 member's visibility change is dropped, as production drops it). A CARER (owner rule 2026-11-16: a guardian named on the
 roster of a child OR of an adult in care) may also see, set, edit, snooze, mark done and cancel the person's reminders,
-except a `private` one. That reach is for managing rows only: forget, undo and explain for a person stay child-only
-(`capability.guards`). The `reminders` read op is person-bound: it answers only for the person a speaker assertion proves.
+except a `private` one. That reach is for managing rows only: organising never includes forget, undo or explain;
+forgetting on someone's behalf is a separate named power, today offered only to a child's guardian (`capability.guards`), to
+be replaced by memory care. The `reminders` read op is person-bound: it answers only for the person a speaker assertion proves.
 
 **Durable.** Rows are rebuilt from the kernel's own verified receipts (`rows.DurableRows`, the list store's rule): each
 receipt's proof carries its row, and a row exists only while the receipt that created it is live. Every later action over a
@@ -1160,9 +1163,9 @@ reminders' (`Spine._row_source`): forgetting an alarm takes every later record o
 it takes the alarm too; an undo is refused once the alarm changed since.
 
 **What does not map, precisely.**
-- HOUSEHOLD alarms (owner `__household__`, set at the wall panel by whoever is there) and the panel's right to SILENCE
+- Alarms of a DEVICE or SHARED principal (production's owner `__household__`, set at the wall panel by whoever is there) and the panel's right to SILENCE
   any ringing alarm (`can_silence`): the kernel acts only for a person, and a guest at the panel is nobody. They need a
-  household principal in the consent model; until then they stay production's.
+  device or shared principal in the consent model; until then they stay production's.
 - One-day exceptions (`alarm_overrides`: "an hour earlier next Friday", or skip a day): not modelled.
 - Sound (tone or music), the volume ramp and the panel's masked view: not modelled (they decide nothing the kernel owns).
 - Timers are a separate, in-memory store in production (`skybridge_service._TimerStore`, "set a timer", pause, resume,

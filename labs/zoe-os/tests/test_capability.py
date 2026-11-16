@@ -7,7 +7,7 @@ from zoe_os.capability import ADULT, CHILD, GUEST, ConsentError, Enforcer, Grant
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.spine import Refused, Spine
 
-PEOPLE = [Person("adult-a"), Person("adult-b"), Person("kid", CHILD, guardians=("adult-a",)),
+PEOPLE = [Person("adult-a", ADULT), Person("adult-b", ADULT), Person("kid", CHILD, guardians=("adult-a",)),
           Person("visitor", GUEST)]
 VOICE = {"skill": "voice", "emits": ["utterance", "presence"], "origin": True}
 HELPER = {"skill": "helper", "reads": {"utterance": "private", "presence": "household"},

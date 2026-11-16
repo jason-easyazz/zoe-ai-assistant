@@ -10,9 +10,11 @@ Whether it is ringing NOW is ``schedule.alarm_state`` (pure), where production's
 Actions (all reversible, all read back): ``alarm.set`` (today's ``{time}`` still works: it now ADDS an alarm, as production does,
 instead of replacing the one the lab driver kept), ``alarm.edit``, ``alarm.toggle``, ``alarm.delete``, ``alarm.snooze``,
 ``alarm.dismiss``. Who may: the owner (``alarms.can_edit`` for a personal alarm), and a CARER (owner rule 2026-11-16: a guardian on
-the roster of a child or of an adult in care) for the person they care for, except an alarm its owner made ``private``. Forget,
-undo and explain stay child-only (``capability.guards``). A HOUSEHOLD alarm (owner ``__household__``,
-set at the wall panel) and the panel's right to silence any ringing alarm are NOT expressible: the kernel acts only for a person.
+the roster of a child or of an adult in care) for the person they care for, except an alarm its owner made ``private``.
+Organising never includes forget, undo or explain; forgetting on someone's behalf is a separate named power, today offered only to
+a child's guardian (``capability.guards``), to be replaced by memory care. An alarm owned by a DEVICE or SHARED principal (production
+writes the owner ``__household__`` for one set at the wall panel) and the panel's right to silence any ringing alarm are NOT
+expressible: the kernel acts only for a person.
 """
 from __future__ import annotations
 
@@ -62,7 +64,7 @@ class DurableAlarms(DurableRows):
         return sch.alarm_state(row, self.clock() if now is None else now, self.tz)
 
     def visible_to(self, person: str) -> list[dict]:
-        """``alarms.can_see`` for a member: their own (household alarms are not modelled). ``enabled`` as production shows it: a
+        """``alarms.can_see`` for a member: their own (alarms of a device or shared principal are not modelled). ``enabled`` as production shows it: a
         one-off that has rung is off."""
         out = []
         for _, r in sorted(self.rows.items()):

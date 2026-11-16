@@ -21,7 +21,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-from ..capability import ADULT, CHILD, GUEST, Person
+from ..capability import ADULT, CHILD, GUEST, LEAST, Person
 from ..replay import Recording
 
 GENERATOR = 1
@@ -43,7 +43,7 @@ class Habit:
 @dataclass(frozen=True)
 class Member:
     id: str
-    role: str = ADULT
+    role: str = LEAST                            # unstated: least access, never adult (``capability.LEAST``)
     guardians: tuple[str, ...] = ()
     wake: Habit = Habit("06:45")
     leave: Habit | None = Habit("08:00")        # None: usually at home
@@ -75,8 +75,8 @@ class Household:
 
 SAMPLE = Household(
     members=(
-        Member("alex", wake=Habit("06:30"), leave=Habit("07:50"), take=("phone", "keys", "laptop")),
-        Member("sam", wake=Habit("07:00"), leave=Habit("08:20"), back=Habit("18:10", 30),
+        Member("alex", ADULT, wake=Habit("06:30"), leave=Habit("07:50"), take=("phone", "keys", "laptop")),
+        Member("sam", ADULT, wake=Habit("07:00"), leave=Habit("08:20"), back=Habit("18:10", 30),
                bed=Habit("23:00", 25), take=("phone", "gym bag")),
         Member("kid", CHILD, ("alex", "sam"), wake=Habit("07:10", 10), leave=Habit("08:15", 10),
                back=Habit("15:30", 15), bed=Habit("20:15", 15), routine=("teeth", "shoes"),
@@ -203,7 +203,7 @@ def household_from(raw: dict) -> Household:
         return None if value is None else Habit(value) if isinstance(value, str) else Habit(*value)
 
     members = tuple(Member(
-        m["id"], m.get("role", ADULT), tuple(m.get("guardians", ())),
+        m["id"], m.get("role", LEAST), tuple(m.get("guardians", ())),
         **{key: habit(m[key]) for key in ("wake", "leave", "back", "bed") if key in m},
         routine=tuple(m.get("routine", ())), take=tuple(m.get("take", ()))) for m in raw["members"])
     return Household(members, habit(raw.get("dinner", "18:45")),

@@ -13,7 +13,7 @@ import pytest
 from authority import AUTH_ACTS, AUTHORITY_BRAIN, ADAPTERS, DurableKeeper, DurableLists
 from zoe_os import schedule as sch
 from zoe_os.alarm_rows import MAX_SNOOZES, DurableAlarms
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.kernel import Kernel
 from zoe_os.spine import Refused
@@ -37,7 +37,7 @@ def seq_n(owner) -> int:
 
 class House:
     def __init__(self, path, clock):
-        self.k = Kernel(str(path), [Person(A), Person(B)], clock=lambda: clock[0])
+        self.k = Kernel(str(path), [Person(A, ADULT), Person(B, ADULT)], clock=lambda: clock[0])
         self.lists = DurableLists(self.k.spine).register(self.k)
         self.al = DurableAlarms(self.k.spine, lambda: clock[0]).register(self.k)
         self.al.rebuild()

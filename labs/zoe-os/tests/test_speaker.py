@@ -258,7 +258,7 @@ def test_through_the_socket_the_surface_alone_is_refused_and_the_members_own_for
 def test_the_token_and_the_secret_reach_no_file_but_the_identity_file_and_no_log_and_the_eraser_still_erases():
     from test_authority import A, B
     state = Path(tempfile.mkdtemp(prefix="zt"))
-    (state / "people.json").write_text(json.dumps({"people": [A, B]}))
+    (state / "people.json").write_text(json.dumps({"people": [{"id": A, "role": "adult"}, {"id": B, "role": "adult"}]}))
     proc = subprocess.Popen([sys.executable, "-B", str(HERE / "authority_proc.py"), "--dir", str(state)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             env={"PATH": os.environ["PATH"], "HOME": str(state)})

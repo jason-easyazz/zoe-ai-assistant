@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from zoe_os import bridge
-from zoe_os.capability import Enforcer, GrantStore, Person
+from zoe_os.capability import ADULT, Enforcer, GrantStore, Person
 from zoe_os.events import Kind, Visibility
 from zoe_os.spine import Spine
 
@@ -17,7 +17,7 @@ READER = {"skill": "reader", "reads": {k: "private" for k in
 
 @pytest.fixture
 def spine(tmp_path):
-    store = GrantStore([Person("member-1")])
+    store = GrantStore([Person("member-1", ADULT)])
     for m in (*ADAPTERS, READER):
         store.install(m)
     store.grant("member-1", "reader")

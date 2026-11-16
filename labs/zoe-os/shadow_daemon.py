@@ -8,7 +8,8 @@ receipt beside it, in its OWN store. Read ``docs/knowledge/zoe-os-list-shadow.md
 
 State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no ``ZOE_`` name), else ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
 
-    people.json   {"people": [member ids]}   REQUIRED, written by the owner (``os_shadow.export_roster``); read at start. Missing:
+    people.json   {"people": [entries]}   REQUIRED (an entry: {"id", "role": "adult"|"child"|"guest", "guardians": [ids]}; a
+                  plain id, a missing or unknown role, or anything the loader cannot fully read is LEAST access: say "adult"), written by the owner (``os_shadow.export_roster``); read at start. Missing:
                   the start is refused. EMPTY (the last member removed) or unreadable: the daemon starts, nobody is granted
                   anything, and the recorded people can still be forgotten (``read_roster``)
     known-people.json  the roster plus every id the kernel still holds a record for: who it can still FORGET. Derived from the
@@ -25,9 +26,11 @@ The verbs it serves: ``list.add``, ``list.remove`` (registered HERE, over the sa
 ``remind.set`` and ``alarm.set`` (the lab drivers, ``zoe_os/brain/drivers.py``). Which of them zoe-data proposes is its own
 ``ZOE_OS_SHADOW_VERBS``; the kernel serves all four.
 
-What it grants itself, and why that is honest only in shadow: every roster member gets the ``brain`` skill's four acts at
-start, with no consent ceremony, because a shadow records what the household already did; it must never be reused as the consent
-model for an authoritative kernel (a child's grant needs a guardian: not modelled here, every member is an adult).
+What it grants itself, and why that is honest only in shadow: every roster member gets a RECORD-ONLY grant of the ``brain``
+skill's four acts at start (``GrantStore.grant(record_only=True)``, refused anywhere but a store marked ``shadow``), with no consent
+ceremony, because a shadow records what the household already did, whatever the member's role: a least-access member's adds are
+still recorded for comparison. It is not consent and must never be reused as the consent model for an authoritative kernel.
+Roles come from the roster as stated; an entry with no stated or an unknown role is LEAST access (``capability.LEAST``), never adult.
 A member taken off the roster stays known (forgettable, never granted) while the kernel holds a record for them, and no longer: once a
 whole-person forget of theirs succeeds their id leaves ``known-people.json`` and the kernel's people. A forget does not shield the
 PERSON: a member still on the roster who acts again is recorded afresh, and that record makes them forgettable again.
@@ -50,7 +53,7 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
 from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders  # noqa: E402
-from zoe_os.capability import Person  # noqa: E402
+from zoe_os.capability import ROLES, Person  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os import speaker  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
@@ -195,20 +198,28 @@ class ShadowServer(KernelServer):
         people.pop(subject, None)
 
 
-def _entry_ok(p) -> bool:
-    """A roster entry: a member id, or ``{"id": id, "role": "adult"|"child"|"guest", "guardians": [ids]}`` (guardians are carers)."""
+def entry_id(p) -> str:
+    """A roster entry's member id: a plain id, or the ``id`` of an object entry; '' when it has none (the roster is unreadable)."""
     if isinstance(p, str):
-        return bool(p)
-    if not isinstance(p, dict) or set(p) - {"id", "role", "guardians"} or not isinstance(p.get("id"), str) or not p["id"]:
-        return False
-    if p.get("role", "adult") not in ("adult", "child", "guest"):
-        return False
-    g = p.get("guardians", [])
-    return isinstance(g, list) and all(isinstance(x, str) and x for x in g)
+        return p
+    return p["id"] if isinstance(p, dict) and isinstance(p.get("id"), str) else ""
 
 
 def roster_ids(entries: list) -> list:
-    return [p if isinstance(p, str) else p["id"] for p in entries]
+    return [entry_id(p) for p in entries]
+
+
+def roster_people(entries: list) -> list:
+    """Persons from roster entries, roles as STATED. Least access whenever the entry does not fully say otherwise: a plain id, a
+    missing or unknown role, an unknown key, or guardians that are not a list of ids give ``Person(id)`` (``capability.LEAST``)."""
+    out = []
+    for p in entries:
+        if isinstance(p, dict) and not set(p) - {"id", "role", "guardians"} and p.get("role") in ROLES \
+                and isinstance(p.get("guardians", []), list) and all(isinstance(g, str) and g for g in p.get("guardians", [])):
+            out.append(Person(p["id"], p["role"], tuple(p.get("guardians", []))))
+        else:
+            out.append(Person(entry_id(p)))
+    return out
 
 
 def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
@@ -234,7 +245,7 @@ def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
         people = json.loads(raw)["people"] if raw is not None else None
     except (ValueError, KeyError, TypeError, UnicodeDecodeError):
         people = None
-    if not isinstance(people, list) or not all(_entry_ok(p) for p in people):
+    if not isinstance(people, list) or not all(entry_id(p) for p in people):
         print(f"zoe-os {daemon} kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
               file=sys.stderr, flush=True)
         return [], "unreadable"
@@ -244,7 +255,7 @@ def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
 def build(state: Path, db: str | None = None):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
     entries, roster_status = read_roster(state)
-    people = roster_ids(entries)                   # the shadow records what happened: roles and carers are the authority's
+    people = roster_ids(entries)                   # ids; roles are read below, as stated (unstated: least access)
     from authority import db_path                  # the same move rule as the authority: never start beside an unmoved record
     path = db_path(state, db)                      # --db: the permanent home (authority.PERMANENT_DB)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -252,15 +263,17 @@ def build(state: Path, db: str | None = None):
     # Every id the kernel holds a record for stays a person it knows, so a member taken off people.json can still be forgotten
     # (zoe-data forgets by id and reads "only a person can ask to forget" as "never recorded": this is what makes that true).
     # Only the CURRENT roster is granted anything below: a removed member is forgettable, never proposable.
-    k = Kernel(str(path), [Person(p) for p in known])
+    members = roster_people(entries)
+    k = Kernel(str(path), members + [Person(p) for p in known if p not in set(people)])   # extras (off the roster): least
     lists = Lists().register(k)
     register_list_remove(k, lists)
     reminders, alarms = Reminders(time.time).register(k), Alarms().register(k)
     for manifest in (*ADAPTERS, SHADOW_BRAIN):
         k.grants.install(manifest)
     k.install(Keeper(lists, reminders, alarms))
+    k.grants.shadow = True                                     # this store records; it decides nothing (see the module docstring)
     for person in people:
-        k.grants.grant(person, "brain", acts=list(ACTS))       # the shadow records what already happened: see the module docstring
+        k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)    # recorded whatever their role, never consent
     srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people)
     srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
