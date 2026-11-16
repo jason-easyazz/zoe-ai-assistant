@@ -19,6 +19,7 @@ import pytest
 pytestmark = pytest.mark.ci_safe  # slim-dep green; opts into validate.yml's `-m ci_safe` lane
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -184,8 +185,8 @@ async def test_bootstrap_silent_then_live_prs_in_one_evening_digest():
     gh.raise_pr(5, "docs: old open PR")
     gh.merge(4, "fix: merged before the feature was on", at=at("08:00"))
     await booted(gh, bot)
-    gh.merge(10, "feat(brief): first-turn brief", "## What\n\nThe brief now opens your first chat. It skips cancelled "
-             "events. A third sentence never shows.\n\n- detail", at=at("10:00"))
+    gh.merge(10, "feat(brief): first-turn brief", "## What\n\n- detail\n\nFor-The-Household: The brief now opens your "
+             "first chat. It skips cancelled events. A third sentence never shows.", at=at("10:00"))
     gh.merge(11, "fix(music): resume after a call", "## What\n\nMusic resumes after a call ends.", at=at("10:05"))
     gh.merge(12, "test: pin a date", at=at("10:10"))
     gh.merge(13, "fix: not deployed yet", at=at("19:00"), live=False)
@@ -194,12 +195,10 @@ async def test_bootstrap_silent_then_live_prs_in_one_evening_digest():
     await run(gh, bot, at("19:30"))
     assert len(bot.delivered) == 1
     text = bot.delivered[0]["text"]
-    assert "3 changes went live" in text
-    for n in (10, 11, 12):
-        assert text.count(f"#{n} ") == 1
-    assert "#13" not in text and "#4" not in text and "#5" not in text
-    assert "• #10 brief: first-turn brief - The brief now opens your first chat." in text
-    assert "It skips" not in text  # a digest line carries one sentence
+    assert text == ("Good evening. Here's today: three changes went live.\n"
+                    "• The brief now opens your first chat. It skips cancelled events. (#10)\n"
+                    "Plus two bits of housekeeping (#11, #12).\n"
+                    "Nothing for you to do.")  # at most two sentences; no trailer = housekeeping, collapsed
     assert bot.delivered[0]["telegram_id"] == OWNER_TID
     await run(gh, bot, at("19:40"))
     assert len(bot.delivered) == 1  # once only
@@ -216,8 +215,8 @@ async def test_raised_prs_are_a_digest_count_and_a_merge_supersedes_its_raised_l
     await run(gh, bot, at("12:00"))
     await run(gh, bot, at("19:30"))
     text = bot.delivered[0]["text"]
-    assert "Raised, not merged: 2 new (1 draft)." in text
-    assert "Fixed (1)\n• #22 c" in text  # as a live change, not as a raised one
+    assert "Two new changes are open and not merged yet (one is a draft)." in text
+    assert "One bit of housekeeping (#22), nothing you will notice." in text  # as a live change, not a raised one
 
 
 async def test_needs_owner_is_instant_and_three_at_once_are_batched():
@@ -226,13 +225,15 @@ async def test_needs_owner_is_instant_and_three_at_once_are_batched():
     gh.raise_pr(30, "fix: one", "Needs a look.", labels=["needs-owner"])
     await run(gh, bot, at("12:00"))
     assert len(bot.delivered) == 1
-    assert bot.delivered[0]["text"].startswith("Raised, waiting on you: #30 fix: one")
-    assert bot.delivered[0]["url"].endswith("/pull/30")
+    assert bot.delivered[0]["text"] == ('I need your OK on something. It is about "One".\n'
+                                        "Can you have a look when you get a minute?")
+    assert bot.delivered[0]["url"].endswith("/pull/30") and bot.delivered[0]["label"] == "Open #30"
     for n in (31, 32, 33, 34):
         gh.raise_pr(n, f"fix: n{n}", labels=["needs-owner"])
     await run(gh, bot, at("13:00"))
     assert len(bot.delivered) == 2
-    assert bot.delivered[1]["text"].startswith("4 updates from Zoe:")
+    assert bot.delivered[1]["text"] == "Waiting on you:\n" + "\n".join(
+        f'• "N{n}" needs a look from you. (#{n})' for n in (31, 32, 33, 34))
 
 
 async def test_control_large_batch_threshold_sends_one_each(monkeypatch):
@@ -258,11 +259,13 @@ async def test_same_kind_within_30_min_and_the_daily_cap_roll_into_the_digest():
     await run(gh, bot, at("13:00"), people=me)  # 2nd instant today
     gh.raise_pr(43, "fix: d", labels=["needs-owner"])
     await run(gh, bot, at("14:00"), people=me)  # over the cap: digest
-    assert [d["text"].split("\n")[0] for d in bot.delivered] == [
-        "Raised, waiting on you: #40 fix: a", "Raised, waiting on you: #42 fix: c"]
+    assert [d["label"] for d in bot.delivered] == ["Open #40", "Open #42"]
+    assert [d["text"].split("\n")[0] for d in bot.delivered] == [  # the opener rotates: never the same twice in a row
+        'I need your OK on something. It is about "A".', 'One for you to decide. It is about "C".']
     await run(gh, bot, at("19:30"), people=me)
     digest = bot.delivered[-1]["text"]
-    assert "Waiting on you (2)\n• #41 b\n• #43 d" in digest and "#40" not in digest
+    assert ('Waiting on you:\n• "B" needs a look from you. (#41)\n• "D" needs a look from you. (#43)' in digest
+            and "#40" not in digest)
 
 
 # ── dedup ─────────────────────────────────────────────────────────────────────
@@ -435,7 +438,7 @@ async def test_failed_send_retries_without_duplicates():
     await run(gh, bot, at("13:30"))
     await run(gh, bot, at("19:30"))
     assert bot.calls == 3
-    assert len(bot.delivered) == 1 and "#80" in bot.delivered[0]["text"]
+    assert len(bot.delivered) == 1 and bot.delivered[0]["label"] == "Open #80"
     d = cn.load_state()["deliveries"]["u-owner|pr:80:decision"]
     assert d["status"] == "sent" and d["attempts"] == 2
 
@@ -451,7 +454,7 @@ async def test_a_timeout_after_sending_is_never_resent_and_is_mentioned_once():
     await run(gh, bot, at("19:30"))
     await run(gh, bot, at("19:30", day=20))
     mentions = [d["text"] for d in bot.delivered[1:]]
-    assert len(mentions) == 1 and "may not have reached you earlier: #81" in mentions[0]
+    assert len(mentions) == 1 and 'may not have reached you earlier: "X" (#81).' in mentions[0]
 
 
 class _Crash(BaseException):
@@ -476,8 +479,8 @@ async def _crash_scenario():
 
 async def test_a_crash_mid_send_never_sends_twice():
     bot = await _crash_scenario()
-    assert all("Raised, waiting on you: #82" not in d["text"] for d in bot.delivered)
-    assert len(bot.delivered) == 1 and "may not have reached you earlier: #82" in bot.delivered[0]["text"]
+    assert all(d["label"] != "Open #82" for d in bot.delivered)  # the decision itself is never re-sent
+    assert len(bot.delivered) == 1 and 'may not have reached you earlier: "X" (#82)' in bot.delivered[0]["text"]
 
 
 async def test_control_requeueing_sending_rows_duplicates(monkeypatch):
@@ -488,7 +491,7 @@ async def test_control_requeueing_sending_rows_duplicates(monkeypatch):
 
     monkeypatch.setattr(cn, "_recover", requeue)
     bot = await _crash_scenario()
-    assert any("Raised, waiting on you: #82" in d["text"] for d in bot.delivered)
+    assert any(d["label"] == "Open #82" for d in bot.delivered)
 
 
 # ── stuck deploys, shadow, kill switch ────────────────────────────────────────
@@ -502,8 +505,9 @@ async def test_merged_but_not_live_after_an_hour_is_one_broke_notice():
     await run(gh, bot, at("11:10"))
     await run(gh, bot, at("11:20"))
     assert len(bot.delivered) == 1
-    t = bot.delivered[0]["text"]
-    assert "Merged but not live after 60 min: #90, #91" in t and "failure" in t
+    assert bot.delivered[0]["text"] == (
+        'Heads up: two changes did not go live: "A" and "B". They were merged over an hour ago and are not running '
+        "yet. The last deploy failed. It may need a look. (#90, #91)")
     assert bot.delivered[0]["url"].endswith("/actions/runs/1")
 
 
@@ -544,7 +548,7 @@ async def test_shadow_mode_logs_and_never_sends_and_on_does_not_replay():
     assert bot.calls == 0
     audit = [json.loads(line) for line in (cn.state_dir() / "audit.jsonl").read_text().splitlines()]
     shadow = [a for a in audit if a["event"] == "shadow_send"]
-    assert len(shadow) == 1 and "#95" in shadow[0]["text"]
+    assert len(shadow) == 1 and shadow[0]["url"].endswith("/pull/95") and '"X"' in shadow[0]["text"]
     await run(gh, bot, at("13:00"), mode="on")
     assert bot.calls == 0
 
@@ -564,7 +568,7 @@ async def test_kill_switch_stops_every_send():
 async def test_a_long_digest_is_split_under_the_route_limit_and_every_pr_is_accounted_for():
     gh, bot = FakeGitHub(), FakeBot()
     await booted(gh, bot)
-    body = "## What\n\n" + ("A long sentence about the change that keeps going for a while. " * 3)
+    body = "For-The-Household: " + ("A long sentence about the change that keeps going for a while, " * 3) + "done."
     for n in range(100, 160):
         gh.merge(n, f"fix(area): change number {n} with a reasonably long title", body, at=at("10:00"))
     await run(gh, bot, at("19:30"))
@@ -577,16 +581,34 @@ async def test_a_long_digest_is_split_under_the_route_limit_and_every_pr_is_acco
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
-def test_summary_from_body_trailer_and_title():
-    assert cn.summarise("fix: x", "## What\n\nFirst `thing` is **fixed**. Then [docs](http://x) too. Third.") == \
-        "First thing is fixed. Then docs too."
-    assert cn.summarise("fix: x", "Body text.\n\nFor-The-Household: Music resumes after a call.") == \
-        "Music resumes after a call."
-    assert cn.summarise("feat(brief): first-turn brief skips a cancelled event", "") == \
-        "First-turn brief skips a cancelled event."
-    assert cn.summarise("fix: x", "## What\n\n- bullet one is here.\n- bullet two") == "bullet one is here. bullet two"
-    assert len(cn.summarise("fix: x", "word " * 400)) <= 280
-    assert cn.summarise("fix: x", "Co-Authored-By: a <a@b>\n\nOwner ask: keep me posted.") == "Owner ask: keep me posted."
+def test_household_sentence_subject_and_trailers_never_prose():
+    assert cn.household("Body text.\n\nFor-The-Household: Music resumes after a call.") == "Music resumes after a call."
+    assert cn.household("For-The-Household: `Alarms` **ring** [again](http://x). Second. Third.") == "Alarms ring again. Second."
+    for none in ("For-The-Household: nothing visible", "For-The-Household: Nothing visible.", "no trailer", ""):
+        assert cn.household(none) == ""
+    assert cn.household("<!-- For-The-Household: a template example -->") == ""  # comments are not trailers
+    assert len(cn.household("For-The-Household: " + "word " * 400)) <= 280
+    assert cn.subject("feat(brief): first-turn brief skips a cancelled event (#12)") == \
+        "First-turn brief skips a cancelled event"
+    assert cn.subject('Revert "fix(music): resume after a call" (#13)') == "Resume after a call"
+    assert cn.subject("chore: bump to 1a2b3c4d5e and `x`") == "Bump to and x"
+    assert cn.subject("") == "A change"
+    f = cn.pr_fields("fix: x", "Numbers: a 1 -> 2\nOwner-Step: Flip the `switch`\nIf-No-Answer: It stays off")
+    assert f == {"household": "", "numbers": ["a 1 → 2"], "owner_step": "Flip the switch.",
+                 "if_no_answer": "It stays off."}
+    for key in ("Numbers", "Owner-Step", "If-No-Answer", "For-The-Household"):
+        assert cn._TRAILER.match(f"{key}: anything")
+
+
+def test_numbers_line_is_validated():
+    assert cn.numbers("Numbers: scrubbing a long message 4.5 s -> 0.03 s; tests that guard it 603") == \
+        ["scrubbing a long message 4.5 s → 0.03 s", "tests that guard it 603"]
+    assert cn.numbers("Numbers: faster → much faster; fewer errors") == []  # no digit anywhere: ignored entirely
+    assert cn.numbers("Numbers: a 1->2; b 3 → 4; c 5 -> 6; d 7 -> 8") == ["a 1 → 2", "b 3 → 4", "c 5 → 6"]  # max 3
+    assert cn.numbers("Numbers: **load** [time](http://x) `9 s` -> 2 s; no digit here") == ["load time 9 s → 2 s"]
+    long = cn.numbers("Numbers: " + "word " * 40 + "1 -> 2")
+    assert len(long) == 1 and len(long[0]) <= cn.NUMBER_CHARS and long[0].endswith("…")
+    assert cn.numbers("Numbers:\n\nprose 1 -> 2") == []  # the trailer value is its own line
 
 
 def test_category_from_the_conventional_commit_type():
@@ -715,7 +737,7 @@ async def test_a_pr_open_for_months_is_announced_once():
     gh.raise_pr(99, "fix: slow burner")
     for day in range(0, 70, 5):
         await run(gh, bot, at("19:30") + timedelta(days=day))
-    assert len([d for d in bot.delivered if "Raised, not merged" in d["text"]]) == 1
+    assert len([d for d in bot.delivered if "open and not merged yet" in d["text"]]) == 1
 
 
 async def test_the_may_not_have_reached_you_line_is_mentioned_at_most_once_even_if_it_times_out():
@@ -738,26 +760,11 @@ async def test_a_merge_supersedes_a_decision_held_by_quiet_hours():
     await run(gh, bot, at("23:00", day=18))
     gh.merge(84, "fix: x", at=at("01:00"))
     await run(gh, bot, at("07:10"))
-    assert all("waiting on you" not in d["text"] for d in bot.delivered)
+    assert all(d["label"] != "Open #84" for d in bot.delivered)
     assert cn.load_state()["deliveries"]["u-owner|pr:84:decision"]["status"] == "superseded"
 
 
 # ── owner env default + dot-point "went live" notices ─────────────────────────
-def test_bullets_from_each_source_in_order():
-    hh = cn.bullets("fix: x", "## Summary\n- not me\n\nFor-The-Household: Music resumes after a call. Volume is kept.")
-    assert hh == ["Music resumes after a call.", "Volume is kept."]
-    sm = cn.bullets("fix: x", "Intro.\n\n- other list\n\n## Summary\n\n- First `thing` fixed\n- Second thing\n- Third\n"
-                              "- Fourth\n- Fifth\n\n## Test plan\n- ran it")
-    assert sm == ["First thing fixed", "Second thing", "Third", "Fourth"]
-    assert cn.bullets("fix: x", "## Notes\n- a list only\n- two") == ["A list only", "Two"]
-    para = cn.bullets("fix: x", "Alarms ring again. They had stopped after the update. Third one here. Fourth. Fifth.")
-    assert para[:2] == ["Alarms ring again.", "They had stopped after the update."] and len(para) == 4
-    assert cn.bullets("fix: x", "- one\n- two\n\nTest plan:\n\n- ran tests\n- ran lint") == ["One", "Two"]
-    assert cn.bullets("fix: x", "") == []  # negative control: nothing invented
-    assert cn.bullets("fix: x", "For-The-Household: nothing visible\n\n- real point") == ["Real point"]
-    assert all(len(b) <= cn.BULLET_CHARS for b in cn.bullets("fix: x", "- " + "word " * 100))
-
-
 def _env_owner(cap=50) -> cn.Recipient:
     doc = comm_prefs.normalise({"preset": "everything", "daily_instant_cap": cap}, "admin")
     return cn.Recipient("u-owner", "admin", OWNER_TID, doc, env_default=True)
@@ -773,10 +780,12 @@ async def _two_live(people):
     return bot
 
 
-async def test_live_notice_is_title_plus_dot_points_one_message_per_pr():
+async def test_live_notices_one_message_per_pr_and_the_wording_rotates():
     bot = await _two_live([_env_owner()])
-    assert [d["text"] for d in bot.delivered] == ["Live now: #50 feat: one\n• Alpha thing\n• Beta thing",
-                                                  "Live now: #51 feat: two\n• Gamma thing"]
+    assert [d["text"] for d in bot.delivered] == [
+        "Some housekeeping went in: One.\nNothing for you to do.",
+        "A behind-the-scenes change is in and running: Two.\nNothing for you to do."]
+    assert [d["label"] for d in bot.delivered] == ["Open #50", "Open #51"]  # the number lives on the button
 
 
 async def test_control_saved_prefs_owner_keeps_the_30_minute_spacing():
@@ -784,16 +793,16 @@ async def test_control_saved_prefs_owner_keeps_the_30_minute_spacing():
     assert len(saved.delivered) == 1
 
 
-async def test_batched_live_notices_keep_each_prs_bullets():
+async def test_batched_live_notices_keep_each_prs_sentence():
     gh, bot = FakeGitHub(), FakeBot()
     people = [_env_owner()]
     await run(gh, bot, at("09:00"), people=people)
     for n in (60, 61, 62):
-        gh.merge(n, f"feat: p{n}", f"- point a{n}\n- point b{n}", at=at("12:00"))
+        gh.merge(n, f"feat: p{n}", f"- point\n\nFor-The-Household: Thing {n} works now.", at=at("12:00"))
     await run(gh, bot, at("12:05"), people=people)
-    assert len(bot.delivered) == 1
-    t = bot.delivered[0]["text"]
-    assert t.startswith("3 updates from Zoe:") and all(f"Point a{n}" in t and f"Point b{n}" in t for n in (60, 61, 62))
+    assert [d["text"] for d in bot.delivered] == [
+        "Three things went in this afternoon.\n• Thing 60 works now. (#60)\n• Thing 61 works now. (#61)\n"
+        "• Thing 62 works now. (#62)\nNothing for you to do."]
 
 
 async def test_a_long_live_notice_stays_under_1000_chars():
@@ -848,3 +857,228 @@ async def test_quiet_hours_still_hold_overnight_with_the_env_default():
     assert bot.delivered == []
     await run(gh, bot, at("07:05", day=20), people=people)
     assert len(bot.delivered) == 1
+
+
+# ── the assistant's voice (exact text) ────────────────────────────────────────
+FIX_BODY = ("## Summary\n- widen the scrubber\n\nFor-The-Household: Long messages no longer make Zoe pause before she "
+            "answers.\nNumbers: scrubbing a long message 4.5 s -> 0.03 s; tests that guard it 603\n")
+MORNING = datetime(2026, 10, 19, 9, 30, tzinfo=timezone(timedelta(hours=8)))
+EVENING = datetime(2026, 10, 19, 19, 0, tzinfo=timezone(timedelta(hours=8)))
+
+
+def _live(n, title, body=""):
+    return {"key": f"pr:{n}:live", "kind": "live", "number": n, "title": title, "url": f"https://x/{n}",
+            "category": cn.category_for_title(title), **cn.pr_fields(title, body)}
+
+
+def _decision_item(n=2010):
+    body = ("For-The-Household: The hall panel would dim itself at 9pm.\nOwner-Step: Should it dim at 9pm, or stay "
+            "bright?\nIf-No-Answer: It stays as it is.")
+    return {"key": f"pr:{n}:decision", "kind": "raised", "category": "decision", "number": n,
+            "title": "feat(panel): dim at night", "url": f"https://x/{n}", **cn.pr_fields("", body)}
+
+
+def _stuck_item():
+    return {"key": "deploy:stuck:x", "kind": "stuck", "category": "broke", "title": "Merged but not live",
+            "summary": cn.stuck_text([{"number": 2005, "title": "fix(reminders): repeat on weekdays only"}],
+                                     timedelta(minutes=60), {"conclusion": "failure"})}
+
+
+FIX = _live(2001, "fix(memory): widen the scrubber (#2001)", FIX_BODY)
+SNOOZE = _live(2002, "feat(reminders): snooze from the panel", "For-The-Household: You can snooze a reminder from the "
+               "wall screen now.\nOwner-Step: Switch ZOE_REMINDER_SNOOZE on when you want to try it.")
+CHORE = _live(2003, "test: pin a date in the calendar test")
+REVERT = _live(2004, 'Revert "feat(reminders): snooze from the panel" (#2004)',
+               "For-The-Household: The snooze button is gone again for now.")
+
+
+def test_one_fix_with_numbers_technical_and_plain():
+    m = cn.render_instant([FIX], "technical", "o/r", turn=0, local=MORNING)
+    assert m.text == ("A fix is in and running. Long messages no longer make Zoe pause before she answers.\n"
+                      "By the numbers: scrubbing a long message 4.5 s → 0.03 s; tests that guard it 603.\n"
+                      "Nothing for you to do.")
+    assert (m.url, m.label) == ("https://x/2001", "Open #2001")
+    assert cn.render_instant([FIX], "plain", "o/r", turn=1).text == (  # layer 1 only: no numbers
+        "Fixed, and live now. Long messages no longer make Zoe pause before she answers.\nNothing for you to do.")
+
+
+def test_owner_step_ends_the_message_and_missing_or_nothing_visible_is_housekeeping():
+    assert cn.render_instant([SNOOZE], "technical", "o/r", turn=2).text == (
+        "A new change just went live. You can snooze a reminder from the wall screen now.\n"
+        "One thing for you: Switch ZOE_REMINDER_SNOOZE on when you want to try it.")
+    hidden = _live(2008, "refactor(router): split the table", "For-The-Household: nothing visible")
+    assert cn.render_instant([hidden], "technical", "o/r", turn=0).text == (
+        "Some housekeeping went in: Split the table.\nNothing for you to do.")
+    assert cn.render_instant([CHORE], "technical", "o/r", turn=2).text == (
+        "Housekeeping, nothing you will notice: Pin a date in the calendar test.\nNothing for you to do.")
+
+
+def test_three_at_once_in_one_message():
+    m = cn.render_instant([FIX, SNOOZE, CHORE], "technical", "o/r", turn=1, local=MORNING)
+    assert m.text == ("This morning, three changes went live.\n"
+                      "• Long messages no longer make Zoe pause before she answers. (#2001)\n"
+                      "   By the numbers: scrubbing a long message 4.5 s → 0.03 s; tests that guard it 603.\n"
+                      "• You can snooze a reminder from the wall screen now. (#2002)\n"
+                      "And one bit of housekeeping (#2003).\n"
+                      "For you:\n"
+                      "• Switch ZOE_REMINDER_SNOOZE on when you want to try it.")
+    assert m.label == "Open on GitHub" and len(m.keys) == 3
+
+
+def test_a_revert_and_a_stuck_deploy_lead_plainly():
+    assert cn.render_instant([REVERT], "technical", "o/r", turn=0).text == (
+        'Heads up first: "Snooze from the panel" was rolled back and is no longer running. The snooze button is '
+        "gone again for now.\nNothing for you to do.")
+    assert cn.render_instant([_stuck_item()], "technical", "o/r").text == (
+        'Heads up: "Repeat on weekdays only" did not go live. It was merged over an hour ago and is not running '
+        "yet. The last deploy failed. It may need a look. (#2005)")
+    m = cn.render_instant([FIX, CHORE, _decision_item(), _stuck_item()], "technical", "o/r", turn=0, local=MORNING)
+    assert m.text == (  # bad news first, never buried; then what waits on you; then the good news
+        'Heads up: "Repeat on weekdays only" did not go live. It was merged over an hour ago and is not running '
+        "yet. The last deploy failed. It may need a look. (#2005)\n"
+        "Waiting on you:\n"
+        "• The hall panel would dim itself at 9pm. Should it dim at 9pm, or stay bright? If you leave it, it stays "
+        "as it is. (#2010)\n"
+        "Also, two things went in this morning.\n"
+        "• Long messages no longer make Zoe pause before she answers. (#2001)\n"
+        "   By the numbers: scrubbing a long message 4.5 s → 0.03 s; tests that guard it 603.\n"
+        "Plus one bit of housekeeping (#2003).\n"
+        "Nothing else for you to do.")
+
+
+def test_a_decision_is_one_question_with_its_default():
+    m = cn.render_instant([_decision_item()], "technical", "o/r", turn=0)
+    assert m.text == ("I need your OK on something. The hall panel would dim itself at 9pm.\n"
+                      "Should it dim at 9pm, or stay bright?\nIf you leave it, it stays as it is.")
+    assert m.label == "Open #2010"
+
+
+def _digest_items():
+    return [FIX, SNOOZE, CHORE, _live(2006, "chore(deps): bump httpx"), REVERT, _decision_item(),
+            {"key": "pr:2020:raised", "kind": "raised", "category": "raised", "number": 2020, "title": "fix: x",
+             "draft": True}]
+
+
+def test_digest_detailed_and_plain_with_housekeeping_collapsed():
+    msgs = cn.render_digest(_digest_items(), [], comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r",
+                            local=EVENING)
+    assert [m.text for m in msgs] == [
+        "Good evening. Here's today: five changes went live.\n"
+        "One new change is open and not merged yet (one is a draft).\n"
+        'Heads up first: "Snooze from the panel" was rolled back and is no longer running. The snooze button is '
+        "gone again for now. (#2004)\n\n"
+        "Waiting on you:\n"
+        "• The hall panel would dim itself at 9pm. Should it dim at 9pm, or stay bright? If you leave it, it stays "
+        "as it is. (#2010)\n\n"
+        "For you to do:\n"
+        "• Switch ZOE_REMINDER_SNOOZE on when you want to try it.\n\n"
+        "What went in:\n"
+        "• Long messages no longer make Zoe pause before she answers. (#2001)\n"
+        "   By the numbers: scrubbing a long message 4.5 s → 0.03 s; tests that guard it 603.\n"
+        "• You can snooze a reminder from the wall screen now. (#2002)\n"
+        "Plus two bits of housekeeping (#2003, #2006)."]
+    assert sorted(k for m in msgs for k in m.keys) == sorted(i["key"] for i in _digest_items())
+    plain = comm_prefs.normalise({"categories": {c: {"detail": "plain"} for c in comm_prefs.CATEGORIES}}, "admin")
+    text = cn.render_digest([FIX, CHORE, _live(2006, "chore(deps): bump httpx")], [], plain, opener=1,
+                            repo_name="o/r", local=EVENING)[0].text
+    assert text == ("Good evening. Here's how today went: three changes went live.\n"
+                    "• Long messages no longer make Zoe pause before she answers.\n"
+                    "Plus two bits of housekeeping.\nNothing for you to do.")  # plain: no numbers, no #N
+    weekly = cn.render_digest([CHORE], [], plain, opener=2, repo_name="o/r", period="this week")[0].text
+    assert weekly == ("Here's the round-up for this week: one change went live.\n"
+                      "One bit of housekeeping, nothing you will notice.\nNothing for you to do.")
+
+
+def test_pointer_only_mode_is_unchanged():
+    ptr = comm_prefs.normalise({"categories": {c: {"detail": "pointer"} for c in comm_prefs.CATEGORIES}}, "admin")
+    msgs = cn.render_digest([FIX, CHORE], [], ptr, opener=0, repo_name="o/r", local=EVENING)
+    assert [m.text for m in msgs] == ["Zoe has 2 updates for you. Ask me \"what's new?\"."]
+    assert cn.render_instant([FIX], "pointer", "o/r").text == cn.POINTER_TEXT
+
+
+def test_size_bounds_hold_with_long_inputs():
+    big = [_live(3000 + n, "fix(area): " + "t" * 300, "For-The-Household: " + "word " * 200 + "\nNumbers: "
+                 + "; ".join(f"{'x' * 90} {k} -> {k + 1}" for k in range(5)) + "\nOwner-Step: " + "do " * 120)
+           for n in range(40)]
+    m = cn.render_instant(big, "technical", "o/r", turn=0, local=MORNING)
+    assert len(m.text) <= cn.CHUNK_CHARS and "more on GitHub." in m.text and len(m.keys) == 40
+    assert len(cn.render_instant(big[:1], "technical", "o/r").text) <= cn.CHUNK_CHARS
+    msgs = cn.render_digest(big, [], comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r", local=EVENING)
+    assert 1 < len(msgs) <= cn.MAX_CHUNKS and all(len(x.text) <= cn.CHUNK_CHARS for x in msgs)
+    assert sorted(k for x in msgs for k in x.keys) == sorted(i["key"] for i in big)  # every key in exactly one
+    assert "more on GitHub." in msgs[-1].text
+
+
+def test_rotation_is_deterministic_and_never_repeats_back_to_back():
+    starts = [cn.render_instant([FIX], "technical", "o/r", turn=t).text.split(".")[0] for t in range(6)]
+    assert starts == ["A fix is in and running", "Fixed, and live now", "A fix just went live"] * 2
+    assert all(a != b for a, b in zip(starts, starts[1:]))
+    heads = [cn.render_digest([CHORE], [], comm_prefs.normalise(None, "admin"), opener=t, repo_name="o/r")[0]
+             .text.split(":")[0] for t in range(3)]
+    assert heads == ["Here's today", "Here's how today went", "Here's the round-up for today"]
+
+
+_GUARD_CC = re.compile(r"(?:^|[•\"'(]\s?)(?:feat|fix|perf|docs?|tests?|chore|ci|build|refactor|style|deps|revert)"
+                       r"(?:\([^)]*\))?!?:\s|\b(?:feat|fix|docs?|chore|refactor)\([^)]*\)!?:", re.I | re.M)
+_GUARD_HEX = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+
+
+def _guard_texts():
+    titles = ["fix(memory): widen `scrub` 1a2b3c4d (#77)", 'Revert "feat(x): y" (#78)', "chore: bump 0123abcd4567",
+              "docs: a", "feat!: big", "plain title with #79 inside"]
+    bodies = ["", "For-The-Household: nothing visible", "For-The-Household: Now `faster` (#80) at deadbeef12.\n"
+              "Numbers: `t` 4 -> 2 at cafe12345; b 1 -> 2\nOwner-Step: run `this` (#81)"]
+    items = [_live(100 + i * 3 + j, t, b) for i, t in enumerate(titles) for j, b in enumerate(bodies)]
+    out = [cn.render_instant([i], d, "o/r", turn=k).text for k, i in enumerate(items) for d in ("technical", "plain")]
+    out += [cn.render_instant(items[k:k + 4], "technical", "o/r", turn=k).text for k in range(0, len(items), 4)]
+    out += [m.text for m in cn.render_digest(items + [_stuck_item(), _decision_item()], [],
+                                              comm_prefs.normalise(None, "admin"), opener=0, repo_name="o/r")]
+    return out
+
+
+def test_guard_no_commit_syntax_no_hash_no_backtick_and_each_number_once():
+    for text in _guard_texts():
+        assert not _GUARD_CC.search(text), text
+        assert not _GUARD_HEX.search(text), text
+        assert "`" not in text, text
+        for n in set(re.findall(r"#\d+", text)):
+            assert len(re.findall(re.escape(n) + r"\b", text)) == 1, (n, text)  # the PR number at most once
+        for n in ("#77", "#78", "#79", "#80", "#81"):  # numbers from inside titles and bodies never leak
+            assert n not in text, text
+
+
+def test_control_without_dejargon_the_guard_goes_red(monkeypatch):
+    monkeypatch.setattr(cn, "_dejargon", cn._plain)
+    assert any(_GUARD_CC.search(t) or _GUARD_HEX.search(t) for t in _guard_texts())
+
+
+# ── why a tick finds nobody: a reason code, counts only ───────────────────────
+async def test_recipient_reason_codes():
+    cases = [
+        (FakeDB([{"id": "u-owner", "role": "admin"}], {"u-owner": {"telegram_id": "111"}}), "ok"),
+        (FakeDB([{"id": "u-owner", "role": "admin"}], {"u-owner": {}}), "no_link"),
+        (FakeDB([{"id": "u-owner", "role": "Admin"}], {"u-owner": {"telegram_id": "111"}}), "owner_role_spelling"),
+        (FakeDB([{"id": "u-a", "role": "member"}], {"u-a": {"telegram_id": "222"}}), "no_admin"),
+    ]
+    for db, want in cases:
+        rs = await cn.load_recipients(db)
+        assert rs.diag["reason"] == want, (want, rs.diag)
+    assert (await cn.load_recipients(cases[1][0])).diag == {"reason": "no_link", "admins": 1, "linked": 0,
+                                                            "owner_role_other_case": 0}
+
+
+async def test_no_recipients_audit_line_carries_the_reason():
+    gh, bot = FakeGitHub(), FakeBot()
+    db = FakeDB([{"id": "u-owner", "role": "admin"}], {"u-owner": {}})
+
+    async def recipients():
+        return await cn.load_recipients(db)
+
+    await cn.tick(gh=gh, sender=bot.sender(), recipients=recipients, now=at("09:00"), sleep=_noop_sleep, run_mode="on")
+    gh.raise_pr(500, "fix: x", labels=["needs-owner"])
+    await cn.tick(gh=gh, sender=bot.sender(), recipients=recipients, now=at("12:00"), sleep=_noop_sleep, run_mode="on")
+    lines = [json.loads(x) for x in (cn.state_dir() / "audit.jsonl").read_text().splitlines()]
+    nr = [a for a in lines if a["event"] == "no_recipients"]
+    assert nr and {k: nr[0][k] for k in ("reason", "admins", "linked", "new")} == \
+        {"reason": "no_link", "admins": 1, "linked": 0, "new": 1}
+    assert bot.calls == 0
