@@ -45,10 +45,10 @@ MINIMAL = {
     "forget": {"subject": SAM, "actor": SAM}, "erase_member": {"subject": SAM},
     "erase_item": {"digest": "0" * 16, "subject": SAM}, "grant": {"person": SAM, "skill": "toy"},
     "revoke": {"person": SAM, "skill": "toy"}, "undo": {"person": SAM, "actor": SAM},
-    "explain": {"person": SAM, "last": "action"},
+    "explain": {"person": SAM, "last": "action"}, "reminders": {"person": SAM},
 }
 AUDIENCE = {"forget": "forget.person", "erase_member": "forget.person", "erase_item": "forget.scoped",
-            "grant": "grant", "revoke": "revoke", "undo": "undo", "explain": "explain"}
+            "grant": "grant", "revoke": "revoke", "undo": "undo", "explain": "explain", "reminders": "reminders"}
 
 
 class Clock:

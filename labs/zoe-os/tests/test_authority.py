@@ -69,6 +69,14 @@ class Daemon:
         return self.brain.call("act", action="list.add", on_behalf_of=person,
                                args={"item": item, "list": "shopping", "asked": said.seq}, caused_by=[said.seq])
 
+    def remind(self, person: str, action: str = "remind.set", *, mentions=(), **args) -> dict:
+        said = self.voice.publish("utterance", subject=person, payload={"text": _t("synthetic reminder")}, mentions=list(mentions))
+        out = self.brain.call("act", action=action, on_behalf_of=person, args={**args, "asked": said.seq}, caused_by=[said.seq])
+        return {**out, "said": said.seq}
+
+    def notes(self, person: str) -> dict:
+        return {r["note"]: r for r in self.panel.call("reminders", person=person)["reminders"]}
+
     def keyed(self) -> list:
         return self.reconciler.call("list_digest")["digests"]
 
@@ -753,6 +761,151 @@ def test_property_after_any_history_no_live_record_holds_forgotten_content_and_e
         elif v["status"] == "removed":
             assert digest(item) not in held, item
     assert len(gone) >= 3 and sum(v["status"] in ("present", "removed") for v in items.values()) >= 1   # both sides exercised
+
+
+# ---- the durable reminder rows: the same guarantees ----------------------------------------------------------------------------
+@pytest.mark.parametrize("die,present,uncertain", [("after_intent", False, 1), ("after_do", False, 1), ("after_commit", True, 0)])
+def test_an_acknowledged_reminder_survives_a_kill_and_an_unacknowledged_one_is_absent_or_uncertain(state, die, present, uncertain):
+    d = start(state, die=die)
+    assert d.remind(A, note="kept", in_minutes=30)["verified"] is True
+    with pytest.raises((ConnectionError, OSError, wire.WireError)):
+        d.remind(A, note="die", time="20:00")
+    assert d.proc.wait(timeout=10) == -9
+    again = start(state)
+    got = again.notes(A)
+    assert "kept" in got and ("die" in got) is present
+    assert again.brain.call("health")["recovered"] == uncertain
+    assert again.remind(B, note="after", repeat="FREQ=DAILY")["verified"] is True and "after" in again.notes(B)
+
+
+@pytest.mark.parametrize("die", ["after_intent", "after_do"])
+def test_a_snooze_killed_before_its_receipt_is_not_half_applied(state, die):
+    d = start(state, die=die)
+    rid = d.remind(A, note="tea", time="20:00")["proof"]["id"]
+    with pytest.raises((ConnectionError, OSError, wire.WireError)):
+        d.remind(A, "remind.snooze", id=rid, minutes=13)
+    d.proc.wait(timeout=10)
+    row = start(state).notes(A)["tea"]
+    assert row["snoozed_until"] is None and row["after"] < row["next_fire"]
+
+
+def test_control_without_the_reminder_rebuild_an_acknowledged_reminder_is_lost_and_the_test_sees_it(state):
+    d = start(state)
+    assert d.remind(A, note="kept", in_minutes=30)["verified"] is True
+    d.kill()
+    assert "kept" not in start(state, control="no_rem_rebuild").notes(A)
+
+
+def test_a_reminder_undo_after_a_restart_reverses_it_and_stays_reversed(state):
+    d = start(state)
+    rid = d.remind(A, note="bins", time="19:00")["proof"]["id"]
+    d.remind(A, "remind.cancel", id=rid)
+    d.kill()
+    again = start(state)
+    assert "bins" not in again.notes(A)
+    assert again.panel.call("undo", person=A, actor=A)["verified"] is True and "bins" in again.notes(A)
+    again.kill()
+    assert "bins" in start(state).notes(A)
+
+
+def test_erase_member_takes_their_reminders_and_another_members_edit_of_one_and_they_stay_gone(state):
+    d = start(state)
+    rid = d.remind(A, note="oat milk run", time="19:00", visibility="family")["proof"]["id"]
+    d.remind(B, "remind.edit", id=rid, note="oat milk run and bread")          # B's receipt now carries A's words
+    d.remind(B, note="rice", time="19:00")
+    out = d.panel.call("erase_member", subject=A)
+    assert out["verified"] is True
+    assert set(d.notes(B)) == {"rice"} and not _on_disk(state[0], b"oat milk")
+    d.kill()
+    assert set(start(state).notes(B)) == {"rice"}
+
+
+def test_an_entity_forget_through_the_old_op_also_reaches_the_reminder_rows(state):
+    d = start(state)
+    d.remind(A, note="gift for Dana", time="19:00")
+    d.remind(A, note="eggs", time="19:00")
+    d.panel.call("forget", subject=A, actor=A, entity="Dana")
+    d.kill()
+    assert set(start(state).notes(A)) == {"eggs"}
+
+
+@pytest.mark.parametrize("scope", [{"entity": "Dana"}, {"topic": "Dana telescope"}])
+def test_scoped_shared_edit_forget_erases_reads_receipts_and_bytes_after_daemon_restart(state, scope):
+    d = start(state)
+    rid = d.remind(A, note="shared original", time="19:00", visibility="family")["proof"]["id"]
+    edited = d.remind(B, "remind.edit", id=rid, note="Dana telescope delivery")
+    assert "Dana telescope delivery" in d.notes(A)
+    assert d.panel.call("explain", person=B, seq=edited["seq"])["seq"] == edited["seq"]
+    assert _members_bytes(state[0], b"Dana")
+    d.panel.call("forget", subject=A, actor=A, **scope)
+
+    def check(daemon):
+        for person in (A, B):
+            assert set(daemon.notes(person)) == {"shared original"}
+            with pytest.raises(Refused):
+                daemon.panel.call("explain", person=person, seq=edited["seq"])
+        assert _members_bytes(state[0], b"Dana") == []
+
+    check(d)  # the authority pumps the rebuild before replying
+    d.kill()
+    check(start(state))
+
+
+# ---- the forget rule over reminder rows: a reminder takes its later records; a cancel takes the reminder -----------------------
+def test_forgetting_a_reminder_takes_its_edits_snoozes_and_cancel_and_their_bytes(state):
+    note, edit = "synthetic marker <rem-a>", "synthetic marker <rem-a-edit>"
+    d = start(state)
+    made = d.remind(A, note=note, time="19:00")
+    rid = made["proof"]["id"]
+    d.remind(A, "remind.edit", id=rid, note=edit)
+    d.remind(A, "remind.snooze", id=rid, minutes=10)
+    assert _members_bytes(state[0], edit.encode())
+    assert d.panel.call("forget", subject=A, actor=A, seqs=[made["said"]])["count"] >= 6    # the create, the edit, the snooze, requests
+    for word in (note, edit):
+        assert _members_bytes(state[0], word.encode()) == []
+    assert d.notes(A) == {}
+    d.kill()
+    assert start(state).notes(A) == {}
+
+
+def test_forgetting_a_cancel_takes_the_reminder_it_cancelled_and_no_rebuild_brings_it_back(state):
+    note = "synthetic marker <rem-c>"
+    d = start(state)
+    rid = d.remind(A, note=note, time="19:00")["proof"]["id"]
+    cancel = d.remind(A, "remind.cancel", id=rid)
+    assert d.notes(A) == {}
+    d.panel.call("forget", subject=A, actor=A, seqs=[cancel["said"]])                         # "forget that I cancelled it"
+    assert d.notes(A) == {} and _members_bytes(state[0], note.encode()) == []
+    d.kill()
+    assert start(state).notes(A) == {} and _members_bytes(state[0], note.encode()) == []
+
+
+def test_the_reminders_read_is_for_the_proven_person_only(state):
+    from zoe_os import speaker
+    d = start(state)
+    d.remind(A, note="synthetic marker <a-own>", time="19:00")
+    with pytest.raises(Refused, match="speaker unproven"):
+        d.bare_panel.call("reminders", person=A)                                             # the panel's word alone
+    with pytest.raises(Refused, match="speaker unproven"):                                    # B's proven word cannot read A's
+        d.bare_panel.call("reminders", person=A, speaker=speaker.mint(d.speaker_key, B, "reminders", generation=d.generation))
+    assert set(d.notes(A)) == {"synthetic marker <a-own>"} and d.notes(B) == {}
+
+
+def test_a_carer_manages_an_adult_in_cares_reminders_except_private_ones_and_never_forgets_for_them(state):
+    (state[0] / "people.json").write_text(json.dumps({"people": [adult(A), {"id": B, "role": "adult", "guardians": [A]}]}))  # B: in A's care
+    d = start(state)
+    set_for = d.remind(A, note="synthetic marker <b-pills>", time="08:00", mentions=[B], **{"for": B})
+    rid = set_for["proof"]["id"]
+    assert set(d.notes(B)) == {"synthetic marker <b-pills>"} and set(d.notes(A)) == {"synthetic marker <b-pills>"}
+    assert d.remind(A, "remind.snooze", id=rid, minutes=5)["verified"] is True              # the carer manages it
+    own = d.remind(B, note="synthetic marker <b-private>", time="21:00", visibility="private")["proof"]["id"]
+    assert "synthetic marker <b-private>" not in d.notes(A)                                   # private: not even the carer
+    with pytest.raises(Refused, match="no such reminder"):
+        d.remind(A, "remind.cancel", id=own)
+    with pytest.raises(Refused, match="not theirs to forget"):                                # managing, never erasing
+        d.panel.call("forget", subject=B, actor=A)
+    with pytest.raises(Refused, match="not theirs to undo"):
+        d.panel.call("undo", person=B, actor=A)
 
 
 # ---- least access: nothing defaults to adult ----------------------------------------------------------------------------------------

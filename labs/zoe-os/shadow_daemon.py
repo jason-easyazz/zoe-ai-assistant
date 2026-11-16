@@ -248,7 +248,7 @@ def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
 def build(state: Path, db: str | None = None):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
     entries, roster_status = read_roster(state)
-    people = roster_ids(entries)
+    people = roster_ids(entries)                   # ids; roles are read below, as stated (unstated: least access)
     from authority import db_path                  # the same move rule as the authority: never start beside an unmoved record
     path = db_path(state, db)                      # --db: the permanent home (authority.PERMANENT_DB)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

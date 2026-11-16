@@ -54,7 +54,7 @@ class _Conn:
 #: the refusal's ``attempted`` text per person-bound op (fixed strings: nothing from the request)
 _ATTEMPTED = {"forget": "forget", "grant": "grant", "revoke": "revoke", "undo": "undo",
               "explain": "explain for a person", "erase_member": "erase a member",
-              "erase_item": "erase a list item"}
+              "erase_item": "erase a list item", "reminders": "read reminders"}
 
 
 class KernelServer:

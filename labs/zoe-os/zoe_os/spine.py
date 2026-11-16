@@ -62,6 +62,8 @@ CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
 CREATE TABLE IF NOT EXISTS reversals (seq INTEGER NOT NULL, target INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS reversals_target ON reversals(target);
 CREATE INDEX IF NOT EXISTS reversals_seq ON reversals(seq);
+CREATE TABLE IF NOT EXISTS dependents (seq INTEGER NOT NULL, target INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS dependents_target ON dependents(target);
 CREATE INDEX IF NOT EXISTS latest_receipt ON events(subject, seq DESC)
   WHERE kind = 'action_receipt' AND tombstoned = 0;
 CREATE INDEX IF NOT EXISTS live_kind ON events(kind, seq) WHERE tombstoned = 0;
@@ -206,6 +208,25 @@ def _list_key(row: dict) -> tuple:
     return row.get("list", "shopping"), row.get("item")
 
 
+def _row_source(payload: dict) -> tuple[int, bool] | None:
+    """A durable-row store's receipt (``zoe_os/rows.py``: its before-state is ``{"id", "row", "source"[, "reverses"]}``) over a row
+    another request CREATED: ``(that creating request's seq, does this action take the row away)``. ``None`` for anything else,
+    and for the create itself (its source is its own request, already its cause).
+    * an action that takes the row away (a cancel) is a REVERSAL: forgetting it takes the create (or the rebuild brings the row
+      back), and forgetting the create takes it;
+    * every action over the row (a cancel too) is a DEPENDENT of the create and of every earlier action over the row: it copies
+      the row's whole state, so forgetting any of them (an edit's new words) takes it; forgetting it alone takes only it and the
+      actions after it."""
+    undo = payload.get("undo") if isinstance(payload, dict) else None
+    before = undo.get("before") if isinstance(undo, dict) else None
+    if not isinstance(before, dict) or type(before.get("source")) is not int:
+        return None
+    args = undo.get("args") if isinstance(undo.get("args"), dict) else {}
+    if before["source"] == args.get("asked"):
+        return None
+    return before["source"], before.get("reverses") is True
+
+
 def _reversal_targets(payload: dict) -> list[int] | None:
     """The requests of the rows a receipt REMOVED. Marked (``reverses``, provenance 1): every row's ``asked``. A LEGACY removal
     (``LEGACY_REMOVALS``, unmarked: its snapshot is the whole previous list): the rows whose (list, item) is the one it removed,
@@ -323,7 +344,7 @@ class Spine:
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
-        if self._db.execute("SELECT 1 FROM meta WHERE key = 'reversals_v2'").fetchone() is None:
+        if self._db.execute("SELECT 1 FROM meta WHERE key = 'reversals_v3'").fetchone() is None:
             # An older record (or one indexed by v1, which knew only the marker): index EVERY removal it holds, marked or legacy,
             # once. ONE transaction, the old index rebuilt from nothing: a crash halfway leaves no meta key and no partial index,
             # and the next start does it again (idempotent). One pass over the receipts (plus, for a legacy removal that cannot be
@@ -331,12 +352,13 @@ class Spine:
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 self._db.execute("DELETE FROM reversals")
+                self._db.execute("DELETE FROM dependents")
                 for seq, subject, raw in self._db.execute(
                         "SELECT seq, subject, payload FROM events WHERE kind = ? AND tombstoned = 0 ORDER BY seq",
                         (Kind.ACTION_RECEIPT.value,)).fetchall():
                     self._index_reversal(seq, subject, json.loads(raw) if raw else {})
-                self._db.execute("DELETE FROM meta WHERE key = 'reversals_v1'")
-                self._db.execute("INSERT INTO meta VALUES ('reversals_v2', x'01')")
+                self._db.execute("DELETE FROM meta WHERE key IN ('reversals_v1', 'reversals_v2')")
+                self._db.execute("INSERT INTO meta VALUES ('reversals_v3', x'01')")
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -355,6 +377,7 @@ class Spine:
         """)
         self._subs: list[Subscription] = []
         self._before_forget = None  # trusted kernel store cleanup, never a skill/wire operation
+        self._forget_candidates: list = []  # trusted row stores: visible cross-member receipts, before matching/closure
         self._epoch = 0     # bumped by every forget; a subscription re-checks its queue on a change
         key = self._db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()
         if key is None:
@@ -581,6 +604,8 @@ class Spine:
                             f"SELECT seq FROM people INDEXED BY people_seq WHERE person = ?"
                             f" AND seq <= ? AND seq IN ({marks})", [subject, upto, *chunk]))
                 if key or groups:
+                    for candidates in self._forget_candidates:
+                        seed.update(candidates(subject))
                     seed = self._matching(seed, key, groups)
                     if groups and len(seed) > MAX_TOPIC_EVENTS:
                         raise Refused("too many events match: say which part")
@@ -739,6 +764,8 @@ class Spine:
             marks = ",".join("?" * len(chunk))
             more = {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM causes WHERE cause IN ({marks})", chunk)}
             more |= self._reversed(chunk)
+            # a dependent dies with ANY of its targets (it copies each one's content)
+            more |= {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM dependents WHERE target IN ({marks})", chunk)}
             pending |= {seq for (seq,) in self._db.execute(f"SELECT DISTINCT seq FROM reversals WHERE target IN ({marks})", chunk)
                         if seq not in dead}
             for seq in more:
@@ -748,6 +775,17 @@ class Spine:
         return dead
 
     def _index_reversal(self, seq: int, subject, payload: dict) -> None:
+        row = _row_source(payload)
+        if row is not None:                    # a durable-row store's action over ONE row: linked to the row's creating request
+            source, reverses = row
+            # Every action over the row copies its WHOLE state (the proof, the before), so it depends on the create AND on every
+            # earlier live action over the same row: forgetting any of them (an edit's new words) takes this one too.
+            earlier = {s for (s,) in self._db.execute(
+                "SELECT seq FROM dependents WHERE target = ? UNION SELECT seq FROM reversals WHERE target = ?", (source, source))}
+            self._db.executemany("INSERT INTO dependents VALUES (?,?)", [(seq, t) for t in {source} | earlier])
+            if reverses:                       # a cancel: forgetting it takes the row it took away (backward)
+                self._db.execute("INSERT INTO reversals VALUES (?,?)", (seq, source))
+            return
         targets = _reversal_targets(payload)
         if targets is None:
             targets = self._legacy_targets(seq, subject, payload)
@@ -818,6 +856,7 @@ class Spine:
                 self._db.execute(f"DELETE FROM nested_people WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM reversals WHERE seq IN ({marks}) OR target IN ({marks})", chunk * 2)
+                self._db.execute(f"DELETE FROM dependents WHERE seq IN ({marks}) OR target IN ({marks})", chunk * 2)
                 self._db.execute(f"DELETE FROM snapshot_dependencies WHERE receipt_seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM snapshot_dependencies WHERE source_seq IN ({marks})", chunk)
                 self._db.execute(f"DELETE FROM opaque_snapshots WHERE receipt_seq IN ({marks})", chunk)

@@ -187,6 +187,13 @@ class Enforcer:
 
     def __init__(self, store: GrantStore) -> None:
         self.store = store
+        # Row stores' ``reach_of(person, receipt payload) -> bool | None``: a receipt over a row is read, by a skill for its
+        # subject or by a person asking "why", only while that person reaches the row NOW (``rows.DurableRows``). One list,
+        # shared with the explainer, so every reader of a receipt applies the same current-link rule.
+        self.reach: list = []
+
+    def out_of_reach(self, person: str | None, event: Event) -> bool:
+        return event.kind is Kind.ACTION_RECEIPT and any(r(person, event.payload) is False for r in self.reach)
 
     def is_origin(self, source: str) -> bool:
         m = self.store.manifests.get(source)
@@ -220,6 +227,8 @@ class Enforcer:
         m = self.store.manifests.get(reader)
         if m is None or not _covers(m.reads.get(event.kind), event.visibility):
             return Decision(False, "not in manifest")
+        if self.out_of_reach(event.subject, event):
+            return Decision(False, "out of its subject's reach")
         if event.visibility is Visibility.PRIVATE:
             g = self.store.of(reader, event.subject)
             ok = g is not None and g.reads.get(event.kind) is Visibility.PRIVATE

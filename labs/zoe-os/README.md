@@ -115,6 +115,7 @@ bad outcome.
 | one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the store moves it |
 | an action for one person cannot snooze, ack, delete or overwrite another person's reminder by id; a foreign id answers like a missing one | `test_reminder_owner.py` | `ReminderStore._own` ignores the owner: SAM's action changes ALEX's reminder |
 | a forget still reaches what derived from an event that aged out | `test_retention.py` | expiry that drops the links, or retires a skeleton early: the copy survives |
+| entity/topic forget reaches other members' receipts over visible shared rows, with existing edit/cancel linking and invisible rows preserved | `test_reminder_rows.py`, `test_authority.py` (coordinator verification pending) | without `DurableRows.forget_candidates`, another member's matching edit survives rebuild and restart; discovery uses indexed row-source links, not a history scan |
 
 ### The brain bridge ([record](../../docs/architecture/zoe-os-brain-bridge.md))
 

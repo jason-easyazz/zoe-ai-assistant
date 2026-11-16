@@ -61,6 +61,8 @@ def snapshot_sources(payload: dict) -> tuple[set[int], bool]:
             numeric_slot = (isinstance(before, dict) and set(before) == {'value'}
                             and (before['value'] is None or isinstance(before['value'], (int, float))))
             opaque |= not numeric_slot
+        elif 'row' in before:                          # a durable row store's one-row snapshot (``zoe_os/rows.py``)
+            sources.add(before['source'])
         else:
             rows = before.get('rows', [before.get('alarm')])
             sources.update(row['asked'] for row in rows if row is not None)
@@ -71,6 +73,11 @@ def scrub_snapshot(before: dict, dead: set[int]) -> dict | None:
     """Only versioned row snapshots assert complete provenance; None means unknown."""
     if not isinstance(before, dict) or before.get('provenance') != 1:
         return None
+    if 'row' in before and type(before.get('source')) is int:
+        # One durable row (``zoe_os/rows.py``): its state derives from the request that created it and every action over it, and
+        # the spine links this receipt to each of them (``Spine._row_source``): if any one is forgotten this receipt is erased
+        # with it. A surviving receipt therefore holds nothing forgotten, and an unrelated forget leaves it (and its undo) whole.
+        return before
     if 'rows' in before:
         rows = before['rows']
         if not all(isinstance(r.get('asked'), int) for r in rows):
@@ -143,13 +150,15 @@ class Dispatcher:
         self._reverse: dict[str, tuple[Snapshot, Undo]] = {}
         self._meta: dict[str, tuple[str, dict | None]] = {}      # action -> (doc, params)
         self._checks: dict[str, Callable] = {}                    # action -> its own rule (``register``)
+        self._undo_checks: dict[str, Callable] = {}               # action -> may its undo run NOW (``register``)
         self._purges: dict[str, tuple[str, str]] = {}
         self._purge_do: dict[str, Do] = {}
 
     def register(self, action: str, do: Do, verify: Verify, *, needs_accept: bool = True,
                  snapshot: Snapshot | None = None, undo: Undo | None = None,
                  doc: str = "", params: dict | None = None, check: Callable | None = None,
-                 purge_key: tuple[str, str] | None = None, purge: Do | None = None) -> None:
+                 purge_key: tuple[str, str] | None = None, purge: Do | None = None,
+                 undo_check: Callable | None = None) -> None:
         """``snapshot`` and ``undo`` together make the action reversible. Without both it is
         not, its receipts say so, and ``undo`` will refuse it rather than pretend.
 
@@ -165,8 +174,15 @@ class Dispatcher:
         person's rows, an erasure notice reaches the erased requests of every owner.
 
         ``check(person, args, caused_by) -> reason`` is the action's own rule (a time already past, a row that is not theirs):
-        a non-empty reason refuses (and records) the act BEFORE the intent is written, like a bad argument."""
+        a non-empty reason refuses (and records) the act BEFORE the intent is written, like a bad argument.
+
+        ``undo_check(person, receipt_payload, actor) -> reason`` is asked before an undo of this action runs (a row that has
+        changed since, or that its owner has since made private): a non-empty reason refuses the undo, nothing is written."""
         self._actions[action] = (do, verify, needs_accept)
+        if undo_check is not None:
+            self._undo_checks[action] = undo_check
+        else:
+            self._undo_checks.pop(action, None)
         if check is not None:
             self._checks[action] = check
         else:
@@ -322,6 +338,10 @@ class Dispatcher:
             if why:
                 self.spine._refuse(actor, UNDO, why)
             action, saved = last.payload["action"], last.payload["undo"]
+            if action in self._undo_checks:
+                why = self._undo_checks[action](person, last.payload, actor)
+                if why:
+                    self.spine._refuse(actor, UNDO, why)
             self._check_arguments(actor, UNDO, person, saved)
             snapshot, reverse = self._reverse[action]
             intent = self._open_intent(KERNEL, UNDO, person, None, None, (last.seq,), undoes=last.seq)
@@ -390,6 +410,9 @@ class Dispatcher:
                 payload = self._uncertain(action, skill, grant_id) | {"reversible": False}
                 if undoes is not None:          # an undo in flight: just as uncertain, and spent
                     payload["undoes"] = undoes
+                    undone = self.spine._get(undoes)
+                    if undone is not None:      # what it reversed, so a store can judge who may see it (``rows.reach_of``)
+                        payload["of"] = undone.payload.get("action")
                 ev = self._close_intent(intent, Event(
                     Kind.ACTION_RECEIPT, KERNEL, subject=person, caused_by=causes, payload=payload))
                 self.spine._kernel_append(Event(

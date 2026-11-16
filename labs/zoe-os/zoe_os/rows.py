@@ -1,0 +1,223 @@
+"""Durable kernel rows (reminders, alarms): REBUILT FROM THE LOG, the authority list store's rule (``authority.DurableLists``).
+
+Every action touches exactly ONE row, and its read-back (the receipt's ``proof``) carries that row's whole state after the write:
+``{"id": ..., "row": {...}}``, or ``"row": None`` when it removed it. The snapshot (``receipt.undo.before``) is that row before. So
+the rows are a pure function of the live, verified receipts, replayed in order:
+
+* a row EXISTS only while the receipt that created it is live: a forget that takes the create takes the row, whatever later
+  receipts say (a later edit's proof cannot resurrect it);
+* a later verified receipt for the row sets it to its proof; a verified ``undo`` puts back the reversed receipt's ``before``;
+* an ``uncertain`` or ``unverified`` receipt changes nothing.
+
+Hence an acknowledged write (its verified receipt committed with the closing of its intent) survives a ``kill -9``; one killed
+before that commit has no verified receipt and is absent after the restart, never half there; an undo after a restart is replayed
+from its receipt; and a forget of any scope is followed by a rebuild, so its rows do not come back. ONE copy of the words: the
+receipts, which every forget already reaches.
+"""
+from __future__ import annotations
+
+import json
+
+_RECEIPTS = "SELECT seq, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0 ORDER BY seq"
+_ROW_RECEIPTS = (" FROM events e JOIN (SELECT seq FROM causes WHERE cause = ?"
+                 " UNION SELECT seq FROM dependents WHERE target = ?) d ON e.seq = d.seq"
+                 " WHERE e.kind = 'action_receipt' AND e.tombstoned = 0")
+
+
+class DurableRows:
+    prefix = "x"                 # row ids: <prefix><the asking event's seq>[.n]
+    creates = ""                 # the action that makes a row
+    actions: tuple = ()          # every action over these rows (``creates`` included)
+    removes: tuple = ()          # the actions that take a row away (a cancel): REVERSALS of the create, for the forget rule
+
+    def __init__(self, spine, clock) -> None:
+        self.spine, self.clock = spine, clock
+        self.rows: dict[str, dict] = {}
+        self._sources: set[int] = set()  # creating requests, including cancelled/undone rows; no copied content
+
+    # ---- one row per action: id, snapshot, undo, read-back --------------------------------------------------------------------
+    def fresh(self, args: dict) -> str:
+        """The id a create would mint: deterministic from the asking event, so the snapshot (taken first) and the write agree."""
+        base = rid = f"{self.prefix}{args['asked']}"
+        n = 1
+        while rid in self.rows:
+            n += 1
+            rid = f"{base}.{n}"
+        return rid
+
+    def target(self, action: str, args: dict) -> str:
+        return self.fresh(args) if action == self.creates else str(args.get("id", ""))
+
+    def source_of(self, rid: str) -> int | None:
+        """The request that CREATED row ``rid`` (ids are ``<prefix><that request's seq>[.n]``)."""
+        head = str(rid)[len(self.prefix):].split(".")[0] if str(rid).startswith(self.prefix) else ""
+        return int(head) if head.isdigit() else None
+
+    def snapshot_for(self, action: str):
+        """The row before the write, plus ``source`` (the creating request: the spine links every later action over the row to it,
+        so forgetting the row takes its edits, snoozes and cancel, and forgetting a cancel takes the row) and ``reverses`` for an
+        action that takes the row away (``Spine._row_source``)."""
+        def snapshot(person, args):
+            rid = self.target(action, args)
+            row = self.rows.get(rid)
+            out = {"provenance": 1, "id": rid, "row": dict(row) if row else None}
+            owner = row["owner"] if row else (self.owner_of(person, args) if action == self.creates else None)
+            if owner is not None:
+                out["owner"] = owner             # who the row is FOR, kept even when no row is (an undone create): ``reach_of``
+            source = args.get("asked") if action == self.creates else self.source_of(rid)
+            if type(source) is int:
+                out["source"] = source
+                self._sources.add(source)
+            if action in self.removes:
+                out["reverses"] = True
+            return out
+        return snapshot
+
+    def put_back(self, person, args, before) -> None:
+        if before.get("id") is None:
+            return
+        if before["row"] is None:
+            self.rows.pop(before["id"], None)
+        else:
+            self.rows[before["id"]] = dict(before["row"])
+
+    def summary(self, row: dict) -> dict:
+        """What a client compares besides the row (the shadow reads ``note`` / ``alarm``): per store."""
+        return {}
+
+    def read_back(self, person, args, result) -> dict | None:
+        """The proof: the row AS STORED, when it is what the write meant. A driver returns ``(row id, the row it must now be)``,
+        ``None`` for gone; the read-back looks again rather than trusting that."""
+        rid, want = result
+        row = self.rows.get(rid)
+        if want is None:
+            return {"id": rid, "row": None} if row is None else None
+        return {"id": rid, "row": dict(row), **self.summary(row)} if row == want else None
+
+    def undo_check(self, person, payload: dict, actor) -> str:
+        """An undo puts back the row as it was before ONE action: only while the row is still what that action left. Changed
+        since (a later edit, by anyone: the owner marking it private, say) or gone: refused, never a silent overwrite."""
+        proof = payload.get("proof") or {}
+        rid = proof.get("id")
+        if rid is None or self.rows.get(rid) != proof.get("row"):
+            return "it has changed since"
+        row = self.rows.get(rid) or (payload.get("undo") or {}).get("before", {}).get("row")
+        if row is not None and not self.may_reach(actor, row):
+            return "not theirs to undo"          # the CURRENT link decides: a removed carer cannot undo what they once set
+        return ""
+
+    # ---- who may reach a row NOW (the setter is never standing authority) -----------------------------------------------------
+    def may_reach(self, person: str, row: dict) -> bool:
+        """May ``person`` reach ``row`` now: its owner, by default; a store adds its carers and shared rows, by the CURRENT link."""
+        return person == row.get("owner")
+
+    def owner_of(self, person: str, args: dict) -> str:
+        """Who a create makes the row FOR: ``for`` when a carer sets it for someone, else the person asking."""
+        return args.get("for", person)
+
+    def reach_of(self, person: str, payload: dict) -> bool | None:
+        """For every reader of a receipt (a skill reading for its subject, a person asking "why"): may ``person`` see a receipt
+        over one of these rows NOW? ``None``: not a receipt over these rows, or one that shows no row (an action recovered as
+        uncertain), so the ordinary rules apply. An undo is judged as what it reversed while that is kept; otherwise the row as
+        it stands, else as the receipt recorded it (its proof, an undo's restored snapshot, the snapshot before), else whom it
+        was for. A row named but not attributable: NO (fail closed)."""
+        undone = payload.get("undoes")
+        if type(undone) is int and payload.get("of") in self.actions:     # an undo: judged as what it reversed, while kept
+            ev = self.spine._get(undone)
+            if ev is not None and ev.payload.get("action") in self.actions:
+                return self.reach_of(person, ev.payload)
+        proof = payload.get("proof") or {}
+        snaps = [s for s in (proof, proof.get("restored"), (payload.get("undo") or {}).get("before")) if isinstance(s, dict)]
+        rid = next((s["id"] for s in snaps if s.get("id") is not None), None)
+        ours = payload.get("action") in self.actions or payload.get("of") in self.actions
+        if not ours and (rid is None or not str(rid).startswith(self.prefix)):
+            return None
+        row = (self.rows.get(rid) if rid is not None else None) or next((s["row"] for s in snaps if s.get("row")), None)
+        if row is None:
+            owner = next((s["owner"] for s in snaps if s.get("owner") is not None), None)
+            if owner is None:            # a row named but not attributable: no. Nothing about a row at all (an action
+                return False if rid is not None else None   # recovered as uncertain): the ordinary rules, it shows no row
+            row = {"owner": owner, "visibility": "personal", "private": 0}
+        return self.may_reach(person, row)
+
+    def register_all(self, kernel, specs: dict) -> None:
+        """``specs``: action -> (do, check, doc, params). Every action is reversible and has the one snapshot rule."""
+        for action, (do, check, doc, params) in specs.items():
+            kernel.actions.register(action, do, self.read_back, needs_accept=False, snapshot=self.snapshot_for(action),
+                                    undo=self.put_back, doc=doc, params=params, check=check, undo_check=self.undo_check)
+        reach = kernel.enforcer.reach            # skills' reads and "why did you do that?": both by the CURRENT link
+        if self.reach_of not in reach:
+            reach.append(self.reach_of)
+        if self.forget_candidates not in self.spine._forget_candidates:
+            self.spine._forget_candidates.append(self.forget_candidates)
+
+    # ---- the rebuild ------------------------------------------------------------------------------------------------------------
+    def rebuild(self) -> int:
+        self.rows.clear()
+        self._sources.clear()
+        live: dict[int, dict] = {}
+        made: set[str] = set()
+        for seq, raw in self.spine._db.execute(_RECEIPTS).fetchall():
+            p = json.loads(raw) if raw else {}
+            live[seq] = p
+            if p.get("outcome") != "verified":
+                continue
+            action = p.get("action")
+            if action in self.actions:
+                source = ((p.get("undo") or {}).get("before") or {}).get("source")
+                if type(source) is int:
+                    self._sources.add(source)
+                proof = p.get("proof") or {}
+                rid = proof.get("id")
+                if action == self.creates:
+                    made.add(rid)
+                if self.anchored(rid, made):
+                    self.put_back(None, None, {"id": rid, "row": proof.get("row")})
+            elif action == "undo":
+                orig = live.get(p.get("undoes")) or {}
+                before = (orig.get("undo") or {}).get("before") or {}
+                if orig.get("action") in self.actions and self.anchored(before.get("id"), made):
+                    self.put_back(None, None, before)
+                    if orig.get("action") == self.creates:
+                        made.discard(before["id"])
+        return len(self.rows)
+
+    def forget_candidates(self, person: str):
+        """Receipts over rows visible NOW, whoever wrote them, for entity/topic matching.
+
+        Probe the existing row-source dependency index, never unrelated event history. The
+        latest receipt also attributes a cancelled/undone row when no current row exists.
+        Rebuild and snapshots maintain only source ids; receipt bodies remain the sole copy.
+        The spine applies its normal matcher and closure in the same erase transaction.
+        """
+        receipts = _ROW_RECEIPTS + " AND json_extract(e.payload, '$.action') IN (" + ",".join("?" for _ in self.actions) + ")"
+        for source in self._sources:
+            params = (source, source, *self.actions)
+            latest = self.spine._db.execute(
+                "SELECT e.payload" + receipts + " ORDER BY e.seq DESC LIMIT 1", params).fetchone()
+            if latest is None or self.reach_of(person, json.loads(latest[0] or "{}")) is not True:
+                continue
+            yield from (seq for (seq,) in self.spine._db.execute(
+                "SELECT e.seq" + receipts, params))
+
+    @staticmethod
+    def anchored(rid, made: set) -> bool:
+        """A row's later receipts count only while the receipt that created it is live."""
+        return rid in made
+
+    def touching(self, person: str) -> list[tuple[int, str]]:
+        """(seq, subject) of every live receipt over these rows whose row is ``person``'s (owner or setter), whoever acted: what
+        a whole-member erase must also take, because another member's edit of a shared row carries its words."""
+        out = []
+        for seq, subject, raw in self.spine._db.execute(
+                "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0").fetchall():
+            p = json.loads(raw) if raw else {}
+            if p.get("action") not in self.actions:
+                continue
+            rows = [(p.get("proof") or {}).get("row"), ((p.get("undo") or {}).get("before") or {}).get("row")]
+            if any(r and person in (r.get("owner"), r.get("by")) for r in rows):
+                out.append((seq, subject))
+        return out
+
+    def held_for(self, person: str) -> int:
+        return sum(1 for r in self.rows.values() if person in (r.get("owner"), r.get("by")))

@@ -577,3 +577,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `shadow_daemon.py` is the one long-running entry point: the kernel + the lab list, reminder and alarm drivers (plus its own `list.remove` over the list rows) for zoe-data's SHADOW of list add / list remove / reminder create / alarm create (`docs/knowledge/zoe-os-list-shadow.md`, `docs/knowledge/zoe-os-integration.md`),
   started only by the owner-installed `zoe-os-shadow-kernel.service` (see Forbidden); `services/zoe-data/tests/test_os_shadow_contract.py` runs the zoe-data client against it
   and is skipped with a named reason when this lab is absent.
+  `authority.py` (the authority daemon) also keeps DURABLE reminder rows rebuilt from its own verified receipts
+  (`zoe_os/reminder_rows.py` over `zoe_os/rows.py`; when one fires is the pure `zoe_os/schedule.py`, production's recurrence
+  mirrored and checked against it); `--tz` and `--default-time` are the household settings it reads them in. Its contract with
+  production and what does not map: `docs/architecture/zoe-os.md` section 13.
