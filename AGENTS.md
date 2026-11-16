@@ -20,6 +20,7 @@ Before any code task, you MUST — do not fall back to raw grep/guessing:
 - **Follow the DOX `AGENTS.md` chain** — read the root plus every nested `AGENTS.md` on the path to files you touch, and do the closeout DOX pass after editing (see *DOX framework* below).
 - **Honour the rocks.** Gemma 4 E4B+MTP (brain) and Moonshine v2 Medium (STT) are fixed — optimise *around* them, never propose swapping (see `docs/VISION.md` principle 1). **Retire by removing** (git keeps history); don't hoard `_old`/`_v2`/archive copies.
 - **Replay-gate every voice change (MANDATORY).** Any change to the voice path (STT / brain / TTS — `services/zoe-data/routers/voice_tts.py`, `zoe_core_client.py`, `fast_tiers.py`, the brain/Kokoro config) MUST be replay-gated against Jason's real-voice corpus `~/.zoe-voice-samples` before merge/deploy: said-vs-did must not regress (a previously-working command that now fails = a bug) and per-stage speed must not regress. Use the voice regression + speed harness — `scripts/maintenance/voice_regression_probe.py` (baseline-compared) and the underlying `scripts/perf/measure_voice.py` / `measure_tts.py` — always under `flock /tmp/zoe-voice-harness.lock` (two Kokoro loads ~2.3 GB each will OOM the box). The harness is warm + stops before TTS, so its numbers are RELATIVE (drift vs baseline), not live performance. Full tool doc: `docs/knowledge/voice-pipeline.md`.
+- **Kernel first (Zoe OS).** For an action the Zoe OS kernel already owns (the list in [labs/zoe-os/AGENTS.md](labs/zoe-os/AGENTS.md); today it owns none in production), a feature writes through the kernel. For any other household action (lists, reminders, alarms, routines, notifications, offers), do not add a new private copy of a permission check, visibility filter, quiet-hours rule or receipt store: reuse the existing one, so there is only one thing to move later. Never wire production code to the lab outside the reviewed shadow and authority seams.
 
 ---
 
@@ -219,11 +220,12 @@ routine path, not the exceptional one.** Findings are hypotheses: verify each wi
 negative control, batch every fix into one push. Advisory to the machine, mandatory to
 the process — a PR should not be marked ready until it has had one.
 
-The script falls back **automatically**: polly (Omnigent) first; if polly cannot start or
-produce a provably cross-vendor report (runner start failure, Claude OAuth refresh
-contention, auth error, timeout), `codex exec` is run DIRECTLY in the `zoe-omnigent`
-container with the same contract; only if codex is unavailable (quota) does ONE lean,
-tool-less, size-capped `pi` pass run. **No backend is Claude** — a same-vendor review is
+The script falls back **automatically**: `codex exec` first, on the HOST with its read-only
+sandbox when a host codex is installed (in the `zoe-omnigent` container otherwise, where Docker's
+seccomp blocks that sandbox); only if codex is unavailable (quota) does ONE lean, tool-less,
+size-capped `pi` pass run. polly (Omnigent) is **opt-in only** since 2026-11-16
+(`CROSS_REVIEW_BACKENDS="polly codex pi"`): its orchestrator runs on a metered Anthropic API
+workspace with no credit, and the owner will not add any. **No backend is Claude** — a same-vendor review is
 never substituted — and if every cross-vendor option fails it exits **2** with
 `cross-review unavailable`, which means *not reviewed*, never "clean". Detail, the
 polly-auth root cause and the owner runbook:
@@ -455,7 +457,7 @@ Engineering work runs on:
 - **Claude Code** (Claude Max, flat-rate) — the primary implementer; Sonnet-tier for routine work, Opus-tier for hard or multi-file work. Reads this file via `CLAUDE.md`.
 - **Codex** (ChatGPT subscription, flat-rate) — second implementer for narrow changes and the primary independent reviewer of Claude-implemented work.
 - **Omnigent** (the `zoe-omnigent` container) — hosts the polly orchestrator and the codex / pi workers behind cross-vendor review and the heavy lane of the Flue executor.
-- **`scripts/maintenance/cross_review.sh <PR#> "<contract>"`** — the cross-vendor review dispatcher (polly → direct codex → one lean pi pass, automatic fallback; exit 2 means "unavailable", never a clean review). Routing and costs: *Review pipeline*, Tier 2, and [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+- **`scripts/maintenance/cross_review.sh <PR#> "<contract>"`** — the cross-vendor review dispatcher (host codex → one lean pi pass, automatic fallback; polly opt-in; exit 2 means "unavailable", never a clean review). Routing and costs: *Review pipeline*, Tier 2, and [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
 - **Multica** (currently paused) is the engineering-board workflow-state driver and the **Flue executor** (`labs/flue-executor/`) its execution seam, per the migration plan; moving the household autopilots off Multica is architecture-deep-dive task B2.
 
 Browser work goes through Zoe's CloakBrowser tools (the Zoe MCP browser broker). Operator-level agent skills live outside the repo and are not user-facing Zoe runtime skills under `skills/`.

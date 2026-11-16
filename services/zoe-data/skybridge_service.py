@@ -4623,7 +4623,11 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
     added: list[str] = []
     already: list[str] = []
     if list_id and intent.item_text:
-        added, already, _new_ids, _first = await _add_spoken_items(db, user_id, list_id, list_type, intent.list_name, intent.item_text)
+        # the shadow is told the list the items land on: an existing row's own name (the household list may be called otherwise),
+        # else the name this add created it with; the split rule keeps the spoken name, exactly as before
+        landed_name = str(dict(existing[0]).get("name") or intent.list_name) if existing else intent.list_name
+        added, already, _new_ids, _first = await _add_spoken_items(db, user_id, list_id, list_type, intent.list_name, intent.item_text,
+                                                                   landed_name=landed_name)
         await _maybe_commit(db)
     if list_id:
         from list_service import note_focus_list
@@ -4784,7 +4788,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
 
 
 async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str, list_name: str,
-                            item_text: str) -> tuple[list[str], list[str], list[str], str]:
+                            item_text: str, landed_name: str = "") -> tuple[list[str], list[str], list[str], str]:
     """Add what one spoken add named to the list ``list_id`` (already resolved and visible to ``user_id``): several items when the
     list is a list of THINGS (``list_service.splits_items``), one when it is a to-do list. Returns ``(added, already, new_ids,
     item_id)``: the texts put on, the texts that were already open there, the new row ids, and the id the reply should point at."""
@@ -4803,8 +4807,9 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
     added: list[str] = []
     already: list[str] = []
     new_ids: list[str] = []
+    inserted: list[str] = []      # the texts that really became rows (the Zoe OS shadow proposes exactly these)
     item_id = ""
-    from list_service import list_write_txn
+    from list_service import create_item_record, list_write_txn
 
     # ONE transaction + per-list advisory lock around the read-check-insert loop: overlapping adds serialise, a failed item
     # rolls the whole add back.
@@ -4834,23 +4839,14 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
                     item_id = str(have["id"])
                 continue
             new_id = str(uuid.uuid4())
-            await db.execute(
-                """
-                INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """,
-                new_id,
-                list_id,
-                normalize_item_text(part) or part,
-                "normal",
-                "",
-                "",
-                None,
-                None,
+            await create_item_record(
+                db, item_id=new_id, list_id=list_id, text=part,
+                priority="normal", category="", quantity="", raw_asyncpg=True,
             )
             open_rows.append({"id": new_id, "text": part})
             new_ids.append(new_id)
             added.append(normalize_item_text(part) or part)
+            inserted.append(added[-1])
     if new_ids:
         await _maybe_commit(db)
         item_id = new_ids[0]
@@ -4863,6 +4859,12 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
         write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", _rid, "skybridge:add_item")
         if _rid in new_ids:
             _audit_list_item("add", user_id, list_id, _rid)
+    import os_shadow      # after the commit and the receipts: a no-op with ZOE_OS_LIST_SHADOW off, never raises
+
+    for text in inserted:
+        os_shadow.note_add(user_id, source="skybridge", list_type=list_type, list_name=landed_name or list_name, item=text)
+    for _ in range(len(added) - len(inserted) + len(already)):      # replayed or already-open items: counted, never proposed
+        os_shadow.note_add(user_id, source="skybridge", list_type=list_type, list_name=landed_name or list_name, item="-", landed=False)
     return added, already, new_ids, item_id
 
 

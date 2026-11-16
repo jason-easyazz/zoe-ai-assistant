@@ -88,7 +88,7 @@ def env(monkeypatch, tmp_path):
     db = _Sqlite(path)
     db.conn.execute("CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, end_date TEXT, "
                     "end_time TEXT, duration INTEGER, category TEXT, location TEXT, all_day INTEGER, recurring TEXT, metadata TEXT, "
-                    "visibility TEXT, deleted INTEGER DEFAULT 0)")
+                    "visibility TEXT, deleted INTEGER DEFAULT 0, rrule TEXT, rdates TEXT, recurrence_id TEXT)")
     db.conn.commit()
 
     @contextlib.asynccontextmanager

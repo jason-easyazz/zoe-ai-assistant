@@ -139,7 +139,7 @@ These bias toward caution on non-trivial work. For typo fixes and one-liners, us
 - Harness engineering overview (video): <https://www.youtube.com/watch?v=Xxuxg8PcBvc>.
 - Papers: <https://arxiv.org/abs/2603.25723>, <https://arxiv.org/abs/2603.28052v1>.
 - Related governance: `docs/governance/CRITICAL_FILES.md`, `docs/governance/DOCKER_NETWORKING_RULES.md`, `docs/governance/CLEANUP_SAFETY.md`, `docs/governance/MANIFEST_SYSTEM.md`.
-- Enforceable rule mirrors: `.cursor/rules/*.mdc` plus legacy `.cursorrules` for older tools.
+- Enforceable rule mirrors: `.cursor/rules/*.mdc` plus legacy `.cursorrules` for older tools. `tests/unit/test_charter_mirrors.py` fails when a section 3 or section 6 rule is in one and not the other.
 
 ---
 
