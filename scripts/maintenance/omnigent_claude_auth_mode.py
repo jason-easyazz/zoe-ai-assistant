@@ -108,6 +108,23 @@ def apply(action: str, config: str, env: dict[str, str]) -> tuple[int, str]:
     return 1, f"unknown action: {action}"
 
 
+# P0-2 (docs/architecture/p0-deroot.md section 8, B4): after P0-3 `zoe` has no Docker socket; exec goes through the
+# root helper once it is installed AND sudo allows it, else `docker exec` exactly as before. The helper takes the
+# docker-exec argv minus `docker exec` (pinned by tests/unit/test_omnigent_exec_routing.py).
+OMNIGENT_EXEC_HELPER = os.environ.get("OMNIGENT_EXEC_HELPER") or "/usr/local/libexec/zoe-priv/zoe-omnigent-exec"
+
+
+def _docker_exec_prefix(helper: str | None = None) -> list[str]:
+    helper = helper or OMNIGENT_EXEC_HELPER
+    try:
+        if os.access(helper, os.X_OK) and subprocess.run(
+                ["sudo", "-n", "-l", helper], capture_output=True, timeout=10, check=False).returncode == 0:
+            return ["sudo", "-n", helper]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ["docker", "exec"]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("action", choices=("status", "api", "subscription"))
@@ -123,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     with open(__file__, "rb") as fh:
         src = fh.read()
     proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "python3", "-", "--in-container", ns.action],
+        [*_docker_exec_prefix(), "-i", CONTAINER, "python3", "-", "--in-container", ns.action],
         input=src, check=False,
     )
     return proc.returncode

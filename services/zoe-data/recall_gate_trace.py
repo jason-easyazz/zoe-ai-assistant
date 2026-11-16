@@ -143,9 +143,13 @@ def _erase_state() -> tuple:
 
 
 def epoch() -> Optional[int]:
-    """The forget barrier's epoch, captured by the gate BEFORE it reads the rows a decision is built on. Never raises."""
+    """The forget barrier's epoch, captured by the gate BEFORE it reads the rows a decision is built on - the TURN's when its context
+    holds one (``local_text_logs.writer_epoch``: read before STT on a voice turn), since the owner's words it traces predate the gate.
+    Never raises."""
     try:
-        return _erase_state()[1]
+        import local_text_logs
+
+        return local_text_logs.writer_epoch()
     except Exception:  # noqa: BLE001
         return None
 

@@ -106,12 +106,12 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): VoiceOptio
 export interface VoiceDeps {
   resolve: (telegramId: number) => Promise<string | null>;
   session: (chatId: number) => string;
-  /** The SAME brain call the text handler makes (`/api/chat`, as the member). */
-  ask: (text: string, sessionId: string, userId: string) => Promise<string>;
+  /** The SAME brain call the text handler makes (`/api/chat`, as the member); `eraseToken` from the transcription, if any. */
+  ask: (text: string, sessionId: string, userId: string, eraseToken?: string) => Promise<string>;
   /** `getFile` + download, bounded by MAX_NOTE_BYTES. */
   download: (fileId: string) => Promise<Uint8Array>;
-  /** zoe-data `telegram/transcribe`; '' means no speech was found. */
-  transcribe: (audio: Uint8Array) => Promise<string>;
+  /** zoe-data `telegram/transcribe`; '' means no speech was found. `eraseToken` rides back to the brain call. */
+  transcribe: (audio: Uint8Array) => Promise<string | { text: string; eraseToken?: string }>;
   /** zoe-data `telegram/synthesize`; null when voice is unavailable (fall back to text). */
   synthesize: (text: string) => Promise<Uint8Array | null>;
   reply: (text: string) => Promise<unknown>;
@@ -200,10 +200,13 @@ export async function handleVoiceNote(
   };
 
   let transcript: string;
+  let eraseToken: string | undefined;
   try {
     const audio = await deps.download(note.fileId);
     lap('download_ms');
-    transcript = (await deps.transcribe(audio)).trim();
+    const heard = await deps.transcribe(audio);
+    transcript = (typeof heard === 'string' ? heard : heard.text).trim();
+    eraseToken = typeof heard === 'string' ? undefined : heard.eraseToken;
     lap('stt_ms');
   } catch (err) {
     console.error(`telegram voice note ${note.fileUniqueId} failed before the brain: ${redactToken(err)}`);
@@ -215,7 +218,7 @@ export async function handleVoiceNote(
     return;
   }
 
-  const answer = await deps.ask(framedTranscript(transcript, note), deps.session(chatId), userId);
+  const answer = await deps.ask(framedTranscript(transcript, note), deps.session(chatId), userId, eraseToken);
   lap('brain_ms');
   const delivered = await deliverReply(answer, deps, opts.mode);
   lap('reply_ms');

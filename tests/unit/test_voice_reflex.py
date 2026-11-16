@@ -49,7 +49,8 @@ ON = R.Settings(enabled=True)
 TAKES = ("mm_01", "mm_02", "mm_03", "mm_04")
 #: the otherwise-clean context: every explicit input states its safe value
 CLEAN = dict(rule="deep", speech_ms=1200, turn_kind="wake", local_hour=12, bank_voice="af_sky", current_voice="af_sky",
-             takes=TAKES, committed=True, guest=False, speaker_conf=0.9, media_active=False)
+             takes=TAKES, committed=True, guest=False, speaker_accept=True, speaker_model=R.KNOWN_SPEAKER_MODELS[0],
+             verdict_ms=90, media_active=False)
 
 
 def ok_ctx(**kw):
@@ -65,7 +66,8 @@ SKIP_CASES = {
     "not_committed": (dict(committed=None), ON),
     "media": (dict(media_active=None), ON),
     "guest": (dict(guest=True), ON),
-    "low_confidence": (dict(speaker_conf=0.5), ON),
+    "low_confidence": (dict(speaker_accept=False), ON),
+    "late": (dict(verdict_ms=300), ON),
     "not_wake": (dict(turn_kind="followup"), ON),
     "capped": (dict(rule="max_duration"), ON),
     "short": (dict(speech_ms=400), ON),
@@ -113,8 +115,9 @@ SITE_CASES = {
     "night": (dict(local_hour=23), ON),
     "idle_greeting": (dict(idle_h=5.0), ON),
     "guest": (dict(guest=True), ON),
-    "conf_missing": (dict(speaker_conf=None), ON),
-    "conf_low": (dict(speaker_conf=0.5), ON),
+    "late": (dict(verdict_ms=251), ON),
+    "model_unknown": (dict(speaker_model="resemblyzer"), ON),
+    "not_accepted": (dict(speaker_accept=None), ON),
     "prev_question": (dict(turn_kind="conversation", prev_question=True), replace(ON, chain_enabled=True)),
     "budget_gap": (dict(since_last_s=12.0), ON),
     "budget_chain": (dict(turn_kind="followup", chain_turns_since=1), replace(ON, chain_enabled=True)),
@@ -150,7 +153,7 @@ def _mutant(site: str):
 
 def test_every_guard_site_has_a_case():
     assert set(_sites()) == set(SITE_CASES) | {"except"}
-    assert len(_sites()) == 22
+    assert len(_sites()) == 23
 
 
 @pytest.mark.parametrize("site", sorted(SITE_CASES))
@@ -185,7 +188,7 @@ _GARBAGE = (None, "5", True, float("nan"), float("inf"), float("-inf"), [1], -1)
 
 @pytest.mark.parametrize("field,value", [(f, v) for f in ("speech_ms", "muted_ms", "idle_h") for v in _GARBAGE]
                          + [("noise_dbfs", v) for v in _GARBAGE if v != -1]
-                         + [(f, v) for f in ("since_last_s", "chain_turns_since") for v in _GARBAGE if v is not None]
+                         + [(f, v) for f in ("since_last_s", "chain_turns_since", "verdict_ms") for v in _GARBAGE if v is not None]
                          + [("local_hour", v) for v in _GARBAGE + (7.5, 24, -1)])
 def test_garbage_numeric_inputs_are_silence(field, value):
     s = replace(ON, chain_enabled=True)
@@ -204,23 +207,36 @@ def test_the_explicit_inputs_fail_silent():
         assert R.decide(ok_ctx(media_active=v), s=ON).skip == "media"
     for v in (None, True, 0):
         assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
-    allow = replace(ON, for_guests=True)
-    assert R.decide(ok_ctx(guest=True), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_conf=0.8), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_conf=None), s=allow).skip == "low_confidence"  # still needs a score
-    # speaker confidence: missing, low, NaN, inf or a non-number is silence, always
-    for v in (None, 0.69, float("nan"), float("inf"), "0.9", True, [0.9], 1.0000001, 1.5, 1e9, -0.1):
-        assert R.decide(ok_ctx(speaker_conf=v), s=ON).skip == "low_confidence"   # over 1.0 is not a score
-    assert R.decide(ok_ctx(speaker_conf=1.0), s=ON).kind == "heard"              # exactly 1.0 still plays
+    # the model's own accept: exactly True, nothing else (a raw score or a truthy stand-in is not a decision)
+    for v in (None, False, 1, 0.9, "yes", "True", [True]):
+        assert R.decide(ok_ctx(speaker_accept=v), s=ON).skip == "low_confidence"
+    # the model id: a known one only; the retired Resemblyzer, a near-miss spelling, a non-string or nothing is silence
+    for v in (None, "", "resemblyzer", "wespeaker_resnet34", R.KNOWN_SPEAKER_MODELS[0].upper(), 7, ("x",)):
+        assert R.decide(ok_ctx(speaker_model=v), s=ON).skip == "low_confidence"
     for v in (0.001, 3.0, 1e9):                                                   # dBFS above full scale is not a reading
         assert R.decide(ok_ctx(noise_dbfs=v), s=ON).skip == "error"
     assert R.decide(ok_ctx(noise_dbfs=0.0), s=replace(ON, noise_floor_dbfs=0.0)).skip != "error"   # 0 dBFS is a reading
-    assert R.decide(ok_ctx(speaker_conf=0.70), s=ON).kind == "heard"
-    assert R.decide(ok_ctx(speaker_conf=1), s=ON).kind == "heard"
-    assert R.decide(ok_ctx(speaker_conf=0.75), s=replace(ON, min_speaker_conf=0.8)).skip == "low_confidence"
+    # the deadline: the boundary plays, a hair over or an unknown time is late
+    assert R.decide(ok_ctx(verdict_ms=250), s=ON).kind == "heard"
+    assert R.decide(ok_ctx(verdict_ms=0), s=ON).kind == "heard"
+    for v in (250.001, 5000, None):
+        assert R.decide(ok_ctx(verdict_ms=v), s=ON).skip == "late"
+    assert R.decide(ok_ctx(verdict_ms=200), s=replace(ON, score_deadline_ms=150)).skip == "late"
     # the safe defaults: a bare Ctx (the daemon stated nothing) is silent
     bare = R.Ctx(rule="deep", speech_ms=1200, bank_voice="af_sky", current_voice="af_sky", takes=TAKES)
     assert R.decide(bare, s=ON).skip == "not_committed"
+
+
+def test_an_unknown_or_guest_speaker_is_always_silent_whatever_the_settings():
+    """The contract: an unknown speaker (no claim) or a guest is NEVER heard, even with an accepted verdict from a known
+    model, and no setting or environment value opens that guard (the old REFLEX_FOR_GUESTS escape is gone)."""
+    accepted = dict(speaker_accept=True, speaker_model=R.KNOWN_SPEAKER_MODELS[0], verdict_ms=90)
+    env_settings = R.settings({"REFLEX_ENABLED": "1", "REFLEX_FOR_GUESTS": "1"})
+    for s in (ON, env_settings):
+        for g in (None, True):
+            assert R.decide(ok_ctx(guest=g, **accepted), s=s) == R.Decision("none", None, "guest")
+        assert R.decide(ok_ctx(guest=False, **accepted), s=s).kind == "heard"   # positive control: a member is heard
+    assert not hasattr(env_settings, "for_guests") and "for_guests" not in R.Settings.__dataclass_fields__
 
 
 def test_more_silence_rules():
@@ -342,7 +358,8 @@ def test_defaults_are_the_s1_constants():
     s = R.settings({})
     assert (s.enabled, s.min_speech_ms, s.max_ms, s.seam_ms, s.min_gap_s, s.idle_greet_h, s.night_start, s.night_end,
             s.gain_db) == (False, 480, 600, 120, 30, 4, 22, 7, -3)
-    assert (s.for_guests, s.min_speaker_conf) == (False, 0.70)
+    assert s.score_deadline_ms == 250 and not hasattr(s, "for_guests")   # removed: no setting opens the guest guard
+    assert not hasattr(s, "min_speaker_conf")               # removed: the reflex no longer owns a score threshold
     assert not hasattr(s, "require_speaker")                # removed: a missing score is always silence
 
 
@@ -353,12 +370,30 @@ def test_env_overrides_are_clamped():
     assert s.enabled is True and s.min_gap_s == 10 and s.max_ms == 1000 and s.seam_ms == 40
     assert s.min_speech_ms == 480 and s.gain_db == 0 and s.idle_greet_h == 4 and (s.night_start, s.night_end) == (21, 6)
     assert s.chain_every == 2
-    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_MIN_SPEAKER_CONF": "7"})
-    assert t.for_guests and t.min_speaker_conf == 1.0
-    assert R.settings({"REFLEX_MIN_SPEAKER_CONF": "-1"}).min_speaker_conf == 0.0
+    t = R.settings({"REFLEX_SCORE_DEADLINE_MS": "99999"})
+    assert t.score_deadline_ms == 1000
+    assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "-1"}).score_deadline_ms == 50
+    assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "nan"}).score_deadline_ms == 250
     assert R.settings({"REFLEX_ENABLED": "maybe"}).enabled is False
     assert R.settings({"REFLEX_NIGHT": "25-07"}).night_start == 22
     assert R.settings({"REFLEX_NIGHT": "7-7"}).night_start == 7 and not R.is_night(23, R.settings({"REFLEX_NIGHT": "7-7"}))
+
+
+def test_known_speaker_models_mirror_the_panel_model_id():
+    """Drift pin: the one trusted id is exactly zoe_speaker_resnet34.MODEL_ID (read from its source: that module needs
+    numpy), and the retired model is not trusted."""
+    src = (_MOD.parent / "zoe_speaker_resnet34.py").read_text(encoding="utf-8")
+    parts = {k: re.search(rf'^{k} = "([^"]+)"$', src, re.M).group(1) for k in ("FAMILY", "QUANT", "CENTRE_VERSION")}
+    assert re.search(r'^MODEL_ID = FAMILY \+ "\+" \+ QUANT \+ "\+" \+ CENTRE_VERSION$', src, re.M)
+    assert R.KNOWN_SPEAKER_MODELS == ("+".join((parts["FAMILY"], parts["QUANT"], parts["CENTRE_VERSION"])),)
+    assert "resemblyzer" not in R.KNOWN_SPEAKER_MODELS
+
+
+def test_no_raw_score_threshold_is_left():
+    """The retired Resemblyzer-scale bar (0.70) and the raw ``speaker_conf`` input are gone from the module."""
+    src = _MOD.read_text(encoding="utf-8")
+    assert "0.70" not in src and "speaker_conf" not in src and "MIN_SPEAKER_CONF" not in src
+    assert "speaker_conf" not in R.Ctx.__dataclass_fields__
 
 
 def test_module_is_stdlib_only():
@@ -386,13 +421,14 @@ def make_bank(root: Path, voice: str = "af_sky", n: int = 3, ms: int = 400, rate
               manifest_voice: str | None = None):
     files = {f"mm_{i + 1:02d}": _wav(ms + 10 * i, rate=rate, freq=150.0 + 10 * i) for i in range(n)}
     pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
-    sha8 = R.bank_sha8(voice, 60, pairs)
+    man = {"voice": manifest_voice or voice, "style_len": 60, "render_date": "2026-11-14",
+           "takes": [{"id": k, "sha256": s, "dur_ms": 0, "rms_db": -20.0} for k, s in pairs]}
+    sha8 = R.manifest_sha8(man)
+    man["bank"] = sha8
     d = root / voice / (dirname or sha8)
     d.mkdir(parents=True)
     for k, v in files.items():
         (d / f"{k}.wav").write_bytes(v)
-    man = {"voice": manifest_voice or voice, "bank": sha8, "style_len": 60, "render_date": "2026-11-14",
-           "takes": [{"id": k, "sha256": s, "dur_ms": 0, "rms_db": -20.0} for k, s in pairs]}
     (d / "manifest.json").write_text(json.dumps(man))
     return d, sha8
 
@@ -404,6 +440,60 @@ def test_loader_accepts_a_good_bank(tmp_path):
     assert res.bank.takes["mm_01"].dur_ms == 400 and len(res.bank.takes["mm_01"].pcm) == 400 * 24 * 2
     ctx = ok_ctx(bank_voice=res.bank.voice, takes=res.bank.take_ids)
     assert R.decide(ctx, s=ON).kind == "heard"
+
+
+@pytest.mark.parametrize("edit", ["dur_ms", "rms_db", "render_date", "new_key", "drop_bank", "reorder_takes"])
+def test_loader_refuses_an_edited_manifest(tmp_path, edit):
+    """Every manifest field is covered by the bank id: editing ANY of them (a take's duration or level, the render date, an
+    added key, the bank key itself, the take order) without re-rendering makes the loader refuse the bank."""
+    d, _ = make_bank(tmp_path)
+    assert R.load_bank("af_sky", str(tmp_path), ON).reason == "ok"           # positive control: the untouched bank loads
+    man = json.loads((d / "manifest.json").read_text())
+    if edit == "dur_ms":
+        man["takes"][0]["dur_ms"] = 999
+    elif edit == "rms_db":
+        man["takes"][1]["rms_db"] = -3.0
+    elif edit == "render_date":
+        man["render_date"] = "2099-01-01"
+    elif edit == "new_key":
+        man["gain_db"] = 6.0
+    elif edit == "drop_bank":
+        man.pop("bank")
+    else:
+        man["takes"] = man["takes"][::-1]
+    (d / "manifest.json").write_text(json.dumps(man))
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "sha_mismatch")
+
+
+def test_manifest_sha8_ignores_only_its_own_key_and_refuses_nan():
+    m = {"voice": "af_sky", "takes": [{"id": "mm_01", "sha256": "0" * 64}], "render_date": "2026-11-14"}
+    assert R.manifest_sha8(m) == R.manifest_sha8({**m, "bank": "deadbeef"})
+    assert R.manifest_sha8(m) != R.manifest_sha8({**m, "render_date": "2026-11-15"})
+    with pytest.raises(ValueError):
+        R.manifest_sha8({**m, "gain_db": float("nan")})
+
+
+def test_load_bank_reads_each_manifest_once_and_orders_by_the_verified_date(tmp_path, monkeypatch):
+    """The manifest is read ONCE (through the single-descriptor reader); load_bank never re-opens it by path to get the
+    render date. Any by-path read of a bank file (Path.read_text / read_bytes / open) fails the test."""
+    old, _ = make_bank(tmp_path)
+    man = json.loads((old / "manifest.json").read_text())
+    import shutil
+
+    newer = dict(man, render_date="2026-12-01")
+    newer.pop("bank")
+    sha_new = R.manifest_sha8(newer)
+    newer["bank"] = sha_new
+    shutil.copytree(old, old.parent / sha_new)
+    (old.parent / sha_new / "manifest.json").write_text(json.dumps(newer))
+    reads = []
+    real_reader = R._read_regular_file
+    monkeypatch.setattr(R, "_read_regular_file", lambda p, lim: (reads.append(Path(p).name), real_reader(p, lim))[1])
+    for name in ("read_text", "read_bytes", "open"):
+        monkeypatch.setattr(Path, name, lambda *a, **k: pytest.fail("a bank file was re-read by path"))
+    res = R.load_bank("af_sky", str(tmp_path), ON)
+    assert res.reason == "ok" and res.bank.sha8 == sha_new and res.bank.render_date == "2026-12-01"
+    assert reads.count("manifest.json") == 2                      # once per candidate directory, never twice
 
 
 def test_loader_refuses_a_tampered_file(tmp_path):
@@ -418,13 +508,14 @@ def _bank_with(tmp_path: Path, bad: bytes) -> Path:
     """A three-take bank whose second file is ``bad``, with a manifest whose hash MATCHES it (so only the reader refuses)."""
     files = {"mm_01": _wav(400), "mm_02": bad, "mm_03": _wav(420, freq=170.0)}
     pairs = [(k, hashlib.sha256(v).hexdigest()) for k, v in files.items()]
-    sha8 = R.bank_sha8("af_sky", 60, pairs)
+    man = {"voice": "af_sky", "style_len": 60, "takes": [{"id": k, "sha256": h} for k, h in pairs]}
+    sha8 = R.manifest_sha8(man)
+    man["bank"] = sha8
     d = tmp_path / "af_sky" / sha8
     d.mkdir(parents=True)
     for k, v in files.items():
         (d / f"{k}.wav").write_bytes(v)
-    (d / "manifest.json").write_text(json.dumps({"voice": "af_sky", "bank": sha8, "style_len": 60,
-                                                 "takes": [{"id": k, "sha256": h} for k, h in pairs]}))
+    (d / "manifest.json").write_text(json.dumps(man))
     return d
 
 
@@ -488,6 +579,49 @@ def test_loader_refuses_other_defects(tmp_path):
     assert R.load_bank("../x", str(tmp_path), ON).reason == "voice_mismatch"
     assert set(R.LOAD_RESULTS) >= {"ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format",
                                    "too_long", "too_few"}
+
+
+def test_loader_decodes_the_bytes_it_hashed_not_a_second_read(tmp_path, monkeypatch):
+    """A take swapped on disk AFTER its hash was checked must not reach the bank: the loader decodes the very bytes it
+    hashed. The swap is made from inside the hash call, so it lands between the check and any later read of the path."""
+    d, _ = make_bank(tmp_path)
+    target = d / "mm_02.wav"
+    original = target.read_bytes()
+    swapped = _wav(410, freq=900.0, amp=20000)                      # a valid take of the same format, different PCM
+    real = hashlib
+
+    class _SwapAfterHash:
+        @staticmethod
+        def sha256(data=b""):
+            h = real.sha256(data)
+            if bytes(data) == original:
+                target.write_bytes(swapped)                         # the attacker's swap, right after the check
+            return h
+
+    monkeypatch.setattr(R, "hashlib", _SwapAfterHash)
+    res = R.load_bank("af_sky", str(tmp_path), ON)
+    import io
+
+    with wave.open(io.BytesIO(original), "rb") as wf:
+        want = wf.readframes(wf.getnframes())
+    assert res.reason == "ok"
+    assert res.bank.takes["mm_02"].pcm == want                     # the verified PCM, never the swapped file's
+
+
+def test_loader_refuses_a_take_that_is_not_a_regular_file(tmp_path):
+    """A take path that is a FIFO (or a symlink) is refused on the open descriptor, without blocking on it."""
+    import os
+
+    d, _ = make_bank(tmp_path)
+    (d / "mm_02.wav").unlink()
+    os.mkfifo(d / "mm_02.wav")
+    assert R.load_bank("af_sky", str(tmp_path), ON) == R.LoadResult(None, "missing")
+    d2, _ = make_bank(tmp_path / "s")
+    real = (d2 / "mm_02.wav").read_bytes()
+    (tmp_path / "elsewhere.wav").write_bytes(real)
+    (d2 / "mm_02.wav").unlink()
+    (d2 / "mm_02.wav").symlink_to(tmp_path / "elsewhere.wav")
+    assert R.load_bank("af_sky", str(tmp_path / "s"), ON) == R.LoadResult(None, "missing")
 
 
 def test_loader_negative_control_untampered_copy_loads(tmp_path):

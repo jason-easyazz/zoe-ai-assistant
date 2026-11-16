@@ -229,7 +229,13 @@ def _owned_by_other_floor(text: str, floors_live: bool = True) -> bool:
         v = distress_handoff.detect(text)
         if v.tier != "none" and distress_handoff.mode_for(v.tier) == "enforce":
             return True
-        return bool(medical_safety.detect(text).cls) and medical_safety.mode() == "enforce"
+        if medical_safety.mode() != "enforce":
+            return False
+        if medical_safety.detect(text).cls:
+            return True
+        # the present-tense self-assessment ("am i overdosing on ...") is answered by the medical floor only when ITS mode is also
+        # enforce (medical_safety.handle): then a child in a possible emergency gets the emergency reply, not "ask a grown-up"
+        return bool(medical_safety.self_assessment(text).cls) and medical_safety.self_assess_mode() == "enforce"
     except Exception:  # noqa: BLE001 - a broken detector or mode read must not wave a child's hazard ask through: this floor answers
         return False
 

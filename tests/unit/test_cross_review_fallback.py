@@ -137,6 +137,9 @@ def rig(tmp_path):
         "CROSS_REVIEW_CODEX_BIN": str(stub("codex", _STUB_CODEX)),
         "CROSS_REVIEW_PI_BIN": str(stub("pi", _STUB_PI)),
         "CROSS_REVIEW_GH_BIN": str(stub("gh", _STUB_GH)),
+        # polly is opt-in (out of the default order since 2026-11-16); most of these tests pin its
+        # fallback semantics, so the rig opts in. The default order is pinned on its own below.
+        "CROSS_REVIEW_BACKENDS": "polly codex pi",
         # NEVER the real /home/zoe/assistant: the tripwire and the review worktree run git
         # against this, so every test gets its own throwaway "live" checkout.
         "CROSS_REVIEW_LIVE_CHECKOUT": str(live),
@@ -537,7 +540,7 @@ def test_no_script_uses_the_live_checkout_as_a_review_cwd():
         assert "cd /workspace" not in code, f"{p.name} starts a reviewer in the live checkout"
         assert "-C /workspace" not in code and "-C /home/zoe/assistant" not in code, p.name
     polly = _POLLY.read_text()
-    assert re.search(r'sh -c "cd \$KICK_CWD && omnigent run', polly), "the kick cwd must be the review dir"
+    assert re.search(r'sh -c "cd \$KICK_CWD && B=.+? && rm -f \S+ && omnigent run', polly), "the kick cwd must be the review dir"
     brief = re.search(r'^BRIEF="(.*)"$', polly, re.M).group(1)
     assert "NEVER run git checkout, switch, reset, fetch or commit" in brief
     assert "/workspace or /home/zoe/assistant" in brief
@@ -627,6 +630,7 @@ def leakrig(rig, tmp_path):
                 "PATH": f"{bindir}:{os.environ['PATH']}",
                 "STUB_PIDS": pids,
                 "CROSS_REVIEW_CODEX_BIN": "",     # the REAL `docker exec ... codex` path
+                "CROSS_REVIEW_CODEX_WHERE": "container",  # the fake `codex` on PATH must not be run as a host codex
                 "CROSS_REVIEW_PI_BIN": "",
                 "CROSS_REVIEW_BACKENDS": "codex",
                 "CROSS_REVIEW_CODEX_TIMEOUT_S": 6,
@@ -773,3 +777,51 @@ def test_negative_control_polly_window_is_net_of_reserve_and_cap_step_time(leakr
     t = int(re.search(r"T=(\d+)", rig.call_lines("polly")[0]).group(1))
     # 1100 - margin 20 - overhead 600 - teardown reserve 200 = 280, minus the 3 s the count took
     assert 120 <= t <= 277, t
+
+
+# ------------------------------------------------- default order + where codex runs ---
+
+def test_default_order_is_codex_then_pi_and_never_starts_polly(rig):
+    # 2026-11-16: polly runs on a metered Anthropic API workspace with no credit; in the default
+    # order it only failed and cost time before every codex review. It stays available opt-in.
+    r = rig.run(CROSS_REVIEW_BACKENDS="")
+    assert r.returncode == 0, r.stderr
+    assert "polly" not in rig.calls(), rig.calls()
+    assert rig.calls()[-1] == "codex", rig.calls()
+    assert r.stdout.startswith("REVIEWER-VENDOR: openai/codex")
+
+
+def _host_codex(tmp_path: Path) -> Path:
+    p = tmp_path / "host-codex"
+    p.write_text(_STUB_CODEX.replace('"codex ', '"hostcodex ', 1))
+    p.chmod(0o755)
+    return p
+
+
+def test_codex_runs_on_the_host_when_one_is_installed(rig, tmp_path):
+    host = _host_codex(tmp_path)
+    r = rig.run(CROSS_REVIEW_BACKENDS="codex", CROSS_REVIEW_CODEX_BIN="", CROSS_REVIEW_CODEX_HOST_BIN=host)
+    assert r.returncode == 0, r.stderr
+    line = next(ln for ln in rig.log_text().splitlines() if ln.startswith("hostcodex "))
+    # the operator's own codex config (plugins, MCP servers) is kept out, and the sandbox stays read-only
+    assert "--ignore-user-config" in line and "-s read-only" in line, line
+    assert "dockerexec" not in rig.log_text()
+
+
+def test_codex_where_container_ignores_a_host_codex(rig, tmp_path):
+    host = _host_codex(tmp_path)
+    r = rig.run(CROSS_REVIEW_BACKENDS="codex", CROSS_REVIEW_CODEX_BIN="", CROSS_REVIEW_CODEX_HOST_BIN=host,
+                CROSS_REVIEW_CODEX_WHERE="container", OMNIGENT_CONTAINER="zoe-no-such-container-for-tests")
+    assert "hostcodex" not in rig.log_text(), "WHERE=container must never run the host codex"
+
+
+def test_codex_where_host_without_a_host_codex_is_a_reason_not_a_container_run(rig, tmp_path):
+    r = rig.run(CROSS_REVIEW_BACKENDS="codex", CROSS_REVIEW_CODEX_BIN="", CROSS_REVIEW_CODEX_WHERE="host",
+                CROSS_REVIEW_CODEX_HOST_BIN=tmp_path / "absent")
+    assert r.returncode == 2, r.stderr
+    assert "CROSS_REVIEW_CODEX_WHERE=host but no host codex is installed" in r.stderr
+
+
+def test_a_bad_codex_where_is_a_configuration_error(rig):
+    r = rig.run(CROSS_REVIEW_CODEX_WHERE="cloud")
+    assert r.returncode == 1 and "CROSS_REVIEW_CODEX_WHERE must be auto, host or container" in r.stderr
