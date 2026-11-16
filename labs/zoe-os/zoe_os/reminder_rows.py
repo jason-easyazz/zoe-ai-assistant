@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from . import schedule as sch
 from .brain.drivers import ASKED
-from .capability import ADULT
+from .capability import ADULT, CHILD
 from .rows import DurableRows
 
 GRACE_MIN = 2                 # production reminder_scan._SAME_DAY_GRACE_MIN
@@ -51,9 +51,15 @@ class DurableReminders(DurableRows):
 
     def visible_to(self, person: str) -> list[dict]:
         """Production's list filter, ``visibility = 'family' OR user_id = me`` (routers/reminders.py ``_visibility_filter_sql``),
-        plus the setter of a row they set for someone else, plus a CARER for the person they care for (not a private one)."""
+        plus the setter of a row they set for someone else, plus a CARER for the person they care for (not a private one). A family
+        reminder is shared: a LEAST-access reader (no role stated) sees only their own (``capability.LEAST``)."""
+        shared = self._stated(person)
         return [r | {"next_fire": self.next_fire(r)} for _, r in sorted(self.rows.items())
-                if r["visibility"] == "family" or self._mine(person, r) or self._cares(person, r)]
+                if (r["visibility"] == "family" and shared) or self._mine(person, r) or self._cares(person, r)]
+
+    def _stated(self, person: str) -> bool:
+        who = self.grants.people.get(person)
+        return who is not None and who.role in (ADULT, CHILD)
 
     # ---- who may ---------------------------------------------------------------------------------------------------------------
     def _carer(self, adult: str, person: str) -> bool:
@@ -62,7 +68,8 @@ class DurableReminders(DurableRows):
         organising never includes forget, undo or explain; forgetting on someone's behalf is a separate named power, today offered only to a
         child's guardian (``capability.guards``), to be replaced by memory care."""
         who, by = self.grants.people.get(person), self.grants.people.get(adult)
-        return who is not None and by is not None and by.role == ADULT and adult in who.guardians
+        # both STATED: a least-access person (no role stated) is nobody's to manage, and a least-access carer cares for no one
+        return who is not None and by is not None and by.role == ADULT and who.role in (ADULT, CHILD) and adult in who.guardians
 
     @staticmethod
     def _mine(person: str, row: dict) -> bool:
