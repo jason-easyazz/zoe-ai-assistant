@@ -620,3 +620,44 @@ def test_punctuation_after_a_secret_still_ends_it_and_the_sentence_survives():
     assert "qzx7wkv9" not in out and "bins go out on friday" in out
     out, _ = scrub_pii("the door code is 4521. the plumber comes at noon")
     assert "4521" not in out and "plumber comes at noon" in out
+
+
+# --- a QUOTED word after a secret label is always the value (review of #2660: a regression against main) -------------------------
+@pytest.mark.parametrize("said", [
+    'my password is "on"', 'my password is "hidden"', "my password is 'wrong'", 'my password was "gone"',
+    'my password is “valid”', 'my passcode is "here"', 'the api key is "missing"', 'my password is still "valid"',
+    'the password for the wifi is "under"', 'password "on"', 'my password "hidden"',
+])
+def test_a_quoted_state_word_after_a_secret_label_is_redacted(said):
+    out, reject = scrub_pii(said)
+    assert reject is None and "[REDACTED]" in out, out
+    for word in ("on", "hidden", "wrong", "gone", "valid", "here", "missing", "under"):
+        assert f'"{word}"' not in out and f"'{word}'" not in out and f"“{word}”" not in out, out
+
+
+def test_a_quoted_value_of_several_words_is_redacted_through_its_closing_quote():
+    out, _ = scrub_pii('my password is "qzx plum wkv" and the dog is fed')
+    assert not any(w in out for w in ("qzx", "plum", "wkv")) and "the dog is fed" in out
+    out, _ = scrub_pii('my password is "qzx plum wkv')            # never closed: the whole slot goes
+    assert not any(w in out for w in ("qzx", "plum", "wkv"))
+
+
+@pytest.mark.parametrize("said", [
+    "my password is on the fridge", "my password is hidden", "my password was wrong", "my password is still valid",
+])
+def test_the_same_state_words_unquoted_are_still_kept(said):
+    assert scrub_pii(said) == (said, None)
+
+
+# --- filler words between the connector and a code (review of #2660) ---------------------------------------------------------
+@pytest.mark.parametrize("fill", ["actually", "now", "just", "still", "currently", "now still", "actually just"])
+@pytest.mark.parametrize("form", ["the door code is {f} 5791", "the alarm code was {f} 5791", "the gate code: {f} 5791",
+                                  "the code for the safe is {f} 5791"])
+def test_a_code_said_after_a_filler_word_is_redacted(form, fill):
+    out, _ = scrub_pii(form.format(f=fill))
+    assert "5791" not in out, out
+
+
+def test_a_filler_word_with_no_code_after_it_changes_nothing():
+    said = "the door code is actually broken"
+    assert scrub_pii(said) == (said, None)

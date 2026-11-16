@@ -1415,17 +1415,29 @@ def _norm_word(token: str) -> str:
     return token.strip(".,;:!?\"'’").lower()
 
 
+_QUOTES = "\"'‘’“”"
+
+
+def _quoted(token: str) -> bool:
+    """A word said IN QUOTES after a secret label is always the value, whatever the word is ("my password is \"on\"")."""
+    return token[:1] in _QUOTES
+
+
 def _judge_value(head: str, toks: "list[tuple[str, str]]", *, excuse: bool, rescan: "Callable[[str], str]") -> str:
     """The value slot after a label + connector, word by word (``toks`` = (leading space, token)): up to ``_MAX_MODIFIERS``
     modifiers are skipped (kept as said); then the NEXT word decides - nothing left (only modifiers) or, when ``excuse``
     (after "is" / "was"), a slot-ending word: kept; an introducer: it and the rest of the slot redacted; anything else: that word
     redacted. Whatever follows is scrubbed again (``rescan``). Linear: one pass over at most seven tokens."""
     i = 0
-    while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
+    while i < len(toks) and i < _MAX_MODIFIERS and not _quoted(toks[i][1]) and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
         i += 1
     kept = "".join(sp + t for sp, t in toks[:i])
     if i == len(toks):          # modifiers only: after is / was no value was said; after : or = those words ARE the value
         return head + (kept if excuse else _REDACT)
+    if _quoted(toks[i][1]):     # a quoted value: redacted through its closing quote (the whole slot when it never closes)
+        j = next((k for k in range(i, len(toks)) if len(toks[k][1].rstrip(".,;:!?")) > (k == i)
+                  and toks[k][1].rstrip(".,;:!?")[-1:] in _QUOTES), len(toks) - 1)
+        return head + kept + toks[i][0] + _REDACT + rescan("".join(sp + t for sp, t in toks[j + 1:]))
     word = _norm_word(toks[i][1])
     tail = "".join(sp + t for sp, t in toks[i + 1:])
     if excuse and word in _LABELLED_NOT_VALUES:
@@ -1487,6 +1499,8 @@ def _alt(words: tuple[str, ...]) -> str:
 
 
 _CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an optional word between two \s* is quadratic on a long space run
+#: the connector plus up to two filler words before the value ("the door code is actually 5791"): a closed list, bounded
+_CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|definitely|really|only)\s{1,8}){0,2})"
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
 #: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
 #: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
@@ -1494,7 +1508,7 @@ _TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[ -]\d{2,12}){0,3}"
 _CODE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
-    rf"{_CONNECT}({_TOKEN})"
+    rf"{_CONNECT_FILL}({_TOKEN})"
 )
 #: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
 _BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
