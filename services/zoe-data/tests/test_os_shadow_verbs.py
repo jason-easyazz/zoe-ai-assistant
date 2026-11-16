@@ -463,3 +463,117 @@ def test_every_note_function_checks_the_flags_before_it_touches_an_argument():
     body = door.body[1:] if isinstance(door.body[0], ast.Expr) and isinstance(door.body[0].value, ast.Constant) else door.body
     first = body[0]
     assert isinstance(first, ast.If) and "wants" in ast.dump(first.test) and "build" not in ast.dump(first)
+
+
+# ---- a reminder is compared on its ABSOLUTE due instant, so a queue delay cannot shift it -------------------------------------------
+@pytest.mark.parametrize("delay_min", [0, 7])
+def test_a_job_delayed_in_the_queue_sends_the_same_instant_and_still_matches(kernel, monkeypatch, delay_min):
+    """The door stamps the commit; the worker sends minutes counted from the SEND. A fake wall clock moves on ``delay_min`` minutes
+    between the two: what the kernel is asked for (and what is compared) is the same absolute instant, and the kernel's own clock
+    turns the minutes back into it."""
+    import time as _time
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    clock = [_time.time()]
+    monkeypatch.setattr(os_shadow, "_wall", lambda: clock[0])
+    os_shadow._reset_for_tests()                                     # no worker yet: the job waits in the queue
+    monkeypatch.setattr(os_shadow, "_worker_alive", lambda: True)
+    d, t = _in(90)
+    os_shadow.note_reminder_create(MEMBER, source="service", note=NOTE, due_date=d, due_time=t, recurring=False)
+    clock[0] += 60 * delay_min                                       # the queue delay
+    assert os_shadow.revive()
+    settle(1)
+    (sent,) = acts(kernel)
+    assert "due_at" not in sent["args"]                              # the kernel refuses an unknown argument: never sent yet
+    assert 88 - delay_min <= sent["args"]["in_minutes"] <= 91 - delay_min
+    assert os_shadow.counters_by_verb() == {"reminder_create": {"match": 1}}
+
+
+def test_a_kernel_that_reports_the_due_time_off_by_the_queue_delay_is_schedule_differs(kernel, monkeypatch):
+    """A kernel that took the minutes from the COMMIT (the old relative send) lands 7 minutes late: never a match."""
+    import time as _time
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    clock = [_time.time()]
+    monkeypatch.setattr(os_shadow, "_wall", lambda: clock[0])
+    os_shadow._reset_for_tests()
+    monkeypatch.setattr(os_shadow, "_worker_alive", lambda: True)
+    d, t = _in(90)
+    os_shadow.note_reminder_create(MEMBER, source="service", note=NOTE, due_date=d, due_time=t, recurring=False)
+    clock[0] += 420
+    kernel.act_mode = "late_by_delay"
+    kernel.late_s = 420
+    assert os_shadow.revive()
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"reminder_create": {"schedule_differs": 1}}
+
+
+def test_the_due_instant_comparison_tolerates_only_the_minute_rounding():
+    sent = {"note": "n", "in_minutes": 5, "due_at": 1_000_000.0}
+    rec = lambda due: {"verified": True, "outcome": "verified", "on_behalf_of": "m", "proof": {"note": "n", "due_at": due}}  # noqa: E731
+    assert os_shadow.compare("added", rec(1_000_030), sent, "reminder_create", member="m")[0] == "match"
+    assert os_shadow.compare("added", rec(1_000_061), sent, "reminder_create", member="m")[0] == "schedule_differs"
+    assert os_shadow.compare("added", rec("soon"), sent, "reminder_create", member="m")[0] == "schedule_differs"
+    no_due = {"verified": True, "outcome": "verified", "on_behalf_of": "m", "proof": {"note": "n", "in_minutes": 5}}
+    assert os_shadow.compare("added", no_due, sent, "reminder_create", member="m")[0] == "schedule_unproven"   # relative is no proof
+
+
+# ---- marker text through any caller argument, every verb: never in a line or a counter key ----------------------------------------
+MARK = "Zq7Marker"
+_M = f"{MARK} x=1 result=match"
+MARKED = {
+    "list_add": [dict(source=_M), dict(item=_M), dict(list_name=_M), dict(list_type=_M)],
+    "list_remove": [dict(source=_M), dict(item=_M), dict(list_name=_M), dict(list_type=_M)],
+    "reminder_create": [dict(source=_M), dict(note=_M), dict(due_time=_M), dict(due_date=_M)],
+    "alarm_create": [dict(source=_M), dict(time_hhmm=_M), dict(repeat=_M)],
+}
+
+
+def _call_marked(verb, kw):
+    if verb in ("list_add", "list_remove"):
+        base = dict(source="spoken", list_type="shopping", list_name="Shopping", item="rice") | kw
+        (os_shadow.note_add if verb == "list_add" else os_shadow.note_list_remove)(MEMBER, **base)
+    elif verb == "reminder_create":
+        d, t = _in(90)
+        os_shadow.note_reminder_create(MEMBER, **(dict(source="service", note=NOTE, due_date=d, due_time=t, recurring=False) | kw))
+    else:
+        os_shadow.note_alarm_create(MEMBER, **(dict(source="service", time_hhmm="06:45", repeat="once") | kw))
+
+
+@pytest.mark.parametrize("verb,kw", [(v, kw) for v, kws in MARKED.items() for kw in kws])
+def test_marker_text_from_any_argument_of_any_verb_never_reaches_a_line_or_a_counter(kernel, monkeypatch, caplog, verb, kw):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    caplog.set_level(logging.DEBUG)
+    _call_marked(verb, kw)
+    settle(1)
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert MARK not in text and not any(MARK in str(k) for k in os_shadow.counters())
+    assert not any(MARK in str(k) or MARK in str(v) for k, v in os_shadow.counters_by_verb().items())
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("OS_SHADOW_ACT ")]
+    assert line.count("result=") == 1 and f"verb={verb} " in line
+
+
+@pytest.mark.parametrize("mode", ["refuse:" + MARK, "error_code"])
+def test_marker_text_from_the_kernel_never_reaches_a_line(kernel, monkeypatch, caplog, mode):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    caplog.set_level(logging.DEBUG)
+    kernel.act_mode, kernel.error_code = mode, MARK
+    remind(90)
+    settle(1)
+    assert MARK not in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_verb_name_that_is_not_a_verb_is_not_shadowed_and_never_logged(kernel, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    caplog.set_level(logging.DEBUG)
+    os_shadow.note_act(MARK, MEMBER, source="spoken", raw={"item": "rice", "list": "Shopping"})
+    assert MARK not in " ".join(r.getMessage() for r in caplog.records) and os_shadow.counters() == {}
+
+
+@pytest.mark.parametrize("verb", ["list_add", "list_remove", "reminder_create", "alarm_create"])
+def test_a_receipt_that_names_no_member_is_member_unproven_for_every_verb(kernel, monkeypatch, verb):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", ALL)
+    kernel.act_mode = "no_member"
+    _call_marked(verb, {})
+    settle(1)
+    assert os_shadow.counters_by_verb() == {verb: {"member_unproven": 1}}

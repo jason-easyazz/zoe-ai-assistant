@@ -153,16 +153,19 @@ class FakeKernel:
             return
         if mode == "close":
             raise ConnectionError
+        if a["action"] == "remind.set" and set(a["args"]) - {"note", "in_minutes", "asked"}:
+            return self._refuse(conn, req, "unknown argument")          # the kernel's check_params: an extra argument is refused
         if mode == "error_code":                         # an error envelope whose code is free text from the kernel
             return _send(conn, self._frame(req, {"ok": False, "error": {"code": self.error_code, "reason": self.error_code}}))
         if mode == "wrong_shape":
             return self._ok(conn, req, {"hello": 1})
         # the read-back each lab driver returns (labs/zoe-os/zoe_os/brain/drivers.py): list -> item, reminder -> note, alarm -> time.
-        # A reminder's read-back here ALSO says when (in_minutes): the lab driver's does not yet ("no_schedule" mirrors it).
+        # A reminder's read-back here ALSO says when, as an ABSOLUTE instant (due_at = the fake kernel's clock at receipt + the
+        # minutes): the lab driver's does not yet ("no_schedule" mirrors it).
         pkey, akey = {"remind.set": ("note", "note"), "alarm.set": ("alarm", "time")}.get(a["action"], ("item", "item"))
         proof = {pkey: a["args"][akey]}
         if a["action"] == "remind.set":
-            proof["in_minutes"] = a["args"]["in_minutes"]
+            proof["due_at"] = int(os_shadow._wall()) + 60 * a["args"]["in_minutes"]
         verified, outcome, member = True, "verified", a["on_behalf_of"]
         if mode == "unverified":
             verified, outcome, proof = False, "unverified", None
@@ -172,11 +175,13 @@ class FakeKernel:
             proof[pkey] = a["args"][akey] + " x"
         elif mode == "wrong_time":                      # the WHEN differs, the WHAT is right
             if a["action"] == "remind.set":
-                proof["in_minutes"] = a["args"]["in_minutes"] + 5
+                proof["due_at"] += 300
             elif a["action"] == "alarm.set":
                 proof["alarm"] = "23:59" if a["args"]["time"] != "23:59" else "00:00"
+        elif mode == "late_by_delay" and "due_at" in proof:           # minutes taken from the commit, not the send
+            proof["due_at"] += self.late_s
         elif mode == "no_schedule":
-            proof.pop("in_minutes", None)
+            proof.pop("due_at", None)
         elif mode == "wrong_member":
             member = "someone-else"
         elif mode == "no_member":

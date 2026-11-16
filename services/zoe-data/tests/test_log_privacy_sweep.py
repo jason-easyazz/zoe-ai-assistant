@@ -465,7 +465,7 @@ def test_os_shadow_maps_every_logged_field_onto_its_closed_set():
     for name, closed in (("verb", "VERBS"), ("source", "SOURCES"), ("cls", "CLASSES"), ("live", "LIVE"), ("kernel_state", "KERNEL_STATES"),
                          ("reason", "REASONS")):
         assert f"{name} if {name} in {closed}" in src or f"in {closed} else" in src, name
-        assert isinstance(getattr(os_shadow, closed), tuple)
+        assert isinstance(getattr(os_shadow, closed), (tuple, dict))
 
 
 def test_os_shadow_forget_code_is_a_class_name_or_queue_full():

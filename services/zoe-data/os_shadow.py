@@ -58,10 +58,18 @@ DIR_FLAG = "ZOE_OS_SHADOW_DIR"
 VERBS = {"list_add": ("list.add", (("item", "item", "item_differs", "kernel_malformed"), ("list", "list", "list_differs", None))),
          "list_remove": ("list.remove", (("item", "item", "item_differs", "kernel_malformed"), ("list", "list", "list_differs", None))),
          "reminder_create": ("remind.set", (("note", "note", "item_differs", "kernel_malformed"),
-                                            ("in_minutes", "in_minutes", "schedule_differs", "schedule_unproven"))),
+                                            ("due_at", "due_at", "schedule_differs", "schedule_unproven"))),
          "alarm_create": ("alarm.set", (("alarm", "time", "schedule_differs", "kernel_malformed"),))}
 DEFAULT_VERBS = "list_add"
 REMIND_MAX_MIN = 10080         # the kernel's ``remind.set`` takes 1..10080 whole minutes from now
+#: A reminder is compared on its ABSOLUTE due instant (UTC epoch seconds), computed from the live row and the commit time, never on a
+#: relative "in N minutes" (a queue delay would shift that and still read as a match). The kernel's ``remind.set`` today takes only
+#: ``in_minutes`` and refuses an unknown argument, so ``due_at`` is NOT sent (``LOCAL_ONLY``): ``in_minutes`` is recomputed from it at
+#: SEND time. A match needs the kernel's read-back ``proof.due_at`` within ``DUE_TOLERANCE_S`` (the minute rounding); without it the
+#: reminder is ``schedule_unproven``. When the kernel takes ``due_at``, drop it from ``LOCAL_ONLY``.
+LOCAL_ONLY = frozenset({"due_at"})
+DUE_TOLERANCE_S = 60.0
+_wall = time.time              # the wall clock the send-time minutes are computed from (a test replaces it)
 
 # ---- the wire (kernel protocol v1; see the module docstring) ----------------------------------------------------------------------
 WIRE_VERSION = 1
@@ -351,7 +359,11 @@ def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add
             if missing is not None:
                 return missing, state
             continue
-        if proof[pkey] != sent.get(akey):
+        got, want = proof[pkey], sent.get(akey)
+        if pkey == "due_at":          # absolute instants: equal within the minute the wire rounds to
+            if not isinstance(got, (int, float)) or isinstance(got, bool) or abs(got - want) > DUE_TOLERANCE_S:
+                return differs, state
+        elif got != want:
             return differs, state
     return "match", state
 
@@ -590,7 +602,7 @@ def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict,
         seq = ev.get("seq") if isinstance(ev, dict) else None
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise KernelProtocol("no seq")
-        rec = kernel.call(SKILL_BRAIN, "act", until, action=action, on_behalf_of=user_id, args={**sent, "asked": seq}, caused_by=[seq])
+        rec = kernel.call(SKILL_BRAIN, "act", until, action=action, on_behalf_of=user_id, args={**{k: v for k, v in sent.items() if k not in LOCAL_ONLY}, "asked": seq}, caused_by=[seq])
         if not isinstance(rec, dict) or not isinstance(rec.get("verified"), bool) or not isinstance(rec.get("outcome"), str):
             raise KernelProtocol("bad receipt")
         result_kernel = rec
@@ -623,7 +635,8 @@ def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], s
         if len(hhmm) != 5 or hhmm[2] != ":" or not (hhmm[:2] + hhmm[3:]).isdigit() or int(hhmm[:2]) > 23 or int(hhmm[3:]) > 59:
             return None, "time"
         return {"time": hhmm}, ""
-    # reminder_create: the kernel's remind.set is ONE-SHOT, in whole minutes from now (1..10080)
+    # reminder_create: the kernel's remind.set is ONE-SHOT, in whole minutes from now (1..10080). The due instant is absolute (from the
+    # row and the COMMIT time); the minutes are counted from NOW (the send), so a job that waited in the queue still asks for that instant.
     if raw.get("recurring"):
         return None, "recurring"
     if not raw.get("due_time"):
@@ -636,10 +649,11 @@ def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], s
     run_at = build_run_at(raw.get("due_date"), hm[0], hm[1], datetime.fromtimestamp(wall_at, timezone.utc)) if hm else None
     if run_at is None:
         return None, "time"
-    minutes = int(round((run_at.timestamp() - wall_at) / 60.0))
+    due_at = run_at.timestamp()
+    minutes = int(round((due_at - _wall()) / 60.0))
     if not 1 <= minutes <= REMIND_MAX_MIN:
         return None, "range"
-    return {"note": raw["note"], "in_minutes": minutes}, ""
+    return {"note": raw["note"], "in_minutes": minutes, "due_at": due_at}, ""
 
 
 # ---- the hook -----------------------------------------------------------------------------------------------------------------------
