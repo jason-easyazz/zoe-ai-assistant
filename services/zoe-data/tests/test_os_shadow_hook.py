@@ -31,9 +31,52 @@ class _Cur:
         return list(self._rows)
 
 
-class _DB:
-    def __init__(self):
+class _Txn:
+    """A transaction that RECORDS its state and can FAIL at exit (the commit), so a hook moved inside it, or run after a failed
+    commit, is caught: ``depth`` > 0 while open, ``committed`` counts clean exits, ``fail_commit`` raises at the outermost exit."""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def __aenter__(self):
+        self.owner.depth += 1
+        return self
+
+    async def __aexit__(self, exc_type, *a):
+        self.owner.depth -= 1
+        if exc_type is None and self.owner.depth == 0:
+            if self.owner.fail_commit:
+                raise RuntimeError("commit failed")
+            self.owner.committed += 1
+        return False
+
+
+class _TxState:
+    depth = 0
+    committed = 0
+    fail_commit = False
+
+    def transaction(self):
+        return _Txn(self)
+
+
+def _spy_hook(monkeypatch, owner):
+    """Record, for every hook call, whether a transaction was open and how many commits had landed."""
+    seen = []
+    real = os_shadow.note_add
+
+    def spy(*a, **k):
+        seen.append((owner.depth, owner.committed))
+        return real(*a, **k)
+
+    monkeypatch.setattr(os_shadow, "note_add", spy)
+    return seen
+
+
+class _DB(_TxState):
+    def __init__(self, fail_commit=False):
         self.writes: list = []
+        self.fail_commit = fail_commit
 
     async def execute(self, sql, params=()):
         if "pg_advisory_xact_lock" in sql:
@@ -43,19 +86,10 @@ class _DB:
         self.writes.append((sql.split("(")[0].strip(), tuple(params)[1:]))
         return _Cur([])
 
-    def transaction(self):
-        class _T:
-            async def __aenter__(s):
-                return s
 
-            async def __aexit__(s, *a):
-                return False
-        return _T()
-
-
-async def _spoken_add():
+async def _spoken_add(db=None):
     import list_service
-    db = _DB()
+    db = db or _DB()
     out = await list_service.add_items_to_list(db, text="oat milk and rice", user_id=MEMBER, list_type="shopping",
                                                list_name="Shopping", new_list_visibility="family")
     return db.writes, {k: out[k] for k in ("added", "already", "created_list", "deduped")}
@@ -67,15 +101,38 @@ async def test_the_live_add_is_identical_with_the_shadow_off_dead_or_on(kernel, 
     base_writes, base_out = await _spoken_add()
     assert [w[0] for w in base_writes] == ["INSERT INTO list_items"] * 2 and base_out["added"] == ["oat milk", "rice"]
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
-    for mode in ("ok", "refuse", "close", "malformed"):
+    for mode, code in (("ok", "match"), ("refuse", "kernel_refused_live_did"), ("close", "kernel_unavailable"),
+                       ("malformed", "kernel_malformed")):
+        os_shadow._reset_for_tests()                 # each mode on its own worker and circuit, and its own outcome checked
+        assert os_shadow.revive()
         kernel.act_mode = mode
         writes, out = await _spoken_add()
         assert out == base_out and [w[1][1:] for w in writes] == [w[1][1:] for w in base_writes]   # the rows written are unchanged
+        settle(2)
+        assert os_shadow.counters() == {code: 2}, mode    # THIS mode was exercised, both rows
+    os_shadow._reset_for_tests()
+    assert os_shadow.revive()
     kernel.srv.close()
     Path(kernel.path).unlink()
     writes, out = await _spoken_add()
     assert out == base_out
-    settle(1)
+    settle(2)
+    assert os_shadow.counters() == {"kernel_unavailable": 2}
+
+
+@pytest.mark.asyncio
+async def test_the_spoken_add_hooks_only_after_its_transaction_committed_and_never_after_a_failed_commit(kernel, monkeypatch):
+    db = _DB()
+    seen = _spy_hook(monkeypatch, db)
+    await _spoken_add(db)
+    assert seen and all(depth == 0 and committed == 1 for depth, committed in seen), seen     # outside, after the one commit
+    failed = _DB(fail_commit=True)
+    seen_failed = _spy_hook(monkeypatch, failed)
+    with pytest.raises(RuntimeError):
+        await _spoken_add(failed)
+    assert seen_failed == []                          # the commit failed: no proposal
+    settle(2)
+    assert os_shadow.counters() == {"match": 2}
 
 
 @pytest.mark.asyncio
@@ -114,20 +171,9 @@ async def test_the_rest_add_mirrors_a_custom_list_by_its_name_from_the_row_it_al
 
 
 # ---- the accepted suggestion: a member's yes is a real add ----------------------------------------------------------------------------
-class _Conn:
-    def __init__(self, boom=False):
-        self.boom, self.writes = boom, []
-
-    def transaction(self):
-        conn = self
-
-        class _T:
-            async def __aenter__(s):
-                return s
-
-            async def __aexit__(s, *a):
-                return False
-        return _T()
+class _Conn(_TxState):
+    def __init__(self, boom=False, fail_commit=False):
+        self.boom, self.writes, self.fail_commit = boom, [], fail_commit
 
     async def fetchrow(self, sql, *args):
         if "FROM pending_suggestions" in sql:
@@ -171,6 +217,25 @@ async def test_an_accepted_suggestion_add_is_shadowed_after_its_commit_and_a_fai
     assert not (await pending_suggestions.execute_suggestion("s2", MEMBER))["ok"]     # rolled back: nothing to shadow
     import time
     time.sleep(0.2)
+    assert os_shadow.counters() == {"match": 1}
+
+
+@pytest.mark.asyncio
+async def test_the_suggestion_hook_runs_after_the_commit_and_never_after_a_failed_one(kernel, monkeypatch):
+    import pending_suggestions
+
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    conn = _Conn()
+    seen = _spy_hook(monkeypatch, conn)
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"]
+    assert seen == [(0, 1)]                            # outside the transaction, after its commit
+    failed = _Conn(fail_commit=True)                    # every statement succeeds; the COMMIT fails
+    seen_failed = _spy_hook(monkeypatch, failed)
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(failed))
+    out = await pending_suggestions.execute_suggestion("s2", MEMBER)
+    assert not out["ok"] and seen_failed == []
+    settle(1)
     assert os_shadow.counters() == {"match": 1}
 
 

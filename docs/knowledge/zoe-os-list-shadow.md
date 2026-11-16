@@ -18,6 +18,7 @@ Labels: **[code]** read in the source, **[lab]** run against a fake or the lab k
 ## 1. Where a list add happens today (every path) [code]
 
 One live write core is two functions and a REST route. Every path below ends in one of them; the shadow hook sits AFTER each commit.
+**The hook call sites and their writer-coverage test arrive later in the stack (#2623-#2631)**; this PR is the client alone.
 
 | Path | Entry | Reaches the write through | Hook |
 |---|---|---|---|
@@ -49,7 +50,7 @@ add it to `sys.path` (pinned: `test_zoe_data_never_imports_the_lab_kernel`). It 
   citing that event), `panel` (a trusted surface: `forget`). `describe` is not needed: the action name and arguments are fixed here.
 
 **How the two cannot drift silently.** `tests/test_os_shadow.py` runs the client against an in-process FAKE kernel written from the spec.
-`tests/test_os_shadow_contract.py` runs it against the REAL lab kernel (`labs/zoe-os/shadow_daemon.py` in a subprocess) and asserts
+`tests/test_os_shadow_contract.py` (later in the stack, with the kernel verbs: #2623-#2631 and the kernel branch) runs it against the REAL lab kernel (`labs/zoe-os/shadow_daemon.py` in a subprocess) and asserts
 `WIRE_VERSION == wire.VERSION` and that every op and argument the client sends is in `wire.OPS`. It is **skipped with a named reason**
 ("the lab Zoe OS kernel is not in this tree: contract unproven") when `labs/zoe-os` is absent, so the zoe-data side can land on `main`
 without the lab stack and the contract test starts running the day both are present. Until then the wire is pinned by the fake only [inferred].
@@ -78,12 +79,14 @@ The kernel record holds list items (household words) in the spine, in receipts (
   durable retry marker re-runs it as a WHOLE-MEMBER kernel forget (the name is never stored: the safe over-forget of a measuring store).
 * **Topic forget** (`forget_topic._forget`): `os_shadow.erase_topic` (kernel `forget(topic=...)`), failure = `store_down` + the same marker.
 * A scope the kernel refuses to match falls back to a whole-member forget (a scope that matches nothing never widens, but this store may).
-* **Flag off but a kernel was once installed** (`creds.json` exists): forget still tries; if it cannot reach the kernel it records the member
-  in `pending-forgets.json` and the worker replays it, before any new proposal, the next time shadow is turned on. The park is a
-  locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
+* **A forget that cannot be confirmed in the kernel is PARKED, whatever the flag** (`pending-forgets.json`, replayed before the next
+  job): with the flag `shadow` the caller is still told it failed (`ShadowForgetUnavailable`), with it off it is deferred (0). The park
+  is a locked (thread lock + `flock`), atomic and fsync'd read-modify-write; a replay re-reads under the lock, so a park made while it
   ran is kept; a park that cannot be made durable (disk, an unreadable file, which is never overwritten) FAILS the erase closed
-  (`ShadowForgetUnavailable`) instead of letting it say done. **Flag off and no
-  `creds.json`**: nothing was ever recorded, no socket is touched.
+  (`ShadowForgetUnavailable`) instead of letting it say done. **A missing `creds.json` is not proof of nothing to forget** (the kernel's
+  store can outlive it): the ONLY no-op is the flag off AND no shadow state at all, decided by `os_shadow.shadow_state_exists()`: the
+  state directory is absent, or holds none of `creds.json`, `people.json`, `known-people.json`, `kernel/`, `pending-forgets.json`; a
+  directory that cannot be read, or a state path that is not a directory, counts as state.
 * **A parked forget always reaches the kernel before any later add for that member** (`test_os_shadow_forget.py`, "forgotten means
   forever"): the worker replays the park file before EVERY job while anything is parked (an in-memory copy of the parked ids is kept in
   step with the file under its lock, so a known-empty park costs one global read per job and no file I/O; a new process reads the file
@@ -146,7 +149,8 @@ The hook is a flag read and, with the flag on, one bounded `queue.put_nowait`. T
 0.005 ms; flag on p95 0.011 ms** per add, against a target of under 5 ms. This is the time added on the caller; it does not include the
 worker thread's GIL share while it talks to the socket [not measured] and was not measured under a real turn [not run].
 
-A slow kernel is cut off by ONE budget per add (1.5 s from when the worker takes it): every connect, handshake, publish, act and read draws
+Any unavailability (a failed connect, unreadable or missing credentials, a connection the kernel accepted then closed or timed out
+mid-request) opens the 5 s circuit, so a broken kernel costs one attempt, not one per add. A slow kernel is cut off by ONE budget per add (1.5 s from when the worker takes it): every connect, handshake, publish, act and read draws
 on what is left, each also capped at 0.5 s, so a stall at any stage ends the add as `timeout` within the budget
 (`test_one_deadline_per_add_covers_every_socket_stage`); a full queue (64) drops and counts; nothing the worker does can raise
 into a turn (`test_the_live_add_is_identical_with_the_shadow_off_dead_or_on`: the rows the live path writes and the outcome it returns are identical
