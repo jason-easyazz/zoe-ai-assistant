@@ -4805,7 +4805,7 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
     new_ids: list[str] = []
     inserted: list[str] = []      # the texts that really became rows (the Zoe OS shadow proposes exactly these)
     item_id = ""
-    from list_service import list_write_txn
+    from list_service import create_item_record, list_write_txn
 
     # ONE transaction + per-list advisory lock around the read-check-insert loop: overlapping adds serialise, a failed item
     # rolls the whole add back.
@@ -4835,19 +4835,9 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
                     item_id = str(have["id"])
                 continue
             new_id = str(uuid.uuid4())
-            await db.execute(
-                """
-                INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """,
-                new_id,
-                list_id,
-                normalize_item_text(part) or part,
-                "normal",
-                "",
-                "",
-                None,
-                None,
+            await create_item_record(
+                db, item_id=new_id, list_id=list_id, text=part,
+                priority="normal", category="", quantity="", raw_asyncpg=True,
             )
             open_rows.append({"id": new_id, "text": part})
             new_ids.append(new_id)
