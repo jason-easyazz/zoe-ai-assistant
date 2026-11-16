@@ -359,3 +359,15 @@ def test_a_proper_name_only_entry_is_not_an_allowed_word():
 def test_a_malformed_lexicon_refuses_instead_of_raising():
     r = scrub_query("weather forecast", lexicon={"enabled": True})
     assert not r.send and r.reason == ws.REASON_ERROR
+
+
+def test_a_dictionary_word_that_starts_with_a_member_name_still_leaves():
+    # OWNER DECISION 2026-11-16: every word that leaves must already be an ordinary dictionary word, so a name can only
+    # get out glued into something if the result is itself a real word ("rosemary", "billboard"), which says nothing
+    # about the person. Stripping those would weaken real searches for every household with a Rose, Bill or Mark.
+    terms = PrivateTerms.of(names=["Rose", "Bill"])
+    assert scrub_query("rosemary garden ideas", terms).query == "rosemary garden ideas"
+    assert scrub_query("billboard charts week", terms).query == "billboard charts week"
+    # ...while the name itself, split or glued into a non-word, still never leaves
+    assert "rose" not in scrub_query("rose garden ideas", terms).query.split()
+    assert scrub_query("roseparty garden ideas", terms).query == "garden ideas"
