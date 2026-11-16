@@ -45,18 +45,24 @@ panel or in the voice path calls it yet. Flag `ZOE_LISTEN_PACE` = `off` (default
   `still_talking` disagrees with its `talk_chunks` (that definition) is malformed and changes nothing.
 - **Lengthen fast.** Two cut events in the last 20 eligible turns: one level longer, at once. One cut right after a reflex
   sound: one level longer, at once. Never rate-limited.
-- **Shorten slow.** One level shorter after **40 consecutive clean eligible turns**; 80 after any lengthen; 120 to return to a
-  level that caused a lengthen in the last 30 days; doubled wherever the reflex is on; at most one automatic shortening a
-  day. Any cut resets the run to zero.
+- **Shorten slow.** One level shorter after **40 consecutive clean turns that prove the shorter level** (below); 80 after any
+  lengthen; 120 to return to a level that caused a lengthen in the last 30 days; doubled wherever the reflex is on; at most
+  one automatic shortening a day. Any cut resets the run to zero.
 - **Unknown never shortens.** A turn is evidence only when every field is known: closed on silence (deep / quiet / clean /
   hesitation), not a barge seed, not frozen (media, night, noise, first wake, speculation, cap), muted ms known and zero, a
   monitor that listened, and (for a clean verdict) at least 1200 ms of the window observed. Anything malformed or unknown
   leaves the state byte-identical.
-- **Which level a turn speaks for.** Every tail at a lower level is <= the same tail at a higher one, so a clean turn observed
-  at level U proves every level <= U would have been clean too (the quiet run was unbroken and nobody spoke after U's later
-  close). A clean turn therefore counts when it was observed at the subject's level or a longer one; in shadow every turn is
-  an L0 observation, which is valid evidence for every shorter level. A clean turn observed at a SHORTER level is skipped. A
-  cut always counts (the safe direction).
+- **Only proven evidence shortens.** A clean final close at level U does NOT by itself prove a shorter level would have been
+  clean: a 600 ms pause, a resume and a clean finish at L0 would have been cut by L-3's 560 ms gate. A clean turn proves a
+  level L clean only when its observed level (`level_used`) is known and >= L, and, unless it was observed AT L, its longest
+  in-turn quiet run (`pause_max_ms`, speech end to resume) is shorter than the quickest close L can make (its clean gate, else
+  its deep tail). A clean turn proven at the subject's level ages the cut window; it adds to the run only if it also proves
+  the next shorter level. An unknown level is skipped (`skip:level_unknown`), a shorter one too (`skip:level_mismatch`), and
+  one whose pause the current level would have closed on (`skip:unproven`). A cut always counts (the safe direction).
+  **The panel's `FIRST_SOUND` line does not carry `pause_max_ms` yet, so automatic shortening is dormant until it does**;
+  lengthening and the spoken settings work without it.
+- **The controller validates too.** `step()` applies the parser's own checks (`valid_outcome`): a hand-built outcome with an
+  unknown window, a non-bool flag, an out-of-range count or a `still_talking` that contradicts its chunk count is malformed.
 - **Drift.** A level SHORTER than the default drifts back up one step a week after 21 days unheard. A longer level never
   drifts down on its own (that would be shortening on no evidence).
 - **Spoken override** (the API; the phrases are a later Skybridge PR):

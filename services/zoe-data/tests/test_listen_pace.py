@@ -17,7 +17,9 @@ pytestmark = pytest.mark.ci_safe
 T0 = 1_800_000_000.0
 DAY = lp.DAY_S
 
-CLEAN = dict(close="deep=640ms", win="wake", still_talking="0", talk_chunks="0", obs_ms="1500", muted_ms="0")
+# level_used=4 + pause_max_ms=0: a turn that PROVES every shorter close clean (seen at the longest level, no in-turn pause)
+CLEAN = dict(close="deep=640ms", win="wake", still_talking="0", talk_chunks="0", obs_ms="1500", muted_ms="0", level_used="4",
+             pause_max_ms="0")
 CUT = dict(CLEAN, still_talking="1", talk_chunks="5")
 
 
@@ -215,6 +217,64 @@ def test_still_talking_that_contradicts_the_chunk_count_is_malformed(bad):
     assert s2 is s and ch.reason == "skip:malformed" and ch.after == 0
     assert lp.outcome_from_fields(dict(CLEAN, talk_chunks="2")) is not None          # the consistent neighbours still parse
     assert lp.outcome_from_fields(dict(CLEAN, still_talking="1", talk_chunks="3")) is not None
+
+
+# ── only PROVEN evidence shortens: unknown, contradictory or unproven is neutral ─────────────────────────────────────────────
+def test_a_pause_resume_finish_turn_never_counts_toward_a_shorter_level_it_would_have_cut():
+    """Seen at L0 with a 600 ms pause mid-turn, then a resume and a clean finish. L-3's clean gate (560 ms) would have closed
+    on that pause: the turn proves nothing for L-3, so the run toward it does not move."""
+    s = lp.State(level=-2, run=39)
+    s2, ch = lp.step(s, out(level_used="0", pause_max_ms="600"), T0)
+    assert s2.level == -2 and s2.run == 39 and ch.reason == "none"
+    s3, ch = lp.step(s, out(level_used="0", pause_max_ms="200"), T0)           # a pause L-3 would have survived: it counts
+    assert (s3.level, ch.reason) == (-3, "shorten_run")
+    s4, ch = lp.step(lp.State(level=0, run=39), out(level_used="2", pause_max_ms="700"), T0)    # 700 > L-1's 640
+    assert s4.level == 0 and s4.run == 39
+
+
+def test_a_clean_turn_with_no_pause_measure_is_neutral():
+    s = lp.State(level=0, run=39)
+    f = dict(CLEAN, level_used="0")
+    f.pop("pause_max_ms")
+    s2, ch = lp.step(s, lp.outcome_from_fields(f), T0)
+    assert s2.level == 0 and s2.run == 39 and ch.reason == "none"
+
+
+def test_a_clean_turn_at_an_unknown_level_never_shortens():
+    s = lp.State(level=1, run=39)
+    f = dict(CLEAN)
+    f.pop("level_used")
+    s2, ch = lp.step(s, lp.outcome_from_fields(f), T0)
+    assert s2 is s and ch.reason == "skip:level_unknown"
+    s3, _ = lp.step(s, lp.outcome_from_fields({k: v for k, v in CUT.items() if k != "level_used"}), T0)
+    assert s3.run == 0 and s3.events_half == lp.HALF                           # a cut still counts: lengthening needs less proof
+
+
+def test_a_pause_seen_at_a_longer_level_only_proves_the_current_one_if_it_would_have_survived_it():
+    s = lp.State(level=-3, run=0)
+    s2, ch = lp.step(s, out(level_used="0", pause_max_ms="600"), T0)           # L-3 would have closed on that pause
+    assert s2 is s and ch.reason == "skip:unproven"
+
+
+def _good():
+    return lp.Outcome(rule="deep", win="wake", still_talking=False, talk_chunks=0, obs_ms=1500, muted_ms=0, level_used=4,
+                      pause_max_ms=0)
+
+
+@pytest.mark.parametrize("bad", [
+    {"win": "invalid"}, {"still_talking": False, "talk_chunks": 5}, {"still_talking": True, "talk_chunks": 1},
+    {"still_talking": "0"}, {"still_talking": 0}, {"talk_chunks": True}, {"talk_chunks": -2}, {"talk_chunks": 10001},
+    {"talk_chunks": 1.0}, {"obs_ms": -1}, {"obs_ms": 60001}, {"muted_ms": -2}, {"frozen": "weird"}, {"frozen": None},
+    {"reflex": "yes"}, {"held": 1}, {"speech_ms": -5}, {"level_used": 9}, {"level_used": -4}, {"pause_max_ms": -1},
+    {"rule": 5},
+])
+def test_step_validates_a_hand_built_outcome_like_the_parser(bad):
+    import dataclasses
+    o = dataclasses.replace(_good(), **bad)
+    s = lp.State(level=0, run=39)
+    s2, ch = lp.step(s, o, T0)
+    assert s2 is s and ch.reason == "skip:malformed"
+    assert lp.step(s, _good(), T0)[1].reason == "shorten_run"                    # the untouched outcome would have shortened
 
 
 def test_garbage_state_or_clock_never_raises_or_moves():

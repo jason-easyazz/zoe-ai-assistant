@@ -17,7 +17,12 @@ The rule, in one sentence each:
   that caused a lengthen in the last 30 days, at most one automatic shortening a day); any cut resets the run;
 * inside a floor and a ceiling: ``[LEVEL_MIN, LEVEL_MAX]``, and a child subject's floor is L0 (role-based, never voice-inferred);
 * UNKNOWN NEVER SHORTENS: any malformed, missing or contradictory input leaves the state exactly as it was (a cut-off command is
-  the bug the owner cares about; an over-long wait is merely slow).
+  the bug the owner cares about; an over-long wait is merely slow). ``step`` applies the parser's own validation
+  (``valid_outcome``), so a hand-built ``Outcome`` is held to the same rules;
+* ONLY PROVEN EVIDENCE SHORTENS: a clean turn counts toward the run only when it proves the SHORTER level's close would have
+  been clean too (``proves_clean_at``: the observed level known and at least that long, and no in-turn pause, ``pause_max_ms``,
+  that the shorter level would have closed on). Unproven is neutral. A cut needs no such proof (lengthening is the safe
+  direction). The panel's FIRST_SOUND line does not carry ``pause_max_ms`` yet, so automatic shortening is dormant until it does.
 
 A "cut event" is the person talking after the close: ``still_talking=1`` on the daemon's FIRST_SOUND line (>= 3 speech chunks
 inside the fixed 1.5 s window after the close), weight 1; the server's trailing-"and" hold merging a continuation, weight 0.5.
@@ -167,6 +172,35 @@ class Outcome:
     held: bool = False                 # the server's trailing-"and" hold merged a continuation into this turn
     speech_ms: Optional[int] = None    # None = not measured (the S0 line has no speech length)
     level_used: Optional[int] = None   # the level whose tails closed this recording (None = not stated)
+    pause_max_ms: Optional[int] = None  # the longest quiet run INSIDE the turn, speech end to resume (None = not measured)
+
+
+_COUNT_RANGES = {"talk_chunks": (-1, 10000), "obs_ms": (0, 60000), "muted_ms": (-1, 600000)}
+_OPT_RANGES = {"speech_ms": (0, 600000), "level_used": (LEVEL_MIN, LEVEL_MAX), "pause_max_ms": (0, 600000)}
+
+
+def _is_count(v, lo: int, hi: int) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def valid_outcome(o) -> bool:
+    """THE validation, shared by the parser and the controller (``classify`` / ``step``), so a hand-built ``Outcome`` gets
+    exactly the checks a parsed one does: the enums, every count an int (never a bool) inside its range, the flags real bools,
+    and ``still_talking`` agreeing with the daemon's own definition (>= ``STILL_TALKING_CHUNKS`` chunks)."""
+    try:
+        if not isinstance(o, Outcome) or not isinstance(o.rule, str) or o.win not in WINDOWS:
+            return False
+        if not isinstance(o.frozen, str) or (o.frozen and o.frozen not in FREEZES):
+            return False
+        if not all(isinstance(b, bool) for b in (o.still_talking, o.reflex, o.held)):
+            return False
+        if not all(_is_count(getattr(o, k), lo, hi) for k, (lo, hi) in _COUNT_RANGES.items()):
+            return False
+        if not all(getattr(o, k) is None or _is_count(getattr(o, k), lo, hi) for k, (lo, hi) in _OPT_RANGES.items()):
+            return False
+        return (o.talk_chunks >= STILL_TALKING_CHUNKS) == o.still_talking
+    except Exception:  # noqa: BLE001 - anything odd is malformed
+        return False
 
 
 _TRUE = ("1", "true", "yes")
@@ -218,6 +252,7 @@ def outcome_from_fields(m: Mapping) -> Optional[Outcome]:
             return None
         lvl = m.get("level_used")
         sp = m.get("speech_ms")
+        pm = m.get("pause_max_ms")
         reflex = m.get("reflex", False)
         if isinstance(reflex, str) and reflex.strip() in ("none", "-"):
             reflex = False
@@ -234,10 +269,9 @@ def outcome_from_fields(m: Mapping) -> Optional[Outcome]:
             held=_flag01(m.get("held", False)),
             speech_ms=None if sp in (None, "", "-1", -1) else _int(sp, lo=0, hi=600000),
             level_used=None if lvl in (None, "", "-") else _int(lvl, lo=LEVEL_MIN, hi=LEVEL_MAX),
+            pause_max_ms=None if pm in (None, "", "-", "-1", -1) else _int(pm, lo=0, hi=600000),
         )
-        if (o.talk_chunks >= STILL_TALKING_CHUNKS) != o.still_talking:
-            return None                 # the daemon sets still_talking exactly when >= 3 chunks were heard: anything else contradicts
-        return o
+        return o if valid_outcome(o) else None
     except (KeyError, ValueError, TypeError, AttributeError):
         return None
 
@@ -247,8 +281,9 @@ def classify(o: Optional[Outcome]) -> "tuple[str, int]":
 
     A cut needs no full observation window (people talking after the close is positive evidence however short the look). A
     clean verdict needs every unknown resolved: a monitor that listened, the window observed >= MIN_OBS_MS, the muted ms
-    known and zero. Anything less is a skip, never "clean"."""
-    if o is None:
+    known and zero. Anything less is a skip, never "clean". A "clean" verdict is only "nobody talked after THIS close"; what
+    it proves about a shorter level is ``proves_clean_at``'s question."""
+    if o is None or not valid_outcome(o):
         return "skip:malformed", 0
     if o.frozen:
         return "skip:frozen", 0
@@ -269,6 +304,27 @@ def classify(o: Optional[Outcome]) -> "tuple[str, int]":
     if o.obs_ms < MIN_OBS_MS:
         return "skip:short_window", 0
     return "clean", 0
+
+
+def tolerance_ms(level: int) -> int:
+    """The shortest quiet run, counted from a speech end, that can close a recording at ``level``: its clean gate where it has
+    one, else its deep tail. (The deep tail really starts after the decay chunks, so counting it from the speech end is the
+    cautious side: it can only call a turn unproven that was in fact safe.)"""
+    p = profile(level)
+    return min(p.deep_ms, p.clean_ms) if p.clean_ms > 0 else p.deep_ms
+
+
+def proves_clean_at(o: Outcome, level: int) -> bool:
+    """Does this CLEAN turn prove a close at ``level`` would have been clean too? Fields used: ``level_used`` and
+    ``pause_max_ms``. It needs the level it was observed at, known and >= ``level`` (a longer close's final silence and
+    post-close window contain the shorter close's). Unless it was observed AT ``level``, it also needs proof that no quiet run
+    INSIDE the turn could have closed a ``level`` recording early (a 600 ms pause, a resume, a finish: L-3's 560 ms gate would
+    have cut it): ``pause_max_ms`` known and < ``tolerance_ms(level)``. Anything unknown is False: not evidence."""
+    if o.level_used is None or o.level_used < level:
+        return False
+    if o.level_used == level:
+        return True
+    return o.pause_max_ms is not None and o.pause_max_ms < tolerance_ms(level)
 
 
 # ── the controller ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -307,11 +363,15 @@ def step(s: State, o: Optional[Outcome], now: float, *, reflex_on: bool = False)
         before = effective_level(s, now)
         if verdict.startswith("skip"):
             return s, Change(verdict, before, before)
-        if o.level_used is not None and o.level_used < before and verdict == "clean":
-            # Every tail at a lower level is <= the same tail at a higher one (PROFILES is monotone), so a clean turn
-            # observed at level U proves the close at any level <= U was clean too: the quiet run in between was unbroken
-            # and nobody spoke for the window after U's later close. It proves nothing about a level above U.
-            return s, Change("skip:level_mismatch", before, before)
+        if verdict == "clean":
+            # A clean turn is evidence only for what it PROVES (proves_clean_at); everything else is neutral. A cut needs no
+            # such proof: lengthening is the safe direction.
+            if o.level_used is None:
+                return s, Change("skip:level_unknown", before, before)
+            if o.level_used < before:
+                return s, Change("skip:level_mismatch", before, before)     # observed shorter: says nothing about this level
+            if not proves_clean_at(o, before):
+                return s, Change("skip:unproven", before, before)          # a pause inside it would have closed this level
         s = replace(s, level=before, eligible=s.eligible + 1, last_heard_at=now)
         if verdict == "cut":
             ring = (s.ring + str(half))[-WINDOW:]
@@ -327,10 +387,12 @@ def step(s: State, o: Optional[Outcome], now: float, *, reflex_on: bool = False)
                 s2 = _lengthen(s, 1, now)
                 return s2, Change("lengthen_events" if s2.level != before else "none", before, s2.level)
             return s, Change("none", before, s.level)
-        # clean
-        s = replace(s, ring=(s.ring + "0")[-WINDOW:], run=s.run + 1, quicker_guard=max(0, s.quicker_guard - 1))
+        # clean (proven at this level): it ages the cut window; it counts toward the run only if it ALSO proves the target clean
         target = s.level - 1
-        if (target >= max(LEVEL_MIN, s.floor) and _pinned(s, now) != "longer"
+        proven = target >= max(LEVEL_MIN, s.floor) and proves_clean_at(o, target)
+        s = replace(s, ring=(s.ring + "0")[-WINDOW:], run=s.run + 1 if proven else s.run,
+                    quicker_guard=max(0, s.quicker_guard - 1))
+        if (proven and _pinned(s, now) != "longer"
                 and (s.last_step_at is None or now - s.last_step_at >= STEP_GAP_S)
                 and s.run >= _run_needed(s, target, now, reflex_on)):
             s = replace(s, level=target, run=0, after_lengthen=False, last_step_at=now, bad=_keep_bad(s.bad, now))
