@@ -26,7 +26,7 @@ canary read back. Synthetic names, users and contents only.
 `--keep-image`) and asserts it is gone. Exit 0 = every cell passed; 5 = no result (read `last-console.log`).
 `last-result.json` and `last-console.log` are git-ignored.
 
-**Not provable here, verified live in the rehearsal:** Docker's own resolution of a bind source, compose
+**Not provable here, still to be checked in the live rehearsal (not done yet):** Docker's own resolution of a bind source, compose
 `!override` merging, the real images' needs under `cap_drop`, and the real exec through sudo.
 
 ## Cells

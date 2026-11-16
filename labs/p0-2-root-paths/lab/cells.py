@@ -7,6 +7,7 @@ section 2.6 (and the classes the 2026-11-14 inventory added) gets three cells: (
 uid 0 write a marker into /root (0700 root) or read a root-only canary; (b) the P0-2 fix is applied with the
 shipped deliverable and the same attempt fails, with a negative control that removes ONE piece of the fix and
 reopens the route; (c) the service still does its job."""
+import glob
 import json
 import os
 import shutil
@@ -376,10 +377,14 @@ cell("X2-verify-catches-a-writable-parent", v2.returncode == 1 and v2.stdout.cou
 again = paths("apply", PUB, "--container-stopped")
 cell("X3-apply-is-idempotent", again.returncode == 0 and again.stdout.count("re-asserted") == len(items)
      and paths("verify", PUB).returncode == 0, again.stdout.strip().replace("\n", " / ")[:300])
+write("/srv/zoe/smb-drop/after-apply.txt", "written after the move\n", 0o600)   # data the revert must keep
 rv = paths("revert", PUB, "--only", "smb-drop")
 v3 = paths("verify", PUB, "--only", "smb-drop")
+kept = [d for d in glob.glob("/srv/zoe/smb-drop.reverted-*")
+        if open(os.path.join(d, "after-apply.txt")).read() == "written after the move\n"]
 cell("X4-revert-renames-new-and-leaves-old", rv.returncode == 0 and v3.returncode == 1
-     and os.path.exists("/home/zoe/smb-drop/synthetic.txt"), rv.stdout.strip())
+     and not os.path.lexists("/srv/zoe/smb-drop") and len(kept) == 1
+     and os.path.exists("/home/zoe/smb-drop/synthetic.txt"), f"{rv.stdout.strip()} kept={kept}")
 
 summary = {"pass": sum(r["pass"] for r in results), "total": len(results), "cells": results}
 print("P0LAB-RESULT " + json.dumps(summary), flush=True)
