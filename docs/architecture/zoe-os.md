@@ -17,6 +17,14 @@ and not checked, **[vision]** means not built and not proven.
 
 ## 0. Answer first
 
+**Forget merge [code; coordinator verification pending]:** Named sequences use `people_seq`;
+snapshot copies use `snapshot_dependencies` and per-person `opaque_snapshots`. Selection,
+complete notice batches, snapshot scrubbing, erasure and bookkeeping commit together.
+Erasing an action receipt fingerprints its own arguments and content, excluding copied
+`undo.before` and `proof.restored` state: those copies belong to their source provenance.
+Otherwise erasing A would shield a surviving earlier row copied into A's before-state,
+and refuse a clean undo receipt restoring that row. Kernel append checks remain enabled.
+
 **What "an OS" means for a household.** Today each feature of Zoe carries its own copy of the hard rules: who
 may see this, whether she may speak now, how to forget, how to prove a thing was really done. The copies are
 good, and they are separate, so every new feature must remember all of them, and the price of one miss is a
@@ -137,6 +145,22 @@ grant. A guest cannot grant. Revoking takes effect on the next delivery.
 store, and one `Enforcer` that the spine and the action dispatcher both call. A skill that asks for more than
 its manifest is refused and the refusal is an event. Grant changes are events only an auditor can read.
 
+**Erased consent [code, lab verification pending].** In the kernel, a grant authorises only while its
+grant-change record is live. `GrantStore.of` and `all_for` check that record on every read, so the enforcer,
+action dispatcher, skills, surface descriptions and brain bridge all see an erased grant as no grant.
+The explainer reads only live grant-change events and therefore cannot explain an erased grant.
+Whole-member forget reaches grant records naming the member as person, guardian or sharing recipient, and refusal records
+whose `who` is that member. An event-list forget reaches only selected records belonging to the person,
+plus their descendants. Entity/topic forget reaches records only if their payload matches that scope.
+Unrelated grants survive a scoped forget. A fresh explicit grant is required to authorise later actions.
+The twin's sharing grants also require their recorded event to remain live; erased sharing never opens a line.
+`ForgetResult.count` and wire `forget.count` count every erased event row, including grant/refusal records
+and earlier scoped notices that name the member. The new forget notice is excluded. Thus one grant,
+one utterance and its action receipt return 3, not 2. This follows the owner's decision that grant and
+refusal records "should be forgotten too"; they are events, not uncounted ancillary rows. Whole-member
+forget also removes an earlier named scoped notice; the aged-content retention example therefore counts
+three rows (skeleton, derived copy, notice) while still honestly matching zero aged words by entity.
+
 **Exists [code].** Roles and a capability matrix (`guest_policy.py`), the authority table with coded floors
 (`household_authority.py`), and a written design for ability manifests and connected accounts:
 [zoe-abilities.md](zoe-abilities.md). The lab manifest is deliberately the same idea as that document's
@@ -149,7 +173,8 @@ no single enforcement point: each feature checks for itself.
 
 **Contract.** When a person asks to forget, their events are gone: from replay, from export, from every
 subscriber's queue, from events that were derived from them, and from the bytes on disk. A subscriber that was
-offline during the forget and replays later gets nothing. Nobody can bring the words back by re-publishing them.
+offline during the forget and replays later gets nothing. Nobody can bring those words back into an event
+concerning the forgetting person. Another member may use the identical sentence privately elsewhere.
 
 **Prototype [lab]** (`spine.py` `forget`): only the person (or a child's guardian) may ask. The kernel
 1. collects every event about the person, including events that only mention them;
@@ -162,13 +187,79 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
    source and derived events disappear from that view immediately, without waiting for a notice or `pump()`;
 6. keeps a keyed hash of the forgotten free text, first-hand and derived alike (text that only ever lived in a
    skill's derived event is forgotten too). A skill that later tries to publish the same words, even nested
-   inside another payload (a list, a tuple or a dictionary), is refused. A trusted adapter recording the
-   person saying the same thing again is new reality, is allowed, and lifts that hash. The cost **[inferred]**:
-   the hash is household-wide, so an identical derived string (a templated offer with the same times) is
-   refused for everyone until a trusted adapter records it first-hand;
+   inside another payload (a list, a tuple or a dictionary), is refused when the event concerns that person.
+   The hash belongs to the forgetting person, including text that lived only in a derived event about
+   someone else. Trusted adapters also obey the shield and cannot lift it by recording the words again;
 7. reaches the action bookkeeping: an intent row tied to an erased event keeps no person, skill, action,
    grant or cause. A still-live sequence number stays as a bare marker, so forgetting only a receipt does not
-   make the person's yes usable again.
+   make the person's yes usable again. Whole-member erase also deletes all that member's intent rows,
+   including rows with no event links, and erases indexed grant and refusal records.
+
+**Per-person publication rule [code, lab verification pending].** For a private event, concerning A means
+that A is its subject, a declared mention, its source identity, or a name appearing as whole words in a
+payload string or dictionary key, at any depth (including tuples). The person identifier is the lab's
+name; aliases and pronouns are not resolved. Household and kernel visibility are checked against every
+person's shields even when B is the subject: A could receive them. A private event solely for B may carry
+A's forgotten sentence or third-party name if it neither names nor mentions A. This applies to individual
+publishes, batches, trusted origins and kernel-service appends. A refusal whose metadata would itself
+repeat forgotten content is stored as an anonymous marker. Existing cause checks still reject any
+reference to an erased event.
+
+Whole-member erase removes all indexed events concerning A and their descendants. It shields their old
+free text for A; it does not ban A's identity or prevent fresh events with different text or new consent.
+The durable notice and ledger use a keyed owner hash instead of A's identifier. In-process skill contexts
+resolve the hash against the already-known roster; consumers unable to resolve it must discard cached state
+conservatively. Scoped notices retain their subject and erased-event list; a later whole-member erase also
+erases those notices. The roster is consent configuration in memory, not a table erased by forget.
+
+**Lab store upgrade.** Existing `shield` rows remain household-wide forever; they cannot safely be
+attributed to one owner. Existing `entity_shield` rows also remain household-wide. New rows use indexed
+`(fingerprint, owner-hash)` tables, so publication work depends on the incoming payload, not log or shield
+history. Old grant/refusal/forget payload references are indexed once on opening the store, using the
+live-kind index. If a whole-member erase removes the owner metadata needed to evaluate a legacy entity
+hash, the store retains a permanent fail-closed marker: it refuses all named/string payloads globally.
+This deliberately over-blocks legacy stores rather than forgetting how to recognise an old forbidden name;
+new stores never need that fallback. Legacy global shields are an explicit exception to B's new freedom.
+
+**Scratch schema footprint [code; coordinator measurement].** Fresh stores use `WITHOUT ROWID` for
+cursors, metadata and retired counts, avoiding separate primary-key B-trees. Person links have primary
+key `(person, seq)` and cause links `(seq, cause)`; both are sets, inserted with `OR IGNORE`. Their primary
+keys replace `people_person` and `causes_seq`; `people_seq`, `causes_cause`, `latest_receipt` and every
+intent index remain. Existing stores keep their old table layout/indexes. The coordinator measured
+**209,288 bytes including DB/WAL/SHM** after bootstrap and two refusals; this is not the DB schema
+alone. Relative to the branch's HEAD schema, the merge adds `snapshot_dependencies`,
+`snapshot_receipt`, `opaque_snapshots` and `opaque_receipt` (four additional B-trees).
+Relative to MERGE_HEAD it also adds `scoped_shield`, `scoped_entities`, `forget_subject` and
+`intent_person`, while WITHOUT ROWID layouts remove redundant primary-key trees. Per-object byte
+attribution is unmeasured. The oracle matches the boundary test: no 4096-byte run of the 200,000-byte
+body on disk, and DB/WAL/SHM total below twice its length. Complexity budgets and both index pins stay.
+
+**Conflicting prior guarantees [code; coordinator verification required].** First-hand reassertion does
+not lift a shield. Explicit `release` is also refused, even for the member: "forgotten means forever"
+wins until the owner defines an exception. A member may give new consent and say different things;
+deliberately repeating the old exact sentence or forgotten entity remains blocked for that member.
+**Owner question:** should deliberate relearning ever override "forgotten means forever"? If yes, what
+explicit authenticated instruction permits it, and does it lift text, entity, or both? Pending an answer,
+all remain blocked; another member's private use still follows "per-person scoping is required".
+
+**Kernel-driven external cleanup [code; lab tests added, verification pending].** Trusted bootstrap
+registers a store's idempotent purge and independent read-back with `Kernel.register_store_purge`.
+After validating the person's forget authority and computing the erased rows, the spine invokes the
+kernel under its lock and SQLite transaction, BEFORE tombstoning source/grant records. Whole-member
+cleanup purges every row owned by the member, even if the skill lost its cache or ignores the notice.
+Scoped cleanup receives the erased events while their request/receipt keys still exist and purges only
+matching request rows across all owners. The reminder fake-store adapter implements both paths; the
+skill's notice handler drops local state and replays idempotent notice-bound deletes. No ordinary
+action or receipt is emitted for registered cleanup, and no grant is resurrected. Context exposes only
+the reviewed ID-restricted replay delete, never registration or arbitrary store-purge callbacks.
+The closed wire operation table exposes no purge; ordinary actions still require live consent.
+
+A purge exception or failed read-back aborts forget and leaves consent/source records live for retry.
+External stores cannot commit atomically with SQLite: if a later step fails or the kernel crashes, an
+external purge may already have happened while log erasure rolls back. Purges must be idempotent; retry
+finishes erasure. A successful forget promises verified cleanup of registered stores. Unregistered stores,
+lying drivers and unsupported private process-memory copies remain outside this prototype's guarantee.
+No production store or live service is changed.
 
 **Forget scope and undo copies [code; regression runs pending].** Every notice carries `scope`
 (`person`, `seqs`, `entity`, or `topic`) and `seqs`, including an explicit empty array when nothing
@@ -179,7 +270,7 @@ is independently idempotent. The kernel acknowledges a skill's cursor only after
 a restart resumes remaining batches, and an interrupted handler can receive its batch again. External
 stores must survive or be restored separately; this does not make arbitrary external writes transactional.
 Reminder request IDs derive from sequences, so notice replay can purge its surviving external table even
-when the restarted skill has lost its in-memory item cache (action grants must be restored before pumping).
+when the restarted skill has lost its in-memory item cache, including after consent erasure.
 Whole-person notices apply through `upto`, so replay does not erase newer rows. Missing, unknown, or
 malformed legacy scopes purge that person's subscriber state: over-erasing a store is safer than retaining
 possibly forgotten content. Keeper, reminders, twin, leaving-catch and calendar-heads-up share this rule.
@@ -256,15 +347,18 @@ wins races with background writers (`user_erase_gate.py`), and the inventory tes
 `memory_forgotten.py` and `forget_topic.py` **[code]** and rebuilt, not imported. An entity is a name of one to
 six whole words, case and punctuation blind; the person's events that name it are erased with everything
 derived, and a keyed hash of the name is kept per person (never the name), so a skill that writes the name about
-that person again is refused, in new words, nested, or as a dictionary key. A first-hand mention is recorded and
-lifts nothing; only the person's explicit release does. A topic is its content words, and an event is about it
+that person again is refused, in new words, nested, or as a dictionary key. B can mention that third party
+in private events that do not concern A; a household event cannot resurrect it for A. First-hand mentions
+also obey the shield; explicit entity release is blocked pending the owner question above.
+A topic is its content words, and an event is about it
 only when it holds every one; more than twelve matching events is refused whole. A scope with no words is
 refused and never widens to "everything".
 
 **Missing, and the honest limits of the lab version.** The supported cache is kernel-owned; a private body copy
 outside that cache violates its contract. Python cannot prevent arbitrary copying in the same process or erase
-another program's memory. Separate derived stores still depend on their forget handlers (including the twin and
-reminder store); this cache change does not turn them into kernel-owned stores. **Reworded content is not caught**:
+another program's memory. Separate derived stores need registered kernel purge drivers (the reminder fake store)
+or still depend on cooperative forget handlers (the twin); arbitrary stores are not automatically kernel-owned.
+**Reworded content is not caught**:
 a paraphrase that avoids the name and the exact old
 sentences, a near spelling, part of a name, a pronoun or a role ("my sister"). A test asserts that the first
 three get through, so the limit is pinned. Production has near-spelling probes and asks "did you also
@@ -375,8 +469,35 @@ from its own process, and a skill is another process that is handed a socket pat
 operations and nothing else: `publish`, `subscribe`, `poll`, `forget`, `grant`, `revoke`, `act`, `explain`,
 each with a fixed list of arguments. No request names its caller: the kernel proves who is on a connection once
 (a challenge and a keyed answer, so the credential never crosses the socket) and uses that identity for every
-request. `forget`, `grant` and `revoke` are a person's decisions and are accepted only from a credential issued
-to a trusted surface.
+request. `forget`, `grant`, `revoke`, `undo`, `explain` for a person (and the authority's `erase_member` /
+`erase_item`) are a person's decisions and are accepted only from a credential issued to a trusted surface.
+
+**A surface cannot speak for a person [lab].** The surface's word for WHO decided is not enough: until
+2026-11-16 any holder of the panel credential could `forget(subject=X, actor=X)` for every member, and grant,
+revoke, undo or explain for them. Now each person-bound request carries a **speaker assertion**
+(`zoe_os/speaker.py`): a token `{person, issued_at, nonce, audience}` with an HMAC-SHA256 under the secret of
+the `speaker-verifier` identity, minted by the component that actually verified the person (in production,
+zoe-data after a voice match or a panel session) and relayed by the surface, which cannot mint one. The kernel
+checks it in ONE place (`KernelServer._prove_speaker`, at the dispatch, so the shadow and authority daemons
+inherit it): the MAC (constant time), the person (the request's speaking field: `actor` for forget and undo,
+the guardian for a child's grant, else the named person; the kernel's own rule then links that speaker to the
+subject), the audience (`forget.person`, `forget.scoped`, `grant`, `revoke`, `undo`, `explain`: "forget that"
+cannot become "forget me"), age under 60 s (2 s skew), minted for THIS kernel run's generation (a random id
+fresh at every start, published with the secret), and a nonce used once
+(kept until its token's own issue time + 60 s + 2 s, so it outlives the token's acceptance window). The authority's
+`list_digest` (every member's list rows, for the reconcile tool) answers only a dedicated `reconciler` credential, with
+digests keyed by a per-start secret over member, list and item, so no surface can confirm a guess at anyone's list.
+Every failure is one refusal, `speaker unproven`, counted by a fixed reason name; the token is never logged.
+The member-delete path's `eraser` credential needs no assertion, for the forget family only. The secret is in
+`identity-creds.json` (0600, apart from `creds.json` and `erase-creds.json`), fresh at every start. Used
+nonces live in memory (bounded at 1024, a full store refuses); a restart loses them, which is safe because a
+new run has a new generation and refuses every token minted for an earlier one, whatever the clocks did and
+even under a provisioned secret. Within a run, verification time never goes back (`max(last seen, wall)`), and
+a wall clock seen to step back past the skew rolls the generation mid-run (republished at once), so an
+accepted token is never accepted again for any sequence of wall-clock values. A guardian link grants reach (forget, undo, seeing private events, signing a
+grant) only while the kernel's own roster says the subject is a child. There is no setting
+that turns the check off. What it does not defend: a process holding the identity secret can mint for anyone,
+so that secret must live only with the code that verifies people.
 
 **What was attacked [lab]**, each refused and recorded, each with a control that removes one mechanism and
 shows the attack working:
@@ -829,4 +950,199 @@ lines may be shared beyond their guardians at all (today they cannot be, by anyo
 memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
 
+## Load, soak and crash results
+
+[code] `labs/zoe-os/bench_kernel.py` is the offline evidence harness, with
+`bench_support.py` providing a scratch kernel process and durable synthetic effects.
+It uses the brain bridge's real authenticated Unix-socket wire. The driver fixture
+is explicitly different from the brain's in-memory stores; success here would not
+prove those stores survive restart. Workload seed defaults to 4721.
+
+[lab, coordinator baseline, 2026-11-15, seed 7] Measurements on the real box,
+before the indexed-lookup changes below. All latencies are microseconds.
+
+| Verb | p50 | p90 | p99 |
+|---|---|---|---|
+| list.add | 721 | not supplied | not supplied |
+| list.remove | 713 | not supplied | not supplied |
+| remind.set | 713 | not supplied | not supplied |
+| alarm.set | 716 | not supplied | not supplied |
+| why | 896 | not supplied | not supplied |
+| undo | 7,726 | 8,231 | not supplied |
+| forget | 12,261 | 38,555 | 49,851 |
+| denied | 348 | not supplied | not supplied |
+| malformed | 289 | not supplied | not supplied |
+
+Undo was previously 27,774 p50 before newest-first paging; forget was 3,995 before
+intent scrubbing and derived-event text hashing. These protections remain required.
+Concurrency: 1/4/16 clients achieved 1,533 / 1,772 / 1,677 wire calls/s; 16-client
+p99 was 17 ms, with cross-member isolation holding. Fifty SIGKILL trials across six
+stages passed integrity, no half receipt, acknowledged-write survival and undo after
+restart. Cold-start p50 was 129 ms. The 20,000-operation soak exceeded its 290 s budget;
+there are no completed soak growth/drift measurements. Profiling was reported null.
+
+[code] Root causes and changes:
+
+- Undo used `_newest`'s 200-event decode and a member-wide `people` subquery;
+  `_undone` scanned intents. `Dispatcher.last_action` now selects exactly one live
+  receipt by subject using a partial index; `intents.undoes` is indexed.
+- Scoped forget read every member event before intersecting `seqs`. Deletes by
+  `people.seq` / `causes.seq`, and the three intent references, lacked indexes.
+  Selection now includes the requested IDs in SQL; all these predicates are indexed.
+  Reads, closure, hashes, erasure, intent scrub, ledger and notice share one transaction.
+  Secure deletion, derived text/tuple shields, spent-yes/undo markers and the WAL
+  truncation checkpoint remain. No durability setting or claim rule was weakened.
+- `why` finds its grant through `_newest`; without a kind index this traversed
+  intervening event history. A partial live `(kind, seq)` index removes that work.
+
+[inferred] The nine baseline medians sum to 24.383 ms; their uniform mix costs
+about 54.2 s for 20,000 timed operations. Fixture setup adds roughly 20 s at the
+measured ordinary-call cost. Thus 290 s is already ample for steady costs (and is
+under five minutes); raising it would hide history drift. It remains 290 s. Soak
+now retains partial results on timeout, exits nonzero, and reports overall AND
+per-verb p50/p90/p99 in each requested-history quarter. Mix changes cannot masquerade
+as a slow verb when per-verb quarters are inspected.
+
+[code] A bounded isolated forget and undo no longer scan unrelated completed history.
+Broad person/entity/topic forget still visits candidate/erased events and descendants;
+open intent cause checks scale with pending intents, not completed history. Checkpoint
+I/O depends on WAL state and storage; indexed lookups do not bound physical I/O latency.
+Grants and example brain driver effects remain memory-only. SQLite remains WAL with
+`synchronous=NORMAL`: process-kill evidence is not power-loss evidence.
+
+[code] `--profile` writes top-level `profile[verb]` and `latency.profile[verb]` for
+one extra call of EVERY verb, with setup excluded. Each includes `phases_us` for
+decode, consent, SQL (including cursor stepping), commit and receipt, plus raw
+counters and total wire time. Zero means no work in that phase. Receipt is inclusive
+of SQL/commit; phases overlap and must not be summed. Decode includes wire and stored
+JSON; supervisor parsing is excluded. Autocommit timing includes the SQL statement
+and SQLite sync; native fsync is not separately observable. No measured attribution
+is claimed until the coordinator reruns it.
+
+| Coordinator rerun evidence | After (fill from result JSON) |
+|---|---|
+| Undo on a 20,000-event history, target p50 < 2,000 us | **PENDING COORDINATOR:** `latency.undo` with `--history-n 20000` |
+| Scoped forget on that history, target p50 < 5,000 us | **PENDING COORDINATOR:** `latency.forget` with `--history-n 20000` |
+| Completed soak | **PENDING COORDINATOR:** completed calls, seconds, RSS/DB growth, quarter timings |
+| Profile | **PENDING COORDINATOR:** per-verb phase timings from `profile` |
+| Regression checks | **PENDING COORDINATOR:** test counts/exits, concurrency, crash and cold results |
+
+[code] The small tests include deliberate wrong-member routing and a volatile effect
+store. The crash oracle checks actual effects as well as acknowledged receipts; the
+concurrency oracle compares stored member/key pairs against controller-owned expectations.
+The fixture pauses inside one of six shuffled crash phases before SIGKILL, including
+inside an effect transaction and inside a receipt transaction. It never treats an
+unacknowledged interrupted write as known done. See the lab README for commands and
+measurement boundaries. Full runs and all existing tests green remain unproven.
+
+[code] Socket-free complexity guards in `tests/test_history_cost.py` build 200 and
+5,000 events plus completed intents and links. SQLite progress callbacks count VM
+steps, including work hidden inside a single statement; fixed budgets cover full
+undo, absent-member lookup and isolated/receipt forget. Negative controls restore
+the old paged undo or issue an unindexed scan and must trip the same budget.
+Rollback, open-intent scrubbing and body absence with a loose 400,000-byte DB/WAL/SHM
+bound after two refusals are checked. Startup truncates schema-creation WAL page images; the seven
+additive indexes are installed idempotently on opening existing lab stores.
+The existing oversized-frame scenario and all socket tests still need the coordinator.
+## Snapshot dependency index (lab)
+
+Receipt appends index both undo-before rows and restored read-back proofs in
+`snapshot_dependencies(source_seq, receipt_seq)`, a WITHOUT ROWID table whose
+primary key serves chunked source lookups. The receipt index supports deletion.
+Forget visits only dependent receipts, removes their old edges, and indexes the
+surviving rows again, in the erase transaction. Tombstones remove incoming and
+outgoing edges. Opaque snapshots containing text use a compact per-person
+fallback index; opaque numeric state contains no forgotten text.
+
+Existing stores get a one-time atomic backfill at open, with 256 receipt bodies
+per batch and a durable completion marker. This bounds memory, not total upgrade
+work: first open is proportional to existing receipts; subsequent forgets never
+scan receipt history. New stores use the indexed path immediately.
+
+The history-cost regression retains the 4000-step fixed budget; its 1/50-dependent
+case additionally allows 150 steps per payload rewrite. It includes a negative
+control that deliberately scans surviving receipts. Restart/privacy, rollback,
+remaining-edge and whole-member cleanup tests cover the index lifecycle.
+
+The benchmark's `--profile` now exposes `checkpoint` separately, timing the
+existing `PRAGMA wal_checkpoint(TRUNCATE)` call through its database wrapper.
+It measures synchronous checkpoint call latency, including SQLite/I/O work,
+without changing checkpoint policy. No checkpoint timing has been measured here.
 Authorised display and diagnostics have different boundaries: returned to an authorised reader through the kernel's API = may contain that reader's content; printed, logged or written by a tool = codes, ids and counts only. The explainer retains visibility and grant checks and returns event payloads and human-readable explanations; twin display results retain routine and room labels and remain subject to display authorisation checks. Replay and rehearsal reports, harness diagnostics and bridge logs omit content. Any CLI printing twin or explainer display results must reduce them to codes, ids and counts unless an explicit `--show-content` flag is supplied (default off).
+
+## Combined forget transaction and store boundary (lab)
+
+[code] Under the spine lock and `BEGIN IMMEDIATE`, forget selects the complete
+causal closure, purges each registered store and independently reads back that
+its selected rows are absent, scrubs snapshots and intents and tombstones source
+rows, writes person-scoped shields, erases selected grant/refusal records, writes
+the opaque ledger and appends every ordered notice batch, then commits. Whole-person
+cleanup also removes that member's intents, cursor and legacy named bookkeeping.
+The append callback interface remains `then(seq)` with `before()` preparation;
+forget does its work in preparation so notices are inserted last.
+
+All SQLite erasure, dependency-index changes, shields, consent erasure, ledger
+and notices commit or roll back together. Failure reloads the in-memory legacy
+shield caches. External stores do not share that commit: their purge runs while
+consent is still live, and a failed callback/read-back aborts log erasure. Earlier
+external deletes can remain after rollback or a crash; callbacks must be idempotent
+and retry must complete them. There is no distributed atomicity or compensation
+that restores forgotten rows.
+
+Every notice has `scope` (`person`, `entity`, `topic`, `seqs`) and a complete,
+ordered sequence batch of at most 256 IDs, including an explicit empty batch.
+A forget that erases an earlier notice (a scoped notice names its subject in
+clear) carries that notice's listed IDs into its own batches, so a subscriber
+that had not read it still receives the duty; `count` stays the rows erased.
+Whole-person notices retain an opaque `subject_hash`, resolved against the known
+roster only in memory. Every owner hash (notice subject, scoped shields, forget
+ledger, nested-index markers) is a keyed hash of the EXACT person id; name
+normalisation is for entity forgets only, so two ids that fold alike stay two
+people. Stores written with the former normalised owner hash do not match after
+this change (a lab clean break, no migration); scoped notices also identify the subject. This preserves
+whole-person erasure of names without truncating the reviewed notice protocol.
+Explicit erased request IDs match every owner's stores and caches. Whole-person
+purge additionally sweeps orphaned owner rows; the twin clears reduced owner facts
+through the notice watermark even when source retention has removed their events.
+Every subscriber cache reads a notice through ONE helper, `provenance.erased`
+(`subject_of` is the only reader of a notice's subject; a structural test pins it).
+It resolves an anonymous notice through the context: in process the resolved
+member's state goes up to the watermark, including state whose source retention
+already retired. A remote skill (`Client`) holds no key to resolve `subject_hash`,
+so an unresolved whole-person notice means "possibly any member", never "nobody":
+only state whose source event the skill can still read is kept (`still_live`, one
+replay of its own reads from its oldest held source); the Keeper, which cannot
+vouch for any row from its reads, refuses and retries instead. State the unresolved
+rule drops for another member can no longer act: a reminder or a leaving catch must
+cite its live source to publish, and the twin relearns. On a whole-person notice the
+reminder skill never deletes through the forgotten member's (erased) consent; the
+kernel's whole-member sweep removed their rows. Another member's state with a live source
+survives; their state whose source had also left the log is dropped and relearned.
+
+Whole-person selection also follows `nested_people`: a known member id that an
+ordinary payload holds as a whole string value or a dict key, at any depth, other
+than the subject and mentions. Ids inside longer free text are not identities here
+(the name shield covers those). Receipt before-state copies are excluded, as in
+entity matching; the snapshot scrub reaches them through their sources. Rows written
+before the index, or before a member was known, are backfilled once per member at
+open (marked by a keyed hash, never the id). Scoped, entity and topic forgets do not
+use this index.
+
+Registered store purges and their read-backs receive every erased seq: a request
+already expired to its retention skeleton arrives as a body-less `Skeleton`
+(seq and kind), read by primary key, so rows keyed by `asked` are reached.
+
+Trusted bootstrap registers synchronous purges for brain lists/reminders/alarms
+and the reminder fixture. The reminder skill retains the reviewed replay delete:
+`Context.purge` can invoke only an opted-in action for IDs derived from a live
+notice, with independent read-back. It conveys no general action permission and
+cannot replace an erased grant. Other skill caches remain cooperative in-process
+memory; notices are replayed after restart and acknowledged only after handling.
+First-hand text reassertion and explicit entity release do not lift shields.
+
+[code] Both index pins and SQL-step budgets in `test_history_cost.py` are unchanged.
+The arbitrary schema-size ceiling is replaced by the boundary test's content oracle and loose bound;
+its negative control plants the oversized body on disk. Snapshot controls disable scrubbing and
+either retain the shield (dirty receipt refused) or disable it (resurrection demonstrated).
+These changes and controls remain unrun by this builder: available memory was 662 MB, below 1200 MB.
+The coordinator must verify them in a test window. No live code or configuration changes.

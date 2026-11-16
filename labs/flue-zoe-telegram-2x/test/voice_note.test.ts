@@ -67,7 +67,13 @@ describe('a linked sender sends a voice note', () => {
     const chat = hits('/api/chat/');
     assert.equal(chat.length, 1);
     assert.equal(chat[0]!.headers['x-zoe-user-id'], 'jason');
-    assert.deepEqual(chat[0]!.body, { message: 'what time is it', session_id: 'telegram-42', channel: 'telegram' });
+    // ... carrying back the forget epoch zoe-data read before it transcribed the note (an erase since then refuses the turn's logs).
+    assert.deepEqual(chat[0]!.body, {
+      message: 'what time is it',
+      session_id: 'telegram-42',
+      channel: 'telegram',
+      erase_token: 'synthetic-boot:7',
+    });
 
     // Synthesised, then uploaded through sendVoice as the OGG zoe-data returned.
     const syn = hits('/api/system/telegram/synthesize');

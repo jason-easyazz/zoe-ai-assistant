@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from zoe_os import wire
+from zoe_os import speaker, wire
 from zoe_os.client import Client
 from zoe_os.skills.leaving_catch import LeavingCatch
 from zoe_os.skills.malicious import Malicious
@@ -67,6 +67,8 @@ class Box:
         self.proc.stdin.flush()
         ready = json.loads(self.proc.stdout.readline())
         self.pid, self.creds, self.recovered = ready["pid"], ready["creds"], ready["recovered"]
+        self.speaker_key = bytes.fromhex(ready["speaker_key"])     # the test plays the speaker-verifier
+        self.speaker_generation = ready["speaker_generation"]
         self._clients.clear()
 
     def sup(self, cmd: str, **more) -> dict:
@@ -93,9 +95,18 @@ class Box:
         self.sup("control", name=name)
 
     def client(self, name: str) -> Client:
+        """A surface's client mints the speaker assertion for each person-bound call (the test is the
+        component that verified the person); a skill's client has no key and cannot."""
         if name not in self._clients:
-            self._clients[name] = Client(self.socket, name, bytes.fromhex(self.creds[name]))
+            surface = name in self.cfg["surfaces"]
+            self._clients[name] = Client(self.socket, name, bytes.fromhex(self.creds[name]),
+                                         speaker_key=self.speaker_key if surface else None,
+                                         speaker_generation=self.speaker_generation if surface else None)
         return self._clients[name]
+
+    def assertion(self, person: str, audience: str, **kw) -> str:
+        """A speaker assertion for a raw request, as the speaker-verifier would mint it."""
+        return speaker.mint(self.speaker_key, person, audience, generation=self.speaker_generation, **kw)
 
     def skill(self, name: str = HELPER, user: int | None = None) -> Child:
         self.children.append(Child(self, name, user))

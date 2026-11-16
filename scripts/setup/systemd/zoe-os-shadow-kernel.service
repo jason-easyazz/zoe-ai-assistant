@@ -24,8 +24,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/assistant/labs/zoe-os
-Environment=ZOE_OS_SHADOW_DIR=%h/.zoe/os-shadow
-ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/shadow_daemon.py --dir ${ZOE_OS_SHADOW_DIR}
+# --dir is an ARGUMENT, never an environment name (a lab process reads no product-prefixed name)
+ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/shadow_daemon.py --dir %h/.zoe/os-shadow
 Restart=on-failure
 RestartSec=5
 # The database, its WAL and the credentials are the owner's alone.

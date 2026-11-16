@@ -11,9 +11,13 @@ The shadow daemon (``shadow_daemon.py``) plus three things an authority needs an
   receipt, so it is absent after the restart (and ``recover`` gives its intent an ``uncertain`` receipt). Never half there. Chosen
   over a second table so there is ONE copy of the household's words to erase, and so nothing here touches the spine's or the
   dispatcher's transaction code;
-* erase reach over the wire: ``erase_member`` (everything of the member in the record and the list store) and ``erase_item``
-  ("forget that" on one list item). Surface credentials only (a person's decision), idempotent, each answers with a receipt that
-  is ``verified`` only when the read-back finds nothing left;
+* erase reach over the wire: ``erase_member`` (everything of the member in the record and the list store: the member-delete
+  path's own ``eraser`` credential, kept in ``erase-creds.json`` apart from the surfaces' ``creds.json``, OR a surface carrying a
+  ``forget.person`` speaker assertion for that member) and ``erase_item`` ("forget that" on one list item of ONE named member: a
+  surface with a ``forget.scoped`` assertion for that member, or the eraser). Who may is decided by ``KernelServer._prove_speaker``
+  and nowhere here. Idempotent, each answers with a receipt that is ``verified`` only when the read-back finds nothing left;
+* a DURABLE roster: the kernel knows the current people.json PLUS every id its record still names, so a member taken off the roster
+  is still erased by id. After a whole-person erase or forget of a member off the roster, the forget first, then the id leaves;
 * ``health``: alive, schema version, whether the last write went through: what zoe-data reads to decide whether to fall back.
 
 A revoke is remembered: at start every roster member is granted the brain's acts EXCEPT one whose newest ``brain`` grant change in
@@ -25,46 +29,104 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import signal
+import sqlite3
 import sys
 import threading
 from pathlib import Path
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 
-from shadow_daemon import ACTS, ADAPTERS, SHADOW_BRAIN, serve, state_dir, write_creds  # noqa: E402
+from shadow_daemon import (ACTS, ADAPTERS, SHADOW_BRAIN, read_roster, recorded_people, serve, state_dir,  # noqa: E402
+                           write_creds, write_identity)
 from zoe_os.brain.drivers import ASKED, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person  # noqa: E402
-from zoe_os.events import Kind  # noqa: E402
+from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
-from zoe_os.spine import Refused  # noqa: E402
+from zoe_os.spine import KERNEL, Refused  # noqa: E402
 
 SCHEMA = 1          # the authority's own record shape (the rebuild rule below); bumped when it changes meaning
 _RECEIPTS = "SELECT seq, subject, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0"
+#: the member-delete path's identity: the forget family without a speaker assertion, nothing else. No reads, no emits, no acts.
+ERASER = {"skill": "eraser"}
+ERASER_CREDS = "erase-creds.json"
+#: the reconcile tool's identity: the ONLY credential ``list_digest`` answers. No reads, no emits, no acts, never a surface.
+RECONCILER = {"skill": "reconciler"}
+RECONCILE_CREDS = "reconcile-creds.json"     # {"socket", "creds": {"reconciler": hex}, "digest_key": hex}, 0600, every start
+_DIGEST_DOMAIN = b"zoe-os list digest v1\0"
+
+
+def write_secret(path: Path, payload: dict) -> None:
+    """A credential file the way ``write_creds`` writes one: 0600 from creation, replaced atomically. Never printed or logged."""
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(payload, fh)
+    os.replace(tmp, path)
 
 
 def digest(item: str) -> str:
-    """What the reconcile compares: never the words. zoe-data computes the same over its own stored text."""
+    """An item named by its caller for ``erase_item`` ("forget that", on the caller's OWN proven list): never the words. NOT what
+    ``list_digest`` returns: an unkeyed hash of a short item is a dictionary lookup away from the words."""
     return hashlib.sha256(item.strip().lower().encode()).hexdigest()[:16]
 
 
+def keyed_digest(key: bytes, member: str, list_name: str, item: str) -> str:
+    """What ``list_digest`` returns and the reconciler computes over production's rows: HMAC-SHA256 under the kernel's per-start
+    digest key (``reconcile-creds.json``) over (member, list, normalised item), so equal items of different members or lists never
+    collide, and nobody without the key can test a guess."""
+    msg = json.dumps([member, list_name, item.strip().lower()], separators=(",", ":"), ensure_ascii=False).encode()
+    return hmac.new(key, _DIGEST_DOMAIN + msg, hashlib.sha256).hexdigest()
+
+
 class DurableLists(Lists):
-    """``Lists`` whose rows are a function of the log. Snapshots are LEAN (a count, or the removed rows): a receipt never carries the
-    person's whole list, so an add costs the same on the hundredth item as on the first."""
+    """``Lists`` whose rows are a function of the log. Snapshots are LEAN (nothing for an add, the removed rows for a remove): a receipt
+    never carries the person's whole list, so an add costs the same on the hundredth item as on the first. Both are versioned
+    (``provenance: 1``, every row with its ``asked``): a forget then scrubs only the rows it reaches (``receipts.scrub_snapshot``) and
+    the surviving action stays undoable; an unmarked snapshot would be treated as opaque and lose its undo on ANY forget of the
+    person's. A removal's snapshot is also marked ``reverses``: forgetting the removal forgets the adds it reversed
+    (``Spine._closure``), so a rebuild can never replay them.
+
+    ``owner_of`` maps every list request (``asked``) and list receipt seq to the member whose row it is, so a forget finds the rows
+    it reached WHOEVER owns them (``affected``), in time proportional to the seqs it erased, not to all rows."""
 
     def __init__(self, spine) -> None:
         super().__init__()
         self.spine = spine
+        self.owner_of: dict[int, str] = {}
+
+    def note(self, seq, person) -> None:
+        if type(seq) is int and isinstance(person, str):
+            self.owner_of[seq] = person
+
+    def affected(self, seqs) -> set:
+        """The members whose rows a forget of ``seqs`` may have reached (their index entries go with it)."""
+        return {self.owner_of.pop(s) for s in seqs if s in self.owner_of}
+
+    def _forgotten(self, person, item) -> bool:
+        """The backstop, scoped to the row's OWNER: an item that names an entity ``person`` asked to forget never comes back as their
+        row. Not the global word shield: that would also drop ANOTHER member's own, still-live row of the same words, and make the
+        rebuilt rows differ from the running ones. Rows come only from live receipts, and ``Spine._closure`` erases what a
+        forgotten reversal reversed, so the ordinary replay cannot resurrect a forgotten add; this guards the entity scope."""
+        return isinstance(item, str) and self.spine._names_forgotten(
+            Event(Kind.ACTION_RECEIPT, KERNEL, subject=person, payload={"item": item}))
+
+    def add(self, person, args):
+        self.note(args.get("asked"), person)
+        if not self._forgotten(person, args.get("item")):
+            super().add(person, args)
 
     @staticmethod
     def key(row_or_args) -> tuple:
         return row_or_args.get("list", "shopping"), row_or_args["item"]
 
-    def snapshot(self, person, args):                       # list.add: how many copies were there
-        return {"n": sum(1 for r in self.rows.get(person, []) if self.key(r) == self.key(args))}
+    def snapshot(self, person, args):                       # list.add: its undo takes back only its own row, so nothing is copied
+        return {"provenance": 1, "rows": []}
 
     def put_back(self, person, args, before):               # undo of list.add: the row this add appended goes
         rows = self.rows.get(person, [])
@@ -73,10 +135,14 @@ class DurableLists(Lists):
             rows.remove(mine[-1])
 
     def removed_snapshot(self, person, args):               # list.remove: the rows it is about to take
-        return {"rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
+        return {"provenance": 1, "reverses": True,
+                "rows": [dict(r) for r in self.rows.get(person, []) if self.key(r) == self.key(args)]}
 
     def put_back_removed(self, person, args, before):
-        self.rows.setdefault(person, []).extend(dict(r) for r in before["rows"])
+        rows = before["rows"]
+        if before.get("reverses") is not True:             # a legacy snapshot (the WHOLE previous list): only the removed rows
+            rows = [r for r in rows if self.key(r) == self.key(args)]
+        self.rows.setdefault(person, []).extend(dict(r) for r in rows if not self._forgotten(person, r.get("item")))
 
     def remove(self, person, args):
         rows = self.rows.get(person, [])
@@ -126,6 +192,7 @@ class DurableLists(Lists):
         for seq, subject, raw in db.execute(sql, args).fetchall():
             payload = json.loads(raw) if raw else {}
             live[seq] = payload
+            self.note(seq, subject)
             if payload.get("action") not in ("list.add", "list.remove", "undo") or subject is None:
                 continue
             original = live.get(payload.get("undoes")) if payload.get("action") == "undo" else None
@@ -145,17 +212,54 @@ class DurableKeeper(Keeper):
 
     def on_event(self, ev, ctx) -> None:
         super().on_event(ev, ctx)
-        if ev.kind is Kind.FORGET and ev.payload.get("subject"):
-            self.lists.rebuild(ev.payload["subject"])
+        if ev.kind is Kind.FORGET:
+            # every member whose rows came from what this notice erased (a forget of B can erase A's row: A's utterance named B),
+            # plus the subject; each is rebuilt from what the log still holds
+            owners = self.lists.affected(ev.payload.get("seqs") or ())
+            if ev.payload.get("subject"):
+                owners.add(ev.payload["subject"])
+            for person in sorted(owners):
+                self.lists.rebuild(person)
 
 
 class AuthorityServer(KernelServer):
     """The kernel server plus the authority's ops (``wire.OPS``: ``health``, ``erase_member``, ``erase_item``, ``list_digest``)."""
 
-    def __init__(self, kernel, path: str, lists: DurableLists, others=(), **kw) -> None:
+    def __init__(self, kernel, path: str, lists: DurableLists, others=(), *, roster=(), **kw) -> None:
         super().__init__(kernel, path, **kw)
         self.lists, self.others = lists, tuple(others)
+        self.roster = frozenset(roster)
         self.last_write_ok: bool | None = None     # None: no write since start
+        self._digest_key = secrets.token_bytes(32)  # fresh per start: handed only to the reconciler's file (``digest_secret``)
+        self.roster_status = "ok"                  # set by ``build`` from ``read_roster``
+
+    def _held(self, person: str) -> bool:
+        """Does the record still name ``person`` (any people link)? Read from the database every time, never assumed."""
+        return self.kernel.spine._db.execute("SELECT 1 FROM people WHERE person = ? LIMIT 1", (person,)).fetchone() is not None
+
+    def _known_for_forget(self, person: str) -> bool:
+        """Make sure the kernel can forget ``person`` if the record names them: an id off the roster that the record still holds is
+        (re)admitted as a person, never granted. False = never seen and nothing held: there is nothing to forget."""
+        people = self.kernel.grants.people
+        if person in people:
+            return True
+        if self._held(person):
+            people[person] = Person(person)
+            return True
+        return False
+
+    def _left_the_roster(self, person: str) -> None:
+        """After a whole-person forget SUCCEEDED (forget first, then the roster): a member off the roster leaves the kernel's people,
+        so nothing new is recorded about them and a later forget is honestly "never knew them"."""
+        if person not in self.roster and not self._held(person):
+            self.kernel.grants.people.pop(person, None)
+
+    def _op_forget(self, conn, a: dict) -> dict:
+        out = super()._op_forget(conn, a)
+        self.kernel.pump()                         # the keepers erase the stores' copies before the reply
+        if a.get("seqs") is None and a.get("entity") is None and a.get("topic") is None:
+            self._left_the_roster(a["subject"])
+        return out
 
     def _op_act(self, conn, a: dict) -> dict:
         try:
@@ -167,6 +271,13 @@ class AuthorityServer(KernelServer):
             self.last_write_ok = False
             raise
         self.last_write_ok = out.get("outcome") == "verified"
+        if a.get("action") in ("list.add", "list.remove"):
+            self.lists.note(out.get("seq"), a["on_behalf_of"])
+        return out
+
+    def _op_undo(self, conn, a: dict) -> dict:
+        out = super()._op_undo(conn, a)
+        self.lists.note(out.get("seq"), a["person"])
         return out
 
     def _op_health(self, conn, a: dict) -> dict:
@@ -183,7 +294,8 @@ class AuthorityServer(KernelServer):
                 db.execute("ROLLBACK")
             self.last_write_ok = False
         return {"alive": True, "schema": SCHEMA, "last_write_ok": self.last_write_ok,
-                "recovered": len(self.kernel.recovered), "rows": sum(len(r) for r in self.lists.rows.values())}
+                "recovered": len(self.kernel.recovered), "rows": sum(len(r) for r in self.lists.rows.values()),
+                "roster": self.roster_status}
 
     def _receipts_for(self, person: str, item_digest: str) -> list[int]:
         """The person's live list receipts for the item (by digest), and the utterances they cite (the words go with them)."""
@@ -196,45 +308,130 @@ class AuthorityServer(KernelServer):
                 seqs.extend(json.loads(db.execute("SELECT COALESCE(caused_by, '[]') FROM events WHERE seq = ?", (seq,)).fetchone()[0]))
         return seqs
 
+    def _erased(self, person: str) -> None:
+        """The member's brain grant goes, and does not come back at the next start, WITHOUT a record naming them: a revoke event
+        (a grant change, which names the person) would itself be a record a later forget erases, and it would keep their id on
+        disk. The grant leaves memory; the start-up grant skips them by a keyed hash (``erased_marks``), never by their id."""
+        self.kernel.grants._grants.get(SHADOW_BRAIN["skill"], {}).pop(person, None)
+        self.kernel.spine._db.execute("INSERT OR IGNORE INTO meta VALUES (?, x'01')",
+                                      (ERASED_MARK + self.kernel.spine._owner(person).hex(),))
+
     def _live_events(self, person: str) -> int:
+        """The member's live CONTENT: every record linked to them but the kernel's own bookkeeping. Main's kernel also links a member
+        to grant changes, refusals and forget notices; the erase itself writes one (the brain revoke that keeps them from being
+        re-granted at the next start), and counting it would make every erase read back as "not verified"."""
         return self.kernel.spine._db.execute(
-            "SELECT COUNT(*) FROM people p JOIN events e ON e.seq = p.seq WHERE p.person = ? AND e.tombstoned = 0",
-            (person,)).fetchone()[0]
+            "SELECT COUNT(*) FROM people p JOIN events e ON e.seq = p.seq WHERE p.person = ? AND e.tombstoned = 0"
+            " AND e.kind NOT IN ('grant_change', 'refusal', 'forget')", (person,)).fetchone()[0]
 
     def _op_erase_member(self, conn, a: dict) -> dict:
         """Everything of the member: their events (and what derives from them), their list rows, their reminder and alarm rows, and
-        their brain grant (revoked, so a restart does not re-grant them). ``verified`` only when the read-back finds nothing."""
-        self._person_op(conn, "erase a member")
+        their brain grant (revoked, so a restart does not re-grant them). ``verified`` only when the read-back finds nothing.
+        Forgets BY ID whatever the current roster says. The member-delete path's ``eraser`` credential, or a surface with the
+        member's own ``forget.person`` assertion; a surface alone is refused ``speaker unproven`` (``_prove_speaker``)."""
         subject = a["subject"]
-        if subject not in self.kernel.grants.people:
-            return {"erased": 0, "receipt_seq": None, "verified": True, "known": False}     # never acted for: nothing held
+        if not self._known_for_forget(subject):                              # checked in the record: never seen, nothing held
+            left = len(self.lists.rows.get(subject, [])) + self._live_events(subject)
+            return {"erased": 0, "receipt_seq": None, "verified": left == 0, "known": False}
         count = self.kernel.spine.forget(subject, actor=subject).count
         notice = self.kernel.spine.last_seq                                  # the FORGET event: the erase's durable receipt
-        self.kernel.grants.revoke(subject, SHADOW_BRAIN["skill"])
+        self.kernel.pump()                                                   # every member's rows the erase reached, now
+        self._erased(subject)
         self.lists.rebuild(subject)
         for store in self.others:                                            # the lab reminder / alarm stores, in memory
             (store.at if isinstance(store, Alarms) else store.rows).pop(subject, None)
         left = len(self.lists.rows.get(subject, [])) + self._live_events(subject)
+        if left == 0:
+            self._left_the_roster(subject)                                   # forget first, then the roster
         return {"erased": count, "receipt_seq": notice, "verified": left == 0, "known": True}
 
     def _op_erase_item(self, conn, a: dict) -> dict:
-        """"Forget that" on one list item, by DIGEST (no words cross the wire for an erase), for every member who holds it: production
-        cannot say which member added an item on a shared list, so the erase is household-wide (the safe over-forget)."""
-        self._person_op(conn, "erase a list item")
-        want, erased, notices = a["digest"], 0, []
-        for person in sorted(self.kernel.grants.people):
-            seqs = self._receipts_for(person, want)
+        """"Forget that" on one list item of ONE member, by DIGEST (no words cross the wire for an erase). ``subject`` is required:
+        a request without it is refused (``name whose item``), so one person's request never changes another member's list."""
+        subject, want = a.get("subject"), a["digest"]
+        if not subject:
+            self.kernel.spine._refuse(conn.name, "erase a list item", "name whose item")
+        erased, notice = 0, None
+        if self._known_for_forget(subject):
+            seqs = self._receipts_for(subject, want)
             if seqs:
-                erased += self.kernel.spine.forget(person, actor=person, seqs=seqs).count
-                notices.append(self.kernel.spine.last_seq)
-            self.lists.rebuild(person)
-        left = sum(1 for rows in self.lists.rows.values() for r in rows if digest(r["item"]) == want) + sum(
-            len(self._receipts_for(p, want)) for p in self.kernel.grants.people)
-        return {"erased": erased, "receipt_seq": notices[-1] if notices else None, "verified": left == 0}
+                erased = self.kernel.spine.forget(subject, actor=subject, seqs=seqs).count
+                notice = self.kernel.spine.last_seq
+                self.kernel.pump()                                           # every member's rows the erase reached, now
+            self.lists.rebuild(subject)
+        left = sum(1 for r in self.lists.rows.get(subject, []) if digest(r["item"]) == want) + len(self._receipts_for(subject, want))
+        return {"erased": erased, "receipt_seq": notice, "verified": left == 0}
+
+    def digest_secret(self) -> bytes:
+        """For the supervisor only (never a verb): the key ``list_digest`` digests are made with."""
+        return self._digest_key
 
     def _op_list_digest(self, conn, a: dict) -> dict:
-        self._person_op(conn, "read the list digest")
-        return {"digests": sorted(digest(r["item"]) for rows in self.lists.rows.values() for r in rows)}
+        """Every member's rows as KEYED digests (``keyed_digest``), for the reconcile tool's own credential only: a surface, a skill
+        and the eraser are refused ``only the reconciler``. Never the words, never a value anyone without the key can confirm."""
+        if conn.name != RECONCILER["skill"]:
+            self.kernel.spine._refuse(conn.name, "read the list digest", "only the reconciler")
+        return {"digests": sorted(keyed_digest(self._digest_key, person, r.get("list", "shopping"), r["item"])
+                                  for person, rows in self.lists.rows.items() for r in rows)}
+
+
+def convert_legacy(spine) -> int:
+    """Rewrite the list receipts the SHADOW kernel wrote (same database, moved here) into this kernel's lean snapshot shape, once.
+
+    A shadow ``list.add`` / ``list.remove`` saved the person's WHOLE previous list as its before-state, and an undo of one saved the
+    whole list again as ``proof.restored``. Replayed as they are, an undo of a migrated removal re-appends every row ([milk, eggs] ->
+    remove milk -> undo = two eggs), its read-back can never match, and each receipt keeps copies of OTHER rows' words. So:
+    * ``list.add``: before -> ``{"provenance": 1, "rows": []}`` (its undo takes back only its own row);
+    * ``list.remove``: before -> the rows it REMOVED (those with its (list, item): a removal takes every copy), marked ``reverses``;
+    * an ``undo`` of either: ``proof.restored`` -> the converted before of what it undid.
+    Runs at EVERY start (one pass over the receipts, the same cost as the rebuild), not once behind a flag: a shadow kernel started
+    again on this database (a rollback) writes legacy receipts after any "done" mark could have been set. ONE transaction (a crash
+    halfway converts nothing; the next start does it all), then a WAL checkpoint, so the old copies leave the disk (``secure_delete``
+    is on). Idempotent: an already-lean snapshot is left as it is. Returns the receipts rewritten."""
+    db = spine._db
+    converted: dict[int, dict] = {}
+    changed = 0
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        for seq, raw in db.execute("SELECT seq, payload FROM events WHERE kind = 'action_receipt' AND tombstoned = 0 ORDER BY seq"
+                                   ).fetchall():
+            p = json.loads(raw) if raw else {}
+            new = None
+            saved = p.get("undo") if isinstance(p.get("undo"), dict) else None
+            before = saved.get("before") if saved else None
+            if p.get("action") in ("list.add", "list.remove") and isinstance(before, dict) and isinstance(saved.get("args"), dict):
+                if p["action"] == "list.add" and before != {"provenance": 1, "rows": []}:
+                    new = {"provenance": 1, "rows": []}
+                elif p["action"] == "list.remove" and before.get("reverses") is not True:
+                    want = DurableLists.key(saved["args"])
+                    new = {"provenance": 1, "reverses": True,
+                           "rows": [dict(r) for r in before.get("rows", ()) if isinstance(r, dict) and r.get("item") is not None
+                                    and DurableLists.key(r) == want]}
+                if new is not None:
+                    p["undo"] = {**saved, "before": new}
+                converted[seq] = (p.get("undo") or {}).get("before")
+            elif p.get("action") == "undo" and isinstance(p.get("proof"), dict) and "restored" in p["proof"]:
+                target = converted.get(p.get("undoes"))
+                if target is not None and p["proof"]["restored"] != target:
+                    p["proof"] = {**p["proof"], "restored": target}
+                    new = target
+            if new is not None:
+                db.execute("UPDATE events SET payload = ? WHERE seq = ?", (json.dumps(p, sort_keys=True), seq))
+                changed += 1
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return changed
+
+
+ERASED_MARK = "authority_erased:"
+
+
+def erased_marks(k: Kernel) -> set[str]:
+    """The keyed hashes of members whose data the member-delete path erased: never granted again automatically at a start."""
+    return {key[len(ERASED_MARK):] for (key,) in k.spine._db.execute("SELECT key FROM meta WHERE key LIKE ?", (ERASED_MARK + "%",))}
 
 
 def revoked(k: Kernel, skill: str) -> set[str]:
@@ -252,44 +449,129 @@ def revoked(k: Kernel, skill: str) -> set[str]:
 PERMANENT_DB = "~/.zoe/zoe-os/zoe-os.db"
 
 
+def _sidecars(db: Path) -> list:
+    return [db.with_name(db.name + suffix) for suffix in ("-wal", "-shm", "-journal")]
+
+
+def _fsync_dir(d: Path) -> None:
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def fingerprint(db: Path) -> dict:
+    """What "the same record" means for the move: per table (and the schema), the row count and a digest of every row, compared
+    as a SORTED multiset so a copy that renumbers implicit rowids (VACUUM INTO) still matches, and a lost, added or changed row
+    never does. A plain connection, so a WAL left by a killed kernel is read too (closing it may fold that WAL in: no row changes)."""
+    con = sqlite3.connect(str(db))
+    try:
+        out = {"schema": sorted(con.execute("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_autoindex%'"))}
+        for (table,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall():
+            rows = sorted(hashlib.sha256(repr(r).encode()).digest() for r in con.execute(f'SELECT * FROM "{table}"'))
+            out[table] = (len(rows), hashlib.sha256(b"".join(rows)).hexdigest())
+        return out
+    finally:
+        con.close()
+
+
+def migrate(old: Path, new: Path) -> None:
+    """Move the record from the lab location to ``--db`` and FINISH a move a crash interrupted. Every step is safe to interrupt;
+    the next start resumes from what is on disk:
+
+    * nothing moved yet (old only)                 -> copy, verify, remove the old
+    * killed mid copy (old + ``.moving`` temp)     -> the temp is thrown away, copy again
+    * killed after the rename (old + new)          -> verify the new against the old, then remove the old
+    * killed during the removal (old's sidecars)   -> the sidecars are removed
+    Verified = ``integrity_check`` ok AND ``fingerprint`` equal. A mismatch REFUSES the start with both files kept: no kernel ever
+    runs on the new file while the old one exists, so a mismatch is damage, never newer data."""
+    tmp = new.with_name(new.name + ".moving")
+    if not old.exists():
+        for f in (*_sidecars(old), tmp, *_sidecars(tmp)):
+            f.unlink(missing_ok=True)
+        return
+    new.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    con = sqlite3.connect(str(old))
+    try:
+        con.execute("PRAGMA journal_mode=DELETE")              # the old record as ONE file: its WAL folded in and removed
+    finally:
+        con.close()
+    if not new.exists():
+        for f in (tmp, *_sidecars(tmp)):
+            f.unlink(missing_ok=True)
+        con = sqlite3.connect(str(old))
+        try:
+            con.execute("VACUUM INTO ?", (str(tmp),))          # a compact copy: no free pages carried over
+        finally:
+            con.close()
+        os.chmod(tmp, 0o600)
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, new)
+        _fsync_dir(new.parent)
+    check = sqlite3.connect(f"file:{new}?mode=ro", uri=True)
+    try:
+        ok = check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        check.close()
+    if not ok or fingerprint(new) != fingerprint(old):
+        raise SystemExit("the kernel database move could not be verified: both copies kept, nothing started (see README)")
+    _remove_copy(old)                                          # only now: the old copy is outside every future forget
+
+
+def _remove_copy(db: Path) -> None:
+    """The main file first, then its sidecars: a crash in between leaves only sidecars, which the next start removes."""
+    for f in (db, *_sidecars(db)):
+        f.unlink(missing_ok=True)
+    _fsync_dir(db.parent)
+
+
 def db_path(state: Path, db: str | None) -> Path:
-    """The database to open. Refuses (exits) when ``--db`` names a file that does not exist while the OLD lab location still holds one:
-    a kernel that started empty beside an unmoved record would decide adds with no history and leave a copy forget cannot see."""
+    """The database to open. With ``--db`` the record at the OLD lab location is moved there first (``migrate``): a kernel never
+    starts beside a second copy of the record, which no forget would reach."""
     old = state / "kernel" / "zoe-os.db"
     if not db:
         return old
     path = Path(db).expanduser()
-    if not path.exists() and old.exists():
-        raise SystemExit(f"the kernel database was not moved: run the one-time move in labs/zoe-os/README.md first ({old.name})")
+    if path.resolve() != old.resolve():
+        migrate(old, path)
     return path
 
 
 def build(state: Path, db: str | None = None):
-    people = json.loads((state / "people.json").read_text("utf-8"))["people"]
-    if not people or not all(isinstance(p, str) and p for p in people):
-        raise SystemExit("people.json has no members: the kernel acts for nobody it does not know")
+    people, roster_status = read_roster(state, "authority")      # the one rule, shared with the shadow daemon
     path = db_path(state, db)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    k = Kernel(str(path), [Person(p) for p in people])
+    # the roster PLUS every id the record still names: a member taken off people.json is still erased by id (never granted)
+    k = Kernel(str(path), [Person(p) for p in sorted(set(people) | recorded_people(path))])
     k.spine._db.execute("INSERT OR REPLACE INTO meta VALUES ('authority_schema', ?)", (str(SCHEMA).encode(),))
+    convert_legacy(k.spine)                        # receipts the shadow kernel wrote, into this kernel's lean snapshots: before any replay
     lists = DurableLists(k.spine).register(k)
     lists.rebuild()
     reminders, alarms = Reminders(lambda: k.clock()).register(k), Alarms().register(k)
-    for manifest in (*ADAPTERS, SHADOW_BRAIN):
+    for manifest in (*ADAPTERS, SHADOW_BRAIN, ERASER, RECONCILER):
         k.grants.install(manifest)
     k.install(DurableKeeper(lists, reminders, alarms))
-    no = revoked(k, SHADOW_BRAIN["skill"])
+    no, gone = revoked(k, SHADOW_BRAIN["skill"]), erased_marks(k)
     for person in people:
-        if person not in no:
+        if person not in no and k.spine._owner(person).hex() not in gone:
             k.grants.grant(person, SHADOW_BRAIN["skill"], acts=list(ACTS))
-    srv = AuthorityServer(k, str(state / "k.sock"), lists, (reminders, alarms))
+    srv = AuthorityServer(k, str(state / "k.sock"), lists, (reminders, alarms), roster=people)
+    srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
+    write_secret(state / ERASER_CREDS, {"socket": srv.path, "creds": {ERASER["skill"]: srv.issue(ERASER["skill"], eraser=True).hex()}})
+    write_secret(state / RECONCILE_CREDS, {"socket": srv.path, "creds": {RECONCILER["skill"]: srv.issue(RECONCILER["skill"]).hex()},
+                                           "digest_key": srv.digest_secret().hex()})
     return k, srv, creds
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--dir", help="state directory (default $ZOE_OS_SHADOW_DIR or ~/.zoe/os-shadow)")
+    ap.add_argument("--dir", help="state directory (default $OSLAB_SHADOW_DIR or ~/.zoe/os-shadow)")
     ap.add_argument("--db", help=f"the kernel's database file (the unit passes {PERMANENT_DB}); default STATE/kernel/zoe-os.db")
     opts = ap.parse_args(argv)
     state = state_dir(opts.dir)
@@ -297,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
+    write_identity(state, srv)
+    srv.on_speaker_roll(lambda _generation: write_identity(state, srv))      # a mid-run roll republishes the generation
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())

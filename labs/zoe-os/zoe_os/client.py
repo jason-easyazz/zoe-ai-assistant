@@ -5,21 +5,49 @@ the in-process prototype the same shapes (``kernel.spine.publish(event)``,
 ``kernel.actions.act(...)``) so the SAME skill class runs on the far side of the boundary.
 The ``source`` / ``reader`` / ``skill`` names those calls carry are dropped here: the
 protocol has no such field, the kernel uses the connection's verified identity.
+
+``speaker_key`` + ``speaker_generation`` (both from ``identity-creds.json``): the speaker-verifier's secret and the kernel run
+it mints for, for a client that plays the component which
+verifies people (the lab tests do; in production that is zoe-data, never a skill). With it, a
+person-bound call gets a fresh ``speaker`` assertion for the person it names (``speaker.binding``)
+unless one is passed; without it, a person-bound call is refused ``speaker unproven``.
 """
 from __future__ import annotations
 
 import socket
 import time
 
-from . import wire
+from . import speaker, wire
 from .events import Event, Kind
+from .provenance import subject_of
 from .receipts import Receipt
 from .spine import EventCache, Refused
 
 
 class Client:
-    def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0) -> None:
+    @staticmethod
+    def forgotten_subject(notice: Event) -> str | None:
+        """None for a whole-person notice: it carries no subject and this side holds no key to
+        resolve its hash. The consumer must then treat it as possibly ANY member and keep only
+        state whose source it can still read (``provenance.unresolved_person`` and
+        ``provenance.still_live``), never as a notice about nobody."""
+        return subject_of(notice)
+
+    def live_seqs(self, kinds, after: int) -> set[int]:
+        """Sequence numbers of the live events of ``kinds`` after ``after`` this skill may read.
+        A short-lived reader, like ``_cache_history``: no subscription is left behind."""
+        reader = Client(*self._cache_conn, timeout=self._timeout)
+        try:
+            return {e.seq for e in reader.drain(reader.subscribe(kinds=kinds, from_seq=after))}
+        finally:
+            reader.close()
+
+    def __init__(self, path: str, skill: str, credential: bytes, *, timeout: float = 10.0,
+                 speaker_key: bytes | None = None, speaker_generation: str | None = None) -> None:
+        if (speaker_key is None) != (speaker_generation is None):
+            raise ValueError("a speaker key needs the kernel run's generation (identity-creds.json), and the other way round")
         self.skill, self._timeout, self._id = skill, timeout, 0
+        self._speaker_key, self._speaker_generation = speaker_key, speaker_generation
         self._cache_conn = (path, skill, credential)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
@@ -48,6 +76,10 @@ class Client:
         raise wire.WireError(err.get("code", wire.INTERNAL), err.get("reason", ""))
 
     def call(self, op: str, **args):
+        if self._speaker_key is not None and "speaker" not in args:
+            token = speaker.mint_for(self._speaker_key, op, args, generation=self._speaker_generation)
+            if token is not None:
+                args["speaker"] = token
         self._id += 1
         wire.write_frame(self.sock, {"v": wire.VERSION, "id": self._id, "op": op, "args": args},
                          timeout=self._timeout)

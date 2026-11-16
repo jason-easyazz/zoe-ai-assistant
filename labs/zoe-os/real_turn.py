@@ -685,12 +685,16 @@ def run(args, probes: Probes) -> int:
                 rows.append({"n": n, "skipped": "wall-clock cap"})
                 continue
             turn = stack.box.say(member, text)
-            local_open(urllib.request.Request(
+            tid = json.loads(local_open(urllib.request.Request(
                 f"http://127.0.0.1:{stack.server.port}/turn", method="POST", headers={"X-Runner": stack.token},
-                data=json.dumps({"member": member, "cause": turn.cause}).encode()), timeout=5).read()
+                data=json.dumps({"member": member, "cause": turn.cause}).encode()), timeout=5).read())["turn"]
             logged = len(stack.server.log)
-            got = read_turn_stream(app_url, f"lab-{n}-{os.urandom(3).hex()}", text, min(TURN_CAP_S, left))
-            props = stack.server.log[logged:]
+            # The bridge's turn id is the Flue instance id: the app's tools send it back with every call.
+            got = read_turn_stream(app_url, tid, text, min(TURN_CAP_S, left))
+            # Attributed by the id each record CARRIES, never by when it landed: a late call from an
+            # earlier turn that arrives now is that turn's (and refused stale), not this one's.
+            props = [p for p in stack.server.log[logged:] if p["turn_id"] == tid]
+            late = sum(p.get("code") == "stale_turn" for p in stack.server.log[logged:])
             hop = sum(p["hop_ms"] for p in props)
             called = tools_called(got["frames"])
             diag = diagnose(got["frames"], props, expect)
@@ -700,7 +704,8 @@ def run(args, probes: Probes) -> int:
                                                            p['status'] != 'invalid' for p in props) if props else None,
                          "kernel": [p["status"] for p in props], "kernel_expected": kernel_expect,
                          "model_ms": round(got["total_ms"] - hop), "hop_ms": round(hop, 2),
-                         "first_frame_ms": round(got["first_ms"] or 0), "error": got["error"], "diag": diag})
+                         "first_frame_ms": round(got["first_ms"] or 0), "error": got["error"], "diag": diag,
+                         "late_calls_refused": late})
             fixture.append({"turn": n, "frames": reduce_frames(got["frames"]), "proposals": props})
         verify = verify_kernel(stack, rows, turns)
         after = cache_state(llama, probes)

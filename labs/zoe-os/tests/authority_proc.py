@@ -62,7 +62,6 @@ CONTROLS = {
 
 def _erase_without_forget(self, conn, a):
     """The erase op with the forget step removed: the read-back must catch it (verified false)."""
-    self._person_op(conn, "erase a member")
     left = len(self.lists.rows.get(a["subject"], [])) + self._live_events(a["subject"])
     return {"erased": 0, "receipt_seq": None, "verified": left == 0, "known": True}
 

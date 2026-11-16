@@ -251,6 +251,7 @@ def test_wire_exception_paths_do_not_echo_input(tmp_path, op, error):
         server = object.__new__(KernelServer)
         server.kernel = k
         server._validate = lambda _: ''  # exercise each operation's exception handler
+        server._prove_speaker = lambda *a: None  # (the speaker check has its own tests: test_speaker.py)
         def fail(*args):
             raise error
         setattr(server, '_op_' + op, fail)

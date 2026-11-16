@@ -27,13 +27,12 @@ StartLimitBurst=10
 [Service]
 Type=simple
 WorkingDirectory=%h/assistant/labs/zoe-os
-# The private state directory: k.sock (0600), creds.json (0600), people.json. Never in a checkout.
-Environment=ZOE_OS_SHADOW_DIR=%h/.zoe/os-shadow
-# THE ONE database setting (owner decision 2026-11-15): the kernel's OWN SQLite file, in its permanent home beside Zoe's other stores,
-# in the nightly backup (labs/zoe-os/README.md "Backup"). zoe-data's ZOE_OS_KERNEL_DB names the same path; set both or neither. The
-# daemon refuses to start if this file is missing while the old ~/.zoe/os-shadow/kernel/zoe-os.db still exists (the move was skipped).
-Environment=ZOE_OS_KERNEL_DB=%h/.zoe/zoe-os/zoe-os.db
-ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/authority.py --dir ${ZOE_OS_SHADOW_DIR} --db ${ZOE_OS_KERNEL_DB}
+# --dir: the private state directory: k.sock (0600), creds.json, erase-creds.json, identity-creds.json (0600), people.json. Never in
+# a checkout. --db: THE ONE database setting (owner decision 2026-11-15): the kernel's OWN SQLite file, in its permanent home beside
+# Zoe's other stores, in the nightly backup (labs/zoe-os/README.md "Backup"). Both are ARGUMENTS, never environment names (a lab
+# process reads no product-prefixed name). At start the daemon moves an old STATE/kernel/zoe-os.db to --db and refuses to start if the
+# move cannot be verified.
+ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/authority.py --dir %h/.zoe/os-shadow --db %h/.zoe/zoe-os/zoe-os.db
 Restart=always
 RestartSec=2
 TimeoutStopSec=10
