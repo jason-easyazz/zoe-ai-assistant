@@ -65,7 +65,7 @@ Where each verb is hooked (after the commit, never raises, one bounded queue put
 | `alarm_create` | `alarm.set` | `alarms.create_alarm` (every caller: REST, voice, anticipation) | none |
 
 What the kernel's verbs cannot express is counted as a disagreement, never sent: a recurring reminder, a date-only reminder (live
-fires it at the household default time), a reminder more than 7 days out (`remind.set` takes 1..10080 minutes), an alarm time that is
+fires it at the household default time), a reminder more than 7 days out only for an OLDER kernel (its `in_minutes` takes 1..10080), an alarm time that is
 not `HH:MM`, and a REPEATING alarm (`alarm.set` is one time, once: `not_expressible reason=recurring`) [code]. The kernel's alarm is
 one time per person with no repeat rule; that is a known gap to close before (d), not a pass.
 
@@ -75,18 +75,20 @@ one time per person with no repeat rule; that is a known gap to close before (d)
 | verb | WHAT | WHEN | a field the read-back lacks |
 |---|---|---|---|
 | `list_add`, `list_remove` | `item` (`item_differs`); `list` when the driver reports it (`list_differs`) | none: a list item does not fire | `item` missing = `kernel_malformed`; `list` optional |
-| `reminder_create` | `note` (`item_differs`) | `due_at`, the ABSOLUTE due instant (UTC epoch seconds), within 60 s (`schedule_differs`) | `due_at` missing = `schedule_unproven` (a relative `in_minutes` read-back is no proof) |
+| `reminder_create` | `note` (`item_differs`) | `due_at`, the ABSOLUTE due instant (UTC epoch seconds) sent and read back (`schedule_differs`) | `due_at` missing = `schedule_unproven` (an older kernel; a relative read-back is no proof) |
 | `alarm_create` | the time is the whole value | `alarm` == `time`, an absolute wall-clock `HH:MM` already (no queue-delay weakness) (`schedule_differs`) | `kernel_malformed` |
 
-For whom, every verb: `on_behalf_of` must be the member (`member_differs`), and a receipt without it is `member_unproven`
+Every list remove is proposed against the RESOLVED list (the row the card or the name found, `skybridge_service._find_list_for_remove(...,
+with_name=True)`), not the words. For whom, every verb: `on_behalf_of` must be the member (`member_differs`), and a receipt without it is `member_unproven`
 (`os_shadow.for_whom`, the one check).
 
-**Reminders are compared absolute to absolute** [code]: the due instant is computed once from the live row and the commit time; the
-wire still carries `in_minutes` (the kernel's `remind.set` takes only that and refuses an unknown argument,
-`labs/zoe-os/zoe_os/receipts.py check_params`), recomputed from the instant at SEND time, so a job that waited in the queue still asks
-for the same instant. **What the kernel side must add before reminders can be compared:** accept `due_at` (integer, UTC epoch
-seconds) on `remind.set` (alongside or instead of `in_minutes`), and return `proof.due_at` (integer, UTC epoch seconds: the stored due)
-in its read-back (`Reminders.added`). Then drop `due_at` from `os_shadow.LOCAL_ONLY` so it is sent.
+**Reminders are sent and compared absolute to absolute** [code]: the due instant (`due_at`, integer UTC epoch seconds) is computed
+once from the live row and the commit time and SENT (never with `in_minutes`: the kernel takes exactly one), so a job that waited in
+the queue still asks for the same instant; the kernel's read-back `proof.due_at` is the stored instant and must equal it (within 60 s,
+the rounding of the fallback below). A due instant that is not a time (NaN, inf, a string, a bool, past 2^40) is `kernel_malformed`,
+and the decoder refuses NaN / Infinity on the wire. **An older kernel** (no `due_at`) refuses it as an unknown argument: the act is
+retried ONCE with `in_minutes` counted from the SEND, the line carries `reason=old_kernel`, and since its read-back has no `due_at` it
+reads `schedule_unproven` (the report's NOT COMPARABLE YET line names how many writes went to an older kernel).
 
 **The lab driver's `remind.set` read-back is `{"note"}` only** (`labs/zoe-os/zoe_os/brain/drivers.py` `Reminders.added`) [code], so
 against today's lab kernel every reminder reads `schedule_unproven` (a disagreement), never `match`: a reminder at the wrong time can

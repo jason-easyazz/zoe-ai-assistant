@@ -63,13 +63,14 @@ VERBS = {"list_add": ("list.add", (("item", "item", "item_differs", "kernel_malf
          "alarm_create": ("alarm.set", (("alarm", "time", "schedule_differs", "kernel_malformed"),))}
 DEFAULT_VERBS = "list_add"
 REMIND_MAX_MIN = 10080         # the kernel's ``remind.set`` takes 1..10080 whole minutes from now
-#: A reminder is compared on its ABSOLUTE due instant (UTC epoch seconds), computed from the live row and the commit time, never on a
-#: relative "in N minutes" (a queue delay would shift that and still read as a match). The kernel's ``remind.set`` today takes only
-#: ``in_minutes`` and refuses an unknown argument, so ``due_at`` is NOT sent (``LOCAL_ONLY``): ``in_minutes`` is recomputed from it at
-#: SEND time. A match needs the kernel's read-back ``proof.due_at`` within ``DUE_TOLERANCE_S`` (the minute rounding); without it the
-#: reminder is ``schedule_unproven``. When the kernel takes ``due_at``, drop it from ``LOCAL_ONLY``.
-LOCAL_ONLY = frozenset({"due_at"})
-DUE_TOLERANCE_S = 60.0
+#: A reminder is sent and compared on its ABSOLUTE due instant (``due_at``: integer UTC epoch seconds), computed from the live row and
+#: the commit time, never a relative "in N minutes" (a queue delay would shift that and still read as a match). The kernel's
+#: ``remind.set`` takes exactly one of ``in_minutes`` / ``due_at`` and its read-back returns ``due_at``. An OLDER kernel refuses
+#: ``due_at`` as an unknown argument: the act is retried ONCE with ``in_minutes`` recomputed from the instant at SEND time and the
+#: outcome is marked ``reason=old_kernel`` (its read-back has no ``due_at``, so it reads ``schedule_unproven``: never a match).
+DUE_TOLERANCE_S = 60.0         # the minute rounding of the old-kernel fallback; an exact due_at read-back is equal
+DUE_MAX = 2 ** 40              # a due instant past this (year ~36812) is not a time: kernel_malformed
+UNKNOWN_ARGUMENT = "unknown argument"
 _wall = time.time              # the wall clock the send-time minutes are computed from (a test replaces it)
 
 # ---- the wire (kernel protocol v1; see the module docstring) ----------------------------------------------------------------------
@@ -366,6 +367,12 @@ def for_whom(kernel: dict, member: Optional[str]) -> Optional[str]:
     return None if who == member else "member_differs"
 
 
+def _a_time(value) -> bool:
+    """A number the kernel may report as a due instant: an int or a finite float, not a bool, in ``0..DUE_MAX``. The decoder already
+    refuses NaN / Infinity on the wire (``_no_constant``); this holds for any caller of ``compare``."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= DUE_MAX)
+
+
 def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add", *, member: Optional[str] = None) -> tuple[str, str]:
     """``(result, kernel_state)``. ``live``: added | refused (added = the live write landed, whatever the verb). ``kernel``: the act
     receipt (a dict), ``{"refused": reason}`` or None. ``sent``: the kernel args as proposed; ``member``: who it was for. A ``match`` needs
@@ -396,8 +403,10 @@ def compare(live: str, kernel: Optional[dict], sent: dict, verb: str = "list_add
                 return missing, state
             continue
         got, want = proof[pkey], sent.get(akey)
-        if pkey == "due_at":          # absolute instants: equal within the minute the wire rounds to
-            if not isinstance(got, (int, float)) or isinstance(got, bool) or abs(got - want) > DUE_TOLERANCE_S:
+        if pkey == "due_at":          # absolute instants: equal within the minute the old-kernel fallback rounds to
+            if not _a_time(got):
+                return "kernel_malformed", state        # NaN, inf, a string, a bool, an absurd number: not an answer
+            if abs(got - want) > DUE_TOLERANCE_S:
                 return differs, state
         elif got != want:
             return differs, state
@@ -418,7 +427,7 @@ LIVE = ("added", "refused", "noop")
 KERNEL_STATES = ("verified", "unverified", "uncertain", "refused", "none")
 REASONS = ("-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", CROSSED, "socket", "unavailable",
            "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake", "hook", "worker", "code", "pending_forget",
-           "forgotten_before", "recurring", "no_time", "range", "time", "parse")
+           "forgotten_before", "recurring", "no_time", "range", "time", "parse", "old_kernel")
 
 
 def counters() -> dict:
@@ -641,12 +650,23 @@ def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict,
     action = VERBS[verb][0]
     result_kernel: Optional[dict] = None
     reason, result = "", ""
+    old_kernel = False
     try:
         ev = kernel.call(SKILL_VOICE, "publish", until, kind="utterance", subject=user_id, payload={"text": utterance_text(verb)})
         seq = ev.get("seq") if isinstance(ev, dict) else None
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise KernelProtocol("no seq")
-        rec = kernel.call(SKILL_BRAIN, "act", until, action=action, on_behalf_of=user_id, args={**{k: v for k, v in sent.items() if k not in LOCAL_ONLY}, "asked": seq}, caused_by=[seq])
+        try:
+            rec = kernel.call(SKILL_BRAIN, "act", until, action=action, on_behalf_of=user_id, args={**sent, "asked": seq}, caused_by=[seq])
+        except KernelRefused as exc:
+            if not ("due_at" in sent and UNKNOWN_ARGUMENT in (exc.reason or "").lower()):
+                raise
+            old_kernel = True             # an older kernel: ONE retry with the minutes counted from now (the send), never from the commit
+            minutes = int(round((sent["due_at"] - _wall()) / 60.0))
+            if not 1 <= minutes <= REMIND_MAX_MIN:
+                return {"result": "not_expressible", "reason": "range"}
+            rec = kernel.call(SKILL_BRAIN, "act", until, action=action, on_behalf_of=user_id,
+                              args={"note": sent["note"], "in_minutes": minutes, "asked": seq}, caused_by=[seq])
         if not isinstance(rec, dict) or not isinstance(rec.get("verified"), bool) or not isinstance(rec.get("outcome"), str):
             raise KernelProtocol("bad receipt")
         result_kernel = rec
@@ -664,6 +684,8 @@ def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict,
     kstate = "none"
     if not result:
         result, kstate = compare(live, result_kernel, sent, verb, member=user_id)
+    if old_kernel and not reason:
+        reason = "old_kernel"             # the report counts which kernels are old
     return {"result": result, "kernel_state": kstate, "reason": reason, "hop_ms": hop_ms}
 
 
@@ -679,8 +701,8 @@ def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], s
         if len(hhmm) != 5 or hhmm[2] != ":" or not (hhmm[:2] + hhmm[3:]).isdigit() or int(hhmm[:2]) > 23 or int(hhmm[3:]) > 59:
             return None, "time"
         return {"time": hhmm}, ""
-    # reminder_create: the kernel's remind.set is ONE-SHOT, in whole minutes from now (1..10080). The due instant is absolute (from the
-    # row and the COMMIT time); the minutes are counted from NOW (the send), so a job that waited in the queue still asks for that instant.
+    # reminder_create: the kernel's remind.set is ONE-SHOT. The due instant is absolute (from the row and the COMMIT time) and is what
+    # is sent (``due_at``), so a job that waited in the queue still asks for that instant.
     if raw.get("recurring"):
         return None, "recurring"
     if not raw.get("due_time"):
@@ -693,11 +715,7 @@ def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], s
     run_at = build_run_at(raw.get("due_date"), hm[0], hm[1], datetime.fromtimestamp(wall_at, timezone.utc)) if hm else None
     if run_at is None:
         return None, "time"
-    due_at = run_at.timestamp()
-    minutes = int(round((due_at - _wall()) / 60.0))
-    if not 1 <= minutes <= REMIND_MAX_MIN:
-        return None, "range"
-    return {"note": raw["note"], "in_minutes": minutes, "due_at": due_at}, ""
+    return {"note": raw["note"], "due_at": int(round(run_at.timestamp()))}, ""
 
 
 # ---- the hook -----------------------------------------------------------------------------------------------------------------------

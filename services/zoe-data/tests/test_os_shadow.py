@@ -67,6 +67,7 @@ class FakeKernel:
         self.known = None                      # the members the kernel knows (None = everyone): a stranger's forget is refused
         self.reply_mode = "ok"
         self.close_on = None
+        self.old_kernel = False                        # a kernel from before remind.set took due_at
         self.delay = 0.0
         self.stall: dict = {}                  # (stage, connection number) -> seconds the kernel sits on that stage
         self._seq = 0
@@ -156,8 +157,12 @@ class FakeKernel:
             return
         if mode == "close":
             raise ConnectionError
-        if a["action"] == "remind.set" and set(a["args"]) - {"note", "in_minutes", "asked"}:
-            return self._refuse(conn, req, "unknown argument")          # the kernel's check_params: an extra argument is refused
+        if a["action"] == "remind.set":                   # the kernel's check_params (labs/zoe-os/zoe_os/receipts.py)
+            known = {"note", "in_minutes", "asked"} | (set() if self.old_kernel else {"due_at"})
+            if set(a["args"]) - known:
+                return self._refuse(conn, req, "unknown argument")      # an older kernel: due_at is an unknown argument
+            if ("in_minutes" in a["args"]) == ("due_at" in a["args"]):
+                return self._refuse(conn, req, "needs exactly one of its alternative arguments")
         if mode.startswith("raw_result:"):                # the act's result as raw JSON text (NaN, Infinity, 1e400 ...)
             body = ('{"v":1,"id":%d,"ok":true,"result":%s}' % (req["id"], mode.split(":", 1)[1])).encode()
             return conn.sendall(struct.pack(">I", len(body)) + body)
@@ -166,12 +171,12 @@ class FakeKernel:
         if mode == "wrong_shape":
             return self._ok(conn, req, {"hello": 1})
         # the read-back each lab driver returns (labs/zoe-os/zoe_os/brain/drivers.py): list -> item, reminder -> note, alarm -> time.
-        # A reminder's read-back here ALSO says when, as an ABSOLUTE instant (due_at = the fake kernel's clock at receipt + the
-        # minutes): the lab driver's does not yet ("no_schedule" mirrors it).
+        # A reminder's read-back says when, as the STORED absolute instant (due_at as given, or the fake kernel's clock at receipt + the
+        # minutes), like the kernel's ``Reminders.added``; an older kernel's read-back has the note only.
         pkey, akey = {"remind.set": ("note", "note"), "alarm.set": ("alarm", "time")}.get(a["action"], ("item", "item"))
         proof = {pkey: a["args"][akey]}
-        if a["action"] == "remind.set":
-            proof["due_at"] = int(os_shadow._wall()) + 60 * a["args"]["in_minutes"]
+        if a["action"] == "remind.set" and not self.old_kernel:
+            proof["due_at"] = a["args"]["due_at"] if "due_at" in a["args"] else int(os_shadow._wall()) + 60 * a["args"]["in_minutes"]
         verified, outcome, member = True, "verified", a["on_behalf_of"]
         if mode == "unverified":
             verified, outcome, proof = False, "unverified", None

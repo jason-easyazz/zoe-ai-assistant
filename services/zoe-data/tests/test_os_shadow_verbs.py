@@ -81,7 +81,10 @@ def test_each_verb_sends_the_kernels_action_and_args_and_matches(kernel, monkeyp
     settle(3)
     sent = {a["action"]: a["args"] for a in acts(kernel)}
     assert set(sent) == {"remind.set", "alarm.set", "list.remove"}
-    assert sent["remind.set"]["note"] == NOTE and 88 <= sent["remind.set"]["in_minutes"] <= 91     # production's own due instant
+    import time as _time
+    due = sent["remind.set"]["due_at"]                                                             # production's own due instant
+    assert sent["remind.set"]["note"] == NOTE and "in_minutes" not in sent["remind.set"] and isinstance(due, int)
+    assert 88 * 60 <= due - _time.time() <= 91 * 60
     assert sent["alarm.set"]["time"] == "06:45" and sent["list.remove"]["item"] == "rice"
     assert all(isinstance(a["asked"], int) for a in sent.values())
     assert os_shadow.counters_by_verb() == {v: {"match": 1} for v in ("reminder_create", "alarm_create", "list_remove")}
@@ -93,7 +96,7 @@ def test_each_verb_sends_the_kernels_action_and_args_and_matches(kernel, monkeyp
 
 
 @pytest.mark.parametrize("kw,why", [({"recurring": True}, "recurring"), ({"due_time": None}, "no_time"),
-                                    ({"minutes": 8 * 24 * 60}, "range"), ({"due_time": "99:99"}, "time")])
+                                    ({"due_time": "99:99"}, "time")])
 def test_a_reminder_the_kernels_verb_cannot_say_is_a_counted_disagreement_never_sent(kernel, monkeypatch, caplog, kw, why):
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
     caplog.set_level(logging.INFO, logger="os_shadow")
@@ -199,13 +202,20 @@ async def test_the_live_reminder_create_is_identical_with_the_kernel_on_dead_or_
     base = await once()
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
-    for mode in ("ok", "item_differs", "close", "malformed"):
+    for mode, code in (("ok", "match"), ("item_differs", "item_differs"), ("close", "kernel_unavailable"), ("malformed", "kernel_malformed")):
+        os_shadow._reset_for_tests()                 # each mode on its own worker and circuit, its own outcome checked
+        assert os_shadow.revive()
         kernel.act_mode = mode
         assert await once() == base, mode
+        settle(1)
+        assert os_shadow.counters_by_verb() == {"reminder_create": {code: 1}}, mode
+    os_shadow._reset_for_tests()
+    assert os_shadow.revive()
     kernel.srv.close()
     Path(kernel.path).unlink()
     assert await once() == base
-    settle(5)
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"reminder_create": {"kernel_unavailable": 1}}
 
 
 @pytest.mark.asyncio
@@ -229,11 +239,13 @@ async def test_the_live_alarm_create_is_identical_with_the_kernel_on_dead_or_dis
     base = await once(0)
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
-    for n, mode in enumerate(("ok", "item_differs", "close"), 1):
+    for n, (mode, code) in enumerate((("ok", "match"), ("item_differs", "schedule_differs"), ("close", "kernel_unavailable")), 1):
+        os_shadow._reset_for_tests()
+        assert os_shadow.revive()
         kernel.act_mode = mode
         assert await once(n) == base, mode
-    settle(3)
-    assert sum(os_shadow.counters_by_verb()["alarm_create"].values()) == 3
+        settle(1)
+        assert os_shadow.counters_by_verb() == {"alarm_create": {code: 1}}, mode
 
 
 # ---- structure pins: every WRITER FUNCTION of a shadowed verb is hooked or named (the list-add scan, test_os_shadow_hook.py) ------
@@ -484,13 +496,13 @@ def test_a_job_delayed_in_the_queue_sends_the_same_instant_and_still_matches(ker
     assert os_shadow.revive()
     settle(1)
     (sent,) = acts(kernel)
-    assert "due_at" not in sent["args"]                              # the kernel refuses an unknown argument: never sent yet
-    assert 88 - delay_min <= sent["args"]["in_minutes"] <= 91 - delay_min
+    assert "in_minutes" not in sent["args"]                          # the absolute instant, never both
+    assert 88 * 60 <= sent["args"]["due_at"] - (clock[0] - 60 * delay_min) <= 91 * 60     # counted from the COMMIT, whatever the delay
     assert os_shadow.counters_by_verb() == {"reminder_create": {"match": 1}}
 
 
 def test_a_kernel_that_reports_the_due_time_off_by_the_queue_delay_is_schedule_differs(kernel, monkeypatch):
-    """A kernel that took the minutes from the COMMIT (the old relative send) lands 7 minutes late: never a match."""
+    """A kernel that reports the due instant 7 minutes off (what a relative send through a delayed queue produced): never a match."""
     import time as _time
 
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
@@ -513,7 +525,7 @@ def test_the_due_instant_comparison_tolerates_only_the_minute_rounding():
     rec = lambda due: {"verified": True, "outcome": "verified", "on_behalf_of": "m", "proof": {"note": "n", "due_at": due}}  # noqa: E731
     assert os_shadow.compare("added", rec(1_000_030), sent, "reminder_create", member="m")[0] == "match"
     assert os_shadow.compare("added", rec(1_000_061), sent, "reminder_create", member="m")[0] == "schedule_differs"
-    assert os_shadow.compare("added", rec("soon"), sent, "reminder_create", member="m")[0] == "schedule_differs"
+    assert os_shadow.compare("added", rec("soon"), sent, "reminder_create", member="m")[0] == "kernel_malformed"    # not a time
     no_due = {"verified": True, "outcome": "verified", "on_behalf_of": "m", "proof": {"note": "n", "in_minutes": 5}}
     assert os_shadow.compare("added", no_due, sent, "reminder_create", member="m")[0] == "schedule_unproven"   # relative is no proof
 
@@ -577,3 +589,158 @@ def test_a_receipt_that_names_no_member_is_member_unproven_for_every_verb(kernel
     _call_marked(verb, {})
     settle(1)
     assert os_shadow.counters_by_verb() == {verb: {"member_unproven": 1}}
+
+
+
+# ---- an older kernel (no due_at) and bad numbers in a kernel's read-back ------------------------------------------------------------
+@pytest.mark.parametrize("delay_min", [0, 7])
+def test_an_older_kernel_gets_one_retry_in_minutes_from_the_send_and_reads_schedule_unproven(kernel, monkeypatch, caplog, delay_min):
+    import time as _time
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    clock = [_time.time()]
+    monkeypatch.setattr(os_shadow, "_wall", lambda: clock[0])
+    kernel.old_kernel = True
+    os_shadow._reset_for_tests()
+    monkeypatch.setattr(os_shadow, "_worker_alive", lambda: True)
+    d, t = _in(90)
+    os_shadow.note_reminder_create(MEMBER, source="service", note=NOTE, due_date=d, due_time=t, recurring=False)
+    clock[0] += 60 * delay_min
+    assert os_shadow.revive()
+    settle(1)
+    tries = acts(kernel)
+    assert [sorted(x["args"]) for x in tries] == [["asked", "due_at", "note"], ["asked", "in_minutes", "note"]]   # once, then the fallback
+    assert 88 - delay_min <= tries[1]["args"]["in_minutes"] <= 91 - delay_min                                   # from the SEND
+    assert os_shadow.counters_by_verb() == {"reminder_create": {"schedule_unproven": 1}}
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("OS_SHADOW_ACT ")]
+    assert " result=schedule_unproven reason=old_kernel " in line
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "soon", True, 10 ** 30])
+def test_a_due_instant_that_is_not_a_time_is_kernel_malformed(bad):
+    sent = {"note": "n", "due_at": 1_000_000}
+    rec = {"verified": True, "outcome": "verified", "on_behalf_of": "m", "proof": {"note": "n", "due_at": bad}}
+    assert os_shadow.compare("added", rec, sent, "reminder_create", member="m")[0] == "kernel_malformed"
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "1e400"])
+def test_a_reminder_read_back_with_a_non_standard_number_is_malformed_on_the_wire(kernel, monkeypatch, raw):
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    kernel.act_mode = ('raw_result:{"verified": true, "outcome": "verified", "on_behalf_of": "%s", "proof": {"note": "%s", "due_at": %s}}'
+                       % (MEMBER, NOTE, raw))
+    remind(90)
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"reminder_create": {"kernel_malformed": 1}}
+
+
+
+def test_a_reminder_eight_days_out_is_sent_as_its_instant_and_compared(kernel, monkeypatch):
+    """Before due_at the kernel's 1..10080 minutes made this not_expressible:range; the absolute instant says it."""
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    remind(minutes=8 * 24 * 60)
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"reminder_create": {"match": 1}} and "due_at" in acts(kernel)[0]["args"]
+
+
+# ---- the shadow proposes against the RESOLVED list, not the words ----------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_a_card_context_remove_on_a_custom_list_is_shadowed_against_that_list(kernel, monkeypatch):
+    import skybridge_service as sky
+
+    class _Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+    class _DB:
+        async def fetch(self, sql, *args):
+            if "FROM lists" in sql and "WHERE id = $1" in sql:
+                return [{"id": "L9", "name": "Camping gear", "list_type": "personal"}]      # the card's list
+            if "FROM list_items" in sql:
+                return [{"id": "I1", "list_id": "L9", "text": "tent pegs", "completed": 0}]
+            return []
+
+        async def execute(self, sql, *args):
+            return "UPDATE 1"
+
+    async def nothing(*a, **k):
+        return {}
+
+    monkeypatch.setattr(sky, "_ensure_default_lists", nothing)
+    monkeypatch.setattr(sky, "_maybe_commit", nothing)
+    monkeypatch.setattr(sky, "_resolve_lists", nothing)
+    monkeypatch.setattr(sky, "_audit_list_item", lambda *a, **k: None)
+    seen = []
+    monkeypatch.setattr(os_shadow, "note_list_remove", lambda *a, **k: seen.append(k))
+    context = {"cards": [{"content": {"source": "list_show", "list_id": "L9", "list_type": "personal"}}]}
+    intent = sky.SkybridgeIntent(domain="lists", action="remove_item", item_text="tent pegs")     # no list named: the card decides
+    await sky._resolve_list_remove_item(intent, MEMBER, _DB(), context)
+    assert [k["list_name"] for k in seen] == ["Camping gear"] and seen[0]["list_type"] == "personal"
+    assert await sky._find_list_for_remove(intent, MEMBER, _DB(), context) == ("L9", "personal")   # every other caller: unchanged
+
+
+# ---- the reminder and alarm hooks run only after a commit that succeeded (fakes that CAN fail) ------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_the_reminder_hook_runs_after_its_commit_and_never_after_a_failed_one(kernel, monkeypatch, fail):
+    from models import ReminderCreate
+    from reminder_service import create_reminder_record
+    from test_reminder_scheduled_on_create import _Db
+
+    async def _allow(*_a, **_k):
+        return None
+
+    class _CommitDb(_Db):
+        committed = 0
+
+        async def commit(self):
+            if fail:
+                raise RuntimeError("commit failed")
+            self.committed += 1
+
+    monkeypatch.setattr("reminder_service.require_feature_access", _allow)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", _allow)
+    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", lambda **_k: _allow())
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "reminder_create")
+    db = _CommitDb([])
+    seen = []
+    monkeypatch.setattr(os_shadow, "note_reminder_create", lambda *a, **k: seen.append(db.committed))
+    d, t = _in(60)
+    try:
+        await create_reminder_record(ReminderCreate(title=NOTE, due_date=d, due_time=t), user={"user_id": MEMBER, "role": "admin"}, db=db)
+    except RuntimeError:
+        assert fail
+    assert seen == ([] if fail else [1])               # after the one commit; nothing when the commit failed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_the_alarm_hook_runs_after_its_commit_and_never_after_a_failed_one(kernel, monkeypatch, tmp_path, fail):
+    import aiosqlite
+
+    import alarms
+    from test_alarms import NIGHT, _migrate
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
+    path = str(tmp_path / "a.db")
+    _migrate(path)
+    db = await aiosqlite.connect(path)
+    state = {"committed": 0}
+    real_commit = db.commit
+
+    async def commit():
+        if fail:
+            raise RuntimeError("commit failed")
+        await real_commit()
+        state["committed"] += 1
+
+    monkeypatch.setattr(db, "commit", commit)
+    seen = []
+    monkeypatch.setattr(os_shadow, "note_alarm_create", lambda *a, **k: seen.append(state["committed"]))
+    try:
+        await alarms.create_alarm(db, MEMBER, time_hhmm="06:45", repeat="once", now=NIGHT)
+    except RuntimeError:
+        assert fail
+    finally:
+        await db.close()
+    assert seen == ([] if fail else [1])
