@@ -125,8 +125,8 @@ def test_every_generated_day_replays_cleanly_and_a_person_can_be_left_out():
 
 def test_a_household_can_be_described_in_plain_data_and_bad_input_is_refused():
     house = household_from({
-        "members": [{"id": "pat", "wake": "05:30", "leave": ["06:15", 5], "take": ["keys"]},
-                    {"id": "robin", "leave": None}],
+        "members": [{"id": "pat", "role": "adult", "wake": "05:30", "leave": ["06:15", 5], "take": ["keys"]},
+                    {"id": "robin", "role": "adult", "leave": None}],                 # roles stated: unstated is least access
         "weekly": [{"person": "pat", "weekday": 0, "at": "09:00", "label": "synthetic meeting"}]})
     assert house.members[0].leave == Habit("06:15", 5) and house.members[1].leave is None
     (day,) = generate(house, days=1, seed=1, awkward={0: ""})

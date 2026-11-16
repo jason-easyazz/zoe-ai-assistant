@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.client import Client
 from zoe_os.kernel import Kernel
 from zoe_os.server import KernelServer
@@ -142,7 +142,7 @@ class Effects:
 def child():
     cfg = json.loads(sys.stdin.readline())
     os.umask(0o077)
-    k = Kernel(cfg['db'], [Person(p) for p in MEMBERS])
+    k = Kernel(cfg['db'], [Person(p, ADULT) for p in MEMBERS])
     meter = Meter()
     supervisor_loads = json.loads
     if cfg.get('profile'):

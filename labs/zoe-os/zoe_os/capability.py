@@ -5,6 +5,9 @@
 * A GRANT is one person saying yes to one skill, for all or part of its manifest. No grant,
   no access (default deny). A child's grant needs a guardian's signature. A guest cannot
   grant. A grant can be revoked at any time and the next delivery already obeys it.
+* LEAST ACCESS BY DEFAULT: a person with no stated role, an unknown role, or an entry a loader cannot fully understand is
+  ``LEAST`` (the guest role): cannot grant, so cannot consent for anyone (themself included) and is acted for nowhere; cannot
+  read household or kernel events. Nothing defaults to adult: an adult is always stated.
 * The ENFORCER is the single decision point. The spine asks it before every publish,
   subscribe and delivery; the action dispatcher asks it before every action.
 """
@@ -18,6 +21,8 @@ from .events import KERNEL_ONLY, Event, Kind, Visibility
 from .spine import Decision
 
 ADULT, CHILD, GUEST = "adult", "child", "guest"
+ROLES = (ADULT, CHILD, GUEST)
+LEAST = GUEST            # the least access there is: what an unstated or unknown role gets
 
 
 class ConsentError(Exception):
@@ -26,9 +31,14 @@ class ConsentError(Exception):
 
 @dataclass(frozen=True)
 class Person:
+    """A principal. ``role`` must be stated to mean anything: unstated or unknown is ``LEAST``, never adult."""
     id: str
-    role: str = ADULT
+    role: str = LEAST
     guardians: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.role not in ROLES:
+            object.__setattr__(self, "role", LEAST)
 
 
 @dataclass(frozen=True)
@@ -88,6 +98,7 @@ class GrantStore:
         self._ids = itertools.count(1)
         self.on_change = on_change
         self.record_live = None
+        self.shadow = False     # set ONLY by the shadow daemon: it may record what production already did (``record_only``)
 
     def install(self, manifest: Manifest | Mapping) -> Manifest:
         m = manifest if isinstance(manifest, Manifest) else Manifest.from_dict(manifest)
@@ -95,14 +106,20 @@ class GrantStore:
         return m
 
     def grant(self, person: str, skill: str, *, reads: Mapping | None = None,
-              acts=None, guardian: str | None = None) -> Grant:
-        """One person's yes. ``reads`` / ``acts`` default to everything the manifest asks."""
+              acts=None, guardian: str | None = None, record_only: bool = False) -> Grant:
+        """One person's yes. ``reads`` / ``acts`` default to everything the manifest asks.
+
+        ``record_only``: NOT a yes. Only a store marked ``shadow`` (the shadow daemon, which records what production already did,
+        beside it, and decides nothing) may install one, for any member whatever their role, so a least-access member's adds are
+        still recorded for comparison. Anywhere else it is refused."""
         who, m = self.people.get(person), self.manifests.get(skill)
         if who is None or m is None:
             raise ConsentError("unknown person or skill")
-        if who.role == GUEST:
+        if record_only and not self.shadow:
+            raise ConsentError("only a shadow kernel records without consent")
+        if who.role == GUEST and not record_only:
             raise ConsentError("a guest cannot grant")
-        if who.role == CHILD:
+        if who.role == CHILD and not record_only:
             signer = self.people.get(guardian or "")
             if signer is None or signer.role != ADULT or signer.id not in who.guardians:
                 raise ConsentError("a child's grant needs one of their guardians")
@@ -115,7 +132,7 @@ class GrantStore:
             raise ConsentError("a grant cannot exceed the manifest")
         # Adults do not need a signer; do not persist an unchecked caller string.
         g = Grant(f"g{next(self._ids)}", person, skill, reads, acts,
-                  guardian if who.role == CHILD else None)
+                  guardian if who.role == CHILD and not record_only else None)
         self._grants.setdefault(skill, {})[person] = g
         if self.on_change:
             self.on_change("granted", g)
