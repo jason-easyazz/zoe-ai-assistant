@@ -1008,9 +1008,15 @@ def _do_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: Optio
 
 async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> int:
     """Never blocks the event loop: the job goes on the queue with ``put_nowait``; a full queue (or a worker that cannot start) PARKS
-    the forget durably (the blocking park runs in an executor) instead of waiting. What the caller is told stays honest: a confirmed
-    forget returns its count; with the flag ``shadow`` anything unconfirmed raises ``ShadowForgetUnavailable`` (parked or not); with
-    it off a parked forget returns 0 (deferred: replayed before the next job), and one that could not be parked raises."""
+    the forget durably (the blocking park runs in an executor) instead of waiting.
+
+    What the caller is told is the truth about the KERNEL'S RECORD, whatever the flag says now: a confirmed forget returns its count;
+    ANY forget the kernel did not confirm raises ``ShadowForgetUnavailable`` (parked as well, so it is replayed before the next job),
+    with the flag on OR off. A durable retry marker is not an erase: a shadow turned off with its kernel stopped still holds what it
+    recorded, so the member delete / entity / topic forget fails closed and the caller retries until the kernel confirms. The ONE
+    no-op is the flag off with no shadow state at all (nothing was ever recorded here). There is deliberately no offline removal:
+    zoe-data cannot prove the kernel process is stopped (deleting its store under a live writer is not a provable erase), so retiring
+    the shadow for good is an owner step (stop the unit, then remove the shadow directory: docs/knowledge/zoe-os-list-shadow.md)."""
     strict = mode() == "shadow"
     # the state check stats and lists a directory: in a thread, never on the event loop (a slow or hung disk would stall every turn)
     if not strict and not await asyncio.to_thread(shadow_state_exists):
@@ -1036,11 +1042,9 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     except Exception as park_exc:  # noqa: BLE001 - the retry could not be made durable: the erase must not say "done"
         logger.error("OS_SHADOW forget NOT confirmed and NOT parked code=%s", type(park_exc).__name__)
         raise ShadowForgetUnavailable(f"not parked ({type(park_exc).__name__})") from park_exc
-    if strict:                        # the flag on: an unconfirmed forget is never "forgotten", parked or not
-        logger.error("OS_SHADOW forget NOT confirmed, parked code=%s", code)
-        raise ShadowForgetUnavailable(f"{code} (parked)")
-    logger.warning("OS_SHADOW forget deferred (flag off) code=%s", code)
-    return 0
+    # never "forgotten" without the kernel's confirmation, flag on or off: the record may still be there
+    logger.error("OS_SHADOW forget NOT confirmed, parked code=%s", code)
+    raise ShadowForgetUnavailable(f"{code} (parked)")
 
 
 async def forget_user(user_id: str) -> int:

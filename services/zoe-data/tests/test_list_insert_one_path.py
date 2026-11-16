@@ -210,3 +210,34 @@ async def test_the_spoken_skybridge_add_shadows_the_list_it_landed_on(monkeypatc
     await call(db, "u1", "L1", "shopping", "Shopping", "milk", landed_name="Groceries")
     await call(db, "u1", "L1", "shopping", "Shopping", "bread")                     # no resolved name given: the spoken one
     assert seen == ["Groceries", "Shopping"]
+
+
+@pytest.mark.asyncio
+async def test_the_ordinary_spoken_skybridge_add_hands_on_the_resolved_lists_name(monkeypatch):
+    """The panel resolver ("add milk to the shopping list"): the household shopping list is called "Groceries"; the add is handed
+    to _add_spoken_items with landed_name "Groceries", so the shadow is told that list."""
+    import skybridge_service as sky
+
+    seen = {}
+
+    async def nothing(*a, **k):
+        return {}
+
+    async def find(intent, user_id, db, context):
+        return "L1", "shopping"
+
+    async def name_of(db, list_id):
+        return "Groceries"
+
+    async def add(db, user_id, list_id, list_type, list_name, item_text, landed_name=""):
+        seen.update(list_name=list_name, landed_name=landed_name)
+        return ["milk"], [], ["I1"], "I1"
+
+    monkeypatch.setattr(sky, "_ensure_default_lists", nothing)
+    monkeypatch.setattr(sky, "_find_or_create_list", find)
+    monkeypatch.setattr(sky, "_list_name_of", name_of)
+    monkeypatch.setattr(sky, "_add_spoken_items", add)
+    monkeypatch.setattr(sky, "_resolve_lists", nothing)
+    intent = sky.SkybridgeIntent(domain="lists", action="add_item", list_type="shopping", item_text="milk")
+    await sky._resolve_list_add_item(intent, "u1", object(), None)
+    assert seen == {"list_name": "Groceries", "landed_name": "Groceries"}

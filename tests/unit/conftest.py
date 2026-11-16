@@ -28,8 +28,11 @@ import pytest
 
 # A unit test that imports zoe-data modules (memory_service, the forget paths) reaches the Zoe OS shadow client; its state directory
 # defaults to the LIVE ~/.zoe/os-shadow. Pin it to an empty per-session directory and the switch off before anything is imported.
-os.environ.setdefault("ZOE_OS_SHADOW_DIR", tempfile.mkdtemp(prefix="zoe-unit-os-shadow-"))
+# UNCONDITIONAL (never setdefault): an inherited value - the live dir, or an empty one that falls back to it - must not survive.
+# shadow-pin-start
+os.environ["ZOE_OS_SHADOW_DIR"] = tempfile.mkdtemp(prefix="zoe-unit-os-shadow-")
 os.environ["ZOE_OS_LIST_SHADOW"] = "off"
+# shadow-pin-end
 
 _ZOE_DATA = Path(__file__).resolve().parents[2] / "services" / "zoe-data"
 

@@ -79,9 +79,12 @@ os.environ["ZOE_OMI_REPASS_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "omi-repass"
 # the forget paths call it unconditionally, so without this pin a test's member delete could reach the live kernel or write its park
 # file. Pinned before any import (the module starts its worker at import when the flag is on: pinned off here too); each test then gets
 # its own empty directory (``_os_shadow_private_state``) and a guard fails any test that leaves the client on a real state dir.
+# UNCONDITIONAL (never setdefault): an inherited value - the live dir, or an empty one that falls back to it - must not survive.
+# shadow-pin-start
 os.environ["ZOE_OS_SHADOW_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "os-shadow")
 os.environ["ZOE_OS_LIST_SHADOW"] = "off"
 os.environ["ZOE_OS_SHADOW_VERBS"] = "list_add"
+# shadow-pin-end
 # The known state paths that default under ``~/.zoe`` (2026-10-29: the suite wrote 6 test panel ids into the LIVE ``~/.zoe/warm-speaker.json``.
 # ``warm_speaker._path()`` refuses the live file only while ``PYTEST_CURRENT_TEST`` is set, and its ``warm-speaker-save`` thread outlives the
 # test that spawned it - the save ran with the guard off and landed on the real path). A session-wide pin makes the real path unreachable
