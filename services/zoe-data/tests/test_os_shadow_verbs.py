@@ -842,4 +842,7 @@ def test_with_the_shadow_off_an_alarm_create_computes_no_date(monkeypatch):
     # structural: the one production caller passes a lambda, never an eagerly computed value
     tree = ast.parse(open(alarms.__file__, encoding="utf-8").read())
     hooks = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "note_alarm_create"]
-    assert hooks and all(isinstance(kw.value, ast.Lambda) for n in hooks for kw in n.keywords if kw.arg == "dated")
+    # every call MUST pass ``dated`` (a missing keyword would make an all() over its keywords vacuously true) and it must be a lambda
+    dated = [[kw.value for kw in n.keywords if kw.arg == "dated"] for n in hooks]
+    assert hooks and all(len(d) == 1 for d in dated), "every note_alarm_create call passes dated="
+    assert all(isinstance(d[0], ast.Lambda) for d in dated), "dated= is a lambda (lazy), never an eagerly computed value"
