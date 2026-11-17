@@ -188,7 +188,7 @@ async def test_a_parked_id_that_belongs_to_another_member_is_left_alone(world, k
     """The negative case: A's park entry names B's turn (and an id that does not exist). The finish flags A's own turn only; B's is
     not touched, and the entry is dropped."""
     w = world
-    assert await turn_forget.finish_parked(w.a, {"messages": ["b-said", "no-such-id"]}) == 0
+    assert await turn_forget.finish_parked(w.a, {"messages": ["b-said", "no-such-id"]}) == {}      # nothing left (and nothing of B's touched)
     assert await w.meta("b-said") == {}
     os_shadow.park_erase(w.a, messages=["b-said", "a-said", "no-such-id"])
     add()                                                         # the kernel is healthy: the replay finishes at once

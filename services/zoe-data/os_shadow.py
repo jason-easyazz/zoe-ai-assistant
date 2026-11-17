@@ -1359,6 +1359,13 @@ PLAN_HOLD_S = 60.0
 #: member alone meanwhile (it would only do the same erases concurrently). It expires by itself: a forget that returned without
 #: ``ok`` (refused, raised) is then finished by the replay.
 _planning: dict = {}
+#: member -> how many parked ids the replay's last finish could NOT erase (they stay parked): ``parked_unfinished`` is their total
+_left: dict = {}
+
+
+def parked_unfinished() -> int:
+    """How many parked ids the replay tried and could not erase (still parked). 0 = nothing is stuck."""
+    return sum(_left.values())
 
 
 class Plan:
@@ -1382,13 +1389,15 @@ class Plan:
 
 async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:
     """Park the whole plan of a multi-step forget (see above) and return its handle. ``rows``: memory row ids. ``words``: an async
-    callable returning ``{"turns": [...], "messages": [...]}`` (``exact_words.words_plan``), CALLED ONLY when there is shadow state
+    callable returning ``{"turns": [...], "messages": [...]}`` (``exact_words.words_plan``); ``rows`` may be an async callable too. Both are CALLED ONLY when there is shadow state
     to park beside: with no state directory this is a memory read and nothing else (no thread, no disk, no lookup). RAISES
     ``ShadowForgetUnavailable`` when the plan cannot be made durable: the forget must not start (fail closed, like every park)."""
     if mode() != "shadow":
         if _no_state() or not await asyncio.to_thread(_state_probe):
             return Plan(user_id, None)
     try:
+        if callable(rows):            # an async lookup of more row ids (a curated row's earlier revisions): only when parking
+            rows = await rows()
         found = (await words()) if words is not None else {"turns": (), "messages": ()}
         entry = {"rows": [str(i) for i in rows if i], "turns": [str(i) for i in found["turns"] if i],
                  "messages": [str(i) for i in found["messages"] if i]}
@@ -1474,8 +1483,14 @@ async def _finish_erases() -> int:
             try:
                 import turn_forget
 
-                await turn_forget.finish_parked(member, entry)
-                await asyncio.to_thread(erases_done, member, entry)
+                left = await turn_forget.finish_parked(member, entry)
+                kept = {k: set(left[k]) if k in left else set() for k in ERASE_KINDS}
+                await asyncio.to_thread(erases_done, member, {k: [i for i in entry[k] if i not in kept[k]] for k in ERASE_KINDS})
+                _left[member] = sum(len(kept[k]) for k in ERASE_KINDS)
+                if _left[member]:     # an id the replay could not erase is NEVER cleared as done: it stays parked, and is counted
+                    logger.error("OS_SHADOW parked erase NOT finished, kept code=left")
+                    continue
+                del _left[member]
                 done += 1
                 logger.info("OS_SHADOW parked erase finished")
             except Exception as exc:  # noqa: BLE001
@@ -1708,6 +1723,7 @@ def _reset_for_tests() -> None:
     _pending_members = None           # a restart: the next worker reads the park file before its first job
     _erase_members, _loop, _finishing = None, None, False
     _planning.clear()
+    _left.clear()
     _state_stop.set()                 # the poller ends; nothing is established, so the next forget probes
     with _state_lock:
         _state_known, _state_poller = ("", True, 0.0), None

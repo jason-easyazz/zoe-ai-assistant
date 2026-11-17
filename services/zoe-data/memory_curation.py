@@ -455,7 +455,10 @@ async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, s
         rejected = True
     import os_shadow
     await os_shadow.forget_for_erase(pol.member.user_id)
-    plan = await os_shadow.plan_erase(pol.member.user_id, rows=[old.id])      # PARK FIRST: the row is durable before it is hidden
+    async def _plan_rows() -> list:      # the row AND its earlier (superseded) revisions: every id the erase below will take
+        return [old.id, *await _earlier_revisions(pol, old, svc)]
+
+    plan = await os_shadow.plan_erase(pol.member.user_id, rows=_plan_rows)    # PARK FIRST: durable before the row is hidden
     cat = str((old.metadata or dict()).get("curated_category") or "")
     await _audited(db, curator.user_id, pol.member.user_id, "forget", cat, old.id)
     ok = rejected or await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER,

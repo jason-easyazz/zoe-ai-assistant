@@ -430,40 +430,45 @@ async def clear_unerased(user_id: str, ids: Optional[list] = None) -> None:
         logger.warning("TURN_FORGET user=%s parked erase not cleared (%s)", user_id, type(exc).__name__)
 
 
-async def finish_parked(user_id: str, entry: dict) -> int:
+async def finish_parked(user_id: str, entry: dict) -> dict:
     """Finish a parked erase once the kernel has confirmed (``os_shadow._finish_erases``). ``entry``: ``rows`` / ``turns`` /
-    ``messages`` ids. The parked index turns and transcript rows go by id (``exact_words.finish_parked``). For each parked row that
-    is still HIDDEN (rejected / archived - an approved row is never touched: nothing hid it, so its forget never began), the
-    member's verbatim words behind it are erased first (the recipe of the memories-screen forget: the row's own turn id and source
-    quote), then the rows. RAISES on any failure: the entry stays parked, and because the words go before the rows a repeat still
-    finds them. Idempotent. Returns rows erased."""
+    ``messages`` ids. Returns what is LEFT, in the same shape (``{}`` = everything is done): the caller clears only the rest.
+
+    EVERY parked id is erased, whatever its row's status (approved, superseded, rejected, archived, anything): a parked id was
+    chosen by a forget - a curation forget parks the current row AND its superseded revisions - and a status filter belongs to
+    DISCOVERY, never to the replay of an explicit plan. The parked index turns and transcript rows go by id
+    (``exact_words.finish_parked``); for each parked row that still exists, the member's verbatim words behind it are erased first
+    (the row's own turn id and source quote), then the rows.
+
+    The ONLY id treated as done without being erased here is a row that no longer exists. A row that is still there after the erase
+    (the eraser would not take it: not this member's, physical erase switched off, a store that kept it) is LEFT, never cleared.
+    RAISES on a store failure: nothing is cleared, and because the words go before the rows a repeat still finds them. Idempotent."""
     import exact_words
 
     await exact_words.finish_parked(user_id, entry.get("turns") or (), entry.get("messages") or ())
-    row_ids = list(entry.get("rows") or ())
+    row_ids = list(dict.fromkeys(str(i) for i in entry.get("rows") or () if i))
     if not row_ids:
-        return 0
+        return {}
     import memory_space
     import provenance_answers as pa
     from memory_service import get_memory_service, physical_erase_enabled
 
     svc = get_memory_service()
-    hidden = []
+    present = []
     for rid in row_ids:
         ref = await svc.get(rid)
-        if ref is None or not pa._owns(ref.metadata or {}, user_id):
-            continue
-        if str((ref.metadata or {}).get("status") or "approved").lower() not in ("rejected", "archived"):
-            continue
-        await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
-        hidden.append(rid)
-    n = 0
-    if hidden and physical_erase_enabled():
-        n = int((await svc.erase_rows(user_id, hidden, actor=user_id,
-                                      reason="forgotten by request (finished after the shadow confirmed)")).get("rows_removed") or 0)
-    with _LOCK:
-        _unerased.pop(user_id, None)
-    return n
+        if ref is None:
+            continue                  # truly gone already: the one legitimate "nothing to do"
+        present.append(rid)
+        if pa._owns(ref.metadata or {}, user_id):
+            await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
+    if present and physical_erase_enabled():
+        await svc.erase_rows(user_id, present, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)")
+    left = [rid for rid in present if await svc.get(rid) is not None]      # read back: an id is done only when its row is gone
+    if not left:
+        with _LOCK:
+            _unerased.pop(user_id, None)
+    return {"rows": left} if left else {}
 
 
 def reset() -> None:  # tests

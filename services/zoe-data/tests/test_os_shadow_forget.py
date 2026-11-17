@@ -1178,6 +1178,7 @@ def callers(kernel, monkeypatch):
             self.reviews: list = []
             self.before_erase = None        # called as the eraser is entered (the late case: the kernel stops HERE)
             self.after_erase = None         # called once the rows are gone (the kernel stops before the WORDS step)
+            self.stuck: set = set()         # ids the eraser quietly does not take (it reports success all the same)
             self.ordinary_failure = False   # the eraser fails for a reason that is not the shadow
 
         async def get(self, rid):
@@ -1201,7 +1202,7 @@ def callers(kernel, monkeypatch):
                 raise _StoreError("erase_rows failed: Zoe OS shadow erasure failed") from exc
             if self.ordinary_failure:
                 raise _StoreError("erase_rows failed: disk")
-            n = sum(self.rows.pop(rid, None) is not None for rid in ids)
+            n = sum(self.rows.pop(rid, None) is not None for rid in ids if rid not in self.stuck)
             if self.after_erase:
                 self.after_erase()
             return {"rows_removed": n}
@@ -1752,7 +1753,7 @@ async def test_a_forget_the_shadow_refused_is_finished_by_the_replay_after_a_res
     assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
     assert st.svc.rows == {} and (MEMBER, "t1") not in st.backend.rows
     assert not (kernel.state / "pending-forgets.json").exists()
-    assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1"], "turns": ["t1"]}) == 0     # replayed twice is harmless
+    assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1"], "turns": ["t1"]}) == {}    # replayed twice is harmless
 
 
 @pytest.mark.asyncio
@@ -1778,14 +1779,19 @@ async def test_a_parked_erase_whose_finish_fails_stays_parked_and_is_never_run_b
 
 
 @pytest.mark.asyncio
-async def test_a_parked_erase_never_touches_an_approved_row_and_a_member_delete_drops_the_entry(kernel, callers, env, monkeypatch):  # noqa: F811
+async def test_a_parked_id_is_erased_whatever_its_status_and_a_missing_row_is_the_only_thing_done_without_an_erase(kernel, callers):
     import turn_forget
 
-    monkeypatch.setattr(os_shadow, "_kick_erases", lambda: None)     # only the delete's own drop is under test (not the replay's finish)
     st = callers
     await st.said()
-    assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1", "no-such-row"]}) == 0      # r1 is approved: a parked id alone erases nothing
-    assert st.svc.rows["r1"].metadata["status"] == "approved" and (MEMBER, "t1") in st.backend.rows
+    # a parked id was chosen by a forget: the replay erases it whatever its status (r1 is still APPROVED here), with the words behind it
+    assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1", "no-such-row"]}) == {}
+    assert st.svc.rows == {} and (MEMBER, "t1") not in st.backend.rows
+
+
+@pytest.mark.asyncio
+async def test_a_member_delete_drops_the_members_parked_entry(kernel, callers, env, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(os_shadow, "_kick_erases", lambda: None)     # only the delete's own drop is under test (not the replay's finish)
     os_shadow.park_erase(MEMBER, rows=["r1"], turns=["t1"])
     os_shadow.park_erase("member-b", rows=["r9"])
     svc, _col = env
@@ -1826,9 +1832,9 @@ async def test_a_words_erase_the_shadow_refused_is_parked_by_turn_id_and_finishe
 
 
 @pytest.mark.asyncio
-async def test_a_refused_unwrite_hid_nothing_so_the_replay_erases_nothing_and_the_retry_completes(kernel, callers):
-    """The day-review unwrite hard-erases approved rows with no hiding step: when the shadow refuses, the row is exactly as it was
-    (its caller keeps the candidates and retries). The parked id is dropped by the replay WITHOUT erasing an approved row."""
+async def test_a_refused_unwrite_is_finished_by_the_replay_though_its_row_was_never_hidden(kernel, callers):
+    """The day-review unwrite hard-erases approved rows with no hiding step. When the shadow refuses, the eraser parks the id; the
+    replay erases it - a parked id is erased whatever its status - and the caller's retry then finds nothing left to do."""
     st = callers
     await st.said()
     st.svc.before_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
@@ -1838,8 +1844,9 @@ async def test_a_refused_unwrite_hid_nothing_so_the_replay_erases_nothing_and_th
     kernel.forget_mode, st.svc.before_erase = "ok", None
     add()
     assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
-    assert st.svc.rows["r1"].metadata["status"] == "approved" and (MEMBER, "t1") in st.backend.rows
-    assert (await st.run("unwrite"))[0] and st.svc.rows == {}
+    assert st.svc.rows == {}
+    import omi_review_apply
+    assert await omi_review_apply.unwrite(MEMBER, [{"kind": "person_fact", "written_ref": "memory:r1"}]) == 0      # the retry: a no-op
 
 
 @pytest.mark.asyncio
@@ -2066,3 +2073,44 @@ async def test_a_forget_that_dies_between_two_steps_is_finished_by_the_replay_fr
     add()
     assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
     assert (MEMBER, "t1") not in st.backend.rows
+
+
+# ---- the replay erases EVERY parked id, whatever its status; one it cannot erase stays parked ---------------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stuck", [(), ("r0b",)], ids=["all-erasable", "one-id-cannot-be-erased"])
+async def test_a_curation_forget_the_kernel_refused_is_replayed_for_the_row_and_every_superseded_revision(kernel, callers, monkeypatch, stuck):
+    """The reviewer's case. A curator's forget erases the current row AND its superseded revision chain (the earlier wording). The
+    kernel fails at that erase: all three ids are parked. Restart, the kernel recovers, any job: the replay erases ALL three - a
+    superseded row is not "still hidden", it was chosen by the forget - and clears the park. The variant: the eraser quietly does
+    not take one id; the two it took leave the park, the third STAYS parked and is counted, and is finished once it can be."""
+    from types import SimpleNamespace
+
+    import memory_curation as mc
+
+    st = callers
+    await st.said()
+    for rid, wording in (("r0a", "The synthetic garden grew thyme"), ("r0b", "The synthetic garden grew sage")):
+        st.svc.rows[rid] = SimpleNamespace(id=rid, text=wording, metadata={"user_id": MEMBER, "status": "superseded"})
+
+    async def chain(*args):
+        return ["r0a", "r0b"]
+
+    monkeypatch.setattr(mc, "_earlier_revisions", chain)
+    st.svc.before_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
+    assert not (await st.run("curation"))[0]
+    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1", "r0a", "r0b"]}} and len(st.svc.rows) == 3
+    assert st.svc.rows["r0a"].metadata["status"] == "superseded"                    # never hidden: exactly what the old replay skipped
+    _restart(kernel)
+    kernel.forget_mode, st.svc.before_erase, st.svc.stuck = "ok", None, set(stuck)
+    add()                                                                           # any job: nobody asks again
+    if not stuck:
+        assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+        assert st.svc.rows == {} and os_shadow.parked_unfinished() == 0
+        return
+    assert await _until(lambda: sorted(st.svc.rows) == ["r0b"] and os_shadow.parked_unfinished() == 1)
+    assert await _until(lambda: _parked_rows(kernel) == {MEMBER: {"rows": ["r0b"]}})  # kept: never cleared as done, and counted
+    assert st.svc.rows["r0b"].text == "The synthetic garden grew sage"
+    st.svc.stuck = set()
+    add()
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert st.svc.rows == {} and os_shadow.parked_unfinished() == 0
