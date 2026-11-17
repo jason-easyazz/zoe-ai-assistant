@@ -168,6 +168,7 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
 
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
 ADDRESS_NUMBER_BEFORE = 6  # a house number this many words before a street word makes an address
+ADDRESS_NUMBER_AFTER = 3  # ...or this many after it ("Maple Street number 12", "Maple St no. 12")
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
 
@@ -326,8 +327,9 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     rx = _glue_rx(singles)
     drop: dict[int, str] = {}
     # An address in any shape, read on the words rather than the characters: a street word with a house number up to
-    # ADDRESS_NUMBER_BEFORE words before it ("12 Maple Tree Green Valley Street") or right after it ("Maple Street 12").
-    # The number, the street word and everything between go; with the number after, so do the three words before.
+    # ADDRESS_NUMBER_BEFORE words before it ("12 Maple Tree Green Valley Street") or ADDRESS_NUMBER_AFTER after it
+    # ("Maple Street 12", "Maple Street number 12"). The number, the street word and everything between go; with the
+    # number after, so do the three words before.
     streets = {fold(w) for w in lex["street_types"]}
     house = re.compile(r"\d{1,5}[a-z]?")
     for si, tok in enumerate(tokens):
@@ -338,8 +340,10 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             if house.fullmatch(tokens[k]):
                 span.update(range(k, si + 1))
                 break
-        if si + 1 < len(tokens) and house.fullmatch(tokens[si + 1]):
-            span.update(range(max(0, si - 3), si + 2))
+        for k in range(si + 1, min(len(tokens), si + 1 + ADDRESS_NUMBER_AFTER)):
+            if house.fullmatch(tokens[k]):
+                span.update(range(max(0, si - 3), k + 1))
+                break
         for k in span:
             if tokens[k] not in lex["question_words"]:
                 drop.setdefault(k, "address")
@@ -354,7 +358,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         if tok and (tok in singles or plain in singles or bare[i] in singles or parts & singles or _glued(tok, singles, rx)
                     or _glued(plain, singles, rx) or _glued(bare[i], singles, rx)):
             drop[i] = "private"
-        elif tok in glue or plain in glue or bare[i] in glue or any(g in tok for g in glue_inside):
+        elif {tok, plain, bare[i], _run_word(tok), _run_word(plain)} & glue or any(g in tok for g in glue_inside):
             drop[i] = "memory"
     for phrase in phrases:
         n = len(phrase)
@@ -478,7 +482,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
            for view in views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if "@" in query or not query or any(g in fold(view) for view in views for g in glue_inside) \
-            or any(fold(w) in glue for view in views for w in re.split(r"[\W_]+", view) if w):
+            or any({fold(w), _run_word(fold(w))} & glue for view in views for w in re.split(r"[\W_]+", view) if w):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)
 
