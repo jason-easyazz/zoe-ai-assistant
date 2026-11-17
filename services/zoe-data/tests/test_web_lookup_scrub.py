@@ -426,3 +426,18 @@ def test_a_phone_number_with_unicode_hyphens_is_stripped(raw):
 def test_a_comma_after_the_house_number_is_still_an_address():
     r = scrub_query("pizza delivery 12, Maple Street tonight")
     assert "maple" not in r.query and "12" not in r.query.split(), r
+
+
+_SEPARATORS = [" ", "-", ".", ",", ", ", "_", "/", "\u2011", "\u2013", "\u2212", " - ", "\u00a0", "(", ")", "·", "|", "~", "*", ":", ";"]
+
+
+@pytest.mark.parametrize("sep", _SEPARATORS)
+def test_a_phone_number_is_stripped_whatever_separates_its_groups(sep):
+    r = scrub_query(f"pizza delivery call 0491{sep}570{sep}006 tonight")
+    assert not ({"0491", "570", "006"} & set(re.split(r"[\W_]+", r.query))), (sep, r)
+
+
+@pytest.mark.parametrize("sep", [" ", ".", "-", "_", ", ", ",", "\u2013", " . "])
+def test_an_address_is_stripped_whatever_separates_its_parts(sep):
+    r = scrub_query(f"pizza delivery 12{sep}Maple{sep}Street tonight")
+    assert "maple" not in r.query, (sep, r)
