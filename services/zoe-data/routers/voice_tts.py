@@ -176,9 +176,10 @@ async def _label_member_clip(member: str) -> None:
 
     _ew.turn_identify(member)
     clip = _vc.current_clip()
-    if not clip:
-        # no clip saved this turn (the usual case, and always with the clip flags off): nothing to label or drop, so the voice
-        # path pays neither watermark read nor a worker dispatch - ``record`` was a no-op here before the guard too
+    if not clip or not _vc.verdict_enabled():
+        # no clip saved this turn, or the verdict flag is off (a saved clip then stays UNLABELLED: not attributable, kept on this
+        # box and expired on a shipped unit - owner decision 2026-11-17): nothing to label or drop, so the voice path pays neither
+        # watermark read nor a worker dispatch - ``record`` was a no-op here before the guard too
         return
     refused = await _ew.turn_write_refused(None, "voice_clip", member)
     if not refused:

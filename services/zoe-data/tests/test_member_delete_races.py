@@ -524,7 +524,8 @@ def test_a_clip_whose_wav_cannot_be_dropped_keeps_its_owner_label_and_the_retry_
     assert voice_clips.erase_member(A) == 1 and not wav.exists() and not side.exists(), "the retry removes both"
 
 
-def test_with_no_clip_the_voice_turn_pays_no_watermark_read_or_worker_dispatch(monkeypatch):
+@pytest.mark.parametrize("clip, verdict", [(None, "1"), ("/tmp/saved-clip.wav", "0")])
+def test_with_no_clip_the_voice_turn_pays_no_watermark_read_or_worker_dispatch(monkeypatch, clip, verdict):
     """The clip guard costs the voice path nothing when the turn saved no clip (the usual case, and always with the clip flags
     off): the speaker is identified for the delete, and neither the watermark nor a worker thread is touched."""
     import erase_watermark
@@ -533,7 +534,8 @@ def test_with_no_clip_the_voice_turn_pays_no_watermark_read_or_worker_dispatch(m
 
     identified = []
     monkeypatch.setattr(erase_watermark, "turn_identify", identified.append)
-    monkeypatch.setattr(voice_clips, "current_clip", lambda: None)
+    monkeypatch.setattr(voice_clips, "current_clip", lambda: clip)
+    monkeypatch.setenv("ZOE_VOICE_CLIP_VERDICT", verdict)   # a saved clip with the verdict flag off is unlabelled: nothing to do
 
     async def no_read(*_a, **_k):
         raise AssertionError("the watermark was read with no clip to label")
