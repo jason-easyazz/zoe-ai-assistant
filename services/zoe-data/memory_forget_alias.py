@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 import forget_match as fm
-from turn_forget import LIVE_FORGET_STATUSES
+from turn_forget import live_rows
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ SESSION = "forget-alias"        # not tied to a conversation: the questions surf
 MAX_QUESTIONS = 3               # per forget; the rest are counted as ``over_cap`` in the reject ledger, not asked
 MAX_RUN = 3                     # a split spelling is at most this many adjacent tokens
 
-STATUSES = (*LIVE_FORGET_STATUSES, "superseded", "archived", "rejected")
+EXTRA_STATUSES = ("superseded", "archived", "rejected")
 ASKED_TTL_S = 600.0             # how long an asked-aloud question stays bindable to a bare yes / no
 INSTRUCTION = " Say yes to forget it too, or no to leave it."
 
@@ -180,23 +180,14 @@ def find_aliases(name: str, texts: "Iterable[tuple[str, str]]") -> "list[Alias]"
 async def collect_texts(user_id: str, svc: Any) -> "list[tuple[str, str]]":
     """The owner's text: every row in every status (the forget sweep's ownership guard: another user's row is never read) + live people rows."""
     out: "list[tuple[str, str]]" = []
-    for status in STATUSES:
-        offset = 0
-        while True:
-            try:
-                page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
-            except Exception as exc:  # noqa: BLE001 - a status that cannot be listed is skipped, the rest are scanned
-                logger.info("forget_alias: could not list %s rows (%s)", status, type(exc).__name__)
-                break
-            if not page:
-                break
-            for r in page:
-                md = getattr(r, "metadata", {}) or {}
-                if md.get("user_id") == user_id or md.get("wing") == user_id:
-                    out.append(("memory", getattr(r, "text", "") or ""))
-            if len(page) < 1000:
-                break
-            offset += len(page)
+    try:
+        rows = await live_rows(svc, user_id, extra_statuses=EXTRA_STATUSES)
+        for r in rows:
+            md = getattr(r, "metadata", {}) or {}
+            if md.get("user_id") == user_id or md.get("wing") == user_id:
+                out.append(("memory", getattr(r, "text", "") or ""))
+    except Exception as exc:  # noqa: BLE001 - alias suggestions are best effort, never a forget confirmation
+        logger.info("forget_alias: could not list rows (%s)", type(exc).__name__)
     try:
         from db_pool import get_db_ctx  # type: ignore[import]
 

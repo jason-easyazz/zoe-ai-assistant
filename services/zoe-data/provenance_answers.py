@@ -1458,10 +1458,7 @@ async def _target_plan(user_id: str, exp: "mp.Explained", ref: Any = None, *extr
 
 async def _live_forget_rows(svc: Any, user_id: str) -> list:
     """Every live status: retired / erased rows (superseded, archived, rejected) need no new forget."""
-    rows = []
-    for status in turn_forget.LIVE_FORGET_STATUSES:
-        rows.extend(await asyncio.wait_for(svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT), READ_BUDGET_S))
-    return list({r.id: r for r in rows}.values())
+    return await turn_forget.live_rows(svc, user_id, read_budget_s=READ_BUDGET_S)
 
 
 async def _bound_rows(svc: Any, user_id: str, mids: tuple, *, skip: Any = ()) -> list:

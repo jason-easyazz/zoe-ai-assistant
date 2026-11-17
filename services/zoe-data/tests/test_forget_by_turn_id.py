@@ -1502,3 +1502,56 @@ def test_topic_forget_expands_saved_turns_to_facts_without_topic_words(world, st
     assert run(svc.get(paraphrase.id)) is None
     assert chat.off(mid)
     assert {other.text, nonturn.text} <= _approved(svc)
+
+
+@pytest.mark.parametrize("path", ["forget_that", "forget_it"])
+def test_forget_reaches_an_older_page_of_the_turns_facts(world, monkeypatch, path):
+    svc, chat = world
+    said, mid = "My zindle florns beside the vesk", "m-paged-zindle"
+    chat.rows[mid] = [said, {"user_id": UID}]
+    turn_forget.note_user_turn(UID, said, mid=mid)
+    target = run(svc.ingest("User draves a quarn", user_id=UID, source="chat_regex", status="approved",
+                            metadata={"source_turn": mid}))
+    other = run(svc.ingest("User vesks a plim", user_id=UID, source="chat_regex", status="approved",
+                           metadata={"source_turn": "m-paged-other"}))
+    assert target and other
+    real = svc.list_by_status
+
+    async def paged(*, user_id, status, limit=100, offset=0):
+        rows = await real(user_id=user_id, status=status, limit=10000)
+        rows.sort(key=lambda r: r.id == target.id)   # the target is older than the first page
+        # A full first page, with duplicates, exercises both offset paging and id de-duplication.
+        rows = ([other] * 1000 + [target]) if status == "approved" else rows
+        return rows[offset:offset + limit]
+    monkeypatch.setattr(svc, "list_by_status", paged)
+    if path == "forget_that":
+        reply = run(intent_router._execute_forget_last(UID))
+    else:
+        exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=said, quote=said,
+                           turn_id="xw-paged@m-paged-zindle")
+        reply = run(pa._forget_turn(UID, exp, svc=svc))
+    assert reply.startswith("Done"), reply
+    assert run(svc.get(target.id)).metadata["status"] == "rejected"
+    assert run(svc.get(other.id)).metadata["status"] == "approved"
+    assert chat.off(mid)
+
+
+def test_topic_forget_after_restart_erases_a_legacy_excerpt_observation(world):
+    svc, chat = world
+    said, mid = "My zindle florns beside the vesk", "m-legacy-zindle"
+    chat.rows[mid] = [said, {"user_id": UID}]
+    ref = run(svc.ingest("User's zindle florns beside the vesk", user_id=UID, source="chat_regex",
+                         status="approved", source_excerpt=said))
+    assert ref
+    md = svc._collection().rows[ref.id][1]
+    md.pop("source_kind", None)
+    md.pop("source_turn", None)
+    run(night_store.get_backend().put_observation(night_store.obs_row(
+        id="o-legacy-zindle", user_id=UID, turn_id="", quote=said, day="2026-10-08", said_at=time.time())))
+    turn_forget.reset()
+    assert not xw.get_backend().rows
+    res = run(forget_topic.forget(svc, UID, "zindle"))
+    assert res.forgotten and not (res.store_down or res.failed), res
+    assert ref.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    assert chat.off(mid)
+    assert not run(night_store.get_backend().observations(UID))
