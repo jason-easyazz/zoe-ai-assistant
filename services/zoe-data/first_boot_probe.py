@@ -13,7 +13,8 @@ Nothing calls this module yet (wiring notes: docs/architecture/first-boot.md).
 from __future__ import annotations
 
 import logging
-import os
+
+from typed_env import env_str
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,12 +55,12 @@ async def _count(db, sql: str, params: tuple = ()) -> int:
     return int(rows[0][0] or 0) if rows else 0
 
 
-async def _safe(name: str, coro):
+async def _safe(step: str, coro):
     """Run one read; ``None`` (unknown) when it fails, never ``False``."""
     try:
         return await coro
     except Exception as exc:  # noqa: BLE001 - unknown, not "no"
-        logger.warning("first_boot_probe: %s read failed: %s", name, type(exc).__name__)
+        logger.warning("first_boot_probe: %s read failed: %s", step, type(exc).__name__)
         return None
 
 
@@ -110,7 +111,7 @@ async def _time_and_place() -> bool:
 
     import household_locale
 
-    zone = (os.environ.get("ZOE_TIMEZONE") or "").strip()
+    zone = env_str("ZOE_TIMEZONE", "").strip()   # EXPLICIT only (as household_locale): the code default is not "set up"
     if not zone:
         return False                                      # the code default zone is an assumption, not a household's answer
     ZoneInfo(zone)                                        # an invalid zone raises: unknown, never "set"
@@ -176,7 +177,7 @@ async def _deferred(db, owner: str, now: datetime) -> frozenset:
 
 
 def _backup_configured(config_dir: Optional[str] = None) -> bool:
-    base = config_dir or os.environ.get("ZOE_OFFBOX_CONFIG_DIR") or str(Path.home() / ".config" / "zoe-backup")
+    base = config_dir or env_str("ZOE_OFFBOX_CONFIG_DIR", "") or str(Path.home() / ".config" / "zoe-backup")
     return (Path(base) / "offbox.env").is_file()
 
 
