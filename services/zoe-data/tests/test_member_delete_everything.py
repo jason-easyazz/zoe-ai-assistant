@@ -871,6 +871,9 @@ def test_a_shared_session_the_member_owned_names_them_nowhere_after_the_delete(e
         await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sh-a', 's-shared', 'rs-a', '[\"a reply to A\"]')")
         await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sh-b', 's-shared', 'rs-b', '[\"a reply to B\"]')")
         await x("INSERT INTO chat_ag_ui_runs VALUES ('run-b-a', 's-b', 'rs-a', '[\"a reply to A at B''s panel\"]')")
+        # a run a GUEST identity started proves no member started it: it goes too
+        await x("INSERT INTO openclaw_run_state VALUES ('rs-g', 'voice-guest', 'guest asks')")
+        await x("INSERT INTO chat_ag_ui_runs VALUES ('run-sh-g', 's-shared', 'rs-g', '[\"a reply drawn from A\"]')")
         await store.commit()
     asyncio.run(seed())
     assert _names(store, A), "control: A is named before the delete"

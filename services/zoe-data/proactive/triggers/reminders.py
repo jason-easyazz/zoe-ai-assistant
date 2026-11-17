@@ -299,7 +299,9 @@ async def schedule_reminder(
     try:
         erased = await erase_watermark.send_refused(user_id, began, "schedule")
     except erase_watermark.Unavailable:
-        erased = False                       # the fire-time check reads the mark again, and refuses on an unreadable one
+        # FAIL CLOSED: an unreadable mark cannot prove the member was not deleted while this call paused, so the row is removed
+        # and no job (which would carry the message) is registered. A live member's reminder is re-scheduled by the next scan.
+        erased = True
     if erased:
         async with _get_compat_db() as db:
             await db.execute("DELETE FROM proactive_scheduled WHERE id = ?", (row_id,))

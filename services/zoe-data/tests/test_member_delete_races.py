@@ -593,3 +593,53 @@ def test_an_unreadable_erase_mark_refuses_a_turns_write(monkeypatch):
             erase_watermark.turn_unbind(ctx)
             erase_watermark.turn_close(token)
     assert asyncio.run(go()) is True
+
+
+
+def test_a_reminder_scheduled_when_the_erase_mark_is_unreadable_keeps_no_row_and_no_job(monkeypatch, tmp_path):
+    """FAIL CLOSED: the post-insert erase check cannot be read, so the row is removed and no job carrying the message is registered."""
+    import aiosqlite
+    import contextlib
+
+    import erase_watermark
+    from proactive.triggers import reminders
+
+    db_path = str(tmp_path / "sched.db")
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        db = await aiosqlite.connect(db_path)
+        try:
+            yield db
+        finally:
+            await db.close()
+
+    async def setup():
+        async with ctx() as db:
+            await db.execute("CREATE TABLE proactive_scheduled (id TEXT PRIMARY KEY, user_id TEXT, message TEXT, trigger_type TEXT, "
+                             "send_at TEXT, apscheduler_job_id TEXT, fired INTEGER, item_id TEXT, schedule_generation INTEGER, "
+                             "created_at TEXT)")
+            await db.commit()
+    asyncio.run(setup())
+    monkeypatch.setattr(reminders, "_get_compat_db", ctx)
+
+    async def no_generation(_item):
+        return 0
+
+    async def unreadable(*_a, **_k):
+        raise erase_watermark.Unavailable("store down")
+
+    registered = []
+    monkeypatch.setattr(reminders, "_reminder_generation", no_generation)
+    monkeypatch.setattr(erase_watermark, "send_refused", unreadable)
+    monkeypatch.setattr(reminders, "register_job", lambda **kw: registered.append(kw))
+
+    async def go():
+        from datetime import datetime, timedelta, timezone
+
+        rid = await reminders.schedule_reminder(user_id=A, message="private words", send_at=datetime.now(timezone.utc) + timedelta(hours=1))
+        async with ctx() as db:
+            cur = await db.execute("SELECT COUNT(*) FROM proactive_scheduled")
+            return rid, (await cur.fetchone())[0]
+    assert asyncio.run(go()) == ("", 0)
+    assert registered == []

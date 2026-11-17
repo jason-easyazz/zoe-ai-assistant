@@ -547,8 +547,9 @@ async def _existing_users(r: _Run, ids: list):
 async def _shared_runs(r: _Run, user_id: str, sessions: list) -> None:
     """The AG-UI runs of every surviving session the member owned or spoke in. A run records its session and its run id, not a speaker;
     the run's starter is the ``openclaw_run_state`` row of the same id (``chat._record_run_state``: written at the run's start with the
-    requesting member). A run is KEPT only when that row names ANOTHER member; a run the member started, or one nobody can be shown to
-    have started, goes (its events hold the reply text, derived from the turns it answered). The member's own ``openclaw_run_state``
+    requesting member). A run is KEPT only when that row names ANOTHER household MEMBER (a user row that is not a guest / kiosk
+    identity); a run the member started, a guest's, or one nobody can be shown to have started goes (its events hold the reply text,
+    derived from the turns it answered). The member's own ``openclaw_run_state``
     rows go afterwards with the ``OWNED`` rows."""
     for at in range(0, len(sessions), _CHUNK):
         part = sessions[at:at + _CHUNK]
@@ -561,7 +562,12 @@ async def _shared_runs(r: _Run, user_id: str, sessions: list) -> None:
             chunk = run_ids[j:j + _CHUNK]
             for x in await r.rows(f"SELECT id, user_id FROM openclaw_run_state WHERE id IN ({', '.join('?' * len(chunk))})", tuple(chunk)):
                 starters[str(x[0])] = str(x[1] or "").strip()
-        gone = [str(x[0]) for x in runs if starters.get(str(x[1] or ""), "") in ("", user_id)]
+        # KEPT only when another HOUSEHOLD MEMBER can be shown to have started it: a starter that is the member, empty, a guest /
+        # kiosk identity, or no longer a user row proves nothing, and the run's reply text may derive from the member's turns
+        others = sorted({s for s in starters.values() if s and s != user_id and not _is_guest(s)})
+        users = await _existing_users(r, others)
+        members = {s for s in others if users is None or s in users}
+        gone = [str(x[0]) for x in runs if starters.get(str(x[1] or ""), "") not in members]
         await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE id", gone)
 
 
