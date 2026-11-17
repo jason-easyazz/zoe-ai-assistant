@@ -2022,6 +2022,13 @@ async def scrub_pii_async(text: str, *, contact: bool = True) -> tuple[str, Opti
     return await asyncio.to_thread(scrub_pii, text, contact=contact)
 
 
+async def scrub_pii_matchable_async(text: str) -> tuple[str, Optional[str]]:
+    """``scrub_pii_matchable`` for an async caller: inline up to ``SCRUB_INLINE_MAX`` characters, else off the loop."""
+    if len(text or "") <= SCRUB_INLINE_MAX:
+        return scrub_pii_matchable(text)
+    return await asyncio.to_thread(scrub_pii_matchable, text)
+
+
 def _scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     """Return (possibly-redacted-text, reject_reason_or_None). Pure, compiled regexes only, never logs.
 
@@ -2116,6 +2123,10 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     raw = (text or "").strip() if isinstance(text, str) else ""
     if not raw:
         return None
+    # an excerpt is short: only its first SCRUB_INLINE_MAX characters are ever scrubbed, so no excerpt path (``_build_metadata``,
+    # ``retire_with_quote``) can hold the event loop on a huge input. The cut is far past ``limit`` (+ a card's length), so a
+    # card sliced by it lies wholly beyond what is kept
+    raw = raw[:max(SCRUB_INLINE_MAX, limit + 64)]
     scrubbed, reject = scrub_pii_matchable(raw)
     if reject:
         return None

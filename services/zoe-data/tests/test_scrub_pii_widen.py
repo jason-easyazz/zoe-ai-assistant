@@ -1071,16 +1071,88 @@ def test_a_large_text_is_scrubbed_off_the_event_loop_and_a_short_one_inline(monk
     assert during >= 3, during                                        # the loop kept running while the big text was scrubbed
 
 
-def test_ingest_and_review_scrub_through_the_async_form():
-    """Structural: no async method of MemoryService calls the blocking ``scrub_pii`` directly."""
+_BLOCKING_SCRUBS = {"scrub_pii", "scrub_pii_matchable"}
+#: async functions that may call a blocking scrub directly, each with the bound on its input
+_ASYNC_OK = {
+    ("memory_service.py", "scrub_pii_async"): "the wrapper itself: inline only at or under SCRUB_INLINE_MAX",
+    ("memory_service.py", "scrub_pii_matchable_async"): "the wrapper itself",
+    ("memory_digest.py", "_extract_open_loops"): "inputs sliced to 300 / 200 characters at the call",
+}
+#: SYNC helpers that scrub and are reached from async code: each one's input is bounded where it is built
+_SYNC_WRAPPERS = {
+    ("memory_service.py", "scrub_pii"), ("memory_service.py", "scrub_pii_matchable"),
+    ("memory_service.py", "scrub_source_excerpt"),          # cut to SCRUB_INLINE_MAX before the scrub
+    ("memory_service.py", "_stamp_claim"),                  # a claim field of an already-scrubbed fact
+    ("night_mind.py", "_unstorable"), ("struggle_detector.py", "_scrub"), ("correction_marker.py", "not_replayable"),
+    ("user_model_card.py", "compact_fact"), ("user_model_card.py", "style_line"),   # one turn / one sentence / one fact
+}
+
+
+def _scrub_call_sites():
     import ast
+    import glob
+    import os
     import memory_service as ms
 
-    tree = ast.parse(open(ms.__file__, encoding="utf-8").read())
-    bad = [(fn.name, c.lineno) for cls in tree.body if isinstance(cls, ast.ClassDef) and cls.name == "MemoryService"
-           for fn in ast.walk(cls) if isinstance(fn, ast.AsyncFunctionDef)
-           for c in ast.walk(fn) if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "scrub_pii"]
-    assert not bad, bad
+    root = os.path.dirname(ms.__file__)
+    found = []
+    for path in sorted(glob.glob(os.path.join(root, "*.py")) + glob.glob(os.path.join(root, "routers", "*.py"))):
+        tree = ast.parse(open(path, encoding="utf-8").read())
+
+        def walk(node, fn):
+            for ch in ast.iter_child_nodes(node):
+                here = (ch.name, isinstance(ch, ast.AsyncFunctionDef)) if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+                if isinstance(ch, ast.Call) and (getattr(ch.func, "id", None) or getattr(ch.func, "attr", None)) in _BLOCKING_SCRUBS:
+                    found.append((os.path.basename(path), here[0] if here else "<module>", bool(here and here[1])))
+                walk(ch, here)
+        walk(tree, None)
+    return found
+
+
+def test_no_async_function_calls_a_blocking_scrub_and_every_sync_scrubber_is_known():
+    """Structural, the whole service (review, PR #2660): an async function scrubs through ``scrub_pii_async`` /
+    ``scrub_pii_matchable_async`` (or is listed with the bound on its input), and every SYNC function that scrubs is on the
+    known list - a new one fails here until its input bound is stated."""
+    sites = _scrub_call_sites()
+    assert sites, "the scan found nothing: it is broken"
+    bad_async = sorted({(f, fn) for f, fn, is_async in sites if is_async and (f, fn) not in _ASYNC_OK})
+    unknown_sync = sorted({(f, fn) for f, fn, is_async in sites if not is_async and (f, fn) not in _SYNC_WRAPPERS})
+    assert not bad_async, bad_async
+    assert not unknown_sync, unknown_sync
+    # negative control: the scan sees a blocking call inside an async function
+    assert ("memory_digest.py", "_extract_open_loops", True) in sites
+
+
+def test_a_huge_excerpt_and_a_huge_turn_do_not_hold_the_loop(monkeypatch):
+    """Behaviour: a 144k excerpt is cut before it is scrubbed (no hop needed), and a 144k text through the matchable async form
+    hops once while a 5 ms ticker keeps ticking."""
+    import asyncio
+    import time
+    import memory_service as ms
+
+    big = 'password is "abc.\n' * 8000
+    t0 = time.monotonic()
+    out = ms.scrub_source_excerpt(big)
+    assert time.monotonic() - t0 < 0.05 and (out is None or len(out) <= 400)
+
+    async def run():
+        ticks, done = [], asyncio.Event()
+
+        async def ticker():
+            while not done.is_set():
+                ticks.append(1)
+                await asyncio.sleep(0.005)
+
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        before = len(ticks)
+        await ms.scrub_pii_matchable_async(big)
+        during = len(ticks) - before
+        done.set()
+        await t
+        return during
+
+    assert asyncio.run(run()) >= 3
 
 
 def test_the_proposals_endpoint_refuses_an_oversized_body(monkeypatch):
