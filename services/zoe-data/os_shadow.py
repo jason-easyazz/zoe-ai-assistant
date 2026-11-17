@@ -1375,8 +1375,11 @@ class Plan:
         self.has_failed = False
 
     def failed(self) -> None:
-        """A step failed: keep every planned id for replay, even if the caller later calls ok."""
-        self.has_failed = True
+        """A step failed: keep every planned id for replay, even if the caller later calls ok. ONLY a real plan (something was
+        parked: the shadow is in play) can fail: with the shadow off and no state there is no plan, ``has_failed`` stays False and
+        every caller behaves exactly as it did before the shadow existed (the reply included)."""
+        if self.entry is not None:
+            self.has_failed = True
 
     async def ok(self) -> None:
         """Every step confirmed: the plan's ids leave the park. Never raises (an id left behind names nothing that still exists,

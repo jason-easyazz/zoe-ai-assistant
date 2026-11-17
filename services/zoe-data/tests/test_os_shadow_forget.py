@@ -2540,3 +2540,17 @@ async def test_entity_ordinary_failure_keeps_its_reply_and_cascade_and_parks_for
     os_shadow._planning.clear()
     await os_shadow._finish_erases()
     assert store.rows == {} and not (kernel.state / "pending-erases.json").exists()
+
+
+def test_with_the_shadow_off_a_step_failure_never_marks_a_plan_or_changes_a_reply():
+    """Review (PR #2631), no regression against main: flag off and no shadow state = ``plan_erase`` returns an EMPTY plan, and an
+    empty plan cannot fail - so a caller's ``if plan.has_failed`` reply branch is unreachable and the pre-shadow reply stands."""
+    empty = os_shadow.Plan("member-poff", None)
+    empty.failed()
+    assert empty.has_failed is False
+    import asyncio
+
+    asyncio.run(empty.ok())                                    # still a no-op, never raises
+    real = os_shadow.Plan("member-poff", {"rows": ["r1"]})
+    real.failed()
+    assert real.has_failed is True                             # control: a real plan does fail
