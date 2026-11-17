@@ -166,7 +166,7 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
     return singles | name_words, phrases, name_words
 
 
-MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is matched inside a token
+MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
 ADDRESS_NUMBER_BEFORE = 6  # a house number this many words before a street word makes an address
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
@@ -262,8 +262,10 @@ def _memory_glue(terms: PrivateTerms, lex: dict) -> set[str]:
             for j in range(i + 2, min(i + 4, len(raw)) + 1):
                 if sum(is_content[i:j]) >= 2:
                     glue.add("".join(raw[i:j]))
-    # six letters: "tea pot" -> "teapot", "car port" -> "carport". A coincidental match refuses a query (the accepted cost).
-    return {g for g in glue if len(g) >= MEMORY_GLUE_MIN}
+    # every length: a glued phrase that IS a whole word ("ox bow" -> "oxbow") is matched at any length; only the search INSIDE
+    # a longer word keeps MEMORY_GLUE_MIN, so two short words cannot hide in every query. A coincidental match refuses or
+    # strips (the accepted cost).
+    return glue
 
 
 def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict | None = None) -> ScrubResult:
@@ -320,6 +322,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         return ScrubResult(False, "", REASON_NO_ALLOW_LIST)
     singles, phrases, _names = _private_singles(terms, lex)
     glue = _memory_glue(terms, lex)
+    glue_inside = {g for g in glue if len(g) >= MEMORY_GLUE_MIN}
     rx = _glue_rx(singles)
     drop: dict[int, str] = {}
     # An address in any shape, read on the words rather than the characters: a street word with a house number up to
@@ -351,7 +354,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         if tok and (tok in singles or plain in singles or bare[i] in singles or parts & singles or _glued(tok, singles, rx)
                     or _glued(plain, singles, rx) or _glued(bare[i], singles, rx)):
             drop[i] = "private"
-        elif any(g in tok for g in glue):
+        elif tok in glue or plain in glue or bare[i] in glue or any(g in tok for g in glue_inside):
             drop[i] = "memory"
     for phrase in phrases:
         n = len(phrase)
@@ -474,7 +477,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     if any(_memory_runs([fold(w) for w in re.split(r"[\s.\-'’_/]+", view)], terms, lex) or _memory_runs([fold(w) for w in view.split()], terms, lex)
            for view in views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-    if "@" in query or not query or any(g in fold(view) for view in views for g in glue):
+    if "@" in query or not query or any(g in fold(view) for view in views for g in glue_inside) \
+            or any(fold(w) in glue for view in views for w in re.split(r"[\W_]+", view) if w):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)
 
