@@ -1469,7 +1469,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
 
                     if physical_erase_enabled():
                         await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
-                        turn_forget.clear_unerased(user_id)
+                        await turn_forget.clear_unerased(user_id)
                         left = len(carried)
                 left += await _erase_words(user_id, exp, ref.text or "")
             except Exception as exc:  # noqa: BLE001
@@ -1497,7 +1497,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
                 import turn_forget
 
-                if turn_forget.keep_unerased(user_id, gone, exc):
+                if await turn_forget.keep_unerased(user_id, gone, exc):
                     # ... but NOT when the Zoe OS shadow could not confirm (os_shadow.py): nothing more is erased, the reply is not
                     # "forgot", and "forget it" again (the row is rejected by then) erases these rows and the words
                     _rearm(user_id, exp)

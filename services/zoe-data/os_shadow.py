@@ -180,7 +180,7 @@ def provisioned() -> bool:
 
 #: every file or directory the shadow kernel or this client ever leaves in the state directory (``labs/zoe-os/shadow_daemon.py``):
 #: the credentials, the roster, the ids the kernel can still forget, the kernel's own store, and the parked forgets
-STATE_NAMES = ("creds.json", "people.json", "known-people.json", "kernel", "pending-forgets.json")
+STATE_NAMES = ("creds.json", "people.json", "known-people.json", "kernel", "pending-forgets.json", "pending-erases.json")
 
 
 def shadow_state_exists() -> bool:
@@ -197,6 +197,74 @@ def shadow_state_exists() -> bool:
     except OSError:
         return True
     return bool(names & set(STATE_NAMES))
+
+
+# ---- "is there any shadow state?" answered ON the loop ---------------------------------------------------------------------------------
+# A forget with the flag off and no shadow state is a no-op, and must cost a spoken forget NOTHING: no executor hop, no disk probe.
+# The answer is established OFF the turn (at import, and by any probe) and kept fresh by a small daemon thread that stats the state
+# directory every ``STATE_POLL_S`` until state appears. It only ever saves work for "certainly no state"; everything else probes:
+#   * state written by THIS process (a park, the roster): ``_state_installed`` flips the answer at once, before the write returns;
+#   * state written by ANOTHER process (the owner installs the kernel, a night job, an MCP server): seen by the poll within
+#     ``STATE_POLL_S``;
+#   * the poller is dead or stalled, the directory setting changed, or nothing was ever established: the cached answer is not used
+#     (it must be younger than ``3 * STATE_POLL_S`` and for this directory) and the forget probes the disk in a thread, as before.
+# Once state is seen the answer is "exists" and stays so until a probe says otherwise: with state, every forget goes to the kernel.
+STATE_POLL_S = 1.0
+_state_lock = threading.Lock()
+_state_known: tuple = ("", True, 0.0)                # (state directory, state exists, time.monotonic() it was last confirmed)
+_state_seq = 0                                       # bumped when this process installs state: an older "no state" reading is void
+_state_poller: Optional[threading.Thread] = None
+_state_stop = threading.Event()
+
+
+def _no_state() -> bool:
+    """True only when it is certain, WITHOUT touching the disk, that there is no shadow state. Loop-safe: reads memory only."""
+    d, exists, at = _state_known
+    return not exists and time.monotonic() - at < 3 * STATE_POLL_S and d == str(state_dir())
+
+
+def _state_installed() -> None:
+    """This process is about to write (or has written) shadow state: every forget from now on goes to the kernel."""
+    global _state_known, _state_seq
+    with _state_lock:
+        _state_seq += 1
+        _state_known = (str(state_dir()), True, time.monotonic())
+
+
+def _state_probe() -> bool:
+    """Read the disk and record the answer. BLOCKING: a thread or start-up, never the loop. Starts the poller while there is none."""
+    global _state_known, _state_poller
+    d, seq = str(state_dir()), _state_seq
+    exists = shadow_state_exists()
+    with _state_lock:
+        if exists or seq == _state_seq:              # a "no state" read that raced this process installing state is void
+            _state_known = (d, exists, time.monotonic())
+        if not exists and not (_state_poller is not None and _state_poller.is_alive() and _state_poller.name == d):
+            _state_stop.clear()
+            _state_poller = threading.Thread(target=_state_poll, args=(d,), name=d, daemon=True)
+            _state_poller.start()
+    return exists
+
+
+def _state_poll(d: str) -> None:
+    """Keep "no state" fresh for directory ``d``; ends when state appears, the directory setting changes, or a reset asks."""
+    global _state_known
+    me = threading.current_thread()
+    while not _state_stop.wait(STATE_POLL_S):
+        try:
+            if _state_poller is not me or str(state_dir()) != d:
+                return
+            seq = _state_seq
+            exists = shadow_state_exists()
+            with _state_lock:
+                if _state_poller is not me:
+                    return
+                if exists or seq == _state_seq:
+                    _state_known = (d, exists, time.monotonic())
+            if exists:
+                return
+        except Exception:  # noqa: BLE001 - the answer goes stale and forgets probe the disk themselves (the safe side)
+            return
 
 
 def _load_creds() -> tuple[str, dict]:
@@ -445,7 +513,7 @@ LIVE = ("added", "refused", "noop")
 KERNEL_STATES = ("verified", "unverified", "uncertain", "refused", "none")
 REASONS = ("-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", CROSSED, "socket", "unavailable",
            "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake", "hook", "worker", "code", "pending_forget",
-           "forgotten_before", "recurring", "no_time", "range", "time", "parse", "old_kernel")
+           "forgotten_before", "recurring", "no_time", "range", "time", "parse", "old_kernel", "dated")
 
 
 def counters() -> dict:
@@ -552,6 +620,10 @@ def _start_at_import() -> None:
             _ensure_worker()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        _state_probe()                # start-up, never a turn: "no shadow state" is then answered from memory (see _no_state)
+    except Exception:  # noqa: BLE001 - nothing established: the first forget probes
+        pass
 
 
 class _Kernel:
@@ -614,6 +686,8 @@ def _run() -> None:
                 _replay_pending(kernel, force=job[0] == "forget")
             except Exception as exc:  # noqa: BLE001 - kept pending, tried again before the next job
                 logger.warning("OS_SHADOW replay error=%s", type(exc).__name__)
+        if _erase_members is None or _erase_members:
+            _kick_erases()            # the same replay finishes what production still holds for a member the kernel has confirmed
         try:
             if job[0] == "act":
                 _do_act(kernel, *job[1:])
@@ -715,6 +789,8 @@ def kernel_args(verb: str, raw: dict, wall_at: float) -> tuple[Optional[dict], s
     if verb == "alarm_create":
         if (raw.get("repeat") or "once") != "once":
             return None, "recurring"         # alarm.set is one time, once: a repeating alarm is something the kernel cannot say
+        if raw.get("dated"):
+            return None, "dated"             # alarm.set says a time of day only (its next occurrence): a one-off for a LATER date is not that
         hhmm = str(raw.get("time") or "")
         if len(hhmm) != 5 or hhmm[2] != ":" or not (hhmm[:2] + hhmm[3:]).isdigit() or int(hhmm[:2]) > 23 or int(hhmm[3:]) > 59:
             return None, "time"
@@ -770,6 +846,7 @@ def _door(verb: str, user_id: Optional[str], source: str, landed: bool, build) -
     """The hook's decision: ``(_OFF | _QUEUED | the result code the write ends in here, cls)``. Every return names one."""
     if not wants(verb):
         return _OFF, "-"
+    _note_loop()
     cls, raw = build()
     if not landed:
         return "live_noop", cls
@@ -822,10 +899,13 @@ def note_reminder_create(user_id: Optional[str], *, source: str, note: Optional[
         {"note": _text(note), "due_date": due_date, "due_time": due_time, "recurring": bool(recurring)} if _text(note) else None))
 
 
-def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optional[str], repeat: Optional[str]) -> None:
-    """An alarm row committed (``alarms.create_alarm``). The kernel's alarm is one time per person: the repeat rule rides ``cls``."""
+def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optional[str], repeat: Optional[str],
+                      dated: bool = False) -> None:
+    """An alarm row committed (``alarms.create_alarm``). The kernel's alarm is one time per person: the repeat rule rides ``cls``.
+    ``dated``: a one-off set for a date that is NOT the time's next occurrence - the kernel's verb carries no date, so proposing the
+    time alone could "match" a kernel alarm on another day; it is counted ``not_expressible reason=dated`` and never sent."""
     _note("alarm_create", user_id, source, True, lambda: ("once" if (repeat or "once") == "once" else "repeat",
-                                                          {"time": str(time_hhmm or ""), "repeat": repeat or "once"}))
+                                                          {"time": str(time_hhmm or ""), "repeat": repeat or "once", "dated": bool(dated)}))
 
 
 # ---- forget -------------------------------------------------------------------------------------------------------------------------
@@ -891,7 +971,12 @@ def _pending_read() -> list:
 
 def _pending_write(members: list) -> None:
     """Atomic and durable: a unique temp file, fsync, rename, fsync of the directory. Raises on any failure (never swallowed)."""
-    path = _pending_path()
+    _durable_write(_pending_path(), sorted(set(members)))
+
+
+def _durable_write(path: Path, payload) -> None:
+    """The park's ONE writer (``pending-forgets.json`` and ``pending-erases.json``): an empty payload removes the file."""
+    members = payload
     if not members:
         try:
             path.unlink()
@@ -899,12 +984,13 @@ def _pending_write(members: list) -> None:
             return                    # nothing was parked: nothing to make durable
         _fsync_dir(path.parent)       # the unlink is a directory change: durable too, or a crash could bring the file back
         return
+    _state_installed()                # this IS shadow state: no forget may skip the kernel from here on
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "w") as fh:
-            json.dump(sorted(set(members)), fh)
+            json.dump(payload, fh, sort_keys=True)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
@@ -985,6 +1071,136 @@ def _replay_pending(kernel: _Kernel, force: bool = True) -> bool:
         return False
 
 
+# ---- parked PRODUCTION erases: rows a forget hid but could not erase because the kernel did not confirm ----------------------------------
+# ``pending-erases.json`` beside the parked forgets, under the SAME lock and writer: ``{member: [memory row ids]}``. IDS ONLY, never
+# a word (the words to erase are read from the rows themselves when the erase is finished). The worker's replay that confirms a
+# member's parked kernel forget then has the service finish these (``turn_forget.finish_parked``) with no further request from the
+# member; a finish that fails leaves the entry for the next job; a member delete drops the member's entry.
+#: members with a parked erase as this process last saw the file (None = not read yet: the worker reads it before its next job)
+_erase_members: Optional[frozenset] = None
+_loop: Optional[asyncio.AbstractEventLoop] = None    # the service's loop, noted by the hook and the forget: where a finish is run
+_finishing = False
+
+
+def _note_loop() -> None:
+    global _loop
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+
+
+def _erases_path() -> Path:
+    return state_dir() / "pending-erases.json"
+
+
+def _erases_read() -> dict:
+    """Missing file = none; a file that is there but not the documented shape RAISES ``PendingUnreadable`` (never overwritten)."""
+    try:
+        text = _erases_path().read_text("utf-8")
+    except FileNotFoundError:
+        return {}
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        raise PendingUnreadable("pending-erases.json is not json") from exc
+    if not isinstance(raw, dict) or not all(isinstance(v, list) for v in raw.values()):
+        raise PendingUnreadable("pending-erases.json is not a map of lists")
+    return {str(m): [str(i) for i in ids if i] for m, ids in raw.items()}
+
+
+def _erases_store(todo: dict) -> None:
+    global _erase_members
+    todo = {m: ids for m, ids in todo.items() if ids}
+    _durable_write(_erases_path(), todo)
+    _erase_members = frozenset(todo)
+
+
+def park_erase(member: str, rows) -> None:
+    """Record, durably, the rows left to erase for ``member`` (merged into what is already parked). BLOCKING and it RAISES when it
+    cannot be made durable: a thread, never the loop."""
+    with _pending_locked():
+        todo = _erases_read()
+        todo[str(member)] = list(dict.fromkeys([*todo.get(str(member), []), *(str(i) for i in rows if i)]))
+        _erases_store(todo)
+
+
+def parked_erases() -> dict:
+    """What is parked, by member. BLOCKING (a thread)."""
+    global _erase_members
+    with _pending_locked():
+        todo = _erases_read()
+        _erase_members = frozenset(todo)
+        return todo
+
+
+def erases_done(member: str, rows=None) -> None:
+    """Drop what was finished: the ids in ``rows`` (anything parked for the member SINCE stays), or the member's whole entry when
+    ``rows`` is None (a member delete, which erased everything they had). BLOCKING (a thread); raises when it cannot be written."""
+    with _pending_locked():
+        todo = _erases_read()
+        gone = None if rows is None else set(str(i) for i in rows)
+        todo[str(member)] = [] if gone is None else [i for i in todo.get(str(member), []) if i not in gone]
+        _erases_store(todo)
+
+
+async def drop_parked_erases(user_id: str) -> None:
+    """A member delete finished: nothing of theirs is left to erase, so their parked entry (ids) goes too. No disk and no thread
+    when there is certainly no shadow state, or this process knows nothing is parked. Raises when the entry could not be removed."""
+    if _no_state() or (_erase_members is not None and str(user_id) not in _erase_members):
+        return
+    if not await asyncio.to_thread(_state_probe):
+        return
+    await asyncio.to_thread(erases_done, user_id, None)
+
+
+def _kick_erases() -> None:
+    """From the worker, after a replay: have the service's loop finish what is parked. Never waits (the finish itself forgets in the
+    kernel, through this worker), never raises."""
+    loop = _loop
+    if _finishing or loop is None or loop.is_closed():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(_finish_erases(), loop)
+    except Exception:  # noqa: BLE001 - kept parked, tried again after the next job
+        pass
+
+
+async def _finish_erases() -> int:
+    """Finish the parked erases of every member whose kernel forget is NOT still parked (the kernel confirmed it). One at a time; a
+    member whose finish fails stays parked (never dropped) and is tried again after the next job. Returns members finished."""
+    global _finishing
+    if _finishing:
+        return 0
+    _finishing = True
+    done = 0
+    try:
+        todo = await asyncio.to_thread(parked_erases)
+        still = await asyncio.to_thread(_pending_read_locked)
+        for member, entry in todo.items():
+            if member in still:
+                continue              # its kernel forget is not confirmed yet: nothing in production is erased before that
+            try:
+                import turn_forget
+
+                await turn_forget.finish_parked(member, entry)
+                await asyncio.to_thread(erases_done, member, entry)
+                done += 1
+                logger.info("OS_SHADOW parked erase finished")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("OS_SHADOW parked erase NOT finished, kept code=%s", type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("OS_SHADOW parked erases unreadable code=%s", type(exc).__name__)
+    finally:
+        _finishing = False
+    return done
+
+
+def _pending_read_locked() -> frozenset:
+    with _pending_locked():
+        return frozenset(_pending_read())
+
+
 #: the kernel's own refusal when it has never known the subject (``capability.may_forget``). The shadow daemon never forgets a member
 #: it was started with (it keeps every id it ever had: ``shadow_daemon.py``), so this refusal means nothing was ever recorded for them.
 NEVER_KNOWN = "only a person can ask to forget"
@@ -1046,9 +1262,13 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     zoe-data cannot prove the kernel process is stopped (deleting its store under a live writer is not a provable erase), so retiring
     the shadow for good is an owner step (stop the unit, then remove the shadow directory: docs/knowledge/zoe-os-list-shadow.md)."""
     strict = mode() == "shadow"
-    # the state check stats and lists a directory: in a thread, never on the event loop (a slow or hung disk would stall every turn)
-    if not strict and not await asyncio.to_thread(shadow_state_exists):
-        return 0                      # certain nothing was ever recorded here (no state at all) and the shadow is off: nothing to forget
+    _note_loop()
+    if not strict:
+        if _no_state():               # the common case with no kernel installed: answered from memory, no thread, no disk
+            return 0
+        # not certain: the state check stats and lists a directory, in a thread, never on the event loop
+        if not await asyncio.to_thread(_state_probe):
+            return 0                  # certain nothing was ever recorded here (no state at all) and the shadow is off: nothing to forget
     # anything else goes to the kernel, and is PARKED if it cannot be confirmed there (a missing creds.json included: the kernel's
     # store may still hold the member): "cannot reach" is never "done"
     fut: concurrent.futures.Future = concurrent.futures.Future()
@@ -1121,6 +1341,8 @@ def write_roster(ids, dest: Optional[Path] = None) -> list:
     added (the kernel reads it at start). Ids only; never printed."""
     clean = sorted(_roster_ids(ids))
     path = dest or (state_dir() / "people.json")
+    if dest is None:
+        _state_installed()            # the roster IS shadow state: no forget may skip the kernel from here on
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
@@ -1142,9 +1364,13 @@ def main(argv: Optional[list] = None) -> int:
 
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
-    global _roster_cache, _worker, _down_logged, _pending_members
+    global _roster_cache, _worker, _down_logged, _pending_members, _erase_members, _loop, _finishing, _state_known, _state_poller
     _down_logged = False
     _pending_members = None           # a restart: the next worker reads the park file before its first job
+    _erase_members, _loop, _finishing = None, None, False
+    _state_stop.set()                 # the poller ends; nothing is established, so the next forget probes
+    with _state_lock:
+        _state_known, _state_poller = ("", True, 0.0), None
     _forgotten_at.clear()
     _parked_at.clear()
     if _worker is not None and _worker.is_alive():

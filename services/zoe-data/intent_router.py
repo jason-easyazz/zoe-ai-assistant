@@ -4134,11 +4134,11 @@ async def _execute_forget_last(user_id: str) -> str:
             from memory_service import physical_erase_enabled
             if physical_erase_enabled():
                 await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
-                turn_forget.clear_unerased(user_id)
+                await turn_forget.clear_unerased(user_id)
                 finished_earlier = bool(carried)
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
-            if turn_forget.keep_unerased(user_id, erase_ids, exc):
+            if await turn_forget.keep_unerased(user_id, erase_ids, exc):
                 return FORGET_STORE_DOWN_REPLY
     try:
         import exact_words

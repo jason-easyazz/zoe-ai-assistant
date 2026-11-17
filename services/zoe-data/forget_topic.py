@@ -417,11 +417,11 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
 
             if physical_erase_enabled():
                 await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)")
-                turn_forget.clear_unerased(user_id)
+                await turn_forget.clear_unerased(user_id)
                 res.finished_earlier = len(carried)
         except Exception as exc:  # noqa: BLE001 - archived rows are hidden from every read either way
             logger.warning("forget_topic: physical erase failed (%s) - rows stay archived", type(exc).__name__)
-            if turn_forget.keep_unerased(user_id, erase_ids, exc):
+            if await turn_forget.keep_unerased(user_id, erase_ids, exc):
                 # ... but NOT when the Zoe OS shadow could not confirm (os_shadow.py): the forget is not confirmed, and the member's
                 # repeat finishes these same rows
                 res.store_down = True

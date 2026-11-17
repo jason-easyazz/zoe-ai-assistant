@@ -2255,6 +2255,9 @@ class MemoryService:
         try:
             import os_shadow
             await os_shadow.forget_user(user_id)
+            # ... and the rows an earlier forget of theirs left parked for erase (pending-erases.json, ids only): this delete erases
+            # every row the member has, so the entry goes (no disk, no thread, when there is no shadow state or nothing is parked)
+            await os_shadow.drop_parked_erases(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which

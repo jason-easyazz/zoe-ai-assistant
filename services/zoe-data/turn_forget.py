@@ -389,10 +389,15 @@ def unerased(user_id: Optional[str]) -> list:
         return list(_unerased.get(user_id or "") or ())
 
 
-def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
+async def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
     """A forget's physical erase of ``ids`` (rows it had already hidden) failed with ``exc``. True when that is the Zoe OS shadow not
-    confirming (``os_shadow.unconfirmed``): the ids are remembered, and the caller must NOT say "forgotten" and must keep its target
-    - its repeat adds ``unerased`` to what it erases, because its own lookups (approved / pending rows) no longer find hidden rows.
+    confirming (``os_shadow.unconfirmed``): the caller must NOT say "forgotten" and must keep its target. The ids are then
+
+    * PARKED durably beside the shadow's own parked forget (``os_shadow.park_erase``: ids only), so the replay that confirms the
+      kernel forget finishes these rows and their words (``finish_parked``) with no further request, across a restart; and
+    * remembered in this process, so the member's repeat - whose lookups (approved / pending rows) no longer find hidden rows -
+      adds ``unerased`` to what it erases.
+
     False for any other failure: the rows stay hidden and the forget goes on, as it always did. Never raises."""
     try:
         import os_shadow
@@ -401,17 +406,64 @@ def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
             return False
     except Exception:  # noqa: BLE001
         return False
+    want = list(dict.fromkeys(str(i) for i in ids if i))
     with _LOCK:
-        _unerased[user_id] = list(dict.fromkeys(str(i) for i in ids if i))[-_MAX_UNERASED:]
+        _unerased[user_id] = want[-_MAX_UNERASED:]
         _unerased.move_to_end(user_id)
         while len(_unerased) > _MAX_USERS:
             _unerased.popitem(last=False)
+    try:
+        import asyncio
+
+        await asyncio.to_thread(os_shadow.park_erase, user_id, want)
+    except Exception as park_exc:  # noqa: BLE001 - still not "forgotten"; only the member's repeat (or the next forget) can finish it
+        logger.error("TURN_FORGET user=%s unerased rows NOT parked (%s)", user_id, type(park_exc).__name__)
     return True
 
 
-def clear_unerased(user_id: str) -> None:
+async def clear_unerased(user_id: str, ids: Optional[list] = None) -> None:
+    """The rows were erased (by the member's repeat, or by ``finish_parked``): forget them here and in the durable park. Touches the
+    disk only when something was remembered. Never raises (a stale parked id erases nothing: the replay is idempotent)."""
+    with _LOCK:
+        had = _unerased.pop(user_id, None)
+    if not had and not ids:
+        return
+    try:
+        import asyncio
+
+        import os_shadow
+
+        await asyncio.to_thread(os_shadow.erases_done, user_id, list(ids or had))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TURN_FORGET user=%s parked erase not cleared (%s)", user_id, type(exc).__name__)
+
+
+async def finish_parked(user_id: str, row_ids: list) -> int:
+    """Finish a parked erase once the kernel has confirmed (``os_shadow._finish_erases``): for each parked row that is still HIDDEN
+    (rejected / archived - an approved row is never touched), the member's verbatim words behind it are erased first (the recipe of
+    the memories-screen forget: the row's own turn id and source quote), then the rows. RAISES on any failure: the entry stays
+    parked, and because the words go before the rows a repeat still finds them. Idempotent. Returns rows erased."""
+    import memory_space
+    import provenance_answers as pa
+    from memory_service import get_memory_service, physical_erase_enabled
+
+    svc = get_memory_service()
+    hidden = []
+    for rid in row_ids:
+        ref = await svc.get(rid)
+        if ref is None or not pa._owns(ref.metadata or {}, user_id):
+            continue
+        if str((ref.metadata or {}).get("status") or "approved").lower() not in ("rejected", "archived"):
+            continue
+        await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
+        hidden.append(rid)
+    n = 0
+    if hidden and physical_erase_enabled():
+        n = int((await svc.erase_rows(user_id, hidden, actor=user_id,
+                                      reason="forgotten by request (finished after the shadow confirmed)")).get("rows_removed") or 0)
     with _LOCK:
         _unerased.pop(user_id, None)
+    return n
 
 
 def reset() -> None:  # tests
@@ -423,5 +475,5 @@ def reset() -> None:  # tests
 
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
-    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "unerased", "keep_unerased", "clear_unerased", "reset",
+    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "unerased", "keep_unerased", "clear_unerased", "finish_parked", "reset",
 ]

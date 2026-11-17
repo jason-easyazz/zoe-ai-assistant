@@ -56,7 +56,7 @@ ALLOWED = {
     "reason": frozenset({"-", "no_grant", "manifest", "params", "cause", "forgotten", "other", "timeout", "protocol", "socket",
                          "unavailable", "not_provisioned", "circuit", "no_credential", "closed", "auth", "handshake",
                          "recurring", "no_time", "range", "time", "parse", "hook", "worker", "code", "pending_forget", "crossed", "forgotten_before",
-                         "old_kernel"}),
+                         "old_kernel", "dated"}),
 }
 NUMBERS = ("hop_ms", "q_ms")
 #: a number above this is not a measurement (the add's whole budget is 1.5 s; a day in the queue is already absurd): rejected

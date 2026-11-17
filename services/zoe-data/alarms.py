@@ -379,7 +379,10 @@ async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "on
             (aid, owner, _clean_label(label), hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, nxt, now, now))
         await log_event(db, aid, "created", f"{hhmm} {rule}", now=now)
     await db.commit()
-    os_shadow.note_alarm_create(owner, source="service", time_hhmm=hhmm, repeat=rule)    # Zoe OS shadow: after the commit, never raises
+    # Zoe OS shadow: after the commit, never raises. ``dated``: a one-off for a date that is not the time's next occurrence - the kernel's
+    # alarm carries a time of day only, so it is counted "not expressible" instead of matching a kernel alarm on another day.
+    os_shadow.note_alarm_create(owner, source="service", time_hhmm=hhmm, repeat=rule,
+                                dated=rule == "once" and stored_date != next_once_date(hhmm, now))
     return await get_alarm(db, aid)  # type: ignore[return-value]
 
 

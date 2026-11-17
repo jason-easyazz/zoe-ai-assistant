@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -113,6 +113,36 @@ def test_an_alarm_time_that_is_not_hh_mm_is_not_expressible(kernel, monkeypatch)
     os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="7:5", repeat="once")
     settle(1)
     assert acts(kernel) == [] and os_shadow.counters() == {"not_expressible": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("days,code", [(0, "match"), (3, "not_expressible")])
+async def test_a_one_off_alarm_for_a_later_date_is_not_expressible_and_never_sent(kernel, monkeypatch, tmp_path, caplog, days, code):
+    """RUNS ``alarms.create_alarm``: the kernel's alarm carries a time of day only, so a one-off dated three days out must not be
+    proposed as that time (it could "match" a kernel alarm on another day). The control: the same alarm for the time's NEXT
+    occurrence (its date given explicitly) is proposed and matches."""
+    import aiosqlite
+
+    import alarms
+    from test_alarms import NIGHT, _migrate
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
+    caplog.set_level(logging.INFO, logger="os_shadow")
+    nxt = date.fromisoformat(alarms.next_once_date("06:45", NIGHT))
+    path = str(tmp_path / "a.db")
+    _migrate(path)
+    db = await aiosqlite.connect(path)
+    try:
+        a = await alarms.create_alarm(db, MEMBER, time_hhmm="06:45", repeat="once", once_date=(nxt + timedelta(days=days)).isoformat(), now=NIGHT)
+    finally:
+        await db.close()
+    assert a["once_date"] == (nxt + timedelta(days=days)).isoformat()
+    settle(1)
+    assert os_shadow.counters_by_verb() == {"alarm_create": {code: 1}}
+    assert len(acts(kernel)) == (0 if days else 1)
+    if days:
+        assert any("result=not_expressible reason=dated" in r.getMessage() for r in caplog.records)
+        assert "dated" in report.ALLOWED["reason"] and report.bucket("not_expressible") == "disagree"
 
 
 # ---- THE NEGATIVE CONTROL: a kernel that disagrees on purpose reads as disagree in the report -------------------------------------

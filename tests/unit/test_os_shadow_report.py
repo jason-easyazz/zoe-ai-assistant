@@ -139,7 +139,7 @@ def test_the_verb_and_not_expressible_allowlists_are_the_clients():
     fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "kernel_args")
     why = {e.elts[1].value for e in ast.walk(fn) if isinstance(e, ast.Tuple) and len(e.elts) == 2
            and isinstance(e.elts[0], ast.Constant) and e.elts[0].value is None}
-    assert why == {"recurring", "no_time", "time"} and why | {"parse", "range", "old_kernel"} <= rep.ALLOWED["reason"]
+    assert why == {"recurring", "no_time", "time", "dated"} and why | {"parse", "range", "old_kernel"} <= rep.ALLOWED["reason"]
 
 
 def test_nothing_is_dropped_unknown_codes_and_unreadable_lines_are_counted(tmp_path, capsys):
