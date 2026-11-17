@@ -167,7 +167,6 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
 
 
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
-ADDRESS_NUMBER_BEFORE = 6  # a house number this many words before a street word makes an address
 ADDRESS_NUMBER_AFTER = 3  # ...or this many after it ("Maple Street number 12", "Maple St no. 12")
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
@@ -255,7 +254,7 @@ def _memory_glue(terms: PrivateTerms, lex: dict) -> set[str]:
     more), so a memory phrase is still seen when it is glued, hyphenated or padded with a number."""
     glue: set[str] = set()
     for text in terms.memory:
-        raw = [f for f in (fold(w) for w in _words(_clean(text))) if f]
+        raw = [f for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w)) if f]
         is_content = [f not in lex["drop_words"] for f in raw]
         content = [f for f, c in zip(raw, is_content) if c]
         glue.update(a + b for a, b in zip(content, content[1:]))
@@ -326,17 +325,17 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     glue_inside = {g for g in glue if len(g) >= MEMORY_GLUE_MIN}
     rx = _glue_rx(singles)
     drop: dict[int, str] = {}
-    # An address in any shape, read on the words rather than the characters: a street word with a house number up to
-    # ADDRESS_NUMBER_BEFORE words before it ("12 Maple Tree Green Valley Street") or ADDRESS_NUMBER_AFTER after it
-    # ("Maple Street 12", "Maple Street number 12"). The number, the street word and everything between go; with the
-    # number after, so do the three words before.
+    # An address in any shape, read on the words rather than the characters: a street word with a house number ANYWHERE
+    # before it ("12 Old North Maple Tree Valley Hill Road" - no window to outgrow; the query is short) or up to
+    # ADDRESS_NUMBER_AFTER words after it ("Maple Street 12", "Maple Street number 12"). The number, the street word and
+    # everything between go; with the number after, so do the three words before.
     streets = {fold(w) for w in lex["street_types"]}
     house = re.compile(r"\d{1,5}[a-z]?")
     for si, tok in enumerate(tokens):
         if tok not in streets:
             continue
         span: set[int] = set()
-        for k in range(max(0, si - ADDRESS_NUMBER_BEFORE), si):
+        for k in range(si - 1, -1, -1):        # the nearest number before
             if house.fullmatch(tokens[k]):
                 span.update(range(k, si + 1))
                 break

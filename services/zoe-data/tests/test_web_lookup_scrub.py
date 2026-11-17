@@ -492,7 +492,8 @@ def test_an_address_with_the_street_name_in_brackets_is_stripped():
 @pytest.mark.parametrize("raw", ["pizza delivery Maple Street 12 tonight", "pizza delivery 12 Maple Tree Green Valley Street tonight",
                                  "pizza delivery Maple St, 12 tonight", "pizza delivery 12a Maple Tree Road tonight",
                                  "pizza delivery Maple (Street) 12 tonight", "pizza delivery Maple Street number 12 tonight",
-                                 "pizza delivery Maple Street no 12 tonight", "pizza delivery Maple St no. 12 tonight"])
+                                 "pizza delivery Maple Street no 12 tonight", "pizza delivery Maple St no. 12 tonight",
+                                 "pizza delivery 12 Old North Maple Tree Valley Hill Road tonight"])
 def test_an_address_in_any_word_order_is_stripped(raw):
     r = scrub_query(raw)
     assert "maple" not in r.query and "12" not in r.query.split() and "12a" not in r.query.split(), r
@@ -504,7 +505,10 @@ def test_an_address_in_any_word_order_is_stripped(raw):
                                         ("The spare key is in the ox bow", "oxbow replacement prices"),
                                         ("The spare key is in the ox bow", "0xbow replacement prices"),
                                         ("The spare key is in the ox bow", "oxbows replacement prices"),
-                                        ("The spare key is in the tea pot", "teapots replacement prices")])
+                                        ("The spare key is in the tea pot", "teapots replacement prices"),
+                                        ("The spare key is in the tea-pot", "teapot replacement prices"),
+                                        ("The bikes are in the car-port", "carport replacement prices"),
+                                        ("The spare key is in the ox.bow", "oxbows replacement prices")])
 def test_a_short_memory_phrase_glued_into_one_word_never_leaves(memory, raw):
     r = scrub_query(raw, PrivateTerms.of(memory=[memory]))
     words = set(re.split(r"[\W_]+", r.query)) if r.send else set()
