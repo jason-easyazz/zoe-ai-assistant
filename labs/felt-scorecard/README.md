@@ -113,6 +113,21 @@ Paths: `--crash-log`, `--night-reports`, `--backup-log`, `--backup-state`, `--he
 
 Percentiles interpolate linearly between closest ranks.
 
+### INSTRUMENTS (printed last: the before/after number of a change)
+
+One row per log-only instrument (owner rule 2026-11-13: no change without a before/after number). Long window, narrowed
+to the retained app logs exactly like the two app-log ALERTS rows. A window with NO line of the row's marker prints
+`unmeasured` with what that can mean (an instrument not deployed, or switched off, is not a zero). A line with the marker
+but not the exact format the emitter's test pins makes the row `unmeasured` ("malformed marker"). A line whose timestamp
+is impossible (month 13, hour 25) is dropped by `parse_ts`, never counted. To read a before/after, run the scorecard
+twice with `--long-since/--until` on each side of the deploy.
+
+| key | marker (writer) | reads |
+|---|---|---|
+| `inst_loop_block` | `EVENT_LOOP_BLOCK ms=` (`loop_block_stacks._emit`, #2473; `_TOP`/`_FRAMES` not counted) | episodes per day over the span from the last start at or before the first episode; worst day; ms p50/p90/max; episodes that ENDED < 60 s after the latest process start (start = `FORGET_LEDGER state=`, the first line of `main.lifespan`) |
+| `inst_forget_ledger` | `FORGET_LEDGER state=configured\|unconfigured [reason=module_error]` (`memory_forgotten.log_startup_state`, #2462) | starts by state, and the state at the last start |
+| `inst_flue_prepost` | `FLUE_PREPOST sid=<10 hex> total_ms= blocks_ms= other_ms= awaited=` (PR #2484, not on main yet) | household turns: total_ms and blocks_ms p50/p90 |
+
 ## Sample output (real run, 2026-11-12 09:21 local, default windows)
 
 ```text
