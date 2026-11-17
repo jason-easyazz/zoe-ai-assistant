@@ -187,3 +187,54 @@ def _no_live_cold_first_turn(monkeypatch):
     that drives a probe ``main()`` must never reach the brain: switch the stage off by its own env default (the stage's
     own tests call ``judge_cold_start`` / ``run_cold_start_stage`` directly)."""
     monkeypatch.setenv("ZOE_VOICE_PROBE_COLD_CHECK", "0")
+
+
+#: every path under the real home directory the panel voice daemon (scripts/setup/zoe_voice_daemon.py) WRITES, by its module attribute:
+#: SPEAKER_ID_SHADOW_LOG (:522, the speaker-ID shadow log, env-overridable), _PROFILE_CACHE_PATH (:2842, the speaker profile cache),
+#: _FACE_CACHE_PATH (:5303, the face-profile cache). The optional ZOE_VOICE_LOG file is env-only (no default; unset in tests), the
+#: buffers dir is next to the script and read-only, and ~/.zoe-voice/.env.voice is only named in a log line (systemd reads it).
+_DAEMON_HOME_PATHS = ("SPEAKER_ID_SHADOW_LOG", "_PROFILE_CACHE_PATH", "_FACE_CACHE_PATH")
+
+
+def _home_files() -> tuple:
+    """The real daemon files' ABSOLUTE paths, resolved ONCE before the test runs: a test that points HOME at a temp dir (its own
+    monkeypatch is still in force when this fixture's teardown runs) must not make the after-check look at different files."""
+    import os
+
+    out = []
+    for name in ("speaker_shadow_metrics.jsonl", "speaker_profiles.json", "face_profiles.json"):
+        p = os.path.expanduser(f"~/.zoe-voice/{name}")
+        out += [p, p + ".prune", p + ".tmp"]
+    return tuple(out)
+
+
+def _home_snapshot(paths: tuple) -> dict:
+    import os
+
+    out = {}
+    for q in paths:
+        try:
+            st = os.stat(q)
+            out[q] = (st.st_size, st.st_mtime_ns)
+        except FileNotFoundError:
+            out[q] = None
+    return out
+
+
+@pytest.fixture(autouse=True)
+def _daemon_writes_stay_in_tmp(monkeypatch, tmp_path_factory):
+    """A test that reaches the daemon's purge, roster apply, face-cache rewrite, shadow append or profile sync must never touch the
+    REAL ~/.zoe-voice files on the machine running the tests (a panel or a developer box has them): every loaded copy of the daemon
+    module has its home paths pointed at a temp dir of its own (not the test's tmp_path, which some tests require to stay empty),
+    and the real files are checked unchanged (and no prune / temp file left) after."""
+    paths = _home_files()
+    before = _home_snapshot(paths)
+    home = None
+    for mod in list(sys.modules.values()):
+        if mod is None or not all(hasattr(mod, a) for a in _DAEMON_HOME_PATHS):
+            continue
+        home = home or tmp_path_factory.mktemp("daemon-home")
+        for attr in _DAEMON_HOME_PATHS:
+            monkeypatch.setattr(mod, attr, str(home / attr.lower()))
+    yield
+    assert _home_snapshot(paths) == before, "a test wrote a real ~/.zoe-voice file (or left a prune/temp file there)"

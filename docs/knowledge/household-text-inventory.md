@@ -73,7 +73,7 @@ Generated from `household_text.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: household_text.py -->
 
-100 stores: a per-subject forget reaches 44, delete-my-data reaches 47, both 38, neither 47.
+101 stores: a per-subject forget reaches 44, delete-my-data reaches 70, both 42, neither 29.
 
 | store | class | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner | evidence |
 |---|---|---|---|---|---|---|---|---|---|
@@ -103,40 +103,41 @@ Generated from `household_text.py`; do not edit by hand.
 | `user_model_cards` | primary | `pg:user_model_cards` | the user-model card (derived prose) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | user_model_card.py | - |
 | `open_loops` | primary | `pg:open_loops` | unfinished things the member mentioned | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | memory_digest.py, omi_review_apply.py | - |
 | `proactive_candidates` | primary | `pg:proactive_candidates` | things Zoe might raise (derived text) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | commitments.py, proactive/selector.py | - |
-| `people` | primary | `pg:people` | people the household talks about (names, notes) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | contacts_store.py, pending_suggestions.py | - |
-| `person_relationships` | primary | `pg:person_relationships` | who is related to whom | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | people_graph.py | - |
-| `event_attendees` | primary | `pg:event_attendees` | attendee names and emails | `memory_forget_cascade._run` | `calendar_forget.forget_user` | gap | no age limit: kept until deleted | calendar_service.py | - |
-| `events` | primary | `pg:events` | calendar event titles, places, descriptions | `memory_forget_cascade._run` | `calendar_forget.forget_user` | gap | no age limit: kept until deleted | skybridge_service.py, pending_suggestions.py | - |
-| `chat_sessions` | primary | `pg:chat_sessions` | chat titles | `forget_redact.on_forget` | - | gap | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py | - |
-| `chat_messages` | primary | `pg:chat_messages` | the verbatim chat transcript (every channel) | `forget_redact.on_forget` | - | gap | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py | - |
-| `chat_feedback` | primary | `pg:chat_feedback` | a corrected response | - | - | gap | no age limit: kept until deleted | conversation_feedback.py | - |
-| `background_tasks` | primary | `pg:background_tasks` | a background task's text and result | - | - | gap | no age limit: kept until deleted | background_runner.py (read side; no live writer in zoe-data) | - |
+| `people` | primary | `pg:people` | people the household talks about (names, notes) | `memory_forget_cascade._run` | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | contacts_store.py, pending_suggestions.py | - |
+| `person_relationships` | primary | `pg:person_relationships` | who is related to whom | `memory_forget_cascade._run` | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | people_graph.py | - |
+| `event_attendees` | primary | `pg:event_attendees` | attendee names and emails | `memory_forget_cascade._run` | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | calendar_service.py | - |
+| `events` | primary | `pg:events` | calendar event titles, places, descriptions | `memory_forget_cascade._run` | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | skybridge_service.py, pending_suggestions.py | - |
+| `chat_sessions` | primary | `pg:chat_sessions` | chat titles | `forget_redact.on_forget` | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py | - |
+| `chat_messages` | primary | `pg:chat_messages` | the verbatim chat transcript (every channel) | `forget_redact.on_forget` | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py | - |
+| `chat_feedback` | primary | `pg:chat_feedback` | a corrected response | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | conversation_feedback.py | - |
+| `background_tasks` | primary | `pg:background_tasks` | a background task's text and result | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | background_runner.py (read side; no live writer in zoe-data) | - |
 | `pending_suggestions` | primary | `pg:pending_suggestions` | offer text (may name people) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | pending_suggestions.py, anticipation.py | - |
-| `notes` | primary | `pg:notes` | the member's notes | - | - | gap | no age limit: kept until deleted | intent_router.py, pending_suggestions.py | - |
-| `journal_entries` | primary | `pg:journal_entries` | the member's journal | - | - | gap | no age limit: kept until deleted | intent_router.py, mcp_server.py | - |
-| `lists` | primary | `pg:lists` | list names | - | - | gap | no age limit: kept until deleted | list_service.py | - |
+| `notes` | primary | `pg:notes` | the member's notes | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | intent_router.py, pending_suggestions.py | - |
+| `journal_entries` | primary | `pg:journal_entries` | the member's journal | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | intent_router.py, mcp_server.py | - |
+| `lists` | primary | `pg:lists` | list names | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | list_service.py | - |
 | `list_items` | primary | `pg:list_items` | list items (shopping and other lists) | - | - | gap | no age limit: kept until deleted | list_service.py | - |
 | `people_field_values` | primary | `pg:people_field_values` | custom fields about a person | - | - | gap | no age limit: kept until deleted | routers/people.py | - |
-| `chat_ag_ui_runs` | primary | `pg:chat_ag_ui_runs` | AG-UI event streams of a chat run (the reply text) | - | - | gap | no age limit: kept until deleted | routers/chat.py | - |
-| `reminders` | primary | `pg:reminders` | reminder text | - | - | gap | no age limit: kept until deleted | reminder_service.py | - |
-| `transactions` | primary | `pg:transactions` | transaction descriptions | - | - | gap | no age limit: kept until deleted | routers/transactions.py, mcp_server.py | - |
-| `person_activities` | primary | `pg:person_activities` | a person's activities | - | - | gap | no age limit: kept until deleted | person_extractor.py, routers/people.py | - |
-| `person_bucket_list` | primary | `pg:person_bucket_list` | a person's bucket list | - | - | gap | no age limit: kept until deleted | person_extractor.py, routers/people.py | - |
-| `person_gift_ideas` | primary | `pg:person_gift_ideas` | gift ideas for a person | - | - | gap | no age limit: kept until deleted | person_extractor.py, routers/people.py | - |
+| `chat_ag_ui_runs` | primary | `pg:chat_ag_ui_runs` | AG-UI event streams of a chat run (the reply text) | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | routers/chat.py | - |
+| `reminders` | primary | `pg:reminders` | reminder text | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | reminder_service.py | - |
+| `transactions` | primary | `pg:transactions` | transaction descriptions | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | routers/transactions.py, mcp_server.py | - |
+| `person_activities` | primary | `pg:person_activities` | a person's activities | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | person_extractor.py, routers/people.py | - |
+| `person_bucket_list` | primary | `pg:person_bucket_list` | a person's bucket list | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | person_extractor.py, routers/people.py | - |
+| `person_gift_ideas` | primary | `pg:person_gift_ideas` | gift ideas for a person | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | person_extractor.py, routers/people.py | - |
 | `calendars` | primary | `pg:calendars` | calendar names and descriptions | - | `calendar_forget.forget_user` | reached | no age limit: kept until deleted | skybridge_service.py, calendar_forget.py | - |
-| `ambient_memory` | primary | `pg:ambient_memory` | ambient captured text | - | - | gap | no age limit: kept until deleted | routers/voice_tts.py | - |
+| `ambient_memory` | primary | `pg:ambient_memory` | ambient captured text | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | routers/voice_tts.py | - |
 | `notifications` | primary | `pg:notifications` | notification text | - | `notifications_store.forget_user` | reached | no age limit: kept until deleted | notifications_store.py (distress_handoff.py, omi_recordings.py, ...) | - |
+| `ui_action_ledger` | primary | `pg:ui_action_ledger` | a queued UI action's payload (a toast's words) and the panel's acknowledgement context | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | ui_orchestrator.py | - |
 | `proactive_deliveries` | primary | `pg:proactive_deliveries` | delivery ledger (keys; text is in the candidate) | - | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | proactive/ledger.py | - |
 | `proactive_outcome_edges` | primary | `pg:proactive_outcome_edges` | outcome edges (opaque ids) | - | `outcome_edges.erase_user` | reached | no age limit: kept until deleted | proactive/outcome_edges.py | - |
 | `proactive_ledger_lines` | primary | `pg:proactive_ledger_lines` | the spoken proactive line | - | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | proactive/lines.py | - |
-| `proactive_pending` | primary | `pg:proactive_pending` | a queued proactive message | - | - | gap | no age limit: kept until deleted | proactive/session_utils.py | - |
-| `proactive_scheduled` | primary | `pg:proactive_scheduled` | a scheduled proactive message | - | - | gap | no age limit: kept until deleted | proactive/triggers/reminders.py | - |
-| `voice_announcements` | primary | `pg:voice_announcements` | an announcement message | - | - | gap | until expires_at (short-lived), then swept | voice_announce.py | - |
+| `proactive_pending` | primary | `pg:proactive_pending` | a queued proactive message | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | proactive/session_utils.py | - |
+| `proactive_scheduled` | primary | `pg:proactive_scheduled` | a scheduled proactive message | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | proactive/triggers/reminders.py | - |
+| `voice_announcements` | primary | `pg:voice_announcements` | an announcement message | - | `member_owned_forget.forget_user` | reached | until expires_at (short-lived), then swept | voice_announce.py | - |
 | `member_register` | primary | `pg:member_register` | topics the member likes | - | `member_register.forget_user` | reached | no age limit: kept until deleted | member_register.py | - |
 | `alarms` | primary | `pg:alarms` | alarm labels | - | `alarms.forget_user` | reached | no age limit: kept until deleted | alarms.py | - |
-| `ui_actions` | primary | `pg:ui_actions` | UI action payloads (e.g. a typed list item) | - | - | gap | no age limit: kept until deleted | ui_orchestrator.py | - |
-| `openclaw_approvals` | primary | `pg:openclaw_approvals` | old OpenClaw request text (retired, no writer) | - | - | gap | no age limit: kept until deleted | none (retired; read by routers/chat.py) | - |
-| `openclaw_run_state` | primary | `pg:openclaw_run_state` | old OpenClaw request/response text (retired) | - | - | gap | no age limit: kept until deleted | routers/chat.py (retired lane) | - |
+| `ui_actions` | primary | `pg:ui_actions` | UI action payloads (e.g. a typed list item) | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | ui_orchestrator.py | - |
+| `openclaw_approvals` | primary | `pg:openclaw_approvals` | old OpenClaw request text (retired, no writer) | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | none (retired; read by routers/chat.py) | - |
+| `openclaw_run_state` | primary | `pg:openclaw_run_state` | old OpenClaw request/response text (retired) | - | `member_owned_forget.forget_user` | reached | no age limit: kept until deleted | routers/chat.py (retired lane) | - |
 | `palace_sqlite` | primary | `~/.mempalace/**/chroma.sqlite3` | the memory palace: every remembered fact | `memory_residue.scrub_sqlite` | `memory_service.delete_user` | reached | no age limit: kept until deleted | memory_service.py | - |
 | `chroma_collections` | primary | `chroma:mempalace_drawers, chroma:mempalace_audit` | the palace's collections (same store) | `memory_residue.scrub_sqlite` | `memory_service._delete_ids` | reached | no age limit: kept until deleted | memory_service.py | - |
 | `router_shadow_log` | primary | `services/zoe-data/data/router_head_shadow.jsonl(.N)` | utterance text beside its hash | `local_text_logs.erase_entity` | `local_text_logs.erase_all_text` | reached | text stripped after ZOE_TEXT_LOG_RETENTION_DAYS (30) | semantic_router.py (local_text_logs.py erases) | - |

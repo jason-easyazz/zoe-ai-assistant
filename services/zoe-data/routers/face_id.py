@@ -110,8 +110,11 @@ async def face_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)
         raise HTTPException(status_code=400, detail=f"embedding length {len(emb)} != dim {dim} * 4 bytes")
 
     profile_id = str(_uuid.uuid4())
+    import erase_watermark as _ew_enrol
+
     try:
-        async with _get_compat_db() as db:
+        # registered as the member's turn before the write, refused if they were deleted (``erase_watermark.member_write``)
+        async with _ew_enrol.member_write(user_id), _get_compat_db() as db:
             await db.execute(
                 """INSERT INTO face_profiles (id, user_id, display_name, embedding_blob,
                        model_name, dim, consent_at, panel_id)
@@ -129,6 +132,8 @@ async def face_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)
             await db.commit()
     except HTTPException:
         raise
+    except (_ew_enrol.MemberErased, _ew_enrol.Unavailable) as exc:
+        raise HTTPException(status_code=409, detail="this member can no longer be enrolled (nothing was stored)") from exc
     except Exception as exc:
         logger.error("face/enroll DB error for user %s: %s", user_id, exc)
         raise HTTPException(status_code=500, detail="Failed to store face profile") from exc

@@ -136,6 +136,7 @@ async def send_push_to_user(
     body: str = "",
     url: str = "/",
     extra: dict | None = None,
+    erase_since=None,
 ):
     """
     Send a push notification to all of a user's subscriptions.
@@ -143,6 +144,10 @@ async def send_push_to_user(
     ``message`` is a convenience arg: if supplied and ``body`` is empty, it
     becomes the notification body.  ``extra`` dict is merged into the payload
     (e.g. ``{"url": "/chat.html?p=<id>"}`` for proactive deep-linking).
+
+    Member delete (``erase_watermark.send_refused``; ``erase_since``, else the enclosing ``erase_watermark.delivery``): checked right
+    before EACH push leaves, after the subscription read and every earlier push (each can stall up to its timeout); a member deleted
+    since then gets nothing more. An unreadable mark RAISES (nothing is sent on a guess). Neither given: no check (as before).
     """
     if message and not body:
         body = message
@@ -188,6 +193,9 @@ async def send_push_to_user(
             "keys": {"p256dh": row["keys_p256dh"], "auth": row["keys_auth"]},
         }
         payload = json.dumps(payload_data)
+        import erase_watermark
+        if await erase_watermark.send_refused(user_id, erase_since, "web_push"):
+            break
         try:
             await loop.run_in_executor(
                 None,

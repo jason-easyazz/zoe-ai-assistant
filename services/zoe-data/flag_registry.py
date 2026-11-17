@@ -1034,6 +1034,7 @@ _ENTRIES = (
     _f('ZOE_VOICE_BASELINE', 'str', ''),
     _f('ZOE_VOICE_CHAT_TIMEOUT_S', 'int', 20, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_VOICE_CLIP_EXPECTATIONS', 'str', '', doc='docs/knowledge/voice-pipeline.md'),
+    _f('ZOE_VOICE_CLIP_PENDING_FILE', 'str', '', doc='docs/knowledge/forget-reach.md', note='path of the pending clip-drop list (default ~/.zoe/voice-clip-pending-drops.txt)'),
     _f('ZOE_VOICE_CLIP_RETENTION', 'bool', False, doc='docs/knowledge/named-guests.md', note='delete guest / unknown corpus clips past the retention'),
     _f('ZOE_VOICE_CLIP_RETENTION_DAYS', 'int', 30, doc='docs/knowledge/named-guests.md'),
     _f('ZOE_VOICE_CLIP_VERDICT', 'bool', False, doc='docs/knowledge/named-guests.md', note='label each saved corpus clip with the server speaker verdict'),

@@ -106,6 +106,7 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     _pg("calendars", "calendar names and descriptions", "skybridge_service.py, calendar_forget.py"),
     _pg("ambient_memory", "ambient captured text", "routers/voice_tts.py"),
     _pg("notifications", "notification text", "notifications_store.py (distress_handoff.py, omi_recordings.py, ...)"),
+    _pg("ui_action_ledger", "a queued UI action's payload (a toast's words) and the panel's acknowledgement context", "ui_orchestrator.py"),
     _pg("proactive_deliveries", "delivery ledger (keys; text is in the candidate)", "proactive/ledger.py"),
     _pg("proactive_outcome_edges", "outcome edges (opaque ids)", "proactive/outcome_edges.py"),
     _pg("proactive_ledger_lines", "the spoken proactive line", "proactive/lines.py"),

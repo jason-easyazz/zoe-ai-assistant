@@ -241,7 +241,7 @@ async def read_latest(user_id: str, session_id: str, *, now: Optional[float] = N
 
 
 async def forget_user(user_id: str) -> int:
-    """Drop a user's persisted replies (the right-to-be-forgotten path). Returns the row count removed; 0 on failure. Takes the user's
+    """Drop a user's persisted replies (the right-to-be-forgotten path). Returns the row count removed; RAISES on failure (the member delete fails closed). Takes the user's
     erase gate: a write already in flight lands first and is removed with the rest; a write scheduled before this ran is dropped."""
     try:
         from db_compat import get_compat_db
@@ -253,4 +253,4 @@ async def forget_user(user_id: str) -> int:
                 return int(getattr(cur, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("reply_ledger: persisted replies NOT erased for a forgotten user (%s)", type(exc).__name__)
-        return 0
+        raise                 # fail closed: MemoryService.delete_user reports the failure (and the caller retries)

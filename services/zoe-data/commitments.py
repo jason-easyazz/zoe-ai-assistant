@@ -828,7 +828,7 @@ async def forget_user(user_id: str) -> int:
     """Drop every commitment of a member AND the sentences already queued from them (the right-to-be-forgotten path,
     ``MemoryService.delete_user``): an armed check-back or owning-up still names the person's subject and the next pull would speak it.
     Takes the member's erase gate: a recording or sweep step in flight lands first and is removed with the rest, and one scheduled
-    before this ran is dropped. Count of promises removed; 0 on failure (logged at WARNING: a failed erase must be visible)."""
+    before this ran is dropped. Count of promises removed; RAISES on failure (logged at WARNING; the member delete fails closed)."""
     try:
         from db_compat import get_compat_db
 
@@ -841,7 +841,7 @@ async def forget_user(user_id: str) -> int:
                 return n
     except Exception as exc:  # noqa: BLE001
         logger.warning("commitments: promises and queued sentences NOT erased for a forgotten user (%s)", type(exc).__name__)
-        return 0
+        raise                 # fail closed: MemoryService.delete_user reports the failure (and the caller retries)
 
 
 async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:

@@ -1040,26 +1040,61 @@ def _record_text(r: dict) -> str:
     return "\n".join(str(x or "") for x in (r.get("text"), r.get("reply"), rv.get("cause"), rv.get("note")))
 
 
-def _rewrite(d: Path, keep: Callable[[dict], bool]) -> int:
+def _strict_lines(p: Path, uid: str) -> tuple[list[dict], list[str], int]:
+    """An ERASE read of one records file: ``(records, unparseable lines that cannot name uid, unparseable lines that can)``. RAISES
+    when the file cannot be read (a member delete must fail, not read an unreadable file as empty)."""
+    recs, raw_kept, named = [], [], 0
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        if not ln.strip():
+            continue
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            r = None
+        if isinstance(r, dict):
+            recs.append(r)
+        elif uid in ln:
+            named += 1                                  # a torn / corrupt line naming the member goes with their records
+        else:
+            raw_kept.append(ln)
+    return recs, raw_kept, named
+
+
+def _rewrite(d: Path, keep: Callable[[dict], bool], *, strict_uid: Optional[str] = None) -> int:
+    """Rewrite every records file without the records ``keep`` refuses. ``strict_uid`` (a member delete): nothing is swallowed - an
+    unreadable records file RAISES, a corrupt line naming the member goes too, and an unreadable or corrupt summary is removed (it is
+    derived; the report is re-rendered without it; a summary that cannot be removed RAISES)."""
     removed = 0
     for p in sorted(d.glob(f"*{RECORDS_SUFFIX}")):
-        recs = _read_records(p)
+        if strict_uid:
+            recs, raw_kept, named = _strict_lines(p, strict_uid)
+        else:
+            recs, raw_kept, named = _read_records(p), [], 0
         kept = [r for r in recs if keep(r)]
-        if len(kept) == len(recs):
+        if len(kept) == len(recs) and not named:
             continue
-        removed += len(recs) - len(kept)
+        removed += len(recs) - len(kept) + named
         night = p.name[: -len(RECORDS_SUFFIX)]
-        _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept))
+        # The DERIVED files (summary, report) are cleaned FIRST and the records last: if a summary cannot be removed the raise
+        # leaves the member's records in place, so a retry finds them and cleans everything again (records first would make
+        # the retry skip this night and leave a readable report behind).
         try:
             summary = json.loads(summary_path(night, d).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             summary = {}
+        except (OSError, ValueError):
+            if not strict_uid:
+                summary = {}
+            else:
+                summary_path(night, d).unlink()          # unreadable or corrupt: removed (raises when it cannot be: fail closed)
+                summary = {}
         gone = {r.get("turn_id") for r in recs} - {r.get("turn_id") for r in kept}
         if summary:
             summary["events"] = [e for e in summary.get("events") or [] if e.get("turn_id") not in gone]
             summary["examples"] = {c: [i for i in ids if i not in gone] for c, ids in (summary.get("examples") or {}).items()}
             _write_private(summary_path(night, d), json.dumps(summary, indent=1, sort_keys=True))
         _write_private(report_path(night, d), render_report(night, kept, summary))
+        _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept) + "".join(ln + "\n" for ln in raw_kept))
     return removed
 
 
@@ -1108,11 +1143,19 @@ async def delete_user(user_id: str) -> int:
 
     def run() -> int:
         with _locked(d):
-            n = _rewrite(d, lambda r: r.get("user_id") != user_id)
+            n = _rewrite(d, lambda r: r.get("user_id") != user_id, strict_uid=user_id)
             for p in d.glob(f"*{SUMMARY_SUFFIX}"):
+                if not p.exists():
+                    continue                                 # removed above with its night's records
+                raw = p.read_text(encoding="utf-8")          # unreadable: RAISES (fail closed)
                 try:
-                    s = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    s = json.loads(raw)
+                except ValueError:
+                    s = None
+                if not isinstance(s, dict):
+                    if user_id in raw:
+                        p.unlink()                           # a corrupt summary that may name the member: removed (derived)
+                        n += 1
                     continue
                 ev = [e for e in s.get("events") or [] if e.get("member") != user_id]
                 if len(ev) != len(s.get("events") or []):

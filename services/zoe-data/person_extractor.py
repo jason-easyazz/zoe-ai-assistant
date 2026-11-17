@@ -296,6 +296,16 @@ def _parse_birthday(raw: str) -> tuple[Optional[int], Optional[int], Optional[in
 
 # ── DB UUID resolution ────────────────────────────────────────────────────────
 
+def _erased_since_queued(user_id: str) -> bool:
+    """Member delete: the post-turn pass running this was queued before the member's erase (the erase gate's snapshot, carried by
+    ``routers/chat._persist_memory_candidates`` / ``routers/voice_tts._run_voice_memory_passes``) - its Postgres people / edge / fact
+    writes must not land. The delete also WAITS for those passes (they hold their turn), so a write already past this check lands
+    before the erase and is erased with the rest."""
+    import user_erase_gate
+
+    return user_erase_gate.erased_since_scheduled(user_id)
+
+
 async def _resolve_person(name: str, user_id: str, db):
     """The full ``people_graph.Resolution`` of ``name`` for this user: ``unique`` | ``ambiguous`` (with the candidates, in
     the shape the ask-when-ambiguous tier reads) | ``none``. Exact name first (case / accents folded), then a whole token,
@@ -1262,6 +1272,8 @@ async def _write_relationship(
     transaction under the pair's advisory lock; with the temporal flag OFF a changed relationship is no longer dropped
     silently - it is kept as a pending candidate; ``evidence`` (``people_graph.Evidence``: turn id, quote span, speaker
     rank) is stored on the edge."""
+    if _erased_since_queued(user_id):        # member delete: no edge (or stub person) for a member erased since this was queued
+        return None
     import people_graph as _pg
     from routers.people import _WORK_GROUPS
 
@@ -1448,6 +1460,8 @@ async def apply_person_fact(
     value = (value or "").strip()
     if not name or not value:
         return False
+    if _erased_since_queued(user_id):        # member delete: the post-turn pass that queued this was outrun by the member's erase
+        return False
     # The LLM pass hands over whatever the 4B called a "name": "the meaning" (from a question about the meaning of life) became a
     # household contact that stayed in every recall packet. The regex path has always been gated by ``_looks_like_person_name``;
     # this is the same gate at the one entry the model reaches (QA round 4, open since round 1).
@@ -1604,6 +1618,8 @@ async def process_text(
     Returns count of facts written.
     """
     if not text or not user_id or is_unidentified(user_id):
+        return 0
+    if _erased_since_queued(user_id):        # member delete: never mine a turn of a member erased since it was queued
         return 0
     # BM5: an off-the-record turn is never mined.
     try:

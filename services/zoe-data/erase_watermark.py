@@ -22,6 +22,7 @@ reader, a code and counts: never an id, never text.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import logging
@@ -333,3 +334,366 @@ async def insert_or_update(db, exists: tuple, insert: tuple, update: tuple) -> b
     from db_pool import get_db_ctx  # type: ignore[import]
     async with get_db_ctx() as conn:
         return await go(conn)
+
+
+async def erased_since(user_id: str, made_at: Any) -> bool:
+    """True when ``user_id`` has an erase mark at or after ``made_at`` (a row's creation time; an unreadable time counts as erased).
+    No mark at all: False. RAISES ``Unavailable`` when the mark cannot be read (the caller does not act on a guess)."""
+    mark = await watermark(user_id)
+    if mark is None:
+        return False
+    made = instant(made_at)
+    return made is None or made <= mark
+
+
+#: when the delivery in progress began (``delivery``), for the send steps deep in its path that take no ``since`` of their own
+_delivery: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_delivery", default=None)
+
+
+@contextlib.contextmanager
+def delivery(since: Any):
+    """Run one delivery (a notification fan-out) with ``since`` = when it began: ``send_refused(uid, None, ...)`` deeper in its path
+    (``routers.push.send_push_to_user``, the spoken lanes) uses it. Tasks the delivery starts inherit it (contextvars)."""
+    token = _delivery.set(since)
+    try:
+        yield
+    finally:
+        _delivery.reset(token)
+
+
+async def send_refused(user_id: Any, since: Any, lane: str) -> bool:
+    """The LAST-STEP send guard, called after every await that can stall and right before a send leaves the box (a push, a queued
+    spoken line, a phone message): True = send NOTHING, because ``user_id`` was deleted at or after ``since`` (when the delivery began,
+    or when the queued row was made; None = the enclosing ``delivery``'s). No member id, or no ``since`` at all: False. RAISES
+    ``Unavailable`` when the mark cannot be read (the caller does not send on a guess). Logs the lane only."""
+    uid = str(user_id or "").strip()
+    since = _delivery.get() if since is None else since
+    if not uid or since is None:
+        return False
+    if await erased_since(uid, since):
+        logger.info("ERASE_WATERMARK_SEND_REFUSED lane=%s", lane)
+        return True
+    return False
+
+
+async def refuse_send(user_id: Any, since: Any, lane: str) -> bool:
+    """``send_refused`` that FAILS CLOSED: an unreadable mark also refuses (the caller sends nothing on a guess, and retries later where
+    it can). For the senders that have no claim to release and no caller to raise into (the phone digests)."""
+    try:
+        return await send_refused(user_id, since, lane)
+    except Unavailable:
+        logger.warning("ERASE_WATERMARK_SEND_UNREADABLE lane=%s", lane)
+        return True
+
+
+def delivery_began() -> Optional[datetime]:
+    """When the enclosing ``delivery`` began, or None outside one. A row a delivery QUEUES is stamped with it (not with the insert
+    time), so a delete that lands at any moment after the delivery began refuses the row where it is consumed."""
+    return instant(_delivery.get())
+
+
+# -- in-flight member turns: the delete waits for them, and each late write re-checks the mark against the turn's start -------------
+#: token -> {"session", "member", "began", "refs"}: every member turn in flight in this process. A chat turn is keyed by its session
+#: (``routers/chat.locked_chat_stream`` holds the session lock: one at a time); a VOICE turn (``routers/voice_tts.voice_command``) also
+#: binds its token in the task context (``_TURN_CTX``), which its stream body and its background tasks inherit, and is held open by
+#: them (``turn_hold`` / ``turn_release``) until its last write. The member is whatever is known at the start and RE-KEYED when the
+#: speaker is resolved (``turn_identify``); the START time never changes.
+_TURNS: dict = {}
+_TURN_CTX: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_turn", default=None)
+#: a turn older than this is not waited for (a stream nobody iterated never runs its ``finally``): it is CANCELLED instead
+#: (``cancel_stale_turns``), and every store write it could still make is refused at the database wrapper (``store_write_guard``)
+TURN_STALE_S = 600.0
+
+
+def _current_task():
+    try:
+        import asyncio
+
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
+def turn_open(session_id: Optional[str], user_id: str) -> str:
+    """A member turn began (``session_id``: a chat turn's session; None for a voice turn, which is found through the context).
+    Returns its token. The task running it is kept, so a STALE turn of a deleted member can be cancelled (``cancel_stale_turns``)."""
+    import uuid
+
+    token = uuid.uuid4().hex
+    _TURNS[token] = {"session": str(session_id) if session_id else None, "member": str(user_id or ""), "began": _now(), "refs": 1,
+                     "task": _current_task()}
+    return token
+
+
+def turn_bind(token: str):
+    """Bind a turn opened with ``turn_open`` (a chat turn) in the CURRENT context, as a voice turn binds itself: the store writes its
+    tools make in this task (and the tasks it starts) are then judged against this turn's start (``store_write_guard``). Returns the
+    context token for ``turn_unbind``."""
+    entry = _TURNS.get(str(token or ""))
+    return _TURN_CTX.set((str(token), entry["began"])) if entry else None
+
+
+def turn_unbind(ctx_token) -> None:
+    """Undo ``turn_bind`` / ``bind_member_turn`` (the latter also closes the tool call's own turn)."""
+    if ctx_token is None:
+        return
+    if isinstance(ctx_token, tuple) and ctx_token and ctx_token[0] == "tool":
+        _kind, token, ctx_token = ctx_token
+        _TURNS.pop(token, None)
+    try:
+        _TURN_CTX.reset(ctx_token)
+    except ValueError:      # finalised in another context (a stream closed by the server): that context dies with it
+        pass
+
+
+def bind_member_turn(user_id: str):
+    """A write that arrives WITHOUT a turn context but on behalf of a member's turn - a brain TOOL call, which reaches zoe-data as a
+    separate request (``/api/system/intent-dispatch``), an MCP tool call - is a turn of its OWN in the registry: the member's id and
+    the START of their OLDEST turn in flight (the conservative choice: an erase at or after it refuses), and the task running it. So
+    it outlives its parent turn closing, the delete waits for it (or cancels it once stale) like any turn, and it is bound in the
+    current context. No turn of the member in flight: nothing is opened or bound. Returns the token for ``turn_unbind``."""
+    uid = str(user_id or "")
+    starts = [e["began"] for e in list(_TURNS.values()) if uid and e["member"] == uid]
+    if not starts:
+        return None
+    began = min(starts)
+    token = turn_open(None, uid)
+    _TURNS[token]["began"] = began
+    return ("tool", token, _TURN_CTX.set((token, began)))
+
+
+def release_task_turns(task) -> None:
+    """Close every turn ``task`` opened and never closed (a tool call bound in a task of its own, ``mcp_server.handle_tool``)."""
+    for t in [t for t, e in list(_TURNS.items()) if task is not None and e.get("task") is task]:
+        _TURNS.pop(t, None)
+
+
+def stale_turn_tasks(user_id: str) -> list:
+    """The tasks of ``user_id``'s turns older than ``TURN_STALE_S`` that are still running."""
+    uid, cutoff = str(user_id or ""), _now().timestamp() - TURN_STALE_S
+    return [e["task"] for e in list(_TURNS.values()) if e["member"] == uid and e["began"].timestamp() < cutoff
+            and e.get("task") is not None and not e["task"].done()]
+
+
+def cancel_stale_turns(user_id: str) -> list:
+    """Cancel the member's STALE turns (the delete does not wait for them): a turn stalled for ten minutes that resumed after the
+    delete would otherwise write as a deleted member. Returns the cancelled tasks (the caller waits for them to end). The task
+    running the caller is never cancelled."""
+    me = _current_task()
+    out = [t for t in stale_turn_tasks(user_id) if t is not me]
+    for t in out:
+        t.cancel()
+    if out:
+        logger.warning("ERASE_WATERMARK_STALE_TURNS_CANCELLED count=%d", len(out))
+    return out
+
+
+class TurnWriteRefused(RuntimeError):
+    """A store write a turn made for a member erased at or after the turn BEGAN (``store_write_guard``): the write never runs."""
+
+
+#: an INSERT INTO / UPDATE / DELETE FROM <table> statement's target table (lower case)
+_WRITE_RX = re.compile(r"^\s*(?:with\b.*?\)\s*)?(?:insert\s+into|update|delete\s+from)\s+\"?([a-z_][a-z0-9_]*)", re.IGNORECASE | re.DOTALL)
+
+
+def write_target(sql: str) -> str:
+    m = _WRITE_RX.match(str(sql or ""))
+    return m.group(1).lower() if m else ""
+
+
+@contextlib.asynccontextmanager
+async def _on(conn):
+    yield conn
+
+
+async def store_write_guard(sql: str, conn: Any = None) -> None:
+    """THE ONE CHECK every member-owned store write of a turn passes (``db_pool.AsyncpgCompat``: every pooled statement): inside a
+    bound turn (voice, chat, or a brain tool call bound by ``bind_member_turn``), a write to a member-owned table
+    (``member_owned_forget.TURN_WRITE_TABLES``) for a turn whose member was erased at or after the turn began raises
+    ``TurnWriteRefused`` BEFORE the statement runs. Outside a turn it costs one ContextVar read; inside one, one mark read per
+    member-owned write, read on the CALLER's connection (``conn``: no second pooled connection, so a busy pool neither slows the write
+    nor turns the check into an unreadable mark). A member delete's own statements are never judged (``user_erase_gate.whole_member_erase``
+    unbinds). An unreadable mark lets the write run (the late-write rule's choice for a turn's own save; the erase fails closed)."""
+    bound = _TURN_CTX.get()
+    if bound is None:
+        return
+    table = write_target(sql)
+    if not table:
+        return
+    import member_owned_forget
+
+    if table not in member_owned_forget.TURN_WRITE_TABLES:
+        return
+    entry = _TURNS.get(bound[0]) if bound[0] else None
+    member = (entry or {}).get("member") or ""
+    if not member:
+        return
+    backend = get_backend()
+    in_tx = False
+    if conn is not None and isinstance(backend, SqlBackend) and backend._ctx is None:
+        backend = SqlBackend(ctx=lambda: _on(conn))
+        probe = getattr(conn, "is_in_transaction", None)
+        in_tx = bool(callable(probe) and probe())
+    try:
+        if in_tx:      # inside the caller's transaction the read runs in a SAVEPOINT: a failed read never aborts the caller's work
+            async with conn.transaction():
+                mark = await watermark(member, backend=backend)
+        else:
+            mark = await watermark(member, backend=backend)
+    except Unavailable:
+        return
+    import user_erase_gate
+
+    if user_erase_gate.in_progress(member) or (mark is not None and bound[1] <= mark):
+        logger.warning("ERASE_WATERMARK_STORE_WRITE_REFUSED table=%s", table)
+        raise TurnWriteRefused(table)
+
+
+class MemberErased(Exception):
+    """A write on behalf of a member who has been (or is being) deleted: refused, nothing stored."""
+
+
+@contextlib.asynccontextmanager
+async def member_write(user_id: str):
+    """A write that CREATES member content outside any turn (a biometric enrolment request): it is registered as the member's turn
+    FIRST, so a delete that starts after this point waits for it (and then erases what it wrote), and THEN refused when the member
+    has any erase mark (a whole-member delete is the only writer of marks: one at its start, one at its end), so a delete that began
+    before it is never undone by it. An unreadable mark refuses too (``Unavailable``): the caller does not store on a guess."""
+    token = turn_open(None, str(user_id or ""))
+    ctx = turn_bind(token)
+    try:
+        import user_erase_gate
+
+        if user_erase_gate.in_progress(str(user_id)) or await watermark(str(user_id)) is not None:
+            logger.warning("ERASE_WATERMARK_MEMBER_WRITE_REFUSED")
+            raise MemberErased(str(user_id))
+        yield
+    finally:
+        turn_unbind(ctx)
+        turn_close(token)
+
+
+def turn_close(token_or_session: str) -> None:
+    """Release a turn (its token), or every turn of a chat session (the session id)."""
+    key = str(token_or_session or "")
+    if key in _TURNS:
+        turn_release(key)
+        return
+    for t in [t for t, e in list(_TURNS.items()) if e["session"] == key]:
+        _TURNS.pop(t, None)
+
+
+def voice_turn_begin():
+    """``turn_open`` for a voice turn, bound in the CURRENT context (its stream body and background tasks inherit it). Returns the
+    context token for ``voice_turn_end``."""
+    token = turn_open(None, "")
+    return _TURN_CTX.set((token, _TURNS[token]["began"]))
+
+
+def voice_turn_end(ctx_token) -> None:
+    bound = _TURN_CTX.get()
+    if bound is not None:
+        turn_release(bound[0])
+    _TURN_CTX.reset(ctx_token)
+
+
+def turn_identify(user_id: str) -> None:
+    """The context's turn is now known to be ``user_id``'s (the speaker was resolved): the delete waits for it from here on. The
+    turn keeps the START it had."""
+    bound = _TURN_CTX.get()
+    if bound is not None and bound[0] in _TURNS and user_id:
+        _TURNS[bound[0]]["member"] = str(user_id)
+
+
+def turn_hold() -> Optional[str]:
+    """One more piece of work of the context's turn (a background task, a stream body): the turn stays in flight until it releases."""
+    bound = _TURN_CTX.get()
+    if bound is None or bound[0] not in _TURNS:
+        return None
+    _TURNS[bound[0]]["refs"] += 1
+    return bound[0]
+
+
+def turn_release(token: Optional[str]) -> None:
+    entry = _TURNS.get(str(token or ""))
+    if entry is None:
+        return
+    entry["refs"] -= 1
+    if entry["refs"] <= 0:
+        _TURNS.pop(str(token), None)
+
+
+def inflight_turns(user_id: str) -> int:
+    """How many turns of ``user_id`` are in flight in this process now (the member delete waits for them; stale ones excepted)."""
+    uid, cutoff = str(user_id or ""), _now().timestamp() - TURN_STALE_S
+    return sum(1 for e in list(_TURNS.values()) if e["member"] == uid and e["began"].timestamp() >= cutoff)
+
+
+def turn_began(session_id: Optional[str] = None) -> Optional[datetime]:
+    """When the turn this write belongs to began: the context's voice turn, else the chat turn in flight on ``session_id``."""
+    bound = _TURN_CTX.get()
+    if bound is not None:
+        return bound[1]
+    starts = [e["began"] for e in list(_TURNS.values()) if session_id and e["session"] == str(session_id)]
+    return min(starts) if starts else None
+
+
+async def turn_write_refused(session_id: Optional[str], lane: str, user_id: Optional[str] = None) -> bool:
+    """THE LATE-WRITE RULE for a turn's writes: True = drop (or undo) this write, because the member it is written AS (``user_id``,
+    else the turn's member) was erased at or after the turn BEGAN (its start, never the moment the speaker was resolved). Asked twice
+    by every writer: right before its write and right after it (undoing the write when True) - a delete that lands between the two
+    finds the row with its erase or is caught by the second check, since the mark is recorded before anything is erased, and the mark
+    is DURABLE, so this holds for a turn in any process. No turn known: False. An unreadable mark: False (a turn's own save is never
+    dropped on a guess; the erase itself fails closed on an unreadable store)."""
+    began = turn_began(session_id)
+    if began is None:
+        return False
+    uid = user_id
+    if not uid:
+        bound = _TURN_CTX.get()
+        entries = ([_TURNS.get(bound[0])] if bound is not None else
+                   [e for e in list(_TURNS.values()) if session_id and e["session"] == str(session_id)])
+        uid = next((e["member"] for e in entries if e and e["member"]), "")
+    import user_erase_gate
+
+    if uid and user_erase_gate.in_progress(str(uid)):    # a delete of this member is running: its first mark may predate the turn
+        return True
+    try:
+        return await send_refused(uid, began, lane)
+    except Unavailable:
+        return False
+
+
+def hold_session_turn(session_id: Optional[str]) -> Optional[str]:
+    """One more piece of work of the chat turn in flight on ``session_id`` (its post-turn passes, queued from inside the turn): the
+    turn stays in flight - the member delete waits - until the work releases it (``turn_release``). None when no turn is open there."""
+    for token, entry in list(_TURNS.items()):
+        if session_id and entry["session"] == str(session_id):
+            entry["refs"] += 1
+            return token
+    return None
+
+
+def held_at_call(session_arg: str):
+    """Decorate an async post-turn writer queued from inside a chat turn: at the CALL (the moment it is queued, before the turn can
+    end) the turn on the session named by argument ``session_arg`` is held, and released when the writer finishes."""
+    import functools
+    import inspect
+
+    def wrap(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            bound = sig.bind_partial(*args, **kwargs)
+            token = hold_session_turn(bound.arguments.get(session_arg))
+            inner = fn(*args, **kwargs)        # created NOW: an inner call-time wrapper (the erase gate's snapshot) reads at queue time
+
+            async def run():
+                try:
+                    return await inner
+                finally:
+                    turn_release(token)
+            return run()
+        return call
+    return wrap

@@ -84,6 +84,11 @@ async def enqueue_ui_action(
 ) -> Dict[str, Any]:
     if action_type not in ALLOWED_ACTION_TYPES:
         raise ValueError(f"Unsupported action type: {action_type}")
+    # The ORIGINATING member (who the action is for), kept BEFORE ``user_id`` becomes the panel's signed-in identity below (a guest
+    # kiosk's actions are stored as ``guest``). It is written into the action's ``queued`` ledger event (server-side only, never sent
+    # to the panel), where a member delete finds the actions queued for them (``member_owned_forget._originated_ui_actions``) and the
+    # panel's poll checks their erase mark (``routers/ui_actions.get_pending_ui_actions``).
+    origin_user_id = str(user_id or "")
 
     if not panel_id:
         # No panel specified — find the requester's foreground panel.
@@ -177,6 +182,7 @@ async def enqueue_ui_action(
             "action_type": action_type,
             "payload": payload,
             "requires_confirmation": bool(requires_confirmation),
+            "origin_user_id": origin_user_id,
         },
     )
     if commit:
@@ -194,8 +200,22 @@ async def enqueue_ui_action(
         "confirmation_token": confirmation_token if requires_confirmation else None,
     }
     if broadcast:
-        if panel_id:
-            await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
-        else:
-            await broadcaster.broadcast("all", "ui_action", message)
+        await broadcast_ui_action(message)
     return message
+
+
+async def broadcast_ui_action(message: Dict[str, Any]) -> None:
+    """Push one queued action (``enqueue_ui_action``'s return) to its panel, or to every client when it names none. A caller that
+    must re-check something between the queue write and the push enqueues with ``broadcast=False`` and calls this itself."""
+    panel_id = message.get("panel_id")
+    if panel_id:
+        await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
+    else:
+        await broadcaster.broadcast("all", "ui_action", message)
+
+
+async def withdraw_ui_action(db, action_id: str) -> None:
+    """Remove a queued action and its ledger rows (a delivery refused between the queue write and the push)."""
+    await db.execute("DELETE FROM ui_action_ledger WHERE action_id = ?", (action_id,))
+    await db.execute("DELETE FROM ui_actions WHERE id = ?", (action_id,))
+    await db.commit()

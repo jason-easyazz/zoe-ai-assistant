@@ -382,14 +382,33 @@ def fact_text(r: dict) -> str:
     return " ".join(str(r.get(k) or "") for k in ("subject", "value", "word", "of"))
 
 
-def _rewrite(d: Path, keep: Callable[[dict], bool]) -> int:
+def _rewrite(d: Path, keep: Callable[[dict], bool], *, strict_uid: Optional[str] = None) -> int:
+    """Rewrite every facts file without the records ``keep`` refuses. ``strict_uid`` (a member delete): an unreadable file RAISES (never
+    read as empty) and a corrupt line naming the member goes too; other corrupt lines are kept as they are."""
     removed = 0
     for p in sorted(d.glob(f"*{FACTS_SUFFIX}")):
-        recs = _read(p)
+        raw_kept, named = [], 0
+        if strict_uid:
+            recs = []
+            for ln in p.read_text(encoding="utf-8").splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    r = None
+                if isinstance(r, dict):
+                    recs.append(r)
+                elif strict_uid in ln:
+                    named += 1
+                else:
+                    raw_kept.append(ln)
+        else:
+            recs = _read(p)
         kept = [r for r in recs if keep(r)]
-        if len(kept) != len(recs):
-            removed += len(recs) - len(kept)
-            _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept))
+        if len(kept) != len(recs) or named:
+            removed += len(recs) - len(kept) + named
+            _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept) + "".join(ln + "\n" for ln in raw_kept))
     return removed
 
 
@@ -440,11 +459,17 @@ async def delete_user(user_id: str) -> int:
     def run() -> int:
         with _locked(d):
             _note_erased(d, user_id)         # an in-flight run that loaded this member's turns BEFORE now must not publish them after
-            n = _rewrite(d, lambda r: r.get("user_id") != user_id)
+            n = _rewrite(d, lambda r: r.get("user_id") != user_id, strict_uid=user_id)
             for p in d.glob(f"*{SUMMARY_SUFFIX}"):
+                raw = p.read_text(encoding="utf-8")          # unreadable: RAISES (fail closed)
                 try:
-                    s = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    s = json.loads(raw)
+                except ValueError:
+                    s = None
+                if not isinstance(s, dict):
+                    if user_id in raw:
+                        p.unlink()                           # a corrupt summary that may name the member: removed (derived)
+                        n += 1
                     continue
                 if user_id in (s.get("members") or {}):
                     s["members"].pop(user_id, None)

@@ -61,7 +61,7 @@ _DEFAULT_TTL_S = 120
 # The intercom's rows (``intercom.py``: a member's announcement / ring addressed to ONE named panel) are panel-scoped for the same
 # reason - "tell the kitchen" must never be played by whichever daemon polls first. ``timer_done``
 # (``skybridge_service._ring_when_done``): a member's timer ending is said only by the panel that set it.
-PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll",
+PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "face_profile_forget", "voice_enroll",
                                           "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link",
                                           "timer_done")
 
@@ -75,15 +75,20 @@ PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_prof
 #                         would speak the member's name and enrol whoever stands there next
 #   voice_profile_forget  drop ``user_id``'s voice signature from the daemon's cache and disk NOW, then re-sync (one row per
 #                         panel, PANEL-SCOPED above: every speaker must hear it, and only that panel may claim its own row)
+#   face_profile_forget   drop ``user_id``'s face embeddings from the panel's face-profile cache file (``~/.zoe-voice/face_profiles.json``,
+#                         read by ``zoe_face_id.py``) NOW; queued with the voice forget by a member delete (``member_owned_forget``).
+#                         PANEL-SCOPED, one row per panel, like the voice forget. A daemon older than this command spends the row unhandled
 #   voice_clip_play       play a few seconds of a saved unknown-voice clip, then ask "who's this?" (named_guest_clips.py): PANEL-SCOPED;
 #                         the row carries a single-use token, never audio - the daemon redeems it at POST /api/voice/clip-playback
-COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget", "voice_clip_play")
+COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget", "face_profile_forget", "voice_clip_play")
 # A spoken row after which the daemon opens a listening window with no wake word: an OFFER asks a question, and "Hey Zoe, yes" is
 # not a natural way to answer one. Old daemons ignore the flag (the answer then needs the wake word; the pending offer waits 2 min).
 LISTEN_AFTER_TRIGGERS: tuple[str, ...] = ("voice_enroll_offer",)
-# A command nobody is there to receive is stale in seconds; the forget command is the exception (see ``enqueue_command``).
+# A command nobody is there to receive is stale in seconds; the forget commands are the exception (see ``enqueue_command``): a panel
+# that is offline gets them when it reconnects within the day.
 COMMAND_TTL_S = 180
 FORGET_TTL_S = 24 * 3600
+FORGET_TRIGGERS: tuple[str, ...] = ("voice_profile_forget", "face_profile_forget")
 
 # Hard cap per claim; the engine enqueues one row per spoken notification, so
 # anything larger than a handful means a backlog that should expire, not play.
@@ -143,6 +148,13 @@ async def enqueue_announcement(
         raise ValueError("announcement message is empty")
     ttl = max(1, int(ttl_s)) if ttl_s else _ttl_s()
     now = _now()
+    # ``created_at`` is when the enclosing delivery BEGAN when there is one (``erase_watermark.delivery``), so the claim's erase check
+    # (``claim_announcements``: a row made at or before the member's erase mark is never spoken) refuses a line for a member deleted at
+    # ANY moment after the delivery began, even one whose delete landed between the sender's last check and this insert
+    import erase_watermark
+
+    began = erase_watermark.delivery_began()
+    made = began if began is not None and began < now else now
     if dedupe_key:
         ann_id = dedupe_id(dedupe_key)
     else:
@@ -157,7 +169,7 @@ async def enqueue_announcement(
             panel_id,
             text,
             trigger_type or "",
-            _fmt(now),
+            _fmt(made),
             _fmt(datetime.fromtimestamp(now.timestamp() + ttl, tz=timezone.utc)),
         ),
     )
@@ -207,7 +219,7 @@ async def enqueue_command(
     if trigger_type not in COMMAND_TRIGGERS:
         raise ValueError(f"not a command trigger: {trigger_type!r}")
     body = json.dumps({"kind": trigger_type, "user_id": user_id, **(command or {})}, ensure_ascii=False, separators=(",", ":"))
-    ttl = ttl_s if ttl_s else (FORGET_TTL_S if trigger_type == "voice_profile_forget" else COMMAND_TTL_S)
+    ttl = ttl_s if ttl_s else (FORGET_TTL_S if trigger_type in FORGET_TRIGGERS else COMMAND_TTL_S)
     return await enqueue_announcement(
         db, user_id=user_id, message=body, panel_id=panel_id, trigger_type=trigger_type, ttl_s=ttl, commit=commit,
     )
@@ -272,7 +284,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     # 2) Candidate rows (oldest first, so briefs play in order).
     if _strict_panel():
         cursor = await db.execute(
-            """SELECT id, user_id, message, trigger_type, expires_at FROM voice_announcements
+            """SELECT id, user_id, message, trigger_type, expires_at, created_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
                  AND panel_id = ?
                ORDER BY created_at ASC LIMIT ?""",
@@ -281,7 +293,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     else:
         scoped = ", ".join("?" for _ in PANEL_SCOPED_TRIGGERS)
         cursor = await db.execute(
-            f"""SELECT id, user_id, message, trigger_type, expires_at FROM voice_announcements
+            f"""SELECT id, user_id, message, trigger_type, expires_at, created_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
                  AND (COALESCE(trigger_type, '') NOT IN ({scoped}) OR panel_id = ?)
                ORDER BY created_at ASC LIMIT ?""",
@@ -289,9 +301,47 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
         )
     rows = await cursor.fetchall()
 
-    # 3) Atomic per-row claim — the poll-overlap guard.
+    # 3) Atomic per-row claim — the poll-overlap guard. The members whose rows are being claimed are IN FLIGHT until the claimed list
+    # is returned (``inflight_claims``: a member delete waits for them), and every claimed line is re-checked AFTER the claim commits.
+    members = sorted({str(r["user_id"] or "") for r in rows})
+    for m in members:
+        _IN_CLAIM[m] = _IN_CLAIM.get(m, 0) + 1
+    try:
+        return await _claim_rows(db, rows, panel_id=panel_id, now=now, now_s=now_s)
+    finally:
+        for m in members:
+            left = _IN_CLAIM.get(m, 0) - 1
+            if left > 0:
+                _IN_CLAIM[m] = left
+            else:
+                _IN_CLAIM.pop(m, None)
+
+
+#: member -> claims of their rows in progress in this process (``claim_announcements``); the member delete waits for none to be left
+_IN_CLAIM: dict = {}
+
+
+def inflight_claims(user_id: str) -> int:
+    return _IN_CLAIM.get(str(user_id or ""), 0)
+
+
+async def _claim_rows(db, rows, *, panel_id: str, now, now_s: str) -> list[dict]:
+    import erase_watermark
+
     claimed: list[dict] = []
+    owners: list[tuple] = []
     for row in rows:
+        # The last step before a spoken line leaves for the panel: a line queued for a member who was deleted at or after it was queued
+        # is never spoken (marked expired), whoever queued it and however it raced the delete. An unreadable mark: not now (it stays
+        # pending). A panel COMMAND carries no content and is exempt: the delete itself queues the voice / face forgets after its mark.
+        if (row["trigger_type"] or "") not in COMMAND_TRIGGERS:
+            try:
+                gone = await erase_watermark.send_refused(row["user_id"], row["created_at"], "voice_announcement")
+            except erase_watermark.Unavailable:
+                continue
+            if gone:
+                await db.execute("UPDATE voice_announcements SET expired = 1 WHERE id = ? AND delivered_at IS NULL", (row["id"],))
+                continue
         # The 07:30 brief vs the first-turn brief (ZOE_BRIEF_ON_FIRST_TURN): never
         # play a brief the conversation already delivered, and hold it while a
         # conversational brief is mid-reply. A no-op with that flag off.
@@ -317,7 +367,20 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
             if getattr(cur, "rowcount", 0) != 1:
                 continue  # another poller won this row
         claimed.append(_claimed_item(row, now))
+        owners.append((row["user_id"], row["created_at"], row["trigger_type"] or ""))
     await db.commit()
+    # AFTER the claim committed (the late-write rule): a member deleted since the line was queued - also one whose delete landed
+    # between the check above and this point - is handed nothing; an unreadable mark hands nothing either (never spoken on a guess).
+    kept = []
+    for item, (uid, made, trigger) in zip(claimed, owners):
+        if trigger not in COMMAND_TRIGGERS:
+            try:
+                if await erase_watermark.send_refused(uid, made, "voice_announcement_claimed"):
+                    continue
+            except erase_watermark.Unavailable:
+                continue
+        kept.append(item)
+    claimed = kept
     if claimed:
         log.info(
             "voice_announce: claimed %d announcement(s) for panel=%s",

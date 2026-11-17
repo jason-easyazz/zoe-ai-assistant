@@ -511,6 +511,8 @@ def test_a_cancel_tap_reaches_the_running_enrolment(daemon):
 def test_a_forget_command_drops_that_members_profile_from_memory_and_disk_at_once(daemon, monkeypatch, tmp_path):
     cache_file = tmp_path / ".zoe-voice" / "speaker_profiles.json"
     monkeypatch.setattr(daemon, "_PROFILE_CACHE_PATH", str(cache_file))
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(tmp_path / ".zoe-voice" / "speaker_shadow_metrics.jsonl"))   # the purge prunes it
+    monkeypatch.setattr(daemon, "_SHADOW_FORGOTTEN", set(), raising=False)
     synced = []
     monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: synced.append(force))
     with daemon._profile_cache_lock:
@@ -526,6 +528,27 @@ def test_a_forget_command_drops_that_members_profile_from_memory_and_disk_at_onc
 
 def test_a_forget_command_without_a_user_does_nothing(daemon, monkeypatch):
     assert daemon._handle_server_command({"command": {"kind": "voice_profile_forget", "user_id": " "}}) is False
+
+
+def test_a_face_forget_command_drops_that_members_faces_from_the_face_cache_file(daemon, monkeypatch, tmp_path):
+    """A member delete queues ``face_profile_forget``: the daemon removes the member's rows from the file ``zoe_face_id.py`` reads (no
+    process re-syncs it on its own), keeps everyone else's, 0600. No file is nothing held; an unreadable file is removed."""
+    cache_file = tmp_path / ".zoe-voice" / "face_profiles.json"
+    cache_file.parent.mkdir()
+    monkeypatch.setattr(daemon, "_FACE_CACHE_PATH", str(cache_file))
+    cache_file.write_text(json.dumps({"profiles": [{"user_id": "ann", "embedding_base64": "AA=="},
+                                                   {"user_id": "ann", "embedding_base64": "AB=="},
+                                                   {"user_id": "bob", "embedding_base64": "BB=="}]}))
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": "ann"}}) is True
+    on_disk = json.loads(cache_file.read_text())
+    assert [p["user_id"] for p in on_disk["profiles"]] == ["bob"]
+    assert "AA==" not in cache_file.read_text() and "AB==" not in cache_file.read_text()
+    assert oct(os.stat(cache_file).st_mode & 0o777) == "0o600"
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": " "}}) is False
+    cache_file.write_text("{not json")
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": "ann"}}) is True
+    assert not cache_file.exists(), "an unreadable cache is removed (the next enrolment run re-syncs it)"
+    assert daemon._handle_server_command({"command": {"kind": "face_profile_forget", "user_id": "ann"}}) is True, "no file: nothing held"
 
 
 # ── the talk screen: the phrase is shown as well as spoken ────────────────────────────────────────────────────────────────
@@ -739,3 +762,110 @@ def test_the_failure_counter_is_reset_for_each_run(daemon, monkeypatch):
     posts = []
     _run_daemon_enrolment(daemon, monkeypatch, lambda path, data, timeout=60, retries=None: posts.append(path) or {"ok": True})
     assert posts.count("/api/enrollment/screen") == 11
+
+
+# ── a panel that missed its purge commands still drops the member: the start / hourly sync's ROSTER ───────────────────────────
+
+class _SyncResp:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data
+
+
+def _panel_files(daemon, monkeypatch, tmp_path):
+    root = tmp_path / ".zoe-voice"
+    root.mkdir(exist_ok=True)
+    face, shadow, voice = root / "face_profiles.json", root / "speaker_shadow_metrics.jsonl", root / "speaker_profiles.json"
+    monkeypatch.setattr(daemon, "_FACE_CACHE_PATH", str(face))
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(shadow))
+    monkeypatch.setattr(daemon, "_PROFILE_CACHE_PATH", str(voice))
+    monkeypatch.setattr(daemon, "_applied_roster", {})
+    monkeypatch.setattr(daemon, "_SHADOW_FORGOTTEN", set(), raising=False)
+    face.write_text(json.dumps({"profiles": [{"user_id": "ann", "embedding_base64": "AA=="}, {"user_id": "bob", "embedding_base64": "BB=="}]}))
+    shadow.write_text("".join(json.dumps({"boot": "b", "seq": i, "user_id": u, "score": 0.5}) + "\n"
+                              for i, u in enumerate(["ann", "bob", None, "ann"])))
+    os.chmod(shadow, 0o640)
+    return face, shadow
+
+
+def _start_sync(daemon, monkeypatch, data):
+    http = MagicMock()
+    http.get.return_value = _SyncResp(data)
+    monkeypatch.setattr(daemon, "_zoe_http", lambda: http)
+    with daemon._profile_cache_lock:
+        daemon._profile_cache["fetched_at"] = 0.0
+        daemon._profile_cache["syncing"] = False
+    daemon._sync_speaker_profiles(force=True)          # what the daemon runs at start (and hourly)
+
+
+def test_an_older_daemon_dropped_the_purge_and_the_new_daemon_start_drops_the_member_anyway(daemon, monkeypatch, tmp_path):
+    """The server queued face/voice purges for ``ann``; the daemon deployed then predated them and spent the rows unhandled. The new
+    daemon's start sync carries the roster (``ann`` holds no profile any more): her face rows and her shadow rows go; bob's stay."""
+    face, shadow = _panel_files(daemon, monkeypatch, tmp_path)
+    _start_sync(daemon, monkeypatch, {"profiles": [{"user_id": "bob", "embedding_base64": "BB=="}],
+                                      "roster": {"voice": ["bob"], "face": ["bob"]}})
+    assert [p["user_id"] for p in json.loads(face.read_text())["profiles"]] == ["bob"]
+    rows = [json.loads(x) for x in shadow.read_text().splitlines() if x.strip()]
+    assert [r["user_id"] for r in rows] == ["bob", None], "the member's predictions go; a row naming nobody stays"
+    assert oct(os.stat(shadow).st_mode & 0o777) == "0o640", "the log keeps its mode"
+
+
+def test_a_panel_offline_past_the_queue_life_purges_at_its_next_start_and_an_older_server_drops_nothing(daemon, monkeypatch, tmp_path):
+    """Offline longer than the commands' 24 h: they expired unclaimed. Its next start sync still drops the member. A server that sends
+    no roster (older) drops nothing - never a guess."""
+    face, shadow = _panel_files(daemon, monkeypatch, tmp_path)
+    before = (face.read_text(), shadow.read_text())
+    _start_sync(daemon, monkeypatch, {"profiles": []})
+    assert (face.read_text(), shadow.read_text()) == before, "no roster: nothing dropped"
+    _start_sync(daemon, monkeypatch, {"profiles": [], "roster": {"voice": ["bob"]}})          # the face list left out: faces untouched
+    assert len(json.loads(face.read_text())["profiles"]) == 2
+    _start_sync(daemon, monkeypatch, {"profiles": [], "roster": {"voice": ["bob"], "face": ["bob"]}})
+    assert [p["user_id"] for p in json.loads(face.read_text())["profiles"]] == ["bob"]
+    assert "ann" not in shadow.read_text()
+
+
+def test_the_voice_forget_drops_the_members_shadow_rows_and_keeps_a_torn_line_only_if_it_cannot_name_them(daemon, monkeypatch, tmp_path):
+    face, shadow = _panel_files(daemon, monkeypatch, tmp_path)
+    with open(shadow, "a", encoding="utf-8") as f:
+        f.write('{"boot": "b", "seq": 9, "user_id": "an\n')             # torn, cannot name ann: kept
+        f.write('{"boot": "b", "seq": 10, "user_id": "ann", "sco\n')    # torn, names ann: dropped
+        f.write(json.dumps({"boot": "b", "seq": 11, "user_id": "bob", "secondary": {"user_id": "ann"}}) + "\n")   # the other model said ann
+        f.write(json.dumps({"boot": "b", "seq": 12, "user_id": "annabel"}) + "\n")                              # a different member
+    monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: None)
+    assert daemon._handle_server_command({"command": {"kind": "voice_profile_forget", "user_id": "ann"}}) is True
+    text = shadow.read_text()
+    assert '"user_id": "ann"' not in text and '"seq": 10' not in text and '"seq": 11' not in text
+    assert '"seq": 9' in text and '"annabel"' in text and '"bob"' in text
+    assert oct(os.stat(shadow).st_mode & 0o777) == "0o640"
+
+
+def test_a_shadow_append_scored_before_a_voice_forget_and_landing_after_it_is_dropped(daemon, monkeypatch, tmp_path):
+    """A scoring thread matched ``ann`` and is blocked before its append; the panel forgets ann's voice (purge + prune); the thread
+    resumes: its row must not land. An append for someone else still does."""
+    face, shadow = _panel_files(daemon, monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon, "_SHADOW_FORGOTTEN", set())
+    monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: None)
+    gate, entered = threading.Event(), threading.Event()
+    real_makedirs = os.makedirs
+
+    def blocking_makedirs(path, *a, **k):                    # the append's first step, before it takes the log's lock
+        if threading.current_thread().name == "scorer":
+            entered.set()
+            gate.wait(5)
+        return real_makedirs(path, *a, **k)
+    monkeypatch.setattr(daemon.os, "makedirs", blocking_makedirs)
+    results = {}
+    t = threading.Thread(target=lambda: results.update(ann=daemon._record_speaker_shadow(("ann", 0.91))), name="scorer")
+    t.start()
+    assert entered.wait(5)
+    assert daemon._handle_server_command({"command": {"kind": "voice_profile_forget", "user_id": "ann"}}) is True
+    gate.set()
+    t.join(5)
+    assert results == {"ann": False}, "the late row was dropped, not logged"
+    assert '"user_id": "ann"' not in shadow.read_text()
+    assert daemon._record_speaker_shadow(("bob", 0.9)) is True and '"bob"' in shadow.read_text()

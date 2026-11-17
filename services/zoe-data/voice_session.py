@@ -455,6 +455,12 @@ def close_member(member_id: str, reason: str) -> list:
     return out
 
 
+def member_panels(member_id: str) -> list:
+    """The panels where ``member_id`` still holds an open voice session (a member delete checks this after ``revoke_member``, which
+    never raises: a session left open is the failure it would otherwise swallow)."""
+    return sorted(p for p, s in list(_SESSIONS.items()) if s.member_id == member_id)
+
+
 async def revoke_member(member_id: str, reason: str = "consent_revoked") -> None:
     """``close_member`` + tell the panels. Safe to call with the flag off (nothing is open then). Never raises.
     Also drops the member from the wake-warm speaker memo (consent revoked / voice profile deleted).

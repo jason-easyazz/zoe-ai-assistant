@@ -186,20 +186,19 @@ class _Conn(_TxState):
         self.writes.append(sql.split("(")[0].strip())
 
 
-class _Pool:
-    def __init__(self, conn):
-        self.conn = conn
+def _pooled(conn):
+    """What ``pending_suggestions.execute_suggestion`` opens since the member-delete round 10: ``db_pool.get_db_ctx()``, which yields
+    the REAL pooled wrapper (``db_pool.AsyncpgCompat``, the member-delete write guard included) around a connection - here the fake
+    one, so its statements, its transaction and its commit are what the wrapper drives."""
+    import db_pool
 
-    def acquire(self):
-        conn = self.conn
+    class _Ctx:
+        async def __aenter__(s):
+            return db_pool.AsyncpgCompat(conn)
 
-        class _A:
-            async def __aenter__(s):
-                return conn
-
-            async def __aexit__(s, *a):
-                return False
-        return _A()
+        async def __aexit__(s, *a):
+            return False
+    return lambda: _Ctx()
 
 
 @pytest.mark.asyncio
@@ -208,12 +207,12 @@ async def test_an_accepted_suggestion_add_is_shadowed_after_its_commit_and_a_fai
 
     monkeypatch.setenv("ZOE_ANTICIPATION", "off")
     conn = _Conn()
-    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", _pooled(conn))
     out = await pending_suggestions.execute_suggestion("s1", MEMBER)
     assert out["ok"] and "INSERT INTO list_items" in conn.writes
     settle(1)
     assert [a["args"]["item"] for _, op, a in kernel.calls if op == "act"] == ["oat milk"] and os_shadow.counters() == {"match": 1}
-    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(_Conn(boom=True)))
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", _pooled(_Conn(boom=True)))
     assert not (await pending_suggestions.execute_suggestion("s2", MEMBER))["ok"]     # rolled back: nothing to shadow
     import time
     time.sleep(0.2)
@@ -227,12 +226,12 @@ async def test_the_suggestion_hook_runs_after_the_commit_and_never_after_a_faile
     monkeypatch.setenv("ZOE_ANTICIPATION", "off")
     conn = _Conn()
     seen = _spy_hook(monkeypatch, conn)
-    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", _pooled(conn))
     assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"]
     assert seen == [(0, 1)]                            # outside the transaction, after its commit
     failed = _Conn(fail_commit=True)                    # every statement succeeds; the COMMIT fails
     seen_failed = _spy_hook(monkeypatch, failed)
-    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(failed))
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", _pooled(failed))
     out = await pending_suggestions.execute_suggestion("s2", MEMBER)
     assert not out["ok"] and seen_failed == []
     settle(1)

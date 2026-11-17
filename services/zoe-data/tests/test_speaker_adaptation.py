@@ -266,6 +266,7 @@ CREATE TABLE speaker_profiles (
 CREATE TABLE panel_user_bindings (panel_id TEXT NOT NULL, user_id TEXT NOT NULL,
     binding_type TEXT NOT NULL DEFAULT 'allowed', priority INTEGER DEFAULT 0, PRIMARY KEY (panel_id, user_id));
 CREATE TABLE ui_panel_sessions (panel_id TEXT PRIMARY KEY, user_id TEXT, last_seen_at TEXT, updated_at TEXT);
+CREATE TABLE face_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, active INTEGER DEFAULT 1);
 """
 
 
@@ -312,6 +313,11 @@ class World:
 
     def unbind(self):
         self.db.conn.execute("DELETE FROM panel_user_bindings")
+        self.db.conn.commit()
+
+    def add_faces(self):
+        """An active face profile for every member who has a speaker profile here."""
+        self.db.conn.execute("INSERT OR IGNORE INTO face_profiles (id, user_id, active) SELECT 'f-' || user_id, user_id, 1 FROM speaker_profiles")
         self.db.conn.commit()
 
     def row(self, uid="jason"):
@@ -458,12 +464,26 @@ async def test_fresh_login_session_corroborates_and_stale_does_not(world):
 @pytest.mark.asyncio
 async def test_face_match_corroborates_only_for_the_same_user_above_threshold(world):
     world.unbind()
+    world.add_faces()                    # a face match vouches only for a member with a face profile here
     ok = await world.offer(corroboration={"face_user_id": "jason", "face_score": 0.8})
     assert ok["applied"] is True and ok["corroboration"] == ["face"]
     for claim in ({"face_user_id": "kiddo", "face_score": 0.9}, {"face_user_id": "jason", "face_score": 0.3},
                   {"face_user_id": "jason"}, {"face_user_id": "jason", "face_score": "x"}):
         out = await world.offer(now=NOW + timedelta(days=2), corroboration=claim)
         assert out["reason"] == "no_corroboration", claim
+
+
+@pytest.mark.asyncio
+async def test_a_panel_face_match_with_no_face_profile_here_vouches_for_nothing(world):
+    """A deleted member's face (or a stale panel cache) is not a profile here: the match corroborates nothing until one exists."""
+    world.db.conn.execute("DELETE FROM speaker_profiles")     # this test's own invented member, alone (no close second voice)
+    world.add_profile("ann", ANCHOR)
+    world.unbind()
+    gone = await world.offer(voice_user_id="ann", corroboration={"face_user_id": "ann", "face_score": 0.8})
+    assert gone["reason"] == "no_corroboration"
+    world.add_faces()
+    ok = await world.offer(voice_user_id="ann", corroboration={"face_user_id": "ann", "face_score": 0.8})
+    assert ok["applied"] is True and ok["corroboration"] == ["face"]
 
 
 @pytest.mark.asyncio

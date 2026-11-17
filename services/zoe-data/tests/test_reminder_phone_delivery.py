@@ -482,3 +482,35 @@ def test_a_broken_seam_never_reaches_the_scheduler(fire):
     first["raise"] = True
     fire("on")                                       # must not raise
     assert len(first["deliver"]) == 2
+
+
+# -- a member delete during the awaited work before a phone send: nothing reaches the phone ---------------------------------------
+def test_a_delete_during_the_read_before_the_phone_lane_sends_nothing_to_the_phone(fire, monkeypatch):
+    """The engine checked the erase mark before the push step, then awaited the reminder's sensitivity read: a member deleted in that
+    await must get nothing on the phone lane (the seam is never called). The old code called it unchanged."""
+    import erase_watermark
+
+    async def erase_during_the_read(item_id):
+        await erase_watermark.record("member-a")          # the delete's durable mark, written while the engine awaits
+        return False
+    monkeypatch.setattr(reminder_delivery, "reminder_sensitive", erase_during_the_read)
+    calls = fire("on")
+    assert calls["deliver"] == [] and calls["push"] == 0, "nothing was handed to the phone lane"
+
+
+def test_a_delete_during_the_seams_own_reads_sends_nothing_on_any_channel(world):
+    """Inside the seam: the delete lands (its durable mark, from any process) while the seam awaits the member's audience read. The
+    in-process erase generation never moves here, so only the last-step mark check stops the sends; the claims are released."""
+    import erase_watermark
+
+    async def erase_now(uid):
+        await erase_watermark.record(uid)
+    world.on_audience = erase_now
+
+    async def go():
+        with erase_watermark.delivery(erase_watermark._now()):
+            return await reminder_delivery.deliver("member-a", "reminder", "Water the ferns", "", dedupe_id="sched-1",
+                                                   sensitive=False, now=NOON)
+    res = asyncio.run(go())
+    assert world.telegram == [] and world.web_push == [], "nothing reached the phone"
+    assert set(res.outcomes.values()) == {"skipped:erased"} and world.ledger == {}

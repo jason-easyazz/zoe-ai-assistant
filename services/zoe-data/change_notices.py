@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
 import comm_prefs
+import erase_watermark
 import telegram_notify
 from typed_env import env_int, env_str
 
@@ -837,6 +838,7 @@ class Ctx:
     clock: Optional[Callable[[], datetime]] = None  # the real clock, read before each follow-up (None = ``now``)
     new_keys: list[str] = field(default_factory=list)
     sent_messages: int = 0
+    began: Optional[datetime] = None     # when the tick began: the last-step erase check of every send (``_send``) is against it
 
     def persist(self) -> None:
         save_state(self.st)
@@ -1015,6 +1017,13 @@ async def _send(c: Ctx, r: Recipient, msg: Message) -> str:
     if c.mode == "shadow":
         outcome = "shadow"
         audit("shadow_send", member=r.user_id, keys=msg.keys, text=msg.text, url=msg.url)
+    elif await erase_watermark.refuse_send(r.user_id, c.began, "change_notice"):
+        # the LAST step before the message leaves (after the gap sleep): a member deleted since the tick began gets nothing;
+        # an unreadable mark sends nothing now and the delivery stays queued
+        for k in msg.keys:
+            ds[f"{r.user_id}|{k}"]["status"] = "queued"
+        audit("erase_refused", member=r.user_id, keys=msg.keys)
+        return "erased"
     else:
         outcome = await c.sender(r.telegram_id, msg)
         audit("send", member=r.user_id, keys=msg.keys, outcome=outcome, chars=len(msg.text))
@@ -1171,7 +1180,9 @@ async def _deliver_digest(c: Ctx, r: Recipient, lane: str) -> None:
                          period="today" if lane == "digest" else "this week")
     st["opener"][r.user_id] = idx
     outcomes = [await _send(c, r, m) for m in msgs]
-    landed = {k for m, o in zip(msgs, outcomes) if o != "oversize" for k in m.keys}
+    # an erase-refused message (or one refused on an unreadable mark) did not land: its keys stay queued and follow next tick, so the
+    # period is not marked sent (a deleted member is no recipient by then)
+    landed = {k for m, o in zip(msgs, outcomes) if o not in ("oversize", "erased") for k in m.keys}
     for u in uncertain:  # not shown this time: it stays an "uncertain" mention for the next digest, never a resend
         d = ds[f"{r.user_id}|{u['key']}"]
         if u["key"] not in landed and d["status"] == "queued":
@@ -1213,8 +1224,9 @@ async def tick(*, gh: Optional[GitHub] = None, sender: Sender = telegram_sender,
         return {"mode": "off"}
     if killed():
         return {"mode": m, "killed": True}
+    began = erase_watermark._now()
     st = await asyncio.to_thread(load_state)
-    c = Ctx(st=st, now=now or datetime.now(timezone.utc), mode=m, sender=sender, sleep=sleep, repo=repo(),
+    c = Ctx(st=st, now=now or datetime.now(timezone.utc), mode=m, sender=sender, sleep=sleep, repo=repo(), began=began,
             clock=clock or (None if now else (lambda: datetime.now(timezone.utc))))
     _recover(c)
     silent = not st.get("bootstrapped")

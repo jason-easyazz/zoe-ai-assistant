@@ -423,6 +423,8 @@ async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
             return "disabled"
         if not user_id or not panel_id or is_synthetic_user(user_id):
             return "synthetic"
+        import erase_watermark
+        began = erase_watermark._now()      # a member deleted after this hears nothing (engine._speak_on_panel's last-step check)
         now = _now_utc()
         local = now.astimezone(_ZOE_TZ)
         if not _in_window(local):
@@ -478,10 +480,11 @@ async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
         # No pooled connection is held across the lanes (they open their own).
         # The claim's announcement_id is linked in the announcement's own
         # transaction (engine._speak_on_panel with claim_id).
-        panel_outcome, daemon_outcome, _ann_id = await _engine._speak_on_panel(
-            user_id=user_id, panel_id=panel_id, message=brief["message"],
-            trigger_type=TRIGGER_TYPE, claim_id=claim_id,
-        )
+        with erase_watermark.delivery(began):
+            panel_outcome, daemon_outcome, _ann_id = await _engine._speak_on_panel(
+                user_id=user_id, panel_id=panel_id, message=brief["message"],
+                trigger_type=TRIGGER_TYPE, claim_id=claim_id,
+            )
         log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s "
                  "tier=%s missed=%s", TRIGGER_TYPE, user_id, panel_id, panel_outcome,
                  daemon_outcome, tier, state)

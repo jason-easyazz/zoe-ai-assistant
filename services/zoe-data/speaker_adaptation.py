@@ -370,9 +370,15 @@ async def _verify_corroboration(db: Any, *, panel_id: str, user_id: str, claims:
         logger.debug("speaker adapt: panel-session lookup failed: %s", exc)
     try:
         if str(claims.get("face_user_id") or "") == user_id and float(claims.get("face_score")) >= cfg.face_min:
-            got.append("face")
+            # the panel matched against ITS cached copy, which outlives a deleted face profile until its next sync: a face only vouches
+            # while the member still has an active face profile here (fails closed: an unreadable store vouches for nothing)
+            async with db.execute("SELECT 1 FROM face_profiles WHERE user_id = ? AND active = 1 LIMIT 1", (user_id,)) as cur:
+                if await cur.fetchone() is not None:
+                    got.append("face")
     except (TypeError, ValueError):
         pass
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("speaker adapt: face-profile lookup failed: %s", type(exc).__name__)
     return got
 
 

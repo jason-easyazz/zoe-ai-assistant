@@ -249,8 +249,9 @@ def latest(*, now: "float | None" = None) -> str:
         return ""
 
 
-def forget_user(member_id: str, *, sync: bool = True) -> int:
-    """Remove ``member_id`` from every panel's entry, in memory and in the file. Returns entries removed. Never raises."""
+def forget_user(member_id: str, *, sync: bool = True, strict: bool = False) -> int:
+    """Remove ``member_id`` from every panel's entry, in memory and in the file. Returns entries removed. Never raises, unless ``strict``
+    (a member delete): then a failure to load or rewrite the memo RAISES, so the delete fails closed instead of reading 0 as done."""
     try:
         m = (member_id or "").strip()
         if not m:
@@ -266,6 +267,10 @@ def forget_user(member_id: str, *, sync: bool = True) -> int:
         # snapshot neither _mem nor _last_written shows) lands first and is then overwritten from the post-forget memory. A
         # failed write leaves _save_failed set and the member on disk; the next forget/note rewrites it again.
         _persist()
+        if strict and _save_failed:
+            raise OSError("warm-speaker memo not rewritten")
         return len(gone)
     except Exception:  # noqa: BLE001
+        if strict:
+            raise
         return 0

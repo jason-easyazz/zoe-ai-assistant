@@ -861,6 +861,45 @@ async def test_quiet_hours_still_hold_overnight_with_the_env_default():
     assert len(bot.delivered) == 1
 
 
+async def test_an_owner_deleted_during_the_tick_is_sent_nothing():
+    """The durable erase mark lands after the tick began (here: while the recipients are read): the last-step check right before the
+    send refuses, nothing reaches the bot, and the delivery stays queued (not burnt as failed)."""
+    import erase_watermark
+
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.raise_pr(30, "fix: one", "Needs a look.", labels=["needs-owner"])
+
+    async def recipients():
+        await erase_watermark.record("u-owner")
+        return [owner()]
+    await cn.tick(gh=gh, sender=bot.sender(), recipients=recipients, now=at("12:00"), sleep=_noop_sleep, run_mode="on")
+    assert bot.calls == 0 and bot.delivered == []
+    st = cn.load_state()
+    assert {d["status"] for k, d in st["deliveries"].items() if k.startswith("u-owner|")} == {"queued"}
+
+
+async def test_an_erase_refused_digest_did_not_land_and_follows_next_tick(monkeypatch):
+    """An erase-refused send (an unreadable mark refuses too: nothing is sent on a guess) is NOT a landed digest: its keys stay queued,
+    the period is not marked sent, and the next tick delivers it once the mark can be read (main's digest follow-up counted it as
+    landed and burnt the evening's digest)."""
+    import erase_watermark
+
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.merge(10, "fix(music): resume after a call", "## What\n\nMusic resumes after a call ends.", at=at("10:00"))
+    unreadable = {"on": True}
+
+    async def refuse_send(uid, since, lane):
+        return unreadable["on"]
+    monkeypatch.setattr(erase_watermark, "refuse_send", refuse_send)
+    await run(gh, bot, at("19:30"))
+    assert bot.calls == 0, "nothing sent while the mark cannot be read"
+    unreadable["on"] = False
+    await run(gh, bot, at("19:40"))
+    assert len(bot.delivered) == 1 and "(#10)" in bot.delivered[0]["text"], "the digest follows once the mark reads"
+
+
 # ── the assistant's voice (exact text) ────────────────────────────────────────
 FIX_BODY = ("## Summary\n- widen the scrubber\n\nFor-The-Household: Long messages no longer make Zoe pause before she "
             "answers.\nNumbers: scrubbing a long message 4.5 s -> 0.03 s; tests that guard it 603\n")

@@ -586,7 +586,7 @@ def test_execute_suggestion_does_not_consult_anticipation_when_off(monkeypatch):
     def no_pool():
         raise RuntimeError("no pool")
 
-    monkeypatch.setattr(pending_suggestions, "get_pool", no_pool)
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", no_pool)   # execute_suggestion takes the pooled (guarded) wrapper
     assert run(pending_suggestions.execute_suggestion("x", ANN)) == {"ok": False, "error": "no pool"}
 
 

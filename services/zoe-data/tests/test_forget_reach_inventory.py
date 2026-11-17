@@ -351,3 +351,12 @@ def test_notifications_are_reached_by_the_member_erase():
     assert s.status == fr.REACHED and s.member == "notifications_store.forget_user"
     assert _called_from(s.member, (MEMBER_SITE,), "delete_user")
     assert "notifications" not in fr.GAPS
+
+
+def test_no_member_owned_store_is_left_as_an_unexplained_gap():
+    """Owner decision 2026-11-15 ("deleting a member should delete everything"): every remaining gap says WHY it cannot be reached -
+    a row with no author on a household-shared object (and the column it would need), a store with no member id, or a backup."""
+    allowed = ("Authorship gap:", "No member id:", "Backup:")
+    bad = [s.key for s in fr.STORES if s.status == fr.GAP and not s.why.startswith(allowed)]
+    assert not bad, bad
+    assert all("needs" in s.why for s in fr.STORES if s.status == fr.GAP and s.why.startswith("Authorship gap:"))

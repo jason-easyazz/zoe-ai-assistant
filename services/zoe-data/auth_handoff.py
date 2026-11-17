@@ -536,6 +536,12 @@ async def send_to_phone(handoff_id: str) -> dict[str, Any]:
         return {"ok": False, "status": "unavailable",
                 "detail": "Scan the code instead." if url else "Start again to get a fresh link."}
     what = str(row["provider"] or "your account")
+    # the LAST step before the link leaves (after the chat-id read): a hand-off the member started before they were deleted is never
+    # sent (a stale pending row, asked for again from a session that still authenticates); an unreadable mark sends nothing either
+    import erase_watermark
+
+    if await erase_watermark.refuse_send(row["user_id"], row["created_at"], "auth_handoff"):
+        return {"ok": False, "status": "unavailable", "detail": "Start again to get a fresh link."}
     try:
         sent = await _telegram_send(chat, f"Tap to finish connecting {what} to Zoe (home Wi-Fi only; "
                                           f"expires in {max(1, int(float(row['expires_at']) - time.time()) // 60)} min).",

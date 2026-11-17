@@ -40,6 +40,28 @@ def _utc_iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: scheduled row id -> how many ``_fire_reminder`` runs for it are in progress in THIS process. A claim records only a time, never its
+#: owner, so this is what lets a member delete tell a live delivery from a dead claim (``claim_is_dead``). A COUNT, raised before the
+#: claim attempt and lowered in a ``finally`` of the same call, so it cannot be unbalanced by any exit path and a duplicate run (one that
+#: loses the claim, or a stuck-claim re-fire beside a slow original) never clears the original's entry; counting from before the claim
+#: means there is no instant between a won claim and its record (a losing duplicate counts for the few ms it runs: presumed live).
+_IN_FLIGHT: dict = {}
+
+
+def _fires_here() -> bool:
+    """True when this process runs the reminder scheduler (``engine.start`` -> ``start_scheduler``): the process that fires reminders."""
+    from proactive import scheduler
+    return scheduler._scheduler is not None
+
+
+def claim_is_dead(scheduled_id: str) -> bool:
+    """True only when a claim on ``scheduled_id`` is PROVEN dead: this process runs the scheduler (zoe-data is the one process that fires
+    reminders; a restart stops the old process before the new one starts) and is not delivering that row now. A claim made by an earlier
+    process, or left by a fire that already returned (a failed release, a failed quiet-hours reschedule), holds nobody's delivery. Any
+    other claim - this process runs no scheduler, or the fire is still running here however old its claim - is presumed LIVE."""
+    return _fires_here() and _IN_FLIGHT.get(str(scheduled_id), 0) <= 0
+
+
 async def _claim_scheduled_for_fire(scheduled_id: str):
     """Atomically claim an unfired reminder for delivery.
 
@@ -137,6 +159,19 @@ async def _record_fire_failure_and_release(scheduled_id: str, exc: Exception) ->
         log.error("could not record fire failure for %s", scheduled_id)
 
 
+async def _member_erased_since_row(user_id: str, scheduled_id: str) -> bool:
+    """True when ``user_id`` was deleted (``erase_watermark``) at or after this scheduled row was made, or the row is gone. No mark at
+    all (every live member): False without touching the row. RAISES when the mark cannot be read."""
+    import erase_watermark
+
+    if await erase_watermark.watermark(user_id) is None:
+        return False
+    async with _get_compat_db() as db:
+        async with db.execute("SELECT created_at FROM proactive_scheduled WHERE id = ?", (scheduled_id,)) as cur:
+            row = await cur.fetchone()
+    return row is None or await erase_watermark.erased_since(user_id, row[0])
+
+
 async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     """
     Called by APScheduler at the scheduled time (and by listener/reconcile-
@@ -159,7 +194,24 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     (>_STUCK_CLAIM_SECONDS later). It is never lost. See module/PR notes.
     """
     from proactive.engine import fire_notification  # deferred import
+    import erase_watermark
 
+    # BEFORE the claim and the erase check: a member delete that lands after this instant is refused at the last step of the send
+    # (fire_notification's erase_since); one that landed before it is seen by the check below.
+    since = erase_watermark._now()
+    key = str(pending_id)
+    _IN_FLIGHT[key] = _IN_FLIGHT.get(key, 0) + 1
+    try:
+        await _fire_claimed(pending_id, user_id, message, since, fire_notification)
+    finally:
+        left = _IN_FLIGHT.get(key, 0) - 1
+        if left > 0:
+            _IN_FLIGHT[key] = left
+        else:
+            _IN_FLIGHT.pop(key, None)
+
+
+async def _fire_claimed(pending_id: str, user_id: str, message: str, since, fire_notification) -> None:
     claim = await _claim_scheduled_for_fire(pending_id)
     if claim is None:
         log.info("reminder %s already claimed/fired elsewhere — skipping duplicate", pending_id)
@@ -169,6 +221,19 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     job_generation = claim["schedule_generation"] or 0
     if item_id and await _reminder_job_superseded(item_id, job_generation):
         log.info("reminder %s superseded (deleted/ack/inactive/rescheduled) — not delivering", pending_id)
+        await _consume_scheduled(pending_id)
+        return
+
+    # A member delete may have run since the claim (it consumes and deletes the rows, but a fire that already claimed one is past that
+    # gate): a send whose member has an erase mark at or after the row is never delivered. Unreadable: not now (released and retried).
+    try:
+        erased = await _member_erased_since_row(user_id, pending_id)
+    except Exception as exc:
+        log.error("_fire_reminder: erase check failed for pending %s (%s) - not delivering now", pending_id, type(exc).__name__)
+        await _record_fire_failure_and_release(pending_id, exc)
+        raise
+    if erased:
+        log.info("reminder %s: its member was deleted - not delivering", pending_id)
         await _consume_scheduled(pending_id)
         return
 
@@ -183,6 +248,7 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
             # job has item_id="" and loses the generation/supersede backstop,
             # letting it deliver after the reminder was snoozed/acked/deleted.
             item_id=item_id,
+            erase_since=since,
         )
     except Exception as exc:
         log.error("_fire_reminder failed for pending %s: %s", pending_id, exc)
@@ -203,7 +269,17 @@ async def schedule_reminder(
     The row is stamped with the reminder's CURRENT schedule_generation so a later
     update/snooze (which bumps that generation) makes this job self-void at fire
     time instead of delivering at the now-stale time.
+
+    Member delete: the row's ``created_at`` is when THIS call began (or when the enclosing ``erase_watermark.delivery`` began, e.g. a
+    quiet-hours follow-up), not the insert time, so the fire-time check (``_member_erased_since_row``: a row made at or before the
+    member's erase mark never delivers) refuses it for a delete that lands at ANY moment after that - also one that lands between a
+    caller's own check and this insert. After the insert the mark is asked once more: a refused row is removed and no job is
+    registered (returns ""), so nothing names the member afterwards. An unreadable mark keeps the row: the fire-time check (which
+    fails closed) decides. Every proactive_scheduled row is made here.
     """
+    import erase_watermark
+
+    began = erase_watermark.delivery_began() or erase_watermark._now()
     row_id = str(uuid.uuid4())
     job_id = f"reminder-{row_id}"
 
@@ -215,11 +291,21 @@ async def schedule_reminder(
         await db.execute(
             """INSERT INTO proactive_scheduled
                (id, user_id, message, trigger_type, send_at, apscheduler_job_id,
-                fired, item_id, schedule_generation)
-               VALUES (?, ?, ?, 'reminder', ?, ?, 0, ?, ?)""",
-            (row_id, user_id, message, send_str, job_id, item_id, generation),
+                fired, item_id, schedule_generation, created_at)
+               VALUES (?, ?, ?, 'reminder', ?, ?, 0, ?, ?, ?)""",
+            (row_id, user_id, message, send_str, job_id, item_id, generation, erase_watermark._iso(began)),
         )
         await db.commit()
+    try:
+        erased = await erase_watermark.send_refused(user_id, began, "schedule")
+    except erase_watermark.Unavailable:
+        erased = False                       # the fire-time check reads the mark again, and refuses on an unreadable one
+    if erased:
+        async with _get_compat_db() as db:
+            await db.execute("DELETE FROM proactive_scheduled WHERE id = ?", (row_id,))
+            await db.commit()
+        log.info("schedule_reminder: its member was deleted - nothing scheduled")
+        return ""
 
     # Register the scheduler job AFTER the row exists. If registration fails the
     # row would otherwise linger as a "scheduled" reminder that can never fire,

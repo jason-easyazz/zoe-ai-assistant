@@ -133,14 +133,84 @@ def _spawn_bg(coro) -> None:
     effect — history rows, memory passes, escalations — is queued until the
     verdict and dropped on cancel (``voice_speculation.defer_until_commit``);
     otherwise ``coro`` is scheduled unchanged."""
+    import erase_watermark as _ew
+
+    held = _ew.turn_hold()           # a voice turn's background work keeps the turn in flight (the member delete waits for it)
     try:
         coro = _speculation.defer_until_commit(coro, "background")
         t = asyncio.ensure_future(coro)
     except Exception as exc:  # no running loop — run inline best-effort
         logger.warning("_spawn_bg could not schedule task: %s", exc)
+        _ew.turn_release(held)
         return
     _BG_TASKS.add(t)
     t.add_done_callback(_BG_TASKS.discard)
+    t.add_done_callback(lambda _t: _ew.turn_release(held))
+
+
+def _member_turn(fn):
+    """Every voice turn is a member turn IN FLIGHT from its first line to its last write (``erase_watermark.voice_turn_begin``): the
+    member delete waits for it once the speaker is known (``turn_identify``), and every late write (the transcript rows, the clip
+    label, the exact-words entry) re-checks the member's erase mark against the turn's START. The binding lives in the task context,
+    so the stream body and the background tasks the turn starts inherit it and hold the turn open until they finish."""
+    import functools
+
+    @functools.wraps(fn)
+    async def call(*args, **kwargs):
+        import erase_watermark as _ew
+
+        bound = _ew.voice_turn_begin()
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            _ew.voice_turn_end(bound)
+    return call
+
+
+async def _label_member_clip(member: str) -> None:
+    """The speaker is known: the member delete waits for this turn from now on (``turn_identify``), and the clip this turn saved is
+    labelled theirs (``voice_clips.record``) - unless the member was deleted since the turn BEGAN (the late-write rule, asked before the
+    label and again after it): then the clip is DROPPED, neither labelled with nor kept for them (never kept unattributed)."""
+    import erase_watermark as _ew
+    import voice_clips as _vc
+
+    _ew.turn_identify(member)
+    clip = _vc.current_clip()
+    if not clip or not _vc.verdict_enabled():
+        # no clip saved this turn, or the verdict flag is off (a saved clip then stays UNLABELLED: not attributable, kept on this
+        # box and expired on a shipped unit - owner decision 2026-11-17): nothing to label or drop, so the voice path pays neither
+        # watermark read nor a worker dispatch - ``record`` was a no-op here before the guard too
+        return
+    refused = await _ew.turn_write_refused(None, "voice_clip", member)
+    if not refused:
+        # the sidecar write is blocking file I/O: a worker thread (a copy of this context, so ``record`` finds this turn's clip)
+        await asyncio.to_thread(_vc.record, "member", member)
+        refused = await _ew.turn_write_refused(None, "voice_clip", member)
+    if refused and clip:
+        try:
+            # labelled as theirs first, then WAV first and the label last: a failure keeps the label. Blocking writes and unlinks
+            # (and, on a double failure, the pending list's short lock): a worker thread, never the event loop
+            await asyncio.to_thread(_vc.drop_clip, clip, member)
+            _vc.clear_current()
+        except OSError as exc:
+            # the turn goes on (a reply never fails on a clip); the clip stays LABELLED as the deleted member's with a pending-drop
+            # marker, which is the durable retry even when their delete already completed: the clip loop's
+            # ``voice_clips.retry_pending_drops`` (at start and every 6 h, whatever the retention flag says) removes it
+            logger.error("VOICE_CLIP_DROP_FAILED reason=%s - retried by the clip loop's pending-drop pass", type(exc).__name__)
+
+
+async def _release_turn_after(gen, held):
+    try:
+        async for item in gen:
+            yield item
+    finally:
+        try:
+            await gen.aclose()
+        finally:
+            import erase_watermark as _ew
+
+            _ew.turn_release(held)
+
 
 def _stream_in_turn_context(agen):
     """``agen`` (a voice turn's lazy stream body) driven in a COPY of the CURRENT context, wherever it is iterated.
@@ -151,8 +221,12 @@ def _stream_in_turn_context(agen):
     ``/voice/turn_stream`` the body is pulled by the OUTER request task (and a ``_first_task`` copy of it for the filler
     race), not by the ``sub_task`` that ran ``voice_command`` - so none of those bindings were visible to the brain
     (2026-10-19: every panel stream turn read ``restraint.current_verdict() is None``, an unconfirmed voice read as a typed
-    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there."""
-    return _drive_in_context(agen, contextvars.copy_context())
+    turn). Call it where the body is CREATED, inside ``voice_command``: the copy is taken there. The body also holds the voice turn
+    open (``erase_watermark.turn_hold``) until it ends."""
+    import erase_watermark as _ew
+
+    held = _ew.turn_hold()
+    return _release_turn_after(_drive_in_context(agen, contextvars.copy_context()), held)
 
 
 async def _drive_in_context(agen, ctx: contextvars.Context):
@@ -3447,6 +3521,12 @@ async def _schedule_voice_chat_save(
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
 
         async def _persist() -> None:
+            import erase_watermark as _ew
+
+            # the late-write rule: a member deleted since the voice turn BEGAN gets no session row and no turn back (the rows'
+            # own writer, _save_chat_message, checks before and after each insert; the session row is checked here)
+            if await _ew.turn_write_refused(session_id, "voice_session", user_id):
+                return
             # Voice sessions are minted server-side and never go through
             # POST /sessions/, so the chat_sessions parent row must be created
             # here or every insert dies on the session FK (the silent zero-
@@ -3467,6 +3547,14 @@ async def _schedule_voice_chat_save(
                            **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
                 await _svc(session_id, "assistant", reply, user_id=user_id)
+            if await _ew.turn_write_refused(session_id, "voice_session", user_id):
+                # deleted while this ran: the session row this made for the member goes when nothing else is in it
+                from db_pool import get_db_ctx as _ctx
+
+                async with _ctx() as db:
+                    await db.execute("DELETE FROM chat_sessions WHERE id = ? AND user_id = ? AND NOT EXISTS "
+                                     "(SELECT 1 FROM chat_messages WHERE session_id = ?)", (session_id, user_id, session_id))
+                    await db.commit()
 
         _spawn_bg(_persist())
     except Exception as exc:
@@ -3619,6 +3707,7 @@ async def _run_voice_memory_passes(
 
 
 @router.post("/command")
+@_member_turn
 async def voice_command(
     payload: dict,
     caller: dict = Depends(_require_voice_auth),
@@ -3705,7 +3794,7 @@ async def voice_command(
     import voice_clips as _voice_clips
 
     if identified_user_id:
-        _voice_clips.record("member", identified_user_id)
+        await _label_member_clip(identified_user_id)
     elif (_clip_guest := _named_guests.current()) is not None:
         _voice_clips.record("guest", _clip_guest.person_id)
     elif _speaker_verified is False:
@@ -3946,6 +4035,10 @@ async def voice_command(
         # A voice the server matched to a NAMED GUEST is that guest, whatever member session the panel holds (a fresh PIN, a
         # binding): never member scope, member data or a member's attribution for their turn (review #2339).
         _scope_identity_user, _has_scope_identity, effective_user = None, False, "guest"
+    if effective_user and effective_user not in _GUEST_SENTINEL_USERS:
+        import erase_watermark as _ew_who
+
+        _ew_who.turn_identify(effective_user)     # the turn's member as attributed (re-keyed; its START is unchanged)
     # Home control: a turn whose member the server verified is a member's turn whatever the caller verdict said (a relayed panel).
     if _scope_identity_user and panel_principal.home_control_verdict() is False:
         panel_principal.record_home_control(True)
@@ -7244,6 +7337,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
 
 
 @router.post("/ambient")
+@_member_turn
 async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Receive an ambient audio segment from the Pi daemon, transcribe it, and store in DB.
 
@@ -7279,6 +7373,9 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         # unidentified one is the expected case, not a fault.
         logger.debug("ambient_memory: unidentified speaker on panel=%s - not transcribed, not stored", panel_id)
         return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
+    import erase_watermark as _ew_amb
+
+    _ew_amb.turn_identify(ambient_user_id)           # the speaker is known: a member delete waits for this request from here
 
     import uuid as _uuid
     _stt_erase_epoch()   # the class rule for every STT route (its store is ambient_memory, not a local text log)
@@ -7303,6 +7400,14 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
     # Store in ambient_memory, scoped to the segment's own speaker (resolved above).
     stored = False
+    import erase_watermark as _ew
+
+    # Member delete, the late-write rule: the speaker deleted since this request BEGAN (``_member_turn``; the delete waits for it once
+    # the speaker is known) gets no row - checked before the insert and again after it (then the member's rows are taken out: they
+    # are erased anyway). Only an attributed segment is ever stored, so every row is checked for the member it is written as.
+    _ew.turn_identify(ambient_user_id)
+    if await _ew.turn_write_refused(None, "ambient_memory", ambient_user_id):
+        return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
     try:
         from db_compat import get_compat_db as _get_compat_db
 
@@ -7314,6 +7419,10 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
             )
             await db.commit()
             stored = True
+            if await _ew.turn_write_refused(None, "ambient_memory", ambient_user_id):
+                await db.execute("DELETE FROM ambient_memory WHERE user_id = ?", (ambient_user_id,))
+                await db.commit()
+                return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
             logger.debug(
                 "ambient_memory: panel=%s user=%s chars=%d",
                 panel_id, ambient_user_id, len(transcript),
@@ -7570,8 +7679,12 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     embedding_bytes = finished_profile
 
     profile_id = str(_uuid.uuid4())
+    import erase_watermark as _ew_enrol
+
     try:
-        async with _get_compat_db() as db:
+        # registered as the member's turn before the write, refused if they were deleted (``erase_watermark.member_write``): an
+        # enrolment paused before here can never put a deleted member's voiceprint back
+        async with _ew_enrol.member_write(user_id), _get_compat_db() as db:
             # Check if the user already has a profile OF THIS MODEL — update it, never touch another model's row.
             async with db.execute(
                 "SELECT id FROM speaker_profiles WHERE user_id=? AND "
@@ -7615,6 +7728,8 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
                         (profile_id, user_id, display_name, embedding_bytes, panel_id or None, clips, model_id),
                     )
             await db.commit()
+    except (_ew_enrol.MemberErased, _ew_enrol.Unavailable) as exc:
+        raise HTTPException(status_code=409, detail="this member can no longer be enrolled (nothing was stored)") from exc
     except Exception as exc:
         logger.error("voice/enroll DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to store profile") from exc
@@ -7842,6 +7957,18 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
         logger.error("voice/profiles/sync DB error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc
 
+    # THE ROSTER (ids only, never a vector): every member who still holds a consented voice profile of ANY model, and every member
+    # with an active face profile. The panel drops whatever it holds for anyone else - its face cache file and its speaker-ID shadow
+    # log (scripts/setup/zoe_voice_daemon.py ``_apply_roster``) - at start and every sync, so a member delete (or "forget my voice")
+    # reaches a panel that missed its purge command (offline past the command's 24 h, or a daemon that predated it). A list that could
+    # not be read is LEFT OUT (the panel then drops nothing for it), never sent empty.
+    roster = dict(voice=sorted({str(r[0]) for r in rows if r[0]}))
+    try:
+        async with _get_compat_db() as db:
+            async with db.execute("SELECT DISTINCT user_id FROM face_profiles WHERE active = 1") as cur:
+                roster["face"] = sorted({str(r[0]) for r in await cur.fetchall() if r[0]})
+    except Exception as exc:  # noqa: BLE001 - no face table (never migrated) or a read failure: no face roster this sync
+        logger.debug("voice/profiles/sync: face roster unavailable: %s", type(exc).__name__)
     served = speaker_models.visible_models() & _parse_models_param(models)
     rows = [r for r in rows if speaker_models.row_model_id(r, 4) in served]
     rows = await speaker_adaptation.serve_adapted_profiles(rows, user_idx=0, blob_idx=2, model_idx=4)  # ZOE_SPEAKER_ADAPT=on only
@@ -7860,6 +7987,7 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
         extra["learn_unknown"] = True      # the panel then attaches an unmatched turn's embedding (never audio) for learning
     return dict(
         **extra,
+        roster=roster,
         ok=True,
         threshold=_speaker_id_threshold(),
         mode=speaker_models.speaker_mode(),

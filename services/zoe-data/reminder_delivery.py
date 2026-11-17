@@ -229,6 +229,17 @@ async def _channel(ch: str, uid: str, gen: int, text: str, url: str, dedupe_id: 
             return "skipped:duplicate", 0
     if erase_gate.generation(uid) != gen:      # erased between the claim and the send: send nothing (the erase took the claim)
         return "skipped:erased", 0
+    # the durable mark too, right before the message leaves (the generation is this process's only; a delete anywhere writes the mark):
+    # a member deleted since the enclosing delivery began (``erase_watermark.delivery``) gets nothing, and the claim is released
+    import erase_watermark
+    try:
+        gone = await erase_watermark.send_refused(uid, None, f"phone_{ch}")
+    except erase_watermark.Unavailable:
+        await _settle(key, "retry")
+        return "failed:erase_mark_unreadable", 0
+    if gone:
+        await _settle(key, "retry")
+        return "skipped:erased", 0
     try:
         if ch == "telegram":
             outcome = await _send_telegram(tid, text)

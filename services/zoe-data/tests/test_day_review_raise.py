@@ -661,3 +661,25 @@ def test_the_voice_lane_notes_every_turn_before_the_tiers():
     src = (SVC / "routers" / "voice_tts.py").read_text()
     note = src.index("_day_review_raise.note_voice_turn(")
     assert src.index("_scope_identity_user = _vs_decision.scope_user") < note < src.index('phase="conversation"')
+
+
+async def test_a_member_deleted_while_their_phone_is_looked_up_gets_nothing_on_the_phone(env, monkeypatch):
+    """The last await before the Telegram send is the linked-phone read: a member delete landing there (its durable erase mark)
+    sends nothing (the last-step check), and an unreadable mark sends nothing either."""
+    import erase_watermark
+
+    async def tid_then_erase(member):
+        await erase_watermark.record(member)
+        return "424242"
+    monkeypatch.setattr(drr, "_telegram_id", tid_then_erase)
+    assert await drr.send_to_phone(OWNER, {"reminder": 2}) == "none"
+    assert env["sent"] == []
+
+    async def tid_of(member):
+        return "424242"
+
+    async def unreadable(*_a, **_k):
+        raise erase_watermark.Unavailable("down")
+    monkeypatch.setattr(drr, "_telegram_id", tid_of)
+    monkeypatch.setattr(erase_watermark, "watermark", unreadable)
+    assert await drr.send_to_phone(OTHER, {"reminder": 2}) == "none" and env["sent"] == []

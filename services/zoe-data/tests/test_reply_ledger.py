@@ -470,7 +470,8 @@ def test_failed_writes_and_failed_erasures_are_logged_at_warning(svc, caplog):
     """No ``ledger_db``: ``get_compat_db`` has no pool, so every database call fails."""
     caplog.set_level(logging.DEBUG)
     assert asyncio.run(rl.write(UID, _rec("r000000000000004"))) is False
-    assert asyncio.run(rl.forget_user(UID)) == 0
+    with pytest.raises(RuntimeError):            # the member erase fails CLOSED (delete_user treats "no pool ever" as nothing to clear)
+        asyncio.run(rl.forget_user(UID))
     assert asyncio.run(rl.forget_conversation(UID, "s1")) == 0
     warned = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "reply_ledger"]
     assert len(warned) == 3, [r.getMessage() for r in caplog.records]

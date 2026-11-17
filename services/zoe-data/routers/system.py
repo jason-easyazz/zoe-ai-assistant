@@ -2391,6 +2391,11 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     if _refused:
         _log_dispatch(intent_name, 200, False, "speculative_refused", started)
         return {"intent": intent_name, "ok": False, "result": "", "reason": _refused}
+    import erase_watermark as _ew
+
+    # a brain TOOL call arrives as its own request: its store writes are judged against the member's turn in flight
+    # (``erase_watermark.bind_member_turn``: the oldest), so a stalled turn of a deleted member cannot write through a tool
+    _bound = _ew.bind_member_turn(user_id)
     try:
         if intent_name in _ALARM_DISPATCH_INTENTS:
             import alarm_voice
@@ -2408,9 +2413,14 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         # through so the brain's tool sees 4xx, not a generic 500 (Codex P2, #1686).
         _log_dispatch(intent_name, exc.status_code, False, _dispatch_reason(exc.detail), started)
         raise
+    except _ew.TurnWriteRefused:
+        _log_dispatch(intent_name, 410, False, "member_erased", started)
+        raise HTTPException(status_code=410, detail="member_erased")
     except Exception as exc:  # pragma: no cover - defensive
         _log_dispatch(intent_name, 500, False, f"error_{type(exc).__name__}", started)
         raise HTTPException(status_code=500, detail="intent execution failed") from exc
+    finally:
+        _ew.turn_unbind(_bound)
     _log_dispatch(intent_name, 200, result is not None, "" if result is not None else "no_result", started)
     return {"intent": intent_name, "ok": result is not None, "result": result or ""}
 

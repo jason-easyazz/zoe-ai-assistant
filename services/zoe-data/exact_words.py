@@ -317,6 +317,13 @@ async def _shielded(user_id: str, text: str) -> bool:
         return True
 
 
+async def _late_for_erased(user_id: str) -> bool:
+    import erase_watermark
+    import user_erase_gate
+
+    return user_erase_gate.erased_since_scheduled(user_id) or await erase_watermark.turn_write_refused(None, "exact_words", user_id)
+
+
 async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None, turn_id: Optional[str] = None,
                      source: str = "chat", speaker_verified: Optional[bool] = None) -> bool:
     """Index one owner turn. True when a row was written. Never raises."""
@@ -348,7 +355,16 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         cols = tokens_column(kept)
         if not cols:
             return False
-        return bool(await get_backend().add(user_id, turn_id or turn_key(user_id, kept, when), when, kept, cols, source))
+        # Member delete, the late-write rule: an index entry for a member erased since this work was scheduled (the erase gate's
+        # snapshot, in-process, both lanes) or since its voice turn began (the durable mark) is never written, and one that lands
+        # across the delete is taken out again (the whole member's rows: they are erased anyway).
+        if await _late_for_erased(user_id):
+            return False
+        added = bool(await get_backend().add(user_id, turn_id or turn_key(user_id, kept, when), when, kept, cols, source))
+        if added and await _late_for_erased(user_id):
+            await get_backend().delete_user(user_id)
+            return False
+        return added
     except Exception as exc:  # noqa: BLE001 - the index is an extra; a turn never fails on it
         logger.warning("exact_words: turn not indexed (%s)", type(exc).__name__)
         return False

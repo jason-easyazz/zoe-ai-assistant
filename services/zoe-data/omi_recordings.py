@@ -592,11 +592,20 @@ def _fsync_dir(directory: Path) -> None:
 
 
 def _unlink(path: str) -> None:
+    """LENIENT removal, for retention and housekeeping only (expiry, the disk floor, audio dropped after transcription, an ingest
+    that failed): a failure is logged and the next sweep tries again. An ERASE uses ``_unlink_strict``."""
     if path:
         try:
             Path(path).unlink(missing_ok=True)
         except OSError as exc:
             logger.warning("omi_recordings: audio file not removed (%s)", type(exc).__name__)
+
+
+def _unlink_strict(path: str) -> None:
+    """ERASE removal (a member delete, a recording delete, an entity forget): RAISES on anything but "already gone", so the erase
+    fails, the row keeps its ``audio_path`` (the file is removed BEFORE the row is changed) and a retry finds the file again."""
+    if path:
+        Path(path).unlink(missing_ok=True)
 
 
 class StoreError(Exception):
@@ -734,7 +743,9 @@ async def get_recording(user_id: str, rid: str) -> Optional[dict]:
 async def _tombstone(db, row: Any, now: datetime) -> None:
     import omi_voices            # FIRST: its segments, held voice embeddings and voiceprint contributions go with it (voiceprints rebuilt).
     await omi_voices.drop_recording(db, row["id"])    # A failure here leaves the row NOT deleted, so the owner's retry runs it again
-    _unlink(row["audio_path"] or "")
+    # the FILE before the row, and STRICT: a WAV that cannot be removed fails the erase and the row keeps its audio_path, so the retry
+    # finds the file (a tombstone is only ever written once the audio is gone). Off the event loop (a member delete tombstones many).
+    await asyncio.to_thread(_unlink_strict, row["audio_path"] or "")
     await db.execute(
         "UPDATE omi_recordings SET status = 'deleted', transcript = '', audio_path = '', audio_bytes = 0, started_at = '', ended_at = '', "
         "duration_s = 0, keep_audio = 0, audio_expires_at = NULL, reviewed = 0, deleted_at = ? WHERE id = ?", (_iso(now), row["id"]))
@@ -752,7 +763,7 @@ async def delete_recording(user_id: str, rid: str) -> bool:
             await omi_day_review.forget_recording(user_id, rid)
             import omi_repass          # the night re-pass's stored hypotheses of THIS recording (its words, private files); a failure keeps the recording for a retry
             import omi_repass_eval
-            omi_repass_eval.forget_recording(omi_repass.home_dir(), user_id, rid)
+            await asyncio.to_thread(omi_repass_eval.forget_recording, omi_repass.home_dir(), user_id, rid)
             await _tombstone(db, rows[0], _now())
             await db.commit()
     logger.info("OMI_DELETED id=%s", rid)
@@ -813,14 +824,19 @@ async def forget_user(user_id: str) -> int:
             try:        # the night re-pass's per-chunk hypotheses (words, private files), swept INSIDE the gate the hypothesis writer also takes: a failure is LOUD, raised below after the rest has run
                 import omi_repass
                 import omi_repass_eval
-                omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+                await asyncio.to_thread(omi_repass_eval.forget_user, omi_repass.home_dir(), user_id)   # file rewrite off the loop
             except Exception as exc:  # noqa: BLE001
                 logger.error("OMI_REPASS_HYPS_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
                 hyps_failure = exc
+            audio_failure: Optional[BaseException] = None
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
-                    await _tombstone(db, r, _now())
-                    n += 1
+                    try:
+                        await _tombstone(db, r, _now())
+                        n += 1
+                    except OSError as exc:        # a WAV that cannot be removed: its row keeps audio_path for the retry; the rest still go
+                        logger.error("OMI_AUDIO_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                        audio_failure = audio_failure or exc
                 await db.commit()
             try:        # the member's voice rows: a failure is LOUD (an erase that leaves biometrics behind is a P1)
                 import omi_voices
@@ -836,12 +852,20 @@ async def forget_user(user_id: str) -> int:
             except Exception as exc:  # noqa: BLE001
                 logger.error("OMI_HEALTH_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
                 health_failure = exc              # raised below, once the rest of the erase has run
-            try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
+            device_failure: Optional[BaseException] = None
+            try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) is nothing to unassign
                 async with get_compat_db() as db:
                     await omi_devices.forget_user(db, user_id)
                     await db.commit()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
+                import omi_voices
+                if not omi_voices._missing(exc):   # any other failure leaves a pendant registered to the member: LOUD, raised below
+                    logger.error("OMI_DEVICES_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                    device_failure = exc
+        if audio_failure is not None:
+            raise audio_failure
+        if device_failure is not None:
+            raise device_failure
         if voice_failure is not None:
             raise VoiceEraseIncomplete(type(voice_failure).__name__) from voice_failure
         if hyps_failure is not None:
@@ -891,7 +915,9 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                     text = r["transcript"] or ""
                     if not text or not rx.search(text):
                         continue
-                    _unlink(r["audio_path"] or "")
+                    # the WAV first, strict (it still holds the spoken name): a failure keeps the row as it is (transcript and
+                    # audio_path) for the retry the cascade's strict caller makes
+                    await asyncio.to_thread(_unlink_strict, r["audio_path"] or "")
                     await db.execute("UPDATE omi_recordings SET transcript = ?, audio_path = '', audio_bytes = 0, keep_audio = 0 WHERE id = ?",
                                      (rx.sub(_FORGOTTEN_MARK, text), r["id"]))
                     n += 1
