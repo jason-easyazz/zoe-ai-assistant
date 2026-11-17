@@ -277,7 +277,9 @@ def test_a_phone_number_with_any_separator_is_stripped(raw):
 
 
 def test_a_fraction_is_not_a_phone_number():
-    assert scrub_query("3/4 cup flour conversion").send
+    r = scrub_query("3/4 cup flour conversion")
+    # the scrubber emits words, so the fraction leaves as its numbers: both must survive
+    assert r.send and {"3", "4", "cup"} <= set(r.query.split()), r
 
 
 
@@ -526,3 +528,15 @@ def test_a_known_memory_number_glued_to_letters_never_leaves(raw):
 def test_a_phone_number_padded_with_letters_is_stripped(pad):
     r = scrub_query(f"pizza delivery call 0491{pad}570{pad}006 tonight")
     assert not ({"0491", "570", "006"} & set(r.query.split())), r
+
+
+@pytest.mark.parametrize("raw", ["my gate code is 1234 keypad reset instructions", "wifi password 5521 router reset",
+                                 "garage pin: 0000 opener manual", "safe combination 12 34 56 reset", "pin1234 keypad reset"])
+def test_a_code_after_a_code_word_never_leaves_even_unknown(raw):
+    r = scrub_query(raw)
+    assert not any(ch.isdigit() for ch in r.query), r
+
+
+def test_a_number_not_after_a_code_word_still_leaves():
+    r = scrub_query("top 10 keypad locks 2024")
+    assert r.send and "10" in r.query.split(), r

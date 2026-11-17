@@ -155,6 +155,20 @@
     "cat",
     "pet"
   ],
+  "code_words": [
+    "code",
+    "codes",
+    "pin",
+    "pincode",
+    "passcode",
+    "password",
+    "passwd",
+    "combination",
+    "combo",
+    "passkey",
+    "otp",
+    "pw"
+  ],
   "naming_words": [
     "called",
     "named"

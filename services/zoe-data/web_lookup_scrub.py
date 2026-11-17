@@ -105,7 +105,7 @@ def load_lexicon() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not data.get("enabled"):
             continue
-        for key in ("drop_words", "question_words", "relation_words", "cue_relation_words", "naming_words", "street_types",
+        for key in ("drop_words", "question_words", "relation_words", "cue_relation_words", "code_words", "naming_words", "street_types",
                     "possessive_words", "unit_suffixes"):
             out[key] = frozenset(out.get(key, frozenset())) | {fold(w) for w in data.get(key, [])}
         out["instruction_cues"] = list(out["instruction_cues"]) + list(data.get("instruction_cues", []))
@@ -168,6 +168,7 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
 
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
 ADDRESS_NUMBER_AFTER = 3  # ...or this many after it ("Maple Street number 12", "Maple St no. 12")
+CODE_NUMBER_AFTER = 3  # a number this many words after a code word is the code ("gate code is 1234", "pin: 0000")
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
 
@@ -346,6 +347,16 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for k in span:
             if tokens[k] not in lex["question_words"]:
                 drop.setdefault(k, "address")
+    # A number right after a code word is a code, known or not ("my gate code is 1234", "wifi password 5521"); so is a
+    # token mixing the code word with digits ("pin1234").
+    codes = lex.get("code_words", frozenset())
+    for ci, tok in enumerate(tokens):
+        if tok in codes:
+            for k in range(ci + 1, min(len(tokens), ci + 1 + CODE_NUMBER_AFTER)):
+                if any(c.isdigit() for c in tokens[k]):
+                    drop.setdefault(k, "code")
+        elif any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
+            drop.setdefault(ci, "code")
     # A known number from memory (3+ digits: a gate code) is private INSIDE any token, whatever is glued to it ("4417mhz").
     mem_numbers = {n for s_ in singles for n in re.findall(r"\d{3,}", s_)}
     for i, tok in enumerate(tokens):
