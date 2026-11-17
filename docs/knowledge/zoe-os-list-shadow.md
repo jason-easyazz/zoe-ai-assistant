@@ -220,6 +220,17 @@ FAILS (the member is told it is not forgotten) until the owner removes the direc
 a hand copy appears with its data at once, so a process that looked less than `TRUST_S` ago can answer one forget from memory in
 those seconds; that data is never served, and the owner's only way forward is to remove it.
 
+**After a forget the member is recorded afresh.** Forgetting a member's data must not lock them out. Two things made it do so,
+found the first time the forget half of `tests/test_os_shadow_contract.py` ran against the real kernel: (1) the client published
+ONE constant cause text for every write of a verb, and the kernel shields, per member, the free text of whatever it forgets, so the
+first forget made every later write of theirs "carries forgotten content"; the cause text now ends in a random tag
+(`os_shadow.cause_text`). (2) A whole-person forget erases the member's record-only grant with the rest, and only the next daemon
+start gave it back; `shadow_daemon.py` now installs it again at the member's next act (`ShadowServer.record_again`), not before, so
+between the forget and that act nothing names them. What stays refused, by the kernel's own rule: the very item, note or title the
+member had forgotten (`CONTENT_KEYS`), said again by them, is `kernel_refused_live_did reason=forgotten`. Because a row- or
+turn-scoped forget in zoe-data forgets the member's WHOLE shadow record, every item they had added before it is refused if added
+again: read `reason=forgotten` lines in the week's report as that rule, not as the kernel disagreeing with production.
+
 **Verify**: add one item by voice, then `grep 'OS_SHADOW_ACT verb=list_add' ~/.zoe-logs/zoe-data.*  | tail -3` shows `result=match`.
 **Read a week**: `python3 scripts/maintenance/os_shadow_report.py ~/.zoe-logs/zoe-data.*`.
 **Roll back**: remove the `ZOE_OS_LIST_SHADOW` line and restart zoe-data (the hook becomes a flag read again); optionally

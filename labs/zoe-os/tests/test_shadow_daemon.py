@@ -106,6 +106,27 @@ def test_a_forget_on_the_wire_leaves_none_of_the_members_words_in_any_file_and_k
         d.brain.call("forget", subject=B, actor=B)                     # a skill cannot speak for a person
 
 
+def test_a_forgotten_member_still_on_the_roster_acts_again_and_is_recorded_afresh_without_a_restart(state):
+    """Forgetting a member's data must not lock them out. The forget erases their record-only grant with the rest; their NEXT act
+    gets it back (not before: until then nothing names them), in the SAME daemon. The kernel's own content shield still holds:
+    the very words they had forgotten are refused, new ones are recorded. The control: a member who is NOT on the roster gets
+    nothing back."""
+    d = start(state)
+    assert d.add(A, MARK.decode())["verified"] is True
+    assert d.panel.call("forget", subject=A, actor=A)["count"] >= 2
+    assert holding(state[0], A.encode()) in ([], ["known-people.json", "people.json"], ["people.json"])    # nothing in the record
+    again = d.add(A, "synthetic quince words")
+    assert again["verified"] is True and again["on_behalf_of"] == A        # recorded afresh, no restart
+    with pytest.raises(Refused):
+        d.add(A, MARK.decode())                                            # the forgotten words themselves stay forgotten
+    assert d.panel.call("forget", subject=A, actor=A)["count"] >= 2        # ... and what they did since is forgettable again
+    assert d.add(A, "synthetic medlar words")["verified"] is True
+    assert d.add(B, "synthetic other words")["verified"] is True           # B was never touched
+    from zoe_os.wire import WireError
+    with pytest.raises(WireError):
+        d.add("member-nobody", "synthetic stranger words")                 # control: not a member: not even a person here
+
+
 def test_a_member_taken_off_the_roster_stays_forgettable_until_forgotten_then_leaves_known_people(state):
     d = start(state)
     d.add(A, MARK.decode())

@@ -276,11 +276,18 @@ def test_a_real_add_is_recorded_as_an_event_and_a_receipt_and_matches(kernel, ca
     ops = [(s, op) for s, op, _ in kernel.calls]
     assert ops == [("voice", "publish"), ("brain", "act")]            # the surface records the cause; the brain acts on it
     pub, act = kernel.calls[0][2], kernel.calls[1][2]
-    assert pub["kind"] == "utterance" and pub["subject"] == MEMBER and pub["payload"] == {"text": os_shadow.UTTERANCE_TEXT}
+    # the fixed text plus a random tag (never a household word): one constant text for every write was shielded by the member's first
+    # forget, and the real kernel then refused every later write of theirs (test_os_shadow_contract.py runs that against it)
+    assert pub["kind"] == "utterance" and pub["subject"] == MEMBER and set(pub["payload"]) == {"text"}
+    fixed, tag = pub["payload"]["text"].rsplit(" ", 1)
+    assert fixed == os_shadow.UTTERANCE_TEXT and len(tag) == 16 and int(tag, 16) >= 0
     assert act["action"] == "list.add" and act["on_behalf_of"] == MEMBER and act["caused_by"] == [1]
     assert act["args"] == {"item": ITEM, "list": "Shopping", "asked": 1}
     (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
     assert line.startswith("OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=")
+    add()
+    settle(2)
+    assert kernel.calls[2][2]["payload"]["text"] != pub["payload"]["text"]            # no two cause events carry the same string
 
 
 @pytest.mark.parametrize("mode,result,kstate,reason", [

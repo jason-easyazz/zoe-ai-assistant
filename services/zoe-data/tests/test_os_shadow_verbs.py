@@ -89,7 +89,9 @@ def test_each_verb_sends_the_kernels_action_and_args_and_matches(kernel, monkeyp
     assert all(isinstance(a["asked"], int) for a in sent.values())
     assert os_shadow.counters_by_verb() == {v: {"match": 1} for v in ("reminder_create", "alarm_create", "list_remove")}
     pubs = [a["payload"]["text"] for _, op, a in kernel.calls if op == "publish"]
-    assert sorted(pubs) == ["shadow alarm create", "shadow list remove", "shadow reminder create"]   # fixed text, never the note
+    # fixed text plus a random tag (os_shadow.cause_text), never the note
+    assert sorted(p.rsplit(" ", 1)[0] for p in pubs) == ["shadow alarm create", "shadow list remove", "shadow reminder create"]
+    assert all(len(p.rsplit(" ", 1)[1]) == 16 for p in pubs) and len(set(pubs)) == 3
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "verb=alarm_create src=service cls=once" in text and "verb=reminder_create src=service cls=once" in text
     assert NOTE not in text and "quillon" not in text.lower() and "rice" not in text

@@ -203,6 +203,14 @@ def test_a_real_list_add_matches_and_the_forget_leaves_none_of_it_readable(real_
     os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="rice")
     settle(2)
     assert os_shadow.counters() == {"match": 2}                       # the kernel is still serving after a forget
+    # The kernel's own rule, pinned so nobody reads it as a client fault: it shields, for this member, the free text of what it
+    # forgot ("forgotten means forever"), so the SAME item again is a counted refusal; anything else of theirs is recorded afresh.
+    os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item=ITEM)
+    settle(3)
+    assert os_shadow.counters() == {"match": 2, "kernel_refused_live_did": 1}
+    os_shadow.note_add(MEMBER, source="spoken", list_type="shopping", list_name="Shopping", item="oats")
+    settle(4)
+    assert os_shadow.counters() == {"match": 3, "kernel_refused_live_did": 1}
 
 
 def test_the_real_kernel_refuses_a_member_it_has_no_grant_from_and_the_client_names_it(real_kernel):
@@ -246,9 +254,12 @@ def test_a_reminder_an_alarm_and_a_remove_match_against_the_real_kernel(real_ker
 def test_the_real_kernel_refuses_what_its_schema_cannot_take_and_the_client_names_it(real_kernel, monkeypatch):
     monkeypatch.setenv("ZOE_OS_SHADOW_VERBS", "alarm_create")
     os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="7:5", repeat="once")      # never sent: the client stops it
+    # a repeating alarm is something the kernel's one-time alarm.set cannot say: the client counts it and never sends it either
+    # (os_shadow.kernel_args; this line used to expect a match, from before the client stopped sending them)
     os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="weekdays")
-    settle(2)
-    assert os_shadow.counters_by_verb() == {"alarm_create": {"not_expressible": 1, "match": 1}}
+    os_shadow.note_alarm_create(MEMBER, source="service", time_hhmm="06:45", repeat="once")    # what the verb CAN say: sent, matches
+    settle(3)
+    assert os_shadow.counters_by_verb() == {"alarm_create": {"not_expressible": 2, "match": 1}}
 
 
 def removed_and_forgotten(state: Path, monkeypatch) -> subprocess.Popen:

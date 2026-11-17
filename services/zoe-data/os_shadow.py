@@ -91,6 +91,14 @@ def utterance_text(verb: str) -> str:
     return UTTERANCE_TEXT if verb == "list_add" else "shadow " + verb.replace("_", " ")
 
 
+def cause_text(verb: str) -> str:
+    """The text the cause event is PUBLISHED with: the verb's fixed text plus a random tag, so no two cause events of a member
+    carry the same string. The kernel shields, per member, every free-text string of what it forgets ("forgotten means forever");
+    with one constant text for every write, a member's first forget shielded that constant and the kernel then refused every later
+    shadowed write of theirs (``kernel_refused_live_did reason=forgotten``). Still no household word: the tag is random hex."""
+    return f"{utterance_text(verb)} {os.urandom(8).hex()}"
+
+
 class KernelRefused(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -926,7 +934,7 @@ def _act_outcome(kernel: _Kernel, verb: str, user_id: str, live: str, raw: dict,
     reason, result = "", ""
     old_kernel = False
     try:
-        ev = kernel.call(SKILL_VOICE, "publish", until, kind="utterance", subject=user_id, payload={"text": utterance_text(verb)})
+        ev = kernel.call(SKILL_VOICE, "publish", until, kind="utterance", subject=user_id, payload={"text": cause_text(verb)})
         seq = ev.get("seq") if isinstance(ev, dict) else None
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise KernelProtocol("no seq")
