@@ -933,3 +933,10 @@ def test_changed_to_introduces_the_value(text):
 @pytest.mark.parametrize("text", ["my password changed", "the password reset link expired", "the password was reset to be safe"])
 def test_changed_without_a_value_is_judged_as_before(text):
     assert "zebrafiddle" not in scrub_pii(text)[0]
+
+
+def test_a_tab_joins_card_and_phone_digit_groups_too():
+    assert scrub_pii("card 4111\t1111\t1111\t1111")[1] == "luhn_cc"
+    for text in ("call me on 0400\t555\t101", "my mobile is +61\t400\t555\t101"):
+        out, _ = scrub_pii(text)
+        assert R in out and "555" not in out, out
