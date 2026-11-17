@@ -1000,6 +1000,51 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
     return res
 
 
+def _routines_wanted() -> bool:
+    """Both routines flags on (``ZOE_ROUTINES=on`` and ``ZOE_ROUTINE_VOICE`` shadow | on), read once per turn. Checked BEFORE the
+    tier is imported: a flag-off turn never loads ``routines_tier`` / ``routines_store`` or compiles their patterns."""
+    try:
+        from typed_env import flag
+
+        return (str(flag("ZOE_ROUTINES") or "off").strip().lower() == "on"
+                and str(flag("ZOE_ROUTINE_VOICE") or "off").strip().lower() in ("shadow", "on"))
+    except Exception:  # noqa: BLE001 - an unreadable flag is off
+        return False
+
+
+def _routines_turn_begins(session_id: str) -> None:
+    """Every turn's start (flags on only, nothing imported otherwise): the routines walk survives only when the routines tier itself
+    sees the next turn (``routines_tier.turn_begins``), so a turn answered by a tier above it ends the walk."""
+    if not _routines_wanted():
+        import sys                                    # flags off: never import; but a tier loaded earlier still sees the turn pass
+        loaded = sys.modules.get("routines_tier")
+        if loaded is not None:
+            try:
+                loaded.turn_begins(session_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return
+    try:
+        import routines_tier as _rt
+
+        _rt.turn_begins(session_id)
+    except Exception:  # noqa: BLE001 - never breaks a turn
+        pass
+
+
+async def _routines_tier(text: str, user_id: str, session_id: str, kwargs: dict):
+    """The routines tier, imported only when its flags are on (see ``_routines_wanted``). Never raises."""
+    if not _routines_wanted():
+        return None
+    try:
+        import routines_tier as _rt
+
+        return await _rt.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                              extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+    except Exception:  # noqa: BLE001 - the tier never breaks a turn
+        return None
+
+
 async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # A reply that ANSWERS Zoe's own pending reminder offer ("yes please, 2:45 so i'm not late") is not a time question: the domain
     # tiers would hand the bare words to the time expert ("It's 8:54 AM"). Defer the whole turn (flag-gated ZOE_OFFER_FOLLOWUP_BINDING,
@@ -1019,6 +1064,7 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":
+        _routines_turn_begins(session_id)
         answered = await _distress_tier(text, user_id, kwargs)
         if answered is not None:
             return answered
@@ -1152,6 +1198,12 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
                                        extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
+        if answered is not None:
+            return answered
+        # routines (ZOE_ROUTINES + ZOE_ROUTINE_VOICE, both default OFF = returns before any work): "done" / "skip" / "later" to the
+        # step Zoe just named, "what's next?", a one-off line ("remind me to take the drill to work tomorrow", only when a routine
+        # fits; a clock time steps aside to the reminder path), "I'm off" with an undone take-with line. medical_safety.detect first.
+        answered = await _routines_tier(text, user_id, session_id, kwargs)
         if answered is not None:
             return answered
         # intercom (ZOE_INTERCOM, default OFF = returns before any work): "tell the kitchen dinner's ready", "announce: ...", "call the
