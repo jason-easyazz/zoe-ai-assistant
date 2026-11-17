@@ -4,7 +4,7 @@ import glob
 import pytest
 
 from zoe_os.brain.drivers import BRAIN, Alarms, Keeper, Lists, Reminders as DriverReminders
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.events import Event, Kind, Visibility
 from zoe_os.kernel import Kernel
 from zoe_os.spine import Refused, Spine
@@ -19,7 +19,7 @@ SECRET, KEEP = 'velvet comet token', 'copper fern token'
 
 
 def boot(path):
-    k = Kernel(str(path), [Person(PERSON)])
+    k = Kernel(str(path), [Person(PERSON, ADULT)])
     k.grants.install({'skill': 'voice', 'origin': True, 'emits': ['utterance']})
     k.grants.install(BRAIN)
     k.grants.grant(PERSON, 'brain')

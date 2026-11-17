@@ -12,7 +12,7 @@ import pytest
 from spine_helpers import AllowList
 from test_history_cost import vm_budget
 from zoe_os import spine as spine_mod
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.events import Event, Kind
 from zoe_os.kernel import Kernel
 from zoe_os.spine import Spine
@@ -130,7 +130,7 @@ def test_backfill_runs_once_and_the_marker_names_nobody(path):
 
 
 def test_kernel_members_come_from_the_grant_store(tmp_path):
-    k = Kernel(str(tmp_path / 'kernel.db'), [Person(A), Person(B)])
+    k = Kernel(str(tmp_path / 'kernel.db'), [Person(A, ADULT), Person(B, ADULT)])
     try:
         k.grants.install({'skill': 'voice', 'origin': True, 'emits': ['utterance']})
         ev = k.spine.publish(Event(Kind.UTTERANCE, 'voice', B,

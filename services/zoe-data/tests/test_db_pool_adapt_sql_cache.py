@@ -185,28 +185,41 @@ def test_non_str_sql_takes_the_uncached_walk():
     assert db_pool._adapt_sql_memo.cache_info().currsize == 0
 
 
-def test_a_dropped_rule_cannot_be_impersonated_by_a_new_one_at_the_same_address(monkeypatch):
-    """Review of PR 2469: with the key built from id(rule), a rule that is swapped out and garbage-collected frees its
-    address; a NEW rule allocated there would match the old cache entry and serve the OLD rewrite. The key holds the rule
-    objects, so every swap is seen. Many swaps with gc between them make an address reuse overwhelmingly likely."""
-    import gc
+def test_a_dropped_rule_cannot_be_impersonated_by_a_new_one_at_the_same_address():
+    """Review of PR 2469: with the key built from id(rule), a rule that is swapped out and freed gives its address
+    back; a NEW rule allocated there would match the old cache entry and serve the OLD rewrite. The key holds the rule
+    objects, so a rule a cache entry was built under is never freed.
+
+    Proved directly, not by hoping for an address reuse: after the caller drops its last reference (and ``re``'s own
+    compile cache is purged), the swapped-in rule must still be ALIVE, held by the memo. The earlier shape of this test
+    swapped rules 300 times through ``monkeypatch.setattr`` with two ``gc.collect()`` per swap. ``monkeypatch`` keeps
+    every replaced value for its undo, so no rule was ever freed and the test passed on the id()-keyed code too; and each
+    full collection walks the whole heap, which late in the lane cost ~0.6 s: 357 s for this one test (2026-11-14)."""
     import re
+    import weakref
 
     sql = "SELECT NOW() FROM t WHERE a = ?"
+    real_rule = db_pool._NOW_RE
     real = db_pool._adapt_sql(sql)
     assert "NOW()::text" in real
-    never = "this_never_matches_anything_xyz"
-    for i in range(300):
-        # rule A: never matches -> NOW() is left alone
-        monkeypatch.setattr(db_pool, "_NOW_RE", re.compile(never + str(i)))
-        assert db_pool._adapt_sql(sql) == "SELECT NOW() FROM t WHERE a = $1", i
-        # drop A entirely, collect, then install a DIFFERENT rule (it may land at A's old address)
-        monkeypatch.setattr(db_pool, "_NOW_RE", None)
-        gc.collect()
-        monkeypatch.setattr(db_pool, "_NOW_RE", re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE))
-        assert db_pool._adapt_sql(sql) == real, i          # the NEW rule's rewrite, never A's cached one
-        gc.collect()
-    monkeypatch.undo()
+    try:
+        for i in range(20):
+            # rule A: never matches -> NOW() is left alone
+            rule = re.compile(f"this_never_matches_anything_xyz{i}")
+            alive = weakref.ref(rule)
+            db_pool._NOW_RE = rule
+            assert db_pool._adapt_sql(sql) == "SELECT NOW() FROM t WHERE a = $1", i
+            # drop A everywhere the test can reach: the module global, the local, re's compile cache
+            db_pool._NOW_RE = real_rule
+            del rule
+            re.purge()
+            assert alive() is not None, "the memo must keep a rule it has an entry for alive (its address is never reused)"
+            # a DIFFERENT rule, freshly allocated: it gets its own rewrite, never A's cached one
+            db_pool._NOW_RE = re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE)
+            assert db_pool._adapt_sql(sql) == real, i
+    finally:
+        db_pool._NOW_RE = real_rule
+        db_pool._adapt_sql_memo.cache_clear()     # the 20 throwaway rules are not left pinned for the rest of the lane
     assert db_pool._adapt_sql(sql) == real
 
 

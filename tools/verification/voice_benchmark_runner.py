@@ -23,7 +23,6 @@ def run_once(text: str) -> Dict[str, float]:
         "status_code": float(r.status_code),
         "latency_ms": elapsed_ms,
         "bytes": float(len(r.content)),
-        "provider_edge": 1.0 if r.headers.get("x-zoe-tts-provider") == "edge-tts" else 0.0,
     }
 
 
@@ -36,12 +35,10 @@ def main() -> None:
     ok = [s for s in samples if s["ok"] == 1.0]
     lat = [s["latency_ms"] for s in ok]
     bts = [s["bytes"] for s in ok]
-    edge_ratio = (sum(s["provider_edge"] for s in ok) / len(ok)) if ok else 0.0
 
     print("Voice benchmark summary")
     print(f"total_samples={len(samples)} success={len(ok)}")
     if ok:
-        print(f"provider_edge_ratio={edge_ratio:.2f}")
         print(f"latency_ms_p50={statistics.median(lat):.1f}")
         print(f"latency_ms_p95={sorted(lat)[int(0.95 * (len(lat)-1))]:.1f}")
         print(f"latency_ms_avg={statistics.mean(lat):.1f}")

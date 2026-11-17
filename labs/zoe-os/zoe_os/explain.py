@@ -34,7 +34,8 @@ class Explainer:
     # ---- who may see what ---------------------------------------------------------------
     def _is(self, asker: str, person: str | None) -> bool:
         owner = self.people.get(person or "")
-        return bool(owner) and (asker == owner.id or asker in owner.guardians)
+        guardian = asker in owner.guardians and getattr(self.people.get(asker), "role", None) == ADULT if owner else False
+        return bool(owner) and (asker == owner.id or guardian)       # a guardian link counts only for a STATED adult
 
     def _may_see(self, asker: str, ev: Event) -> bool:
         who = self.people.get(asker)

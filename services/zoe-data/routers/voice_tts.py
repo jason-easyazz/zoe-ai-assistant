@@ -48,12 +48,10 @@ from tts_waterfall import (
     _clean_for_speech,
     _has_espeak_ng,
     _kokoro_http_client,
-    _synthesize_edge_tts,
     _synthesize_espeak,
     _synthesize_kokoro_sidecar,
     _synthesize_local_service,
     TTS_MODE_KOKORO,
-    edge_tts_available,
     tts_mode,
 )
 
@@ -1175,7 +1173,6 @@ async def _require_livekit_auth(
 
 VOICE_PROFILES = {
     "zoe_au_natural_v1": {
-        "edge_voice": "en-AU-NatashaNeural",
         "espeak_speed": 158,
         "espeak_pitch": 44,
         "espeak_volume": 150,
@@ -2540,7 +2537,6 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
-    edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
     speed = int(os.getenv("ZOE_ESPEAK_SPEED", str(prof["espeak_speed"])))
     pitch = int(os.getenv("ZOE_ESPEAK_PITCH", str(prof["espeak_pitch"])))
     volume = int(os.getenv("ZOE_ESPEAK_VOLUME", str(prof["espeak_volume"])))
@@ -2552,16 +2548,15 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     # ── TTS: Kokoro sidecar ONLY by default (ZOE_TTS_MODE=kokoro) ──
     # Owner decision 2026-10-21: Kokoro is Zoe's only voice. No fallback voice,
-    # and reply text never leaves the box (Edge TTS sends it to Microsoft). If
-    # Kokoro fails, the request 503s below. The legacy waterfall (Kokoro → local
-    # sidecar → Edge TTS → espeak-ng) runs only when another mode is set
-    # explicitly (hybrid/local/cloud/edge/offline).
+    # and reply text never leaves the box (there is no off-box engine: Edge TTS
+    # was retired 2026-11-16). If Kokoro fails, the request 503s below. The
+    # legacy LOCAL waterfall (Kokoro → local sidecar → espeak-ng) runs only when
+    # another mode is set explicitly (hybrid/local/offline; see tts_mode).
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
-    if mode != "cloud":
-        audio_bytes = await _synthesize_kokoro_sidecar(text)
-        if audio_bytes:
-            provider = "kokoro-sidecar"
-            content_type = "audio/wav"
+    audio_bytes = await _synthesize_kokoro_sidecar(text)
+    if audio_bytes:
+        provider = "kokoro-sidecar"
+        content_type = "audio/wav"
 
     if audio_bytes is None and mode in {"hybrid", "local"}:
         audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
@@ -2570,17 +2565,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
             if not audio_bytes.startswith(b"RIFF"):
                 content_type = "audio/mpeg"
 
-    if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
-        try:
-            audio_bytes = await _synthesize_edge_tts(text, edge_voice)
-            if audio_bytes:
-                provider = "edge-tts"
-                if not audio_bytes.startswith(b"RIFF"):
-                    content_type = "audio/mpeg"
-        except Exception:
-            audio_bytes = None
-
-    if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
+    if audio_bytes is None and mode != TTS_MODE_KOKORO:
         try:
             audio_bytes = await _synthesize_espeak(text, speed=speed, pitch=pitch, volume=volume)
             provider = "espeak-ng"
@@ -2681,7 +2666,6 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
     mode = tts_mode()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
-    edge_voice = str((payload or {}).get("edge_voice") or os.getenv("ZOE_EDGE_TTS_VOICE", prof["edge_voice"]))
     local_tts_url = os.getenv("ZOE_LOCAL_TTS_URL", "")
 
     sentences = _split_sentences(text)
@@ -2695,28 +2679,18 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Kokoro ONLY by default (see /synthesize). The waterfall
-            # (Kokoro → local sidecar → Edge TTS → espeak) needs an explicit mode.
-            if mode != "cloud":
-                audio_bytes = await _synthesize_kokoro_sidecar(sentence)
-                if audio_bytes:
-                    provider = "kokoro-sidecar"
+            # Kokoro ONLY by default (see /synthesize). The local waterfall
+            # (Kokoro → local sidecar → espeak) needs an explicit mode.
+            audio_bytes = await _synthesize_kokoro_sidecar(sentence)
+            if audio_bytes:
+                provider = "kokoro-sidecar"
 
             if audio_bytes is None and mode in {"hybrid", "local"} and local_tts_url:
                 audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
                 if audio_bytes:
                     provider = "local-tts"
 
-            if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
-                try:
-                    audio_bytes = await _synthesize_edge_tts(sentence, edge_voice)
-                    if audio_bytes:
-                        provider = "edge-tts"
-                except Exception as exc:
-                    error_msg = str(exc)
-                    audio_bytes = None
-
-            if audio_bytes is None and mode not in {"cloud", TTS_MODE_KOKORO}:
+            if audio_bytes is None and mode != TTS_MODE_KOKORO:
                 try:
                     audio_bytes = await _synthesize_espeak(sentence, prof["espeak_speed"], prof["espeak_pitch"], prof["espeak_volume"])
                     if audio_bytes:
@@ -5668,7 +5642,7 @@ async def voice_command(
                         })
 
                         # Prefer kokoro-sidecar (natural GPU voice); fall back to the
-                        # full /synthesize waterfall (local → Edge → espeak) if it's down.
+                        # /synthesize path (Kokoro-only by default) if it's down.
                         wav_bytes = await _synthesize_kokoro_sidecar(s)
                         _tts_provider = "kokoro-sidecar"
                         if wav_bytes:

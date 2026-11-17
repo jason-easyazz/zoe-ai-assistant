@@ -333,7 +333,7 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         import memory_provenance
         if memory_provenance.is_off_record(user_id, text):   # BM5: off the record is never indexed
             return False
-        from memory_service import is_guest_memory_user, scrub_pii
+        from memory_service import is_guest_memory_user, scrub_pii_matchable_async
         if is_guest_memory_user(user_id) or speaker_verified is False:
             return False
         import own_words
@@ -344,7 +344,8 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         if (len(owner_text.split()) < MIN_WORDS or own_words.instruction_shaped(owner_text)
                 or _is_a_question(owner_text) or wants(owner_text)):
             return False
-        scrubbed, reject = scrub_pii(owner_text)
+        # a forget erases an indexed turn by its words (``erase_text``): not widened before forgets match by turn id (#2574)
+        scrubbed, reject = await scrub_pii_matchable_async(owner_text)
         if reject or not scrubbed.strip():
             return False
         if await _shielded(user_id, scrubbed):
