@@ -457,8 +457,11 @@ async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
                 payload = json.loads(payloads.get(aid) or "null")
             except ValueError:
                 payload = payloads.get(aid)                      # unparseable: the text prefilter matched the quoted id itself
-            if _names_member(payload, user_id) or any(_names_member(d, user_id) for _, d in evs) or (
-                    isinstance(payload, str) and json.dumps(str(user_id)) in payload):
+            names_member = _names_member(payload, user_id) or any(_names_member(d, user_id) for _, d in evs) or (
+                isinstance(payload, str) and json.dumps(str(user_id)) in payload)
+            # a guest row that ALSO names another member in an identity field is shared with them: it stays (the member's own row goes)
+            names_other = _names_other(payload, user_id) or any(_names_other(d, user_id) for _, d in evs)
+            if names_member and (owner == user_id or not names_other):
                 out.add(aid)
     # ...and every pre-upgrade action a GUEST / kiosk identity owns with no recorded origin that names NO other member: it can hold
     # the member's words with no id in it, and nobody else can be shown to own it. One whose payload or ledger names another member

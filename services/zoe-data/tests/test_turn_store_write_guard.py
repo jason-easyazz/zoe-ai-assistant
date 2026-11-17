@@ -330,7 +330,7 @@ def test_a_cancelled_palace_write_holds_its_caller_until_the_worker_finishes(tmp
     asyncio.run(go())
 
 
-def test_inside_a_transaction_the_mark_read_runs_in_a_savepoint_and_a_failed_read_never_aborts_the_write(monkeypatch):
+def test_inside_a_transaction_the_mark_read_runs_in_a_savepoint_and_a_failed_read_refuses_the_write(monkeypatch):
     ew.set_backend(None)
 
     class _TxConn(_Conn):
@@ -362,10 +362,13 @@ def test_inside_a_transaction_the_mark_read_runs_in_a_savepoint_and_a_failed_rea
         db = db_pool.AsyncpgCompat(conn)
         bound = ew.turn_bind(_turn(A))
         try:
-            await db.execute("INSERT INTO reminders (id, user_id) VALUES (?, ?)", ("r1", A))
+            with pytest.raises(ew.TurnWriteRefused):
+                await db.execute("INSERT INTO reminders (id, user_id) VALUES (?, ?)", ("r1", A))
         finally:
             ew.turn_unbind(bound)
-        assert conn.savepoints == 1 and any("INSERT" in s for s in conn.ran), "read in a savepoint; unreadable mark: the write runs"
+        # the read ran in a SAVEPOINT (a failed read never aborts the caller's transaction), and the unreadable mark FAILS CLOSED:
+        # the write is refused before it runs
+        assert conn.savepoints == 1 and not any("INSERT" in s for s in conn.ran), "read in a savepoint; unreadable mark: refused"
     asyncio.run(go())
 
 
