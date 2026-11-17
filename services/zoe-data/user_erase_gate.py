@@ -82,14 +82,17 @@ def whole_member_erase(method):
     bound in the caller's context (``erase_watermark.store_write_guard`` judges a turn's store writes, never the delete's own)."""
     @functools.wraps(method)
     async def call(self, user_id, *args, **kwargs):
-        from erase_watermark import _TURN_CTX
+        from erase_watermark import _ERASE_OWN_TURN, _TURN_CTX
 
+        bound = _TURN_CTX.get()
+        own = _ERASE_OWN_TURN.set(bound[0] if bound else None)   # the delete must not wait for the request that runs it
         unbound = _TURN_CTX.set(None)
         try:
             with erase_span(user_id):
                 return await method(self, user_id, *args, **kwargs)
         finally:
             _TURN_CTX.reset(unbound)
+            _ERASE_OWN_TURN.reset(own)
     return call
 
 

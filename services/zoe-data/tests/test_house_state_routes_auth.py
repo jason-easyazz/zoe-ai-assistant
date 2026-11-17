@@ -34,6 +34,19 @@ import routers.panel_config as pc
 import routers.rooms as rooms
 from database import get_db
 
+
+@pytest.fixture(autouse=True)
+def _no_member_is_under_removal(monkeypatch):
+    """This file's fake database has no member-removal store (its rows are shaped for the room/panel tables), and it tests the panel
+    token's authority, not removal: the removal gate (auth._removal_gate, which the member-bound token path now passes) reads as
+    "nobody is being removed". The gate itself is tested in test_settings_member_delete_runs_full_erase.py."""
+    import auth
+
+    async def not_removed(_uid):
+        return False
+    monkeypatch.setattr(auth, "_under_removal", not_removed)
+
+
 pytestmark = pytest.mark.ci_safe
 
 PANEL_IP = "192.0.2.50"     # the registered kiosk

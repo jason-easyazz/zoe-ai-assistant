@@ -1680,6 +1680,17 @@ async function loadUsers() {
     const users = data.users || data || [];
     usersById = {};
     for (const u of users) usersById[u.user_id] = u;
+    await loadRemovals();
+    // an unfinished removal whose sign-in is already off is not in the default (active-only) list: show it anyway, with its state
+    const missing = Object.keys(removalsById).filter(id => !usersById[id]);
+    if (missing.length) {
+      try {
+        const all = await apiCall('GET', '/api/admin/users?active_only=false');
+        for (const u of (all.users || all || [])) {
+          if (missing.includes(u.user_id) && !usersById[u.user_id]) { usersById[u.user_id] = u; users.push(u); }
+        }
+      } catch (e) { /* the badge rows below still show for the ones already listed */ }
+    }
     if (!users.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No users found</td></tr>';
       return;
@@ -1689,7 +1700,7 @@ async function loadUsers() {
         <td><strong>${escHtml(u.username)}</strong></td>
         <td style="color:var(--text2)">${escHtml(u.email)}</td>
         <td><span class="badge badge-accent">${escHtml(roleLabel(u.role))}</span></td>
-        <td>${u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
+        <td>${removalBadge(u.user_id) || (u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>')}</td>
         <td>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <button class="btn btn-ghost btn-sm" data-uid="${escHtml(u.user_id)}" onclick="openEditUser(this.dataset.uid)">Edit</button>
@@ -1776,16 +1787,71 @@ async function doResetPassword() {
   }
 }
 
+/* Delete a member = ONE server action (POST /api/members/{id}/remove): barrier, sign-in off, the full erase of everything Zoe keeps
+   about them, then the sign-in itself. The page shows the server's state only, and never says "deleted" before the server says done
+   (the erase confirmed): in_progress = "Deleting...", retrying = "Not finished - retrying", done = the member is gone. */
+let removalsById = {};
+const resumedRemovals = new Set();   // once per page visit: a failing removal is not hammered (the server retries the erase itself)
+
+async function loadRemovals() {
+  try {
+    const data = await apiCall('GET', '/api/members/removals');
+    removalsById = {};
+    for (const r of (data.removals || [])) removalsById[r.user_id] = r;
+  } catch (e) { removalsById = {}; }
+  // a removal that is not finished resumes with this administrator's session (the sign-in steps need one); same one action
+  for (const r of Object.values(removalsById)) {
+    if (resumedRemovals.has(r.user_id)) continue;
+    if (r.status === 'retrying') { resumedRemovals.add(r.user_id); resumeRemoval(r.user_id); }
+    else if (r.status === 'in_progress') {   // already running: just follow it to its outcome
+      resumedRemovals.add(r.user_id);
+      watchRemoval(r.user_id, (usersById[r.user_id] || {}).username || 'this member');
+    }
+  }
+}
+
+function removalBadge(id) {
+  const r = removalsById[id];
+  if (!r || r.status === 'none' || r.status === 'done') return '';
+  return r.status === 'in_progress' ? '<span class="badge badge-accent">Deleting…</span>'
+                                    : '<span class="badge badge-danger">Not finished – retrying</span>';
+}
+
+async function resumeRemoval(id) {
+  try { await apiCall('POST', `/api/members/${encodeURIComponent(id)}/remove`); } catch (e) { return; }
+  watchRemoval(id, (usersById[id] || {}).username || 'this member');
+}
+
+async function watchRemoval(id, name) {
+  // every 2 s for the first 3 minutes, then every 20 s for as long as the page is open (a big erase can take a while); the badge
+  // never claims more than the server said
+  for (let i = 0; ; i++) {
+    await new Promise(res => setTimeout(res, i < 90 ? 2000 : 20000));
+    let st;
+    try { st = await apiCall('GET', `/api/members/${encodeURIComponent(id)}/removal`); }
+    catch (e) { if (i === 90) toast(`Still deleting ${name}. Reopen Settings to check.`, 'info'); continue; }
+    removalsById[id] = st;
+    if (st.status === 'done') { toast(`${name} was deleted, with everything Zoe kept about them.`, 'success'); loadUsers(); return; }
+    if (st.status === 'retrying') { toast(`Deleting ${name} isn't finished yet. Zoe will keep retrying.`, 'error'); loadUsers(); return; }
+    if (i === 90) toast(`Still deleting ${name}. This page keeps checking.`, 'info');
+  }
+}
+
 async function deleteUser(id) {
   const name = (usersById[id] || {}).username || 'this user';
-  if (!confirm(`Permanently delete user "${name}"?`)) return;
+  if (!confirm(`Delete "${name}" and everything Zoe keeps about them? Their sign-in stops at once. This can't be undone.`)) return;
+  let st;
   try {
-    await apiCall('DELETE', `/api/admin/users/${encodeURIComponent(id)}`);
-    toast('User deleted', 'success');
-    loadUsers();
+    st = await apiCall('POST', `/api/members/${encodeURIComponent(id)}/remove`);
   } catch (e) {
     toast(e.message, 'error');
+    return;
   }
+  removalsById[id] = st;
+  resumedRemovals.add(id);
+  toast(`Deleting ${name}…`, 'info');
+  loadUsers();
+  watchRemoval(id, name);
 }
 
 /* ── Admin: System info ───────────────────────────────────── */

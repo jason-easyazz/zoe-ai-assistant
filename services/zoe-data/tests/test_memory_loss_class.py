@@ -328,6 +328,9 @@ _REMOVERS = {
     # the owner's verbatim-turn index (``exact_turns``, Postgres - never palace rows): the forget's erase of the rows that
     # name a forgotten entity; the audited whole-user removal is ``backend.delete_user`` behind ``MemoryService.delete_user``
     ("exact_words.py", "erase_entity"),
+    # the member-removal job's sign-in step: an HTTP DELETE to zoe-auth's admin user endpoint (httpx ``client.delete``), never a
+    # palace row; it runs only after MemoryService.delete_user confirmed the full erase (member_removal.advance)
+    ("member_removal.py", "_auth_delete"),
     # "forget it" after "why did you say that?" deletes the owner's quoted turn from the same index (BM5, provenance_answers.forget_it)
     ("exact_words.py", "erase_text"), ("exact_words.py", "erase_turn"),
     # topic forget ("forget everything about X"): the same exact_turns index (Postgres, never palace rows) through its backend -

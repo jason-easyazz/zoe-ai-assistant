@@ -597,10 +597,29 @@ def turn_release(token: Optional[str]) -> None:
         _TURNS.pop(str(token), None)
 
 
-def inflight_turns(user_id: str) -> int:
-    """How many turns of ``user_id`` are in flight in this process now (the member delete waits for them; stale ones excepted)."""
+#: the caller's own turn token, remembered by user_erase_gate.whole_member_erase when it clears _TURN_CTX for a delete
+_ERASE_OWN_TURN: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_erase_own_turn", default=None)
+
+
+def inflight_turns(user_id: str, *, exclude_own: bool = False) -> int:
+    """How many turns of ``user_id`` are in flight in this process now (the member delete waits for them; stale ones excepted).
+    ``exclude_own``: leave out the turn bound in the CALLER's context - a delete must not wait for the very request that runs it (an
+    administrator forgetting their own memories: their request is a turn, ``auth._bind_request_turn``)."""
     uid, cutoff = str(user_id or ""), _now().timestamp() - TURN_STALE_S
-    return sum(1 for e in list(_TURNS.values()) if e["member"] == uid and e["began"].timestamp() >= cutoff)
+    # OWN = exactly the turn the caller had bound: the bound context, or - inside user_erase_gate.whole_member_erase, which clears
+    # the context before the erasers - the token it remembered as it cleared it (_ERASE_OWN_TURN). Only that one turn: an earlier
+    # turn of the same member still held by background work, or a turn of another task, is still waited for.
+    own = None
+    if exclude_own:
+        bound = _TURN_CTX.get()
+        token = bound[0] if bound else _ERASE_OWN_TURN.get()
+        entry = _TURNS.get(token) if token else None
+        # ...and only when that turn is run by THIS task: a task started from inside a turn inherits its context but is a different
+        # task, and must still wait for the turn (a delete scheduled from a voice turn waits for the turn's own tool write)
+        if entry is not None and entry.get("task") is not None and entry["task"] is _current_task():
+            own = token
+    return sum(1 for t, e in list(_TURNS.items()) if e["member"] == uid and e["began"].timestamp() >= cutoff
+               and not (own is not None and t == own))
 
 
 def turn_began(session_id: Optional[str] = None) -> Optional[datetime]:

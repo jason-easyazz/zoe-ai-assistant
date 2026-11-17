@@ -66,6 +66,134 @@ def _cache_get(session_id: str) -> Optional[dict]:
     return None
 
 
+#: members a removal (Settings > Delete, ``member_removal``) has put behind its barrier IN THIS PROCESS: every request of theirs is
+#: refused at once, cached session or not (``bar_member`` also evicts their cached identities). A process that did not see the
+#: removal (a restart) checks the DURABLE removal row on every cache miss (``_under_removal``), so it never rests on the cache.
+_BARRED: set = set()
+
+
+def bar_member(user_id: str) -> None:
+    """Refuse every request of ``user_id`` from now on and drop their cached sessions (the removal's step 1, before the sign-in goes)."""
+    uid = str(user_id or "")
+    if not uid:
+        return
+    _BARRED.add(uid)
+    for sid in [s for s, (u, _ts) in list(_session_cache.items()) if str((u or {}).get("user_id") or "") == uid]:
+        _session_cache.pop(sid, None)
+
+
+def _store_absent(exc: BaseException) -> bool:
+    """No database to read: a store never migrated (no table), or a process that has NEVER had a pool. A pool that existed and was lost
+    is a FAULT (``db_pool.pool_ever_initialised``), so the caller fails closed - matching the error text alone would read a lost pool
+    as "no member is being removed" and let a member under removal through."""
+    s = str(exc).lower()
+    if "no such table" in s or ("relation" in s and "does not exist" in s):
+        return True
+    try:
+        import db_pool
+
+        return "pool" in s and not db_pool.pool_ever_initialised()
+    except Exception:  # noqa: BLE001 - cannot tell: not absent (the caller fails closed)
+        return False
+
+
+async def _under_removal(user_id: str) -> bool:
+    """True when ``user_id`` is behind a removal's barrier: barred in this process, or a durable removal row exists. RAISES when the row
+    cannot be read (the caller decides: fail closed unless ``ZOE_AUTH_FAIL_CLOSED`` is off)."""
+    uid = str(user_id or "")
+    if not uid:
+        return False
+    if uid in _BARRED:
+        return True
+    try:
+        import member_removal
+
+        state = await member_removal.get_store().get(uid)
+    except Exception as exc:  # noqa: BLE001
+        if _store_absent(exc):
+            return False
+        raise
+    if state is not None:
+        _BARRED.add(uid)
+        return True
+    return False
+
+
+async def _removal_gate(user: Optional[dict], request: Any = None) -> Optional[dict]:
+    """The removal barrier for a resolved identity (session, cache miss, or relay). Returns the identity to use: unchanged when its
+    member is not being removed; RAISES 401 when they are. When the removal row cannot be read it RAISES 503, or - only with
+    ZOE_AUTH_FAIL_CLOSED explicitly off - returns a degraded GUEST, never the member (an outage must not let a member under removal
+    through). Guests and principals with no member id pass unchanged."""
+    uid = str((user or {}).get("user_id") or "")
+    if not uid or uid == GUEST_USER_ID:
+        return user
+    try:
+        under_removal = await _under_removal(uid)
+    except Exception as exc:  # noqa: BLE001 - the removal row cannot be read
+        logger.warning("removal barrier unreadable (%s)", type(exc).__name__)
+        degraded = _degraded_user()
+        if degraded is None:
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
+        out = {k: v for k, v in degraded.items() if k != _DEGRADED_MARK}
+        out["auth_degraded"] = True
+        return out
+    if under_removal:
+        raise HTTPException(status_code=401, detail="This account is being removed")
+    if request is not None:
+        _bind_request_turn(request, user)     # a member let through is a turn for the rest of the request
+    return user
+
+
+#: the scope key under which a request's member turns are listed; RequestTurnMiddleware creates the list and closes every turn in it
+#: when the response has been sent. No list (a direct call, a test without the middleware): no turn is opened, so none can leak.
+REQUEST_TURNS_KEY = "zoe_request_turns"
+
+
+def _bind_request_turn(request: Any, user: Optional[dict]) -> None:
+    """Make a signed-in MEMBER's request a turn for its duration (``erase_watermark.turn_open`` + ``turn_bind``): every member-owned
+    store write it makes is then judged by ``store_write_guard`` against the request's START, so a request that was already past auth
+    when a removal began cannot write after the erase; and the member delete waits for it like any turn (cancelling it once stale).
+    Guests, degraded identities and principals with no member id open nothing."""
+    uid = str((user or {}).get("user_id") or "")
+    if not uid or uid == GUEST_USER_ID or (user or {}).get("auth_degraded"):
+        return
+    scope = getattr(request, "scope", None)
+    turns = scope.get(REQUEST_TURNS_KEY) if isinstance(scope, dict) else None
+    if not isinstance(turns, list):
+        return
+    try:
+        import erase_watermark
+
+        token = erase_watermark.turn_open(None, uid)
+        turns.append(token)
+        erase_watermark.turn_bind(token)
+    except Exception as exc:  # noqa: BLE001 - never fail a request over its turn record
+        logger.warning("request turn not recorded (%s)", type(exc).__name__)
+
+
+class RequestTurnMiddleware:
+    """Pure ASGI: gives every HTTP request a list for its member turns (``_bind_request_turn``) and closes them all once the response
+    has finished - streamed responses included, since it runs after the app returns."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        scope[REQUEST_TURNS_KEY] = []
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            tokens = scope.pop(REQUEST_TURNS_KEY, None) or []
+            if tokens:
+                import erase_watermark
+
+                for token in tokens:
+                    erase_watermark.turn_close(token)
+
+
 def _cache_set(session_id: str, user: dict):
     if len(_session_cache) > 500:
         cutoff = time.monotonic() - CACHE_TTL_SECONDS
@@ -193,7 +321,8 @@ async def get_current_user(request: Request) -> dict:
     # anonymous-guest fallback, ZOE_UNAUTHENTICATED_ROLE, a degraded guest - is LAN-only. relay_ingress.is_relay is False
     # whenever the flag is off, so with the flag off this line changes nothing.
     if relay_ingress.is_relay(request):
-        return await relay_ingress.resolve_user(request)
+        # the relay resolves its own sessions (fresh sign-in at the panel): the removal barrier applies to them all the same
+        return await _removal_gate(await relay_ingress.resolve_user(request), request)
 
     session_id = request.headers.get("X-Session-ID", "")
     device_token = request.headers.get("X-Device-Token", "")
@@ -203,13 +332,16 @@ async def get_current_user(request: Request) -> dict:
     # with panel_auth (which imports auth). _resolve_device_token_user owns the
     # rule (the device, not a person; ZOE_DEVICE_TOKEN_BINDS_MEMBER is the rollback).
     if not session_id and device_token:
+        _resolved = None
         try:
             from routers.panel_auth import _resolve_device_token_user
             _resolved = await _resolve_device_token_user(device_token)
-            if _resolved is not None:
-                return _resolved
         except Exception:
             pass
+        if _resolved is not None:
+            # OUTSIDE the try: the removal gate's 401/503 must reach the caller, not be swallowed. A panel principal has no member
+            # id and passes unchanged; with ZOE_DEVICE_TOKEN_BINDS_MEMBER=1 the token resolves to its MEMBER, who is gated here.
+            return await _removal_gate(_resolved, request)
         # Invalid/unknown token → fall through to unauthenticated behaviour
 
     if not session_id:
@@ -221,7 +353,7 @@ async def get_current_user(request: Request) -> dict:
             )
             # Marked so a gate that must not trust a header-less caller (home control,
             # panel_principal.is_member) can tell this promotion from a real sign-in.
-            return {"user_id": DEFAULT_USER_ID, "role": "admin", "unauthenticated_override": True}
+            return await _removal_gate({"user_id": DEFAULT_USER_ID, "role": "admin", "unauthenticated_override": True})
         return {
             "user_id": "guest",
             "role": "guest",
@@ -231,7 +363,11 @@ async def get_current_user(request: Request) -> dict:
 
     cached = _cache_get(session_id)
     if cached:
+        if str(cached.get("user_id") or "") in _BARRED:      # a member under removal: refused, whatever the cache says
+            _session_cache.pop(session_id, None)
+            raise HTTPException(status_code=401, detail="This account is being removed")
         _refine_traffic_class(cached)
+        _bind_request_turn(request, cached)
         return cached
 
     validated = await _validate_with_auth_service(session_id)
@@ -259,8 +395,14 @@ async def get_current_user(request: Request) -> dict:
         degraded["auth_degraded"] = True
         _refine_traffic_class(degraded)
         return degraded
+    # the DURABLE barrier, on every cache miss: a member under removal is refused even by a process that never saw it start
+    gated = await _removal_gate(validated)
+    if gated is not validated:          # an unreadable barrier under fail-open: a degraded guest, never cached
+        _refine_traffic_class(gated)
+        return gated
     _cache_set(session_id, validated)
     _refine_traffic_class(validated)
+    _bind_request_turn(request, validated)
     return validated
 
 

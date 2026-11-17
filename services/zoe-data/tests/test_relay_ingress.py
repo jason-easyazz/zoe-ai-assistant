@@ -525,7 +525,7 @@ def test_the_middleware_publishes_the_proven_panel_to_code_without_a_request_and
 
 def test_the_relay_gate_is_the_last_middleware_main_adds():
     src = (ROOT / "main.py").read_text()
-    assert src.count("app.add_middleware(") == 3 and src.rindex("app.add_middleware(") == src.index("app.add_middleware(relay_ingress.RelayIngressMiddleware)"), \
+    assert src.count("app.add_middleware(") == 4 and src.rindex("app.add_middleware(") == src.index("app.add_middleware(relay_ingress.RelayIngressMiddleware)"), \
         "the relay gate must be the LAST middleware added (outermost); a later one would run before it"
     # the real websocket handlers are exercised end to end in test_relay_ws_live.py (cross-panel subscription, stale member session)
 
