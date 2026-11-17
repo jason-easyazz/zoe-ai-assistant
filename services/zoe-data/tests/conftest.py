@@ -40,6 +40,14 @@ if _too_late:  # a pin after the import is a silent no-op — fail loudly instea
 
 ZOE_TEST_STORE_DIR = tempfile.mkdtemp(prefix="zoe-test-stores-")
 atexit.register(shutil.rmtree, ZOE_TEST_STORE_DIR, ignore_errors=True)  # no /tmp litter per session
+# No test may inherit the CALLER's git config. A `git commit` in a test's temp repo otherwise runs whatever the caller configured:
+# a signing program (`commit.gpgsign`), a credential helper, `core.hooksPath` hooks, an `init.defaultBranch`. Measured 2026-11-14 with the
+# network blocked: 3 `ci_safe` files of this lane failed only because the box's commit-signing program could not reach its server. A neutral identity is
+# supplied, so a box with no identity (a GitHub runner) and an owner's box see the same git. Pinned by tests/unit/test_git_config_isolation.py.
+_GIT_CONFIG = os.path.join(ZOE_TEST_STORE_DIR, "gitconfig")
+with open(_GIT_CONFIG, "w", encoding="utf-8") as _fh:
+    _fh.write("[user]\n\tname = Zoe Test\n\temail = zoe-test@example.invalid\n")
+os.environ.update(GIT_CONFIG_GLOBAL=_GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
 # The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
@@ -97,6 +105,11 @@ _STATE_PINS = (
 )
 for _var, _leaf in _STATE_PINS:
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+# ``main`` discovers this host's LAN address AT IMPORT by "connecting" a UDP socket to a public address when ``ZOE_HOST_LAN_IP`` is unset,
+# so every test that imports ``main`` asked the host's routing table and got an allow-list that differs online vs offline (measured
+# 2026-11-14: 17 ``ci_safe`` files). Pinned to the value ``zoe_agent`` already defaults to, so the prompt bytes do not change.
+# ``setdefault``: a lane that sets its own keeps it. Pinned by test_host_lan_ip_pinned.py.
+os.environ.setdefault("ZOE_HOST_LAN_IP", "192.168.1.218")
 # The session-wide value, kept so test_live_store_isolation can prove this layer on its own (the per-test fixture overrides the variable).
 os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER_STATE"]
 

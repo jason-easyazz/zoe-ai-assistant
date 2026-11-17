@@ -1430,6 +1430,8 @@ _STATE_TAIL_OK = frozenset({
     "tomorrow", "recently", "earlier", "lately", "before", "after", "ago", "again", "now", "though", "anyway", "too", "either",
     "please", "thanks", "sadly", "unfortunately", "apparently",
 }) | _CLAUSE_CONJ | _VALUE_MODIFIERS
+#: modifiers that may sit between a kept state word and what follows it without excusing it ("to" starts a place phrase instead)
+_STATE_TAIL_ADVERBS = _VALUE_MODIFIERS - {"to"}
 
 
 #: a kept "<label> is [modifiers] on the fridge: <value>": the value after a colon / equals sign later in the SAME clause (bounded)
@@ -1534,9 +1536,14 @@ def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, 
     not_values = globals().get("_LABELLED_NOT_VALUES") or frozenset()
     if excuse and word in not_values:
         j = next((k for k in range(i + 1, end) if _later_introducer(toks, k, i)), None)
-        if (j is None and word not in _PLACE_WORDS and i + 1 < end and toks[i + 1][1]
-                and _norm_word(toks[i + 1][1]) not in _STATE_TAIL_OK):
-            j = i                                  # "is written zebrafiddle": the word straight after is the value
+        if j is None and word not in _PLACE_WORDS:
+            n = i + 1                              # "is saved now zebrafiddle": adverbs between do not excuse what follows
+            while n < end and n - i <= _MAX_MODIFIERS and _norm_word(toks[n][1]) in _STATE_TAIL_ADVERBS:
+                n += 1
+            if n < end and toks[n][1] and _norm_word(toks[n][1]) not in _STATE_TAIL_OK:
+                j = n - 1                          # "is written zebrafiddle": the word after is the value
+            elif overflow and i + 1 < end:
+                j = i                              # the clause runs past the window: nothing beyond it was judged, fail closed
         if j is not None and j + 1 < end:
             return head + kept + _join(toks[i:j + 1]) + toks[j + 1][0] + _REDACT, stop
         return head + kept + toks[i][0] + toks[i][1], at(i + 1)

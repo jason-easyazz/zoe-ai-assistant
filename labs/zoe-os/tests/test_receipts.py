@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from zoe_os.capability import Enforcer, GrantStore, Person
+from zoe_os.capability import ADULT, Enforcer, GrantStore, Person
 from zoe_os.events import Event, Kind
 from zoe_os.receipts import ClaimAuditor, Dispatcher
 from zoe_os.spine import Decision, Refused, Spine
@@ -34,7 +34,7 @@ class Alarms:
 
 @pytest.fixture
 def world(tmp_path):
-    store = GrantStore([Person(P), Person(Q)])
+    store = GrantStore([Person(P, ADULT), Person(Q, ADULT)])
     for m in (PANEL, SKILL, AUDIT):
         store.install(m)
     store.grant(P, "mover")

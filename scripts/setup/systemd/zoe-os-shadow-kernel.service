@@ -1,0 +1,42 @@
+# Zoe OS shadow kernel (lab) - the process zoe-data's list-add shadow talks to
+# (docs/knowledge/zoe-os-list-shadow.md).
+#
+# OPTIONAL, NOT INSTALLED, NOT ENABLED BY ANY PR OR SCRIPT. Installing and enabling this unit is an explicit OWNER action, and it does
+# nothing for the household until ZOE_OS_LIST_SHADOW=shadow is also set for zoe-data. The kernel it runs is NOT authoritative: zoe-data's own
+# list add stays the only writer of the household's list; this process records an event and a receipt beside it, in its OWN store
+# (~/.zoe/os-shadow/kernel/), and the two outcomes are compared in zoe-data's log.
+#
+# Prereqs (the unit runs, it does not build; stdlib python only, no venv, no npm):
+#   mkdir -p ~/.zoe/os-shadow && chmod 700 ~/.zoe/os-shadow
+#   # the roster (member ids only; the kernel refuses to start without it), re-run and restart when a member is added:
+#   docker exec zoe-database psql -U zoe -d zoe -tAc "SELECT id FROM users ORDER BY id" | xargs python3 ~/assistant/services/zoe-data/os_shadow.py --write-roster
+#   cp ~/assistant/scripts/setup/systemd/zoe-os-shadow-kernel.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-os-shadow-kernel.service
+# Roll back: systemctl --user disable --now zoe-os-shadow-kernel.service (leave ~/.zoe/os-shadow so a later member erase still reaches the
+# kernel, or delete the directory to erase the whole shadow record).
+#
+# The daemon writes ~/.zoe/os-shadow/creds.json (mode 0600, re-issued at EVERY start; zoe-data re-reads it on each reconnect) and the
+# socket ~/.zoe/os-shadow/k.sock (mode 0600). A dead kernel costs the household nothing: the shadow logs one code per add and carries on.
+[Unit]
+Description=Zoe OS shadow kernel (lab) - records list adds beside the live path; never authoritative
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/labs/zoe-os
+# --dir is an ARGUMENT, never an environment name (a lab process reads no product-prefixed name)
+ExecStart=/usr/bin/python3 -B %h/assistant/labs/zoe-os/shadow_daemon.py --dir %h/.zoe/os-shadow
+Restart=on-failure
+RestartSec=5
+# The database, its WAL and the credentials are the owner's alone.
+UMask=0077
+# A background recorder must never compete with the voice stack: small, low priority, and it may be swapped out (unlike the voice units).
+MemoryMax=256M
+Nice=10
+CPUWeight=20
+IOWeight=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

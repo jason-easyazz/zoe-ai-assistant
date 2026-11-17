@@ -9,7 +9,7 @@ from procs import Box
 from spine_helpers import AllowList
 from world import household
 
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.events import Event, Kind
 from zoe_os.forget_match import entity_key
 from zoe_os.kernel import Context, Kernel
@@ -53,7 +53,7 @@ def test_control_normalised_owner_refuses_b(spine, monkeypatch):
 
 @pytest.fixture
 def k(tmp_path):
-    kernel = Kernel(str(tmp_path / 'ids.db'), [Person(B), Person(A)])   # B first: a wrong match finds B
+    kernel = Kernel(str(tmp_path / 'ids.db'), [Person(B, ADULT), Person(A, ADULT)])   # B first: a wrong match finds B
     kernel.grants.install({'skill': 'voice', 'origin': True, 'emits': ['utterance']})
     kernel.grants.install({'skill': 'skill', 'reads': {'utterance': 'private'}, 'acts': ['synthetic.del']})
     kernel.purged = []
