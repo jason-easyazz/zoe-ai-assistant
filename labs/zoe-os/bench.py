@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from zoe_os.capability import Enforcer, GrantStore, Person  # noqa: E402
+from zoe_os.capability import ADULT, Enforcer, GrantStore, Person  # noqa: E402
 from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.spine import Spine  # noqa: E402
 
@@ -30,7 +30,7 @@ def main() -> dict:
     tmp = tempfile.mkdtemp(prefix="zoe-os-bench-")
     out: dict = {"events_target": TOTAL}
     try:
-        people = [Person(f"p{i}") for i in range(PEOPLE)]
+        people = [Person(f"p{i}", ADULT) for i in range(PEOPLE)]
         store = GrantStore(people)
         store.install({"skill": "voice", "emits": ["utterance"], "origin": True})
         store.install({"skill": "reader", "reads": {"utterance": "private"}})

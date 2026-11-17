@@ -17,6 +17,9 @@ from ..spine import Refused
 
 ASKED = {"type": "integer", "required": True, "from": "turn",
          "description": "the single authorised request (set by the kernel)"}
+#: the range an absolute ``due_at`` (UTC epoch SECONDS) must fall in: 2000-01-01 .. 2100-01-01. Not a policy on how far ahead a
+#: reminder may be; a units guard: a millisecond timestamp (13 digits) or a negative number is refused, never stored as a date.
+DUE_MIN, DUE_MAX = 946_684_800, 4_102_444_800
 
 
 def _register_forget(kernel, name, store):
@@ -73,7 +76,7 @@ class Lists:
 
 class Reminders:
     def __init__(self, clock) -> None:
-        self.clock, self.rows = clock, {}                    # person -> [{note, due, asked}]
+        self.clock, self.rows = clock, {}                    # person -> [{note, due (int, UTC epoch s), asked}]
 
     def register(self, kernel) -> "Reminders":
         _register_forget(kernel, 'brain-reminders', self)
@@ -81,19 +84,27 @@ class Reminders:
             "remind.set", self.add, self.added, needs_accept=False, snapshot=self.snapshot,
             undo=self.put_back, doc="Set a reminder for the person",
             params={"note": {"type": "string", "required": True, "description": "what to remind"},
-                    "in_minutes": {"type": "integer", "required": True, "minimum": 1, "maximum": 10080,
+                    "in_minutes": {"type": "integer", "required": False, "one_of": "when", "minimum": 1, "maximum": 10080,
                                    "description": "minutes from now as a whole number "
                                                   "(half an hour is 30, 2 hours is 120)"},
+                    # exactly one of in_minutes / due_at. due_at is a CALLER's (zoe-data's shadow, which already holds the absolute
+                    # instant), never the model's: the brain bridge hides every ``from`` param. A due_at in the past is accepted
+                    # and stored as given (this driver records, it does not fire; an overdue reminder is the store's to handle).
+                    "due_at": {"type": "integer", "required": False, "one_of": "when", "from": "caller",
+                               "minimum": DUE_MIN, "maximum": DUE_MAX, "description": "the due instant, UTC epoch seconds"},
                     "asked": ASKED})
         return self
 
     def add(self, person, args):
-        self.rows.setdefault(person, []).append(
-            {"note": args["note"], "due": self.clock() + 60 * args["in_minutes"], "asked": args["asked"]})
+        due = args["due_at"] if "due_at" in args else int(self.clock()) + 60 * args["in_minutes"]
+        self.rows.setdefault(person, []).append({"note": args["note"], "due": due, "asked": args["asked"]})
 
     def added(self, person, args, result):
-        return {"note": args["note"]} if any(
-            r["asked"] == args["asked"] and r["note"] == args["note"] for r in self.rows.get(person, [])) else None
+        """The read-back: the note and the STORED due instant (``due_at``, integer UTC epoch seconds), however it was set."""
+        for r in self.rows.get(person, []):
+            if r["asked"] == args["asked"] and r["note"] == args["note"]:
+                return {"note": args["note"], "due_at": r["due"]}
+        return None
 
     def snapshot(self, person, args):
         return {"provenance": 1, "rows": [dict(r) for r in self.rows.get(person, [])]}

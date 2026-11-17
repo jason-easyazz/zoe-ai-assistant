@@ -7,6 +7,7 @@ no model, no Postgres (``ci_safe``). What it cannot say: anything about the real
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,21 @@ USER = "demo_bar_1a2b3c4d"
 
 
 NO_MODEL = "Z0e needs the on-disk MiniLM model"
+
+
+@pytest.fixture(autouse=True)
+def _the_lab_ledger_secret_does_not_outlive_the_test():
+    """Constructing a ZMA arm does ``os.environ.setdefault("ZOE_FORGET_LEDGER_SALT", ...)`` and nothing takes it out again
+    (scripts/perf/zmb/arms/zma.py; ``close()`` only removes a secret Z0 recorded setting). Every test that ran AFTER this
+    file then saw the forget ledger as configured with no database behind it: run right after this file,
+    test_transcript_check / test_named_guests / test_omi_person_facts went from 136 passed to 81 failed + 7 errors, and the
+    lane in random order lost 245 to 423 tests (found 2026-11-14). This puts the variable back as it was, set or unset, after every test here."""
+    before = os.environ.get("ZOE_FORGET_LEDGER_SALT")
+    yield
+    if before is None:
+        os.environ.pop("ZOE_FORGET_LEDGER_SALT", None)
+    else:
+        os.environ["ZOE_FORGET_LEDGER_SALT"] = before
 
 
 @pytest.fixture(params=["scripted", "z0e"])

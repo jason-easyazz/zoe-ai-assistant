@@ -238,14 +238,16 @@ def not_replayable(text: str) -> Optional[str]:
     in the original."""
     import memory_gate
     import own_words
-    from memory_service import scrub_pii
+    from memory_service import SCRUB_INLINE_MAX, bounded, scrub_pii
 
     said = text or ""                       # AS SAID: the pasted-content walls are line-anchored ("> ...", "assistant: ...")
     flat = " ".join(said.split())
     own = own_words.analyze(said)
     if own.changed or not own.has_own or " ".join(memory_gate._own_words(said).split()) != flat:
         return "not_own_words"
-    scrubbed, reject = scrub_pii(said)
+    if len(said) > SCRUB_INLINE_MAX:            # a turn that long is never replayed (fail closed), and never scrubbed inline
+        return "pii"
+    scrubbed, reject = scrub_pii(bounded(said, SCRUB_INLINE_MAX, 0))
     if reject or scrubbed != said:
         return "pii"
     return None
