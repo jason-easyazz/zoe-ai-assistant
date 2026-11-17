@@ -166,6 +166,8 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
     return singles | name_words, phrases, name_words
 
 
+MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is matched inside a token
+ADDRESS_NUMBER_BEFORE = 6  # a house number this many words before a street word makes an address
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
 
@@ -260,7 +262,8 @@ def _memory_glue(terms: PrivateTerms, lex: dict) -> set[str]:
             for j in range(i + 2, min(i + 4, len(raw)) + 1):
                 if sum(is_content[i:j]) >= 2:
                     glue.add("".join(raw[i:j]))
-    return {g for g in glue if len(g) >= 8}
+    # six letters: "tea pot" -> "teapot", "car port" -> "carport". A coincidental match refuses a query (the accepted cost).
+    return {g for g in glue if len(g) >= MEMORY_GLUE_MIN}
 
 
 def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict | None = None) -> ScrubResult:
@@ -319,6 +322,24 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     glue = _memory_glue(terms, lex)
     rx = _glue_rx(singles)
     drop: dict[int, str] = {}
+    # An address in any shape, read on the words rather than the characters: a street word with a house number up to
+    # ADDRESS_NUMBER_BEFORE words before it ("12 Maple Tree Green Valley Street") or right after it ("Maple Street 12").
+    # The number, the street word and everything between go; with the number after, so do the three words before.
+    streets = {fold(w) for w in lex["street_types"]}
+    house = re.compile(r"\d{1,5}[a-z]?")
+    for si, tok in enumerate(tokens):
+        if tok not in streets:
+            continue
+        span: set[int] = set()
+        for k in range(max(0, si - ADDRESS_NUMBER_BEFORE), si):
+            if house.fullmatch(tokens[k]):
+                span.update(range(k, si + 1))
+                break
+        if si + 1 < len(tokens) and house.fullmatch(tokens[si + 1]):
+            span.update(range(max(0, si - 3), si + 2))
+        for k in span:
+            if tokens[k] not in lex["question_words"]:
+                drop.setdefault(k, "address")
     plains = [fold(words[i].translate(_LOOKALIKE)) if any(c.isdigit() or c in "$@" for c in words[i]) and not tok.isdigit()
               else tok for i, tok in enumerate(tokens)]
     bare = [re.sub(r"\d", "", t) if t and not t.isdigit() else t for t in tokens]   # rose2 -> rose, blue4 -> blue

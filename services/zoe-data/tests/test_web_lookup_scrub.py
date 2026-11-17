@@ -487,3 +487,20 @@ def test_a_known_name_split_around_padding_never_leaves(raw):
 def test_an_address_with_the_street_name_in_brackets_is_stripped():
     r = scrub_query("pizza delivery 12 (Maple) Street tonight")
     assert "maple" not in r.query, r
+
+
+@pytest.mark.parametrize("raw", ["pizza delivery Maple Street 12 tonight", "pizza delivery 12 Maple Tree Green Valley Street tonight",
+                                 "pizza delivery Maple St, 12 tonight", "pizza delivery 12a Maple Tree Road tonight",
+                                 "pizza delivery Maple (Street) 12 tonight"])
+def test_an_address_in_any_word_order_is_stripped(raw):
+    r = scrub_query(raw)
+    assert "maple" not in r.query and "12" not in r.query.split() and "12a" not in r.query.split(), r
+
+
+@pytest.mark.parametrize("memory,raw", [("The spare key is in the tea pot", "teapot replacement prices"),
+                                        ("The bikes are in the car port", "carport replacement prices"),
+                                        ("The spare key is in the tea pot", "tea-pot replacement prices")])
+def test_a_short_memory_phrase_glued_into_one_word_never_leaves(memory, raw):
+    r = scrub_query(raw, PrivateTerms.of(memory=[memory]))
+    words = set(re.split(r"[\W_]+", r.query)) if r.send else set()
+    assert not ({"teapot", "carport"} & words or {"tea", "pot"} <= words), r
