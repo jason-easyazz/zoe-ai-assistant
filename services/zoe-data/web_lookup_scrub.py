@@ -165,6 +165,32 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
     return singles | name_words, phrases, name_words
 
 
+NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
+
+
+def _split_across_filler(view: str, singles: set[str]) -> bool:
+    """True when 2 or 3 words of ``view`` inside a NAME_SPLIT_WINDOW-word window join, in order, into a private word, WHATEVER
+    sits between them ("rose x wood", "rose 2nd wood", "rose big wood" -> rosewood). One rule for every kind of filler, so a
+    new kind of padding cannot reopen the hole; a coincidental match refuses a query, which is the accepted cost."""
+    long = {s for s in singles if len(s) >= MIN_PRIVATE_LEN + 1}
+    if not long:
+        return False
+    parts = [fold(p) for p in re.split(r"[\W_]+", view)]
+    parts = [p for p in parts if p]
+    for i, first in enumerate(parts):
+        if not any(s.startswith(first) for s in long):
+            continue
+        window = parts[i + 1:i + NAME_SPLIT_WINDOW]
+        for a in range(len(window)):
+            two = first + window[a]
+            if two in long:
+                return True
+            for b in range(a + 1, len(window)):
+                if two + window[b] in long:
+                    return True
+    return False
+
+
 def _glue_rx(singles: set[str]) -> re.Pattern | None:
     cands = sorted((s for s in singles if len(s) >= MIN_PRIVATE_LEN), key=len, reverse=True)
     return re.compile("|".join(re.escape(c) for c in cands)) if cands else None
@@ -414,6 +440,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     views += [" ".join(w for w in v.split() if not _padding(fold(w))) for v in views]
     for view in views:
         squeezed = fold(view)
+        if _split_across_filler(view, singles):
+            return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         for s in singles:
             if s in {fold(x) for w in view.split() for x in [w, *re.split(r"[.\-'’]", w)] if x} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \
                     or (len(s) < 4 and _split_exactly(view, s)):
