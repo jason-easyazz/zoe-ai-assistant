@@ -41,6 +41,16 @@ class Person:
             object.__setattr__(self, "role", LEAST)
 
 
+def guards(actor: str, who: Person | None, by: Person | None = None) -> bool:
+    """Is ``actor`` a guardian of ``who`` RIGHT NOW, for the FORGET / UNDO / EXPLAIN reach? Only while the kernel's own roster says
+    ``who`` is a CHILD: a guardian link on an adult (left over from a role change, or written by mistake) grants no such reach.
+    Organising never includes forget, undo or explain; forgetting on someone's behalf is a separate named power, today offered only
+    to a child's guardian, to be replaced by memory care (owner decision 2026-11-16: a carer of a child or an adult in care may
+    correct or remove what is remembered about that person; not built yet). ``by`` is the actor's own roster entry: the link counts
+    only for a STATED adult (a least-access member named as a guardian has no reach: least access by default)."""
+    return who is not None and who.role == CHILD and actor in who.guardians and by is not None and by.role == ADULT
+
+
 def person_from_entry(entry, *, extra_keys=frozenset()) -> Person:
     """The ONE reader of a stated principal (``{"id", "role", "guardians"}``, or a plain id). Least access unless the entry FULLY
     says otherwise: a plain id, a missing or unknown role, a key it does not know (beyond ``extra_keys``, e.g. a twin member's
@@ -240,5 +250,4 @@ class Enforcer:
         who = self.store.people.get(subject)
         if who is None or actor not in self.store.people:
             return Decision(False, "only a person can ask to forget")
-        guardian = actor in who.guardians and self._adult(actor)      # a guardian link counts only for a STATED adult
-        return Decision(actor == subject or guardian, "not theirs to forget")
+        return Decision(actor == subject or guards(actor, who, self.store.people.get(actor)), "not theirs to forget")

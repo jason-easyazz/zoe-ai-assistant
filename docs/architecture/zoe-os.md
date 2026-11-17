@@ -469,8 +469,37 @@ from its own process, and a skill is another process that is handed a socket pat
 operations and nothing else: `publish`, `subscribe`, `poll`, `forget`, `grant`, `revoke`, `act`, `explain`,
 each with a fixed list of arguments. No request names its caller: the kernel proves who is on a connection once
 (a challenge and a keyed answer, so the credential never crosses the socket) and uses that identity for every
-request. `forget`, `grant` and `revoke` are a person's decisions and are accepted only from a credential issued
-to a trusted surface.
+request. `forget`, `grant`, `revoke`, `undo`, `explain` for a person (and the authority's `erase_member` /
+`erase_item`) are a person's decisions and are accepted only from a credential issued to a trusted surface.
+
+**A surface cannot speak for a person [lab].** The surface's word for WHO decided is not enough: until
+2026-11-16 any holder of the panel credential could `forget(subject=X, actor=X)` for every member, and grant,
+revoke, undo or explain for them. Now each person-bound request carries a **speaker assertion**
+(`zoe_os/speaker.py`): a token `{person, issued_at, nonce, audience}` with an HMAC-SHA256 under the secret of
+the `speaker-verifier` identity, minted by the component that actually verified the person (in production,
+zoe-data after a voice match or a panel session) and relayed by the surface, which cannot mint one. The kernel
+checks it in ONE place (`KernelServer._prove_speaker`, at the dispatch, so the shadow and authority daemons
+inherit it): the MAC (constant time), the person (the request's speaking field: `actor` for forget and undo,
+the guardian for a child's grant, else the named person; the kernel's own rule then links that speaker to the
+subject), the audience (`forget.person`, `forget.scoped`, `grant`, `revoke`, `undo`, `explain`: "forget that"
+cannot become "forget me"), age under 60 s (2 s skew), minted for THIS kernel run's generation (a random id
+fresh at every start, published with the secret), and a nonce used once
+(kept until its token's own issue time + 60 s + 2 s, so it outlives the token's acceptance window). The authority's
+`list_digest` (every member's list rows, for the reconcile tool) answers only a dedicated `reconciler` credential, with
+digests keyed by a per-start secret over member, list and item, so no surface can confirm a guess at anyone's list.
+Every failure is one refusal, `speaker unproven`, counted by a fixed reason name; the token is never logged.
+The member-delete path's `eraser` credential needs no assertion, for the forget family only. The secret is in
+`identity-creds.json` (0600, apart from `creds.json` and `erase-creds.json`), fresh at every start. Used
+nonces live in memory (bounded at 1024, a full store refuses); a restart loses them, which is safe because a
+new run has a new generation and refuses every token minted for an earlier one, whatever the clocks did and
+even under a provisioned secret. Within a run, verification time never goes back (`max(last seen, wall)`), and
+a wall clock seen to step back past the skew rolls the generation mid-run (republished at once), so an
+accepted token is never accepted again for any sequence of wall-clock values. A guardian link grants reach (forget, undo, seeing private events, signing a
+grant) only while the kernel's own roster says the subject is a child. Organising never includes forget, undo or explain;
+forgetting on someone's behalf is a separate named power, today offered only to a child's guardian, to be replaced by
+memory care (not built yet). A person with no stated or an unknown role is LEAST access, never adult. There is no setting
+that turns the check off. What it does not defend: a process holding the identity secret can mint for anyone,
+so that secret must live only with the code that verifies people.
 
 **What was attacked [lab]**, each refused and recorded, each with a control that removes one mechanism and
 shows the attack working:
@@ -574,7 +603,7 @@ Two rules: the bridge carries **ids and labels only** (no utterance, reply, titl
 Order of work, each step its own small change behind the flag:
 1. the spine as a module inside the service with no publisher (the registry row for forget goes in here);
 2. call sites 2 and 3 (off the voice path), then read the log for a week: volumes, no errors, no latency;
-3. call site 4, with a restore-and-replay drill of the forget on a copy;
+3. call site 4, with a restore drill on a copy;
 4. call sites 1 and 5 (voice path: replay-gated);
 5. only then a first subscriber, in shadow: the claim auditor, which reads and reports and changes nothing.
 

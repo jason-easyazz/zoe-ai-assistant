@@ -33,8 +33,11 @@ class Shadow:
         line = self.proc.stdout.readline()
         assert line.startswith("zoe-os shadow kernel up"), self.proc.stderr.read()
         raw = json.loads((state / "creds.json").read_text())
-        self.voice, self.brain, self.panel = (Client(raw["socket"], s, bytes.fromhex(raw["creds"][s]), timeout=5)
-                                              for s in ("voice", "brain", "panel"))
+        self.voice, self.brain = (Client(raw["socket"], s, bytes.fromhex(raw["creds"][s]), timeout=5) for s in ("voice", "brain"))
+        # the test plays the speaker-verifier: the panel relays a person's forget only with their speaker assertion
+        ident = json.loads((state / "identity-creds.json").read_text())
+        self.panel = Client(raw["socket"], "panel", bytes.fromhex(raw["creds"]["panel"]), timeout=5,
+                            speaker_key=bytes.fromhex(ident["creds"]["speaker-verifier"]), speaker_generation=ident["generation"])
 
     def add(self, person: str, item: str) -> dict:
         said = self.voice.publish("utterance", subject=person, payload={"text": item})
@@ -85,6 +88,9 @@ def test_a_forget_on_the_wire_leaves_none_of_the_members_words_in_any_file_and_k
     assert known(state[0]) == sorted([A, B])                           # A is still on the roster: still a member
     with pytest.raises(Refused, match="trusted surface"):
         d.brain.call("forget", subject=B, actor=B)                     # a skill cannot speak for a person
+    bare = Client(d.panel._cache_conn[0], "panel", d.panel._cache_conn[2], timeout=5)
+    with pytest.raises(Refused, match="speaker unproven"):
+        bare.call("forget", subject=B, actor=B)                        # nor can the panel's credential alone
 
 
 def test_a_member_taken_off_the_roster_stays_forgettable_until_forgotten_then_leaves_known_people(state):
@@ -114,7 +120,7 @@ def test_with_the_last_member_removed_or_an_unreadable_roster_the_daemon_starts_
     again = start(state)
     # loaded from the record, for forget only: A (their words) and B (B's grant record names them; main's forget reaches it)
     assert known(state[0]) == sorted([A, B])
-    said = again.voice.publish("utterance", subject=A, payload={"text": "synthetic"})
+    said = again.voice.publish("utterance", subject=A, payload={"text": f"synthetic {id(again)}"})
     with pytest.raises(Refused, match="no grant"):                     # nothing can be proposed or acted for anyone
         again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq},
                          caused_by=[said.seq])
@@ -131,6 +137,44 @@ def test_with_the_last_member_removed_or_an_unreadable_roster_the_daemon_starts_
 
 def test_a_missing_roster_file_is_an_operator_error_and_refuses_the_start(state):
     (state[0] / "people.json").unlink()
+    p = subprocess.run([sys.executable, "-B", str(DAEMON), "--dir", str(state[0])], capture_output=True, text=True, timeout=30,
+                       env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
+    assert p.returncode != 0 and "people.json is missing" in p.stderr
+
+
+@pytest.mark.parametrize("damage", ["unreadable_mode", "a_directory"])
+def test_a_roster_file_that_is_there_but_cannot_be_read_starts_the_daemon_for_forget_only(state, damage):
+    if damage == "unreadable_mode" and os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file: the permission case cannot be shown as root")
+    d = start(state)
+    d.add(A, MARK.decode())
+    d.stop()
+    roster = state[0] / "people.json"
+    if damage == "unreadable_mode":
+        roster.chmod(0o000)
+    else:
+        roster.unlink()
+        roster.mkdir()
+    try:
+        again = start(state)
+        said = again.voice.publish("utterance", subject=A, payload={"text": f"synthetic {id(again)}"})
+        with pytest.raises(Refused, match="no grant"):
+            again.brain.call("act", action="list.add", on_behalf_of=A, args={"item": "x", "asked": said.seq},
+                             caused_by=[said.seq])
+        assert again.panel.call("forget", subject=A, actor=A)["count"] >= 2
+        assert known(state[0]) == [B]                                  # B's grant record still names them (main's forget reaches it)
+        assert again.panel.call("forget", subject=B, actor=B)["count"] >= 1
+        assert "people.json is unreadable" in again.stop()
+    finally:
+        if roster.is_file():
+            roster.chmod(0o600)
+    assert holding(state[0], MARK) == [] and known(state[0]) == []
+
+
+def test_a_roster_symlink_to_nothing_is_a_missing_roster_and_refuses_the_start(state):
+    roster = state[0] / "people.json"
+    roster.unlink()
+    roster.symlink_to(state[0] / "no-such-roster.json")
     p = subprocess.run([sys.executable, "-B", str(DAEMON), "--dir", str(state[0])], capture_output=True, text=True, timeout=30,
                        env={"PATH": os.environ["PATH"], "HOME": str(state[0])})
     assert p.returncode != 0 and "people.json is missing" in p.stderr

@@ -73,7 +73,7 @@ def test_control_without_the_credential_check_a_skill_becomes_the_panel_and_read
     box.control("no_verify")
     s = box.raw()
     assert ask(s, {"v": 1, "skill": "panel", "proof": "00"})["ok"]
-    assert ask(s, req("grant", person=ALEX, skill=HELPER))["ok"]
+    assert ask(s, req("grant", person=ALEX, skill=HELPER, speaker=box.assertion(ALEX, "grant")))["ok"]
     helper = box.client(HELPER)
     assert VICTIM_SECRET in str(helper.drain(helper.subscribe(from_seq=0)))
 

@@ -2,7 +2,7 @@
 
     stdin line 1   {"db_dir": ..., "socket": ..., "install": [manifests], "surfaces": [names],
                     "server": {KernelServer keyword arguments}}
-    stdout line 1  {"pid": ..., "creds": {skill: hex}}       <- the supervisor's pipe
+    stdout line 1  {"pid": ..., "creds": {skill: hex}, "speaker_key": hex, "speaker_generation": str}   <- the supervisor's pipe
 
 The pipe to the parent stands in for the supervisor (systemd in production): it is how a
 credential reaches the one process it is for, and it is NOT reachable from the socket. The
@@ -114,7 +114,8 @@ def main() -> None:
     creds = {name: srv.issue(name, surface=name in cfg.get("surfaces", ())).hex()
              for name in k.grants.manifests}
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    print(json.dumps({"pid": os.getpid(), "creds": creds,
+    print(json.dumps({"pid": os.getpid(), "creds": creds, "speaker_key": srv.speaker_secret().hex(),
+                      "speaker_generation": srv.speaker_generation(),
                       "recovered": [e.seq for e in k.recovered]}), flush=True)
     for line in sys.stdin:                # EOF (the parent died) ends the kernel too
         msg = json.loads(line)

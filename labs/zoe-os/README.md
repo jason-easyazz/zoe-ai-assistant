@@ -27,7 +27,7 @@ is invented.
 | `zoe_os/receipts.py` | the action dispatcher, read-back receipts, the write-ahead intent and crash recovery, the claim-without-receipt detector |
 | `zoe_os/attention.py` | per-person routing of offers: card by default, spoken only if that person turned it on |
 | `zoe_os/kernel.py` | the services wired together and the loop that feeds events to skills |
-| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of nine ops and their arguments |
+| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of ten ops and their arguments, plus the authority daemon's four (`health`, `erase_member`, `erase_item`, `list_digest`) |
 | `zoe_os/server.py` | the kernel behind a Unix socket: handshake, per-connection identity, size cap, frame deadline |
 | `zoe_os/client.py` | the skill's side of the socket, and `RemoteKernel` so an in-process skill runs unchanged |
 | `zoe_os/skills/` | three toy skills: leaving catch, calendar heads-up, and a deliberately malicious one |
@@ -48,6 +48,9 @@ is invented.
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
+| `authority.py` | the kernel as the AUTHORITY for list add (stage c, `docs/knowledge/zoe-os-integration.md`): durable list rows rebuilt from the receipts, the `erase_member` (the member-delete credential, `erase-creds.json`, or the member's own speaker assertion) / `erase_item` (one named member) / `health` / `list_digest` ops, a roster that keeps every id the record names (an EMPTY or unreadable `people.json` starts the kernel with nobody granted and forget still served; a missing one refuses the start), revokes remembered; unit template `zoe-os-authority-kernel.service` beside it (never installed) |
+| `zoe_os/speaker.py` | speaker assertions: the proof, minted by the speaker-verifier, of who decided a person-bound request (see "Speaker assertions") |
+| `tests/authority_proc.py`, `tests/test_authority.py` | the authority daemon as its own process with one SIGKILL point or one control armed, and its tests |
 
 ## Run it
 
@@ -88,6 +91,7 @@ bad outcome.
 |---|---|---|
 | the malicious skill, from another process: six remaining attempts refused; forgotten cache entries unavailable | `test_boundary.py` | the same four controls, applied inside the kernel process |
 | a skill cannot be another skill, name its own source, or speak for a person | `test_boundary_attacks.py` | no credential check: it becomes the panel and reads everything |
+| a SURFACE cannot speak for a person: every person-bound op needs a speaker assertion for that person and verb, used once, within 60 s, for THIS kernel run's generation; forged and truncated tokens refused alike; nothing logs the token or the secret | `test_speaker.py` | `_prove_speaker` removed: the panel alone reaches every person-bound op; the start-time rule removed: a pre-restart token replays |
 | a captured handshake or a re-issued credential does not log in | `test_boundary_attacks.py` | a predictable challenge: the capture logs in |
 | an oversized frame is refused before its body is read | `test_boundary_attacks.py` | no size cap: it is stored |
 | a malformed frame is refused, recorded, and harms nothing (23 cases) | `test_boundary_attacks.py` | no validator: an unknown argument is accepted, nothing recorded |
@@ -144,6 +148,150 @@ and nothing about a real household (record, section 12).
 
 In-process controls are monkeypatches in the tests. Controls for the kernel process are named patches in
 `tests/kernel_proc.py`, applied through the parent's pipe. Never switches in the kernel.
+
+## Speaker assertions (`zoe_os/speaker.py`)
+
+A person-bound request (`forget`, `erase_member`, `erase_item`, `grant`, `revoke`, `undo`, `explain` with `person`) from a surface
+carries `speaker`: `<body>.<mac>`, `body` the unpadded base64url of the compact, key-sorted JSON
+`{"a": audience, "g": generation, "n": 32 hex, "p": person, "t": issued_ms}`, `mac` the hex HMAC-SHA256 of
+`"zoe-os speaker assertion v1\0" + body` under the speaker-verifier's secret. Mint with
+`speaker.mint(key, person, audience, generation=g)` (or `speaker.mint_for(key, op, args, generation=g)`, which reads who and which
+audience from the request).
+
+* **The secret and the generation**: `STATE/identity-creds.json`,
+  `{"socket", "creds": {"speaker-verifier": hex}, "generation": 32 hex, "ttl_s": 60}`, 0600, atomic, written by both daemons at every
+  start (a fresh secret AND a fresh generation each time). Never in `creds.json`, never readable through any op, never printed.
+* **The window**: accepted only while `now < issued + 60 s` and `issued <= now + 2 s`, and only for THIS run's generation. A used
+  nonce is kept (in memory, a heap on its keep-until) until `issued + 60 s + 2 s`: keyed to the token's OWN issue time, so it
+  outlives every instant the token could be accepted in this run. Across runs the generation does the work: no token minted for a
+  previous run is ever accepted, whatever the clocks did (a restart inside the skew, a wall clock stepped back) and even under a
+  provisioned secret. There is no dead window after a start: a token for the new generation is good at once.
+* **Inside one run the wall clock may do anything**: verification time is `max(last seen, wall clock)`, so it never goes back
+  within a generation. A wall clock seen to step back by MORE than the 2 s skew ROLLS the generation (new id, used-nonce store
+  emptied, time re-anchored, `identity-creds.json` rewritten at once); so does a full used-nonce store (1024: it can only stay full
+  while time is stuck). Every token of the old generation is then refused, and an honest client recovers at once by re-reading the
+  file. A step back of up to 2 s does not roll: time holds until the wall clock passes it again. The trade: a roll costs every
+  in-flight token one refusal and a retry; the alternative (`max()` alone) would refuse every honest token after a corrected forward
+  jump until the wall clock caught up, possibly for hours. (Property tests over one run with arbitrary clock sequences and over
+  restart sequences, and millisecond-boundary tests, in `test_speaker.py`.)
+* **In the lab**, the test is the component that verifies people: `Box.client("panel")`, `BrainBox.client("panel")` and the
+  authority tests' `Daemon.panel` hold the key and mint one per person-bound call (`Client(..., speaker_key=, speaker_generation=)`);
+  `Box.assertion()`
+  mints one for a raw frame. Skills' clients get no key.
+* **A production client must**: read `identity-creds.json` (the key AND `generation`) from the provisioned state directory, put
+  `"g": generation` in every token, and re-read the file after ANY `speaker unproven` refusal or a reconnect, then retry the request
+  once with a fresh token. The generation can change MID-RUN (a backward clock step past the skew, or a full nonce store), with the
+  same key and the same socket: never cache it across a refusal. A restarted kernel has a new key and a new generation. Mint one assertion per request ONLY after it has itself
+  verified the person who is deciding, with the audience that request needs, and never log it. The member-delete path uses `erase-creds.json` (the `eraser` credential) instead.
+* **Not additive**: a surface client that sends no `speaker` is refused `speaker unproven` (code `refused`), a real refusal.
+
+## The reconcile digest (`list_digest`)
+
+`list_digest` answers ONLY the reconcile tool's own credential (`reconciler`, in `STATE/reconcile-creds.json`, 0600, written at every
+start: `{"socket", "creds": {"reconciler": hex}, "digest_key": hex}`); a surface, a skill and the eraser are refused
+`only the reconciler`. It returns `authority.keyed_digest(digest_key, member, list, item)` for every row: HMAC-SHA256 under a key
+fresh at each start, over the JSON array `[member id, list name, item.strip().lower()]` (compact separators, `ensure_ascii=False`)
+after the domain `"zoe-os list digest v1\0"`, as 64 hex. Equal items of two members or two lists differ, and nobody without the key
+can confirm a guessed item (the old unkeyed, member-less sha256 could be confirmed by hashing a list of common items).
+
+## Authority kernel (`authority.py`)
+
+**Why the rows are rebuilt from the log.** A row exists exactly when a live, verified `list.add` receipt says so (less the verified
+`list.remove` / `undo` receipts after it). The receipt is already durable and committed in one transaction with its write-ahead
+intent, and every forget already reaches it, so there is ONE copy of the words to erase and nothing here changes the spine's or the
+dispatcher's transaction code. The cost is a scan of the receipts at start (measured below) and after each forget (per member it
+reached).
+
+**What a forget rebuilds, and what it can never bring back.**
+* A forget rebuilds EVERY member whose rows came from what it erased, not just its subject (A's row from words that named B goes
+  when B forgets everything). `DurableLists.owner_of` maps each list request (`asked`) and list receipt seq to the row's owner, so
+  the members are found in time proportional to the notice's seqs; each is then rebuilt from its own live receipts.
+* THE RULE (`Spine._closure`): after a forget, NO live record holds the forgotten content: not the action that created it, not an
+  action that reversed or restored it, not their snapshots, arguments, proofs or receipts.
+  BACKWARD, a forgotten reversal takes what it reversed: an `undo` takes the action it `undoes`; a removal (its snapshot is marked
+  `reverses`, and each removed row's request is indexed in the spine's `reversals` table) takes the adds whose rows it removed.
+  FORWARD, a forgotten row takes the removals of it: a removal whose removed rows are ALL forgotten is erased whole, with its request
+  ("remove X" is X's words); an undo of it derives from it and goes too. A removal that also took rows that survive (the
+  authority's remove takes every copy of the item on that list, so two adds of the same item, one forgotten) keeps its receipt, which
+  the surviving row's history needs, and loses the forgotten row from its snapshot; its arguments and proof name the item, which the
+  surviving row still holds in its own records. Erasure reaches the bytes: `secure_delete`, then a WAL checkpoint after the forget.
+* LEGACY records (the shadow kernel's, moved here): the spine indexes removals by KIND as well as by the marker (`LEGACY_REMOVALS`:
+  `list.remove`, whose snapshot is the whole previous list; its targets are the rows with the removed (list, item), which is what a
+  removal takes; a record that cannot say, conservatively every earlier add of that item by that person, which can erase older,
+  already-removed adds of the same item too, never resurrect one). The index is rebuilt once per version (`reversals_v2`), in one
+  transaction (a crash halfway leaves nothing half done). At every start the authority rewrites legacy list snapshots into its own
+  lean ones (`convert_legacy`: an add keeps no copy, a removal keeps only the rows it removed, an undo's `restored` follows), in one
+  transaction followed by a WAL checkpoint, so an undo of a migrated removal restores only what it removed and no receipt keeps
+  copies of other rows. `tests/test_legacy_migration.py` generates the legacy database with the real shadow daemon.
+* Backstop, scoped to the row's owner: a replayed or restored row that names an entity its owner asked to forget is dropped. The
+  plain word shield is GLOBAL in this kernel, so it is not used as a replay filter: it would drop another member's own live row of
+  the same words, and the rebuilt rows would differ from the running ones.
+* For the reminder and alarm rows on the branches above: the SAME RULE. When they become durable (rebuilt from receipts) they must
+  (1) find the affected owners from the notice's seqs the same way (an `asked`/receipt -> owner index), never just the subject;
+  (2) mark a snapshot `reverses` (provenance 1, rows with their `asked`) for any action that takes rows away (a reminder cancel, an
+  alarm clear or move), so the spine indexes it: forgetting that action forgets what it reversed, and forgetting the rows it took
+  erases it (whole, or scrubbed when other rows survive); (3) never replay a row whose receipt is gone; (4) keep an alarm's
+  "before" (the time it replaced) as a row with its `asked`, or the forward rule cannot reach it; (5) for THEIR legacy records
+  (the lab `Reminders` / `Alarms` drivers' receipts: `remind.set` with the person's whole reminder list, `alarm.set` with the
+  previous alarm, neither marked): add any kind that takes rows away to `LEGACY_REMOVALS` with its targets (an `alarm.set` replaces
+  the previous alarm: its target is that alarm's `asked`), and convert the whole-list snapshots at start the way `convert_legacy`
+  does for lists, or an undo will re-append every row. Today's in-memory lab stores already purge cross-owner rows by seq
+  (`provenance.erased_request`).
+
+**Kill points** (`tests/test_authority.py`, real SIGKILL): after the intent, after the driver ran but before the receipt (absent after
+the restart, an `uncertain` receipt), after the receipt but before the reply (present and verified). Controls: `no_rebuild` (an
+acknowledged add is lost and the test sees it), `no_member_forget` (the erase's read-back says `verified: false`).
+
+**Measured** (this box, one client, list.add over the socket = publish + act): see the PR for the numbers of the run that landed it.
+
+**Where the database lives (owner decision 2026-11-15).** The kernel keeps its OWN SQLite file, never tables in the main database,
+in a permanent home beside Zoe's other stores (`~/.zoe/music-assistant/`, `~/.zoe/night-extract/`, `~/.zoe/omi-recordings/`, ...):
+**proposed `~/.zoe/zoe-os/zoe-os.db`** (directory 0700, file 0600; `authority.PERMANENT_DB`). ONE setting names it:
+the daemon's `--db` argument, written as a literal path in the unit template's `ExecStart` (both daemons take it); there is NO
+environment name for it (a lab process reads no product-prefixed name, and an unregistered `ZOE_*` name fails `validate`). zoe-data
+never opens the file. Without `--db` the lab default is `STATE/kernel/zoe-os.db`.
+
+**The move is done by the daemon at start (`authority.migrate`, both daemons).** A daemon given `--db` while the old
+`~/.zoe/os-shadow/kernel/zoe-os.db` still exists first moves it: the old record is folded into one file, copied with `VACUUM INTO`
+to a `.moving` temp (0600, fsynced), renamed into place, VERIFIED (`integrity_check` ok and, per table and for the schema, the row count
+and a digest of every row equal to the old), and only then the old file and its WAL/SHM are removed and the directory fsynced. Every
+step is safe to interrupt and the next start resumes it (a half copy is thrown away and redone; a finished copy is verified and the old
+one removed; leftover sidecars are removed). A copy that does not verify REFUSES the start with both files kept, for the owner to look
+at: no kernel ever runs on the new file while the old one exists, so a mismatch is damage, never newer data. Removing a file does not
+scrub its blocks from the disk (the same holds for any deleted file).
+
+**Nightly backup (from the day shadow is on).** A concrete addition to `scripts/maintenance/mempalace-nightly-backup.sh`, the nightly
+job that already snapshots a live SQLite file with Python's online backup API (the `sqlite3` CLI is not installed on the Jetson); not
+`postgres-nightly-backup.sh`, which is `pg_dump` only. Proposed block, after the MemPalace rotation (not applied by this change):
+
+    kernel_db="$HOME/.zoe/zoe-os/zoe-os.db"                          # the unit's --db
+    kernel_root="${ZOE_BACKUP_DIR:-$HOME/.zoe-backups}/zoe-os"
+    if [[ -f "$kernel_db" ]]; then
+      mkdir -p -m 700 "$kernel_root"
+      out="$kernel_root/zoe-os-$(date +%Y%m%d-%H%M%S).db"
+      python3 - "$kernel_db" "$out" <<'PY'
+    import sqlite3, sys
+    src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)   # WAL: a reader beside the live kernel, never a file copy
+    dst = sqlite3.connect(sys.argv[2])
+    src.backup(dst)                                                  # one consistent snapshot, committed WAL frames included
+    dst.close(); src.close()
+    chk = sqlite3.connect(f"file:{sys.argv[2]}?mode=ro", uri=True)
+    assert chk.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert chk.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()   # a kernel database, not an empty file
+    PY
+      chmod 600 "$out" && gzip -9 "$out"
+      ls -1t "$kernel_root"/zoe-os-*.db.gz | tail -n +8 | xargs -r rm -f       # keep 7, like the palace
+    fi
+
+Never `cp` the live `.db` (its `-wal` holds committed adds the main file does not have yet). `creds.json` and `k.sock` are re-made at
+every start and are never backed up; `people.json` is re-written from `users`, each entry with its role stated
+(`{"id", "role": "adult"|"child"|"guest", "guardians"}`: a plain id is least access, never adult). **Restore check** (run on the copy, kernel stopped):
+`gunzip` it to the `--db` path, then the integrity check above, then start the daemon and read `health` (`schema` 1, `last_write_ok`
+true) and `scripts/maintenance/os_authority_reconcile.py` (`kernel_only=0`). A restore brings back everything the backup holds (owner
+decision 2026-11-16). The backup holds the same words the kernel does, so it ages out with the 35-day rule.
+
+**Not done here.** Retention (a sweep as written would drop list rows: their receipts must be exempt first, D5), power loss (WAL with
+`synchronous=NORMAL` survives a kill, not necessarily a power cut), the roster push (D6), the guardian model (D7).
 
 ## Limits (the same list as the record's section 8, short)
 

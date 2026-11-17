@@ -15,6 +15,10 @@ State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no `
     known-people.json  the roster plus every id the kernel still holds a record for: who it can still FORGET. Derived from the
                   kernel's own record at each start, and rewritten (atomic, mode kept) after a whole-person forget succeeds
     creds.json    {"socket": path, "creds": {"voice": hex, "brain": hex, "panel": hex}}   written here, 0600, on every start
+    identity-creds.json  {"socket": path, "creds": {"speaker-verifier": hex}, "ttl_s": 60}   0600, on every start: the secret
+                  the component that VERIFIES people (zoe-data) mints speaker assertions with (``zoe_os/speaker.py``). A
+                  person-bound op from a surface (forget, grant, revoke, undo, explain for a person) needs one; the panel's
+                  credential alone is refused ``speaker unproven``. Fresh each start: an older assertion is dead after a restart.
     k.sock        the Unix socket (0600)
     kernel/       the kernel's SQLite spine (events, receipts, intents), 0600
 
@@ -51,6 +55,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)]
 from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person, person_from_entry  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
+from zoe_os import speaker  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 
 # trusted origin adapters: the voice surface records the utterance that is the cause of an act; the panel is the surface that
@@ -152,13 +157,13 @@ def write_known(state: Path, ids) -> list:
     return known
 
 
-def remember_people(state: Path, people: list) -> list:
+def remember_people(state: Path, people: list, db: Path | None = None) -> list:
     """The roster plus everyone the kernel still holds a record for, written BEFORE the kernel serves. Derived, never accumulated:
     an id left in the file by a crash between a forget and its rewrite is dropped here. Temp files a killed writer left (they can
     hold ids) are removed first."""
     for stale in (*state.glob(f".{KNOWN}.*.tmp"), state / f"{KNOWN}.tmp"):
         stale.unlink(missing_ok=True)
-    return write_known(state, set(people) | recorded_people(state / "kernel" / "zoe-os.db"))
+    return write_known(state, set(people) | recorded_people(db or state / "kernel" / "zoe-os.db"))
 
 
 class ShadowServer(KernelServer):
@@ -210,41 +215,49 @@ def roster_people(entries: list) -> list:
     return [person_from_entry(p) for p in entries]
 
 
-def read_roster(state: Path) -> tuple[list, str]:
+def read_roster(state: Path, daemon: str = "shadow") -> tuple[list, str]:
     """The CURRENT roster and how it read: ``ok``, ``empty`` or ``unreadable``. Forget never depends on it: the kernel loads every
     id its record names whatever this says, and only roster members are granted anything.
 
-    * MISSING people.json: an operator error (the owner never exported a roster): refuse to start;
+    * MISSING people.json (no file, or a symlink to nothing: ``FileNotFoundError``): an operator error (the owner never exported a
+      roster): refuse to start;
     * EMPTY (``{"people": []}``, the last member removed): a valid household state. Nobody can be proposed for or acted for; the
       recorded people can still be forgotten;
-    * UNREADABLE (not JSON, wrong shape, a non-string id): treated as EMPTY for grants (nothing is granted on a roster nobody can
-      read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line).
-    The same rule as ``authority.read_roster`` (kept textually close; neither imports the other)."""
+    * UNREADABLE: a file that is there but cannot be read (``EACCES``, ``EIO``, a directory in its place: any other ``OSError``),
+      or is not JSON, has the wrong shape or a non-string id. Treated as EMPTY for grants (nothing is granted on a roster nobody
+      can read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line).
+    ONE rule for both daemons: ``authority.py`` imports this (``daemon`` names which one in the stderr line)."""
     path = state / "people.json"
-    if not path.exists():
-        raise SystemExit("people.json is missing: export the household roster first (see README)")
     try:
-        people = json.loads(path.read_text("utf-8"))["people"]
+        raw = path.read_text("utf-8")
+    except FileNotFoundError:
+        raise SystemExit("people.json is missing: export the household roster first (see README)") from None
+    except (OSError, UnicodeDecodeError):
+        raw = None                                 # there, but unreadable: never a reason to stop serving forget
+    try:
+        people = json.loads(raw)["people"] if raw is not None else None
     except (ValueError, KeyError, TypeError, UnicodeDecodeError):
         people = None
     if not isinstance(people, list) or not all(entry_id(p) for p in people):
-        print("zoe-os shadow kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
+        print(f"zoe-os {daemon} kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
               file=sys.stderr, flush=True)
         return [], "unreadable"
     return people, "ok" if people else "empty"
 
 
-def build(state: Path):
+def build(state: Path, db: str | None = None):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
     entries, roster_status = read_roster(state)
     people = roster_ids(entries)
-    known = remember_people(state, people)
-    (state / "kernel").mkdir(mode=0o700, exist_ok=True)
+    from authority import db_path                  # the same move rule as the authority: never start beside an unmoved record
+    path = db_path(state, db)                      # --db: the permanent home (authority.PERMANENT_DB)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    known = remember_people(state, people, path)   # derived from the record in the database this kernel will open
     # Every id the kernel holds a record for stays a person it knows, so a member taken off people.json can still be forgotten
     # (zoe-data forgets by id and reads "only a person can ask to forget" as "never recorded": this is what makes that true).
     # Only the CURRENT roster is granted anything below: a removed member is forgettable, never proposable.
     members = roster_people(entries)
-    k = Kernel(str(state / "kernel" / "zoe-os.db"), members + [Person(p) for p in known if p not in set(people)])  # extras: least
+    k = Kernel(str(path), members + [Person(p) for p in known if p not in set(people)])   # extras (off the roster): least
     lists = Lists().register(k)
     register_list_remove(k, lists)
     reminders, alarms = Reminders(time.time).register(k), Alarms().register(k)
@@ -268,6 +281,14 @@ def write_creds(state: Path, sock: str, creds: dict) -> None:
     os.replace(tmp, state / "creds.json")
 
 
+def write_identity(state: Path, srv: KernelServer) -> None:
+    """The speaker-verifier's secret, the way every credential file is written (0600 from creation, atomic). Never printed."""
+    from authority import write_secret
+    write_secret(state / speaker.IDENTITY_CREDS, {"socket": srv.path, "creds": {speaker.IDENTITY: srv.speaker_secret().hex()},
+                                                  "generation": srv.speaker_generation(),
+                                                  "ttl_s": speaker.TTL_S})
+
+
 def serve(k: Kernel, srv: KernelServer, stop: threading.Event) -> None:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     while not stop.wait(PUMP_S):          # the Keeper erases the driver's rows when the kernel forgets; pumped here
@@ -278,11 +299,15 @@ def serve(k: Kernel, srv: KernelServer, stop: threading.Event) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", help="state directory (else $OSLAB_SHADOW_DIR, else ~/.zoe/os-shadow)")
-    state = state_dir(ap.parse_args(argv).dir)
+    ap.add_argument("--db", help="the kernel's database file; default STATE/kernel/zoe-os.db")
+    opts = ap.parse_args(argv)
+    state = state_dir(opts.dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.umask(0o077)                       # the database, its WAL and the credentials are this user's alone
-    k, srv, creds = build(state)
+    k, srv, creds = build(state, opts.db)
     write_creds(state, srv.path, creds)
+    write_identity(state, srv)
+    srv.on_speaker_roll(lambda _generation: write_identity(state, srv))      # a mid-run roll republishes the generation
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
