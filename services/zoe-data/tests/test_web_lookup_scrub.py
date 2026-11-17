@@ -493,7 +493,8 @@ def test_an_address_with_the_street_name_in_brackets_is_stripped():
                                  "pizza delivery Maple St, 12 tonight", "pizza delivery 12a Maple Tree Road tonight",
                                  "pizza delivery Maple (Street) 12 tonight", "pizza delivery Maple Street number 12 tonight",
                                  "pizza delivery Maple Street no 12 tonight", "pizza delivery Maple St no. 12 tonight",
-                                 "pizza delivery 12 Old North Maple Tree Valley Hill Road tonight"])
+                                 "pizza delivery 12 Old North Maple Tree Valley Hill Road tonight",
+                                 "pizza delivery Maple-Street 12 tonight", "pizza delivery Maple.Street 12 tonight"])
 def test_an_address_in_any_word_order_is_stripped(raw):
     r = scrub_query(raw)
     assert "maple" not in r.query and "12" not in r.query.split() and "12a" not in r.query.split(), r
@@ -513,3 +514,15 @@ def test_a_short_memory_phrase_glued_into_one_word_never_leaves(memory, raw):
     r = scrub_query(raw, PrivateTerms.of(memory=[memory]))
     words = set(re.split(r"[\W_]+", r.query)) if r.send else set()
     assert not ({"teapot", "teapots", "carport", "oxbow", "oxbows", "0xbow"} & words or {"tea", "pot"} <= words), r
+
+
+@pytest.mark.parametrize("raw", ["4417mhz keypad reset instructions", "keypad 4417th reset instructions", "mhz4417 keypad reset"])
+def test_a_known_memory_number_glued_to_letters_never_leaves(raw):
+    r = scrub_query(raw, PrivateTerms.of(memory=["The gate code is 4417"]))
+    assert "4417" not in r.query, r
+
+
+@pytest.mark.parametrize("pad", [" x ", " a ", " x y "])
+def test_a_phone_number_padded_with_letters_is_stripped(pad):
+    r = scrub_query(f"pizza delivery call 0491{pad}570{pad}006 tonight")
+    assert not ({"0491", "570", "006"} & set(r.query.split())), r

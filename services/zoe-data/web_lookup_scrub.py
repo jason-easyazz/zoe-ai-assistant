@@ -332,7 +332,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     streets = {fold(w) for w in lex["street_types"]}
     house = re.compile(r"\d{1,5}[a-z]?")
     for si, tok in enumerate(tokens):
-        if tok not in streets:
+        if tok not in streets and not {fold(p) for p in _COMPOUND_SPLIT.split(words[si])} & streets:
             continue
         span: set[int] = set()
         for k in range(si - 1, -1, -1):        # the nearest number before
@@ -346,6 +346,24 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for k in span:
             if tokens[k] not in lex["question_words"]:
                 drop.setdefault(k, "address")
+    # A known number from memory (3+ digits: a gate code) is private INSIDE any token, whatever is glued to it ("4417mhz").
+    mem_numbers = {n for s_ in singles for n in re.findall(r"\d{3,}", s_)}
+    for i, tok in enumerate(tokens):
+        if set(re.findall(r"\d{3,}", tok)) & mem_numbers:
+            drop.setdefault(i, "memory")
+    # Phone digits padded with single letters ("0491 x 570 x 006"): a run of number tokens and lone letters holding 7+
+    # digits across 2+ numbers is a phone number, padding and all.
+    i = 0
+    while i < len(tokens):
+        j, digits, numbers = i, 0, 0
+        while j < len(tokens) and tokens[j] and (tokens[j].isdigit() or (len(tokens[j]) == 1 and numbers)):
+            if tokens[j].isdigit():
+                digits, numbers = digits + len(tokens[j]), numbers + 1
+            j += 1
+        if numbers >= 2 and digits >= 7:
+            for k in range(i, j):
+                drop.setdefault(k, "number")
+        i = max(j, i + 1)
     plains = [fold(words[i].translate(_LOOKALIKE)) if any(c.isdigit() or c in "$@" for c in words[i]) and not tok.isdigit()
               else tok for i, tok in enumerate(tokens)]
     bare = [re.sub(r"\d", "", t) if t and not t.isdigit() else t for t in tokens]   # rose2 -> rose, blue4 -> blue
@@ -479,6 +497,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if any(_memory_runs([fold(w) for w in re.split(r"[\s.\-'’_/]+", view)], terms, lex) or _memory_runs([fold(w) for w in view.split()], terms, lex)
            for view in views):
+        return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
+    if any(set(re.findall(r"\d{3,}", fold(view))) & {n for s_ in singles for n in re.findall(r"\d{3,}", s_)} for view in views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if "@" in query or not query or any(g in fold(view) for view in views for g in glue_inside) \
             or any({fold(w), _run_word(fold(w))} & glue for view in views for w in re.split(r"[\W_]+", view) if w):
