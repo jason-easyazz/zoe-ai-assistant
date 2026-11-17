@@ -3067,13 +3067,16 @@ class MemoryService:
         status: str = "pending",
         limit: int = 100,
         offset: int = 0,
+        strict: bool = False,
     ) -> list[MemoryRef]:
-        """List rows for a user by status, newest first."""
+        """List rows for a user by status, newest first. Strict reads raise on store failures."""
         self._require(user_id, "user_id is required")
         try:
             rows = await self._run_sync(self._list_by_status_sync, user_id, status)
         except Exception as exc:
             logger.warning("memory_service: list_by_status failed: %s", exc)
+            if strict:
+                raise
             return []
         return rows[offset: offset + limit]
 
@@ -3151,12 +3154,14 @@ class MemoryService:
             )
         return archived
 
-    async def get(self, mem_id: str) -> Optional[MemoryRef]:
-        """Fetch a single row by id."""
+    async def get(self, mem_id: str, *, strict: bool = False) -> Optional[MemoryRef]:
+        """Fetch a single row by id; strict reads raise on store failures, not absence."""
         try:
             row = await self._run_sync(self._get_sync, mem_id)
         except Exception as exc:
             logger.warning("memory_service: get failed id=%s: %s", mem_id, exc)
+            if strict:
+                raise
             return None
         return row
 

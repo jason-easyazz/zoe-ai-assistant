@@ -1008,7 +1008,7 @@ def test_a_provenance_quote_is_vetted_on_its_excerpt_not_just_the_row_text(monke
         "status": "approved", "user_id": USER, "source": "voice_fact", "source_excerpt": f"I told {FRIEND} I like pottery"})
 
     class _Svc:
-        async def get(self, _id):
+        async def get(self, _id, *, strict=False):
             return ref
 
     async def go():

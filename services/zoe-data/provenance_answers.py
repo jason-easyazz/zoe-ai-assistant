@@ -637,7 +637,7 @@ async def _drop_forgotten(user_id: str, items: list, text_of: Any) -> list:
     return [i for i in kept if not matching_tombstone(user_id, text_of(i) or "")]
 
 
-async def gather(user_id: str, *, svc: Any = None) -> Known:
+async def gather(user_id: str, *, svc: Any = None, strict: bool = False) -> Known:
     """The owner's approved rows, sorted into public items (grouped) and private ones (counted by class), plus the people table.
     Own rows only; pasted, instruction-shaped, unverified, recorded-change and forgotten rows are left out. Raises on a store failure
     (the caller says so)."""
@@ -645,7 +645,7 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
     import own_words
 
     svc = svc or _svc_default()
-    rows = await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S)
+    rows = await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, **({"strict": True} if strict else {})), READ_BUDGET_S)
     rows = await _drop_forgotten(user_id, rows, _row_words)
     known = Known()
     for ref in rows:
@@ -1507,7 +1507,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
 
     try:
         svc = svc or _svc_default()
-        ref = await asyncio.wait_for(svc.get(exp.row_id), READ_BUDGET_S)
+        ref = await asyncio.wait_for(svc.get(exp.row_id, strict=True), READ_BUDGET_S)
         mine = ref is not None and _owns(ref.metadata or {}, user_id)
         was_open = mine and str((ref.metadata or {}).get("status") or "approved").lower() == "approved"
         await _speculation_barrier()

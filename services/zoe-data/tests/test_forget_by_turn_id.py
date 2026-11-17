@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 import re
 import time
@@ -1517,8 +1518,8 @@ def test_forget_reaches_an_older_page_of_the_turns_facts(world, monkeypatch, pat
     assert target and other
     real = svc.list_by_status
 
-    async def paged(*, user_id, status, limit=100, offset=0):
-        rows = await real(user_id=user_id, status=status, limit=10000)
+    async def paged(*, user_id, status, limit=100, offset=0, strict=False):
+        rows = await real(user_id=user_id, status=status, limit=10000, strict=strict)
         rows.sort(key=lambda r: r.id == target.id)   # the target is older than the first page
         # A full first page, with duplicates, exercises both offset paging and id de-duplication.
         rows = ([other] * 1000 + [target]) if status == "approved" else rows
@@ -1555,3 +1556,38 @@ def test_topic_forget_after_restart_erases_a_legacy_excerpt_observation(world):
     assert ref.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
     assert chat.off(mid)
     assert not run(night_store.get_backend().observations(UID))
+
+
+@pytest.mark.parametrize("path", ["forget_that", "forget_it", "topic"])
+def test_store_failure_during_scan_never_confirms_or_clears(world, monkeypatch, path):
+    svc, chat = world
+    _plant(svc, chat, "a")
+    before = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    messages = copy.deepcopy(chat.rows)
+    stored_rows = copy.deepcopy(svc._collection().rows)
+    words, observations = _xw_rows(), _night()
+    target = turn_forget.previous_turn(UID)
+    col = svc._collection()
+
+    def broken(**kwargs):
+        raise RuntimeError("invented zindle store failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(col, "get", broken)
+        if path == "forget_that":
+            reply = run(intent_router._execute_forget_last(UID))
+        elif path == "forget_it":
+            exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=SAID["a"], quote=SAID["a"], turn_id=_xw_rows()["a"])
+            reply = run(pa._forget_turn(UID, exp, svc=svc))
+        else:
+            res = run(forget_topic.forget(svc, UID, "my plumber"))
+            assert res.store_down and not res.forgotten
+            reply = "unavailable"
+        assert not reply.startswith("Done")
+    assert {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))} == before
+    assert chat.rows == messages
+    assert svc._collection().rows == stored_rows
+    assert _xw_rows() == words and _night() == observations
+    assert turn_forget.previous_turn(UID) == target
+    assert not run(forget_record.get_backend().open_records(UID))
+    assert not run(forget_record.get_backend().list(UID))

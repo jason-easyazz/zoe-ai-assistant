@@ -86,3 +86,70 @@ def test_shared_helper_never_returns_a_partial_read(failure):
     with pytest.raises(RuntimeError if failure == "store" else asyncio.TimeoutError):
         asyncio.run(turn_forget.live_rows(Store(), "demo_zindle", read_budget_s=0.01))
     assert calls == [("approved", 0), ("approved", 1000)]
+
+
+STRICT_READS = {
+    "turn_forget.py": ("live_rows",),
+    "provenance_answers.py": ("forget_it",),
+    "memory_space.py": ("forget_row", "guardian_forget"),
+    "memories_voice.py": ("forget_fact",),
+    "forget_record.py": ("_reject",),
+}
+
+
+def _check_strict(source, names):
+    tree = ast.parse(source)
+    for name in names:
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
+        reads = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and ((isinstance(n.func, ast.Attribute) and n.func.attr in {"get", "list_by_status", "gather"}
+                       and ast.unparse(n.func.value) in {"svc", "pa"})
+                      or isinstance(n.func, ast.Name) and n.func.id == "getter")]
+        assert reads, name
+        assert all(any(k.arg == "strict" and isinstance(k.value, ast.Constant) and k.value.value is True
+                       for k in n.keywords) for n in reads), name
+
+
+@pytest.mark.parametrize("filename,names", STRICT_READS.items())
+def test_forget_reads_are_strict(filename, names):
+    source = (ROOT / filename).read_text()
+    _check_strict(source, names)
+    with pytest.raises(AssertionError):
+        _check_strict(source.replace("strict=True", "strict=False"), names)
+
+
+def test_memory_service_read_failure_is_not_absence(monkeypatch):
+    import asyncio
+    from memory_service import MemoryService
+
+    svc = MemoryService(data_dir="/nonexistent/zoe-test-zindle")
+    failure = RuntimeError("invented zindle failure")
+
+    class Collection:
+        def get(self, **kwargs):
+            raise failure
+
+    monkeypatch.setattr(svc, "_collection", lambda: Collection())
+    for read, empty in ((lambda **kw: svc.list_by_status(user_id="demo_zindle", **kw), []),
+                        (lambda **kw: svc.get("zindle-row", **kw), None)):
+        assert asyncio.run(read()) == empty
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(read(strict=True))
+        assert caught.value is failure
+
+    class EmptyCollection:
+        def get(self, **kwargs):
+            return {"ids": [], "documents": [], "metadatas": []}
+
+    monkeypatch.setattr(svc, "_collection", lambda: EmptyCollection())
+    assert asyncio.run(svc.get("zindle-missing", strict=True)) is None
+
+
+def test_mcp_forget_read_is_strict():
+    tree = ast.parse((ROOT / "mcp_server.py").read_text())
+    branch = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+                  and ast.unparse(n.test) == "name == 'memory_forget'")
+    source = "async def forget():\n" + "\n".join("    " + line for node in branch.body for line in ast.unparse(node).splitlines())
+    _check_strict(source, ("forget",))
+    with pytest.raises(AssertionError):
+        _check_strict(source.replace("strict=True", "strict=False"), ("forget",))

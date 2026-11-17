@@ -58,10 +58,10 @@ def test_nothing_is_destroyed_when_the_record_cannot_be_written(w, monkeypatch):
 
     async def down(*_a):
         raise Injected("app_settings down")
-    monkeypatch.setattr(fr.SqlBackend, "create", down)
-    assert _forget_last() == intent_router.FORGET_STORE_DOWN_REPLY
-    assert FACTS["a"] in _approved(w.svc) and not w.chat.off(w.mid)             # write-ahead: not a thing was touched
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(fr.SqlBackend, "create", down)
+        assert _forget_last() == intent_router.FORGET_STORE_DOWN_REPLY
+        assert FACTS["a"] in _approved(w.svc) and not w.chat.off(w.mid)         # write-ahead: not a thing was touched
     assert _forget_last().startswith("Done")
 
 

@@ -391,7 +391,7 @@ class _SkippingReviewSvc:
     async def list_by_status(self, *, user_id, status, limit):
         return list(self._rows.values())
 
-    async def get(self, mem_id):
+    async def get(self, mem_id, *, strict=False):
         return self._rows.get(mem_id)
 
     async def review(self, mem_id, **_kw):
