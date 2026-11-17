@@ -107,7 +107,7 @@ def load_lexicon() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not data.get("enabled"):
             continue
-        for key in ("drop_words", "question_words", "relation_words", "cue_relation_words", "code_words", "secret_words", "naming_words", "street_types",
+        for key in ("drop_words", "question_words", "relation_words", "cue_relation_words", "code_words", "secret_words", "naming_words", "street_types", "address_number_words", "address_prefix_words",
                     "possessive_words", "unit_suffixes"):
             out[key] = frozenset(out.get(key, frozenset())) | {fold(w) for w in data.get(key, [])}
         out["instruction_cues"] = list(out["instruction_cues"]) + list(data.get("instruction_cues", []))
@@ -370,6 +370,19 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for k in span:
             if tokens[k] not in lex["question_words"]:
                 drop.setdefault(k, "address")
+    # A postal or unit number: an address-number word with a number up to two words after it ("PO Box 1234", "Unit 5",
+    # "postcode 6000", "Locked Bag 7"). The number, the word and a prefix before it ("po", "gpo", "locked") all go.
+    numbered = lex.get("address_number_words", frozenset())
+    prefixes = lex.get("address_prefix_words", frozenset())
+    for ai, tok in enumerate(tokens):
+        if tok not in numbered:
+            continue
+        for k in range(ai + 1, min(len(tokens), ai + 3)):
+            if house.fullmatch(tokens[k]) or tokens[k].isdigit():
+                start = ai - 1 if ai > 0 and tokens[ai - 1] in prefixes else ai
+                for m in range(start, k + 1):
+                    drop.setdefault(m, "address")
+                break
     # EVERYTHING after a code or password word may be the secret, digits or not, however many words ("gate code is 1234",
     # "safe combination red blue green", "password correct horse battery staple sunset"): no window or cap to outgrow, so
     # every word after the first such word goes and only the words before it can leave. "promo code dominos" and

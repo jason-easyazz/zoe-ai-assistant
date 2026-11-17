@@ -213,6 +213,31 @@
     "circuit",
     "mews"
   ],
+  "address_number_words": [
+    "box",
+    "bag",
+    "unit",
+    "units",
+    "apt",
+    "apartment",
+    "suite",
+    "ste",
+    "lot",
+    "flat",
+    "postcode",
+    "postal",
+    "zip",
+    "zipcode",
+    "pobox"
+  ],
+  "address_prefix_words": [
+    "po",
+    "gpo",
+    "locked",
+    "private",
+    "rmb",
+    "rsd"
+  ],
   "possessive_words": [
     "my",
     "our",

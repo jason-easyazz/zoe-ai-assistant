@@ -584,3 +584,12 @@ def test_a_large_memory_set_does_not_make_a_query_slow():
 def test_an_email_in_any_shape_never_leaves(raw, private):
     r = scrub_query(raw)
     assert not (private & set(re.split(r"[\W_]+", r.query))), r
+
+
+@pytest.mark.parametrize("raw", ["parcel delivery PO Box 1234 tracking", "parcel delivery P.O. Box 1234 tracking",
+                                 "parcel delivery GPO Box 77 tracking", "parcel delivery Locked Bag 7 tracking",
+                                 "furniture delivery Unit 5 tracking", "parcel delivery postcode 6000 tracking",
+                                 "parcel delivery box no 1234 tracking"])
+def test_a_postal_or_unit_number_never_leaves(raw):
+    r = scrub_query(raw)
+    assert not any(ch.isdigit() for ch in r.query), r
