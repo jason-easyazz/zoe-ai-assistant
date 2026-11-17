@@ -169,7 +169,6 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
 ADDRESS_NUMBER_AFTER = 3  # ...or this many after it ("Maple Street number 12", "Maple St no. 12")
 CODE_NUMBER_AFTER = 3  # a number this many words after a code word is the code ("gate code is 1234", "pin: 0000")
-SECRET_WORDS_AFTER = 4  # this many words after a password word are the password ("password correct horse battery staple")
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
 
@@ -363,20 +362,14 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
                     break
         elif any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
             drop.setdefault(ci, "code")
-    # The words after a password word ARE the password, digits or not ("my password swordfish"): the next
-    # SECRET_WORDS_AFTER words go, function words aside. "password reset tips" loses "reset tips" - the accepted cost.
+    # EVERYTHING after a password word may be the password, digits or not, however long ("my password swordfish",
+    # "password correct horse battery staple sunset"): no cap to outgrow, so every word after it goes. Only the words
+    # before it can leave; "password reset tips" loses "reset tips" - the accepted cost.
     secrets = lex.get("secret_words", frozenset())
-    for ci, tok in enumerate(tokens):
-        if tok not in secrets:
-            continue
-        taken = 0
-        for k in range(ci + 1, len(tokens)):
-            if taken >= SECRET_WORDS_AFTER:
-                break
-            if tokens[k] in lex["drop_words"] or tokens[k] in lex["question_words"]:
-                continue
+    first_secret = next((ci for ci, tok in enumerate(tokens) if tok in secrets), None)
+    if first_secret is not None:
+        for k in range(first_secret + 1, len(tokens)):
             drop.setdefault(k, "code")
-            taken += 1
     # A known number from memory (3+ digits: a gate code) is private INSIDE any token, whatever is glued to it ("4417mhz").
     mem_numbers = {n for s_ in singles for n in re.findall(r"\d{3,}", s_)}
     for i, tok in enumerate(tokens):

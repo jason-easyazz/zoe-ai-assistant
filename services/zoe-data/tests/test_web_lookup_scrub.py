@@ -545,7 +545,10 @@ def test_a_number_not_after_a_code_word_still_leaves():
 @pytest.mark.parametrize("raw,secret", [("my password swordfish router reset", {"swordfish"}),
                                         ("wifi password correct horse battery staple router reset",
                                          {"correct", "horse", "battery", "staple"}),
-                                        ("the passphrase is open sesame", {"open", "sesame"})])
+                                        ("the passphrase is open sesame", {"open", "sesame"}),
+                                        ("wifi password correct horse battery staple sunset router reset",
+                                         {"correct", "horse", "battery", "staple", "sunset"}),
+                                        ("password a b c d e f g h i j kumquat", {"kumquat"})])
 def test_the_words_after_a_password_word_never_leave(raw, secret):
     r = scrub_query(raw)
     assert not (secret & set(r.query.split())), r
