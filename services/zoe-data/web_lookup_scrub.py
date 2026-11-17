@@ -304,8 +304,11 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             if (owned or named or words[j][:1].isupper()) and k < len(tokens) and tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"] \
                     and tokens[k] not in lex["relation_words"]:
                 drop.setdefault(k, "relation_name")
-    for i in _memory_runs(tokens, terms, lex):
-        drop.setdefault(i, "memory")
+    # the same three views as the private-word checks: as written, look-alike digits read as letters, digits removed
+    # ("red box2" still holds the memory phrase "red box")
+    for view in (tokens, plains, bare):
+        for i in _memory_runs(view, terms, lex):
+            drop.setdefault(i, "memory")
     # THE ALLOW-LIST, last and strongest: a word may leave the house only if it is an ordinary dictionary word
     # (allow_words(), SCOWL plus a small supplement) or a number of at most four digits. Everything the rules
     # above did not recognise (a name, a code, an invented spelling, a glued or split private term) is dropped,
@@ -313,7 +316,9 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     allow = allow_words()
     units = lex.get("unit_suffixes", frozenset())
     for i, tok in enumerate(tokens):
-        if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(tok, allow, units):
+        # judged on the word AS WRITTEN (casefolded), so a hyphenated compound is checked part by part ("gluten-free" is two
+        # dictionary words; its folded form "glutenfree" is none)
+        if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(words[i].casefold(), allow, units):
             drop[i] = "unknown"
 
     def _content(idx: Iterable[int]) -> int:

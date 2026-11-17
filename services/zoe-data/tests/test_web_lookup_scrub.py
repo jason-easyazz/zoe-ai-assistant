@@ -371,3 +371,18 @@ def test_a_dictionary_word_that_starts_with_a_member_name_still_leaves():
     # ...while the name itself, split or glued into a non-word, still never leaves
     assert "rose" not in scrub_query("rose garden ideas", terms).query.split()
     assert scrub_query("roseparty garden ideas", terms).query == "garden ideas"
+
+
+
+@pytest.mark.parametrize("raw", ["red box2 replacement", "red2 box replacement", "red b0x replacement"])
+def test_a_short_memory_phrase_with_a_digit_added_is_still_stripped(raw):
+    # Codex P1 on #2527: a memory phrase shorter than the glue length ("red box") escaped once a digit was stuck to one word
+    r = scrub_query(raw, PrivateTerms.of(memory=["The spare key is in the red box"]))
+    words = r.query.split()
+    assert not ({"red", "red2"} & set(words) and {"box", "box2", "b0x"} & set(words)), r
+
+
+def test_a_hyphenated_public_compound_is_kept():
+    # Codex P2 on #2527: the allow-list saw the folded "glutenfree" (not a word) instead of "gluten" + "free"
+    r = scrub_query("gluten-free bread recipes", PrivateTerms())
+    assert r.send and r.query.startswith("gluten-free"), r
