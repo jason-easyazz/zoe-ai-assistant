@@ -162,25 +162,15 @@ async def _owned_rows(svc: Any, user_id: str, groups: list, *, mids: Any = ()) -
     import turn_forget
 
     want = {(turn_forget.TURN, mid) for mid in mids}
-    out, seen = [], set()
-    for status in (*turn_forget.LIVE_FORGET_STATUSES, "superseded"):
-        offset = 0
-        while True:
-            page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
-            if not page:
-                break
-            for r in page:
-                md = getattr(r, "metadata", {}) or {}
-                if getattr(r, "id", "") in seen or (md.get("user_id") or md.get("wing")) != user_id:
-                    continue
-                if ((groups and (row_matches(groups, getattr(r, "text", "") or "")
-                                or row_matches(groups, str(md.get("retire_quote") or ""))))
-                        or (status in turn_forget.LIVE_FORGET_STATUSES and turn_forget.classify(r) in want)):
-                    seen.add(r.id)
-                    out.append(r)
-            if len(page) < 1000:
-                break
-            offset += len(page)
+    out = []
+    for r in await turn_forget.live_rows(svc, user_id, extra_statuses=("superseded",)):
+        md = getattr(r, "metadata", {}) or {}
+        if (md.get("user_id") or md.get("wing")) != user_id:
+            continue
+        if ((groups and (row_matches(groups, getattr(r, "text", "") or "")
+                        or row_matches(groups, str(md.get("retire_quote") or ""))))
+                or (md.get("status") in turn_forget.LIVE_FORGET_STATUSES and turn_forget.classify(r) in want)):
+            out.append(r)
     return out
 
 
@@ -307,6 +297,8 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
         res.too_many = True
         return None
     said = [t.text for t in turns] + list(hits.values())
+    legacy_words = list(dict.fromkeys([*said, *((r.metadata or {}).get("source_excerpt") or ""
+                                               for r in rows if turn_forget.classify(r)[0] == turn_forget.LEGACY)]))
     row_texts = [getattr(r, "text", "") or "" for r in rows]
     try:
         import value_correction
@@ -315,7 +307,7 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
     reg_turns = [value_correction.turn_id_of(user_id, t) for t in said] if value_correction is not None else []
     plan = forget_record.Plan(
         rows=[r.id for r in rows], mids=mids, entries=list(hits),
-        obs=await night_mind.legacy_observation_ids(user_id, *said),
+        obs=await night_mind.legacy_observation_ids(user_id, *legacy_words),
         notes=await conversation_notes.ids_for_topic(user_id, lambda text: row_matches(groups, text)),
         reg=await memory_value_registry.ids_for_names(user_id, lambda name: any(row_matches([g], name) for g in groups)),
         reg_turns=reg_turns, reg_topic=True,

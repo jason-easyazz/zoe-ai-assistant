@@ -4435,19 +4435,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # privacy request silently miss rows for users with bigger stores.
             # ... and the facts that were REPLACED (superseded) too: they are kept as history ("where did I live
             # before?"), so a forgotten name left in one would come back through that read.
-            from turn_forget import LIVE_FORGET_STATUSES
+            from turn_forget import live_rows
 
-            for _status in (*LIVE_FORGET_STATUSES, "superseded"):
-                offset = 0
-                while True:
-                    page = await svc.list_by_status(
-                        user_id=user_id, status=_status, limit=1000, offset=offset)
-                    if not page:
-                        break
-                    rows.extend(page)
-                    if len(page) < 1000:
-                        break
-                    offset += len(page)
+            rows.extend(await live_rows(svc, user_id, extra_statuses=("superseded",)))
         except Exception as exc:
             logger.info("memory_forget_entity: lookup failed: %s", exc)
             return "I couldn't reach the memory store right now, so nothing was changed."
@@ -4489,23 +4479,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 # the entity text, so every status goes through the physical erase sweep.
                 erase_ids = list(archived_ids)
                 seen_ids.update(archived_ids)
-                for st in (*LIVE_FORGET_STATUSES, "superseded", "archived", "rejected"):
-                    off = 0
-                    while True:
-                        page = await svc.list_by_status(user_id=user_id, status=st, limit=1000, offset=off)
-                        if not page:
-                            break
-                        for r in page:
-                            _md = getattr(r, "metadata", {}) or {}
-                            if (getattr(r, "id", "") and r.id not in seen_ids
-                                    and (_md.get("user_id") == user_id or _md.get("wing") == user_id)
-                                    and (name_re.search(getattr(r, "text", "") or "")
-                                         or name_re.search(str(_md.get("retire_quote") or "")))):
-                                erase_ids.append(r.id)
-                                seen_ids.add(r.id)
-                        if len(page) < 1000:
-                            break
-                        off += len(page)
+                for r in await live_rows(svc, user_id, extra_statuses=("superseded", "archived", "rejected")):
+                    _md = getattr(r, "metadata", {}) or {}
+                    if (getattr(r, "id", "") and r.id not in seen_ids
+                            and (_md.get("user_id") == user_id or _md.get("wing") == user_id)
+                            and (name_re.search(getattr(r, "text", "") or "")
+                                 or name_re.search(str(_md.get("retire_quote") or "")))):
+                        erase_ids.append(r.id)
+                        seen_ids.add(r.id)
                 if not erase_ids:
                     return
                 erased = await svc.erase_rows(user_id, erase_ids, actor=user_id,

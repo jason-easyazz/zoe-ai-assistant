@@ -493,8 +493,7 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             return []
         import turn_forget
 
-        rows = {r.id: r for status in turn_forget.LIVE_FORGET_STATUSES
-                for r in await svc.list_by_status(user_id=user_id, status=status, limit=1000)}.values()
+        rows = await turn_forget.live_rows(svc, user_id)
         ref_is_ask = is_ask_row(meta)
         out = []
         for r in rows:

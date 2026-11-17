@@ -51,10 +51,31 @@ TURN_TTL_S = 1800.0
 RETRACT_TTL_S = 6 * 3600.0
 #: A row is "from" a turn only if it was written no earlier than this before the turn was saved (clock slack).
 ROW_SLACK_S = 5.0
-#: How many recent rows (per status) are read when looking for a turn's rows.
-SCAN_LIMIT = 200
 #: Live memory rows every forget scanner must cover. Retired statuses are added explicitly by callers.
 LIVE_FORGET_STATUSES = ("approved", "pending", "disputed")
+
+
+async def live_rows(svc: Any, user_id: str, *, extra_statuses: tuple = (),
+                    read_budget_s: Optional[float] = None) -> list:
+    """Every live row, paged to exhaustion and de-duplicated by id. Read failures propagate.
+
+    A caller's optional read budget applies to each page, as it did to each status read.
+    """
+    import asyncio
+
+    rows = {}
+    for status in dict.fromkeys((*LIVE_FORGET_STATUSES, *extra_statuses)):
+        offset = 0
+        while True:
+            read = svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
+            page = await read if read_budget_s is None else await asyncio.wait_for(read, read_budget_s)
+            rows.update((r.id, r) for r in page)
+            if len(page) < 1000:
+                break
+            offset += len(page)
+    return list(rows.values())
+
+
 _MAX_USERS = 512
 _MAX_TURNS = 6
 _MAX_RETRACTED = 16
@@ -555,14 +576,8 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
     """The owner's live rows written from this turn (``mids`` = its saved-turn ids): the bound rows by id alone,
     the legacy rows by their words (``partition``; a legacy match is logged ``TURN_FORGET code=legacy_text n=``). RAISES on a
     store failure (a forget must not be confirmed when the store could not be read)."""
-    rows, seen = [], set()
-    for status in LIVE_FORGET_STATUSES:
-        for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT):
-            m = r.metadata or {}
-            if r.id in seen or (m.get("user_id") or m.get("wing") or user_id) != user_id:
-                continue
-            seen.add(r.id)
-            rows.append(r)
+    rows = [r for r in await live_rows(svc, user_id)
+            if ((r.metadata or {}).get("user_id") or (r.metadata or {}).get("wing") or user_id) == user_id]
     bound, legacy = partition(rows)
     want = set(mids or ())
     out = [r for r in bound if provenance(r.metadata)[0] == "turn" and provenance(r.metadata)[1] in want]

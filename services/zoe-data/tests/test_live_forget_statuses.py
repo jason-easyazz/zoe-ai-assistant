@@ -19,32 +19,12 @@ SCANNERS = {
 
 def _check(source, names):
     tree = ast.parse(source)
-    # Expand named module constants, e.g. the alias scanner's all-status tuple.
-    assignments = {n.targets[0].id: n.value for n in tree.body
-                   if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
-
-    def shared(node):
-        if isinstance(node, ast.Attribute) and node.attr == "LIVE_FORGET_STATUSES":
-            return True
-        if isinstance(node, ast.Name):
-            return node.id == "LIVE_FORGET_STATUSES" or (node.id in assignments and shared(assignments[node.id]))
-        return any(shared(c) for c in ast.iter_child_nodes(node))
-
     for name in names:
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
-        scans = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                 and n.func.attr == "list_by_status"]
-        if not scans:
-            assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_live_forget_rows"
-                       for n in ast.walk(fn)), name
-            continue
-        for scan in scans:
-            # Each status argument must be supplied by a loop over the shared tuple.
-            status = next(k.value for k in scan.keywords if k.arg == "status")
-            assert isinstance(status, ast.Name), name
-            loops = [n for n in ast.walk(fn) if isinstance(n, (ast.For, ast.comprehension))
-                     and isinstance(n.target, ast.Name) and n.target.id == status.id]
-            assert loops and all(shared(n.iter) for n in loops), name
+        calls = [n.func for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        assert not any(isinstance(f, ast.Attribute) and f.attr == "list_by_status" for f in calls), name
+        assert any((isinstance(f, ast.Name) and f.id in {"live_rows", "_live_forget_rows"})
+                   or (isinstance(f, ast.Attribute) and f.attr == "live_rows") for f in calls), name
 
 
 def test_every_forget_status_scan_uses_the_shared_definition():
@@ -57,14 +37,52 @@ def test_every_forget_status_scan_uses_the_shared_definition():
 
 
 @pytest.mark.parametrize("filename", SCANNERS)
-def test_status_guard_rejects_a_private_status_list(filename):
-    source = (ROOT / filename).read_text()
-    # Replace uses, preserving import syntax so the control fails an assertion, not parsing.
-    tree = ast.parse(source)
+def test_status_guard_rejects_a_direct_status_scan(filename):
+    tree = ast.parse((ROOT / filename).read_text())
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "LIVE_FORGET_STATUSES":
-            node.id = "PRIVATE_STATUSES"
-        elif isinstance(node, ast.Attribute) and node.attr == "LIVE_FORGET_STATUSES":
-            node.attr = "PRIVATE_STATUSES"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in SCANNERS[filename]:
+            node.body.append(ast.parse('await svc.list_by_status(user_id=user_id, status="approved", limit=1000)').body[0])
     with pytest.raises(AssertionError):
         _check(ast.unparse(tree), SCANNERS[filename])
+
+
+def _check_helper(source):
+    tree = ast.parse(source)
+    fn = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "live_rows")
+    assert any(isinstance(n, ast.Name) and n.id == "LIVE_FORGET_STATUSES" for n in ast.walk(fn))
+    assert any(isinstance(n, ast.While) for n in ast.walk(fn))
+    scans = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "list_by_status"]
+    assert scans and all(any(k.arg == "offset" for k in n.keywords) for n in scans)
+
+
+def test_shared_helper_pages_the_shared_statuses():
+    _check_helper((ROOT / "turn_forget.py").read_text())
+
+
+def test_helper_guard_rejects_private_statuses():
+    source = (ROOT / "turn_forget.py").read_text().replace("*LIVE_FORGET_STATUSES", '* ("approved", "pending")')
+    with pytest.raises(AssertionError):
+        _check_helper(source)
+
+
+@pytest.mark.parametrize("failure", ["store", "budget"])
+def test_shared_helper_never_returns_a_partial_read(failure):
+    import asyncio
+    from types import SimpleNamespace
+    import turn_forget
+
+    calls = []
+
+    class Store:
+        async def list_by_status(self, *, status, offset, **kwargs):
+            calls.append((status, offset))
+            if offset == 0:
+                return [SimpleNamespace(id="f-zindle")] * 1000
+            if failure == "store":
+                raise RuntimeError("invented store failure")
+            await asyncio.sleep(1)
+
+    with pytest.raises(RuntimeError if failure == "store" else asyncio.TimeoutError):
+        asyncio.run(turn_forget.live_rows(Store(), "demo_zindle", read_budget_s=0.01))
+    assert calls == [("approved", 0), ("approved", 1000)]
