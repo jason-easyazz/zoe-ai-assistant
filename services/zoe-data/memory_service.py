@@ -1380,7 +1380,7 @@ _CONNECT_ALTS = (r"isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|s
                  r"|(?:has|had|have)\s{1,8}been")
 # not inside a longer word or a contraction; a quote straight after the connector with no space ("is'zebrafiddle'") is the
 # value's OPENER, as main reads it (review, PR #2660)
-_CONNECT_WORDS = "(?:" + _CONNECT_ALTS + r")(?!\w|['’](?:t|s|re|ve|d|ll|nt)\b)"
+_CONNECT_WORDS = "(?:" + _CONNECT_ALTS + r")(?!\w|['’](?:t|s|re|ve|d|ll|nt)(?![\w'’]))"   # a suffix with its own closing quote ("is'll'") is a quoted value
 _LABELLED_SECRET_RE = re.compile(
     r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:" + _CONNECT_WORDS
     + r")(?:\s*[:=])?|[:=])\s*)"

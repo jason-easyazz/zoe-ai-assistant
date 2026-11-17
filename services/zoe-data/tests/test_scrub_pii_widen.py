@@ -1264,3 +1264,11 @@ def test_a_quote_straight_after_the_connector_opens_the_value(label, glue):
 def test_a_contraction_is_still_not_a_connector_plus_quote():
     assert scrub_pii("the password's on the fridge")[0].startswith("the password's")
     assert "zebrafiddle" not in scrub_pii("my password isn't zebrafiddle")[0]
+
+
+@pytest.mark.parametrize("label", ["pin", "token"])
+@pytest.mark.parametrize("value", ["'ll'", "'re'", "'s'", "'ve'", "'d'", "'t'", '"ll"', "’s’"])
+def test_a_quoted_value_that_is_a_contraction_suffix_is_still_a_value(label, value):
+    """Review (PR #2660), a regression of the contraction guard: "my token is'll'" - the suffix has its own closing quote."""
+    out, _ = scrub_pii(f"my {label} is{value}")
+    assert out == f"my {label} is{R}", out
