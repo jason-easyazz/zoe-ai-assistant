@@ -310,14 +310,21 @@ async def _who(user_id: str) -> str:
 _SOURCE = {"child": "role", "unverified": "unverified"}
 
 
+def source_for(p: Pending, who: str) -> str:
+    """The floor's role rule, pure: the log source that REFUSES this speaker's hazard ask, or "" = let it through. ``who`` is
+    ``_who``'s answer (child | adult | guest | unverified). A declared child refuses whatever the account; a child account or one
+    the floor cannot place refuses; an adult or a guest passes. Blind: only a positively adult speaker passes. ``resolve`` uses
+    this, and so does ``plan_loop.child_floor``, so the two can never reach different verdicts for the same speaker."""
+    if p.blind:
+        return "" if who == "adult" else "error"
+    return "declared" if p.declared else _SOURCE.get(who, "")
+
+
 async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
     """The fixed reply when the speaker of a hazard ask is (or could be) a child and the floor ENFORCES, else None (ask the brain).
     NEVER raises; an error refuses."""
     try:
-        if p.blind:
-            source = "" if await _who(user_id) == "adult" else "error"
-        else:
-            source = "declared" if p.declared else _SOURCE.get(await _who(user_id), "")
+        source = source_for(p, "" if not p.blind and p.declared else await _who(user_id))
         if not source:
             return None
         n = 1

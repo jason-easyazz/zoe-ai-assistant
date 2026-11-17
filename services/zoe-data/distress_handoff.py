@@ -171,19 +171,33 @@ def _scan(s: str, p: _Pack) -> Verdict:
     return best
 
 
+def _detect(text: str) -> Verdict:
+    s = _strip(unicodedata.normalize("NFKC", text or "").casefold())[:MAX_CHARS]
+    best = NONE
+    for pack in filter(None, (_pack(c) for c in lexicons.LANGS)) if s else ():
+        v = _scan(s, pack)
+        if _RANK[v.tier] > _RANK[best.tier]:
+            best = v
+    return best
+
+
 def detect(text: str) -> Verdict:
     """The tier of one turn. Pure and fast (a few compiled regexes per language); never raises."""
     try:
-        s = _strip(unicodedata.normalize("NFKC", text or "").casefold())[:MAX_CHARS]
-        best = NONE
-        for pack in filter(None, (_pack(c) for c in lexicons.LANGS)) if s else ():
-            v = _scan(s, pack)
-            if _RANK[v.tier] > _RANK[best.tier]:
-                best = v
-        return best
+        return _detect(text)
     except Exception as exc:  # noqa: BLE001 - a floor must not break a turn
         logger.warning("distress detect failed (%s)", type(exc).__name__)
         return NONE
+
+
+def detect_strict(text: str) -> Verdict:
+    """Exactly ``detect``, except that a check that could not run RAISES instead of answering ``NONE`` (an error, or no English
+    distress lexicon: every language pack silently absent would otherwise read as "nothing found"). For a caller that must
+    fail closed (``plan_loop``). ``detect`` is unchanged."""
+    v = _detect(text)
+    if _pack("en") is None:
+        raise LookupError("no distress lexicon")
+    return v
 
 
 def guarded_text(text: str) -> bool:

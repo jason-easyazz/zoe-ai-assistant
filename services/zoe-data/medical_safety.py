@@ -639,7 +639,13 @@ def detect(text: str) -> Verdict:
     return _detect(text, recall_gate=True)
 
 
-def _detect(text: str, *, recall_gate: bool) -> Verdict:
+def detect_strict(text: str) -> Verdict:
+    """Exactly ``detect``, except that a check that could not run RAISES instead of answering ``NONE``: for a caller that must
+    fail closed (``plan_loop``) and so must tell "checked, nothing found" from "could not check". ``detect`` is unchanged."""
+    return _detect(text, recall_gate=True, strict=True)
+
+
+def _detect(text: str, *, recall_gate: bool, strict: bool = False) -> Verdict:
     try:
         s = _fold(text)
         if not s:
@@ -670,6 +676,8 @@ def _detect(text: str, *, recall_gate: bool) -> Verdict:
         return _glucose(s, rx) or NONE
     except Exception as exc:  # noqa: BLE001 - a floor must not break a turn
         logger.warning("medical_safety detect failed (%s)", type(exc).__name__)
+        if strict:
+            raise
         return NONE
 
 
