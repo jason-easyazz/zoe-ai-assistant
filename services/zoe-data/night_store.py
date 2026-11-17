@@ -64,6 +64,8 @@ class Backend(Protocol):
 
     async def erase_matching(self, user_id: str, pattern: "re.Pattern[str]") -> int: ...
 
+    async def erase_ids(self, user_id: str, observations, threads) -> int: ...
+
     async def delete_user(self, user_id: str) -> int: ...
 
 
@@ -127,6 +129,15 @@ class MemoryBackend:
         for i in orphan:
             del self.thread_rows[i]
         return len(gone) + len(orphan)
+
+    async def erase_ids(self, user_id, observations, threads):
+        n = 0
+        for store, ids in ((self.obs_rows, observations), (self.thread_rows, threads)):
+            for rid in ids:
+                if rid in store and store[rid]["user_id"] == user_id:
+                    del store[rid]
+                    n += 1
+        return n
 
     async def delete_user(self, user_id):
         n = 0
@@ -225,6 +236,16 @@ class SqlBackend:
             for i in orphan:
                 cur = await db.execute("DELETE FROM night_threads WHERE user_id = ? AND id = ?", (user_id, i))
                 n += int(getattr(cur, "rowcount", 0) or 0)
+            await db.commit()
+        return n
+
+    async def erase_ids(self, user_id, observations, threads):
+        n = 0
+        async with self._ctx() as db:
+            for table, ids in (("night_observations", observations), ("night_threads", threads)):
+                for rid in ids:
+                    cur = await db.execute(f"DELETE FROM {table} WHERE user_id = ? AND id = ?", (user_id, rid))
+                    n += int(getattr(cur, "rowcount", 0) or 0)
             await db.commit()
         return n
 

@@ -563,10 +563,12 @@ async def _transcript_ids(user_id: str, text: str) -> list:
             if key in _squash(str(content or "")).lower() and OFF_RECORD_JSON_MARK not in str(metadata or "")]
 
 
-async def words_plan(user_id: str, texts: Iterable[str], turn_ids: Iterable[str] = ()) -> dict:
+async def words_plan(user_id: str, texts: Iterable[str], turn_ids: Iterable[str] = (), *, night: bool = False) -> dict:
     """Everything a words erase of ``texts`` (``erase_text`` + ``forget_transcript`` each) and of ``turn_ids`` (``erase_turn``) will
     touch, as ids: ``{"turns": [index turn ids], "messages": [saved-transcript row ids]}``. Reads only; the plan a multi-step
-    forget parks BEFORE its first destructive step (``os_shadow.plan_erase``). RAISES on a store failure."""
+    forget parks BEFORE its first destructive step (``os_shadow.plan_erase``). ``night=True`` also carries the observation and
+    thread ids selected by ``night_mind.erase_words``. RAISES on a store failure."""
+    texts, turn_ids = list(texts), list(turn_ids)
     turns, messages = [str(t) for t in turn_ids if t], []
     backend = get_backend()
     for text in dict.fromkeys(t for t in texts if t):
@@ -579,7 +581,14 @@ async def words_plan(user_id: str, texts: Iterable[str], turn_ids: Iterable[str]
         # the saved turn behind an index turn that is erased BY ID: once the index row is gone nothing else leads to it
         for _id, text, _ts in await backend.get(user_id, list(dict.fromkeys(turns))):
             messages += await _transcript_ids(user_id, text)
-    return {"turns": list(dict.fromkeys(turns)), "messages": list(dict.fromkeys(messages))}
+    found = {"turns": list(dict.fromkeys(turns)), "messages": list(dict.fromkeys(messages))}
+    if night:
+        import night_mind
+
+        for tid in list(turn_ids) or [""]:
+            for kind, ids in (await night_mind.words_plan(user_id, tid, *texts)).items():
+                found[kind] = list(dict.fromkeys([*found.get(kind, ()), *ids]))
+    return found
 
 
 async def park_transcript(user_id: str, text: str, exc: BaseException) -> None:

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import datetime
 import hashlib
 import json
@@ -3834,14 +3835,19 @@ class MemoryService:
                     texts.append(str(doc or ""))
         return owned, texts
 
-    def _delete_audit_for_rows_sync(self, row_ids: list[str]) -> int:
+    def _delete_audit_for_rows_sync(self, row_ids: list[str], *, user_id: Optional[str] = None) -> int:
         """Delete the per-row audit trail (it carries the row's text in ``before`` / ``after`` and the
         forget note in ``reason``) of rows being erased. Tombstones are never matched: they name no row."""
         col = self._audit_collection()
         n = 0
         for i in range(0, len(row_ids), 100):
-            got = col.get(where={"mempalace_id": {"$in": row_ids[i:i + 100]}})
+            query = {"where": {"mempalace_id": {"$in": row_ids[i:i + 100]}}}
+            if user_id is not None:
+                query["include"] = ["metadatas"]
+            got = col.get(**query)
             ids = list(got.get("ids") or [])
+            if user_id is not None:
+                ids = [rid for rid, meta in zip(ids, got.get("metadatas") or []) if (meta or {}).get("user_id") == user_id]
             if ids:
                 col.delete(ids=ids)
                 n += len(ids)
@@ -3855,13 +3861,14 @@ class MemoryService:
 
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
                          reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False,
-                         reach_shadow: bool = True) -> dict[str, Any]:
+                         reach_shadow: bool = True, finish_missing: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
         (:func:`erase_residue_sync`: free pages, FTS5, write-ahead log, orphan HNSW dirs, verified). Only
         rows ``user_id`` owns are touched. ``reason`` must never carry the forgotten name. Fail-closed: if the
-        intent row cannot be written nothing is deleted. Returns counts only."""
+        intent row cannot be written nothing is deleted. ``finish_missing`` is the parked replay: clean the owned audit trail and
+        physical residue even when the rows already went, and raise if physical cleanup fails. Returns counts only."""
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "erase_rows")
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
@@ -3904,7 +3911,14 @@ class MemoryService:
             try:
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
                 if not owned:
-                    return {"rows_removed": 0}
+                    if not finish_missing:
+                        return {"rows_removed": 0}
+                    # A parked erase can resume after the row delete but before its audit/residue cleanup.
+                    audit_removed = await self._run_sync(functools.partial(self._delete_audit_for_rows_sync, user_id=user_id), want)
+                    report = await self._physical_erase([])
+                    if report.get("ok") is False:
+                        raise MemoryServiceError("physical erase did not confirm")
+                    return {"rows_removed": 0, "audit_removed": audit_removed, "physical": report}
                 try:   # the in-process correction memory naming what these rows said (value_correction; never raises)
                     import value_correction
                     value_correction.forget_in_texts(user_id, texts)
@@ -3916,7 +3930,10 @@ class MemoryService:
                     self._append_audit_sync, tomb_id, user_id, actor, "forget_erase",
                     _delete_tombstone_body(owned), None, reason)
                 await self._run_sync(self._delete_ids, owned)
-                audit_removed = await self._run_sync(self._delete_audit_for_rows_sync, owned)
+                if finish_missing:
+                    audit_removed = await self._run_sync(functools.partial(self._delete_audit_for_rows_sync, user_id=user_id), want)
+                else:
+                    audit_removed = await self._run_sync(self._delete_audit_for_rows_sync, owned)
                 await self._run_sync(
                     self._append_audit_sync, tomb_id, user_id, actor, "forget_erase_done",
                     {"rows_removed": len(owned)}, None, "")
@@ -3929,6 +3946,8 @@ class MemoryService:
                 self._seen_keys.discard(key)
             report = await self._physical_erase(needles)
             self.last_erase_report = report
+            if finish_missing and report.get("ok") is False:
+                raise MemoryServiceError("physical erase did not confirm")
             _invalidate_agent_user_facts_cache(user_id)
             return {"rows_removed": len(owned), "audit_removed": audit_removed, "physical": report}
 

@@ -4106,7 +4106,24 @@ async def _execute_forget_last(user_id: str) -> str:
     try:    # PARK FIRST (os_shadow.plan_erase): the rows about to be hidden and the words that go after them, durable before any step
         import exact_words as _xw_plan
         import os_shadow as _os_plan
-        plan = await _os_plan.plan_erase(user_id, rows=[r.id for r in rows], words=lambda: _xw_plan.words_plan(user_id, [text]))
+        async def _words_plan() -> dict:
+            import conversation_notes
+            import memory_value_registry
+
+            found = await _xw_plan.words_plan(user_id, [text])
+            found["notes"] = await conversation_notes.erase_for_text(user_id, text, at=ts, plan_only=True) or ()
+            found["values"] = await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows], plan_only=True) or ()
+            return found
+
+        async def _plan_rows() -> list:
+            import ask_to_remember
+
+            ids = [r.id for r in rows] + turn_forget.unerased(user_id)
+            for row in rows:
+                ids += [r.id for r in await ask_to_remember.siblings_of(svc, user_id, row)]
+            return list(dict.fromkeys(ids))
+
+        plan = await _os_plan.plan_erase(user_id, rows=_plan_rows, words=_words_plan)
     except Exception as exc:  # noqa: BLE001 - the plan could not be made durable: nothing is started
         logger.warning("memory_forget_last: plan not parked (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY

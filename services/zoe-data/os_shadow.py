@@ -1269,12 +1269,13 @@ def _replay_pending(kernel: _Kernel, force: bool = True) -> bool:
 
 # ---- parked PRODUCTION erases: what a forget could not erase because the kernel did not confirm ------------------------------------------
 # ``pending-erases.json`` beside the parked forgets, under the SAME lock and writer: ``{member: {"rows": [...], "turns": [...],
-# "messages": [...]}}`` - memory row ids, exact-words turn ids, saved-transcript row ids. IDS ONLY, never a word. It is written at
+# "messages": [...], "observations": [...], "threads": [...], "notes": [...], "values": [...], "offers": [...]}}``.
+# IDS ONLY, never a word. It is written at
 # the erasers' own shadow step (``park_unconfirmed`` in ``MemoryService.erase_rows`` and ``exact_words._shadow_first``), so
 # no caller can forget to park. The worker's replay that confirms a member's parked kernel forget then has the service finish these
 # (``turn_forget.finish_parked``) with no further request from the member; a finish that fails leaves the entry for the next job; a
 # member delete drops the member's entry.
-ERASE_KINDS = ("rows", "turns", "messages")
+ERASE_KINDS = ("rows", "turns", "messages", "observations", "threads", "notes", "values", "offers")
 #: members with a parked erase as this process last saw the file (None = not read yet: the worker reads it before its next job)
 _erase_members: Optional[frozenset] = None
 _loop: Optional[asyncio.AbstractEventLoop] = None    # the service's loop, noted by the hook and the forget: where a finish is run
@@ -1315,10 +1316,10 @@ def _erases_store(todo: dict) -> None:
     _erase_members = frozenset(todo)
 
 
-def park_erase(member: str, *, rows=(), turns=(), messages=()) -> None:
+def park_erase(member: str, *, rows=(), turns=(), messages=(), observations=(), threads=(), notes=(), values=(), offers=()) -> None:
     """Record, durably, what is left to erase for ``member`` (merged into what is already parked). BLOCKING and it RAISES when it
     cannot be made durable: a thread, never the loop."""
-    add = {"rows": rows, "turns": turns, "messages": messages}
+    add = dict(rows=rows, turns=turns, messages=messages, observations=observations, threads=threads, notes=notes, values=values, offers=offers)
     with _pending_locked(create=True):
         todo = _erases_read()
         entry = todo.setdefault(str(member), {k: [] for k in ERASE_KINDS})
@@ -1389,7 +1390,8 @@ class Plan:
 
 async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:
     """Park the whole plan of a multi-step forget (see above) and return its handle. ``rows``: memory row ids. ``words``: an async
-    callable returning ``{"turns": [...], "messages": [...]}`` (``exact_words.words_plan``); ``rows`` may be an async callable too. Both are CALLED ONLY when there is shadow state
+    callable returning ids by ``ERASE_KINDS`` (``exact_words.words_plan`` plus the caller's other stores);
+    ``rows`` may be an async callable too. Both are CALLED ONLY when there is shadow state
     to park beside: with no state directory this is a memory read and nothing else (no thread, no disk, no lookup). RAISES
     ``ShadowForgetUnavailable`` when the plan cannot be made durable: the forget must not start (fail closed, like every park)."""
     if mode() != "shadow":
@@ -1398,9 +1400,12 @@ async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:
     try:
         if callable(rows):            # an async lookup of more row ids (a curated row's earlier revisions): only when parking
             rows = await rows()
-        found = (await words()) if words is not None else {"turns": (), "messages": ()}
-        entry = {"rows": [str(i) for i in rows if i], "turns": [str(i) for i in found["turns"] if i],
-                 "messages": [str(i) for i in found["messages"] if i]}
+        found = {**dict.fromkeys(ERASE_KINDS, ()), **((await words()) if words is not None else {})}   # every kind present: no lookups below
+        rows = list(rows)
+        if rows:
+            import memory_value_registry
+            found["values"] = [*(found["values"] or ()), *(await memory_value_registry.erase_for_rows(user_id, rows, plan_only=True) or ())]
+        entry = {k: list(dict.fromkeys(str(i) for i in (rows if k == "rows" else found[k] or ()) if i)) for k in ERASE_KINDS}
         if not any(entry.values()):
             return Plan(user_id, None)
         _planning[user_id] = _mono() + PLAN_HOLD_S

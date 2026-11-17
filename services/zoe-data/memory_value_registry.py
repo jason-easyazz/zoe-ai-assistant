@@ -548,7 +548,7 @@ async def _gate_already_held():
     yield
 
 
-async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str, *, gate_held: bool = False) -> int:
+async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str, *, gate_held: bool = False, plan_only: bool = False) -> int | list[str]:
     """Read, select and delete under the member's erase gate - the lock ``record`` holds from before its connection to after its
     commit - so a record in flight lands first and is erased here, and the partial epoch (bumped before the gate is awaited)
     drops any record scheduled before this erase that has not written yet.
@@ -561,7 +561,8 @@ async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str,
     uid = (user_id or "").strip().lower()
     if not uid:
         return 0
-    _partial_bump(uid)
+    if not plan_only:
+        _partial_bump(uid)
     try:
         async with (_gate_already_held() if gate_held else erase_gate.erasing(uid, bump=False)), _db() as db:
             rows = await _fetch(db, f"SELECT id, subject_ref, source_turn_id, row_ids FROM {TABLE} WHERE user_id = ?", (uid,))
@@ -576,6 +577,8 @@ async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str,
                     tied = None                        # unreadable: over-forget, the safe error
                 if tied is None or doomed((str(r[1]), names.get(str(r[1]), ""), r[2], tied)):
                     ids.append(str(r[0]))
+            if plan_only:
+                return ids
             n = await _drop_entries(db, uid, ids)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -584,13 +587,14 @@ async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str,
         logger.error("memory_value_registry: rows NOT erased (path=%s, %s)", path, type(exc).__name__)
         raise
     finally:
-        _partial_bump(uid)
+        if not plan_only:
+            _partial_bump(uid)
     logger.info("MEMORY_SUPERSEDED_ERASED path=%s rows=%d", path, n)
     return n
 
 
 async def erase_topic(user_id: str, *, row_ids: Iterable[str] = (), name_matches: Optional[Callable[[str], bool]] = None,
-                      turn_ids: Iterable[Any] = (), gate_held: bool = False) -> int:
+                      turn_ids: Iterable[Any] = (), gate_held: bool = False, plan_only: bool = False) -> int | list[str]:
     """"Forget what I told you about <topic>" (``forget_topic.forget``): rows tied to the topic's memory rows, rows about a person
     whose name a topic word names (``name_matches(name)``), and rows RECORDED FROM one of the turns the forget retracted
     (``turn_ids``: their content ids - a correction said before any row existed holds no row id and maybe no topic word, but its
@@ -607,10 +611,10 @@ async def erase_topic(user_id: str, *, row_ids: Iterable[str] = (), name_matches
             return True
         return bool(tied & gone) or (subject != SELF and bool(name) and name_matches is not None and bool(name_matches(name)))
 
-    return await _erase_where(user_id, doomed, "topic", gate_held=gate_held)
+    return await _erase_where(user_id, doomed, "topic", gate_held=gate_held, **({"plan_only": True} if plan_only else {}))
 
 
-async def erase_for_turn(user_id: str, turn_text: str, *, row_ids: Iterable[str] = (), gate_held: bool = False) -> int:
+async def erase_for_turn(user_id: str, turn_text: str, *, row_ids: Iterable[str] = (), gate_held: bool = False, plan_only: bool = False) -> int | list[str]:
     """"Forget that" (``intent_router`` ``memory_forget_last``): rows recorded FROM the retracted turn (its content id, the formula
     ``record``'s callers use) and rows tied to the memory rows written from it. RAISES on a store failure."""
     from people_graph import content_turn_id
@@ -622,16 +626,30 @@ async def erase_for_turn(user_id: str, turn_text: str, *, row_ids: Iterable[str]
         _subject, _name, turn, tied = r
         return (tid is not None and turn == tid) or bool(tied & gone)
 
-    return await _erase_where(user_id, doomed, "turn", gate_held=gate_held)
+    return await _erase_where(user_id, doomed, "turn", gate_held=gate_held, **({"plan_only": True} if plan_only else {}))
 
 
-async def erase_for_rows(user_id: str, row_ids: Iterable[str], *, gate_held: bool = False) -> int:
+async def erase_for_rows(user_id: str, row_ids: Iterable[str], *, gate_held: bool = False, plan_only: bool = False) -> int | list[str]:
     """The physical row erase (``MemoryService.erase_rows``, the end of every row forget): rows tied to any of ``row_ids``. RAISES on
     a store failure (the erase is then not done and is retried)."""
     gone = {str(i) for i in row_ids or ()}
     if not gone:
         return 0
-    return await _erase_where(user_id, lambda r: bool(r[3] & gone), "rows", gate_held=gate_held)
+    return await _erase_where(user_id, lambda r: bool(r[3] & gone), "rows", gate_held=gate_held, **({"plan_only": True} if plan_only else {}))
+
+
+async def erase_ids(user_id: str, ids) -> int:
+    import user_erase_gate
+
+    uid = (user_id or "").strip().lower()
+    _partial_bump(uid)
+    try:
+        async with user_erase_gate.erasing(uid, bump=False), _db() as db:
+            n = await _drop_entries(db, uid, list(ids))
+            await db.commit()
+        return n
+    finally:
+        _partial_bump(uid)
 
 
 def reset_state() -> None:

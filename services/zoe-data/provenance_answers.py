@@ -1430,7 +1430,7 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
     texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
     # PARK FIRST (os_shadow.plan_erase): the index turn goes by id below, and with it the only lead to the saved transcript turn - so
     # every id this erase will touch is durable before its first step; cleared when all have confirmed, else finished by the replay
-    plan = await os_shadow.plan_erase(user_id, words=lambda: exact_words.words_plan(user_id, texts, [exp.turn_id] if exp.turn_id else ()))
+    plan = await os_shadow.plan_erase(user_id, words=lambda: exact_words.words_plan(user_id, texts, [exp.turn_id] if exp.turn_id else (), night=True))
     n = 0
     if exp.turn_id:
         n += await exact_words.erase_turn(user_id, exp.turn_id)
@@ -1458,7 +1458,7 @@ async def _plan_forget(user_id: str, row_ids: list, exp: "mp.Explained", *extra:
 
     texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
     return await os_shadow.plan_erase(user_id, rows=row_ids, words=lambda: exact_words.words_plan(
-        user_id, texts, [exp.turn_id] if exp.turn_id else ()))
+        user_id, texts, [exp.turn_id] if exp.turn_id else (), night=True))
 
 
 def _rearm(user_id: str, exp: "mp.Explained") -> None:

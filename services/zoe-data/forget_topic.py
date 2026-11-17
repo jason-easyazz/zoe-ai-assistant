@@ -248,7 +248,7 @@ def name_keys(text: str) -> set:
     return out
 
 
-async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) -> int:
+async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list, *, plan_only: bool = False) -> int | list[str]:
     """The pending offers about the topic go with it (QA round 9: "forget that I told you about my sister" left "add Bea (your
     sister) as a contact?" pending, and it was offered twice more): an offer holding the topic words, or one whose proposed name
     was said in a forgotten turn / row. RAISES when the offers could not be read or deleted: the forget is then NOT confirmed
@@ -263,8 +263,8 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
         names = re.findall(r'"name":\s*"((?:[^"\\]|\\.)*)"', text or "")
         return row_matches(groups, text) or any(name_keys(n) & said for n in names)
 
-    gone = await pending_suggestions.withdraw_matching(user_id, matches)
-    if gone:
+    gone = await pending_suggestions.withdraw_matching(user_id, matches, **({"plan_only": True} if plan_only else {}))
+    if gone and not plan_only:
         logger.info("forget_topic: user=%s offers_withdrawn=%d", user_id, gone)
     return gone
 
@@ -328,7 +328,18 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         import exact_words
 
         hits = await _index_hits(user_id, groups)
-        return await exact_words.words_plan(user_id, [*said, *hits.values()], list(hits))
+        import conversation_notes
+        import memory_value_registry
+        import value_correction
+
+        indexed = list(hits.values())
+        found = await exact_words.words_plan(user_id, [*said, *indexed], list(hits))
+        found["notes"] = await conversation_notes.erase_topic(user_id, lambda text: row_matches(groups, text), plan_only=True) or ()
+        found["offers"] = await _withdraw_offers(user_id, groups, said + indexed + [r.text or "" for r in rows], plan_only=True) or ()
+        found["values"] = await memory_value_registry.erase_topic(
+            user_id, row_ids=[r.id for r in rows], name_matches=lambda name: any(row_matches([g], name) for g in groups),
+            turn_ids=[value_correction.turn_id_of(user_id, t) for t in said + indexed], plan_only=True) or ()
+        return found
 
     try:    # PARK FIRST (os_shadow.plan_erase): the rows, the index turns and the transcript turns this forget will touch, before any step
         plan = await os_shadow.plan_erase(user_id, rows=[r.id for r in rows], words=_words_plan)

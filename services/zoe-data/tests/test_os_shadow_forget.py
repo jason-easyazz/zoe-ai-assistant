@@ -1214,6 +1214,8 @@ def callers(kernel, monkeypatch):
                 self.after_erase()
             return {"rows_removed": n}
 
+    import night_store
+    monkeypatch.setattr(night_store, "_backend", night_store.MemoryBackend())
     svc, backend = Store(), exact_words.MemoryBackend()
     exact_words.set_backend(backend)
     turn_forget.reset()
@@ -1226,7 +1228,7 @@ def callers(kernel, monkeypatch):
     monkeypatch.setattr(memory_forget_cascade, "RETRY_DELAY_S", 0)
     monkeypatch.setattr(ask_to_remember, "siblings_of", lambda *a, **k: value([]))
     for mod, name in ((conversation_notes, "erase_for_text"), (conversation_notes, "erase_topic"), (memory_value_registry, "erase_for_turn"),
-                      (memory_value_registry, "erase_topic"), (night_mind, "erase_words"), (pa, "_speculation_barrier"),
+                      (memory_value_registry, "erase_topic"), (memory_value_registry, "erase_for_rows"), (night_mind, "erase_words"), (pa, "_speculation_barrier"),
                       (memory_space, "curated_locked"), (forget_topic, "_withdraw_offers"), (memory_forget_cascade, "retry_pending"),
                       (memory_forget_cascade, "_mark_pending"), (mc, "_audited"), (mc, "_finished")):
         monkeypatch.setattr(mod, name, noop)
@@ -1996,6 +1998,8 @@ def transcript(kernel, monkeypatch):
 
     import night_mind
 
+    import night_store
+    monkeypatch.setattr(night_store, "_backend", night_store.MemoryBackend())
     index, meta = _SqlIndex(), {"m1": "{}"}
 
     async def candidates(user_id, needle):
@@ -2195,3 +2199,200 @@ async def test_the_real_strict_reads_raise_on_a_store_failure_where_the_plain_on
         await svc.get("r1", strict=True)
     with pytest.raises(memory_service.MemoryServiceError, match="list_by_status failed"):
         await svc.list_by_status(user_id=MEMBER, status="approved", strict=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay_down", [False, True], ids=["replayed", "night-store-down"])
+async def test_night_observation_survives_index_loss_only_until_its_parked_erase_confirms(kernel, transcript, monkeypatch, replay_down):
+    import asyncio
+    import memory_provenance as mp
+    import night_store
+    import provenance_answers as pa
+
+    store = night_store.MemoryBackend()
+    monkeypatch.setattr(night_store, "_backend", store)
+    await store.put_thread(night_store.thread_row(id="thread-quartz", user_id=MEMBER, title="Imaginary fennel patch"))
+    await store.put_observation(night_store.obs_row(id="obs-quartz", user_id=MEMBER, thread_id="thread-quartz",
+                                                  turn_id="turn-quartz", quote="Imaginary fennel grows on Saturn"))
+    await transcript.index.mem.add(MEMBER, "turn-quartz", 1, "Imaginary fennel grows on Saturn", " fennel ", "test")
+    exp = mp.Explained(seq=0, row_id="", ts=0.0, text="Imaginary fennel grows on Saturn", quote="", turn_id="turn-quartz")
+    erase_turn = exact_words_mod.erase_turn
+
+    async def die_after_index(user_id, tid):
+        await erase_turn(user_id, tid)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(exact_words_mod, "erase_turn", die_after_index)
+    with pytest.raises(asyncio.CancelledError):
+        await pa._erase_words(MEMBER, exp)
+    assert not transcript.index.mem.rows and await store.observations(MEMBER)
+    assert _parked_rows(kernel)[MEMBER]["observations"] == ["obs-quartz"]
+    assert "Imaginary fennel" not in (kernel.state / "pending-erases.json").read_text()
+    monkeypatch.setattr(exact_words_mod, "erase_turn", erase_turn)
+    erase_ids = store.erase_ids
+
+    async def finish(user_id, observations, threads):
+        assert (kernel.state / "pending-erases.json").exists()  # never clear first
+        if replay_down:
+            raise RuntimeError("synthetic night store unavailable")
+        return await erase_ids(user_id, observations, threads)
+
+    monkeypatch.setattr(store, "erase_ids", finish)
+    _restart(kernel)
+    assert await os_shadow._finish_erases() == (0 if replay_down else 1)
+    if replay_down:
+        assert await store.observations(MEMBER)
+        assert _parked_rows(kernel)[MEMBER]["observations"] == ["obs-quartz"]
+        assert os_shadow.parked_unfinished() == sum(len(ids) for ids in _parked_rows(kernel)[MEMBER].values())
+        replay_down = False
+        assert await os_shadow._finish_erases() == 1
+    assert not await store.observations(MEMBER) and not await store.threads(MEMBER)
+    assert not (kernel.state / "pending-erases.json").exists()
+    assert os_shadow.parked_unfinished() == 0
+
+
+# Eraser contract: each durable source eraser maps to the actual replay entry point.
+PLANNED_ERASERS = {
+    "exact_words.erase_turn": "exact_words.finish_parked",
+    "exact_words.erase_text": "exact_words.finish_parked",
+    "exact_words.forget_transcript": "exact_words.finish_parked",
+    "exact_words.delete": "exact_words.finish_parked",
+    "memory_service.erase_rows": "memory_service.erase_rows",
+    "memory_service._delete_ids": "memory_service.erase_rows",
+    "memory_service._delete_audit_for_rows_sync": "memory_service.erase_rows",
+    "memory_service._physical_erase": "memory_service.erase_rows",
+    "night_mind.erase_words": "night_mind.erase_ids",
+    "conversation_notes.erase_for_text": "conversation_notes.erase_ids",
+    "conversation_notes.erase_topic": "conversation_notes.erase_ids",
+    "memory_value_registry.erase_for_rows": "memory_value_registry.erase_ids",
+    "memory_value_registry.erase_for_turn": "memory_value_registry.erase_ids",
+    "memory_value_registry.erase_topic": "memory_value_registry.erase_ids",
+    "pending_suggestions.withdraw_matching": "pending_suggestions.erase_ids",
+}
+# These erase no durable words: the kernel is already confirmed before replay; the rest is process-local.
+PLAN_PROCESS_STEPS = {"os_shadow.forget_for_erase", "os_shadow.erase_topic", "turn_forget.retract",
+                      "turn_forget.mark_forgotten", "turn_forget.clear_unerased", "value_correction.forget_turns",
+                      "value_correction.forget_matching", "value_correction.forget_in_texts"}
+PLAN_SEQUENCES = {
+    "provenance_answers": ("_erase_words", "forget_it", "_forget_turn"),
+    "intent_router": ("_execute_forget_last",),
+    "forget_topic": ("_forget", "_erase_words", "_withdraw_offers"),
+    "memory_space": ("forget_row", "guardian_forget"),
+    "memory_curation": ("_forget_locked",),
+    "memory_service": ("erase_rows",),
+}
+
+
+def _sequence_erasers(source, names, owner):
+    tree = ast.parse(source)
+    aliases = {a.asname or a.name: a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    aliases.update(svc="memory_service", self="memory_service", backend="exact_words", pa="provenance_answers")
+    found = set()
+    for name in names:
+        for call in ast.walk(_fn(source, name)):
+            if not isinstance(call, ast.Call):
+                continue
+            target = call.func
+            if isinstance(target, ast.Name):
+                if target.id in {*names, "_delete_tombstone_id", "_delete_tombstone_body", "_forget_preview"}:  # wrappers / content-free receipts
+                    continue
+                if target.id.lstrip("_").startswith(("erase_", "forget_", "withdraw_", "delete_")):
+                    found.add(f"{owner}.{target.id}")
+                continue
+            if not isinstance(target, ast.Attribute):
+                continue
+            if target.attr == "_run_sync" and call.args and isinstance(call.args[0], ast.Attribute):
+                target = call.args[0]
+            receiver, verb = target.value, target.attr
+            if not isinstance(receiver, ast.Name):
+                continue
+            module = aliases.get(receiver.id, receiver.id)
+            # Wrappers are scanned in PLAN_SEQUENCES, not treated as terminal erasers.
+            if (module, verb) in {("provenance_answers", "_erase_words"), ("forget_topic", "_erase_words")}:
+                continue
+            if verb.lstrip("_").startswith(("erase_", "forget_", "withdraw_", "delete_", "physical_erase")) or verb in {"delete", "retract", "mark_forgotten", "clear_unerased"}:
+                found.add(f"{module}.{verb}")
+    return found
+
+
+def _assert_plan_replay(sources):
+    source = set().union(*(_sequence_erasers(sources[module], names, module) for module, names in PLAN_SEQUENCES.items()))
+    assert source - PLAN_PROCESS_STEPS == set(PLANNED_ERASERS)
+    replay = _sequence_erasers(sources["turn_forget"], ("finish_parked",), "turn_forget")
+    # finish_parked is the shared index + transcript eraser, so include it explicitly.
+    if any(
+        isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and ast.unparse(c.func) == "exact_words.finish_parked"
+        for c in ast.walk(_fn(sources["turn_forget"], "finish_parked"))):
+        replay.add("exact_words.finish_parked")
+    assert replay == set(PLANNED_ERASERS.values())
+
+
+def test_every_planned_eraser_has_a_replay_and_a_new_step_cannot_silently_disappear():
+    sources = {module: (SVC / f"{module}.py").read_text() for module in (*PLAN_SEQUENCES, "turn_forget")}
+    _assert_plan_replay(sources)
+    mutated = dict(sources)
+    mutated["provenance_answers"] = sources["provenance_answers"].replace(
+        "    n += await night_mind.erase_words", "    await night_mind.erase_quartz(user_id)\n    n += await night_mind.erase_words")
+    with pytest.raises(AssertionError):
+        _assert_plan_replay(mutated)
+    mutated = dict(sources)
+    mutated["turn_forget"] = sources["turn_forget"].replace("await night_mind.erase_ids", "await night_mind.read_ids")
+    with pytest.raises(AssertionError):
+        _assert_plan_replay(mutated)
+
+
+@pytest.mark.asyncio
+async def test_night_words_plan_carries_observations_and_threads_without_erasing_or_crossing_members(monkeypatch):
+    import night_mind
+    import night_store
+
+    store = night_store.MemoryBackend()
+    monkeypatch.setattr(night_store, "_backend", store)
+    for uid, suffix in (("member-quartz", "quartz"), ("member-topaz", "topaz")):
+        await store.put_thread(night_store.thread_row(id=f"thread-{suffix}", user_id=uid, title="Imaginary saffron"))
+        await store.put_observation(night_store.obs_row(id=f"obs-{suffix}", user_id=uid, thread_id=f"thread-{suffix}",
+                                                      turn_id=f"turn-{suffix}", quote="Imaginary saffron grows on Venus"))
+    plan = await night_mind.words_plan("member-quartz", "turn-quartz")
+    assert plan == {"observations": ["obs-quartz"], "threads": ["thread-quartz"]}
+    assert len(store.obs_rows) == 2 and len(store.thread_rows) == 2  # planning only reads
+    assert await night_mind.erase_ids("member-quartz", **plan) == 2
+    assert not await store.observations("member-quartz") and not await store.threads("member-quartz")
+    assert await night_mind.erase_ids("member-quartz", **plan) == 0  # idempotent
+    assert len(await store.observations("member-topaz")) == len(await store.threads("member-topaz")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_row_already_deleted_still_gets_its_owned_audit_and_residue_cleanup(tmp_path, monkeypatch):
+    import memory_service
+
+    svc = memory_service.MemoryService(data_dir=str(tmp_path))
+    audit = {"audit-quartz": {"user_id": "member-quartz"}, "audit-topaz": {"user_id": "member-topaz"}}
+    scrubbed = []
+
+    class Audit:
+        def get(self, **kwargs):
+            return {"ids": list(audit), "metadatas": list(audit.values())}
+
+        def delete(self, *, ids):
+            for rid in ids:
+                audit.pop(rid)
+
+    async def scrub(needles):
+        scrubbed.append(needles)
+        return {"ok": True}
+
+    async def noop(*args, **kwargs):
+        return 0
+
+    async def sync(fn, *args):
+        return fn(*args)
+
+    monkeypatch.setattr(os_shadow, "forget_for_erase", noop)
+    monkeypatch.setattr(__import__("memory_value_registry"), "erase_for_rows", noop)
+    monkeypatch.setattr(svc, "_run_sync", sync)
+    monkeypatch.setattr(svc, "_owned_rows_sync", lambda *_: ([], []))
+    monkeypatch.setattr(svc, "_audit_collection", lambda: Audit())
+    monkeypatch.setattr(svc, "_physical_erase", scrub)
+    result = await svc.erase_rows("member-quartz", ["row-quartz"], actor="member-quartz", finish_missing=True)
+    assert result["rows_removed"] == 0 and result["audit_removed"] == 1
+    assert list(audit) == ["audit-topaz"] and scrubbed == [[]]

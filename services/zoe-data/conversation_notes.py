@@ -1111,10 +1111,11 @@ async def _source_text(db, owner: str, s: "Stored") -> Optional[str]:
 
 
 async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *, people_id: Optional[str] = None,
-                        strict: bool = True) -> int:
+                        strict: bool = True, plan_only: bool = False) -> int | list[str]:
     """Delete the layer's notes for which ``doomed(note, text)`` is true; ``text`` = the note's words plus its source turns' words (a
     note that paraphrases a forgotten name still rests on the turn that said it). Reads the layer's rows (a handful)."""
-    _partial_bump(user_id)         # a note being written right now (model call in flight) sees this and is dropped, not saved
+    if not plan_only:
+        _partial_bump(user_id)         # a note being written right now (model call in flight) sees this and is dropped, not saved
     try:
         async with _db() as db:
             sql = f"SELECT {_COLS} FROM conversation_notes WHERE user_id = ?"
@@ -1124,14 +1125,17 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
                 params += (people_id,)
             async with db.execute(sql, params) as cur:
                 rows = [_stored(r) for r in await cur.fetchall()]
-            n = 0
+            ids = []
             for s in rows:
                 src = await _source_text(db, user_id, s)
                 if src is None or doomed(s, f"{s.text} {src}"):          # None: a backfilled note whose source cannot be read back goes
-                    await db.execute("DELETE FROM conversation_notes WHERE id = ?", (s.id,))
-                    n += 1
+                    ids.append(s.id)
+            if plan_only:
+                return ids
+            for rid in ids:
+                await db.execute("DELETE FROM conversation_notes WHERE id = ?", (rid,))
             await db.commit()
-            return n
+            return len(ids)
     except Exception as exc:  # noqa: BLE001
         if _no_store(exc):
             return 0
@@ -1139,6 +1143,19 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
             raise
         logger.warning("CONVERSATION_NOTES erase failed (%s)", type(exc).__name__)
         return 0
+    finally:
+        if not plan_only:
+            _partial_bump(user_id)
+
+
+async def erase_ids(user_id: str, ids) -> int:
+    _partial_bump(user_id)
+    try:
+        async with _db() as db:
+            for rid in ids:
+                await db.execute("DELETE FROM conversation_notes WHERE user_id = ? AND id = ?", (user_id, rid))
+            await db.commit()
+        return len(ids)
     finally:
         _partial_bump(user_id)
 
@@ -1162,12 +1179,12 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
     return await _delete_where(user_id, lambda _s, text: bool(rx.search(text)), strict=strict)
 
 
-async def erase_topic(user_id: str, matches: Callable[[str], bool]) -> int:
+async def erase_topic(user_id: str, matches: Callable[[str], bool], *, plan_only: bool = False) -> int | list[str]:
     """"Forget what I told you about <topic>": the member's OWN notes (not their guests') about the topic, by their words or their sources'."""
-    return await _delete_where(user_id, lambda _s, text: bool(matches(text)), people_id="", strict=True)
+    return await _delete_where(user_id, lambda _s, text: bool(matches(text)), people_id="", strict=True, **({"plan_only": True} if plan_only else {}))
 
 
-async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None) -> int:
+async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None, plan_only: bool = False) -> int | list[str]:
     """"Forget that": the member's own notes made from the turn being forgotten. A note rests on that turn when it lists it as a source
     (by word), when its conversation's time span covers ``at`` (the turn's time, with the episode gap either side - this catches a
     PARAPHRASED note, e.g. "dismissed" -> "lost their job"), or when it shares >= 2 content words with it. Over-forgetting is the safe error."""
@@ -1181,7 +1198,7 @@ async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None)
                 return True
         return len(mine) >= 2 and len(_tokens(all_text) & mine) >= 2
 
-    return await _delete_where(user_id, doomed, people_id="", strict=True)
+    return await _delete_where(user_id, doomed, people_id="", strict=True, **({"plan_only": True} if plan_only else {}))
 
 
 async def erase_people(db, owner: str, person_ids: Iterable[str]) -> int:

@@ -432,7 +432,7 @@ async def clear_unerased(user_id: str, ids: Optional[list] = None) -> None:
 
 async def finish_parked(user_id: str, entry: dict) -> dict:
     """Finish a parked erase once the kernel has confirmed (``os_shadow._finish_erases``). ``entry``: ``rows`` / ``turns`` /
-    ``messages`` ids. Returns what is LEFT, in the same shape (``{}`` = everything is done): the caller clears only the rest.
+    ``messages`` / ``observations`` / ``threads`` / ``notes`` / ``values`` / ``offers`` ids. Returns what is LEFT, in the same shape (``{}`` = everything is done): the caller clears only the rest.
 
     EVERY parked id is erased, whatever its row's status (approved, superseded, rejected, archived, anything): a parked id was
     chosen by a forget - a curation forget parks the current row AND its superseded revisions - and a status filter belongs to
@@ -440,12 +440,25 @@ async def finish_parked(user_id: str, entry: dict) -> dict:
     (``exact_words.finish_parked``); for each parked row that still exists, the member's verbatim words behind it are erased first
     (the row's own turn id and source quote), then the rows.
 
-    The ONLY id treated as done without being erased here is a row that no longer exists. A row that is still there after the erase
+    The stores selected by words are erased from their parked ids FIRST: their source index/row may already be gone.
+    Missing rows still go through erase_rows for their audit/residue cleanup. A row that is still there after the erase
     (the eraser would not take it: not this member's, physical erase switched off, a store that kept it) is LEFT, never cleared.
     RAISES on a store failure - a failed READ included (``MemoryService.get(strict=True)``: "could not look" is never "gone") - and then
     nothing is cleared; because the words go before the rows a repeat still finds them. Idempotent."""
     import exact_words
+    import conversation_notes
+    import memory_value_registry
+    import night_mind
+    import pending_suggestions
 
+    if entry.get("observations") or entry.get("threads"):
+        await night_mind.erase_ids(user_id, entry.get("observations") or (), entry.get("threads") or ())
+    if entry.get("notes"):
+        await conversation_notes.erase_ids(user_id, entry["notes"])
+    if entry.get("values"):
+        await memory_value_registry.erase_ids(user_id, entry["values"])
+    if entry.get("offers"):
+        await pending_suggestions.erase_ids(user_id, entry["offers"])
     await exact_words.finish_parked(user_id, entry.get("turns") or (), entry.get("messages") or ())
     row_ids = list(dict.fromkeys(str(i) for i in entry.get("rows") or () if i))
     if not row_ids:
@@ -461,12 +474,15 @@ async def finish_parked(user_id: str, entry: dict) -> dict:
     for rid in row_ids:
         ref = await svc.get(rid, strict=True)
         if ref is None:
-            continue                  # truly gone already: the one legitimate "nothing to do"
+            continue                  # the row is gone; its audit/residue cleanup below still runs
         present.append(rid)
         if pa._owns(ref.metadata or {}, user_id):
             await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
-    if present and physical_erase_enabled():
-        await svc.erase_rows(user_id, present, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)")
+    if not physical_erase_enabled():
+        return {"rows": row_ids}
+    result = await svc.erase_rows(user_id, row_ids, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)", finish_missing=True)
+    if (result.get("physical") or {}).get("ok") is False:
+        return {"rows": row_ids}   # rows can be gone while their physical cleanup still needs retrying
     left = [rid for rid in present if await svc.get(rid, strict=True) is not None]      # read back: done only when the row is gone
     if not left:
         with _LOCK:
