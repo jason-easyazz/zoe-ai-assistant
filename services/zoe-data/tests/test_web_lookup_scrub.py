@@ -606,6 +606,8 @@ def test_a_postal_or_unit_number_never_leaves(raw):
     ("my wife is rose birthday gift ideas", {"rose"}),
     ("weather 51.5072 north 0.1276 west today forecast", {"51", "5072", "0", "1276", "51.5072", "0.1276"}),
     ("wifi-password correct horse battery staple router reset", {"correct", "horse", "battery", "staple"}),
+    ("wifi router password-red-box reset", {"red", "box", "password-red-box"}),
+    ("pizza delivery maple-street-12 tonight", {"maple", "12", "maple-street-12"}),
 ])
 def test_review_thread_reproductions_never_leave(raw, private):
     r = scrub_query(raw)

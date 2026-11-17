@@ -404,9 +404,12 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     streets = {fold(w) for w in lex["street_types"]}
     house = re.compile(r"\d{1,5}[a-z]?")
     for si, tok in enumerate(tokens):
-        if tok not in streets and not {fold(p) for p in _COMPOUND_SPLIT.split(words[si])} & streets:
+        street_parts = [fold(p) for p in _COMPOUND_SPLIT.split(words[si]) if fold(p)]
+        if tok not in streets and not set(street_parts) & streets:
             continue
         span: set[int] = set()
+        if len(street_parts) > 1 and any(house.fullmatch(p) for p in street_parts):   # "maple-street-12": all in one token
+            span.add(si)
         for k in range(si - 1, -1, -1):        # the nearest number before
             if house.fullmatch(tokens[k]):
                 span.update(range(k, si + 1))
@@ -439,7 +442,9 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     first_secret = next((ci for ci, tok in enumerate(tokens)
                          if tok in codes or {fold(p) for p in _COMPOUND_SPLIT.split(words[ci])} & codes), None)
     if first_secret is not None:
-        for k in range(first_secret + 1, len(tokens)):
+        # a cue INSIDE a compound may carry the secret in the same token ("password-red-box"): that token goes too
+        start = first_secret if tokens[first_secret] not in codes else first_secret + 1
+        for k in range(start, len(tokens)):
             drop.setdefault(k, "code")
     for ci, tok in enumerate(tokens):
         if any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
