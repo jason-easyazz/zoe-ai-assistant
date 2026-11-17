@@ -1172,7 +1172,9 @@ async def _save_chat_message(
 
     Returns True only when the row was actually committed (False for empty
     content or a swallowed DB failure), so callers can decide whether the
-    reply still needs a recovery save.
+    reply still needs a recovery save. The insert is idempotent on ``message_id``
+    (primary key, ``ON CONFLICT DO NOTHING``): a second writer of the same id
+    gets True for the row the first one committed, and writes nothing.
 
     Mirrors the OpenClaw gateway pattern: the caller sends only the new message;
     the server owns the transcript. Zoe Agent reads this table for conversation
@@ -1207,7 +1209,7 @@ async def _save_chat_message(
         import memory_provenance as _mp
 
         if user_id and role == "user":
-            if count_turn:   # the voice lane saves the same user turn twice (at its start and with the reply): count it once
+            if count_turn:   # the voice lane has two writers of one user row (arrival + recovery, ONE id): only the first counts
                 _mp.note_user_turn(user_id, clean_content, session_id)
             try:   # what "forget that" points at: the owner's previous TURN (turn_forget) - noted NOW, so a capture that starts
                 import turn_forget as _tf   # before the insert lands still binds to it; its saved-turn id joins only once COMMITTED
@@ -1266,7 +1268,8 @@ async def _save_chat_message(
 def _note_forget_id(user_id, role: str, content: str, mid: str) -> None:
     """The saved-turn id every row derived from the owner's turn carries (``turn_forget.Turn.mids``), recorded ONLY once that row
     has COMMITTED: an id whose insert failed names no transcript row, so facts stamped with it and a forget by it would miss the
-    recovered copy. Each committed copy's id joins the turn (the voice lane saves one turn twice). Never raises."""
+    recovered copy. Each committed copy's id joins the turn (a second insert of the SAME id - the voice lane's two writers of one
+    row, ``voice_tts._ArrivalRow`` - is an ``ON CONFLICT DO NOTHING`` no-op and adds nothing). Never raises."""
     if not user_id or role != "user" or not mid:
         return
     try:

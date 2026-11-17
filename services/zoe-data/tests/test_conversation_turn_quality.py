@@ -797,4 +797,5 @@ def test_voice_command_marks_the_arrival_row_only_from_a_confirmed_insert_and_re
     src = inspect.getsource(vt.voice_command)
     assert "_USER_TURN_SAVED.set(None)" in src and "_USER_TURN_SAVED.set(_arrival)" in src
     assert src.index("_USER_TURN_SAVED.set(None)") < src.index("_USER_TURN_SAVED.set(_arrival)")
-    assert "_arrival.saved = bool(await _svc_user_turn(" in src and "_arrival.settled.set()" in src
+    # the arrival insert goes through _ArrivalRow.write, which marks ``saved`` only on a confirmed commit (and mints the turn's id)
+    assert "await _arrival.write(_svc_user_turn)" in src and "_arrival.settled.set()" in src
