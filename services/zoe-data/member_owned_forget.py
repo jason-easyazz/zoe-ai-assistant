@@ -240,7 +240,8 @@ async def _await_inflight_work(user_id: str) -> None:
         _done, pending = await asyncio.wait(stale, timeout=INFLIGHT_WAIT_S)
         if pending:
             raise RuntimeError("member_owned_forget: a cancelled stale turn of the member has not ended")
-    while erase_watermark.inflight_turns(user_id) or voice_announce.inflight_claims(user_id):
+    # the caller's OWN turn is not waited for (a member forgetting themselves: the request running this delete is their turn)
+    while erase_watermark.inflight_turns(user_id, exclude_own=True) or voice_announce.inflight_claims(user_id):
         if time.monotonic() > deadline:
             raise RuntimeError("member_owned_forget: a turn or an announcement claim of the member is still in flight")
         await asyncio.sleep(_POLL_S)

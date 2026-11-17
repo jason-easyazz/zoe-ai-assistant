@@ -597,10 +597,20 @@ def turn_release(token: Optional[str]) -> None:
         _TURNS.pop(str(token), None)
 
 
-def inflight_turns(user_id: str) -> int:
-    """How many turns of ``user_id`` are in flight in this process now (the member delete waits for them; stale ones excepted)."""
+def inflight_turns(user_id: str, *, exclude_own: bool = False) -> int:
+    """How many turns of ``user_id`` are in flight in this process now (the member delete waits for them; stale ones excepted).
+    ``exclude_own``: leave out the turn bound in the CALLER's context - a delete must not wait for the very request that runs it (an
+    administrator forgetting their own memories: their request is a turn, ``auth._bind_request_turn``)."""
     uid, cutoff = str(user_id or ""), _now().timestamp() - TURN_STALE_S
-    return sum(1 for e in list(_TURNS.values()) if e["member"] == uid and e["began"].timestamp() >= cutoff)
+    own = None
+    if exclude_own and _TURN_CTX.get():
+        token = _TURN_CTX.get()[0]
+        entry = _TURNS.get(token)
+        # OWN only when that turn is run by THIS task: a task started from inside a turn inherits its context but is not that turn,
+        # and must still wait for it (a delete scheduled from a voice turn waits for the turn's own tool write)
+        if entry is not None and entry.get("task") is not None and entry["task"] is _current_task():
+            own = token
+    return sum(1 for t, e in list(_TURNS.items()) if e["member"] == uid and e["began"].timestamp() >= cutoff and t != own)
 
 
 def turn_began(session_id: Optional[str] = None) -> Optional[datetime]:

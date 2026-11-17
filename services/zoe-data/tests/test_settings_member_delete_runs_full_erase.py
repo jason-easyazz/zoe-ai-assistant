@@ -635,3 +635,29 @@ def test_an_unsigned_admin_override_cannot_start_a_removal(monkeypatch):
         assert e.value.status_code == 403
     assert started == [], "no removal step ran"
     route._signed_in_admin({"user_id": ADMIN, "role": "admin"}, Req("s1"))      # a signed-in admin passes
+
+
+def test_a_delete_run_inside_the_members_own_request_does_not_wait_for_itself(monkeypatch):
+    """#2669 review P1: an administrator forgetting their OWN memories (POST /api/memories/users/{own_id}/forget) runs the delete
+    inside a request that is itself a turn of that member; the delete waited for that turn, which only closes after the response:
+    a deadlock until the wait timed out. The delete now leaves the caller's own turn out. Negative control: another turn of the same
+    member is still counted."""
+    import erase_watermark
+
+    async def go():
+        own = erase_watermark.turn_open(None, A)
+        ctx = erase_watermark.turn_bind(own)
+        try:
+            assert erase_watermark.inflight_turns(A) == 1
+            assert erase_watermark.inflight_turns(A, exclude_own=True) == 0, "the delete does not wait for its own request"
+            other = erase_watermark.turn_open(None, A)
+            assert erase_watermark.inflight_turns(A, exclude_own=True) == 1, "another turn of the member is still waited for"
+            erase_watermark.turn_close(other)
+
+            async def child():      # a task started inside the turn inherits its context but is NOT that turn: it still waits
+                return erase_watermark.inflight_turns(A, exclude_own=True)
+            assert await asyncio.ensure_future(child()) == 1
+        finally:
+            erase_watermark.turn_unbind(ctx)
+            erase_watermark.turn_close(own)
+    asyncio.run(go())
