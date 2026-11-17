@@ -2010,6 +2010,18 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     return out, None
 
 
+#: above this many characters an async caller scrubs in a worker thread (``scrub_pii_async``): the scrub is linear but a very
+#: large text (an uncapped API body) would otherwise hold the event loop; short chat / voice text stays inline, with no hop
+SCRUB_INLINE_MAX = 2000
+
+
+async def scrub_pii_async(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """``scrub_pii`` for an async caller on a live path: inline up to ``SCRUB_INLINE_MAX`` characters, else off the loop."""
+    if len(text or "") <= SCRUB_INLINE_MAX:
+        return scrub_pii(text, contact=contact)
+    return await asyncio.to_thread(scrub_pii, text, contact=contact)
+
+
 def _scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     """Return (possibly-redacted-text, reject_reason_or_None). Pure, compiled regexes only, never logs.
 
@@ -2414,7 +2426,7 @@ class MemoryService:
             metadata = {k: v for k, v in (metadata or {}).items() if k not in _auth.AFFECT_KEYS}
             logger.info("AFFECT_STRIPPED writer=%s", source)
 
-        scrubbed, reject = scrub_pii(text, contact=False)   # the FACT keeps a phone / address the owner asked to keep
+        scrubbed, reject = await scrub_pii_async(text, contact=False)   # the FACT keeps a phone / address the owner asked to keep
         if reject:
             self._bump("pii_reject", source)
             if _METRICS_OK:
@@ -2510,7 +2522,7 @@ class MemoryService:
             # pending candidate (the user's words stay approved; nothing is lost).
             writer = origin or source
             # an emergency event is resolved on the fact as MINED (its words are what the member's turn supports)
-            auth_text = (scrub_pii(_mined, contact=False)[0] or scrubbed) if _mined else scrubbed
+            auth_text = ((await scrub_pii_async(_mined, contact=False))[0] or scrubbed) if _mined else scrubbed
             resolved = _auth.resolve_write(
                 writer, auth_text,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
@@ -3501,7 +3513,7 @@ class MemoryService:
             new_text = (edits or current.text).strip()
             if not new_text:
                 raise MemoryServiceError("edit decision requires non-empty edits")
-            scrubbed, reject = scrub_pii(new_text, contact=False)
+            scrubbed, reject = await scrub_pii_async(new_text, contact=False)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
             current_scope = current.metadata.get("scope")
@@ -4297,7 +4309,7 @@ class MemoryService:
             self._bump("opt_out", writer)
             return None
         try:
-            scrubbed, reject = scrub_pii(text, contact=False)
+            scrubbed, reject = await scrub_pii_async(text, contact=False)
             if reject or not scrubbed.strip():
                 return None
             md = self._build_metadata(

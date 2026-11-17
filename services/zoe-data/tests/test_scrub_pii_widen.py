@@ -1029,3 +1029,72 @@ def test_survivors_of_the_second_adversarial_pass(text, gone):
     a long digit line, a blank line between digit lines."""
     out, _ = scrub_pii(text)
     assert R in out and not any(g in out for g in gone), out
+
+
+def test_a_large_text_is_scrubbed_off_the_event_loop_and_a_short_one_inline(monkeypatch):
+    """Review (PR #2660): async callers go through ``scrub_pii_async`` - a 144k text does not hold the loop (a ticker keeps
+    ticking while it is scrubbed), and a short text makes no thread hop at all."""
+    import asyncio
+    import memory_service as ms
+
+    hops = []
+    real = asyncio.to_thread
+
+    async def spy(fn, *a, **k):
+        hops.append(len(a[0]))
+        return await real(fn, *a, **k)
+
+    monkeypatch.setattr(ms.asyncio, "to_thread", spy)
+
+    async def run():
+        ticks, done = [], asyncio.Event()
+
+        async def ticker():
+            while not done.is_set():
+                ticks.append(1)
+                await asyncio.sleep(0.005)
+
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        big = 'password is "abc.\n' * 8000
+        before = len(ticks)
+        out, _ = await ms.scrub_pii_async(big, contact=False)
+        during = len(ticks) - before
+        short, _ = await ms.scrub_pii_async("my password is zebrafiddle", contact=False)
+        done.set()
+        await t
+        return out, during, short
+
+    out, during, short = asyncio.run(run())
+    assert "abc" not in out and short == "my password is [REDACTED]"
+    assert hops == [len('password is "abc.\n' * 8000)], hops          # the big text hopped once; the short one never
+    assert during >= 3, during                                        # the loop kept running while the big text was scrubbed
+
+
+def test_ingest_and_review_scrub_through_the_async_form():
+    """Structural: no async method of MemoryService calls the blocking ``scrub_pii`` directly."""
+    import ast
+    import memory_service as ms
+
+    tree = ast.parse(open(ms.__file__, encoding="utf-8").read())
+    bad = [(fn.name, c.lineno) for cls in tree.body if isinstance(cls, ast.ClassDef) and cls.name == "MemoryService"
+           for fn in ast.walk(cls) if isinstance(fn, ast.AsyncFunctionDef)
+           for c in ast.walk(fn) if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "scrub_pii"]
+    assert not bad, bad
+
+
+def test_the_proposals_endpoint_refuses_an_oversized_body(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from models import MemoryProposalCreate
+    from routers import memories
+
+    async def allowed(*a, **k):
+        return None
+
+    monkeypatch.setattr(memories, "require_feature_access", allowed)
+    monkeypatch.setattr(memories, "_svc", lambda: (_ for _ in ()).throw(AssertionError("ingest must not be reached")))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(memories.create_memory_proposal(MemoryProposalCreate(content="x" * (memories.PROPOSAL_MAX_CHARS + 1)),
+                                                    user={"user_id": "member-px"}, db=None))
+    assert exc.value.status_code == 413
