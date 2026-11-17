@@ -56,10 +56,13 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
 3. **TTS — Kokoro on CUDA** (PyTorch, RTF ~0.08, live-verified `device":"cuda"` on
    `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`. **Kokoro is the ONLY voice**
    (owner decision 2026-10-21; `ZOE_TTS_MODE` default `kokoro`): no fallback voice and **no
-   off-box TTS** — Edge TTS would send reply text to Microsoft. If Kokoro fails, `/synthesize`
+   off-box TTS**: the Microsoft Edge TTS cloud voice was retired 2026-11-16 (owner: "retire
+   it"), and `test_canonical_invariants.py` pins its absence. If Kokoro fails, `/synthesize`
    returns 503 and `/stream` an error line per chunk (the turn is silent, never a different
-   voice). The legacy waterfall (Kokoro → local sidecar → Edge TTS → espeak-ng) still exists
-   only for an explicitly set non-default mode (`hybrid`/`local`/`cloud`/`edge`/`offline`).
+   voice). A LOCAL legacy waterfall (Kokoro → local sidecar → espeak-ng) still exists only for
+   an explicitly set non-default mode (`hybrid`/`local`/`offline`); the retired `cloud`/`edge`
+   values, and any unknown value, read as `kokoro`. The PANEL's own espeak-ng is separate:
+   the Pi daemon speaks a short fixed line with it when zoe-data cannot be reached.
    PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
    cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
    An ONNX Runtime CUDA backend was built and measured NOT a win (2026-09-27; code kept on

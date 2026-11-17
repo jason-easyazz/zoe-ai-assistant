@@ -162,7 +162,8 @@ def test_revision_chains_onto_the_head_of_main_and_there_is_one_head():
             downs.add(d.group(1))
     assert "0079" in revs, "0080 chains onto 0079 (PR #2474, calendar feed): rebase onto main once it has landed"
     assert mod.down_revision in revs
-    assert revs - downs == {"0080"}, f"expected the single head 0080, got {sorted(revs - downs)}"
+    assert "0080" in downs, "a later migration chains onto 0080 (0081_routines, routines stage 1)"
+    assert revs - downs == {"0081"}, f"expected the single head 0081 (routines, on 0080), got {sorted(revs - downs)}"
 
 
 def test_sqlite_upgrade_twice_then_downgrade_twice(tmp_path):

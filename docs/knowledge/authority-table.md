@@ -15,8 +15,28 @@ a budget, and a way to stop that is a card rather than a failure.
 ## The table
 
 `services/zoe-data/authority_table.json` is the single data file. Roles: `owner` (an admin account that is positively an adult),
-`adult`, `child` (any member not positively an adult - fail closed), `guest` (kiosk / guest sessions), `unrecognised_voice`
-(`voice-guest`, anonymous). Each action class has a `risk` (`low` / `high` / `irreversible`) and one verdict per role.
+`adult`, `child` (in THIS log-only table: a signed-in member account not positively an adult), `guest` (kiosk / guest
+sessions), `unrecognised_voice` (`voice-guest`, anonymous). Each action class has a `risk` (`low` / `high` / `irreversible`) and
+one verdict per role. A voice nobody recognised is never treated as a child: see the next section.
+
+## Who the child-safety floor treats as a child (owner decision 2026-11-16)
+
+The enforcing child-safety floor (`services/zoe-data/child_safety_floor.py`) refuses a hazard ask only from someone known or
+declared to be a child. In the owner's words: "you cant tell its a child and not an adult, so it's let through". An unrecognised
+or unverified voice is a guest and passes; a positively identified child, or a session where a child has said their age, is
+refused; a member account that could be a child (no account row, a role in neither set, a slow or failed lookup) is refused; a
+safety check that itself errors fails closed (the one exception: when the check errors before it can read the ask, a positively
+identified adult is still answered). `services/zoe-data/tests/test_child_floor_doc_agrees.py` reads this table and checks
+the floor does what it says.
+
+| speaker | example id | hazard ask |
+|---|---|---|
+| adult member | `member-adult` | answered |
+| child member | `member-child` | refused |
+| guest | `guest` | answered |
+| unverified voice | `voice-guest` | answered |
+| member who could be a child | `member-unknown` | refused |
+| floor check errors | `member-adult` | refused |
 
 | class | owner | adult | child | guest | unrecognised voice |
 |---|---|---|---|---|---|

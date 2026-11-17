@@ -1,5 +1,7 @@
 """TTS synthesis engines for the voice waterfall (Kokoro sidecar / local sidecar /
-Edge TTS / espeak-ng).
+espeak-ng). Every engine here is on-box: there is no off-box TTS engine (the
+Microsoft Edge TTS cloud voice was retired 2026-11-16, owner decision "retire it";
+pinned by test_canonical_invariants.py).
 
 Pure mechanics extracted verbatim from routers/voice_tts.py: engine availability
 checks, the per-engine synthesis calls, the pooled Kokoro-sidecar HTTP client, and
@@ -11,11 +13,10 @@ test_canonical_invariants.py and test_voice_smoke_ci.py.
 Production TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py),
 reached over HTTP by _synthesize_kokoro_sidecar. There is no in-process TTS model.
 By default (ZOE_TTS_MODE=kokoro, see tts_mode) Kokoro is the ONLY engine used —
-the Edge/espeak/local engines below run only under an explicitly set legacy mode.
+the espeak/local engines below run only under an explicitly set legacy mode.
 """
 import asyncio
 import concurrent.futures
-import importlib.util
 import logging
 import os
 import re
@@ -34,23 +35,29 @@ logger = logging.getLogger(__name__)
 
 
 # ZOE_TTS_MODE. Default "kokoro" = the Kokoro sidecar ONLY: no fallback voice,
-# and reply text never leaves the box (owner decision 2026-10-21 — Edge TTS
-# sends the text to Microsoft). The other modes keep the legacy waterfall for
-# anyone who sets them explicitly: hybrid (kokoro → local → edge → espeak),
-# local, offline (kokoro → espeak), cloud/edge.
+# and reply text never leaves the box (owner decision 2026-10-21). The other
+# modes keep a LOCAL waterfall for anyone who sets them explicitly: hybrid and
+# local (kokoro → local sidecar → espeak), offline (kokoro → espeak; readiness
+# does not wait on Kokoro). The off-box modes "cloud" and "edge" were retired
+# with Edge TTS (2026-11-16): they, and any other unknown value, read as
+# "kokoro", so a stale setting can never route speech off the box.
 TTS_MODE_KOKORO = "kokoro"
+TTS_MODES = (TTS_MODE_KOKORO, "hybrid", "local", "offline")
+_UNKNOWN_MODES_WARNED: set = set()
 
 
 def tts_mode() -> str:
-    return env_str("ZOE_TTS_MODE", "kokoro").lower()
+    mode = env_str("ZOE_TTS_MODE", TTS_MODE_KOKORO).lower()
+    if mode in TTS_MODES:
+        return mode
+    if mode not in _UNKNOWN_MODES_WARNED:
+        _UNKNOWN_MODES_WARNED.add(mode)
+        logger.warning("ZOE_TTS_MODE is not a known mode (retired or misspelt); using kokoro only")
+    return TTS_MODE_KOKORO
 
 
 def _has_espeak_ng() -> bool:
     return shutil.which("espeak-ng") is not None
-
-
-def edge_tts_available() -> bool:
-    return importlib.util.find_spec("edge_tts") is not None
 
 
 # asyncio.create_subprocess_exec forks() SYNCHRONOUSLY on the calling (event
@@ -58,7 +65,7 @@ def edge_tts_available() -> bool:
 # can wedge post-fork/pre-exec on an atfork lock, freezing the whole event loop
 # (the outage class fixed for the hermes kanban CLI in commit 5e5ec34d — see
 # services/zoe-data/AGENTS.md's "Background loops must not fork on the event
-# loop thread" rule). These TTS fallback CLIs (espeak-ng, ffmpeg) are
+# loop thread" rule). These TTS fallback CLIs (espeak-ng) are
 # run-to-completion, so — like the kanban CLI — they're spawned via
 # subprocess.run in a small dedicated thread pool instead, bounded twice: the
 # blocking run()'s own timeout, plus a coroutine-side wait_for that still
@@ -144,45 +151,6 @@ async def _synthesize_espeak(text: str, speed: int, pitch: int, volume: int) -> 
             dst.writeframes(bytes(out))
 
         return stereo_path.read_bytes()
-
-
-async def _synthesize_edge_tts(text: str, voice: str) -> Optional[bytes]:
-    try:
-        import edge_tts
-    except Exception:
-        return None
-
-    with tempfile.TemporaryDirectory(prefix="zoe-edge-tts-") as td:
-        mp3_path = Path(td) / "speech.mp3"
-        wav_path = Path(td) / "speech.wav"
-        communicate = edge_tts.Communicate(text=text, voice=voice)
-        edge_timeout = float(os.environ.get("ZOE_EDGE_TTS_TIMEOUT_S", "5"))
-        await asyncio.wait_for(communicate.save(str(mp3_path)), timeout=edge_timeout)
-
-        # Convert mp3 to wav if ffmpeg exists, else return mp3 bytes.
-        if shutil.which("ffmpeg") is None:
-            return mp3_path.read_bytes()
-
-        try:
-            proc = await _spawn_tts_cli(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(mp3_path),
-                    "-ac",
-                    "2",
-                    "-ar",
-                    "22050",
-                    str(wav_path),
-                ],
-                timeout=15.0,
-            )
-        except (subprocess.TimeoutExpired, asyncio.TimeoutError):
-            return mp3_path.read_bytes()
-        if proc.returncode != 0:
-            return mp3_path.read_bytes()
-        return wav_path.read_bytes()
 
 
 async def _synthesize_local_service(text: str, profile: str, base_url: str) -> Optional[bytes]:

@@ -72,7 +72,7 @@ def step(name, fn):
 step("python", lambda: sys.version.split()[0])
 for m in ("fastapi", "pydantic", "sqlalchemy", "apscheduler", "tzlocal", "pytz", "psycopg2", "asyncpg",
           "alembic", "jwt", "chromadb", "mempalace", "moonshine_voice", "fastembed", "transformers",
-          "av", "aiortc", "livekit.rtc", "edge_tts", "pywebpush", "segno", "ddgs", "cloakbrowser", "yaml",
+          "av", "aiortc", "livekit.rtc", "pywebpush", "segno", "ddgs", "cloakbrowser", "yaml",
           "prometheus_client"):
     step(m, lambda m=m: getattr(importlib.import_module(m), "__version__", "imported"))
 def ws():

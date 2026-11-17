@@ -205,13 +205,13 @@ def test_skill_request_caches_purge_other_owners():
 
 @pytest.mark.parametrize('store_type', ['lists', 'reminders', 'alarms', 'skill-reminders'])
 def test_mentioned_member_forget_removes_effect_but_keeps_unrelated(tmp_path, store_type):
-    from zoe_os.capability import Person
+    from zoe_os.capability import ADULT, Person
     from zoe_os.kernel import Kernel
     from zoe_os.brain.drivers import BRAIN
     from zoe_os.skills.reminders import Reminders as SkillReminders
     from reminder_store import ReminderStore
 
-    k = Kernel(str(tmp_path / 'kernel.db'), [Person(p) for p in ('member-a', 'member-b', 'member-c')])
+    k = Kernel(str(tmp_path / 'kernel.db'), [Person(p, ADULT) for p in ('member-a', 'member-b', 'member-c')])
     try:
         k.grants.install({'skill': 'voice', 'origin': True, 'emits': ['utterance']})
         k.grants.install(BRAIN)

@@ -29,6 +29,8 @@ stored anywhere new):
                               subject is a person the name names (by person id, live or soft-deleted) are DELETED
   * ``night_extract``       - the shadow night pre-pass's proposed facts (``~/.zoe/night-extract/``, ``night_extract.erase_entity``): a fact of the
                               member that names the entity is dropped
+  * ``routines``            - the member's routines (alembic 0081, ``routines_store.erase_entity``): a routine whose name names the
+                              entity is deleted whole; a template step or a day line naming it is deleted
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
                               or whose name / email names the entity, loses the link AND the name and email (the row
                               stays, anonymous, so the event keeps its shape); the desktop calendar's legacy
@@ -77,7 +79,7 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
-              "self_review", "night_extract", "conversation_notes", "value_registry", "value_registry_topic")
+              "self_review", "night_extract", "conversation_notes", "value_registry", "value_registry_topic", "routines")
 #: a TOPIC forget whose registry erase failed (``forget_topic``): the retracted turns' ids cannot be stored in the ledger (hashes of
 #: fixed labels only), so the retry over-forgets the member's whole superseded-value registry (a 7-day shadow cache: the safe error)
 VALUE_REGISTRY_TOPIC = "value_registry_topic"
@@ -246,6 +248,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # the shadow night pre-pass's proposed facts (~/.zoe/night-extract/): a fact of the member naming the entity is dropped
         return await night_extract.erase_entity(user_id, rx, strict=True)
 
+    async def routines_() -> int:
+        import routines_store
+
+        # the member's routines (alembic 0081): a routine named for the entity, or a step / day line naming it, is deleted
+        return await routines_store.erase_entity(user_id, rx, strict=True)
+
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
@@ -262,6 +270,8 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("self_review", self_review_, res)
     if want("night_extract"):
         await _step("night_extract", night_extract_, res)
+    if want("routines"):
+        await _step("routines", routines_, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:

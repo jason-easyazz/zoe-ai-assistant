@@ -8,7 +8,7 @@ import pytest
 
 from test_history_cost import vm_budget
 from zoe_os.brain.drivers import Lists
-from zoe_os.capability import Person
+from zoe_os.capability import ADULT, Person
 from zoe_os.events import Event, Kind
 from zoe_os.kernel import Kernel
 from zoe_os.spine import Refused, Skeleton, Spine
@@ -18,7 +18,7 @@ A, B = 'member-a', 'member-b'
 
 @pytest.fixture
 def k(tmp_path):
-    kernel = Kernel(str(tmp_path / 'skeleton.db'), [Person(A), Person(B)])
+    kernel = Kernel(str(tmp_path / 'skeleton.db'), [Person(A, ADULT), Person(B, ADULT)])
     kernel.grants.install({'skill': 'voice', 'origin': True, 'emits': ['utterance']})
     kernel.grants.install({'skill': 'brain', 'reads': {'utterance': 'private'}, 'acts': ['list.add']})
     kernel.lists = Lists().register(kernel)

@@ -33,7 +33,7 @@ from pathlib import Path
 if __name__ == "__main__":      # run as a script: make the package importable
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from zoe_os.capability import ADULT, CHILD, Manifest, Person  # noqa: E402
+from zoe_os.capability import ADULT, CHILD, Manifest, Person, person_from_entry  # noqa: E402
 from zoe_os.events import Event, Kind  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.diagnostics import code, identifier  # noqa: E402
@@ -66,7 +66,7 @@ class Recording:
         head, *rows = [json.loads(line) for line in text.splitlines() if line.strip()]
         if head.get("recording") != FORMAT:
             raise ValueError("not a recording this harness reads")
-        people = [Person(p["id"], p.get("role", ADULT), tuple(p.get("guardians", ()))) for p in head["people"]]
+        people = [person_from_entry(p) for p in head["people"]]             # anything not fully stated: least access
         return cls(people, rows, head.get("answers", {}), head.get("no_accept", []),
                    head.get("off", {}), head.get("meta", {}))
 
