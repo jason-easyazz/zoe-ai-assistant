@@ -266,8 +266,10 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     await os_shadow.forget_for_erase(user_id)
     exp = _explained_for(rid, ref)
     twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
+    plan = await pa._plan_forget(user_id, [ref.id, *(tw.id for tw in twins)], exp, ref.text or "")   # PARK FIRST (os_shadow.plan_erase)
     if status == "approved":
         if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
+            await plan.drop()
             raise RuntimeError("memory store refused the forget")
     gone = [ref.id]
     for tw in twins:
@@ -283,6 +285,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
             await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
             physical = True
     erased = await pa._erase_words(user_id, exp, ref.text or "")
+    await plan.ok()
     logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
     if status == "rejected" and len(gone) == 1 and not erased and not physical:
         return "gone"          # already forgotten earlier and nothing was left to remove
@@ -322,6 +325,7 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
     import os_shadow
     await os_shadow.forget_for_erase(owner)
     twins = await pa.twins_of(owner, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the forget
+    plan = await pa._plan_forget(owner, [ref.id, *(tw.id for tw in twins)], _explained_for(rid, ref), ref.text or "")   # PARK FIRST
     gone = []
     for row in (ref, *twins):
         if str((row.metadata or {}).get("status") or "").lower() == "rejected":
@@ -336,6 +340,7 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
         if physical_erase_enabled():
             await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
     await pa._erase_words(owner, _explained_for(rid, ref), ref.text or "")
+    await plan.ok()
     logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
     return "forgotten"
 

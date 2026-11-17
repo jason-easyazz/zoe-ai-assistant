@@ -1311,6 +1311,7 @@ async def test_a_caller_never_says_forgotten_while_the_kernel_cannot_confirm_and
     if caller in WORDS:
         assert (MEMBER, "t1") not in st.backend.rows
     assert turn_forget.unerased(MEMBER) == []
+    os_shadow._planning.clear()                 # (the hold a forget of this process puts on the replay's finish has run out)
     await os_shadow._finish_erases()            # an id parked for a row the repeat has since erased is dropped by the next replay
     assert not (kernel.state / "pending-forgets.json").exists() and not (kernel.state / "pending-erases.json").exists()
 
@@ -1742,7 +1743,7 @@ async def test_a_forget_the_shadow_refused_is_finished_by_the_replay_after_a_res
     forgotten, out = await st.run(caller)
     assert not forgotten and "r1" in st.svc.rows
     assert st.svc.rows["r1"].metadata["status"] in ("rejected", "archived")         # hidden, not erased: exactly what must not be left
-    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1"]}} and _pending(kernel) == [MEMBER]
+    assert _parked_rows(kernel)[MEMBER]["rows"] == ["r1"] and _pending(kernel) == [MEMBER]
     assert SAID not in (kernel.state / "pending-erases.json").read_text()          # ids only, never the words
     _restart(kernel)
     assert turn_forget.unerased(MEMBER) == [] and turn_forget.previous_turn(MEMBER) is None
@@ -1765,7 +1766,7 @@ async def test_a_parked_erase_whose_finish_fails_stays_parked_and_is_never_run_b
     add()                                                                           # the kernel still refuses: nothing may be erased
     settle(1)
     assert await os_shadow._finish_erases() == 0
-    assert "r1" in st.svc.rows and (MEMBER, "t1") in st.backend.rows and _parked_rows(kernel) == {MEMBER: {"rows": ["r1"]}}
+    assert "r1" in st.svc.rows and (MEMBER, "t1") in st.backend.rows and _parked_rows(kernel)[MEMBER]["rows"] == ["r1"]
     kernel.forget_mode, st.svc.ordinary_failure = "ok", True                        # the kernel confirms, the row erase itself fails
     add()
     assert await _until(lambda: not (kernel.state / "pending-forgets.json").exists())
@@ -1815,7 +1816,7 @@ async def test_a_words_erase_the_shadow_refused_is_parked_by_turn_id_and_finishe
     forgotten, out = await st.run(caller.split("-")[0])
     assert not forgotten, out
     assert st.svc.rows == {} and (MEMBER, "t1") in st.backend.rows
-    assert _parked_rows(kernel) == {MEMBER: {"turns": ["t1"]}}
+    assert _parked_rows(kernel)[MEMBER]["turns"] == ["t1"]
     assert SAID not in (kernel.state / "pending-erases.json").read_text()
     _restart(kernel)
     kernel.forget_mode, st.svc.after_erase = "ok", None
@@ -1926,3 +1927,142 @@ def test_the_hide_without_erase_check_catches_a_planted_caller():
     good = bad.replace("    return", "    await svc.erase_rows('m', [rid], actor='m')\n    return")
     assert _hides_without_erasing(bad, "forget") and not _hides_without_erasing(good, "forget")
     assert not _hides_without_erasing("async def forget(svc):\n    # await svc.review(rid)\n    return 'review'\n", "forget")
+
+
+# ---- PARK FIRST: the whole plan is durable before the first destructive step ------------------------------------------------------------
+exact_words_mod = __import__("exact_words")
+
+
+class _SqlIndex(exact_words_mod.SqlBackend):
+    """The production backend's TYPE (``forget_transcript`` acts only with it) over an in-memory index, for the transcript half."""
+
+    def __init__(self):
+        self.mem = exact_words_mod.MemoryBackend()
+
+    async def rows_matching(self, user_id, needle):
+        return await self.mem.rows_matching(user_id, needle)
+
+    async def get(self, user_id, turn_ids):
+        return await self.mem.get(user_id, turn_ids)
+
+    async def delete(self, user_id, turn_ids):
+        return await self.mem.delete(user_id, turn_ids)
+
+
+@pytest.fixture
+def transcript(kernel, monkeypatch):
+    """One indexed verbatim turn (``t1``) and its saved transcript row (``m1``), with the transcript seams in memory."""
+    from types import SimpleNamespace
+
+    import night_mind
+
+    index, meta = _SqlIndex(), {"m1": "{}"}
+
+    async def candidates(user_id, needle):
+        return [("m1", SAID, meta["m1"])] if needle in SAID.lower() else []
+
+    async def by_id(user_id, ids):
+        return [(i, SAID, meta[i]) for i in ids if i in meta]
+
+    async def update(row_id, value):
+        meta[row_id] = value
+
+    async def noop(*args, **kwargs):
+        return 0
+
+    exact_words_mod.set_backend(index)
+    monkeypatch.setattr(exact_words_mod, "_transcript_candidates", candidates)
+    monkeypatch.setattr(exact_words_mod, "_transcript_rows", by_id)
+    monkeypatch.setattr(exact_words_mod, "_set_transcript_metadata", update)
+    monkeypatch.setattr(night_mind, "erase_words", noop)
+    yield SimpleNamespace(index=index, meta=meta)
+    exact_words_mod.set_backend(None)
+
+
+@pytest.mark.asyncio
+async def test_the_kernel_confirming_the_index_erase_and_failing_at_the_next_step_still_ends_with_the_transcript_suppressed(kernel, transcript, monkeypatch):
+    """The reviewer's case, on the real ``provenance_answers._erase_words``: the index turn is erased BY ID (confirmed), then the
+    kernel stops before the next eraser. The index row - the only lead to the saved transcript turn - is gone. Because the whole
+    plan was parked FIRST, the transcript row's id is durable: after a restart the replay suppresses it and clears the park."""
+    import memory_provenance as mp
+    import provenance_answers as pa
+
+    await transcript.index.mem.add(MEMBER, "t1", 1, SAID, " lavender ", "test")
+    exp = mp.Explained(seq=0, row_id="", ts=0.0, text=SAID, quote=SAID, turn_id="t1")
+    real_erase_turn, order = exact_words_mod.erase_turn, []
+
+    async def erase_turn_then_the_kernel_stops(user_id, turn_id):
+        order.append(json.loads((kernel.state / "pending-erases.json").read_text()))     # what was durable BEFORE the first step
+        n = await real_erase_turn(user_id, turn_id)
+        kernel.forget_mode = "refuse_all"                                                # confirmed step 1; step 2 will be refused
+        return n
+
+    monkeypatch.setattr(exact_words_mod, "erase_turn", erase_turn_then_the_kernel_stops)
+    with pytest.raises(os_shadow.ShadowForgetUnavailable):
+        await pa._erase_words(MEMBER, exp)
+    assert order == [{MEMBER: {"turns": ["t1"], "messages": ["m1"]}}]                    # PARK FIRST: the whole plan, ids only
+    assert (MEMBER, "t1") not in transcript.index.mem.rows                              # step 1 really happened ...
+    assert transcript.meta == {"m1": "{}"}                                              # ... and the transcript is NOT suppressed yet
+    assert _parked_rows(kernel)[MEMBER]["messages"] == ["m1"] and SAID not in (kernel.state / "pending-erases.json").read_text()
+    monkeypatch.setattr(exact_words_mod, "erase_turn", real_erase_turn)
+    _restart(kernel)
+    kernel.forget_mode = "ok"
+    add()                                                                               # any job: nobody asks again
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert json.loads(transcript.meta["m1"]) == {"off_record": True}
+    assert not (kernel.state / "pending-forgets.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["last", "explained", "topic", "screen", "guardian", "curation"])
+async def test_every_multi_step_forget_parks_its_whole_plan_before_its_first_step_and_clears_it_when_all_confirm(kernel, callers, monkeypatch, caller):
+    """ORDER, for every caller that hides rows: at the first lifecycle change (the reject / archive) the park already holds the row
+    id - and the index turn id for the callers that erase words. A forget that completes leaves no park behind."""
+    st, seen = callers, []
+    await st.said()
+    real_review = st.svc.review
+
+    async def review(rid, **kwargs):
+        seen.append(json.loads((kernel.state / "pending-erases.json").read_text()) if (kernel.state / "pending-erases.json").exists() else {})
+        return await real_review(rid, **kwargs)
+
+    monkeypatch.setattr(st.svc, "review", review)
+    forgotten, out = await st.run(caller)
+    assert forgotten, out
+    assert seen and seen[0][MEMBER]["rows"] == ["r1"]
+    assert seen[0][MEMBER].get("turns", []) == (["t1"] if caller in WORDS else [])
+    assert st.svc.rows == {} and not (kernel.state / "pending-erases.json").exists()    # all confirmed: the plan left the park
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["last", "explained", "topic", "screen", "guardian"])
+async def test_a_forget_that_dies_between_two_steps_is_finished_by_the_replay_from_its_parked_plan(kernel, callers, monkeypatch, caller):
+    """The crash shape: the rows are erased (confirmed), then the forget stops for a reason no eraser can park (the request is
+    cancelled between two steps, as a dying process would). Nothing was refused, so no eraser parked anything - only the plan,
+    parked first, remembers the words. Restart, any job: the words are gone and the park is cleared."""
+    import asyncio
+
+    import forget_topic
+
+    st = callers
+    await st.said()
+
+    def die():
+        raise asyncio.CancelledError()
+
+    if caller == "topic":            # a topic forget erases the words before the rows: it dies before the rows instead
+        async def boom(*args, **kwargs):
+            die()
+        monkeypatch.setattr(forget_topic, "_erase_words", boom)
+    else:
+        st.svc.after_erase = die
+    with pytest.raises(asyncio.CancelledError):
+        await st.run(caller)
+    parked = _parked_rows(kernel)[MEMBER]
+    assert parked.get("turns") == ["t1"] and (MEMBER, "t1") in st.backend.rows          # the words are still there, and remembered
+    _restart(kernel)
+    st.svc.after_erase = None
+    os_shadow._planning.clear()                                                         # a restart: nothing of this process is in flight
+    add()
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert (MEMBER, "t1") not in st.backend.rows

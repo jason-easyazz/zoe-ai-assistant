@@ -548,6 +548,40 @@ async def _shadow_first(user_id: str, *, turns=None) -> None:
         raise
 
 
+def _key_and_needle(text: str) -> tuple:
+    key = _squash(text or "").lower().strip(" .!?\"'")
+    return key, max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+
+
+async def _transcript_ids(user_id: str, text: str) -> list:
+    """The ids of the owner's saved turns ``forget_transcript(user_id, text)`` would flag ([] when it would do nothing)."""
+    key, needle = _key_and_needle(text)
+    if len(key) < 6 or not needle or not isinstance(get_backend(), SqlBackend):
+        return []
+    from memory_provenance import OFF_RECORD_JSON_MARK
+    return [str(row_id) for row_id, content, metadata in await _transcript_candidates(user_id, needle)
+            if key in _squash(str(content or "")).lower() and OFF_RECORD_JSON_MARK not in str(metadata or "")]
+
+
+async def words_plan(user_id: str, texts: Iterable[str], turn_ids: Iterable[str] = ()) -> dict:
+    """Everything a words erase of ``texts`` (``erase_text`` + ``forget_transcript`` each) and of ``turn_ids`` (``erase_turn``) will
+    touch, as ids: ``{"turns": [index turn ids], "messages": [saved-transcript row ids]}``. Reads only; the plan a multi-step
+    forget parks BEFORE its first destructive step (``os_shadow.plan_erase``). RAISES on a store failure."""
+    turns, messages = [str(t) for t in turn_ids if t], []
+    backend = get_backend()
+    for text in dict.fromkeys(t for t in texts if t):
+        key, needle = _key_and_needle(text)
+        if len(key) < 6 or not needle:
+            continue
+        turns += [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()]
+        messages += await _transcript_ids(user_id, text)
+    if turns and isinstance(backend, SqlBackend):
+        # the saved turn behind an index turn that is erased BY ID: once the index row is gone nothing else leads to it
+        for _id, text, _ts in await backend.get(user_id, list(dict.fromkeys(turns))):
+            messages += await _transcript_ids(user_id, text)
+    return {"turns": list(dict.fromkeys(turns)), "messages": list(dict.fromkeys(messages))}
+
+
 async def park_transcript(user_id: str, text: str, exc: BaseException) -> None:
     """A caller's ``forget_transcript(user_id, text)`` failed with ``exc``. When that is the shadow not confirming, park the ids of
     the saved turns it was about to flag (ids only) so the replay flags them: by then the index entry may already be gone, and an
@@ -555,14 +589,9 @@ async def park_transcript(user_id: str, text: str, exc: BaseException) -> None:
     try:
         import os_shadow
 
-        key = _squash(text or "").lower().strip(" .!?\"'")
-        needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
-        if not os_shadow.unconfirmed(exc) or len(key) < 6 or not needle or not isinstance(get_backend(), SqlBackend):
+        if not os_shadow.unconfirmed(exc):
             return
-        from memory_provenance import OFF_RECORD_JSON_MARK
-        ids = [str(row_id) for row_id, content, metadata in await _transcript_candidates(user_id, needle)
-               if key in _squash(str(content or "")).lower() and OFF_RECORD_JSON_MARK not in str(metadata or "")]
-        await os_shadow.park_unconfirmed(user_id, messages=ids)
+        await os_shadow.park_unconfirmed(user_id, messages=await _transcript_ids(user_id, text))
     except Exception as park_exc:  # noqa: BLE001
         logger.error("exact_words: unconfirmed transcript flag NOT parked (%s)", type(park_exc).__name__)
 

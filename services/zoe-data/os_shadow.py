@@ -1347,6 +1347,61 @@ def erases_done(member: str, entry: Optional[dict] = None) -> None:
         _erases_store(todo)
 
 
+# ---- PARK FIRST: the whole plan of a multi-step forget is durable before its first destructive step --------------------------------------
+# A forget is several erasers in a row (hide the rows, erase them, the index turn, the indexed words, the transcript flag ...), each
+# with its own shadow check. An eraser that is refused can only park what IT was about to erase: when an earlier step has already
+# destroyed the evidence a later step is found by (the index row the transcript turn is looked up from), or the process dies between
+# two steps, nothing durable would remember the rest. So every multi-step forget calls ``plan_erase`` BEFORE its first destructive
+# step with every id the whole sequence will touch, and ``Plan.ok`` only when every step has confirmed. Anything else (a refusal, an
+# exception, a crash) leaves the plan parked and the shadow's replay finishes it (``turn_forget.finish_parked``, idempotent).
+PLAN_HOLD_S = 60.0
+#: member -> ``_mono()`` until which a forget of THIS process is running that member's plan itself: the replay's finish leaves the
+#: member alone meanwhile (it would only do the same erases concurrently). It expires by itself: a forget that returned without
+#: ``ok`` (refused, raised) is then finished by the replay.
+_planning: dict = {}
+
+
+class Plan:
+    def __init__(self, user_id: str, entry: Optional[dict]) -> None:
+        self.user_id, self.entry = user_id, entry
+
+    async def ok(self) -> None:
+        """Every step confirmed: the plan's ids leave the park. Never raises (an id left behind names nothing that still exists,
+        and the next replay drops it)."""
+        entry, self.entry = self.entry, None
+        if entry is None:
+            return
+        try:
+            await asyncio.to_thread(erases_done, self.user_id, entry)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("OS_SHADOW finished plan not cleared code=%s", type(exc).__name__)
+        _planning.pop(self.user_id, None)
+
+    drop = ok        # the forget stopped BEFORE its first step (the store refused to hide the row): nothing began, nothing to finish
+
+
+async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:
+    """Park the whole plan of a multi-step forget (see above) and return its handle. ``rows``: memory row ids. ``words``: an async
+    callable returning ``{"turns": [...], "messages": [...]}`` (``exact_words.words_plan``), CALLED ONLY when there is shadow state
+    to park beside: with no state directory this is a memory read and nothing else (no thread, no disk, no lookup). RAISES
+    ``ShadowForgetUnavailable`` when the plan cannot be made durable: the forget must not start (fail closed, like every park)."""
+    if mode() != "shadow":
+        if _no_state() or not await asyncio.to_thread(_state_probe):
+            return Plan(user_id, None)
+    try:
+        found = (await words()) if words is not None else {"turns": (), "messages": ()}
+        entry = {"rows": [str(i) for i in rows if i], "turns": [str(i) for i in found["turns"] if i],
+                 "messages": [str(i) for i in found["messages"] if i]}
+        if not any(entry.values()):
+            return Plan(user_id, None)
+        _planning[user_id] = _mono() + PLAN_HOLD_S
+        await asyncio.to_thread(lambda: park_erase(user_id, **entry))
+    except Exception as exc:  # noqa: BLE001
+        _planning.pop(user_id, None)
+        raise ShadowForgetUnavailable(f"plan not parked ({type(exc).__name__})") from exc
+    return Plan(user_id, entry)
+
+
 async def park_unconfirmed(user_id: str, *, rows=(), turns=(), messages=()) -> None:
     """An eraser's shadow step was not confirmed: park what that eraser was about to erase (off the loop). Never raises: the eraser
     raises its own failure either way, and an erase that could not be parked is still never reported as done."""
@@ -1414,6 +1469,8 @@ async def _finish_erases() -> int:
         for member, entry in todo.items():
             if member in still:
                 continue              # its kernel forget is not confirmed yet: nothing in production is erased before that
+            if member in _planning and _planning[member] > _mono():
+                continue              # a forget of this process is running this member's plan right now: left to it (PLAN_HOLD_S)
             try:
                 import turn_forget
 
@@ -1650,6 +1707,7 @@ def _reset_for_tests() -> None:
     _down_logged = False
     _pending_members = None           # a restart: the next worker reads the park file before its first job
     _erase_members, _loop, _finishing = None, None, False
+    _planning.clear()
     _state_stop.set()                 # the poller ends; nothing is established, so the next forget probes
     with _state_lock:
         _state_known, _state_poller = ("", True, 0.0), None

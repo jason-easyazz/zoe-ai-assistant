@@ -4103,6 +4103,13 @@ async def _execute_forget_last(user_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
+    try:    # PARK FIRST (os_shadow.plan_erase): the rows about to be hidden and the words that go after them, durable before any step
+        import exact_words as _xw_plan
+        import os_shadow as _os_plan
+        plan = await _os_plan.plan_erase(user_id, rows=[r.id for r in rows], words=lambda: _xw_plan.words_plan(user_id, [text]))
+    except Exception as exc:  # noqa: BLE001 - the plan could not be made durable: nothing is started
+        logger.warning("memory_forget_last: plan not parked (%s)", type(exc).__name__)
+        return FORGET_STORE_DOWN_REPLY
     gone: list = []
     failed = 0
 
@@ -4185,6 +4192,7 @@ async def _execute_forget_last(user_id: str) -> str:
     if failed:
         # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
         return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
+    await plan.ok()      # every step confirmed: the plan leaves the park (a return above left it for the shadow's replay)
     if gone:
         # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
         # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
@@ -4612,6 +4620,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 return _FORGET_CASCADE_INCOMPLETE
             return (f"I don't have anything saved about {name}." + _cascade + _forget_permanence_note()
                     + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
+        try:    # PARK FIRST (os_shadow.plan_erase): the rows about to be archived, durable before the first one is hidden
+            import os_shadow
+            plan = await os_shadow.plan_erase(user_id, rows=[r.id for r in matches])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: plan not parked (%s)", type(exc).__name__)
+            return await _forget_entity_unconfirmed(user_id)
         forgotten = 0
         archived_ids: list[str] = []
         for r in matches:
@@ -4628,6 +4642,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             await _erase_named(archived_ids)
         except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
             return await _forget_entity_unconfirmed(user_id)
+        await plan.ok()
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")

@@ -455,6 +455,7 @@ async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, s
         rejected = True
     import os_shadow
     await os_shadow.forget_for_erase(pol.member.user_id)
+    plan = await os_shadow.plan_erase(pol.member.user_id, rows=[old.id])      # PARK FIRST: the row is durable before it is hidden
     cat = str((old.metadata or dict()).get("curated_category") or "")
     await _audited(db, curator.user_id, pol.member.user_id, "forget", cat, old.id)
     ok = rejected or await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER,
@@ -463,6 +464,8 @@ async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, s
         chain = await _earlier_revisions(pol, old, svc)
         await svc.erase_rows(pol.member.user_id, [old.id, *chain], actor=curator.user_id,
                              reason="curated note removed by a curator")
+    if ok:
+        await plan.ok()
     await _finished(db, curator.user_id, pol.member.user_id, "forget", ok, cat, old.id)
     if not ok:
         raise CurationRefused(409, "I could not remove that one.")

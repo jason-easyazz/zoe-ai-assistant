@@ -1423,7 +1423,12 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
     cannot index it again. RAISES on a store failure (the caller must not confirm a forget that did not hold). Returns what it removed
     or flagged."""
     import exact_words
+    import os_shadow
 
+    texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
+    # PARK FIRST (os_shadow.plan_erase): the index turn goes by id below, and with it the only lead to the saved transcript turn - so
+    # every id this erase will touch is durable before its first step; cleared when all have confirmed, else finished by the replay
+    plan = await os_shadow.plan_erase(user_id, words=lambda: exact_words.words_plan(user_id, texts, [exp.turn_id] if exp.turn_id else ()))
     n = 0
     if exp.turn_id:
         n += await exact_words.erase_turn(user_id, exp.turn_id)
@@ -1438,7 +1443,20 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
     import night_mind
 
     n += await night_mind.erase_words(user_id, exp.turn_id, exp.quote, exp.text, *extra)
+    await plan.ok()
     return n
+
+
+async def _plan_forget(user_id: str, row_ids: list, exp: "mp.Explained", *extra: str):
+    """PARK FIRST for a row forget (``forget_it``, the memories-screen forget, a guardian's): the rows about to be hidden AND the
+    words that go after them, durable before the first reject (``os_shadow.plan_erase``). The caller calls ``.ok()`` when every
+    step has confirmed; anything else leaves the plan for the shadow's replay."""
+    import exact_words
+    import os_shadow
+
+    texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
+    return await os_shadow.plan_erase(user_id, rows=row_ids, words=lambda: exact_words.words_plan(
+        user_id, texts, [exp.turn_id] if exp.turn_id else ()))
 
 
 def _rearm(user_id: str, exp: "mp.Explained") -> None:
@@ -1484,8 +1502,10 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"." if left else FORGET_GONE_REPLY
         twins = await twins_of(user_id, ref, svc=svc)
         await _speculation_barrier()
+        plan = await _plan_forget(user_id, [ref.id, *(tw.id for tw in twins)], exp, ref.text or "")   # PARK FIRST, before the reject
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
         if done is None:
+            await plan.drop()
             return STORE_DOWN_REPLY
         gone = [ref.id]
         for tw in twins:
@@ -1512,6 +1532,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
+        await plan.ok()
         mp.clear_explained(user_id)
         logger.info("PROVENANCE_FORGET user=%s rows=%d", user_id, len(gone))
         return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"."

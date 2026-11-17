@@ -323,6 +323,19 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         res.store_down = True
         return res
     said = [t.text for t in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))]
+
+    async def _words_plan() -> dict:
+        import exact_words
+
+        hits = await _index_hits(user_id, groups)
+        return await exact_words.words_plan(user_id, [*said, *hits.values()], list(hits))
+
+    try:    # PARK FIRST (os_shadow.plan_erase): the rows, the index turns and the transcript turns this forget will touch, before any step
+        plan = await os_shadow.plan_erase(user_id, rows=[r.id for r in rows], words=_words_plan)
+    except Exception as exc:  # noqa: BLE001 - the plan could not be made durable: nothing is started
+        logger.warning("forget_topic: plan not parked (%s)", type(exc).__name__)
+        res.store_down = True
+        return res
     # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
     # same turns and rows (and so the same names) again
     try:
@@ -426,6 +439,8 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
                 # repeat finishes these same rows
                 res.store_down = True
                 return res
+    if not res.failed:
+        await plan.ok()      # every step confirmed: the plan leaves the park (any return above left it for the shadow's replay)
     res.forgotten = len(archived)
     if archived:
         res.preview = _preview(archived[0].text)
