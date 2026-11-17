@@ -1595,9 +1595,10 @@ _CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an option
 #: each repeat consumes one whole word, so the run stays linear (pinned by the long-filler timing test)
 _CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|definitely|really|only)\s{1,8})*)"
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
-#: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
-#: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
-_TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,3}"
+#: more digit groups (``12 34``). The two token runs are BOUNDED (64 characters each side of the digit): an unbounded lazy run was
+#: retried from every label inside a long digit-free token ("door-code-door-code-...": quadratic; review, PR #2660). A longer
+#: token is not lost: the label net takes whatever follows a label that this pattern did not
+_TOKEN = r"\S{0,64}?\d\S{0,64}?(?=[.,;!?]{0,8}(?:\s|$))(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,3}"
 _CODE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"

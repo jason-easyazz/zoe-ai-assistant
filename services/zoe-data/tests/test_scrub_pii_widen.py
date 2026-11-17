@@ -1218,3 +1218,36 @@ def test_a_short_excerpt_still_rejects_a_card_and_keeps_ordinary_words():
 
     assert ms.scrub_source_excerpt("my card is 4111 1111 1111 1111") is None
     assert ms.scrub_source_excerpt("the bins go out on friday") == "the bins go out on friday"
+
+
+_TIME_SHAPES = {
+    "label run in one token": lambda n: "1 " + "door-code-" * n + "x",
+    "password run in one token": lambda n: "1 " + "password-" * n + "x",
+    "label x n": lambda n: "door code " * n, "bare pin x n": lambda n: "pin " * n + "1",
+    "label colon x n": lambda n: "wifi-key:" * n, "account label x n": lambda n: "account number " * n,
+    "label connector x n": lambda n: "token is " * n, "digit groups x n": lambda n: "door code " + "1-" * n,
+    "quotes x n": lambda n: "password is \"'" * n, "connector words x n": lambda n: "password is is is " * n,
+    "phone label x n": lambda n: "call me on " * n, "bsb x n": lambda n: "bsb 1 " * n,
+    "changed to x n": lambda n: "password changed to " * n,
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_TIME_SHAPES))
+def test_nested_repeat_shapes_grow_linearly(shape):
+    """Review (PR #2660): a lazy run retried from every label inside one long token was quadratic. Every repeat shape here
+    (label, separator, quote, digit group, connector x n) must grow in step with its size: 4x the input, about 4x the time."""
+    import time
+
+    def took(n):
+        text = _TIME_SHAPES[shape](n)
+        best = 9.0
+        for _ in range(2):
+            t0 = time.monotonic()
+            scrub_pii(text)
+            best = min(best, time.monotonic() - t0)
+        return best
+
+    scrub_pii(_TIME_SHAPES[shape](50))
+    small, big = took(4000), took(16000)
+    assert small < 0.5, (shape, small)
+    assert big < 8 * small + 0.2, (shape, small, big)          # quadratic would be 16x
