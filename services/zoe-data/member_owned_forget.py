@@ -387,7 +387,8 @@ async def _originated_ui_actions(r: _Run, user_id: str) -> None:
     """The UI actions queued FOR the member but stored under a panel's signed-in identity (a guest kiosk's actions are ``guest``'s):
     their ``queued`` ledger event names the member as ``origin_user_id`` (``ui_orchestrator.enqueue_ui_action``). Found by a text
     prefilter on that event (the JSON-quoted id, so the scan is the ledger's queued rows only, each one confirmed by parsing it), then
-    every ledger row of those actions and the actions themselves go (children first). The OWNED step takes the member's own rows."""
+    every ledger row of those actions and the actions themselves go (children first) - except one another member OWNS or that names
+    another member in an identity field, which is theirs and stays (as on main). The OWNED step takes the member's own rows."""
     needle = f'%"origin_user_id": {json.dumps(str(user_id))}%'
     rows = await r.rows("SELECT action_id, event_data FROM ui_action_ledger WHERE event_type = 'queued' AND event_data LIKE ?", (needle,))
     mine = []
@@ -398,7 +399,21 @@ async def _originated_ui_actions(r: _Run, user_id: str) -> None:
             origin = None
         if origin == user_id and action_id:
             mine.append(str(action_id))
-    mine = set(mine) | await _preupgrade_ui_actions(r, user_id)
+    # ...but never another member's row (main keeps it): one OWNED by another member, or whose payload names another member in an
+    # identity field, stays - only the member's own, guest- or kiosk-owned ones go
+    keep = set()
+    for at in range(0, len(mine), _CHUNK):
+        part = mine[at:at + _CHUNK]
+        for aid, owner, payload in await r.rows(f"SELECT id, user_id, payload FROM ui_actions WHERE id IN ({', '.join('?' * len(part))})",
+                                                tuple(part)):
+            own = str(owner or "").strip()
+            try:
+                body = json.loads(payload) if isinstance(payload, str) else None
+            except ValueError:
+                body = None
+            if (own and own != user_id and not _is_guest(own)) or _names_other(body, user_id):
+                keep.add(str(aid))
+    mine = (set(mine) - keep) | await _preupgrade_ui_actions(r, user_id)
     mine = sorted(mine)
     await r.by_ids("DELETE FROM ui_action_ledger WHERE action_id", mine)
     await r.by_ids("DELETE FROM ui_actions WHERE id", mine)

@@ -1317,8 +1317,13 @@ def test_a_toast_queued_for_the_member_on_a_guest_kiosk_goes_with_its_ledger_and
 
     async def seed():
         x = store.execute
-        for aid, origin in (("ua-guest-a", A), ("ua-guest-b", B)):
-            await x("INSERT INTO ui_actions (id, user_id, payload) VALUES (?, 'guest', ?)", (aid, json.dumps({"message": "synthetic words"})))
+        for aid, origin, owner, payload in (("ua-guest-a", A, "guest", {"message": "synthetic words"}),
+                                            ("ua-guest-b", B, "guest", {"message": "synthetic words"}),
+                                            # A queued it, but B OWNS it (B was signed in at that panel): B's row, kept as on main
+                                            ("ua-guest-a-b-owns", A, B, {"message": "synthetic words"}),
+                                            # A queued it for B: it names B in an identity field, so it is B's too
+                                            ("ua-guest-a-for-b", A, "guest", {"message": "synthetic words", "target_user_id": B})):
+            await x("INSERT INTO ui_actions (id, user_id, payload) VALUES (?, ?, ?)", (aid, owner, json.dumps(payload)))
             await x("INSERT INTO ui_action_ledger VALUES (?, ?, 'guest', 'kiosk-1', 'queued', ?)",
                     ("l-" + aid, aid, json.dumps({"action_type": "panel_announce", "payload": {"message": "synthetic words"},
                                                   "origin_user_id": origin})))
@@ -1326,8 +1331,9 @@ def test_a_toast_queued_for_the_member_on_a_guest_kiosk_goes_with_its_ledger_and
         await store.commit()
     asyncio.run(seed())
     _delete(svc)
-    assert "ua-guest-a" not in _ids(store, "ui_actions") and "ua-guest-b" in _ids(store, "ui_actions")
-    assert {r for r in _ids(store, "ui_action_ledger") if "guest" in r} == {"l-ua-guest-b", "k-ua-guest-b"}
+    assert {r for r in _ids(store, "ui_actions") if r.startswith("ua-guest")} == {"ua-guest-b", "ua-guest-a-b-owns", "ua-guest-a-for-b"}
+    assert {r for r in _ids(store, "ui_action_ledger") if "guest" in r} == {
+        "l-ua-guest-b", "k-ua-guest-b", "l-ua-guest-a-b-owns", "k-ua-guest-a-b-owns", "l-ua-guest-a-for-b", "k-ua-guest-a-for-b"}
 
 
 def test_a_surviving_session_titled_by_the_members_first_turn_loses_their_words_from_its_title(env, store):
