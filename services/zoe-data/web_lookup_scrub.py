@@ -179,14 +179,31 @@ def _scripts(word: str) -> set[str]:
     return {unicodedata.name(c, "?").split(" ")[0] for c in word if c.isalpha()}
 
 
+def _run_word(t: str) -> str:
+    """A word as the memory-run check compares it: a simple plural ending removed ("boxes" / "keys" -> "box" / "key"), so an
+    inflected private phrase is still the phrase. Applied to BOTH sides."""
+    if len(t) > 4 and t.endswith("es"):
+        return t[:-2]
+    if len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
+        return t[:-1]
+    return t
+
+
+def _padding(t: str) -> bool:
+    """Not a word for the run check: a standalone number or a single letter ("red 2 box", "red x box" is still "red box")."""
+    return t.isdigit() or len(t) <= 1
+
+
 def _memory_runs(tokens: list[str], terms: PrivateTerms, lex: dict) -> set[int]:
     """Indexes of query tokens that sit in a run of two or more content words shared with a memory text."""
     hit: set[int] = set()
-    content = [(i, t) for i, t in enumerate(tokens) if t and t not in lex["drop_words"] and t not in lex["question_words"]]
+    # padding (a standalone number, a single letter) is skipped on BOTH sides, and words are compared without a plural ending
+    content = [(i, _run_word(t)) for i, t in enumerate(tokens) if t and not _padding(t) and t not in lex["drop_words"]
+               and t not in lex["question_words"]]
     if len(content) < 2:
         return hit
     for text in terms.memory:
-        mem = [f for f in (fold(w) for w in _words(_clean(text))) if f and f not in lex["drop_words"]]
+        mem = [_run_word(f) for f in (fold(w) for w in _words(_clean(text))) if f and not _padding(f) and f not in lex["drop_words"]]
         pairs = set(zip(mem, mem[1:]))
         for (i, a), (j, b) in zip(content, content[1:]):
             if (a, b) in pairs:

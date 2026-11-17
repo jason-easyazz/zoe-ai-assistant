@@ -376,15 +376,34 @@ def test_a_dictionary_word_that_starts_with_a_member_name_still_leaves():
 
 
 @pytest.mark.parametrize("raw", ["red box2 replacement", "red2 box replacement", "red b0x replacement",
-                                 "red-box replacement prices", "red.box replacement prices", "red_box replacement", "red/box2 replacement"])
+                                 "red-box replacement prices", "red.box replacement prices", "red_box replacement", "red/box2 replacement",
+                                 "red 2 box replacement prices", "red 2 3 box replacement", "red 2-box replacement",
+                                 "red x box replacement prices", "red boxes replacement prices", "reds box replacement"])
 def test_a_short_memory_phrase_with_a_digit_added_is_still_stripped(raw):
     # Codex P1 on #2527: a memory phrase shorter than the glue length ("red box") escaped once a digit was stuck to one word
     r = scrub_query(raw, PrivateTerms.of(memory=["The spare key is in the red box"]))
     flat = set(re.split(r"[\s.\-_/]+", r.query))
-    assert not ({"red", "red2"} & flat and {"box", "box2", "b0x"} & flat), r
+    assert not ({"red", "red2", "reds"} & flat and {"box", "box2", "b0x", "boxes"} & flat), r
 
 
 def test_a_hyphenated_public_compound_is_kept():
     # Codex P2 on #2527: the allow-list saw the folded "glutenfree" (not a word) instead of "gluten" + "free"
     r = scrub_query("gluten-free bread recipes", PrivateTerms())
     assert r.send and r.query.startswith("gluten-free"), r
+
+
+def test_a_separator_sweep_finds_no_way_to_split_a_short_memory_phrase():
+    """Every separator between the two words of a short memory phrase (punctuation, unicode dashes, invisible spaces, emoji,
+    digits, a filler letter) and every spelling (case, look-alike digits, a plural) still strips it."""
+    import itertools
+
+    terms = PrivateTerms.of(memory=["The spare key is in the red box"])
+    seps = [" ", "-", ".", "_", "/", "'", "\u2019", " 2 ", " 2 3 ", "2", " - ", "\u2013", "\u2014", "\u200b", "\u00a0", "+", ",", ";",
+            ":", "&", "|", "~", "*", " \U0001F642 ", "(", ")", "\t", "  ", " x ", " #2 "]
+    leaks = []
+    for left, sep, right in itertools.product(["red", "RED", "r3d", "red2", "reds"], seps, ["box", "Box", "b0x", "box2", "boxes"]):
+        r = scrub_query(f"{left}{sep}{right} replacement prices", terms)
+        flat = set(re.split(r"[\W_]+", r.query.lower())) if r.send else set()
+        if {"red", "r3d", "red2", "reds"} & flat and {"box", "b0x", "box2", "boxes"} & flat:
+            leaks.append((left + sep + right, r.query))
+    assert leaks == [], leaks[:5]
