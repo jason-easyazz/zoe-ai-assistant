@@ -1372,9 +1372,10 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
     asyncio.run(seed())
     _delete(svc)
     left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
-    # guest-owned origin-less rows go (they may hold A's words with no id, and they are no member's); member-owned ones stay
-    assert left == {"pre-old-b", "pre-text"}, left
-    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-old-b", "l-pre-text"}
+    # guest-owned origin-less rows that name no other member go (they may hold A's words with no id); one aimed at B (pre-b) is
+    # B's and stays, as do member-owned ones
+    assert left == {"pre-b", "pre-old-b", "pre-text"}, left
+    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old-b", "l-pre-text"}
 
 
 def _stalled_fire_across_a_delete(env, store, monkeypatch, push_check):
@@ -1509,3 +1510,24 @@ def test_a_session_the_member_owned_that_another_member_wrote_into_after_the_che
     assert row[0][1] != "about my plans", "never A's title"
     assert "late-b-own" in _ids(store, "chat_messages")
     assert "run-a" not in _ids(store, "chat_ag_ui_runs"), "the run answering A's turn (unattributed) goes from the rescued session too"
+
+
+def test_a_guest_identity_never_takes_a_session_over_a_member(env, store):
+    """Handover ranks EVERY guest identity (``voice-guest``, ``guest-*``, as panel_principal.is_guest_id) after the household's
+    members, even when the guest spoke first and has a user row."""
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-hand', ?, 'A started it')", (A,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('h1', 's-hand', 'user', "
+                "'guest first', ?, '2026-01-01T00:00:01Z')", (_meta("voice-guest"),))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('h2', 's-hand', 'user', "
+                "'B second', ?, '2026-01-01T00:00:02Z')", (_meta(B),))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES ('h3', 's-hand', 'user', 'A own', "
+                "'2026-01-01T00:00:03Z')")
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    owner = _q(store, "SELECT user_id FROM chat_sessions WHERE id = 's-hand'")
+    assert owner == [(B,)], owner

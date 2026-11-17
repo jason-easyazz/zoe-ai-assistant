@@ -357,8 +357,8 @@ async def test_a_guest_kiosk_toast_for_the_member_goes_and_a_title_their_turn_ma
                 aid, json.dumps({"message": "synthetic words"}))
         await x("INSERT INTO ui_action_ledger (id, action_id, user_id, panel_id, event_type, event_data) VALUES ($1, $2, 'guest', 'kiosk-1', "
                 "'queued', $3)", "l-" + aid, aid, json.dumps({"payload": {"message": "synthetic words"}, "origin_user_id": origin}))
-    # pre-upgrade kiosk rows (no origin_user_id): every GUEST-owned one goes (it may hold A's words with no id, and it is no member's
-    # row); the stale pre-upgrade row B owns stays (no cross-member reach)
+    # pre-upgrade kiosk rows (no origin_user_id): a GUEST-owned one naming no other member goes (it may hold A's words with no id);
+    # one aimed at B, and the stale row B owns, stay (no cross-member reach)
     for aid, owner, payload, made in (("pre-a", "guest", {"target_user_id": a}, None), ("pre-b", "guest", {"target_user_id": b}, None),
                                       ("pre-old", "guest", {"message": "synthetic words"}, "2020-01-01T00:00:00Z"),
                                       ("pre-old-b", b, {"message": "synthetic words"}, "2020-01-01T00:00:00Z")):
@@ -374,8 +374,8 @@ async def test_a_guest_kiosk_toast_for_the_member_goes_and_a_title_their_turn_ma
     await mof.forget_user(a)
     assert "ug-a" not in await world.ids("ui_actions") and "ug-b" in await world.ids("ui_actions")
     assert await world.ids("ui_action_ledger", "action_id LIKE 'ug-%'") == {"l-ug-b"}
-    assert await world.ids("ui_actions", "id LIKE 'pre-%'") == {"pre-old-b"}, "pre-upgrade: guest rows go, B's own row stays"
-    assert await world.ids("ui_action_ledger", "action_id LIKE 'pre-%'") == {"l-pre-old-b"}
+    assert await world.ids("ui_actions", "id LIKE 'pre-%'") == {"pre-b", "pre-old-b"}, "guest rows naming nobody go; B's stay"
+    assert await world.ids("ui_action_ledger", "action_id LIKE 'pre-%'") == {"l-pre-b", "l-pre-old-b"}
     assert await c.fetchval("SELECT title FROM chat_sessions WHERE id = 's-bt'") == derive_session_title("What should we cook for dinner tonight")
 
 

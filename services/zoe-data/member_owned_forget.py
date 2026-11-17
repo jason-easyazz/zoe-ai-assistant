@@ -55,6 +55,15 @@ _CHUNK = 200
 _GUESTS = ("guest", "kiosk", "unknown", "")
 
 
+def _is_guest(uid: Any) -> bool:
+    """A shared kiosk / voice guest identity, never a household member: the exact ids above plus everything
+    ``panel_principal.is_guest_id`` recognises (``voice-guest``, ``guest-*``)."""
+    from panel_principal import is_guest_id
+
+    u = str(uid or "").strip()
+    return u.lower() in _GUESTS or is_guest_id(u)
+
+
 def _missing_table(exc: BaseException) -> bool:
     s = str(exc)
     return "no such table" in s or ("does not exist" in s and "relation" in s)
@@ -397,6 +406,22 @@ def _names_member(value: Any, user_id: str, *, under_identity: bool = False) -> 
     return False
 
 
+def _names_other(value: Any, user_id: str) -> bool:
+    """Whether a parsed JSON value names, in an IDENTITY field, someone who is neither the member nor a guest identity."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if str(k) in _IDENTITY_KEYS and isinstance(v, str) and v.strip() and v != user_id and not _is_guest(v):
+                return True
+            if str(k) in _IDENTITY_KEYS and isinstance(v, list) and any(isinstance(x, str) and x.strip() and x != user_id
+                                                                         and not _is_guest(x) for x in v):
+                return True
+            if isinstance(v, (dict, list)) and _names_other(v, user_id):
+                return True
+    elif isinstance(value, list):
+        return any(_names_other(v, user_id) for v in value)
+    return False
+
+
 async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
     """Actions queued BEFORE ``origin_user_id`` was recorded (no origin in their queued ledger event) that NAME the member: their
     payload or any ledger event carries the member's id as a value (found by a text prefilter on the JSON-quoted id, each confirmed
@@ -430,24 +455,32 @@ async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
             if _names_member(payload, user_id) or any(_names_member(d, user_id) for _, d in evs) or (
                     isinstance(payload, str) and json.dumps(str(user_id)) in payload):
                 out.add(aid)
-    # ...and every pre-upgrade action a GUEST / kiosk identity owns with no recorded origin: it can hold the member's words with no id
-    # in it, nobody can be shown to have queued it, and it belongs to NO member - so removing it reaches into nobody else's rows. A
-    # member-owned origin-less row stays (it is that member's).
-    guests = await r.rows(f"SELECT id FROM ui_actions WHERE COALESCE(user_id, '') IN ({', '.join('?' * len(_GUESTS))}) "
-                          "OR user_id LIKE 'guest-%'", tuple(_GUESTS))
+    # ...and every pre-upgrade action a GUEST / kiosk identity owns with no recorded origin that names NO other member: it can hold
+    # the member's words with no id in it, and nobody else can be shown to own it. One whose payload or ledger names another member
+    # in an identity field is THEIRS and stays, as does a member-owned origin-less row.
+    guests = await r.rows(f"SELECT id FROM ui_actions WHERE COALESCE(user_id, '') IN ({', '.join('?' * (len(_GUESTS) + 1))}) "
+                          "OR user_id LIKE 'guest-%'", (*_GUESTS, "voice-guest"))
     gids = sorted({str(x[0]) for x in guests if x[0]} - out)
     for at in range(0, len(gids), _CHUNK):
         part = gids[at:at + _CHUNK]
         marks = ", ".join("?" * len(part))
-        with_origin = set()
-        for aid, data in await r.rows(f"SELECT action_id, event_data FROM ui_action_ledger WHERE event_type = 'queued' AND action_id IN "
-                                      f"({marks})", tuple(part)):
+        keep = set()
+        for aid, data in await r.rows(f"SELECT action_id, event_data FROM ui_action_ledger WHERE action_id IN ({marks})", tuple(part)):
             try:
-                if isinstance(json.loads(data) if isinstance(data, str) else None, dict) and "origin_user_id" in json.loads(data):
-                    with_origin.add(str(aid))
+                ev = json.loads(data) if isinstance(data, str) else None
+            except ValueError:
+                ev = None
+            if isinstance(ev, dict) and "origin_user_id" in ev:
+                keep.add(str(aid))                              # an action WITH an origin is decided by it (``_originated_ui_actions``)
+            elif _names_other(ev, user_id):
+                keep.add(str(aid))                              # aimed at ANOTHER member: theirs
+        for aid, payload in await r.rows(f"SELECT id, payload FROM ui_actions WHERE id IN ({marks})", tuple(part)):
+            try:
+                if _names_other(json.loads(payload) if isinstance(payload, str) else None, user_id):
+                    keep.add(str(aid))
             except ValueError:
                 pass
-        out |= set(part) - with_origin                          # an action WITH an origin is decided by it (``_originated_ui_actions``)
+        out |= set(part) - keep
     return out
 
 
@@ -486,7 +519,7 @@ async def _hand_over(r: _Run, user_id: str, sid: str) -> tuple[bool, list]:
     for meta, at, mid in turns:
         o = _turn_owner(meta, "")
         if o and o != user_id:
-            key = (o.lower() in _GUESTS, str(at or ""), str(mid))
+            key = (_is_guest(o), str(at or ""), str(mid))
             owners[o] = min(owners.get(o, key), key)
     users = await _existing_users(r, list(owners))
     ranked = sorted((k, o) for o, k in owners.items() if users is None or o in users)
