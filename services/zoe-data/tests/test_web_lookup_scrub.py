@@ -439,7 +439,8 @@ def test_a_phone_number_is_stripped_whatever_separates_its_groups(sep):
     assert not ({"0491", "570", "006"} & set(re.split(r"[\W_]+", r.query))), (sep, r)
 
 
-@pytest.mark.parametrize("sep", [" ", ".", "-", "_", ", ", ",", "\u2013", " . "])
+@pytest.mark.parametrize("sep", [" ", ".", "-", "_", ", ", ",", "\u2013", " . ", ":", " : ", "(", ") (", ";", "|", "*", "~", "+",
+                                 "\u00a0", "\U0001F642", " / "])
 def test_an_address_is_stripped_whatever_separates_its_parts(sep):
     r = scrub_query(f"pizza delivery 12{sep}Maple{sep}Street tonight")
     assert "maple" not in r.query, (sep, r)
@@ -481,3 +482,8 @@ def test_a_known_name_split_around_padding_never_leaves(raw):
     # the name's pieces may not leave together, whatever is between them
     words = set(re.split(r"[\W_]+", r.query))
     assert not r.send or not ("rosewood" in words or ({"rose", "ro"} & words and "wood" in words)), r
+
+
+def test_an_address_with_the_street_name_in_brackets_is_stripped():
+    r = scrub_query("pizza delivery 12 (Maple) Street tonight")
+    assert "maple" not in r.query, r

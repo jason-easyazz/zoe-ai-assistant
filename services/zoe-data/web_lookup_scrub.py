@@ -64,8 +64,9 @@ _LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+(?:\.[a
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
 _PHONE_RE = re.compile(r"(?<![^\W_])\+?\d+(?:[\W_]+\d+)+(?![^\W_])")   # ANY run of separators between digit groups, any length
-# what may sit between the parts of an address: whitespace or punctuation ("12, Maple.Street", "12 Maple-Street")
-_ADDR_SEP = r"[\s.,\-_/\u2010-\u2015\u2212]+"
+# what may sit between the parts of an address: ANY run of non-alphanumerics ("12, Maple.Street", "12:Maple:Street",
+# "12 (Maple) Street") - a class, not a list, like the phone separators
+_ADDR_SEP = r"[\W_]+"
 _HEX_RE = re.compile(r"(?i)^[0-9a-f]{16,}$")
 _LOOKALIKE_SCRIPTS = frozenset({"LATIN", "CYRILLIC", "GREEK", "ARMENIAN", "CHEROKEE"})
 _PART_RE = re.compile(r"[^\W_]+")
