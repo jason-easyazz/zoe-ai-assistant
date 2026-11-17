@@ -328,7 +328,7 @@ async def _reject(rec: Record, svc: Any) -> int:
     getter = getattr(svc, "get", None)                                # a store with no point read: every row is (re)reviewed
     for rid in rec.plan.rows:
         if getter is not None:
-            ref = await getter(rid)
+            ref = await getter(rid, strict=True)
             if ref is None:
                 continue                                              # erased already
             if str((ref.metadata or {}).get("status") or "approved").lower() in ("rejected", "archived"):

@@ -67,7 +67,7 @@ async def live_rows(svc: Any, user_id: str, *, extra_statuses: tuple = (),
     for status in dict.fromkeys((*LIVE_FORGET_STATUSES, *extra_statuses)):
         offset = 0
         while True:
-            read = svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
+            read = svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset, strict=True)
             page = await read if read_budget_s is None else await asyncio.wait_for(read, read_budget_s)
             rows.update((r.id, r) for r in page)
             if len(page) < 1000:

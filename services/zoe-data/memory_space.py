@@ -255,7 +255,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     rid = str(row_id or "").strip()
     if not rid:
         return "gone"
-    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
+    ref = await asyncio.wait_for(svc.get(rid, strict=True), pa.READ_BUDGET_S)
     mine = ref is not None and pa._owns(ref.metadata or {}, user_id)
     status = str((ref.metadata or {}).get("status") or "approved").lower() if mine else ""
     if mine and status not in ("approved", "rejected"):
@@ -301,7 +301,7 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
 
     svc = svc or pa._svc_default()
     rid = str(row_id or "").strip()
-    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S) if rid else None
+    ref = await asyncio.wait_for(svc.get(rid, strict=True), pa.READ_BUDGET_S) if rid else None
     ok = ref is not None and pa._owns(ref.metadata or {}, owner) and guardian_forget_open(ref.metadata or {})
     out = await forget_record.forget(owner, code="guardian_row", key=f"row:{rid}", svc=svc, actor=actor, origin="admin",
                                      resolve=(lambda: pa.resolve_row(svc, owner, _explained_for(rid, ref), ref)) if ok
@@ -333,14 +333,14 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
     new = " ".join(str(new_text or "").split())[:TEXT_MAX_CHARS]
     if not rid:
         return "gone"
-    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
+    ref = await asyncio.wait_for(svc.get(rid, strict=True), pa.READ_BUDGET_S)
     if ref is None or not pa._owns(ref.metadata or {}, user_id):
         return "gone"
     status = str((ref.metadata or {}).get("status") or "approved").lower()
     if status == "superseded" and new:
         # a RETRY of this very correction whose twin retire did not finish: the successor already holds ``new`` - finish the twins
         succ_id = str((ref.metadata or {}).get("superseded_by_id") or "")
-        succ = await asyncio.wait_for(svc.get(succ_id), pa.READ_BUDGET_S) if succ_id else None
+        succ = await asyncio.wait_for(svc.get(succ_id, strict=True), pa.READ_BUDGET_S) if succ_id else None
         if (succ is not None and pa._owns(succ.metadata or {}, user_id)
                 and " ".join((succ.text or "").split()) == new and correction_apply.enabled()):
             twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc, strict=True) if tw.id != succ_id]

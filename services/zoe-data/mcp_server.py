@@ -3120,7 +3120,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             # Ownership check: svc.get resolves the row; MemoryService.review
             # also audits, but we want a friendly error rather than a raise.
             try:
-                existing = await svc.get(mem_id)
+                existing = await svc.get(mem_id, strict=True)
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
             if existing is None:
@@ -3157,7 +3157,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             if not mem_id:
                 return {"error": "memory_id required"}
             try:
-                existing = await svc.get(mem_id)
+                existing = await svc.get(mem_id, strict=True)
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
             if existing is None:

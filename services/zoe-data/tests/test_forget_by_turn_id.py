@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 import re
 import time
@@ -1517,8 +1518,8 @@ def test_forget_reaches_an_older_page_of_the_turns_facts(world, monkeypatch, pat
     assert target and other
     real = svc.list_by_status
 
-    async def paged(*, user_id, status, limit=100, offset=0):
-        rows = await real(user_id=user_id, status=status, limit=10000)
+    async def paged(*, user_id, status, limit=100, offset=0, strict=False):
+        rows = await real(user_id=user_id, status=status, limit=10000, strict=strict)
         rows.sort(key=lambda r: r.id == target.id)   # the target is older than the first page
         # A full first page, with duplicates, exercises both offset paging and id de-duplication.
         rows = ([other] * 1000 + [target]) if status == "approved" else rows
@@ -1555,3 +1556,102 @@ def test_topic_forget_after_restart_erases_a_legacy_excerpt_observation(world):
     assert ref.id not in {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
     assert chat.off(mid)
     assert not run(night_store.get_backend().observations(UID))
+
+
+@pytest.mark.parametrize("path", ["forget_that", "forget_it", "topic"])
+def test_store_failure_during_scan_never_confirms_or_clears(world, monkeypatch, path):
+    svc, chat = world
+    _plant(svc, chat, "a")
+    before = {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))}
+    messages = copy.deepcopy(chat.rows)
+    stored_rows = copy.deepcopy(svc._collection().rows)
+    words, observations = _xw_rows(), _night()
+    target = turn_forget.previous_turn(UID)
+    col = svc._collection()
+
+    def broken(**kwargs):
+        raise RuntimeError("invented zindle store failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(col, "get", broken)
+        if path == "forget_that":
+            reply = run(intent_router._execute_forget_last(UID))
+        elif path == "forget_it":
+            exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=SAID["a"], quote=SAID["a"], turn_id=_xw_rows()["a"])
+            reply = run(pa._forget_turn(UID, exp, svc=svc))
+        else:
+            res = run(forget_topic.forget(svc, UID, "my plumber"))
+            assert res.store_down and not res.forgotten
+            reply = "unavailable"
+        assert not reply.startswith("Done")
+    assert {r.id for r in run(svc.list_by_status(user_id=UID, status="approved"))} == before
+    assert chat.rows == messages
+    assert svc._collection().rows == stored_rows
+    assert _xw_rows() == words and _night() == observations
+    assert turn_forget.previous_turn(UID) == target
+    assert not run(forget_record.get_backend().open_records(UID))
+    assert not run(forget_record.get_backend().list(UID))
+
+
+def test_topic_forget_after_restart_expands_copies_before_scanning(world, monkeypatch):
+    import conversation_notes
+    from types import SimpleNamespace
+
+    svc, chat = world
+    said = "My zindle florns beside the vesk"
+    first, second = "m-zindle-copy-a", "m-zindle-copy-b"
+    for mid in (first, second):
+        chat.rows[mid] = [said, {"user_id": UID}]
+        chat.created[mid] = 1000.0
+    matched = run(svc.ingest("User's zindle florns beside the vesk", user_id=UID, source="chat_regex",
+                             status="approved", metadata={"source_turn": first}))
+    paraphrase = run(svc.ingest("User draves a quarn", user_id=UID, source="chat_regex",
+                                status="approved", metadata={"source_turn": second}))
+    assert matched and paraphrase
+    run(night_store.get_backend().put_observation(night_store.obs_row(
+        id="o-zindle-copy", user_id=UID, turn_id=second, quote="A quarn draves", day="2026-10-08", said_at=time.time())))
+    notes = {"n-zindle-copy": SimpleNamespace(turn_ids=[second], source="chat", text="A quarn draves")}
+
+    async def delete_where(user_id, doomed, **kwargs):
+        assert user_id == UID
+        ids = [rid for rid, note in notes.items() if doomed(note, note.text)]
+        for rid in ids:
+            del notes[rid]
+        return len(ids)
+
+    plans = []
+    store = forget_record.get_backend()
+    create = store.create
+
+    async def record_plan(key, raw):
+        plans.append(forget_record.Record.load(UID, key, raw).plan)
+        return await create(key, raw)
+
+    monkeypatch.setattr(store, "create", record_plan)
+    # Exercise the real note turn-id predicate over an isolated note store.
+    monkeypatch.setattr(conversation_notes, "_delete_where", delete_where)
+    turn_forget.reset()
+    assert not xw.get_backend().rows
+    res = run(forget_topic.forget(svc, UID, "zindle"))
+    assert res.forgotten and not (res.store_down or res.failed), res
+    live = {r.id for r in run(turn_forget.live_rows(svc, UID))}
+    assert not {matched.id, paraphrase.id} & live, "a fact bound to a turn copy survived"
+    assert chat.off(first) and chat.off(second)
+    assert not run(night_store.get_backend().observations(UID))
+    assert not notes
+    assert len(plans) == 1
+    plan = plans[0]
+    assert set(plan.mids) == {first, second}
+    assert set(plan.rows) == {matched.id, paraphrase.id}
+
+
+def test_topic_copy_regression_rejects_unexpanded_ids(world, monkeypatch):
+    import inspect
+
+    source = inspect.getsource(forget_topic._said_mids).replace(
+        "return await exact_words.turn_copies(user_id, out) if out else []", "return out")
+    namespace = {}
+    exec(compile(source, "<unexpanded-zindle-ids>", "exec"), forget_topic.__dict__, namespace)
+    monkeypatch.setattr(forget_topic, "_said_mids", namespace["_said_mids"])
+    with pytest.raises(AssertionError, match="a fact bound to a turn copy survived"):
+        test_topic_forget_after_restart_expands_copies_before_scanning(world, monkeypatch)

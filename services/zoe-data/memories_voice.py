@@ -666,7 +666,7 @@ async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
             _RETRY[key] = (pend[0], pend[1], time.monotonic())
         return reply
     try:
-        known = await pa.gather(member, svc=svc)
+        known = await pa.gather(member, svc=svc, strict=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memories_voice: gather failed (%s)", type(exc).__name__)
         return pa.STORE_DOWN_REPLY
@@ -688,7 +688,7 @@ async def forget_fact(member: str, words: str, *, svc: Any = None) -> str:
     proven = first.id in exact and len(exact) == 1
     if len(hits) > 1 and (_tokens(first.text) - want or (tied and not proven)):
         svc = svc or pa._svc_default()
-        ref = await asyncio.wait_for(svc.get(first.id), pa.READ_BUDGET_S)
+        ref = await asyncio.wait_for(svc.get(first.id, strict=True), pa.READ_BUDGET_S)
         twins = {t.id for t in await pa.twins_of(member, ref, svc=svc)} if ref is not None else set()
         if [h for h in hits[1:] if h.id not in twins]:
             return WHICH_REPLY

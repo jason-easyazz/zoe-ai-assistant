@@ -52,7 +52,7 @@ class _FakeSvc:
         q = query.lower()
         return [r for r in self.rows if q in r.text.lower()][:limit]
 
-    async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0):
+    async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0, strict=False):
         rows = [r for r in self.rows if r.metadata.get("status") == status]
         return rows[offset:offset + limit]
 

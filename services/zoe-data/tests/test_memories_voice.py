@@ -806,9 +806,9 @@ def test_control_without_the_restraint_wall_family_conflict_would_reach_the_card
 def test_control_without_the_owner_filter_another_members_row_would_be_forgotten(seeded, monkeypatch):
     real = pa.gather
 
-    async def everyone(user_id, *, svc=None):
-        a = await real(ME, svc=svc)
-        b = await real(OTHER, svc=svc)
+    async def everyone(user_id, *, svc=None, strict=False):
+        a = await real(ME, svc=svc, strict=strict)
+        b = await real(OTHER, svc=svc, strict=strict)
         a.items += b.items
         return a
 
@@ -847,10 +847,10 @@ def test_a_tapped_correction_whose_preflight_read_fails_keeps_the_tap_armed(env,
     rid = row_id(env, "Swimming")
     real, down = env.svc.get, {"on": True}
 
-    async def flaky(row):
+    async def flaky(row, **kw):
         if down["on"]:
             raise RuntimeError("store hiccup")
-        return await real(row)
+        return await real(row, **kw)
 
     monkeypatch.setattr(env.svc, "get", flaky)
     mv.tap(PANEL, ME, rid, "Swimming is on Friday at 9")
