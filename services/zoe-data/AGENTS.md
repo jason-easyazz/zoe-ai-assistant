@@ -179,6 +179,8 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 
 ## Local Contracts
 
+- Night-mind observation erases retain retry targets until orphan threads are removed: SQL deletes share one transaction (explicit on Postgres), and the in-memory backend deletes threads first. Topic forgets resolve LEGACY fact excerpts through `turn_forget.resolve_legacy_ids` before persisting the forget plan. Regression: `tests/test_forget_erase_retry.py`.
+
 - `local_text_logs.erase_capture(match=...)` erases only captures with readable UTF-8 transcripts matching the entity. Keep unreadable transcripts and orphaned WAVs; log their counts only. Member erase uses `everything=True` and clears the whole unattributed capture corpus, including those files. Pinned by `tests/test_forget_reach_extra.py`.
 - Household-text copy reach is independent: corpora, panel copies, backups/exports and staging copies are `copy` stores with source `file:line` evidence. Source expiry, logout and a later backup are not proof of either forget path reaching a copy; partial/unproved reach is a `gap` with both columns `-`. The write scan covers positional/keyword builtin and path opens, `os.open` write flags, direct writes and simple assignment/import aliases; negative controls must cover each spelling.
 - Every production list-item INSERT goes through `list_service.create_item_record`; caller-owned access, dedupe, transactions, receipts and notifications stay with the caller. `tests/test_list_insert_one_path.py` scans production Python SQL (including concatenated/f-string SQL and executemany) for a second writer and tests planted inserts as negative controls.

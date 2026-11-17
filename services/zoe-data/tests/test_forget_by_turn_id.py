@@ -741,6 +741,7 @@ def test_the_topic_forget_treats_each_index_hit_by_its_kind(world, kind, flagged
     be = xw.get_backend()
     for tid in [k[1] for k in be.rows if k[1] != w["entry"]]:
         run(be.delete(UID, [tid]))                                     # the target entry alone (a topic forget takes every hit)
+    svc._collection().rows.pop(w.get("old_fact"), None)                # and no legacy FACT: its excerpt resolves to the turn by words
     turn_forget.reset()
     res = run(forget_topic.forget(svc, UID, "my kayak paddles"))
     assert not (res.store_down or res.failed), res

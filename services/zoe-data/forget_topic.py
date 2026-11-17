@@ -197,7 +197,8 @@ async def _said_mids(user_id: str, turns: list, hits: dict, rows: Any = ()) -> l
     """The saved-turn ids of the owner's words about the topic: each retracted recent turn's ids (a turn noted with none: the saved
     turns its words resolve to), each exact-words entry's (a legacy entry's words resolved the same way; a non-turn entry names
     none) AND each matched row's own saved turn (``source_turn``): after a restart, with no recent turn and no indexed entry, the
-    row is the only thing that still names the turn, and its transcript / observations / notes go by that id. RAISES on a store
+    row is the only thing that still names the turn (a legacy row resolves its excerpt through the turn-forget helper), and its
+    transcript / observations / notes go by that id. RAISES on a store
     failure."""
     import exact_words
     import turn_forget
@@ -215,9 +216,11 @@ async def _said_mids(user_id: str, turns: list, hits: dict, rows: Any = ()) -> l
         elif kind == turn_forget.LEGACY:
             add(await exact_words.legacy_transcript_ids(user_id, text))
     for r in rows or ():
-        kind, mid = turn_forget.classify(r)                # a row bound to a saved turn names it; a non-turn / legacy row names none
+        kind, mid = turn_forget.classify(r)                # a bound row names its saved turn; only a legacy row resolves its excerpt
         if kind == turn_forget.TURN:
             add([mid])
+        elif kind == turn_forget.LEGACY:
+            add(await turn_forget.resolve_legacy_ids(user_id, ((getattr(r, "metadata", {}) or {}).get("source_excerpt"),)))
     return out
 
 
