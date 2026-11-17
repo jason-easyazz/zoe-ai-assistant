@@ -1380,7 +1380,9 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         excerpt = str(meta.get("source_excerpt") or "").strip().lower()
         turn = str(meta.get("user_turn_id") or "")
         out = []
-        for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
+        # ``strict`` (a forget deciding what else to erase): a store failure RAISES instead of reading as "no twins"
+        listing = svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, **({"strict": True} if strict else {}))
+        for r in await asyncio.wait_for(listing, READ_BUDGET_S):
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
             m = r.metadata or {}
@@ -1500,7 +1502,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 return STORE_DOWN_REPLY
             mp.clear_explained(user_id)
             return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"." if left else FORGET_GONE_REPLY
-        twins = await twins_of(user_id, ref, svc=svc)
+        twins = await twins_of(user_id, ref, svc=svc, strict=True)     # a failed lookup stops the forget BEFORE it starts
         await _speculation_barrier()
         plan = await _plan_forget(user_id, [ref.id, *(tw.id for tw in twins)], exp, ref.text or "")   # PARK FIRST, before the reject
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
@@ -1556,7 +1558,8 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
         gone = 0
         key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
         if key:
-            for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
+            for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, strict=True),
+                                            READ_BUDGET_S):
                 ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
                 if _owns(r.metadata or {}, user_id) and ex and (ex == key or key in ex):
                     if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:

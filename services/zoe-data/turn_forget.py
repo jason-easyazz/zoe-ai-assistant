@@ -364,7 +364,7 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
     must not be confirmed when the store could not be read)."""
     out, seen = [], set()
     for status in ("approved", "pending"):
-        for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT):
+        for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT, strict=True):
             if r.id in seen:
                 continue
             m = r.metadata or {}
@@ -442,7 +442,8 @@ async def finish_parked(user_id: str, entry: dict) -> dict:
 
     The ONLY id treated as done without being erased here is a row that no longer exists. A row that is still there after the erase
     (the eraser would not take it: not this member's, physical erase switched off, a store that kept it) is LEFT, never cleared.
-    RAISES on a store failure: nothing is cleared, and because the words go before the rows a repeat still finds them. Idempotent."""
+    RAISES on a store failure - a failed READ included (``MemoryService.get(strict=True)``: "could not look" is never "gone") - and then
+    nothing is cleared; because the words go before the rows a repeat still finds them. Idempotent."""
     import exact_words
 
     await exact_words.finish_parked(user_id, entry.get("turns") or (), entry.get("messages") or ())
@@ -454,9 +455,11 @@ async def finish_parked(user_id: str, entry: dict) -> dict:
     from memory_service import get_memory_service, physical_erase_enabled
 
     svc = get_memory_service()
+    # ``strict=True``: None is a DEFINITE not-found; a read that failed RAISES (a plain ``get`` answers None for it, and a hiccup
+    # would clear the park). Both the look before the erase and the read-back after it.
     present = []
     for rid in row_ids:
-        ref = await svc.get(rid)
+        ref = await svc.get(rid, strict=True)
         if ref is None:
             continue                  # truly gone already: the one legitimate "nothing to do"
         present.append(rid)
@@ -464,7 +467,7 @@ async def finish_parked(user_id: str, entry: dict) -> dict:
             await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
     if present and physical_erase_enabled():
         await svc.erase_rows(user_id, present, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)")
-    left = [rid for rid in present if await svc.get(rid) is not None]      # read back: an id is done only when its row is gone
+    left = [rid for rid in present if await svc.get(rid, strict=True) is not None]      # read back: done only when the row is gone
     if not left:
         with _LOCK:
             _unerased.pop(user_id, None)

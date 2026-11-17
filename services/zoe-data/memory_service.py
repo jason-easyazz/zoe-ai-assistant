@@ -2255,9 +2255,6 @@ class MemoryService:
         try:
             import os_shadow
             await os_shadow.forget_user(user_id)
-            # ... and the rows an earlier forget of theirs left parked for erase (pending-erases.json, ids only): this delete erases
-            # every row the member has, so the entry goes (no disk, no thread, when there is no shadow state or nothing is parked)
-            await os_shadow.drop_parked_erases(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
@@ -2475,6 +2472,15 @@ class MemoryService:
             await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
+        # LAST, once every eraser above has confirmed: what an earlier forget of theirs left parked for erase (the Zoe OS shadow's
+        # pending-erases.json, ids only) is dropped - this delete erased every row and word those ids name. Never earlier: a delete
+        # that fails part-way (or a process that dies) must leave the parked plan for the replay or the retried delete to finish.
+        # Fail closed (the delete is retried; everything above is idempotent). No disk and no thread with no shadow state directory.
+        try:
+            import os_shadow
+            await os_shadow.drop_parked_erases(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: parked erases not dropped ({type(exc).__name__})") from exc
         return len(ids)
 
     async def list_by_status(
@@ -2484,13 +2490,18 @@ class MemoryService:
         status: str = "pending",
         limit: int = 100,
         offset: int = 0,
+        strict: bool = False,
     ) -> list[MemoryRef]:
-        """List rows for a user by status, newest first."""
+        """List rows for a user by status, newest first. A store failure is logged and reads as an empty list - unless
+        ``strict``: then it RAISES (``MemoryServiceError``). A forget that decides WHAT to erase from this listing must pass
+        ``strict=True``: "could not look" must never read as "nothing there"."""
         self._require(user_id, "user_id is required")
         try:
             rows = await self._run_sync(self._list_by_status_sync, user_id, status)
         except Exception as exc:
             logger.warning("memory_service: list_by_status failed: %s", exc)
+            if strict:
+                raise MemoryServiceError(f"list_by_status failed: {type(exc).__name__}") from exc
             return []
         return rows[offset: offset + limit]
 
@@ -2568,12 +2579,16 @@ class MemoryService:
             )
         return archived
 
-    async def get(self, mem_id: str) -> Optional[MemoryRef]:
-        """Fetch a single row by id."""
+    async def get(self, mem_id: str, *, strict: bool = False) -> Optional[MemoryRef]:
+        """Fetch a single row by id. A read failure is logged and answered None - unless ``strict``: then it RAISES
+        (``MemoryServiceError``), and None means ONLY that the store holds no such row. For a caller that must tell "gone" from
+        "could not look": the replay of a parked erase clears an id only on a definite not-found (``turn_forget.finish_parked``)."""
         try:
             row = await self._run_sync(self._get_sync, mem_id)
         except Exception as exc:
             logger.warning("memory_service: get failed id=%s: %s", mem_id, exc)
+            if strict:
+                raise MemoryServiceError(f"get failed: {type(exc).__name__}") from exc
             return None
         return row
 

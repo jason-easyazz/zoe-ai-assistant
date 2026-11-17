@@ -164,7 +164,7 @@ async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
     for status in ("approved", "pending", "disputed", "superseded"):
         offset = 0
         while True:
-            page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
+            page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset, strict=True)
             if not page:
                 break
             for r in page:

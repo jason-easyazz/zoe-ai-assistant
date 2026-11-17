@@ -1494,6 +1494,7 @@ async def _finish_erases() -> int:
                 done += 1
                 logger.info("OS_SHADOW parked erase finished")
             except Exception as exc:  # noqa: BLE001
+                _left[member] = sum(len(entry[k]) for k in ERASE_KINDS)      # nothing was cleared: every id of the entry is still parked
                 logger.error("OS_SHADOW parked erase NOT finished, kept code=%s", type(exc).__name__)
     except Exception as exc:  # noqa: BLE001
         logger.error("OS_SHADOW parked erases unreadable code=%s", type(exc).__name__)

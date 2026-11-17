@@ -95,7 +95,7 @@ class FakeSvc:
         self.rows = {r.id: r for r in rows}
         self.edits = []
 
-    async def list_by_status(self, user_id=None, status="approved", limit=0):
+    async def list_by_status(self, user_id=None, status="approved", limit=0, strict=False):
         return [r for r in self.rows.values() if r.metadata.get("user_id") == user_id]
 
     async def get(self, row_id):

@@ -54,7 +54,7 @@ class FakeSvc:
     def __init__(self, rows):
         self.rows, self.flagged = rows, []
 
-    async def list_by_status(self, *, user_id, status, limit):
+    async def list_by_status(self, *, user_id, status, limit, strict=False):
         return [r for r in self.rows if r.metadata["status"] == status]
 
     async def flag_challenged(self, mem_id, *, user_id, utterance):

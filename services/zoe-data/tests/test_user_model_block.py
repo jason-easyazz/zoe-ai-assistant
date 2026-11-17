@@ -74,7 +74,7 @@ def env(monkeypatch):
             return False
 
     class _Svc:
-        async def list_by_status(self, *, user_id, status, limit):
+        async def list_by_status(self, *, user_id, status, limit, strict=False):
             assert status == "approved"
             return [r for r in st.rows if r.metadata["status"] == "approved"]
 

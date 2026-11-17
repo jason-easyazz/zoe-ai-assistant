@@ -4529,7 +4529,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 offset = 0
                 while True:
                     page = await svc.list_by_status(
-                        user_id=user_id, status=_status, limit=1000, offset=offset)
+                        user_id=user_id, status=_status, limit=1000, offset=offset, strict=True)
                     if not page:
                         break
                     rows.extend(page)
@@ -4581,7 +4581,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 for st in ("pending", "disputed", "superseded", "archived", "rejected"):
                     off = 0
                     while True:
-                        page = await svc.list_by_status(user_id=user_id, status=st, limit=1000, offset=off)
+                        page = await svc.list_by_status(user_id=user_id, status=st, limit=1000, offset=off, strict=True)
                         if not page:
                             break
                         for r in page:

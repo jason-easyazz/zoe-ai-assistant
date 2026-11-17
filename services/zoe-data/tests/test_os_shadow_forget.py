@@ -1179,12 +1179,17 @@ def callers(kernel, monkeypatch):
             self.before_erase = None        # called as the eraser is entered (the late case: the kernel stops HERE)
             self.after_erase = None         # called once the rows are gone (the kernel stops before the WORDS step)
             self.stuck: set = set()         # ids the eraser quietly does not take (it reports success all the same)
+            self.read_down = None           # "before": every strict read fails; "after": only the read-back after the erase
             self.ordinary_failure = False   # the eraser fails for a reason that is not the shadow
 
-        async def get(self, rid):
+        async def get(self, rid, *, strict=False):   # as MemoryService.get: a failed read is None, or RAISES when strict
+            if self.read_down in ("before", "after"):
+                if strict:
+                    raise _StoreError("the store could not be read")
+                return None
             return self.rows.get(rid)
 
-        async def list_by_status(self, *, user_id, status, limit=1000, offset=0):
+        async def list_by_status(self, *, user_id, status, limit=1000, offset=0, strict=False):
             return [r for r in self.rows.values() if r.metadata["status"] == status and r.metadata["user_id"] == user_id][offset:offset + limit]
 
         async def review(self, rid, *, decision, **kwargs):
@@ -1203,6 +1208,8 @@ def callers(kernel, monkeypatch):
             if self.ordinary_failure:
                 raise _StoreError("erase_rows failed: disk")
             n = sum(self.rows.pop(rid, None) is not None for rid in ids if rid not in self.stuck)
+            if self.read_down == "arm-after":
+                self.read_down = "after"
             if self.after_erase:
                 self.after_erase()
             return {"rows_removed": n}
@@ -1508,14 +1515,14 @@ class _EntityStore:
     async def search(self, query, **kwargs):
         return []
 
-    async def list_by_status(self, *, user_id, status, limit=1000, offset=0):
+    async def list_by_status(self, *, user_id, status, limit=1000, offset=0, strict=False):
         return [r for r in self.rows.values() if r.metadata["status"] == status][offset:offset + limit]
 
     async def review(self, rid, *, decision, **kwargs):
         self.rows[rid].metadata["status"] = "archived"
         return self.rows[rid]
 
-    async def get(self, rid):
+    async def get(self, rid, *, strict=False):
         return self.rows.get(rid)
 
     async def erase_rows(self, uid, ids, **kwargs):
@@ -1787,6 +1794,32 @@ async def test_a_parked_id_is_erased_whatever_its_status_and_a_missing_row_is_th
     # a parked id was chosen by a forget: the replay erases it whatever its status (r1 is still APPROVED here), with the words behind it
     assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1", "no-such-row"]}) == {}
     assert st.svc.rows == {} and (MEMBER, "t1") not in st.backend.rows
+
+
+@pytest.mark.asyncio
+async def test_a_member_delete_that_fails_part_way_keeps_the_parked_plan_and_the_retried_delete_drops_it(kernel, env, monkeypatch):  # noqa: F811
+    """RUNS the real ``MemoryService.delete_user`` with an earlier forget's plan parked. A LATER eraser fails (the day review, the
+    first one after the shadow): the delete raises and the plan is STILL parked - it is what would finish that earlier forget.
+    The retried delete succeeds, and only then is the member's entry dropped (another member's stays)."""
+    import memory_service
+    import omi_day_review
+
+    monkeypatch.setattr(os_shadow, "_kick_erases", lambda: None)     # only the delete's own drop is under test (not the replay's finish)
+    os_shadow.park_erase(MEMBER, rows=["r1"], turns=["t1"])
+    os_shadow.park_erase("member-b", rows=["r9"])
+    svc, _col = env
+    real = omi_day_review.forget_user
+
+    async def fails(*args, **kwargs):
+        raise OSError("the day-review store is down")
+
+    monkeypatch.setattr(omi_day_review, "forget_user", fails)
+    with pytest.raises(memory_service.MemoryServiceError, match="day-review erasure failed"):
+        await svc.delete_user(MEMBER, actor=MEMBER)
+    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1"], "turns": ["t1"]}, "member-b": {"rows": ["r9"]}}     # kept
+    monkeypatch.setattr(omi_day_review, "forget_user", real)
+    await svc.delete_user(MEMBER, actor=MEMBER)                                     # the retry: every eraser confirms
+    assert _parked_rows(kernel) == {"member-b": {"rows": ["r9"]}}
 
 
 @pytest.mark.asyncio
@@ -2114,3 +2147,51 @@ async def test_a_curation_forget_the_kernel_refused_is_replayed_for_the_row_and_
     add()
     assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
     assert st.svc.rows == {} and os_shadow.parked_unfinished() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["before", "arm-after"], ids=["the-look-before-the-erase", "the-read-back-after-it"])
+async def test_a_read_that_fails_during_the_replay_is_never_read_as_gone(kernel, callers, when):
+    """``MemoryService.get`` answers None for a read that FAILED, so "None means gone" could clear a park after a hiccup. The replay
+    uses the strict read: when the look before the erase, or the read-back after it, raises, nothing is cleared, the ids stay parked
+    and are counted; the next job with the store back finishes them."""
+    st = callers
+    await st.said()
+    st.svc.before_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
+    assert not (await st.run("curation"))[0]
+    parked = _parked_rows(kernel)
+    assert parked == {MEMBER: {"rows": ["r1"]}}
+    _restart(kernel)
+    kernel.forget_mode, st.svc.before_erase, st.svc.read_down = "ok", None, when
+    add()
+    assert await _until(lambda: os_shadow.parked_unfinished() == 1)
+    assert await _until(lambda: not os_shadow._finishing)
+    assert _parked_rows(kernel) == parked                                           # nothing cleared: "could not look" is not "gone"
+    if when == "before":
+        assert "r1" in st.svc.rows                                                  # not even erased: the replay stopped at the look
+    st.svc.read_down = None
+    add()                                                                           # the store answers again
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert st.svc.rows == {} and os_shadow.parked_unfinished() == 0
+
+
+@pytest.mark.asyncio
+async def test_the_real_strict_reads_raise_on_a_store_failure_where_the_plain_ones_answer_none_or_empty(env, monkeypatch):  # noqa: F811
+    """The real ``MemoryService``: ``get`` and ``list_by_status`` swallow a read failure into None / [] (unchanged for every other
+    caller); with ``strict=True`` they raise it, and None / [] mean only that the store really holds nothing."""
+    import memory_service
+
+    svc, _col = env
+    assert await svc.get("no-such-row", strict=True) is None and await svc.get("no-such-row") is None
+    assert await svc.list_by_status(user_id=MEMBER, status="approved", strict=True) == []
+
+    def broken(*args):
+        raise OSError("the store could not be read")
+
+    monkeypatch.setattr(svc, "_get_sync", broken)
+    monkeypatch.setattr(svc, "_list_by_status_sync", broken)
+    assert await svc.get("r1") is None and await svc.list_by_status(user_id=MEMBER, status="approved") == []    # the swallows
+    with pytest.raises(memory_service.MemoryServiceError, match="get failed"):
+        await svc.get("r1", strict=True)
+    with pytest.raises(memory_service.MemoryServiceError, match="list_by_status failed"):
+        await svc.list_by_status(user_id=MEMBER, status="approved", strict=True)
