@@ -36,6 +36,9 @@ def clips(env, monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_NAMED_GUEST_CLIPS", "1")
     monkeypatch.setenv("ZOE_GUEST_VOICE_LEARN", "on")
     monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(tmp_path))
+    # The cluster is heard at T0 and expires 14 days later; naming it reads the learning module's clock. Unpinned that is the
+    # wall clock, so six tests here went red on 2026-11-22 (T0 + 14 days).
+    monkeypatch.setattr(ngl, "_now", lambda: T0 + timedelta(hours=6))
     ngc.reset()
     queued = []
 

@@ -39,7 +39,7 @@ recorded in the cut-over plan.
    content. Anything a tool prints, logs or writes, and any endpoint without the token, carries codes, ids and counts only.
 8. **An erased permission authorises nothing.** Consent is read from the live record every time it matters.
 9. **Cost does not grow with history.** Everyday actions, undo and forget do bounded work; the step-budget tests pin it.
-10. **It works alone.** No network, no cloud, no code-hosting site is needed to run or test it.
+10. **It works alone.** No network, no cloud, no code-hosting site is needed to run or test it. Pinned in tests: `conftest.py`'s autouse `works_alone` fixture refuses (and fails the test on) any non-loopback socket connect/sendto in this process; `tests/test_works_alone.py` is its negative control.
 
 ## What the kernel owns in production
 

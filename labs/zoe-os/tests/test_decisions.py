@@ -7,7 +7,7 @@ from __future__ import annotations
 from twin_helpers import learn
 from world import household
 
-from zoe_os.capability import GUEST, Person
+from zoe_os.capability import ADULT, GUEST, Person
 from zoe_os.events import Event, Kind
 from zoe_os.retention import CHOSEN, OPTIONS, POLICY, TWIN_WINDOW_DAYS, Rule
 from zoe_os.twin import unusual as unusual_module
@@ -39,7 +39,7 @@ def test_the_twin_keeps_28_days_which_is_enough_for_both_baselines():
 def a_sick_child_day(tmp_path):
     days = generate(SAMPLE, days=22, seed=7, awkward={i: "" for i in range(21)} | {21: "sick_child"})
     k, twin, _ = learn(tmp_path, days)
-    people = dict(k.grants.people) | {"other": Person("other"), "visitor": Person("visitor", GUEST)}
+    people = dict(k.grants.people) | {"other": Person("other", ADULT), "visitor": Person("visitor", GUEST)}
     return k, unusual(twin, TODAY), people
 
 

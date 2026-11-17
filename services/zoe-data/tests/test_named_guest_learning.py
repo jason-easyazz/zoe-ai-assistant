@@ -21,6 +21,9 @@ T0 = datetime(2026, 11, 8, 9, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def learn(env, monkeypatch):
     monkeypatch.setenv("ZOE_GUEST_VOICE_LEARN", "on")
+    # The voices are heard at T0 (passed in as ``now=``) and expire 14 days later; the calls that take no ``now`` read the module
+    # clock. Unpinned that is the wall clock, so every test that names or lists a voice went red on 2026-11-22 (T0 + 14 days).
+    monkeypatch.setattr(ngl, "_now", lambda: T0 + timedelta(hours=6))
     ngl.bind_ask(False)
     yield env
     ngl.bind_ask(False)
