@@ -182,6 +182,20 @@ def _backup_configured(config_dir: Optional[str] = None) -> bool:
 
 # ── the snapshot ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+async def _owner_pin(db, owner: str) -> bool:
+    """An active passcode zoe-auth would ACCEPT: not past its ``expires_at``, judged exactly as ``core/passcode.py::verify_passcode``
+    does (naive local ``datetime.now()`` against ``fromisoformat``). An unreadable expiry is not a usable PIN."""
+    for (expires_at,) in await _rows(db, "SELECT expires_at FROM passcodes WHERE user_id = ? AND is_active = 1", (owner,)):
+        if not expires_at:
+            return True
+        try:
+            if datetime.now() <= datetime.fromisoformat(str(expires_at)):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 async def gather(*, panel_id: Optional[str] = None, db=None, now: Optional[datetime] = None,
                  backup_dir: Optional[str] = None) -> fb.Facts:
     """The unit's ``Facts``. Items that need an owner are ``False`` (and so ``waiting``) while there is none."""
@@ -196,9 +210,7 @@ async def gather(*, panel_id: Optional[str] = None, db=None, now: Optional[datet
             members = child = pin = voice = phone = win = cal = music = None
             deferred: frozenset = frozenset()
             if owner:
-                pin = await _safe("pin", _count(conn, "SELECT COUNT(*) FROM passcodes WHERE user_id = ? AND is_active = 1",
-                                                (owner,)))
-                pin = None if pin is None else pin > 0
+                pin = await _safe("pin", _owner_pin(conn, owner))
                 voice = await _safe("voice", _voice(owner, conn))
                 phone = await _phone(conn, owner)
                 win = await _safe("first_win", _first_win(conn, owner))

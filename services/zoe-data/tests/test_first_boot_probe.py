@@ -20,7 +20,7 @@ OWNER = "owner-a"
 SCHEMA = (
     "CREATE TABLE auth_users (user_id TEXT PRIMARY KEY, username TEXT, role TEXT NOT NULL, password_hash TEXT, created_at TEXT, "
     "is_active INTEGER DEFAULT 1)",
-    "CREATE TABLE passcodes (user_id TEXT, is_active INTEGER DEFAULT 1)",
+    "CREATE TABLE passcodes (user_id TEXT, is_active INTEGER DEFAULT 1, expires_at TEXT)",
     "CREATE TABLE panels (panel_id TEXT PRIMARY KEY, name TEXT NOT NULL, room_id TEXT, is_active INTEGER DEFAULT 1)",
     "CREATE TABLE device_tokens (panel_id TEXT, revoked INTEGER DEFAULT 0, expires_at TEXT)",
     "CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT, slug TEXT)",
@@ -91,7 +91,7 @@ def test_probe_a_set_up_household(store, tmp_path, monkeypatch):
         f"INSERT INTO auth_users VALUES ('{OWNER}', 'o', 'admin', 'hash', '1', 1)",
         "INSERT INTO auth_users VALUES ('kid-b', 'k', 'child', 'hash', '2', 1)",
         "INSERT INTO member_modes VALUES ('kid-b', 'kid', 1)",
-        f"INSERT INTO passcodes VALUES ('{OWNER}', 1)",
+        f"INSERT INTO passcodes VALUES ('{OWNER}', 1, NULL)",
         "INSERT INTO rooms VALUES ('r1', 'Kitchen', 'kitchen')",
         "INSERT INTO panels VALUES ('panel-x1', 'Kitchen panel', 'r1', 1)",
         "INSERT INTO device_tokens VALUES ('panel-x1', 0, NULL)",
@@ -181,3 +181,12 @@ def test_probe_panel_requires_a_valid_token(store, tmp_path, panel_id, tokens, p
     assert f.panel_named is paired
     named = next(s for s in fb.evaluate(f) if s.id == "panel_named")
     assert (named.state == fb.DONE) is paired
+
+
+@pytest.mark.parametrize("expires_at, usable", [(None, True), ("2999-01-01T00:00:00", True), ("2000-01-01T00:00:00", False),
+                                                ("not a date", False)])
+def test_probe_an_expired_owner_pin_is_not_a_pin(store, tmp_path, expires_at, usable):
+    """zoe-auth refuses a passcode past its expires_at (``verify_passcode``), so the checklist must not mark the PIN step done."""
+    f = gather(store, [f"INSERT INTO auth_users VALUES ('{OWNER}', 'o', 'admin', 'hash', '1', 1)",
+                       (f"INSERT INTO passcodes VALUES ('{OWNER}', 1, ?)", (expires_at,))], backup_dir=str(tmp_path))
+    assert f.owner_pin is usable
