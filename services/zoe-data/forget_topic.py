@@ -275,6 +275,7 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
     import conversation_notes
     import forget_record
     import memory_value_registry
+    import night_mind
     import pending_suggestions
     import turn_forget
 
@@ -298,6 +299,7 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
     reg_turns = [value_correction.turn_id_of(user_id, t) for t in said] if value_correction is not None else []
     plan = forget_record.Plan(
         rows=[r.id for r in rows], mids=await _said_mids(user_id, turns, hits, rows), entries=list(hits),
+        obs=await night_mind.legacy_observation_ids(user_id, *said),
         notes=await conversation_notes.ids_for_topic(user_id, lambda text: row_matches(groups, text)),
         reg=await memory_value_registry.ids_for_names(user_id, lambda name: any(row_matches([g], name) for g in groups)),
         reg_turns=reg_turns, reg_topic=True,
@@ -314,7 +316,7 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
             except Exception:  # noqa: BLE001
                 pass
     seen["preview"] = _preview(rows[0].text) if rows else ""
-    if not (plan.rows or plan.mids or plan.entries or plan.notes or plan.reg or plan.offers or reg_turns):
+    if not (plan.rows or plan.mids or plan.entries or plan.obs or plan.notes or plan.reg or plan.offers or reg_turns):
         return None
     return plan
 

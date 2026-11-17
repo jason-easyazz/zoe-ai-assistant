@@ -1946,7 +1946,7 @@ def _excerpt_said_tag(user_id: str, raw: Optional[str], stored: str) -> str:
 # ── write-time provenance (PR #2574): every NEW row names its source - a saved turn, or an explicit non-turn kind ──────────
 #: the explicit provenance kinds a row from NO saved chat turn carries (``metadata["source_kind"]``) instead of an empty id. A caller
 #: may pass one in ``metadata["source_kind"]``; the writer lanes below get theirs here; a row with no turn evidence at all is
-#: ``no_turn`` (nothing a turn forget could ever match it by).
+#: ``no_turn`` unless its deterministic user-turn lane leaves it legacy-shaped for a words match.
 NON_TURN_KINDS = frozenset({"no_turn", "omi_recording", "provider", "restore", "curated", "ui", "notes", "journal", "mcp",
                             "skybridge", "lab", "model"})
 #: writer lane -> its non-turn kind: lanes that never write from a saved chat turn, even when they carry an excerpt
@@ -1979,7 +1979,8 @@ def turn_id_mode() -> str:
 def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Optional[str],
                       user_turn_id: Optional[str]) -> dict:
     """The provenance keys a new row is stamped with (``source_turn`` or ``source_kind``), or ``{_UNBOUND_KEY: True}`` when the
-    row carries turn evidence (an excerpt / a turn id) yet names neither. The saved turn: the caller's ``source_turn``, else the
+    row carries turn evidence (an excerpt / a turn id) yet names neither. A deterministic user-turn writer without evidence
+    stays unmarked and uncounted. The saved turn: the caller's ``source_turn``, else the
     turn the words are (``turn_forget.turn_ref``, resolved now while they are as said). Never raises."""
     src_turn = str(extra.pop("source_turn", "") or "")
     kind = str(extra.pop("source_kind", "") or "")
@@ -2000,7 +2001,7 @@ def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Op
     if src_turn:
         return {"source_turn": src_turn}
     if not (source_excerpt or "").strip() and not (user_turn_id or "").strip():
-        return {"source_kind": "no_turn"}
+        return {} if (source or "").strip() in _auth.DETERMINISTIC_USER_WRITERS else {"source_kind": "no_turn"}
     return {_UNBOUND_KEY: True}
 
 
