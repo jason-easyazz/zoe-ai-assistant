@@ -104,7 +104,8 @@ def load_lexicon() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not data.get("enabled"):
             continue
-        for key in ("drop_words", "question_words", "relation_words", "naming_words", "street_types", "possessive_words", "unit_suffixes"):
+        for key in ("drop_words", "question_words", "relation_words", "cue_relation_words", "naming_words", "street_types",
+                    "possessive_words", "unit_suffixes"):
             out[key] = frozenset(out.get(key, frozenset())) | {fold(w) for w in data.get(key, [])}
         out["instruction_cues"] = list(out["instruction_cues"]) + list(data.get("instruction_cues", []))
         out["answer"].setdefault(data.get("lang", path.stem), data.get("answer", {}))
@@ -318,11 +319,15 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             j += 1
         # No capital letter is required: voice transcripts and model-written queries are often all lower case,
         # and "my friend dana smith" must not leave the house. The word after a relation word is a name, and so
-        # is the one after that unless it is a function word (a first name plus a surname). Over-stripping costs
-        # a weaker query; under-stripping sends a person's name.
+        # is the one after that (given a cue) unless it is a function word (a first name plus a surname).
+        # Over-stripping costs a weaker query; under-stripping sends a person's name.
+        # After a PERSON relation word the first word is a name with no cue at all ("concerts for partner bill"); a weaker
+        # query is the owner-accepted cost. A pet word ("dog food") is an everyday noun, so it still needs a cue ("our dog",
+        # "dog called biscuit", "Dog Biscuit"), and so does the second word (a surname), or every relation word eats two.
         owned = i > 0 and tokens[i - 1] in lex.get("possessive_words", frozenset())   # "my friend", not "dog food"
+        cued = named or owned or words[j][:1].isupper() if j < len(tokens) else False
         if j < len(tokens) and tokens[j] and tokens[j] not in lex["drop_words"] and tokens[j] not in lex["question_words"] \
-                and (named or owned or words[j][:1].isupper()):
+                and (cued or tok not in lex.get("cue_relation_words", frozenset())):
             drop.setdefault(j, "relation_name")
             k = j + 1
             # a surname: after "my friend dana", "my friend called dana" or "friend Dana Smith"

@@ -462,3 +462,11 @@ def test_a_two_letter_part_of_a_hyphenated_name_is_private_as_a_whole_word():
 def test_a_known_memory_number_is_stripped_in_any_script_of_digits(code):
     r = scrub_query(f"gate code {code} keypad reset instructions manual", PrivateTerms.of(memory=["The gate code is 4417"]))
     assert code not in r.query and "4417" not in r.query, r
+
+
+@pytest.mark.parametrize("raw", ["concerts for partner bill tonight", "gifts for friend dana", "restaurants near neighbour pat",
+                                 "tickets for wife rose"])
+def test_a_lowercase_name_after_a_relation_word_is_stripped_without_any_cue(raw):
+    r = scrub_query(raw)
+    name = raw.split()[-1] if raw.split()[-1] != "tonight" else raw.split()[-2]
+    assert name not in r.query.split(), r

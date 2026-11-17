@@ -150,6 +150,11 @@
     "cat",
     "pet"
   ],
+  "cue_relation_words": [
+    "dog",
+    "cat",
+    "pet"
+  ],
   "naming_words": [
     "called",
     "named"
