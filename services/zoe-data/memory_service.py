@@ -1512,7 +1512,7 @@ def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, 
 
     Up to ``_MAX_MODIFIERS`` modifiers are skipped (kept as said); then the next word decides:
 
-    * nothing left: after a word connector (``excuse``) no value was said - kept; after ":" / "=" those words ARE the value;
+    * nothing left: those words ARE the value ("my password is still"): redacted, after a word connector as after ":" / "=";
     * with ``excuse`` and a STATE / TIME / PLACE word (``_LABELLED_NOT_VALUES``, where the module has one): kept only while nothing
       after it can be the secret - a state / time word must be followed by a place / time phrase, a conjunction or a modifier
       (``_STATE_TAIL_OK``), else the next word is the value; a later introducer in the clause ("as", "the name", "but was")
@@ -1527,7 +1527,7 @@ def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, 
     while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
         i += 1
     if i == len(toks) or not any(t for _sp, t in toks[i:]):   # modifiers only
-        return head + (_join(toks[:i]) if excuse else _REDACT), at(i)
+        return head + _REDACT, at(i)               # "is still" / "is now": the modifier can itself be the secret - fail closed
     kept = _join(toks[:i])
     word = _norm_word(toks[i][1])
     end = _clause_end(toks, i + 1)

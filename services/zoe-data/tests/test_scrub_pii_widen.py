@@ -527,7 +527,7 @@ def test_every_modifier_then_a_slot_ending_word_is_kept():
 
 @pytest.mark.parametrize("text", [
     "my password is still working", "my password is not working", "my password is now on the fridge",
-    "my password is no longer valid", "the password was reset", "change your password now", "change your password again",
+    "my password is no longer valid", "change your password now", "change your password again",
     "my password no longer works", "the password reset link expired", "the password change worked",
 ])
 def test_modifier_forms_that_carry_no_value_are_kept(text):
@@ -762,3 +762,10 @@ def test_every_kept_state_or_time_word_then_an_introducer_redacts_the_value(word
 def test_every_kept_state_or_time_word_then_a_bare_word_redacts_it(word):
     out, _ = scrub_pii(f"my password is {word} zebrafiddle")
     assert "zebrafiddle" not in out, out
+
+
+@pytest.mark.parametrize("w", ["still", "now", "reset", "not", "to"])
+def test_a_modifier_that_is_the_whole_value_is_redacted(w):
+    """Review (PR #2660): a word on the modifier list can itself be the password; with nothing after it, it is the value."""
+    out, _ = scrub_pii(f"my password is {w}")
+    assert out == f"my password is {R}", out
