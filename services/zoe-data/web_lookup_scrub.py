@@ -309,6 +309,22 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     for view in (tokens, plains, bare):
         for i in _memory_runs(view, terms, lex):
             drop.setdefault(i, "memory")
+    # ...and over the PARTS of compounds ("red-box", "red.box": one token, two memory words): each part keeps its token's index,
+    # so a memory phrase joined by punctuation is still a run of two words. Same three views per part.
+    part_idx, part_views = [], ([], [], [])
+    for i, w in enumerate(words):
+        for p in re.split(r"[.\-'’_/]", w):
+            f = fold(p)
+            if not f:
+                continue
+            part_idx.append(i)
+            part_views[0].append(f)
+            part_views[1].append(fold(p.translate(_LOOKALIKE)))
+            part_views[2].append(re.sub(r"\d", "", f) if not f.isdigit() else f)
+    if len(part_idx) > len(words):          # only when some word actually split
+        for view in part_views:
+            for k in _memory_runs(view, terms, lex):
+                drop.setdefault(part_idx[k], "memory")
     # THE ALLOW-LIST, last and strongest: a word may leave the house only if it is an ordinary dictionary word
     # (allow_words(), SCOWL plus a small supplement) or a number of at most four digits. Everything the rules
     # above did not recognise (a name, a code, an invented spelling, a glued or split private term) is dropped,

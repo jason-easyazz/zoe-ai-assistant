@@ -9,6 +9,7 @@ ci_safe: pure functions, no sockets, no database.
 from __future__ import annotations
 
 import random
+import re
 import unicodedata
 
 import pytest
@@ -374,12 +375,13 @@ def test_a_dictionary_word_that_starts_with_a_member_name_still_leaves():
 
 
 
-@pytest.mark.parametrize("raw", ["red box2 replacement", "red2 box replacement", "red b0x replacement"])
+@pytest.mark.parametrize("raw", ["red box2 replacement", "red2 box replacement", "red b0x replacement",
+                                 "red-box replacement prices", "red.box replacement prices", "red_box replacement", "red/box2 replacement"])
 def test_a_short_memory_phrase_with_a_digit_added_is_still_stripped(raw):
     # Codex P1 on #2527: a memory phrase shorter than the glue length ("red box") escaped once a digit was stuck to one word
     r = scrub_query(raw, PrivateTerms.of(memory=["The spare key is in the red box"]))
-    words = r.query.split()
-    assert not ({"red", "red2"} & set(words) and {"box", "box2", "b0x"} & set(words)), r
+    flat = set(re.split(r"[\s.\-_/]+", r.query))
+    assert not ({"red", "red2"} & flat and {"box", "box2", "b0x"} & flat), r
 
 
 def test_a_hyphenated_public_compound_is_kept():
