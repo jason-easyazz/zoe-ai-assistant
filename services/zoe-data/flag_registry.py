@@ -902,6 +902,8 @@ _ENTRIES = (
     _f('ZOE_ROUTER_TWO_STAGE_GATE', 'float', 0.5, doc='docs/research/failure-fed-proposals-2026-10-04.md'),
     _f('ZOE_ROUTER_TWO_STAGE_TIMEOUT_S', 'float', 1.5, doc='docs/knowledge/log-review-units-2026-10-04.md'),
     _f('ZOE_ROUTER_WARM_START', 'str', '', doc='docs/knowledge/router-selftrain-loop.md'),
+    _f('ZOE_ROUTINES', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/routines.md', note='stage 1 master switch; off = no route, no tier, no write (the erasers run regardless)'),
+    _f('ZOE_ROUTINE_VOICE', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/routines.md', note='the routines conversation tier; needs ZOE_ROUTINES=on; shadow = log what it would take, take nothing'),
     _f('ZOE_SCHEDULED_QUEUE_WAIT_S', 'float', 1200.0),
     _f('ZOE_SEAM_CONTINUITY_DEBUG', 'str', '', doc='docs/knowledge/samantha-bar.md'),
     _f('ZOE_SEAM_CONTINUITY_INJECT', 'bool', True, doc='docs/knowledge/samantha-bar.md'),
