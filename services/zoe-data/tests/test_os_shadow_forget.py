@@ -2554,3 +2554,29 @@ def test_with_the_shadow_off_a_step_failure_never_marks_a_plan_or_changes_a_repl
     real = os_shadow.Plan("member-poff", {"rows": ["r1"]})
     real.failed()
     assert real.has_failed is True                             # control: a real plan does fail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["last", "topic"])
+async def test_ordinary_erase_failure_shadow_off_preserves_caller_result(ordinary_callers, monkeypatch, caller):
+    import forget_topic
+    import intent_router
+
+    kernel, st = ordinary_callers
+    monkeypatch.delenv("ZOE_OS_LIST_SHADOW", raising=False)
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(kernel.state / "absent"))
+    await st.said()
+    st.svc.ordinary_failure = True
+    forgotten, result = await st.run(caller)
+
+    assert forgotten
+    assert st.svc.rows["r1"].metadata["status"] == ("rejected" if caller == "last" else "archived")
+    assert (MEMBER, "t1") not in st.backend.rows
+    assert not (kernel.state / "absent" / "pending-erases.json").exists()
+    if caller == "last":
+        assert result == f'Done — I forgot: "{SAID}".'
+        assert result != intent_router.FORGET_STORE_DOWN_REPLY
+    else:
+        assert result == forget_topic.Result(found=1, forgotten=1, turns_retracted=1, preview=SAID, words_erased=1)
+        assert not result.store_down
+    # Shadow-on controls: test_ordinary_erase_failure_keeps_the_plan_until_replay[last/topic].

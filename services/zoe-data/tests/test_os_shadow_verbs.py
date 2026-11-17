@@ -827,3 +827,19 @@ async def test_the_alarm_hook_runs_after_its_commit_and_never_after_a_failed_one
     finally:
         await db.close()
     assert seen == ([] if fail else [1])
+
+
+def test_with_the_shadow_off_an_alarm_create_computes_no_date(monkeypatch):
+    """Review (PR #2631), no regression against main: ``alarms.create_alarm`` hands the hook a CALLABLE for ``dated``; with the
+    switch off the hook touches nothing, so ``next_once_date`` (timezone / date work) is never run after the commit."""
+    import ast
+    import alarms
+
+    calls = []
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    os_shadow.note_alarm_create("member-aoff", source="service", time_hhmm="07:10", repeat="once", dated=lambda: calls.append(1) or True)
+    assert calls == []
+    # structural: the one production caller passes a lambda, never an eagerly computed value
+    tree = ast.parse(open(alarms.__file__, encoding="utf-8").read())
+    hooks = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "note_alarm_create"]
+    assert hooks and all(isinstance(kw.value, ast.Lambda) for n in hooks for kw in n.keywords if kw.arg == "dated")

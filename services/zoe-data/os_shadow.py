@@ -1090,12 +1090,15 @@ def note_reminder_create(user_id: Optional[str], *, source: str, note: Optional[
 
 
 def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optional[str], repeat: Optional[str],
-                      dated: bool = False) -> None:
+                      dated: Any = False) -> None:
     """An alarm row committed (``alarms.create_alarm``). The kernel's alarm is one time per person: the repeat rule rides ``cls``.
+    ``dated`` may be a zero-argument callable: it is evaluated ONLY when the shadow is on (inside the lazy payload), so with the flag
+    off the caller pays no date / timezone work after its commit.
     ``dated``: a one-off set for a date that is NOT the time's next occurrence - the kernel's verb carries no date, so proposing the
     time alone could "match" a kernel alarm on another day; it is counted ``not_expressible reason=dated`` and never sent."""
     _note("alarm_create", user_id, source, True, lambda: ("once" if (repeat or "once") == "once" else "repeat",
-                                                          {"time": str(time_hhmm or ""), "repeat": repeat or "once", "dated": bool(dated)}))
+                                                          {"time": str(time_hhmm or ""), "repeat": repeat or "once",
+                                                           "dated": bool(dated() if callable(dated) else dated)}))
 
 
 # ---- forget -------------------------------------------------------------------------------------------------------------------------
