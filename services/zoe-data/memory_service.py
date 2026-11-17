@@ -1599,6 +1599,18 @@ _CODE_RE = re.compile(
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
     rf"{_CONNECT_FILL}({_TOKEN})"
 )
+#: THE CLASS RULE (review, PR #2660): once a secret LABEL is seen, the value needs NO shape - letters only ("the wifi key is
+#: zebrafiddle"), digit pairs, spelled-out numbers, symbols: with a connector the first word and the rest of the clause go
+#: (``_judge_match``, nothing excused); without one, the word after the label goes unless it is on the closed about-the-secret
+#: list (``_PASSWORD_NOT_VALUES``: "the alarm code changed"). The digit shapes (``_CODE_RE``, ``_BARE_PIN_RE``) stay as the extra net
+_CODE_LABEL_FORMS = (
+    rf"(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)})")
+_CODE_LABELLED_RE = re.compile(
+    rf"(?i)\b({_CODE_LABEL_FORMS}|pin(?:\s+(?:number|code))?|passcode)\b"
+    r"(\s{0,8}(?:(?:" + _CONNECT_WORDS + r")(?:\s{0,8}[:=])?|[:=]|'s|’s)\s{0,8})"
+    r"(?!\[REDACTED\])(\S+?)(?=[.,;!?]{0,8}(?:\s|$))" + _SUFFIX
+)
 #: a QUOTED value after any secret label (labelled, bare, "for / to <thing>", a code label), whatever the words: it runs to its
 #: closing quote, or - never closed - to the end of the clause, with NO token cap (a quoted nine-word passphrase loses all nine).
 #: The prefix is bounded everywhere; the close is an index scan from the opening quote (``_scrub_quoted``): linear
@@ -1641,8 +1653,8 @@ def _scrub_quoted(text: str) -> str:
     return "".join(out)
 
 
-#: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
-_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
+#: a PIN said without "is" (``my pin 4821``, ``my pin 12 34``, ``pin 1 2 3 4``): three digits, or digit groups; "pin 3 photos" stays
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2}|\d{1,2}(?:[ -]\d{1,4}){1,7})\b")
 #: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
 #: after the label is kept only when it is on this CLOSED list - a word that says the sentence is ABOUT the password, not its
 #: value. Nouns and states first, then function words (a connector, pronoun or adverb is never the value itself).
@@ -1681,6 +1693,11 @@ _BARE_PASSWORD_RE = re.compile(
     r"(?i)\b(password|passphrase)\b(\s{1,8}"
     rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
     rf"({_BARE_INTRO}|(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-]))(?![-'’=:]){_PASSWORD_VALUE})" + _SUFFIX
+)
+#: a code LABEL said without a connector ("the wifi key zebrafiddle"): the same closed-list rule as a bare password
+_CODE_BARE_RE = re.compile(
+    rf"(?i)\b({_CODE_LABEL_FORMS})\b(\s{{1,8}})"
+    rf"((?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-]))(?![-'’=:\[]){_PASSWORD_VALUE})" + _SUFFIX
 )
 #: WITH a connector ("password: x", "password - x", "my password's x" - the same as "is"): FAIL CLOSED, no word excused; modifiers
 #: are skipped and the word after them redacted
@@ -1942,6 +1959,8 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     redacted = _drive(_REL_PASSWORD_RE, redacted, _always)              # "the password I use is <value>"
     redacted = _drive(_BARE_PASSWORD_CONN_RE, redacted, _never)       # "password: x", "password's x": fail closed
     redacted = _drive(_BARE_PASSWORD_RE, redacted, _never)            # a password said without "is", letters-only too
+    redacted = _drive(_CODE_LABELLED_RE, redacted, _never)            # "the wifi key is <anything>": no shape required
+    redacted = _drive(_CODE_BARE_RE, redacted, _never)                # "the wifi key <word>": the closed list only
     redacted = _scrub_secrets(redacted)
     return (_scrub_contact(redacted) if contact else redacted), None
 

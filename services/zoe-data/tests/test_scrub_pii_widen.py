@@ -131,7 +131,7 @@ MUST_NOT: list[str] = [
     "05-11-2026 was a good day", "the times were 00 15 30 45",
     # code / pin words that are not secrets
     "pineapple on pizza", "the dress code is casual", "the area code", "what's the postcode", "the postcode is unknown",
-    "the alarm code changed yesterday", "the gate code is green", "the wifi password changed", "pin it to the board",
+    "the alarm code changed yesterday", "the wifi password changed", "pin it to the board",
     "pin 3 photos to the fridge", "the zip code", "reset my password", "the password reset tomorrow",
     # the closed list after "password": the sentence is ABOUT the password, it holds no value
     "I need a password manager", "the password reset link expired", "type it in the password field",
@@ -670,9 +670,10 @@ def test_a_code_said_after_a_filler_word_is_redacted(form, fill):
     assert "5791" not in out, out
 
 
-def test_a_filler_word_with_no_code_after_it_changes_nothing():
-    said = "the door code is actually broken"
-    assert scrub_pii(said) == (said, None)
+def test_a_word_after_a_code_label_and_is_goes_whatever_it_is():
+    """The class rule (review, PR #2660): no shape is required of a labelled secret, so "broken" / "green" go as a value would."""
+    assert scrub_pii("the door code is actually broken")[0] == "the door code is [REDACTED]"
+    assert scrub_pii("the gate code is green")[0] == "the gate code is [REDACTED]"
 
 
 # ── a quoted value runs to its closing quote (or the end of the clause), with NO token cap (review of #2660) ──────────────────────
@@ -845,3 +846,30 @@ def test_a_labelled_id_number_goes_as_a_whole_token(value):
     """Review (PR #2660): letters and digits in any order, dash-joined: the WHOLE token after the label, never a part of it."""
     assert scrub_pii(f"passport number {value}")[0] == f"passport number {R}"
     assert scrub_pii(f"my passport number is {value} ok")[0] == f"my passport number is {R} ok"
+
+
+_LABELLED_ANY = ["the wifi key is {v}", "my pin is {v}", "the door code is {v}", "the alarm code: {v}", "my passcode is {v}",
+                 "the safe code was {v}", "the security code for the gate is {v}", "the network key = {v}"]
+
+
+@pytest.mark.parametrize("form", _LABELLED_ANY)
+@pytest.mark.parametrize("value", ["zebrafiddle", "12 34", "1 2 3 4", "twelve thirty-four", "Tr0ub4dor&3"])
+@pytest.mark.parametrize("tail", ["", ". The dog is fed", " and I am tired"])
+def test_a_labelled_secret_needs_no_shape(form, value, tail):
+    """Review (PR #2660), the class rule: after a secret label and its connector the value is redacted whatever its characters."""
+    out, _ = scrub_pii(form.format(v=value) + tail)
+    assert R in out and not any(part in out.split() for part in value.split()), out
+    assert tail.strip(" .") in out, out
+
+
+@pytest.mark.parametrize("text,want", [
+    ("my pin 12 34", "my pin [REDACTED]"), ("pin 1 2 3 4", "pin [REDACTED]"), ("wifi key zebrafiddle", "wifi key [REDACTED]"),
+])
+def test_a_secret_said_without_a_connector_goes_too(text, want):
+    assert scrub_pii(text) == (want, None)
+
+
+@pytest.mark.parametrize("text", ["the alarm code changed", "the dress code is casual", "pin 3 photos to the board",
+                                  "the wifi password works", "I lost the door key"])
+def test_talk_about_a_code_without_a_value_is_kept(text):
+    assert scrub_pii(text) == (text, None)
