@@ -119,7 +119,7 @@ async def _time_and_place() -> bool:
 
 
 async def _phone(db, owner: str) -> Optional[bool]:
-    """True when ANY channel is linked; None only when every read failed."""
+    """True when ANY channel is linked; None (unknown) when none is and ANY read failed - a failed read is never "not linked"."""
     import user_prefs
 
     async def push():
@@ -135,11 +135,13 @@ async def _phone(db, owner: str) -> Optional[bool]:
     seen = [await _safe("phone." + n, f()) for n, f in (("push", push), ("telegram", telegram), ("app", app))]
     if any(seen):
         return True
-    return None if all(s is None for s in seen) else False
+    return None if any(s is None for s in seen) else False
 
 
 async def _first_win(db, owner: str) -> bool:
-    n = await _count(db, "SELECT COUNT(*) FROM reminders WHERE user_id = ? AND COALESCE(is_active, 1) = 1", (owner,))
+    # a deleted reminder keeps is_active (routers/reminders.delete_reminder sets only ``deleted``): it is not a first win
+    n = await _count(db, "SELECT COUNT(*) FROM reminders WHERE user_id = ? AND COALESCE(is_active, 1) = 1 AND COALESCE(deleted, 0) = 0",
+                     (owner,))
     return n > 0 or await _count(db, "SELECT COUNT(*) FROM lists WHERE user_id = ? AND COALESCE(deleted, 0) = 0", (owner,)) > 0
 
 

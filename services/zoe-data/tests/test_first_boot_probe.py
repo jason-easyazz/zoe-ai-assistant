@@ -33,7 +33,7 @@ SCHEMA = (
     "CREATE TABLE push_subscriptions (user_id TEXT, endpoint TEXT)",
     "CREATE TABLE user_preferences (user_id TEXT PRIMARY KEY, prefs TEXT)",
     "CREATE TABLE phone_devices (id TEXT PRIMARY KEY, user_id TEXT, revoked INTEGER DEFAULT 0)",
-    "CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT, is_active INTEGER DEFAULT 1)",
+    "CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT, is_active INTEGER DEFAULT 1, deleted INTEGER DEFAULT 0)",
     "CREATE TABLE lists (id TEXT PRIMARY KEY, user_id TEXT, deleted INTEGER DEFAULT 0)",
     "CREATE TABLE member_modes (user_id TEXT PRIMARY KEY, mode TEXT, minor INTEGER DEFAULT 0)",
     "CREATE TABLE connected_accounts (id TEXT PRIMARY KEY, user_id TEXT, kind TEXT, status TEXT)",
@@ -98,7 +98,7 @@ def test_probe_a_set_up_household(store, tmp_path, monkeypatch):
         ("INSERT INTO speaker_profiles VALUES ('s1', ?, 3, '2026-11-14 09:00:00', '2026-11-14 09:00:00', ?)",
          (OWNER, speaker_models.RESNET34_MODEL_ID)),
         f"INSERT INTO user_preferences VALUES ('{OWNER}', '{{\"telegram_id\": \"1\"}}')",
-        f"INSERT INTO reminders VALUES ('m1', '{OWNER}', 1)",
+        f"INSERT INTO reminders VALUES ('m1', '{OWNER}', 1, 0)",
         f"INSERT INTO connected_accounts VALUES ('c1', '{OWNER}', 'calendar', 'active')",
     ]
     f = gather(store, rows, backup_dir=str(tmp_path))
@@ -190,3 +190,17 @@ def test_probe_an_expired_owner_pin_is_not_a_pin(store, tmp_path, expires_at, us
     f = gather(store, [f"INSERT INTO auth_users VALUES ('{OWNER}', 'o', 'admin', 'hash', '1', 1)",
                        (f"INSERT INTO passcodes VALUES ('{OWNER}', 1, ?)", (expires_at,))], backup_dir=str(tmp_path))
     assert f.owner_pin is usable
+
+
+def test_probe_a_deleted_reminder_is_not_a_first_win(store, tmp_path):
+    """``delete_reminder`` sets ``deleted`` and leaves ``is_active``: the owner's only (deleted) reminder is not a first win."""
+    f = gather(store, [f"INSERT INTO auth_users VALUES ('{OWNER}', 'o', 'admin', 'hash', '1', 1)",
+                       f"INSERT INTO reminders VALUES ('m-del', '{OWNER}', 1, 1)"], backup_dir=str(tmp_path))
+    assert f.first_win is False
+
+
+def test_probe_one_failed_phone_channel_is_unknown_not_unlinked(store, tmp_path):
+    """Two channels read "not linked" and one read FAILS: the owner may be linked through the failed one, so the step is unknown."""
+    f = gather(store, [f"INSERT INTO auth_users VALUES ('{OWNER}', 'o', 'admin', 'hash', '1', 1)", "DROP TABLE phone_devices"],
+               backup_dir=str(tmp_path))
+    assert f.phone_linked is None
