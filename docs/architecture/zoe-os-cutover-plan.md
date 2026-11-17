@@ -1,8 +1,8 @@
 # Zoe OS: the plan from the lab to the kernel in charge
 
-**Status 2026-11-15: a plan. Nothing in it is live.** Owner direction, 2026-11-15: Zoe OS is fast-tracked and goes first in every
-queue; new work that touches lists, reminders, alarms or consent is built kernel-first; the switch-over is staged, one action at a
-time, never all at once.
+**Changed 2026-11-18 (owner decisions):** After train #2631, areas move directly to the kernel behind one fall-back flag each. There are no further shadow stages or week-clean gates. The kernel decides and records; existing stores keep the data. Lists come first, followed by reminders, alarms and timers, routines, calendar and the remaining tools. Clean each area as it moves.
+
+**Status 2026-11-18: a plan.** The first watch-only run ended for the train deploy. Move one area at a time as described below.
 
 This page is the whole programme in one place: what gets updated, upgraded, optimised and cut over, in what order, what each step
 must prove first, and how it is undone. It does not replace the records it leans on:
@@ -19,133 +19,29 @@ Claims are labelled [lab] (run in the lab on the box), [live] (seen on the runni
 
 ## 1. Where it stands today
 
-| Piece | State | Evidence |
-|---|---|---|
-| The lab kernel (events, consent, receipts, why, undo, forget, retention, sharing, twin, brain bridge) | One PR, #2630, in its final review | [lab] 447 tests |
-| Real-brain run | Done twice with a synthetic member | [live read, lab process] list add 8/8, reminders 8/8, alarms 6/6, refusals 3/3, no false calls with the kernel's policy arm |
-| Speed of one kernel call | Measured | [lab] about 1 ms for everyday actions; undo about 1 ms; forget about 2.6 ms |
-| Crash safety of the record | Measured | [lab] 50 kills mid-write: nothing lost, nothing half-written |
-| Forget scoped to the person; permission and refusal records forgotten | Built, in review (#2633, on #2634 and #2635) | [lab] 515 tests |
-| Shadow hook for list add, list remove, reminders, alarms | Built, switched off, in review (#2622 to #2625, #2631, #2632) | [lab] 126 tests; nothing live |
-| List add with the kernel in charge | Being built, switched off | none yet |
-| Anything running in production | Nothing | n/a |
+On 2026-11-18 the kernel first ran from main in watch-only mode. Three demo list adds matched in 3 to 12 ms. It was turned off for the train deploy. The rehearsal matched 300 of 300 adds; see [the run record](../knowledge/zoe-os-list-shadow.md).
 
 ## 2. The rules every step follows
 
-1. **One action at a time.** A verb moves only when its own numbers say so. No big-bang.
-2. **Shadow before authority.** The kernel first watches a verb and its verdict is compared with what really happened. It controls
-   nothing until the two agree.
-3. **The old path stays as the fallback** until a verb has run under the kernel for a full release of the household's normal use.
-   A dead, slow or confused kernel must never fail or stall a turn.
-4. **A real refusal is honoured.** If the kernel says no for a policy reason (no permission, forgotten), that is the answer. The
-   fallback is for faults, not for disagreeing with the rules.
-5. **Forget reaches the kernel before the kernel holds anything.** No stage may leave a member's data somewhere "forget" and
-   "delete this member" cannot reach.
-6. **Measured before and after.** Each step names its number, takes it before, takes it after. Voice-path changes are
-   replay-gated against the real-voice corpus.
-7. **Proven, then switched on.** Built-but-off is not done. Flag flips, service units and restarts are the owner's and the
-   landing session's; this plan says what must be true first.
-8. **Night jobs are rehearsed by day** before any night setting changes.
+1. Move one area at a time, directly behind one fall-back flag. After train #2631 there are no more shadow stages or week-clean gates.
+2. The kernel decides and records. Data stays in its existing store. Each area has one door in zoe-data: it asks the kernel, which answers and records who and which turn; zoe-data changes the store and reports the outcome.
+3. A kernel refusal is final. If unreachable, the change proceeds and is recorded as not checked for later. Decide separately for any area where a wrong yes can do harm.
+4. Measure added delay and replay-gate voice changes. The coordinating agent runs switch-overs; landing and merging follow their existing gates.
+5. A new local store for real household data must stay on this box with no network path. Forget reach is not a precondition on this development box. Never commit personal data.
+
+This design needs no import, leaves readers unchanged and loses no data when the flag falls back. The lists piece is hundreds of lines, compared with an estimated 1,350 to 2,400 before tests to move its data into the kernel.
 
 ## 3. The phases
 
-Each phase lists what it delivers, what must be proven to start it, what proves it worked, and the one-line rollback.
+1. Finish train #2631 and its live checks. Fix the database growth and restart recovery faults in [open problems](../knowledge/open-problems.md).
+2. Move lists: one door in `list_service`, kernel verbs and rules, `ZOE_OS_LISTS=kernel`, live checks, forget by record and cleanup. Name the service `zoe-os-kernel` and its state folder `~/.zoe/os`; remove the shadow-named unit, flag and folder.
+3. Move reminders, including the fixes from parked #2653; then alarms and timers.
+4. Build routines on the kernel from the start. The old-style routines store PRs are parked.
+5. Move calendar, then remaining tools one at a time: notes, journal, people and contacts, memory, music, home control, weather and web lookup, and messages.
 
-### Phase 0. Land the lab (in progress)
+An area is done when every change uses one door; every ability passes on the live box through the kernel with a demo user; forget of a turn and a person works from the kernel record; added delay is measured; and side doors are deleted. Remove dead code, duplicate paths, stale flags, unused tables and stale docs in the same work, and tick the area's rows in the [clean-house register](zoe-os-clean-house.md).
 
-- **Delivers:** the kernel and its docs on `main`, lab-only. Then the three stacked follow-ups: the load harness, the undo and
-  forget speed-up, and the two forget decisions.
-- **Proof to start:** done.
-- **Proof it worked:** `pytest labs/zoe-os` green on `main`; nothing under `services/` imports it.
-- **Rollback:** revert the merge. Nothing runs it.
-
-### Phase 1. Shadow on, four verbs
-
-- **Delivers:** every real list add, spoken list remove, reminder create and alarm create is also shown to a kernel process. The
-  kernel records it and its verdict is compared with what production did. Production is still the only writer.
-- **Needs first:** the shadow PRs landed; a kernel service unit installed; the member roster written; a voice replay (the hook sits
-  on the voice path); the hook's cost on a turn re-measured (it must be a flag read and one queue put). Every erase entry point must already reach the kernel:
-  the Settings delete button (WP-24) and guardian forget, "forget that" and the MCP erase (WP-64) land before the switch goes on.
-- **Owner steps:** install the unit, set the shadow switch and the verb list, restart. Exact commands arrive with the PR.
-- **Proof it worked:** the per-verb report shows lines arriving, agreement near 100%, the kernel answering in under 10 ms at p90,
-  and one deliberate "forget" and one demo-member delete seen to empty the kernel's record for that person.
-- **Rollback:** remove the switch line and restart.
-
-### Phase 2. Prove agreement quickly
-
-Waiting two weeks for enough real traffic is slow. Compress it:
-
-- **Synthetic day:** a scripted set of a few hundred varied list, reminder and alarm requests run through the live box with demo
-  users, built from the same shapes the household uses (no real words). Includes the awkward ones: duplicates, a list that does
-  not exist, a child speaker, a guest, a reminder in the past, two alarms.
-- **Corpus replay:** the real-voice replay corpus run with shadow on, so real phrasings are compared too.
-- **Twin rehearsal:** the household twin plays a week through the kernel as if it were in charge, to find rule conflicts before a
-  person does.
-- **Proposed pass mark for a verb (owner decision D1):** at least 200 compared actions, at least 99.5% agreement, every
-  disagreement read and explained, kernel unavailable under 1%, p90 under 10 ms, and forget and member delete both seen to reach
-  the kernel. Real household traffic still counts and keeps accumulating; the synthetic day is there so the proof does not wait on
-  the calendar.
-
-### Phase 3. First cut-over: list add
-
-- **Delivers:** a list add is proposed to the kernel and the kernel's receipt decides. The existing list tables are still written,
-  as the household's read model, so the panel, the app and every reader keep working unchanged.
-- **Needs first (the gaps, for this one verb):**
-  1. a durable list store in the kernel (today the lab's is in memory);
-  2. the fallback, proven with a hung kernel, a dead kernel and a slow one;
-  3. forget and member delete reaching the kernel, failing closed (a delete that cannot reach the kernel is retried, never
-     reported as done);
-  4. today's household rule for who may add to which list, kept exactly: nobody loses an ability they have now;
-  5. a drift report comparing kernel state with the list tables;
-  6. the service unit with memory limits that can never pressure the voice stack, a health check, and the kernel's database in the
-     nightly backup;
-  7. Phase 2's pass mark for list add; a voice replay;
-  8. **the child floor, as a prerequisite and not a later upgrade:** until the guardian model exists (owner decision D7, Phase 4),
-     a child's list add is never decided by the kernel. It answers `fallback_child` and the existing production path, with
-     today's child rules, handles it (implementation map G5 and WP-22). Authority is not switched on for anyone until a test
-     proves this for every member marked as a child.
-- **Proof it worked:** a week of real use with zero drift, zero stalled turns, fallbacks counted and each one explained, list-add
-  speed on a voice turn no worse than before (replay-gated), and "why did you add that?" and "undo that" answered from receipts.
-- **Rollback:** the authority flag to `off`. The old path never stopped existing.
-
-### Phase 4. Close the kernel's gaps for the next verbs
-
-The kernel cannot yet say everything production can. Each of these is an upgrade to the kernel, built and tested in the lab, then
-shadowed:
-
-| Gap | Blocks | Upgrade |
-|---|---|---|
-| One alarm per person, no repeat rule | alarms | several alarms per person, repeat rules, snooze |
-| No recurring reminders; no date-only; nothing past 7 days | reminders | recurrence, date-only at the household default time, long horizons |
-| Reminder and alarm stores in memory | both | durable stores, crash-tested like the record |
-| Children treated as adults in the shadow roster | any authoritative verb acting for a child (Phase 3 keeps children on the old path through the `fallback_child` floor, its item 8) | the guardian model for a child's permission (owner decision D7) |
-| The kernel learns of members by hand | everything | member add and remove pushed to the kernel (owner decision D6) |
-| Nothing calls the retention sweep | growth | a night job, rehearsed by day first (owner decision D5) |
-| Kernel runs as the same system user as the skills | the trust boundary | its own system user, with the two file-permission tests repeated on the real box |
-
-### Phase 5. The remaining cut-overs, in order
-
-Each repeats Phase 1 to 3 for its own verb: shadow, pass mark, authority behind its own flag, a week clean, then the next.
-
-1. **List remove** (smallest step after list add; shares its store).
-2. **Reminders** (create, then snooze and done, then firing). The firing path is the first place the kernel decides *when to
-   speak*, so quiet hours and the attention budget move with it.
-3. **Alarms and timers.**
-4. **Write receipts everywhere.** Today's receipts live in process memory. Every action that already records one also publishes it
-   to the kernel, in shadow; after a clean week the "did I really do that?" guard reads the durable ones.
-5. **Offers and anticipation.** Zoe's own suggestions ("want me to wake you earlier?") become kernel offers with a yes, a receipt
-   and a per-person attention budget. This is built kernel-first: it is still dark, so there is no old behaviour to match.
-6. **Notifications and the proactive engine:** one gate for anything Zoe says unprompted.
-7. **Notes, journal, calendar publishing, people and contacts**, each mainly for the forget guarantee.
-8. **Presence**, once the presence work it depends on exists.
-9. **Memory, last and least.** It is the strongest part today. The kernel first only *observes* memory writes and forgets; it does
-   not take them over without its own decision.
-
-### Phase 6. Retire the duplicates
-
-When a verb has run under the kernel for a clean release with the fallback never needed for a fault: remove the old permission
-checks, visibility filters and receipt code for that verb. Retire by removing. This is where the simplification the whole idea
-promised is actually collected, so it is tracked: lines and duplicate rule copies removed per verb.
+Rollback is the area's flag. Its data remains in the existing store.
 
 ## 4. Optimisation track (runs alongside, never blocks a phase)
 
@@ -154,30 +50,23 @@ promised is actually collected, so it is tracked: lines and duplicate rule copie
 | Everyday kernel call (list, reminder, alarm) | about 1.1 ms [lab] (was 0.7 ms before the forget work) | at or under 0.7 ms | trim the indexes added for forget; batch the receipt and consumption writes |
 | A refused call | 0.85 ms [lab] (was 0.33 ms) | at or under 0.4 ms | refusal records written off the reply path |
 | Forget, slowest 1% | about 73 ms [lab], cause unknown | under 10 ms | find it with the harness profile |
-| Kernel hop seen from a voice turn | not measured | no measurable change in the replay gate | measure at Phase 1; the hook is one queue put |
+| Kernel hop seen from a voice turn | not measured | no measurable change in the replay gate | measure at each area on the live path |
 | Tool-choice quality (plain brain) | list 7/8, reminders 7/8 [live read] | 8/8 without the policy arm | tool descriptions from the kernel's own schemas; the router learning from kernel receipts |
 | Brain time per tool turn | about 0.9 s p50 [live read] | lower | fewer tools shown per turn, chosen by the kernel's permission view |
-| Kernel memory | not measured over days | a fixed small ceiling in the unit | a week's resident size at Phase 1 |
-| Database growth | about 16 MB per 20,000 calls [lab] | bounded | retention sweep; measure real volume at Phase 1 |
+| Kernel memory | not measured over days | a fixed small ceiling in the unit | measure resident size |
+| Database growth | about 16 MB per 20,000 calls [lab] | bounded | retention sweep; measure real volume |
 
 The load harness (`labs/zoe-os/bench_kernel.py`) is the instrument for the first three rows and is re-run on every kernel change.
 
 ## 5. What the household gets, and when
 
-| After | New ability |
-|---|---|
-| Phase 1 | nothing visible; the owner gets a daily agreement report |
-| Phase 3 | "why did you add that?", "undo that" and a receipt for every list add; a member's forget provably reaches lists |
-| Phase 5.2 to 5.3 | the same for reminders and alarms; one place decides when Zoe may speak |
-| Phase 5.4 | Zoe can never claim an action she did not take, across restarts |
-| Phase 5.5 | suggestions that respect each person's attention, with a yes that is recorded |
-| Phase 6 | fewer places a rule can be wrong; new skills plug into one set of rules instead of copying them |
+Each finished area has one decision door and a record of its outcomes. The area order and completion checks are in section 3.
 
 ## 6. Owner decisions (all nine decided 2026-11-15)
 
 | # | Decision | Outcome |
 |---|---|---|
-| D1 | The pass mark for a verb | **Decided 2026-11-15 (owner accepted the recommendation):** the Phase 2 numbers, reached by synthetic day + corpus replay + real use, not by waiting 14 days |
+| D1 | The pass mark for a verb | **Superseded 2026-11-18:** no shadow pass mark or week-clean gate after the train; use the area completion checks in section 3 |
 | D2 | Kernel as its own service, or inside the main service | **Decided 2026-11-15:** its own service: a kernel fault must not take Zoe down, and it is the only way to a real trust boundary |
 | D3 | Where the kernel's database lives | **Decided 2026-11-15 (owner: "option a"):** its own database file (never tables in the main database: only the kernel process opens it, which is what makes a receipt trustworthy), in a permanent location beside Zoe's other data rather than the experiment folder, and in the nightly backup. The exact path is settled when the service unit is written |
 | D4 | Back it up | **Decided with D3:** yes, in the nightly backup from the day shadow goes on; it holds reminder notes, which are words. Backups keep their data and a restore brings back everything, including things forgotten since (owner, 2026-11-16): backups and restores are the stated exception to permanent forgetting, so no backup-safe forget is owed |
@@ -202,7 +91,7 @@ Record: `docs/architecture/zoe-os-architecture.md` (its section on the owner's c
 
 | Choice | Decision |
 |---|---|
-| The kernel is briefly down after an action's old rule code has been removed | Zoe refuses list, reminder and alarm changes for that moment and says so; reads keep working. The duplicate rules are not kept forever as a spare |
+| The kernel is briefly down after an action's old rule code has been removed | Superseded 2026-11-18: the change proceeds and is recorded as not checked; decide separately where a wrong yes can do harm |
 | Devices that need a spoken yes every time, and do nothing while the kernel is down | Door locks, garage doors, the security alarm, and anything that heats |
 | What a guardian can see and manage | A guardian is a carer, for a child or an adult in care (owner, 2026-11-16). **Organising:** that person's reminders, alarms, lists, routines and calendar, unless an item is marked private; not their private notes or journal; organising never includes forgetting, undoing or explaining that person's data. **Memory care**, a separate power: correcting or removing what Zoe has remembered about that person, and fixing a fact in place. Its limits: it is a named action set on the care link and never implied by organising; every use is recorded with who did it and why; the model can never propose it (only the carer, verified, can ask); it never opens private notes or a journal |
 | Changes to the kernel's own code, its "what the kernel owns" table and its budgets | Need a one-tap approval from the owner, even after clean reviews |
@@ -227,9 +116,9 @@ Record: `docs/research/zoe-os-prior-art-2026-11-15.md`. These are adopted and be
 | Risk | Answer |
 |---|---|
 | The kernel slows or stalls a voice turn | strict timeout, fallback, replay gate at every cut-over |
-| Two sources of truth drift apart | one read model, a drift report, zero drift as an exit proof |
+| Two sources of truth drift apart | No longer applies: area data stays in one existing store |
 | A forget misses the kernel | fail-closed erase reach; the all-tables "nothing names the person" check runs in tests and after a live demo-member delete |
-| Memory pressure on a tight box | unit memory ceiling; a week's measurement before authority |
+| Memory pressure on a tight box | unit memory ceiling and measured memory use |
 | The plan outruns review | small stacked PRs; one cut-over in flight at a time |
 | The brain picks the wrong tool | the kernel refuses what is not permitted; quality tracked per verb in the report |
 
@@ -261,7 +150,7 @@ The kernel does not land in a vacuum. These existing tools and open changes need
 | Change | Adjustment |
 |---|---|
 | Member delete everything (#2598) | must call the kernel's member erase, failing closed, beside the shadow forget |
-| Routines (#2522, #2523, #2614) | a new store of household actions built straight on tables: it should publish receipts to the kernel from day one, and its "done / skip / snooze" taps are natural kernel actions with undo |
+| Routines (#2522, #2523, #2614) | Old-style store PRs are parked; build routines on the kernel from the start |
 | Anticipation engine (#2588 to #2592) | still dark, so build its offers, answers and cooldown as kernel offers with the per-person attention budget rather than its own store |
 | Presence (#2593 onward) | publish presence to the kernel's person-and-presence service instead of a parallel record |
 | Notifications: web push (#2512) and phone delivery | "may Zoe speak or send now" should become one kernel gate, not a third copy of quiet hours |
@@ -272,8 +161,4 @@ The kernel does not land in a vacuum. These existing tools and open changes need
 
 ## 9. What is in flight right now
 
-- Final review of the lab PR (#2630); then the harness (#2634), the speed-up (#2635) and the forget decisions (#2633).
-- The shadow stack in review (#2622 to #2625, #2631, #2632).
-- List add under kernel authority being built, switched off (Phase 3 items 1 to 5).
-- Next to start: the synthetic day for Phase 2; the kernel upgrades for alarms and reminders (Phase 4); the everyday-call speed
-  regression (section 4).
+See `docs/ROADMAP.md` for the current order and `docs/PLANS.md` for status.

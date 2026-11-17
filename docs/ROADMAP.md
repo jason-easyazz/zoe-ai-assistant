@@ -27,6 +27,15 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 ## Now (this week, at most 5)
 
+**Zoe OS migration (owner, 2026-11-18):** Move each area directly behind one fall-back flag; the kernel decides and records while data stays in its existing store. Complete the live checks, forget by record, delay measurement and cleanup for each area.
+
+- **Lists:** one door, kernel rules and `ZOE_OS_LISTS=kernel`.
+- **Reminders:** move after lists, carrying the parked fixes.
+- **Alarms and timers:** move after reminders.
+- **Routines:** built on the kernel (old-style store parked).
+- **Calendar:** move after routines.
+- **Remaining tools:** move one at a time.
+
 **The order (owner, 2026-11-14: "your plan sounds fine, get it all done asap"):** make failure loud, then sound human, then know you,
 then feeds in, then evolve herself. Inputs: [gap audit](research/gap-audit-2026-11-13.md) section 9 and the
 [Samantha frontier](research/samantha-frontier-2026-11-11.md). "Today" values are the felt scorecard's before-reading of 2026-11-14
@@ -89,7 +98,7 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
 - **The memory redesign's flip bar:** golden set at 100%, lab runs with zero false claims, the replay; household shadow only has to
   show no disagreement, because household correction volume is near zero.
 - **The distress contact is not set** `[default ZOE_DISTRESS_CONTACT_USER=unset]`, so a distress hand-off tells nobody: set one.
-- **Zoe OS (Next 5), before any real call site is wired:** how long the household event log is kept (recommendation: short, with
+- **Zoe OS, before the relevant work:** how long the household event log is kept (recommendation: short, with
   counts kept after that; the log is itself sensitive); whether other skills may learn that a person forgot something (the lab tells
   them who and how many, never what); whether the core's own account waits for Next 4 (recommendation: yes).
 - **The forget ledger secret is created automatically on first start:** yes, kept where the secrets decision puts it; #2462 makes the
@@ -118,19 +127,8 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
 4. **De-privilege the assistant's service account, then the credential broker** (Vaultwarden plus a narrow broker; V0 and V1
    lab-proven 2026-10-19, nothing on the box; [design](architecture/credential-vault.md)). On the critical path for feeds (Now 4).
    Owner for the live changes, agent for the build.
-5. **Zoe OS: one small core that every feature passes through** (owner decision, 2026-11-14). Today each feature carries its own copy
-   of the hard rules (who may see this, may she act, may she speak now, how to forget it, was it really done). The core holds them
-   once: one private-by-default event log, a per-person grant for what each skill may read and do, forget as one operation on the
-   log, no action without the person's yes and no claim without a receipt, and unprompted speech as each person's own setting. A
-   new feature then cannot break a rule it never held. State: lab prototype only (#2504 to #2507 draft, 84 lab tests, a malicious
-   skill refused 10 of 10); **nothing in the running system uses it, and it has no process isolation yet, so it proves the rules,
-   not a boundary.** Order: (a) lab: the process boundary, forget by topic, durable receipts, then explain, undo and a replay
-   harness; (b) real call sites publish ids to the log, off the voice path first, changing no behaviour, behind a flag that ships
-   off; (c) reminders run on the core in shadow beside today's path for a week, compared turn by turn; (d) further features one at
-   a time. Numbers: added time per publish at a live call site (unmeasured; must be read on this box before any voice-path site);
-   shadow disagreements for the first feature (target 0); stores a forget must reach by hand (103 today). Gates: Next 4 for the
-   core's own locked-down account; the replay on every zoe-data step; owner decisions on how long the event log is kept and
-   whether skills may learn that a person forgot something. Record: `docs/architecture/zoe-os.md` (arrives with #2507).
+
+
 6. **Calendar stage 1 proper, then contacts, then mail metadata:** the fetcher in the broker, the connect flow, a night-aware sync
    job, delete detection, the forget shield for remote events. Records: [`zoe-abilities.md`](architecture/zoe-abilities.md),
    [`connected-accounts.md`](knowledge/connected-accounts.md).
