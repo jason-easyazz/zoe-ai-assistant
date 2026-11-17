@@ -53,6 +53,8 @@ RETRACT_TTL_S = 6 * 3600.0
 ROW_SLACK_S = 5.0
 #: How many recent rows (per status) are read when looking for a turn's rows.
 SCAN_LIMIT = 200
+#: Live memory rows every forget scanner must cover. Retired statuses are added explicitly by callers.
+LIVE_FORGET_STATUSES = ("approved", "pending", "disputed")
 _MAX_USERS = 512
 _MAX_TURNS = 6
 _MAX_RETRACTED = 16
@@ -550,11 +552,11 @@ def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None
 
 async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Optional[float] = None, *,
                          mids: tuple = ()) -> list:
-    """The owner's approved / pending rows written from this turn (``mids`` = its saved-turn ids): the bound rows by id alone,
+    """The owner's live rows written from this turn (``mids`` = its saved-turn ids): the bound rows by id alone,
     the legacy rows by their words (``partition``; a legacy match is logged ``TURN_FORGET code=legacy_text n=``). RAISES on a
     store failure (a forget must not be confirmed when the store could not be read)."""
     rows, seen = [], set()
-    for status in ("approved", "pending"):
+    for status in LIVE_FORGET_STATUSES:
         for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT):
             m = r.metadata or {}
             if r.id in seen or (m.get("user_id") or m.get("wing") or user_id) != user_id:
