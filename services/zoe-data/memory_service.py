@@ -2018,9 +2018,9 @@ SCRUB_INLINE_MAX = 2000
 
 
 def bounded(text: Optional[str], kept: int, margin: int = 64) -> str:
-    """The part of ``text`` a SYNC caller may hand the scrubber: what it keeps (``kept`` characters) plus a margin, so a secret cut at
-    the edge lies wholly outside what is kept and no caller scrubs more than it stores (review, PR #2660: a sync scrub of a huge
-    text held the event loop). ``margin=0`` after a length guard."""
+    """At most ``kept + margin`` characters of ``text``: the hard bound on what a SYNC caller hands the scrubber (review, PR #2660:
+    a sync scrub of a huge text held the event loop). A caller whose output is STORED never keeps a scrubbed prefix - the whole
+    text decides a reject (a card, a key) - so it refuses an over-length text first and calls this with ``margin=0``."""
     return (text or "")[:max(0, kept) + max(0, margin)]
 
 
@@ -2132,10 +2132,9 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     raw = (text or "").strip() if isinstance(text, str) else ""
     if not raw:
         return None
-    # an excerpt is short: only its first SCRUB_INLINE_MAX characters are ever scrubbed, so no excerpt path (``_build_metadata``,
-    # ``retire_with_quote``) can hold the event loop on a huge input. The cut is far past ``limit`` (+ a card's length), so a
-    # card sliced by it lies wholly beyond what is kept
-    scrubbed, reject = scrub_pii_matchable(bounded(raw, max(SCRUB_INLINE_MAX, limit)))
+    if len(raw) > max(SCRUB_INLINE_MAX, limit):       # too long to judge inline: NO excerpt (fail closed) - never a scrubbed prefix,
+        return None                                   # which could keep the head of a card / key that the whole text would reject
+    scrubbed, reject = scrub_pii_matchable(bounded(raw, max(SCRUB_INLINE_MAX, limit), 0))
     if reject:
         return None
     return scrubbed[:limit].rstrip() or None

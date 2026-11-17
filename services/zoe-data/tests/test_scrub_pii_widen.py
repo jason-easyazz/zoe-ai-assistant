@@ -1144,7 +1144,7 @@ def test_a_huge_excerpt_and_a_huge_turn_do_not_hold_the_loop(monkeypatch):
     big = 'password is "abc.\n' * 8000
     t0 = time.monotonic()
     out = ms.scrub_source_excerpt(big)
-    assert time.monotonic() - t0 < 0.05 and (out is None or len(out) <= 400)
+    assert time.monotonic() - t0 < 0.05 and out is None           # over-length: no excerpt, and nothing was scrubbed
 
     async def run():
         ticks, done = [], asyncio.Event()
@@ -1193,6 +1193,28 @@ def test_struggle_detector_scrubs_only_what_a_summary_keeps():
     sd._scrub("warm the import and the patterns")
     t0 = time.monotonic()
     out = sd._scrub(big)
-    assert time.monotonic() - t0 < 0.05, "the whole turn was scrubbed"
-    assert out is not None and "abc" not in out and out.count("[REDACTED]") <= 16      # a slice, not 8,000 secrets
+    assert time.monotonic() - t0 < 0.05 and out is None, "an over-length turn gives no words, and is not scrubbed"
     assert sd._scrub("my password is zebrafiddle") == "my password is [REDACTED]"
+
+
+@pytest.mark.parametrize("text", [
+    "eyJ" + "a" * 3000 + "." + "b" * 20 + "." + "c" * 20,          # main rejects it as a JWT: no excerpt
+    "4111" + " " * 2100 + "1111 1111 1111",                        # main rejects it as a card: no excerpt
+    "the bins go out on friday " * 200,                            # merely long: still no excerpt (never a prefix)
+])
+def test_an_over_length_excerpt_is_dropped_never_cut(text):
+    """Review (PR #2660), a regression against main: a cut before the scrub kept the head of a secret the whole text rejects."""
+    import memory_service as ms
+    import struggle_detector as sd
+    import user_model_card as umc
+
+    assert ms.scrub_source_excerpt(text) is None and ms.scrub_source_excerpt(text, limit=300) is None
+    assert sd._scrub(text) is None
+    assert umc.compact_fact(text) == ""
+
+
+def test_a_short_excerpt_still_rejects_a_card_and_keeps_ordinary_words():
+    import memory_service as ms
+
+    assert ms.scrub_source_excerpt("my card is 4111 1111 1111 1111") is None
+    assert ms.scrub_source_excerpt("the bins go out on friday") == "the bins go out on friday"
