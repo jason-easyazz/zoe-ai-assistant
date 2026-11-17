@@ -962,6 +962,14 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         memory_capture_stats.completed(user_id, ok=ok)
 
 
+def _typed_verdict_kw(user: dict, channel: str, *, voice_mode: bool = False) -> dict:
+    """``_save_chat_message`` kwargs for the speaker verdict of a TYPED turn: positive + source for a signed-in member, else none."""
+    import speaker_verdict
+
+    v = speaker_verdict.typed_verdict(user, channel=channel, voice_mode=voice_mode)
+    return {} if v is None else {"speaker_verified": v.verified, "speaker_source": v.source}
+
+
 def _capture_words(user_message: str) -> str:
     """The user's own words of a turn (the voice-mode lane appends its spoken-reply instructions to the message)."""
     words = user_message or ""
@@ -1167,6 +1175,7 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 async def _save_chat_message(
     session_id: str, role: str, content: str, user_id: str | None = None,
     *, truncated: bool = False, speaker_verified: bool | None = None, count_turn: bool = True, message_id: str | None = None,
+    speaker_source: str | None = None,
 ) -> bool:
     """Persist a single chat turn to chat_messages.
 
@@ -1198,6 +1207,12 @@ async def _save_chat_message(
         # catch-up) cannot reclassify a turn the gate refused as the owner's own words. Only a rejection is recorded:
         # no verdict / verified leaves the metadata exactly as before.
         meta["speaker_verified"] = False
+    elif speaker_verified is True and speaker_source and role == "user":
+        # A TYPED turn from a signed-in member (speaker_verdict.typed_verdict) carries a POSITIVE verdict WITH its source, so the
+        # claim validator's speaker rule can pass and a reader can tell it from a voice verification. A bare True (the voice
+        # lane's) is still not recorded; no verdict leaves the metadata exactly as before.
+        meta["speaker_verified"] = True
+        meta["speaker_source"] = speaker_source
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): number the user's turn (so "why did you say that?" can find the reply before it) and
     # claim an off-the-record turn at its FIRST sight. An off-the-record user turn - and the reply to it, which can restate it -
     # is saved flagged `off_record`, so the readers that rebuild memory from this table at night (digest, idle consolidation, the
@@ -1474,11 +1489,12 @@ async def chat_stream_generator(
     *,
     req_panel_id: str | None = None,
     channel: str = "chat",
+    voice_mode: bool = False,
 ):
     user_id = user["user_id"]
     await _ensure_user_and_chat_session(session_id, user_id)
     # Persist user turn immediately — enables history for Zoe Agent on the NEXT request
-    await _save_chat_message(session_id, "user", message, user_id=user_id)
+    await _save_chat_message(session_id, "user", message, user_id=user_id, **_typed_verdict_kw(user, channel, voice_mode=voice_mode))
     # Frustration signal detection (non-blocking, session-scoped)
     _check_frustration(session_id, user_id, message)
     enc = EventEncoder()
@@ -2420,6 +2436,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 user,
                 req_panel_id=req_panel_id,
                 channel=req_channel,
+                voice_mode=is_voice_mode,
             ),
             media_type="text/event-stream",
             headers={
@@ -2456,7 +2473,8 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
             # nightly digest would see an empty chat_messages table for any
             # voice / CLI clients that opt out of SSE.
             if message:
-                await _save_chat_message(session_id, "user", message, user_id=user_id)
+                await _save_chat_message(session_id, "user", message, user_id=user_id,
+                                         **_typed_verdict_kw(user, req_channel, voice_mode=is_voice_mode))
             if approval_token:
                 approved = await _resolve_approval(user_id, approval_token)
                 if not approved:
