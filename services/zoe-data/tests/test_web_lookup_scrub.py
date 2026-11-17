@@ -409,10 +409,11 @@ def test_a_separator_sweep_finds_no_way_to_split_a_short_memory_phrase():
     assert leaks == [], leaks[:5]
 
 
-@pytest.mark.parametrize("raw", ["red xqzv box replacement prices", "red qq zzkx box replacement prices"])
+@pytest.mark.parametrize("raw", ["red xqzv box replacement prices", "red qq zzkx box replacement prices",
+                                 "red xqzv box-prices replacement", "price-red xqzv box replacement", "red xqzv box.prices replacement"])
 def test_dropping_an_unknown_word_cannot_join_a_memory_phrase(raw):
     r = scrub_query(raw, PrivateTerms.of(memory=["The spare key is in the red box"]))
-    flat = set(r.query.split()) if r.send else set()
+    flat = set(re.split(r"[\W_]+", r.query)) if r.send else set()
     assert not ({"red"} & flat and {"box"} & flat), r
 
 

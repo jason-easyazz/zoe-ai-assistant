@@ -325,13 +325,10 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             if (owned or named or words[j][:1].isupper()) and k < len(tokens) and tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"] \
                     and tokens[k] not in lex["relation_words"]:
                 drop.setdefault(k, "relation_name")
-    # the same three views as the private-word checks: as written, look-alike digits read as letters, digits removed
-    # ("red box2" still holds the memory phrase "red box")
-    for view in (tokens, plains, bare):
-        for i in _memory_runs(view, terms, lex):
-            drop.setdefault(i, "memory")
-    # ...and over the PARTS of compounds ("red-box", "red.box": one token, two memory words): each part keeps its token's index,
-    # so a memory phrase joined by punctuation is still a run of two words. Same three views per part.
+    # Memory runs are checked in the same three views as the private-word checks (as written, look-alike digits read as
+    # letters, digits removed: "red box2" still holds "red box"), over whole tokens AND over the parts of compounds
+    # ("red-box", "box-prices": each part keeps its token's index). Only tokens still alive take part, so the check can be
+    # re-run after later drops.
     part_idx, part_views = [], ([], [], [])
     for i, w in enumerate(words):
         for p in _COMPOUND_SPLIT.split(w):
@@ -342,10 +339,15 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             part_views[0].append(f)
             part_views[1].append(fold(p.translate(_LOOKALIKE)))
             part_views[2].append(re.sub(r"\d", "", f) if not f.isdigit() else f)
-    if len(part_idx) > len(words):          # only when some word actually split
-        for view in part_views:
-            for k in _memory_runs(view, terms, lex):
-                drop.setdefault(part_idx[k], "memory")
+
+    def _memory_hits() -> set[int]:
+        alive = [i for i in range(len(tokens)) if i not in drop]
+        live_parts = [k for k, i in enumerate(part_idx) if i not in drop]
+        hits = {alive[k] for view in (tokens, plains, bare) for k in _memory_runs([view[i] for i in alive], terms, lex)}
+        hits |= {part_idx[live_parts[k]] for view in part_views for k in _memory_runs([view[j] for j in live_parts], terms, lex)}
+        return hits
+
+    drop.update({i: "memory" for i in _memory_hits()})
     # THE ALLOW-LIST, last and strongest: a word may leave the house only if it is an ordinary dictionary word
     # (allow_words(), SCOWL plus a small supplement) or a number of at most four digits. Everything the rules
     # above did not recognise (a name, a code, an invented spelling, a glued or split private term) is dropped,
@@ -357,13 +359,9 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         # dictionary words; its folded form "glutenfree" is none)
         if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(words[i].casefold(), allow, units):
             drop[i] = "unknown"
-    # dropping a word can JOIN two memory words ("red xqzv box" leaves "red box"): re-check the survivors, same three views,
-    # until nothing more is dropped
-    while True:
-        alive = [i for i in range(len(tokens)) if i not in drop]
-        joined = {alive[k] for view in (tokens, plains, bare) for k in _memory_runs([view[i] for i in alive], terms, lex)}
-        if not joined:
-            break
+    # dropping a word can JOIN two memory words ("red xqzv box" leaves "red box", "red xqzv box-prices" leaves "red box-"):
+    # re-check the survivors, every view and every part, until nothing more is dropped
+    while joined := _memory_hits():
         drop.update({i: "memory" for i in joined})
 
     def _content(idx: Iterable[int]) -> int:
@@ -411,7 +409,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for phrase in phrases:
             if "".join(phrase) in squeezed:
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-    if any(_memory_runs([fold(w) for w in view.split()], terms, lex) for view in (query, plain_query, re.sub(r"\d", "", query))):
+    if any(_memory_runs([fold(w) for w in re.split(r"[\s.\-'’_/]+", view)], terms, lex) or _memory_runs([fold(w) for w in view.split()], terms, lex)
+           for view in (query, plain_query, re.sub(r"\d", "", query))):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if "@" in query or not query or any(g in squeezed for g in glue):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
