@@ -1464,12 +1464,12 @@ def test_a_turn_written_into_an_emptied_session_after_the_check_survives_with_it
     real = mof._retitle
     state = {"done": False}
 
-    async def b_speaks_now(r, surviving):
+    async def b_speaks_now(r, surviving, *rest):
         if not state["done"]:                                   # once: B speaks between the check and the delete
             state["done"] = True
             await r.db.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('late-b', 's-kiosk', 'user', "
                                "'B, just now', ?)", (_meta(B),))
-        return await real(r, surviving)
+        return await real(r, surviving, *rest)
     monkeypatch.setattr(mof, "_retitle", b_speaks_now)
     _delete(svc)
     assert "late-b" in _ids(store, "chat_messages"), "B's turn written after the check is not deleted"
@@ -1505,12 +1505,12 @@ def test_a_session_the_member_owned_that_another_member_wrote_into_after_the_che
     real = mof._retitle
     state = {"done": False}
 
-    async def b_speaks_now(r, surviving):
+    async def b_speaks_now(r, surviving, *rest):
         if not state["done"]:
             state["done"] = True
             await r.db.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('late-b-own', 's-a', 'user', "
                                "'what B asked just now', ?)", (_meta(B),))
-        return await real(r, surviving)
+        return await real(r, surviving, *rest)
     monkeypatch.setattr(mof, "_retitle", b_speaks_now)
     _delete(svc)
     row = _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-a'")
@@ -1539,3 +1539,21 @@ def test_a_guest_identity_never_takes_a_session_over_a_member(env, store):
     _delete(svc)
     owner = _q(store, "SELECT user_id FROM chat_sessions WHERE id = 's-hand'")
     assert owner == [(B,)], owner
+
+
+def test_a_title_another_member_typed_survives_the_delete(env, store):
+    """A spoke in B's session; B's turns stay. B's own typed title is NOT replaced (main leaves it too); only a title made from A's
+    words is re-derived."""
+    svc, _col = env
+
+    async def seed():
+        x = store.execute
+        await x("INSERT INTO chat_sessions (id, user_id, title) VALUES ('s-typed', ?, 'Holiday planning')", (B,))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('ty-a', 's-typed', 'user', "
+                "'what about the beach house', ?, '2026-01-01T00:00:01Z')", (_meta(A),))
+        await x("INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('ty-b', 's-typed', 'user', "
+                "'and flights in March', ?, '2026-01-01T00:00:02Z')", (_meta(B),))
+        await store.commit()
+    asyncio.run(seed())
+    _delete(svc)
+    assert _q(store, "SELECT title FROM chat_sessions WHERE id = 's-typed'") == [("Holiday planning",)]

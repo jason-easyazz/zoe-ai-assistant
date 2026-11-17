@@ -25,7 +25,7 @@ import contextlib
 import json
 import logging
 import re
-from typing import Any
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +299,17 @@ async def _transcript(r: _Run, user_id: str) -> None:
     rows = await r.rows(TRANSCRIPT_SQL, (user_id, *_id_patterns(user_id)))
     mine = [str(x[0]) for x in rows if _turn_owner(x[2], x[3]) == user_id]
     touched = sorted({str(x[1]) for x in rows if _turn_owner(x[2], x[3]) == user_id and x[1]})
+    # BEFORE the turns go: the titles the member's own user turns would have made, per session. A surviving session is retitled
+    # only when its title is one of these (it was made from the member's words); a title someone else typed is never touched.
+    from chat_session_title import derive_session_title
+
+    member_titles: dict = {}
+    for at in range(0, len(mine), _CHUNK):
+        part = mine[at:at + _CHUNK]
+        for sid, role, content in await r.rows(f"SELECT session_id, role, content FROM chat_messages WHERE id IN "
+                                               f"({', '.join('?' * len(part))})", tuple(part)):
+            if str(role or "") == "user" and str(content or "").strip():
+                member_titles.setdefault(str(sid), set()).add(derive_session_title(str(content)))
     await r.by_ids("DELETE FROM chat_messages WHERE id", mine)
     owned = [str(x[0]) for x in await r.rows("SELECT id FROM chat_sessions WHERE user_id = ?", (user_id,))]
     candidates = sorted(set(owned) | set(touched))
@@ -340,7 +351,7 @@ async def _transcript(r: _Run, user_id: str) -> None:
     await r.by_ids("DELETE FROM chat_messages WHERE id", orphan_turns)
     surviving = [sid for sid in shared if sid not in set(orphans)]
     await _shared_runs(r, user_id, surviving)
-    await _retitle(r, surviving)
+    await _retitle(r, surviving, member_titles, set(owned))
     still_empty = "NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = {t}.{c})"
     await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty,
                    still_empty.format(t="chat_ag_ui_runs", c="session_id"))
@@ -356,7 +367,7 @@ async def _transcript(r: _Run, user_id: str) -> None:
     for sid, owner in kept:
         if owner == user_id:
             await _hand_over(r, user_id, sid)
-    await _retitle(r, [sid for sid, _owner in kept])
+    await _retitle(r, [sid for sid, _owner in kept], member_titles, set(owned))
     # ...and every RESCUED session (one the conditional run delete skipped because a turn arrived: gone, orphaned or emptied-but-kept)
     # gets the shared-run rule: a run the member started or nobody can be shown to have started goes (it holds their reply text)
     rescued = []
@@ -492,15 +503,22 @@ async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
     return out
 
 
-async def _retitle(r: _Run, sessions: list) -> None:
-    """Every SURVIVING session that held a deleted turn of the member (whoever owns it) gets its title re-derived from the turns that
-    stay. A title is made from a saved turn's words while it is weak (``routers/chat._touch_chat_session``: ``derive_session_title``),
-    and nothing records whether a title was typed or derived, so its source cannot be proven to survive: it is rebuilt by the same rule
-    from the FIRST surviving user turn (a title another member's own first turn made comes back the same), else 'New Chat'."""
+async def _retitle(r: _Run, sessions: list, member_titles: Optional[dict] = None, owned: frozenset = frozenset()) -> None:
+    """A SURVIVING session that held a deleted turn of the member gets its title re-derived from the turns that stay - but ONLY when its
+    current title is one the member's own words made (``member_titles``: the title each of their deleted user turns would derive,
+    collected before the turns went). A title made from someone else's words, or typed by its owner, is never touched (main leaves it
+    too). A session the member OWNED always carries their title (it is handed over, ``_hand_over``) and is always rebuilt. Rebuilt by the
+    same rule (``derive_session_title``) from the FIRST surviving user turn, else 'New Chat'."""
     from chat_session_title import derive_session_title
 
     for at in range(0, len(sessions), _CHUNK):
         part = sessions[at:at + _CHUNK]
+        if member_titles is not None:
+            current = {str(x[0]): str(x[1] or "") for x in await r.rows(
+                f"SELECT id, title FROM chat_sessions WHERE id IN ({', '.join('?' * len(part))})", tuple(part))}
+            part = [sid for sid in part if sid in owned or current.get(sid, "") in member_titles.get(sid, set())]
+            if not part:
+                continue
         first: dict = {}
         for x in await r.rows(f"SELECT session_id, role, content, created_at, id FROM chat_messages WHERE session_id IN "
                               f"({', '.join('?' * len(part))})", tuple(part)):
