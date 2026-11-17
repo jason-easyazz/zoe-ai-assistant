@@ -576,6 +576,12 @@ Default section order:
 
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
+- **2026-11-18, owner:** A review finding blocks only for a regression against main, a crash, a failing test or a slow live path. Record other findings in `docs/knowledge/open-problems.md` and fix them before that step carries real use. Do not exhaustively review code about to be replaced.
+- **2026-11-18, owner:** This is one development box in one home. A new local store may hold real household data if it stays on the box with no network path; forget reach is not a precondition here. Never commit personal data.
+- **2026-11-18, owner:** For Zoe OS, the coordinating agent runs switch-overs: flag lines in `~/.config/zoe/switch-on.env`, kernel user unit, state folder and roster; check `flock -n /tmp/zoe-voice-harness.lock true` before restarting zoe-data, then report. Landing and merging use the landing loop and its gates.
+- **2026-11-18, owner:** For big design calls, research, write a plan, then move decisively; replace rather than layer.
+- **2026-11-18, owner:** Ship, then patch piece by piece. Keep a visible checklist and clean house as each area moves.
+
 ## Child DOX Index
 
 - [services/AGENTS.md](services/AGENTS.md) — runtime services: zoe-data production web/chat API, zoe-ui static UI + nginx, zoe-auth, MCP bridges, LiveKit

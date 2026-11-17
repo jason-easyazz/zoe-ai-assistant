@@ -777,6 +777,10 @@ The open-PR list was read 2026-11-15 (102 open). Every PR that touches a seam ab
 
 ## 6. Work packages
 
+**Changed 2026-11-18:** The package tables below are the earlier seam inventory. Shadow-only packages WP-28, WP-42, WP-45 and WP-52 are dropped. Shadow portions of WP-30 and WP-61 are dropped; keep useful non-shadow work. Old shadow pass marks, dependencies and critical paths below are historical, not gates. The roadmap owns the order.
+
+**Lists package:** converge every list change on one door in `list_service`; add kernel list verbs and permission rules; have the door ask the kernel and report outcomes behind `ZOE_OS_LISTS=kernel`. Check each ability live with a demo user, measure delay, prove forget by turn and person from the record, delete side doors and clean the area and its register rows.
+
 ### 6.1 Conventions
 
 - **Owner** says who builds: K is the kernel builder, G a general builder, C Codex (narrow change or review), L the landing session
@@ -858,54 +862,13 @@ The open-PR list was read 2026-11-15 (102 open). Every PR that touches a seam ab
 Packages are cut at about 800 changed lines. WP-27, WP-40, WP-61 and WP-62 are the ones most likely to need a stacked split; split by
 entry layer (REST / MCP / voice).
 
-### 6.6 Critical path to "list add under kernel authority, live"
+### 6.6 Lists cut-over
 
-1. **Land Phase 0:** #2630, then #2634 → #2635 → #2633. Review-bound, not build-bound.
-2. **In parallel:**
-   - WP-01 (K) → WP-03 (K);
-   - WP-20 (G1) → WP-22 (G1);
-   - WP-24 (G) and WP-64 (G): built in parallel, but both are **activation prerequisites** (step 4), not fill-ins.
-3. **Infrastructure:** WP-06 lands and **deploys first** (one landing ahead). Then WP-04 and WP-05 (L), WP-02 (L), WP-08, WP-09,
-   WP-10 and WP-11.
-4. **Shadow:** land the stack (#2622 to #2625, #2631, #2632). **Activation gate** (plan rule 5: every forget and
-   member delete reaches the kernel before it holds real content): **WP-24
-   has landed** (the Settings delete button runs the full erase) and **WP-64 has landed** (guardian forget, "forget that" and the
-   MCP erase reach the kernel). Only then does the owner install the unit and turn shadow on (Phase 1). Landing the code
-   flag-dark does not wait for this.
-5. **Prove agreement:** WP-07 with #2642, the synthetic day and the corpus replay with shadow on, until the D1 pass mark is met for
-   list add (Phase 2).
-6. **Authority:** #2637 (rebased by WP-01), WP-22 (reshaped #2638), #2639 reconcile, WP-26 `created_by`, WP-65 why/undo. Then a
-   replay with the scratch kernel, and the owner flips `ZOE_OS_LIST_ADD_AUTHORITY=kernel` (Phase 3).
+Use the lists package above. There is no shadow pass mark or week-clean gate.
 
-**Longest chain:**
+### 6.7 Reminders and alarms cut-over
 
-> #2630 → WP-01 → WP-03 → WP-04 → shadow on → Phase 2 pass mark → WP-22 (needs WP-20) → replay → flip
-
-The pass mark is the long pole. The plan's synthetic day compresses it from weeks to about a day of runs [inferred]. The other long
-pole is the test lane: the kernel suite is heavy and runs only in coordinator windows.
-
-### 6.7 Critical path to "reminders and alarms under kernel authority, live"
-
-1. **Production convergence, which can start today:** WP-40 (G2), WP-44 (G3), WP-51 (C), WP-53 (C).
-2. **Kernel, in sequence on one builder:**
-
-   > WP-41a → WP-41b → WP-41c → WP-50a → WP-50b
-
-   Each one is KS-proven. WP-23a/WP-23b and WP-15 run beside them; Phase 4 needs the roster push and retention before more verbs go
-   authoritative.
-3. **Shadow:** WP-42 and WP-52; then Phase 2 for each verb.
-4. **Authority:** WP-43 for reminder create first, then snooze and done. **Firing waits for the attention work:** WP-60 (the
-   kernel's attention service) and WP-61 (the one "may Zoe speak or send now" function) land first, then WP-45 asks the kernel
-   "deliver now?" in shadow, and only then does firing go under authority. **Alarms follow the same pattern and also wait for
-   WP-61**, because a ringing alarm is unprompted sound.
-5. **Gate:** each step is replay-gated, and list add must have run a clean week first (plan Phase 3 → 5).
-
-**Longest chain:**
-
-> list add live → a week clean → WP-41a..c (K, about five packages in sequence) → WP-42 → pass mark → WP-43
-
-The kernel builder is the bottleneck. Everything production-side (WP-40, WP-44, WP-51) should be done before the kernel side
-finishes, so it is never what waits.
+Move reminders after lists, then alarms and timers. Each area uses the completion checks in the cut-over plan.
 
 ### 6.8 Parallelism
 
