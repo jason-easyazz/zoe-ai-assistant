@@ -31,6 +31,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import NamedTuple
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
@@ -141,6 +142,37 @@ def _words(text: str) -> list[str]:
     return _WORD_RE.findall(text)
 
 
+class _Private(NamedTuple):
+    singles: frozenset
+    phrases: tuple
+    numbers: frozenset   # every 3+ digit run inside a private word (a remembered gate code)
+    glue: frozenset
+    glue_inside: frozenset
+
+
+@lru_cache(maxsize=65536)
+def _memory_words(text: str) -> tuple[str, ...]:
+    """One memory text's words as written (cleaned), parsed once per text."""
+    return tuple(_words(_clean(text)))
+
+
+@lru_cache(maxsize=65536)
+def _memory_parts(text: str) -> tuple[str, ...]:
+    """One memory text's words folded and split into compound parts ("tea-pot" -> tea, pot), parsed once per text."""
+    return tuple(f for f in (fold(p) for w in _memory_words(text) for p in _COMPOUND_SPLIT.split(w)) if f)
+
+
+@lru_cache(maxsize=8)
+def _private_index(terms: PrivateTerms, drop_words: frozenset) -> _Private:
+    """Every private set a query is checked against, built ONCE per set of terms: a query's cost does not depend on how
+    many memories or names the household has."""
+    singles, phrases, _names = _private_singles(terms, {"drop_words": drop_words})
+    singles = frozenset(singles)
+    glue = _memory_glue_of(terms.memory, drop_words)
+    return _Private(singles, tuple(phrases), frozenset(n for s_ in singles for n in re.findall(r"\d{3,}", s_)), glue,
+                    frozenset(g for g in glue if len(g) >= MEMORY_GLUE_MIN))
+
+
 def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tuple[str, ...]], set[str]]:
     """(single private words, multi-word private phrases, name words) in compare-form."""
     singles: set[str] = set()
@@ -166,14 +198,15 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
 
 @lru_cache(maxsize=8)
 def _memory_singles(memory: tuple[str, ...], drop_words: frozenset) -> frozenset:
-    """A memory's numbers and its capitalised words that do not open the text (proper nouns), parsed once per memory set."""
-    out: set[str] = set()
-    for text in memory:
-        for i, w in enumerate(_words(_clean(text))):
-            f = fold(w)
-            if f and (any(c.isdigit() for c in f) or (i > 0 and w[:1].isupper() and f not in drop_words)):
-                out.add(f)
-    return frozenset(out)
+    """Every memory's numbers and proper nouns: a union of per-text results, so adding one memory parses only that one."""
+    return frozenset().union(*(_text_singles(text, drop_words) for text in memory))
+
+
+@lru_cache(maxsize=65536)
+def _text_singles(text: str, drop_words: frozenset) -> frozenset:
+    """One memory's numbers and its capitalised words that do not open the text (proper nouns)."""
+    return frozenset(f for i, w in enumerate(_memory_words(text)) for f in (fold(w),)
+                     if f and (any(c.isdigit() for c in f) or (i > 0 and w[:1].isupper() and f not in drop_words)))
 
 
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
@@ -181,17 +214,32 @@ ADDRESS_NUMBER_AFTER = 3  # ...or this many after it ("Maple Street number 12", 
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
 
+def _subs(text: str, shortest: int) -> set[str]:
+    """Every substring of ``text`` at least ``shortest`` long. The private-word checks look these UP in their sets instead of
+    scanning every private word for each query, so a household with 10,000 memories costs the same per query as one with
+    ten (the query is capped at MAX_RAW_CHARS)."""
+    n = len(text)
+    return {text[i:j] for i in range(n) for j in range(i + shortest, n + 1)}
+
+
+@lru_cache(maxsize=8)
+def _long_names(singles: frozenset) -> tuple[frozenset, frozenset]:
+    """The private words long enough to split, and every prefix of each, so a split check asks one set lookup per word."""
+    long = frozenset(s for s in singles if len(s) >= MIN_PRIVATE_LEN + 1)
+    return long, frozenset(w[:k] for w in long for k in range(1, len(w) + 1))
+
+
 def _split_across_filler(view: str, singles: set[str]) -> bool:
     """True when 2 or 3 words of ``view`` inside a NAME_SPLIT_WINDOW-word window join, in order, into a private word, WHATEVER
     sits between them ("rose x wood", "rose 2nd wood", "rose big wood" -> rosewood). One rule for every kind of filler, so a
     new kind of padding cannot reopen the hole; a coincidental match refuses a query, which is the accepted cost."""
-    long = {s for s in singles if len(s) >= MIN_PRIVATE_LEN + 1}
+    long, prefixes = _long_names(frozenset(singles))
     if not long:
         return False
     parts = [fold(p) for p in re.split(r"[\W_]+", view)]
     parts = [p for p in parts if p]
     for i, first in enumerate(parts):
-        if not any(s.startswith(first) for s in long):
+        if first not in prefixes:
             continue
         window = parts[i + 1:i + NAME_SPLIT_WINDOW]
         for a in range(len(window)):
@@ -204,20 +252,16 @@ def _split_across_filler(view: str, singles: set[str]) -> bool:
     return False
 
 
-def _glue_rx(singles: set[str]) -> re.Pattern | None:
-    cands = sorted((s for s in singles if len(s) >= MIN_PRIVATE_LEN), key=len, reverse=True)
-    return re.compile("|".join(re.escape(c) for c in cands)) if cands else None
-
-
-def _glued(token: str, singles: set[str], rx: re.Pattern | None) -> bool:
+def _glued(token: str, singles: set[str]) -> bool:
     """True when ``token`` is private words glued together (plus digits or up to two stray letters), or
     holds a long private word anywhere. KNOWN LIMIT: a private word under ``EMBEDDED_PRIVATE_LEN`` letters glued
     to three or more unrelated letters is not seen ("chris" must not strip "christmas")."""
-    if any(len(s) >= EMBEDDED_PRIVATE_LEN and s in token for s in singles):
+    if _subs(token, EMBEDDED_PRIVATE_LEN) & singles:
         return True
-    if rx is None:
+    inside = sorted(_subs(token, MIN_PRIVATE_LEN) & singles, key=len, reverse=True)   # only these can match here
+    if not inside:
         return False
-    rest, n = rx.subn("", token)
+    rest, n = re.subn("|".join(map(re.escape, inside)), "", token)
     return n > 0 and len(re.sub(r"\d", "", rest)) <= 2
 
 
@@ -245,12 +289,13 @@ def _padding(t: str) -> bool:
 def _memory_pairs(memory: tuple[str, ...], drop_words: frozenset) -> frozenset:
     """Every adjacent content-word pair of every memory text, parsed ONCE per memory set (the run check is called many
     times per query: three views, compound parts, after every drop, in the tripwire). Padding skipped, plurals removed."""
-    pairs: set[tuple[str, str]] = set()
-    for text in memory:
-        mem = [_run_word(f) for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w))
-               if f and not _padding(f) and f not in drop_words]
-        pairs.update(zip(mem, mem[1:]))
-    return frozenset(pairs)
+    return frozenset().union(*(_text_pairs(text, drop_words) for text in memory))
+
+
+@lru_cache(maxsize=65536)
+def _text_pairs(text: str, drop_words: frozenset) -> frozenset:
+    mem = [_run_word(f) for f in _memory_parts(text) if not _padding(f) and f not in drop_words]
+    return frozenset(zip(mem, mem[1:]))
 
 
 def _memory_runs(tokens: list[str], terms: PrivateTerms, lex: dict) -> set[int]:
@@ -276,19 +321,22 @@ def _memory_glue(terms: PrivateTerms, lex: dict) -> frozenset:
 def _memory_glue_of(memory: tuple[str, ...], drop_words: frozenset) -> frozenset:
     """Every span of two to four memory words holding two content words, squeezed into one string, so a memory phrase is
     still seen when it is glued, hyphenated or padded with a number. Parsed once per memory set."""
-    glue: set[str] = set()
-    for text in memory:
-        raw = [f for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w)) if f]
-        is_content = [f not in drop_words for f in raw]
-        content = [f for f, c in zip(raw, is_content) if c]
-        glue.update(a + b for a, b in zip(content, content[1:]))
-        for i in range(len(raw)):
-            for j in range(i + 2, min(i + 4, len(raw)) + 1):
-                if sum(is_content[i:j]) >= 2:
-                    glue.add("".join(raw[i:j]))
     # every length: a glued phrase that IS a whole word ("ox bow" -> "oxbow") is matched at any length; only the search INSIDE
     # a longer word keeps MEMORY_GLUE_MIN, so two short words cannot hide in every query. A coincidental match refuses or
     # strips (the accepted cost).
+    return frozenset().union(*(_text_glue(text, drop_words) for text in memory))
+
+
+@lru_cache(maxsize=65536)
+def _text_glue(text: str, drop_words: frozenset) -> frozenset:
+    raw = _memory_parts(text)
+    is_content = [f not in drop_words for f in raw]
+    content = [f for f, c in zip(raw, is_content) if c]
+    glue = {a + b for a, b in zip(content, content[1:])}
+    for i in range(len(raw)):
+        for j in range(i + 2, min(i + 4, len(raw)) + 1):
+            if sum(is_content[i:j]) >= 2:
+                glue.add("".join(raw[i:j]))
     return frozenset(glue)
 
 
@@ -344,10 +392,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
 
     if not allow_words():  # no list, no lookup: nothing at all can be checked, so nothing leaves
         return ScrubResult(False, "", REASON_NO_ALLOW_LIST)
-    singles, phrases, _names = _private_singles(terms, lex)
-    glue = _memory_glue(terms, lex)
-    glue_inside = {g for g in glue if len(g) >= MEMORY_GLUE_MIN}
-    rx = _glue_rx(singles)
+    private = _private_index(terms, lex["drop_words"])
+    singles, phrases, glue, glue_inside = private.singles, private.phrases, private.glue, private.glue_inside
     drop: dict[int, str] = {}
     # An address in any shape, read on the words rather than the characters: a street word with a house number ANYWHERE
     # before it ("12 Old North Maple Tree Valley Hill Road" - no window to outgrow; the query is short) or up to
@@ -396,7 +442,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         if any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
             drop.setdefault(ci, "code")
     # A known number from memory (3+ digits: a gate code) is private INSIDE any token, whatever is glued to it ("4417mhz").
-    mem_numbers = {n for s_ in singles for n in re.findall(r"\d{3,}", s_)}
+    mem_numbers = private.numbers
     for i, tok in enumerate(tokens):
         if set(re.findall(r"\d{3,}", tok)) & mem_numbers:
             drop.setdefault(i, "memory")
@@ -421,10 +467,10 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         # each part of a hyphenated or dotted word too ("rose-mary" for Rose: the parts are dictionary words)
         # (fold() joins the parts, and "rosemary" is itself a dictionary word, so split the word as written)
         parts = {f for x in re.split(r"[.\-'’]", words[i]) for f in (fold(x), fold(x.translate(_LOOKALIKE)), re.sub(r"\d", "", fold(x))) if f}
-        if tok and (tok in singles or plain in singles or bare[i] in singles or parts & singles or _glued(tok, singles, rx)
-                    or _glued(plain, singles, rx) or _glued(bare[i], singles, rx)):
+        if tok and (tok in singles or plain in singles or bare[i] in singles or parts & singles or _glued(tok, singles)
+                    or _glued(plain, singles) or _glued(bare[i], singles)):
             drop[i] = "private"
-        elif {tok, plain, bare[i], _run_word(tok), _run_word(plain)} & glue or any(g in tok for g in glue_inside):
+        elif {tok, plain, bare[i], _run_word(tok), _run_word(plain)} & glue or _subs(tok, MEMORY_GLUE_MIN) & glue_inside:
             drop[i] = "memory"
     for phrase in phrases:
         n = len(phrase)
@@ -542,8 +588,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         if _short_joins(view) & singles:
             return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-        for s in singles:
-            if len(s) >= 4 and s in squeezed and _glued_span(view, s):
+        for s in _subs(squeezed, 4) & singles:
+            if _glued_span(view, s):
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         for phrase in phrases:
             if "".join(phrase) in squeezed:
@@ -555,7 +601,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     if any(set(re.findall(r"\d{3,}", fv)) & mem_numbers for fv in folded_views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     out_words = {fold(w) for view in views for w in re.split(r"[\W_]+", view) if w}
-    if "@" in query or not query or any(g in fv for fv in folded_views for g in glue_inside) \
+    if "@" in query or not query or any(_subs(fv, MEMORY_GLUE_MIN) & glue_inside for fv in folded_views) \
             or (out_words | {_run_word(w) for w in out_words}) & glue:
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)

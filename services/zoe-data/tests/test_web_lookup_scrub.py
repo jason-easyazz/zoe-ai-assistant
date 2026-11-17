@@ -564,15 +564,20 @@ def test_a_word_valued_code_after_a_code_word_never_leaves(raw):
 
 
 def test_a_large_memory_set_does_not_make_a_query_slow():
-    """The memory set is parsed once and each query's checks do not scale with it (1,000 memories: well under the budget)."""
+    """The memory set is indexed once (per text, so one new memory re-parses only itself) and each query looks its own
+    substrings up in that index: a query's cost does not grow with 10,000 memories."""
     import time
 
-    terms = PrivateTerms.of(names=["Rose", "Bill"],
-                            memory=[f"The spare key is in the red box number {i} near the old shed and garden" for i in range(1000)])
+    memory = [f"The contact Person{i} likes hobby{i} and collection{i}" for i in range(10000)]
+    terms = PrivateTerms.of(names=["Rose", "Bill"], memory=memory)
     scrub_query("cold start fills the caches", terms)
     start = time.perf_counter()
     for q in ["weather forecast tomorrow", "best garden tools australia", "pizza delivery 12 Maple Street tonight"]:
         scrub_query(q, terms)
+    assert time.perf_counter() - start < 0.3
+    grown = PrivateTerms.of(names=["Rose", "Bill"], memory=memory + ["The new memory about the blue shed"])
+    start = time.perf_counter()
+    scrub_query("weather forecast tomorrow", grown)
     assert time.perf_counter() - start < 1.0
 
 
