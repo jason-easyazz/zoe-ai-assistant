@@ -547,6 +547,28 @@ async def store_write_guard(sql: str, conn: Any = None) -> None:
         raise TurnWriteRefused(table)
 
 
+class MemberErased(Exception):
+    """A write on behalf of a member who has been (or is being) deleted: refused, nothing stored."""
+
+
+@contextlib.asynccontextmanager
+async def member_write(user_id: str):
+    """A write that CREATES member content outside any turn (a biometric enrolment request): it is registered as the member's turn
+    FIRST, so a delete that starts after this point waits for it (and then erases what it wrote), and THEN refused when the member
+    has any erase mark (a whole-member delete is the only writer of marks: one at its start, one at its end), so a delete that began
+    before it is never undone by it. An unreadable mark refuses too (``Unavailable``): the caller does not store on a guess."""
+    token = turn_open(None, str(user_id or ""))
+    ctx = turn_bind(token)
+    try:
+        if await watermark(str(user_id)) is not None:
+            logger.warning("ERASE_WATERMARK_MEMBER_WRITE_REFUSED")
+            raise MemberErased(str(user_id))
+        yield
+    finally:
+        turn_unbind(ctx)
+        turn_close(token)
+
+
 def turn_close(token_or_session: str) -> None:
     """Release a turn (its token), or every turn of a chat session (the session id)."""
     key = str(token_or_session or "")

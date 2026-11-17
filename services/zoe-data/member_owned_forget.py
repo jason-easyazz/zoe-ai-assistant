@@ -137,11 +137,11 @@ class _Run:
         self.removed += max(n, 0)
         return n
 
-    async def by_ids(self, sql_prefix: str, ids: list) -> None:
-        """``DELETE ... WHERE <col> IN (ids)`` in chunks (``sql_prefix`` ends with the column name)."""
+    async def by_ids(self, sql_prefix: str, ids: list, where: str = "") -> None:
+        """``DELETE ... WHERE <col> IN (ids) [AND <where>]`` in chunks (``sql_prefix`` ends with the column name)."""
         for at in range(0, len(ids), _CHUNK):
             part = ids[at:at + _CHUNK]
-            await self.run(f"{sql_prefix} IN ({', '.join('?' * len(part))})", tuple(part))
+            await self.run(f"{sql_prefix} IN ({', '.join('?' * len(part))}){' AND ' + where if where else ''}", tuple(part))
 
 
 def _turn_owner(metadata: Any, session_owner: Any) -> str:
@@ -317,13 +317,25 @@ async def _transcript(r: _Run, user_id: str) -> None:
         await r.run(f"UPDATE chat_sessions SET title = 'New Chat' WHERE id IN ({', '.join('?' * len(part))})", tuple(part))
     # a shared session the member owned is handed to a remaining participant, or goes when none is left (``_hand_over``); then the runs
     # of every surviving session they owned or spoke in; then the gone sessions (children before parents: the FK-order test)
-    orphans = [sid for sid in shared if sid in set(owned) and not await _hand_over(r, user_id, sid)]
-    await r.by_ids("DELETE FROM chat_messages WHERE session_id", orphans)
+    # CONCURRENT WRITES: another member may add a turn to one of these sessions after it was classified. Every delete below is
+    # therefore conditioned at the moment it runs: an orphan loses only the turns ``_hand_over`` SAW (never a later one), and a
+    # session or its runs go only while NO turn is left in it (``NOT EXISTS``, in the same statement), so a parent delete can never
+    # cascade to a turn written after the check - a session that gained one simply stays, with that turn.
+    orphans, orphan_turns = [], []
+    for sid in shared:
+        if sid in set(owned):
+            handed, seen = await _hand_over(r, user_id, sid)
+            if not handed:
+                orphans.append(sid)
+                orphan_turns.extend(seen)
+    await r.by_ids("DELETE FROM chat_messages WHERE id", orphan_turns)
     surviving = [sid for sid in shared if sid not in set(orphans)]
     await _shared_runs(r, user_id, surviving)
     await _retitle(r, surviving)
-    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty)
-    await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans)
+    still_empty = "NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = {t}.{c})"
+    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty,
+                   still_empty.format(t="chat_ag_ui_runs", c="session_id"))
+    await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans, still_empty.format(t="chat_sessions", c="id"))
 
 
 async def _originated_ui_actions(r: _Run, user_id: str) -> None:
@@ -418,12 +430,13 @@ async def _retitle(r: _Run, sessions: list) -> None:
             await r.run("UPDATE chat_sessions SET title = ? WHERE id = ?", (title, sid))
 
 
-async def _hand_over(r: _Run, user_id: str, sid: str) -> bool:
+async def _hand_over(r: _Run, user_id: str, sid: str) -> tuple[bool, list]:
     """A session the member owned that still holds another member's turns must not keep the member as its owner. Every turn left names
     its own owner (a turn without ``metadata.user_id`` was the session owner's, the member's, and is gone), so the session goes to the
     participant who spoke FIRST among the turns that stay, a household member before a guest / kiosk id, and only an id that is a user
     row (the ``chat_sessions.user_id`` foreign key). Its title (the member's words) is reset. False when no such participant is left:
-    the caller deletes the session with what it holds (those turns name nobody who is still a user)."""
+    the caller deletes the session with what it holds (those turns name nobody who is still a user). The ids of the turns seen are
+    returned with the answer, so the caller deletes exactly those and never a turn written after this read."""
     turns = await r.rows("SELECT metadata, created_at, id FROM chat_messages WHERE session_id = ?", (sid,))
     owners = {}
     for meta, at, mid in turns:
@@ -433,10 +446,11 @@ async def _hand_over(r: _Run, user_id: str, sid: str) -> bool:
             owners[o] = min(owners.get(o, key), key)
     users = await _existing_users(r, list(owners))
     ranked = sorted((k, o) for o, k in owners.items() if users is None or o in users)
+    seen = [str(t[2]) for t in turns]
     if not ranked:
-        return False
+        return False, seen
     await r.run("UPDATE chat_sessions SET user_id = ?, title = 'New Chat' WHERE id = ?", (ranked[0][1], sid))
-    return True
+    return True, seen
 
 
 async def _existing_users(r: _Run, ids: list):

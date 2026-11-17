@@ -1443,3 +1443,42 @@ def test_a_row_made_across_the_delete_carries_the_delivery_start_and_its_claim_r
     made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
     assert made <= delete_started, "the row is stamped with when the delivery began, before the delete - not with the insert time"
     assert asyncio.run(session_utils.claim_pending(left[0][0])) is None, "the claim refuses a row whose delivery began before the delete"
+
+
+def test_a_turn_written_into_an_emptied_session_after_the_check_survives_with_its_session(env, store, monkeypatch):
+    """CONCURRENT WRITE: the kiosk session held only A's turn, so the erase classifies it as emptied - then B speaks into it before the
+    session delete runs. Every delete is conditioned when it runs (``NOT EXISTS`` a turn), so the session stays and B's turn with it:
+    a parent delete can never cascade to a turn written after the check."""
+    svc, _col = env
+    real = mof._retitle
+
+    async def b_speaks_now(r, surviving):
+        await r.db.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('late-b', 's-kiosk', 'user', "
+                           "'B, just now', ?)", (_meta(B),))
+        return await real(r, surviving)
+    monkeypatch.setattr(mof, "_retitle", b_speaks_now)
+    _delete(svc)
+    assert "late-b" in _ids(store, "chat_messages"), "B's turn written after the check is not deleted"
+    assert "s-kiosk" in _ids(store, "chat_sessions"), "the session that gained a turn stays"
+    assert "m3" not in _ids(store, "chat_messages"), "A's own turn still goes"
+
+
+def test_an_enrolment_is_a_turn_of_the_member_and_is_refused_once_they_are_deleted(env):
+    """``erase_watermark.member_write`` (voice and face enrolment): while it runs it is the member's turn in flight, so a delete that
+    starts now waits for it; once the member has an erase mark it refuses before anything is stored."""
+    import erase_watermark
+
+    async def go():
+        async with erase_watermark.member_write(A):
+            during = erase_watermark.inflight_turns(A)
+        after = erase_watermark.inflight_turns(A)
+        await erase_watermark.record(A)                             # the member is deleted
+        try:
+            async with erase_watermark.member_write(A):
+                stored = True
+        except erase_watermark.MemberErased:
+            stored = False
+        async with erase_watermark.member_write(B):                 # another member is unaffected
+            other = True
+        return during, after, stored, other
+    assert asyncio.run(go()) == (1, 0, False, True)

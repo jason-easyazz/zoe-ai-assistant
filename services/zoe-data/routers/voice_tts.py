@@ -7678,8 +7678,12 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     embedding_bytes = finished_profile
 
     profile_id = str(_uuid.uuid4())
+    import erase_watermark as _ew_enrol
+
     try:
-        async with _get_compat_db() as db:
+        # registered as the member's turn before the write, refused if they were deleted (``erase_watermark.member_write``): an
+        # enrolment paused before here can never put a deleted member's voiceprint back
+        async with _ew_enrol.member_write(user_id), _get_compat_db() as db:
             # Check if the user already has a profile OF THIS MODEL — update it, never touch another model's row.
             async with db.execute(
                 "SELECT id FROM speaker_profiles WHERE user_id=? AND "
@@ -7723,6 +7727,8 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
                         (profile_id, user_id, display_name, embedding_bytes, panel_id or None, clips, model_id),
                     )
             await db.commit()
+    except (_ew_enrol.MemberErased, _ew_enrol.Unavailable) as exc:
+        raise HTTPException(status_code=409, detail="this member can no longer be enrolled (nothing was stored)") from exc
     except Exception as exc:
         logger.error("voice/enroll DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to store profile") from exc
