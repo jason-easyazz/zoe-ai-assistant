@@ -5598,7 +5598,7 @@ def _rewrite_face_cache(drop, why: str) -> bool:
         try:
             os.unlink(_FACE_CACHE_PATH)
         except OSError as exc2:
-            log.warning("face cache %s: unreadable cache could not be removed: %s", why, exc2)
+            log.warning("face cache %s: unreadable cache could not be removed (%s)", why, type(exc2).__name__)   # never the path
             return False
         log.info("face cache %s: unreadable cache removed (%s)", why, type(exc).__name__)
         return True
@@ -5612,7 +5612,7 @@ def _rewrite_face_cache(drop, why: str) -> bool:
             json.dump({**data, "profiles": kept}, f)
         os.replace(tmp, _FACE_CACHE_PATH)
     except OSError as exc:
-        log.warning("face cache %s: rewrite failed: %s", why, exc)
+        log.warning("face cache %s: rewrite failed (%s)", why, type(exc).__name__)   # an OSError carries the cache path
         return False
     log.info("face cache %s: removed %d cached face profile(s)", why, len(profiles) - len(kept))
     return True
