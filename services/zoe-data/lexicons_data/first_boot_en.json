@@ -1,0 +1,114 @@
+{
+ "lang": "en",
+ "name": "English",
+ "reviewed": false,
+ "enabled": true,
+ "_note": "The words of the first-boot flow (structure: first_boot.json). Every step has 'say' (the offer, spoken), 'screen' (what the panel shows: a title and one short line) and 'done'; most have 'later'. 'common' holds the lines every step shares. House voice: short, warm, honest; never promise what she cannot do, never say a step is done before the system says so. A spoken line is at most 'max_chars'. {room}, {panel}, {time} and {day} are filled by the caller; nothing else is a placeholder. Unreviewed draft: the owner reviews the words before any of this is wired.",
+ "max_chars": 160,
+ "common": {
+  "rephrase": "Sorry, I didn't catch that. You can say yes, or later.",
+  "repeat": "I'm still here whenever you're ready.",
+  "park": "I'll pause setup here. Say 'carry on with setup', or tap the card, and I'll pick up where we left off.",
+  "park_screen": {"title": "Setup paused", "body": "Tap to carry on where we left off."},
+  "resume": "Welcome back. Let's carry on.",
+  "ask_adult": "I need a grown-up for this part. Could you fetch the person setting me up?",
+  "help": "That didn't work, and I can't fix it from here. The card on screen says what happened. It's safe to try again later.",
+  "help_screen": {"title": "Something went wrong", "body": "Scan the code on your phone for what to do next."},
+  "deferred": "No problem. I'll leave that for now and ask again another day."
+ },
+ "steps": {
+  "hello": {
+   "say": "Hi, I'm Zoe. Let's get you set up. The important part takes about ten minutes, and you can stop any time. Shall we start?",
+   "screen": {"title": "Hi, I'm Zoe", "body": "Say 'yes' or tap Start. About ten minutes."},
+   "done": "Great. First things first."
+  },
+  "owner_account": {
+   "say": "First I need to know who looks after me. Scan the code with your phone and make your account there.",
+   "screen": {"title": "Make your account", "body": "Scan with your phone. You'll choose a password there, not here."},
+   "explain": "I can't do anything useful until someone looks after me, so this one comes first. The code stays on screen.",
+   "done": "Thanks. You're the owner now, so you can change any of this later."
+  },
+  "forget_secret": {
+   "say": "I'm setting up how I keep forgotten things forgotten. This takes a second.",
+   "screen": {"title": "Privacy settings", "body": "Setting up. Nothing to do."},
+   "done": "Done."
+  },
+  "panel_paired": {
+   "say": "Now I'll connect this screen to your account. Scan the code with the same phone.",
+   "screen": {"title": "Connect this screen", "body": "Scan with your phone and tap Confirm."},
+   "explain": "This screen needs to be connected before I can learn your voice here. The code stays on screen.",
+   "done": "This screen is connected."
+  },
+  "panel_named": {
+   "say": "Which room is this screen in? Say the room, like kitchen or lounge.",
+   "screen": {"title": "Which room?", "body": "Say the room's name."},
+   "later": "That's fine. I'll call it 'this screen' for now.",
+   "done": "Got it. This is the {room} screen."
+  },
+  "time_and_place": {
+   "say": "I think it's {time} on {day}. Is that right?",
+   "screen": {"title": "Time and place", "body": "{time}, {day}. Say yes, or tell me the right time."},
+   "later": "Okay. Until we fix it, my times might be off.",
+   "done": "Thanks. Reminders and alarms will use that time."
+  },
+  "owner_pin": {
+   "say": "Pick a four-digit PIN on the screen. It unlocks your private things here, like your calendar.",
+   "screen": {"title": "Choose a PIN", "body": "Four digits. Only you should know it."},
+   "later": "Okay. Without a PIN I can't learn your voice yet, so we'll come back to that too.",
+   "done": "Your PIN is set."
+  },
+  "owner_voice": {
+   "say": "Now I'd like to learn your voice. You'll read three short lines. I keep a voice signature, not recordings, and you can delete it. Ready?",
+   "screen": {"title": "Learn my voice", "body": "Three short lines. A signature, not recordings."},
+   "later": "That's fine. Just say 'learn my voice' whenever you like.",
+   "done": "Thanks, I know your voice now."
+  },
+  "phone_linked": {
+   "say": "Want me to be able to reach your phone, for reminders when you're out? Scan the code to link it.",
+   "screen": {"title": "Link your phone", "body": "Scan to get reminders on your phone."},
+   "later": "Okay. Reminders will stay on this screen for now.",
+   "done": "Your phone is linked."
+  },
+  "backup_target": {
+   "say": "What I remember lives here, in this box. If you'd like a safe copy somewhere else, scan the code to choose where.",
+   "screen": {"title": "Keep a safe copy", "body": "Optional. Choose where, on your phone."},
+   "later": "Okay. Nothing is copied anywhere until you choose. I'll ask again another day.",
+   "done": "Your copy is set up."
+  },
+  "first_win": {
+   "say": "That's the important part done. Want to try something? Ask me to remind you about something, or add milk to the shopping list.",
+   "screen": {"title": "Try me", "body": "'Remind me to call the plumber at nine.'"},
+   "later": "No rush. Just talk to me when you need something.",
+   "done": "Done. That's how it works."
+  },
+  "more_members": {
+   "say": "Does anyone else live here? I can make each person their own account, so I don't mix you up.",
+   "screen": {"title": "Who else lives here?", "body": "Each person scans their own code."},
+   "later": "Okay. You can add people any time.",
+   "done": "They're added."
+  },
+  "child_marked": {
+   "say": "Is anyone in the house a child? I talk to children differently, and some things stay with the grown-ups.",
+   "screen": {"title": "Children", "body": "Tell me which accounts are children."},
+   "later": "Okay. Until you tell me, I'll treat every account as a grown-up.",
+   "done": "Thanks, I'll keep that in mind."
+  },
+  "calendar": {
+   "say": "Want me to see your calendar? Scan the code and sign in on your phone.",
+   "screen": {"title": "Connect your calendar", "body": "Sign in on your phone, not here."},
+   "later": "Okay. I'll keep my own list of events for you.",
+   "done": "Your calendar is connected."
+  },
+  "music": {
+   "say": "Want music? Scan the code to connect your music service.",
+   "screen": {"title": "Connect music", "body": "Sign in on your phone."},
+   "later": "Okay. Just ask when you want music set up.",
+   "done": "Music is connected."
+  },
+  "done": {
+   "say": "That's us set up. If anything's still missing, I'll mention it when we talk.",
+   "screen": {"title": "All set", "body": "Talk to me any time."},
+   "done": ""
+  }
+ }
+}
