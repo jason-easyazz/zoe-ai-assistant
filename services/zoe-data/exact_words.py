@@ -629,10 +629,25 @@ def _legacy_forms(text: str) -> list[str]:
 
 def _scrub(text: str) -> str:
     try:
-        from memory_service import scrub_pii
-        return scrub_pii(text)[0] or ""
+        import memory_service
+        limit = getattr(memory_service, "SCRUB_INLINE_MAX", None)
+        if limit is not None and len(text) > limit:
+            return ""
+        return memory_service.scrub_pii(text)[0] or ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def legacy_words_equal(a: str, b: str) -> bool:
+    """Legacy words match by equality as said or as the exact-words boundary redacts them."""
+    return bool(set(_legacy_forms(a)) & set(_legacy_forms(b)))
+
+
+def legacy_words_overlap(a: str, b: str) -> bool:
+    """One sits inside the other, as said or as redacted (a legacy night-mind observation keeps a SPAN of the turn, and an older
+    one keeps it unredacted while the upgraded index holds the redacted form)."""
+    fa, fb = [f for f in _legacy_forms(a) if f], [f for f in _legacy_forms(b) if f]
+    return any(x in y or y in x for x in fa for y in fb)
 
 
 def _needle(key: str) -> str:

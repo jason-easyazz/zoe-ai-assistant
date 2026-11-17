@@ -1655,3 +1655,30 @@ def test_topic_copy_regression_rejects_unexpanded_ids(world, monkeypatch):
     monkeypatch.setattr(forget_topic, "_said_mids", namespace["_said_mids"])
     with pytest.raises(AssertionError, match="a fact bound to a turn copy survived"):
         test_topic_forget_after_restart_expands_copies_before_scanning(world, monkeypatch)
+
+
+def test_redacted_forget_erases_raw_legacy_observations(world):
+    svc, chat = world
+    stored = "My plumber works from [REDACTED]"
+    run(xw.get_backend().add(UID, "xw-florn", time.time(), stored, " plumber work ", "chat"))
+    quotes = {"o-florn": "My plumber works from 9 Example Street",
+              "o-vesk": "My plumber works from 12 Other Road",
+              "o-quarn": "My quarn draves beside the plim",
+              "o-long": stored + " on weekdays"}
+    for oid, quote in quotes.items():
+        run(night_store.get_backend().put_observation(night_store.obs_row(
+            id=oid, user_id=UID, turn_id="", quote=quote, day="2026-10-08", said_at=time.time())))
+    exp = mp.Explained(seq=1, row_id="", ts=time.time(), text=stored, quote=stored, turn_id="xw-florn")
+    assert run(pa._forget_turn(UID, exp, svc=svc)).startswith("Done")
+    # Both addresses redact alike, and a legacy quote that CONTAINS the forgotten words goes too (the rule before this fix, kept):
+    # over-forgetting legacy observations is accepted; the unrelated one stays.
+    assert {o["id"] for o in run(night_store.get_backend().observations(UID))} == {"o-quarn"}
+
+
+@pytest.mark.parametrize("target", ["My plumber works from 9 Example Street", "My plumber works from [REDACTED]"])
+def test_legacy_quote_equality_in_both_spaces(target):
+    for quote in ("My plumber works from 9 Example Street", "My plumber works from [REDACTED]",
+                  "My plumber works from 12 Other Road"):
+        assert xw.legacy_words_equal(quote, target)
+        assert turn_forget._legacy_row_is_from_turn({"source_excerpt": quote}, target, None, frozenset())
+    assert not xw.legacy_words_equal(target + " on weekdays", target)
