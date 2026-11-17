@@ -997,7 +997,7 @@ _ENTRIES = (
     _f('ZOE_TEMPORAL_RELATIONSHIPS_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),
     _f('ZOE_TEXT_LOG_RETENTION_DAYS', 'str', '', doc='docs/knowledge/forget-reach.md'),
     _f('ZOE_TIMER_STORE', 'str', '', doc='services/zoe-data/AGENTS.md', note="'' = ~/.zoe/timers.json (the snapshot file of running voice timers)"),
-    _f('ZOE_TIMEZONE', 'str', 'Australia/Perth', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md', note='live .env: Australia/Perth', divergent_ok={'services/zoe-data/household_locale.py': "'' = the zone was not set explicitly, so it is never a country hint for the conventions line", 'services/zoe-data/identity_facts.py': "'' only feeds a region lookup; no timezone is asserted"}),
+    _f('ZOE_TIMEZONE', 'str', 'Australia/Perth', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md', note='live .env: Australia/Perth', divergent_ok={'services/zoe-data/household_locale.py': "'' = the zone was not set explicitly, so it is never a country hint for the conventions line", 'services/zoe-data/first_boot_probe.py': "'' = the zone was not set explicitly, so the first-boot time-and-place step is not done", 'services/zoe-data/identity_facts.py': "'' only feeds a region lookup; no timezone is asserted"}),
     _f('ZOE_TOOL_TEXT_GUARD', 'str', '', doc='docs/knowledge/write-claim-guard.md'),
     _f('ZOE_TOUCH_PANEL_OFFLINE_CACHE', 'bool', False, doc='docs/knowledge/ui-deep-review-2026-10-04.md'),
     _f('ZOE_TOUCH_PROBE_DEVICE_TOKEN', 'str', ''),
