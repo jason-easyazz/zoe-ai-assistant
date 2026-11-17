@@ -1855,7 +1855,16 @@ def _net_end(text: str, start: int) -> int:
     return m.start() if m else len(text)
 
 
+#: a secret's NEXT digit groups on the following line(s) ("my pin is 12\n34", "the door code is 57\n91"): the grammar's slot stops at
+#: a line break, so after a redacted secret a line that is only digit groups goes too (bounded: eight lines, 40 characters each)
+_SECRET_NEXT_LINE_RE = re.compile(r"(\[REDACTED\])(?:[ ]?\n[ ]?\d[\d \-–]{0,40}(?=\n|$)){1,8}")
+
+
 def _scrub_label_net(text: str) -> str:
+    return _SECRET_NEXT_LINE_RE.sub(r"\1", _label_net(text)) if "\n" in text else _label_net(text)
+
+
+def _label_net(text: str) -> str:
     """ONE left-to-right pass: both patterns are scanned once over the whole text (``finditer``), their matches merged by position,
     and the output built from slices - never a rescan after a replacement (linear: the 1,600-repetition timing test)."""
     hits = sorted([(m.start(), 0, m.end()) for m in _NET_CONN_RE.finditer(text)]

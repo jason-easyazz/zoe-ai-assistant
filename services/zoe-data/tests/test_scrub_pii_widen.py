@@ -959,3 +959,17 @@ def test_ten_thousand_spaces_stay_linear():
         t0 = time.monotonic()
         scrub_pii(big)
         assert time.monotonic() - t0 < 0.5
+
+
+@pytest.mark.parametrize("text,gone,kept", [
+    ("my pin is 12\n34", ("12", "34"), ""), ("the door code is 57\n91", ("57", "91"), ""),
+    ("my pin is 12\n34\n56", ("12", "34", "56"), ""), ("the safe code: 1 2\n3 4\nthen call the plumber", ("1 2", "3 4"), "then call the plumber"),
+])
+def test_a_secret_carried_onto_the_next_line_goes_too(text, gone, kept):
+    out, _ = scrub_pii(text)
+    assert R in out and not any(g in out for g in gone) and kept in out, out
+
+
+def test_a_number_on_the_line_after_ordinary_text_is_kept():
+    said = "the bins go out friday\n42 is the bus"
+    assert scrub_pii(said) == (said, None)
