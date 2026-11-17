@@ -1429,7 +1429,11 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
         n += await exact_words.erase_turn(user_id, exp.turn_id)
     for words in {w for w in (exp.quote, exp.text, *extra) if w}:
         n += await exact_words.erase_text(user_id, words)
-        n += await exact_words.forget_transcript(user_id, words)
+        try:
+            n += await exact_words.forget_transcript(user_id, words)
+        except Exception as exc:  # noqa: BLE001 - raised on; the saved turn's flag is parked by id when the shadow did not confirm
+            await exact_words.park_transcript(user_id, words, exc)
+            raise
     # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that held
     import night_mind
 

@@ -391,12 +391,10 @@ def unerased(user_id: Optional[str]) -> list:
 
 async def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
     """A forget's physical erase of ``ids`` (rows it had already hidden) failed with ``exc``. True when that is the Zoe OS shadow not
-    confirming (``os_shadow.unconfirmed``): the caller must NOT say "forgotten" and must keep its target. The ids are then
-
-    * PARKED durably beside the shadow's own parked forget (``os_shadow.park_erase``: ids only), so the replay that confirms the
-      kernel forget finishes these rows and their words (``finish_parked``) with no further request, across a restart; and
-    * remembered in this process, so the member's repeat - whose lookups (approved / pending rows) no longer find hidden rows -
-      adds ``unerased`` to what it erases.
+    confirming (``os_shadow.unconfirmed``): the caller must NOT say "forgotten" and must keep its target. The row eraser has by then
+    PARKED the ids durably (``os_shadow.park_unconfirmed`` in ``MemoryService.erase_rows``: the replay finishes them with no further request, across a
+    restart); here they are also remembered in this process, so the member's repeat - whose lookups (approved / pending rows) no
+    longer find hidden rows - adds ``unerased`` to what it erases.
 
     False for any other failure: the rows stay hidden and the forget goes on, as it always did. Never raises."""
     try:
@@ -412,12 +410,6 @@ async def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
         _unerased.move_to_end(user_id)
         while len(_unerased) > _MAX_USERS:
             _unerased.popitem(last=False)
-    try:
-        import asyncio
-
-        await asyncio.to_thread(os_shadow.park_erase, user_id, want)
-    except Exception as park_exc:  # noqa: BLE001 - still not "forgotten"; only the member's repeat (or the next forget) can finish it
-        logger.error("TURN_FORGET user=%s unerased rows NOT parked (%s)", user_id, type(park_exc).__name__)
     return True
 
 
@@ -433,16 +425,24 @@ async def clear_unerased(user_id: str, ids: Optional[list] = None) -> None:
 
         import os_shadow
 
-        await asyncio.to_thread(os_shadow.erases_done, user_id, list(ids or had))
+        await asyncio.to_thread(os_shadow.erases_done, user_id, {"rows": list(ids or had)})
     except Exception as exc:  # noqa: BLE001
         logger.warning("TURN_FORGET user=%s parked erase not cleared (%s)", user_id, type(exc).__name__)
 
 
-async def finish_parked(user_id: str, row_ids: list) -> int:
-    """Finish a parked erase once the kernel has confirmed (``os_shadow._finish_erases``): for each parked row that is still HIDDEN
-    (rejected / archived - an approved row is never touched), the member's verbatim words behind it are erased first (the recipe of
-    the memories-screen forget: the row's own turn id and source quote), then the rows. RAISES on any failure: the entry stays
-    parked, and because the words go before the rows a repeat still finds them. Idempotent. Returns rows erased."""
+async def finish_parked(user_id: str, entry: dict) -> int:
+    """Finish a parked erase once the kernel has confirmed (``os_shadow._finish_erases``). ``entry``: ``rows`` / ``turns`` /
+    ``messages`` ids. The parked index turns and transcript rows go by id (``exact_words.finish_parked``). For each parked row that
+    is still HIDDEN (rejected / archived - an approved row is never touched: nothing hid it, so its forget never began), the
+    member's verbatim words behind it are erased first (the recipe of the memories-screen forget: the row's own turn id and source
+    quote), then the rows. RAISES on any failure: the entry stays parked, and because the words go before the rows a repeat still
+    finds them. Idempotent. Returns rows erased."""
+    import exact_words
+
+    await exact_words.finish_parked(user_id, entry.get("turns") or (), entry.get("messages") or ())
+    row_ids = list(entry.get("rows") or ())
+    if not row_ids:
+        return 0
     import memory_space
     import provenance_answers as pa
     from memory_service import get_memory_service, physical_erase_enabled

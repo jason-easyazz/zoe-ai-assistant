@@ -296,7 +296,7 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     # from the ledger - shadow first again - even if the member never repeats the forget.
     if not await _shadow_first(user_id, name, res):
         logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=os_shadow - nothing cleared, the forget is not confirmed", user_id)
-        await _mark_pending(user_id, [label for label in ALL_LABELS if label != VALUE_REGISTRY_TOPIC])
+        await mark_all_pending(user_id)
         return res
     rx = _name_re(name)
     import correction_marker
@@ -334,6 +334,12 @@ async def _cascade(user_id: str, name: str, rx, res: CascadeResult, db) -> Casca
     return res
 
 
+async def mark_all_pending(user_id: str) -> bool:
+    """Leave EVERY step of the entity cascade pending (never the name): the next healthy ``retry_pending`` redoes the whole cascade
+    from the ledger, shadow step first. For a forget that stopped before the cascade ran because the Zoe OS shadow did not confirm."""
+    return await _mark_pending(user_id, [label for label in ALL_LABELS if label != VALUE_REGISTRY_TOPIC])
+
+
 async def _mark_pending(user_id: str, labels) -> bool:
     """Leave the durable retry marker for ``labels`` (never the name). Never raises."""
     try:
@@ -355,6 +361,12 @@ async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
 
     Does NOT record a contact undo and never touches contacts of a step that was not pending: a member who said "keep the
     contact" after a COMPLETE forget keeps it."""
+    try:
+        import os_shadow
+
+        await os_shadow.nudge()      # the Zoe OS shadow's parked forgets and erases are replayed now (free when there is no shadow state)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         import memory_forgotten
         labels = await memory_forgotten.pending_labels(user_id, ALL_LABELS)

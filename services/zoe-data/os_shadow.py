@@ -223,6 +223,27 @@ def _no_state() -> bool:
     return not exists and time.monotonic() - at < 3 * STATE_POLL_S and d == str(state_dir())
 
 
+def _state_dir_present() -> bool:
+    """ONE stat of the state directory, made on the loop by a forget (see ``_nothing_to_forget``). Anything but a clean "it is not
+    there" counts as present."""
+    try:
+        os.stat(state_dir())
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _nothing_to_forget() -> bool:
+    """May a FORGET be answered "nothing recorded here" without a thread? Never from the cached answer alone: another process can
+    install or restore shadow storage after the last poll, and a forget in that window would skip the kernel AND the park. So the
+    cache is only a hint, and the forget itself makes one stat of the state directory on the loop (a single syscall, no executor
+    hop): only when the cache says "no state" AND the directory is not there is the answer certain. A directory that exists - even
+    an empty one - takes the normal path (the probe in a thread, then the kernel or the park)."""
+    return _no_state() and not _state_dir_present()
+
+
 def _state_installed() -> None:
     """This process is about to write (or has written) shadow state: every forget from now on goes to the kernel."""
     global _state_known, _state_seq
@@ -683,11 +704,13 @@ def _run() -> None:
             # reads it, so a park from before a restart is replayed first). Known-empty costs one global read per job, no file I/O.
             # Its own try: a replay that fails must never cost the job behind it (an add keeps its one line).
             try:
-                _replay_pending(kernel, force=job[0] == "forget")
+                _replay_pending(kernel, force=job[0] in ("forget", "replay"))
             except Exception as exc:  # noqa: BLE001 - kept pending, tried again before the next job
                 logger.warning("OS_SHADOW replay error=%s", type(exc).__name__)
         if _erase_members is None or _erase_members:
             _kick_erases()            # the same replay finishes what production still holds for a member the kernel has confirmed
+        if job[0] == "replay":
+            continue                  # a nudge: the replay above was the whole job
         try:
             if job[0] == "act":
                 _do_act(kernel, *job[1:])
@@ -1071,11 +1094,14 @@ def _replay_pending(kernel: _Kernel, force: bool = True) -> bool:
         return False
 
 
-# ---- parked PRODUCTION erases: rows a forget hid but could not erase because the kernel did not confirm ----------------------------------
-# ``pending-erases.json`` beside the parked forgets, under the SAME lock and writer: ``{member: [memory row ids]}``. IDS ONLY, never
-# a word (the words to erase are read from the rows themselves when the erase is finished). The worker's replay that confirms a
-# member's parked kernel forget then has the service finish these (``turn_forget.finish_parked``) with no further request from the
-# member; a finish that fails leaves the entry for the next job; a member delete drops the member's entry.
+# ---- parked PRODUCTION erases: what a forget could not erase because the kernel did not confirm ------------------------------------------
+# ``pending-erases.json`` beside the parked forgets, under the SAME lock and writer: ``{member: {"rows": [...], "turns": [...],
+# "messages": [...]}}`` - memory row ids, exact-words turn ids, saved-transcript row ids. IDS ONLY, never a word. It is written at
+# the erasers' own shadow step (``park_unconfirmed`` in ``MemoryService.erase_rows`` and ``exact_words._shadow_first``), so
+# no caller can forget to park. The worker's replay that confirms a member's parked kernel forget then has the service finish these
+# (``turn_forget.finish_parked``) with no further request from the member; a finish that fails leaves the entry for the next job; a
+# member delete drops the member's entry.
+ERASE_KINDS = ("rows", "turns", "messages")
 #: members with a parked erase as this process last saw the file (None = not read yet: the worker reads it before its next job)
 _erase_members: Optional[frozenset] = None
 _loop: Optional[asyncio.AbstractEventLoop] = None    # the service's loop, noted by the hook and the forget: where a finish is run
@@ -1104,24 +1130,27 @@ def _erases_read() -> dict:
         raw = json.loads(text)
     except ValueError as exc:
         raise PendingUnreadable("pending-erases.json is not json") from exc
-    if not isinstance(raw, dict) or not all(isinstance(v, list) for v in raw.values()):
-        raise PendingUnreadable("pending-erases.json is not a map of lists")
-    return {str(m): [str(i) for i in ids if i] for m, ids in raw.items()}
+    if not isinstance(raw, dict) or not all(isinstance(v, dict) for v in raw.values()):
+        raise PendingUnreadable("pending-erases.json is not a map")
+    return {str(m): {k: [str(i) for i in (e.get(k) or []) if i] for k in ERASE_KINDS} for m, e in raw.items()}
 
 
 def _erases_store(todo: dict) -> None:
     global _erase_members
-    todo = {m: ids for m, ids in todo.items() if ids}
+    todo = {m: {k: e[k] for k in ERASE_KINDS if e.get(k)} for m, e in todo.items() if any(e.get(k) for k in ERASE_KINDS)}
     _durable_write(_erases_path(), todo)
     _erase_members = frozenset(todo)
 
 
-def park_erase(member: str, rows) -> None:
-    """Record, durably, the rows left to erase for ``member`` (merged into what is already parked). BLOCKING and it RAISES when it
+def park_erase(member: str, *, rows=(), turns=(), messages=()) -> None:
+    """Record, durably, what is left to erase for ``member`` (merged into what is already parked). BLOCKING and it RAISES when it
     cannot be made durable: a thread, never the loop."""
+    add = {"rows": rows, "turns": turns, "messages": messages}
     with _pending_locked():
         todo = _erases_read()
-        todo[str(member)] = list(dict.fromkeys([*todo.get(str(member), []), *(str(i) for i in rows if i)]))
+        entry = todo.setdefault(str(member), {k: [] for k in ERASE_KINDS})
+        for k in ERASE_KINDS:
+            entry[k] = list(dict.fromkeys([*entry[k], *(str(i) for i in (add[k] or ()) if i)]))
         _erases_store(todo)
 
 
@@ -1134,20 +1163,49 @@ def parked_erases() -> dict:
         return todo
 
 
-def erases_done(member: str, rows=None) -> None:
-    """Drop what was finished: the ids in ``rows`` (anything parked for the member SINCE stays), or the member's whole entry when
-    ``rows`` is None (a member delete, which erased everything they had). BLOCKING (a thread); raises when it cannot be written."""
+def erases_done(member: str, entry: Optional[dict] = None) -> None:
+    """Drop what was finished: the ids in ``entry`` (anything parked for the member SINCE stays), or the member's whole entry when
+    ``entry`` is None (a member delete, which erased everything they had). BLOCKING (a thread); raises when it cannot be written."""
     with _pending_locked():
         todo = _erases_read()
-        gone = None if rows is None else set(str(i) for i in rows)
-        todo[str(member)] = [] if gone is None else [i for i in todo.get(str(member), []) if i not in gone]
+        have = todo.pop(str(member), None) or {}
+        if entry is not None:
+            todo[str(member)] = {k: [i for i in have.get(k, []) if i not in set(str(x) for x in (entry.get(k) or ()))] for k in ERASE_KINDS}
         _erases_store(todo)
+
+
+async def park_unconfirmed(user_id: str, *, rows=(), turns=(), messages=()) -> None:
+    """An eraser's shadow step was not confirmed: park what that eraser was about to erase (off the loop). Never raises: the eraser
+    raises its own failure either way, and an erase that could not be parked is still never reported as done."""
+    try:
+        if rows or turns or messages:
+            await asyncio.to_thread(lambda: park_erase(user_id, rows=rows, turns=turns, messages=messages))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("OS_SHADOW unconfirmed erase NOT parked code=%s", type(exc).__name__)
+
+
+async def nudge() -> None:
+    """Ask the worker to replay now (the parked kernel forgets, then the parked erases) without waiting for the next write: called by
+    the forget retry pass (``memory_forget_cascade.retry_pending``: every night per member, and on a topic or complete entity
+    forget). Costs nothing - no thread, no disk - when there is certainly no shadow state, or this process knows nothing is parked.
+    Never raises, never waits for the replay."""
+    try:
+        if _no_state() or (_pending_members is not None and not _pending_members and _erase_members is not None and not _erase_members):
+            return
+        _note_loop()
+        if not await asyncio.to_thread(_state_probe):
+            return
+        await asyncio.to_thread(_ensure_worker)
+        _q.put_nowait(("replay",))
+    except Exception:  # noqa: BLE001 - a full queue has jobs in it, and each of those replays first anyway
+        pass
 
 
 async def drop_parked_erases(user_id: str) -> None:
     """A member delete finished: nothing of theirs is left to erase, so their parked entry (ids) goes too. No disk and no thread
-    when there is certainly no shadow state, or this process knows nothing is parked. Raises when the entry could not be removed."""
-    if _no_state() or (_erase_members is not None and str(user_id) not in _erase_members):
+    thread when there is certainly no shadow state (the forget's own rule: the cached answer plus one stat). Raises when the entry
+    could not be removed."""
+    if _nothing_to_forget():
         return
     if not await asyncio.to_thread(_state_probe):
         return
@@ -1175,6 +1233,10 @@ async def _finish_erases() -> int:
     _finishing = True
     done = 0
     try:
+        global _erase_members
+        if not await asyncio.to_thread(os.path.exists, _erases_path()):
+            _erase_members = frozenset()
+            return 0                  # nothing is parked, and reading the park must never create the state directory
         todo = await asyncio.to_thread(parked_erases)
         still = await asyncio.to_thread(_pending_read_locked)
         for member, entry in todo.items():
@@ -1264,7 +1326,7 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     strict = mode() == "shadow"
     _note_loop()
     if not strict:
-        if _no_state():               # the common case with no kernel installed: answered from memory, no thread, no disk
+        if _nothing_to_forget():      # the common case with no kernel installed: memory plus ONE stat on the loop, no thread
             return 0
         # not certain: the state check stats and lists a directory, in a thread, never on the event loop
         if not await asyncio.to_thread(_state_probe):
@@ -1317,7 +1379,11 @@ async def forget_for_erase(user_id: str) -> int:
     turn or production row: zoe-data keeps no map from a turn to the kernel events its writes produced (the cause event carries fixed
     text, never a turn id). So a row- or turn-scoped forget cannot name the turn's shadow records; the nearest CORRECT op is the
     member's whole shadow record (the documented safe over-forget: a shadow copy is disposable). Narrowing it needs the shadow to
-    record its seqs per turn first (an open item)."""
+    record its seqs per turn first (an open item).
+
+    When this raises, the erasers that called it park what they were about to erase (``park_unconfirmed``: the row eraser its row
+    ids, the word erasers their index turn ids), so the replay finishes it: the erasers are the one place every row and words
+    forget goes through, and a caller that had already hidden rows cannot leave them behind."""
     return await _forget(user_id, None, None)
 
 

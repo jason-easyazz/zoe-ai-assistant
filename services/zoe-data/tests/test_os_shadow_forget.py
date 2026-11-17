@@ -1177,6 +1177,7 @@ def callers(kernel, monkeypatch):
             self.rows = {"r1": SimpleNamespace(id="r1", text=SAID, metadata={"user_id": MEMBER, "status": "approved", "source_excerpt": SAID})}
             self.reviews: list = []
             self.before_erase = None        # called as the eraser is entered (the late case: the kernel stops HERE)
+            self.after_erase = None         # called once the rows are gone (the kernel stops before the WORDS step)
             self.ordinary_failure = False   # the eraser fails for a reason that is not the shadow
 
         async def get(self, rid):
@@ -1196,15 +1197,20 @@ def callers(kernel, monkeypatch):
             try:
                 await os_shadow.forget_for_erase(uid)
             except Exception as exc:
+                await os_shadow.park_unconfirmed(uid, rows=list(ids))     # exactly the real eraser's shadow step (pinned below)
                 raise _StoreError("erase_rows failed: Zoe OS shadow erasure failed") from exc
             if self.ordinary_failure:
                 raise _StoreError("erase_rows failed: disk")
-            return {"rows_removed": sum(self.rows.pop(rid, None) is not None for rid in ids)}
+            n = sum(self.rows.pop(rid, None) is not None for rid in ids)
+            if self.after_erase:
+                self.after_erase()
+            return {"rows_removed": n}
 
     svc, backend = Store(), exact_words.MemoryBackend()
     exact_words.set_backend(backend)
     turn_forget.reset()
     mp.clear_explained(MEMBER)
+    real_retry = memory_forget_cascade.retry_pending
     monkeypatch.setattr(mp, "enabled", lambda: True)
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
     monkeypatch.setattr(memory_service, "physical_erase_enabled", lambda: True)
@@ -1251,7 +1257,7 @@ def callers(kernel, monkeypatch):
         turn_forget.note_user_turn(MEMBER, SAID)
         mp.mark_explained(MEMBER, "r1", text=SAID, quote=SAID, turn_id="t1")
 
-    yield SimpleNamespace(svc=svc, backend=backend, run=run, said=said)
+    yield SimpleNamespace(svc=svc, backend=backend, run=run, said=said, retry_pending=real_retry)
     exact_words.set_backend(None)
     turn_forget.reset()
     mp.clear_explained(MEMBER)
@@ -1305,7 +1311,13 @@ async def test_a_caller_never_says_forgotten_while_the_kernel_cannot_confirm_and
     if caller in WORDS:
         assert (MEMBER, "t1") not in st.backend.rows
     assert turn_forget.unerased(MEMBER) == []
+    await os_shadow._finish_erases()            # an id parked for a row the repeat has since erased is dropped by the next replay
     assert not (kernel.state / "pending-forgets.json").exists() and not (kernel.state / "pending-erases.json").exists()
+
+
+#: with no shadow state: in-loop stats of the state directory per forget = its shadow checks (the four entry points and the delete's
+#: drop for "direct"; the erasers' own checks, plus the caller's confirmation where it has one, for the callers)
+STATS = {"direct": 5, "last": 2, "explained": 3, "topic": 2, "screen": 3, "guardian": 3, "unwrite": 2, "curation": 2}
 
 
 def _spy_on_the_loop(monkeypatch):
@@ -1329,6 +1341,8 @@ def _spy_on_the_loop(monkeypatch):
     spy(asyncio, "to_thread")
     spy(type(asyncio.get_running_loop()), "run_in_executor")
     spy(os_shadow, "shadow_state_exists")
+    if hasattr(os_shadow, "_state_dir_present"):
+        spy(os_shadow, "_state_dir_present")
     for name in ("stat", "exists", "is_dir", "is_file", "iterdir"):
         spy(Path, name)
     return seen
@@ -1348,12 +1362,16 @@ async def test_with_no_shadow_state_a_forget_makes_no_executor_hop_and_no_disk_p
     seen = _spy_on_the_loop(monkeypatch)
     if caller == "direct":
         assert [await os_shadow.forget_for_erase(MEMBER), await os_shadow.forget_user(MEMBER), await os_shadow.erase_entity(MEMBER, "Dana"),
-                await os_shadow.erase_topic(MEMBER, "the garden"), await os_shadow.drop_parked_erases(MEMBER)] == [0, 0, 0, 0, None]
+                await os_shadow.erase_topic(MEMBER, "the garden"), await os_shadow.drop_parked_erases(MEMBER),
+                await os_shadow.nudge(), await st.retry_pending(MEMBER)] == [0, 0, 0, 0, None, None, None]
     else:
         forgotten, out = await st.run(caller)
         assert forgotten, out
         assert st.svc.rows == {} and (caller not in WORDS or (MEMBER, "t1") not in st.backend.rows)
-    assert seen == []
+    # no hop and no probe: the ONLY look at the disk is the forget's own single stat of the state directory, once per shadow check
+    # (a forget never confirms from the cached answer alone). A spoken "forget that" makes two checks (the row eraser, the word
+    # eraser), "forget it" three.
+    assert seen == ["_state_dir_present"] * STATS[caller]
     assert kernel.calls == [] and not (tmp_path / "absent").exists()
 
 
@@ -1391,6 +1409,23 @@ async def test_shadow_state_that_appears_later_is_noticed_and_an_unsure_answer_a
     assert not os_shadow._no_state()
     with pytest.raises(os_shadow.ShadowForgetUnavailable):
         await os_shadow.forget_for_erase(MEMBER)                       # state, and no kernel answers: fails closed
+    # (2b) ... and in the window BEFORE any poll: the cache still says "no state", yet no forget entry confirms from it
+    d = fresh("window")
+    assert not d.exists()
+    assert await os_shadow.forget_for_erase(MEMBER) == 0
+    assert not d.exists()                                               # a no-state forget creates nothing
+    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 30.0)               # no poll will come within this test
+    os_shadow._state_known = (str(d), False, time.monotonic())
+    d.mkdir()
+    (d / "kernel").mkdir()                                              # shadow storage restored by another process
+    assert os_shadow._no_state()                                        # the cache has NOT noticed
+    for forget in (lambda: os_shadow.forget_user(MEMBER), lambda: os_shadow.erase_entity(MEMBER, "Dana"),
+                   lambda: os_shadow.erase_topic(MEMBER, "the garden"), lambda: os_shadow.forget_for_erase(MEMBER)):
+        os_shadow._state_known = (str(d), False, time.monotonic())
+        with pytest.raises(os_shadow.ShadowForgetUnavailable):
+            await forget()
+    assert json.loads((d / "pending-forgets.json").read_text()) == [MEMBER]
+    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 0.05)
     # (3) THIS process writes state: the next forget does not skip, without waiting for any poll
     d = fresh("three")
     assert await os_shadow.forget_for_erase(MEMBER) == 0 and os_shadow._no_state()
@@ -1490,9 +1525,17 @@ class _EntityStore:
         self.rows[rid].metadata["status"] = "archived"
         return self.rows[rid]
 
+    async def get(self, rid):
+        return self.rows.get(rid)
+
     async def erase_rows(self, uid, ids, **kwargs):
         if self.fail == "shadow":
-            raise _StoreError("erase_rows failed") from os_shadow.ShadowForgetUnavailable("refused (parked)")
+            self.kernel.forget_mode = "refuse_all"          # the kernel stops HERE, after the entity forget's own confirmation
+        try:
+            await os_shadow.forget_for_erase(uid)
+        except Exception as exc:
+            await os_shadow.park_unconfirmed(uid, rows=list(ids))
+            raise _StoreError("erase_rows failed: Zoe OS shadow erasure failed") from exc
         if self.fail == "ordinary":
             raise _StoreError("erase_rows failed: disk")
         return {"rows_removed": sum(self.rows.pop(rid, None) is not None for rid in ids)}
@@ -1506,7 +1549,11 @@ def entity(kernel, monkeypatch):
     import memory_forgotten
     import memory_service
 
-    cascades, words = [], []
+    cascades, words, marked = [], [], []
+
+    async def mark(user_id, labels, **kwargs):
+        marked.append(sorted(labels))
+        return True
 
     async def cascade(user_id, name, **kwargs):
         cascades.append(name)
@@ -1523,13 +1570,15 @@ def entity(kernel, monkeypatch):
     monkeypatch.setattr(memory_service, "physical_erase_enabled", lambda: True)
     monkeypatch.setattr(memory_forgotten, "add", noop)
     monkeypatch.setattr(memory_forget_cascade, "cascade_forget", cascade)
+    monkeypatch.setattr(memory_forget_cascade, "_mark_pending", mark)
     monkeypatch.setattr(exact_words, "erase_entity", erase_words)
+    monkeypatch.setattr(__import__("night_mind"), "erase_words", noop)
 
     async def forget(store):
         monkeypatch.setattr(memory_service, "get_memory_service", lambda: store)
         return await ir.execute_intent(ir.Intent("memory_forget_entity", {"name": "Dana"}), MEMBER)
 
-    forget.cascades, forget.words, forget.incomplete = cascades, words, ir._FORGET_CASCADE_INCOMPLETE
+    forget.cascades, forget.words, forget.incomplete, forget.marked = cascades, words, ir._FORGET_CASCADE_INCOMPLETE, marked
     return forget
 
 
@@ -1546,7 +1595,7 @@ async def test_an_entity_forget_confirms_the_shadow_before_its_first_erase(kerne
         monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path / "absent"))
     reply = await entity(store)
     if state == "kernel-refusing":
-        assert reply == entity.incomplete and entity.words == [] and entity.cascades == []
+        assert reply == entity.incomplete and entity.words == [] and entity.cascades == [] and len(entity.marked) == 1
         assert store.rows["r1"].metadata["status"] == "approved" and _pending(kernel) == [MEMBER]
     else:
         assert reply != entity.incomplete and "forgot" in reply.lower()
@@ -1554,19 +1603,27 @@ async def test_an_entity_forget_confirms_the_shadow_before_its_first_erase(kerne
 
 
 @pytest.mark.asyncio
-async def test_an_entity_forget_whose_row_erase_the_shadow_did_not_confirm_is_not_reported_and_the_repeat_finishes(kernel, entity):
+async def test_an_entity_forget_whose_row_erase_the_shadow_did_not_confirm_is_parked_and_finished_by_the_replay(kernel, entity):
     """The late case: the entry confirmation succeeded, then the row eraser's own shadow step failed. Not reported, the cascade does
-    not run; the repeat finds the archived row by name and erases it. The control: an ORDINARY erase failure keeps its old outcome."""
+    not run - and two durable records finish it with no repeat: the archived row is parked (finished by the shadow's replay after a
+    restart) and every cascade step is left pending (the retry pass). The control: an ORDINARY erase failure keeps its old outcome."""
+    import memory_forget_cascade as cascade
+
     store = _EntityStore(fail="shadow")
+    store.kernel = kernel
     assert await entity(store) == entity.incomplete
-    assert entity.cascades == [] and "r1" in store.rows and forgets(kernel)[0][1].get("entity") == "Dana"
-    store.fail = None
-    reply = await entity(store)
-    assert reply != entity.incomplete and store.rows == {} and entity.cascades == ["Dana"]
+    assert entity.cascades == [] and store.rows["r1"].metadata["status"] == "archived"
+    assert forgets(kernel)[0][1].get("entity") == "Dana"
+    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1"]}}
+    assert entity.marked == [sorted(l for l in cascade.ALL_LABELS if l != cascade.VALUE_REGISTRY_TOPIC)]
+    _restart(kernel)
+    kernel.forget_mode, store.fail = "ok", None
+    add()                                                                           # any job: the member says nothing more
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists()) and store.rows == {}
     ordinary = _EntityStore(fail="ordinary")
     reply = await entity(ordinary)
-    assert reply != entity.incomplete and "forgot" in reply.lower() and entity.cascades == ["Dana", "Dana"]
-    assert ordinary.rows["r1"].metadata["status"] == "archived"
+    assert reply != entity.incomplete and "forgot" in reply.lower() and entity.cascades == ["Dana"]
+    assert ordinary.rows["r1"].metadata["status"] == "archived" and len(entity.marked) == 1
 
 
 @pytest.fixture
@@ -1684,8 +1741,8 @@ def _restart(kernel):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("caller", ["last", "explained", "topic"])
-async def test_a_spoken_forget_the_shadow_refused_is_finished_by_the_replay_after_a_restart_with_no_further_request(kernel, callers, caller):
+@pytest.mark.parametrize("caller", ["last", "explained", "topic", "screen", "guardian", "curation"])
+async def test_a_forget_the_shadow_refused_is_finished_by_the_replay_after_a_restart_with_no_further_request(kernel, callers, caller):
     """The reviewer's control. The kernel refuses as the row eraser is entered: the row stays hidden and its id is PARKED on disk
     (ids only). Restart. The kernel recovers and the next job of any kind (here a list add) runs the replay: the kernel forget is
     confirmed and the SAME replay has the service erase the row and the member's words. The member never asks again."""
@@ -1696,7 +1753,8 @@ async def test_a_spoken_forget_the_shadow_refused_is_finished_by_the_replay_afte
     st.svc.before_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
     forgotten, out = await st.run(caller)
     assert not forgotten and "r1" in st.svc.rows
-    assert _parked_rows(kernel) == {MEMBER: ["r1"]} and _pending(kernel) == [MEMBER]
+    assert st.svc.rows["r1"].metadata["status"] in ("rejected", "archived")         # hidden, not erased: exactly what must not be left
+    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1"]}} and _pending(kernel) == [MEMBER]
     assert SAID not in (kernel.state / "pending-erases.json").read_text()          # ids only, never the words
     _restart(kernel)
     assert turn_forget.unerased(MEMBER) == [] and turn_forget.previous_turn(MEMBER) is None
@@ -1705,7 +1763,7 @@ async def test_a_spoken_forget_the_shadow_refused_is_finished_by_the_replay_afte
     assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
     assert st.svc.rows == {} and (MEMBER, "t1") not in st.backend.rows
     assert not (kernel.state / "pending-forgets.json").exists()
-    assert await turn_forget.finish_parked(MEMBER, ["r1"]) == 0                     # replayed twice is harmless
+    assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1"], "turns": ["t1"]}) == 0     # replayed twice is harmless
 
 
 @pytest.mark.asyncio
@@ -1719,12 +1777,12 @@ async def test_a_parked_erase_whose_finish_fails_stays_parked_and_is_never_run_b
     add()                                                                           # the kernel still refuses: nothing may be erased
     settle(1)
     assert await os_shadow._finish_erases() == 0
-    assert "r1" in st.svc.rows and (MEMBER, "t1") in st.backend.rows and _parked_rows(kernel) == {MEMBER: ["r1"]}
+    assert "r1" in st.svc.rows and (MEMBER, "t1") in st.backend.rows and _parked_rows(kernel) == {MEMBER: {"rows": ["r1"]}}
     kernel.forget_mode, st.svc.ordinary_failure = "ok", True                        # the kernel confirms, the row erase itself fails
     add()
     assert await _until(lambda: not (kernel.state / "pending-forgets.json").exists())
     assert await _until(lambda: not os_shadow._finishing) and await os_shadow._finish_erases() == 0
-    assert "r1" in st.svc.rows and _parked_rows(kernel) == {MEMBER: ["r1"]}         # kept, never dropped
+    assert "r1" in st.svc.rows and _parked_rows(kernel)[MEMBER]["rows"] == ["r1"]   # kept, never dropped
     st.svc.ordinary_failure = False
     add()
     assert await _until(lambda: not (kernel.state / "pending-erases.json").exists()) and st.svc.rows == {}
@@ -1737,17 +1795,146 @@ async def test_a_parked_erase_never_touches_an_approved_row_and_a_member_delete_
     monkeypatch.setattr(os_shadow, "_kick_erases", lambda: None)     # only the delete's own drop is under test (not the replay's finish)
     st = callers
     await st.said()
-    assert await turn_forget.finish_parked(MEMBER, ["r1", "no-such-row"]) == 0      # r1 is approved: a parked id alone erases nothing
+    assert await turn_forget.finish_parked(MEMBER, {"rows": ["r1", "no-such-row"]}) == 0      # r1 is approved: a parked id alone erases nothing
     assert st.svc.rows["r1"].metadata["status"] == "approved" and (MEMBER, "t1") in st.backend.rows
-    os_shadow.park_erase(MEMBER, ["r1"])
-    os_shadow.park_erase("member-b", ["r9"])
+    os_shadow.park_erase(MEMBER, rows=["r1"], turns=["t1"])
+    os_shadow.park_erase("member-b", rows=["r9"])
     svc, _col = env
     await svc.delete_user(MEMBER, actor=MEMBER)                                     # the real MemoryService.delete_user
-    assert _parked_rows(kernel) == {"member-b": ["r9"]}
+    assert _parked_rows(kernel) == {"member-b": {"rows": ["r9"]}}
 
 
 def test_an_unreadable_erase_park_is_never_overwritten(kernel):
     (kernel.state / "pending-erases.json").write_text("not json")
     with pytest.raises(os_shadow.PendingUnreadable):
-        os_shadow.park_erase(MEMBER, ["r1"])
+        os_shadow.park_erase(MEMBER, rows=["r1"])
     assert (kernel.state / "pending-erases.json").read_text() == "not json"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["last", "last-no-rows", "explained", "screen", "guardian"])
+async def test_a_words_erase_the_shadow_refused_is_parked_by_turn_id_and_finished_by_the_replay(kernel, callers, caller):
+    """The kernel stops AFTER the rows went, before the member's words (or, ``last-no-rows``, a "forget that" of a turn that wrote no
+    row at all): not reported, the words are still there, and the word eraser itself parked the index turn's ID (never the words).
+    Restart, the kernel recovers, any job runs the replay: the words are gone with no further request."""
+    st = callers
+    await st.said()
+    if caller == "last-no-rows":
+        st.svc.rows.clear()
+        kernel.forget_mode = "refuse_all"
+    else:
+        st.svc.after_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
+    forgotten, out = await st.run(caller.split("-")[0])
+    assert not forgotten, out
+    assert st.svc.rows == {} and (MEMBER, "t1") in st.backend.rows
+    assert _parked_rows(kernel) == {MEMBER: {"turns": ["t1"]}}
+    assert SAID not in (kernel.state / "pending-erases.json").read_text()
+    _restart(kernel)
+    kernel.forget_mode, st.svc.after_erase = "ok", None
+    add()
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert (MEMBER, "t1") not in st.backend.rows and not (kernel.state / "pending-forgets.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_unwrite_hid_nothing_so_the_replay_erases_nothing_and_the_retry_completes(kernel, callers):
+    """The day-review unwrite hard-erases approved rows with no hiding step: when the shadow refuses, the row is exactly as it was
+    (its caller keeps the candidates and retries). The parked id is dropped by the replay WITHOUT erasing an approved row."""
+    st = callers
+    await st.said()
+    st.svc.before_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
+    assert not (await st.run("unwrite"))[0]
+    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1"]}} and st.svc.rows["r1"].metadata["status"] == "approved"
+    _restart(kernel)
+    kernel.forget_mode, st.svc.before_erase = "ok", None
+    add()
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert st.svc.rows["r1"].metadata["status"] == "approved" and (MEMBER, "t1") in st.backend.rows
+    assert (await st.run("unwrite"))[0] and st.svc.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_the_forget_retry_pass_triggers_the_replay_with_no_write_and_no_forget(kernel, callers):
+    """With the flag off there may be no list add for days: the forget retry pass (``retry_pending``: every night per member) nudges
+    the worker, so a parked erase is finished without any write or any further forget."""
+    st = callers
+    await st.said()
+    st.svc.before_erase = lambda: setattr(kernel, "forget_mode", "refuse_all")
+    assert not (await st.run("last"))[0]
+    _restart(kernel)
+    kernel.forget_mode, st.svc.before_erase = "ok", None
+    n = len(kernel.calls)
+    await st.retry_pending("member-b")                                # another member's nightly pass is enough
+    assert await _until(lambda: not (kernel.state / "pending-erases.json").exists())
+    assert st.svc.rows == {} and (MEMBER, "t1") not in st.backend.rows
+    assert all(op == "forget" for _, op, _ in kernel.calls[n:])
+
+
+@pytest.mark.asyncio
+async def test_the_real_row_eraser_parks_its_ids_when_the_shadow_does_not_confirm(kernel, env):  # noqa: F811
+    import memory_service
+
+    svc, _col = env
+    kernel.forget_mode = "refuse_all"
+    with pytest.raises(memory_service.MemoryServiceError, match="Zoe OS shadow erasure failed"):
+        await svc.erase_rows(MEMBER, ["r1", "r2"], actor=MEMBER)
+    assert _parked_rows(kernel) == {MEMBER: {"rows": ["r1", "r2"]}}
+
+
+# ---- structure: the parking is at the erasers' own shadow step, and a caller that hides rows reaches the row eraser ---------------------
+def _fn(source, name):
+    return next(n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+
+
+def _parks(source, name, called, keyword):
+    """Does ``name`` call ``called`` with ``keyword=...`` (the ids it parks when the shadow does not confirm)? Syntax tree only."""
+    return any(isinstance(c, ast.Call) and _called(c) == called and keyword in {k.arg for k in c.keywords}
+               for c in ast.walk(_fn(source, name)))
+
+
+def _without_keyword(source, name, called, keyword):
+    """The mutation: the same source with ``keyword=...`` cut out of that call (the negative control's input)."""
+    lines = source.splitlines(keepends=True)
+    for c in ast.walk(_fn(source, name)):
+        if isinstance(c, ast.Call) and _called(c) == called:
+            for k in c.keywords:
+                if k.arg == keyword:
+                    start = sum(map(len, lines[:k.value.lineno - 1])) + k.value.col_offset
+                    end = sum(map(len, lines[:k.value.end_lineno - 1])) + k.value.end_col_offset
+                    head = source[:start].rstrip()
+                    assert head.endswith(keyword + "=")
+                    return head[:-len(keyword) - 1].rstrip().rstrip(",") + source[end:]
+    raise AssertionError("no such keyword")
+
+
+@pytest.mark.parametrize("path,name,called,keyword", [
+    ("memory_service.py", "erase_rows", "park_unconfirmed", "rows"),
+    ("exact_words.py", "erase_turn", "_shadow_first", "turns"),
+    ("exact_words.py", "erase_text", "_shadow_first", "turns"),
+])
+def test_every_shared_eraser_hands_its_ids_to_the_shadow_step_that_parks_them(path, name, called, keyword):
+    source = (SVC / path).read_text("utf-8")
+    assert _parks(source, name, called, keyword)
+    mutated = _without_keyword(source, name, called, keyword)
+    ast.parse(mutated)
+    assert not _parks(mutated, name, called, keyword)
+
+
+def _hides_without_erasing(source, name):
+    """A forget entry point that changes a row's lifecycle (``.review(...)``) must also reach ``erase_rows`` - the eraser that parks
+    the hidden ids when the shadow does not confirm - or the rows it hid could be left behind for good."""
+    calls = {_called(c) for c in ast.walk(_fn(source, name)) if isinstance(c, ast.Call)}
+    return "review" in calls and "erase_rows" not in calls
+
+
+@pytest.mark.parametrize("site", sorted(FORGET_ENTRY_POINTS))
+def test_no_forget_entry_point_hides_rows_without_reaching_the_row_eraser(site):
+    path, name = site.split("::")
+    assert not _hides_without_erasing((SVC / path).read_text("utf-8"), name), f"{site} hides rows it never erases or parks"
+
+
+def test_the_hide_without_erase_check_catches_a_planted_caller():
+    bad = "async def forget(svc, rid):\n    await svc.review(rid, decision='reject')\n    return 'forgotten'\n"
+    good = bad.replace("    return", "    await svc.erase_rows('m', [rid], actor='m')\n    return")
+    assert _hides_without_erasing(bad, "forget") and not _hides_without_erasing(good, "forget")
+    assert not _hides_without_erasing("async def forget(svc):\n    # await svc.review(rid)\n    return 'review'\n", "forget")

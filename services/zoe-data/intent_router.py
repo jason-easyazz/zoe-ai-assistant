@@ -4010,6 +4010,19 @@ _FORGET_CASCADE_INCOMPLETE = (
     "so I can't say it's forgotten yet. Please tell me again in a moment.")
 
 
+async def _forget_entity_unconfirmed(user_id: str) -> str:
+    """An entity forget stopped because the Zoe OS shadow did not confirm, before its cascade ran. Two durable records finish it
+    even if the member never repeats it: the rows it had archived are parked by the row eraser (``pending-erases.json``, finished by
+    the shadow's replay), and EVERY cascade step is left pending here (``memory_forget_cascade``'s own markers, no name), so the next
+    healthy retry pass clears the derived stores from the ledger. Never raises."""
+    try:
+        import memory_forget_cascade
+        await memory_forget_cascade.mark_all_pending(user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("memory_forget_entity: cascade retry not recorded (%s)", type(exc).__name__)
+    return _FORGET_CASCADE_INCOMPLETE
+
+
 async def _forget_cascade_note(user_id: str, name: str) -> tuple[str, bool]:
     """Run the forget cascade (memory_forget_cascade): ``(sentence saying what it did or '', complete)``. The spoken part is honest:
     it names only what was actually removed. ``complete`` is False when a derived store could not be cleared (a lost or exhausted
@@ -4147,6 +4160,7 @@ async def _execute_forget_last(user_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         import os_shadow
+        await exact_words.park_transcript(user_id, text, exc)      # the saved turn's flag, by id, for the shadow's replay (unconfirmed only)
         if os_shadow.unconfirmed(exc):
             return FORGET_STORE_DOWN_REPLY
     try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
@@ -4424,7 +4438,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             await os_shadow.erase_entity(user_id, name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_entity: Zoe OS shadow erase failed (%s) - nothing erased", type(exc).__name__)
-            return _FORGET_CASCADE_INCOMPLETE
+            return await _forget_entity_unconfirmed(user_id)
         # ... and the owner's verbatim turns that name the entity (exact_words): deleted, not merely hidden - every exit path
         # below leaves them gone, and a count only is logged
         try:
@@ -4592,7 +4606,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             try:
                 await _erase_named([])
             except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
-                return _FORGET_CASCADE_INCOMPLETE
+                return await _forget_entity_unconfirmed(user_id)
             _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
             if not _cascade_ok:
                 return _FORGET_CASCADE_INCOMPLETE
@@ -4613,7 +4627,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         try:
             await _erase_named(archived_ids)
         except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
-            return _FORGET_CASCADE_INCOMPLETE
+            return await _forget_entity_unconfirmed(user_id)
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")

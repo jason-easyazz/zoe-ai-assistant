@@ -3870,6 +3870,9 @@ class MemoryService:
                 import os_shadow
                 await os_shadow.forget_for_erase(user_id)
             except Exception as exc:
+                # not confirmed: the ids are PARKED (pending-erases.json, ids only) so the shadow's replay finishes the erase even
+                # if nobody asks again - here, at the one eraser every row forget goes through (a caller may already have hidden them)
+                await os_shadow.park_unconfirmed(user_id, rows=want)
                 raise MemoryServiceError(f"erase_rows failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         if not lock_held:
             try:
