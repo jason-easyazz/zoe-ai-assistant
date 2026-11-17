@@ -650,8 +650,22 @@ def test_a_delete_run_inside_the_members_own_request_does_not_wait_for_itself(mo
         try:
             assert erase_watermark.inflight_turns(A) == 1
             assert erase_watermark.inflight_turns(A, exclude_own=True) == 0, "the delete does not wait for its own request"
-            other = erase_watermark.turn_open(None, A)
-            assert erase_watermark.inflight_turns(A, exclude_own=True) == 1, "another turn of the member is still waited for"
+            # ...and still not with the turn context cleared, as user_erase_gate.whole_member_erase does (it remembers the token)
+            remembered = erase_watermark._ERASE_OWN_TURN.set(own)
+            cleared = erase_watermark._TURN_CTX.set(None)
+            try:
+                assert erase_watermark.inflight_turns(A, exclude_own=True) == 0, "own turn found by the token the gate remembered"
+            finally:
+                erase_watermark._TURN_CTX.reset(cleared)
+                erase_watermark._ERASE_OWN_TURN.reset(remembered)
+            # an EARLIER turn of the member run by this same task (held by its background tail) is still waited for
+            earlier = erase_watermark.turn_open(None, A)
+            assert erase_watermark.inflight_turns(A, exclude_own=True) == 1
+            erase_watermark.turn_close(earlier)
+            async def open_elsewhere():          # a turn of the member run by ANOTHER task
+                return erase_watermark.turn_open(None, A)
+            other = await asyncio.ensure_future(open_elsewhere())
+            assert erase_watermark.inflight_turns(A, exclude_own=True) == 1, "another task's turn of the member is still waited for"
             erase_watermark.turn_close(other)
 
             async def child():      # a task started inside the turn inherits its context but is NOT that turn: it still waits

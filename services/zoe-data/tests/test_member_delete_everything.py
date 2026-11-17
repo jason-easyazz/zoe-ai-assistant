@@ -1438,3 +1438,45 @@ def test_a_row_made_across_the_delete_carries_the_delivery_start_and_its_claim_r
     made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
     assert made <= delete_started, "the row is stamped with when the delivery began, before the delete - not with the insert time"
     assert asyncio.run(session_utils.claim_pending(left[0][0])) is None, "the claim refuses a row whose delivery began before the delete"
+
+
+
+def test_a_member_forgetting_themselves_inside_their_own_request_turn_completes(env, store, monkeypatch):
+    """#2669 review P1, end to end: with every member request a turn (auth._bind_request_turn), an administrator forgetting their
+    OWN memories runs delete_user inside a turn of that member - and the real delete runs inside
+    user_erase_gate.whole_member_erase, which CLEARS the turn context before the erasers. The delete must recognise its own request
+    by task and not wait for it (it used to wait INFLIGHT_WAIT_S and then fail). Negative control: a live turn of the member run by
+    ANOTHER task still holds the delete."""
+    import erase_watermark
+    import member_owned_forget as mof
+
+    svc, _col = env
+    monkeypatch.setattr(mof, "INFLIGHT_WAIT_S", 0.3)
+
+    async def own_request():
+        token = erase_watermark.turn_open(None, A)
+        ctx = erase_watermark.turn_bind(token)
+        try:
+            await svc.delete_user(A, actor=A, reason="forget myself")
+        finally:
+            erase_watermark.turn_unbind(ctx)
+            erase_watermark.turn_close(token)
+    asyncio.run(own_request())
+
+    async def held_by_another_task():
+        opened, release = asyncio.Event(), asyncio.Event()
+
+        async def other_turn():                       # a separate task holding a live turn of B
+            token = erase_watermark.turn_open(None, B)
+            opened.set()
+            await release.wait()
+            erase_watermark.turn_close(token)
+        holder = asyncio.ensure_future(other_turn())
+        await opened.wait()
+        try:
+            await svc.delete_user(B, actor=A, reason="synthetic member delete")
+        finally:
+            release.set()
+            await holder
+    with pytest.raises(Exception, match="member-owned store erasure failed|still in flight"):
+        asyncio.run(held_by_another_task())
