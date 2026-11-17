@@ -1380,7 +1380,12 @@ _CONNECT_ALTS = (r"isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|s
                  r"|(?:has|had|have)\s{1,8}been")
 # not inside a longer word or a contraction; a quote straight after the connector with no space ("is'zebrafiddle'") is the
 # value's OPENER, as main reads it (review, PR #2660)
-_CONNECT_WORDS = "(?:" + _CONNECT_ALTS + r")(?!\w|['’](?:t|s|re|ve|d|ll|nt)(?![\w'’]))"   # a suffix with its own closing quote ("is'll'") is a quoted value
+_CONNECT_WORDS = (
+    # the newer connectors end at a word boundary ("are" is not the start of "area"); "is" / "was" take whatever follows, glued
+    # word characters included ("is4821", "iszebrafiddle"), exactly as main does. The ONE exclusion is a contraction: an
+    # apostrophe + t / s / re / ve / d / ll with no closing quote straight after ("isn't", "the password's on the fridge")
+    r"(?:(?:isn't|isn’t|wasn't|wasn’t|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
+    r"|(?:has|had|have)\s{1,8}been)(?!\w)|is|was)(?!['’](?:t|s|re|ve|d|ll|nt)(?![\w'’]))")
 _LABELLED_SECRET_RE = re.compile(
     r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:" + _CONNECT_WORDS
     + r")(?:\s*[:=])?|[:=])\s*)"

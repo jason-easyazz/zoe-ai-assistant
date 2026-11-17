@@ -1272,3 +1272,20 @@ def test_a_quoted_value_that_is_a_contraction_suffix_is_still_a_value(label, val
     """Review (PR #2660), a regression of the contraction guard: "my token is'll'" - the suffix has its own closing quote."""
     out, _ = scrub_pii(f"my {label} is{value}")
     assert out == f"my {label} is{R}", out
+
+
+@pytest.mark.parametrize("text,gone", [
+    ("my token is4821", "4821"), ("my secret iszebrafiddle", "zebrafiddle"), ("my pin:4821", "4821"), ("my password=abc9", "abc9"),
+    ("my token was4821", "4821"),
+])
+def test_a_value_glued_to_the_connector_is_still_the_value(text, gone):
+    """Review (PR #2660), a regression against main: after "is" / "was" / ":" / "=" whatever follows is the value, glued or not."""
+    out, _ = scrub_pii(text)
+    assert gone not in out and R in out, out
+
+
+@pytest.mark.parametrize("text", ["my password isn't working yet", "the password's on the fridge", "my pin area is tidy"])
+def test_a_contraction_or_a_longer_word_is_not_a_connector(text):
+    out, _ = scrub_pii(text)
+    assert out.startswith(text.split(" is")[0][:14]), out
+    assert "isn't" in out or "password's" in out or "area" in out, out
