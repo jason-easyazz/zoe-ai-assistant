@@ -157,18 +157,20 @@ def _turn_owner(metadata: Any, session_owner: Any) -> str:
     return uid or str(session_owner or "").strip()
 
 
-#: candidate turns of a member: the sessions they own, and every row whose metadata TEXT contains the bare id (a prefilter that cannot miss,
-#: whatever the JSON spacing or key order: a member id is ASCII, and its JSON-escaped form is matched too); ``_turn_owner`` then decides
-#: each row. ``metadata`` is a TEXT column (alembic 0001); the CAST keeps the comparison text on any database. No literal question marks
-#: beyond the binds (the asyncpg positional-compat layer counts them).
+#: candidate turns of a member: the sessions they own, every row whose metadata TEXT contains the bare id, and every row whose metadata
+#: holds ANY backslash. The prefilter cannot miss: JSON text with no backslash spells every string literally (so an id it names is in
+#: the text as written, whatever the spacing or key order), and a string spelled with escapes ("\u0061nn" for ann) puts a backslash in
+#: the text. ``_turn_owner`` then decides each row in Python. The backslash pattern uses ``ESCAPE '!'`` so it means one literal
+#: backslash on every database (PostgreSQL's default LIKE escape IS the backslash). ``metadata`` is a TEXT column (alembic 0001); the
+#: CAST keeps the comparison text on any database. No literal question marks beyond the binds (the asyncpg compat layer counts them).
 TRANSCRIPT_SQL = ("SELECT cm.id, cm.session_id, cm.metadata, cs.user_id FROM chat_messages cm "
                   "LEFT JOIN chat_sessions cs ON cs.id = cm.session_id "
-                  "WHERE cs.user_id = ? OR CAST(cm.metadata AS TEXT) LIKE ? OR CAST(cm.metadata AS TEXT) LIKE ?")
+                  "WHERE cs.user_id = ? OR CAST(cm.metadata AS TEXT) LIKE ? OR CAST(cm.metadata AS TEXT) LIKE ? ESCAPE '!'")
 
 
 def _id_patterns(user_id: str) -> tuple:
-    escaped = json.dumps(str(user_id))[1:-1]
-    return (f"%{user_id}%", f"%{escaped}%")
+    # the bare id (its % and _ only widen the prefilter), and any backslash at all ("!" is the LIKE escape, so "\" is literal)
+    return (f"%{user_id}%", "%\\%")
 
 
 #: how long a member delete waits for a send that is mid-delivery (claimed, not yet fired) before it fails closed (and is retried)

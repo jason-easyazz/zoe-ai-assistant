@@ -377,3 +377,20 @@ async def test_a_guest_kiosk_toast_for_the_member_goes_and_a_title_their_turn_ma
     assert await world.ids("ui_actions", "id LIKE 'pre-%'") == {"pre-b", "pre-old", "pre-old-b"}, "pre-upgrade: only the one naming A goes"
     assert await world.ids("ui_action_ledger", "action_id LIKE 'pre-%'") == {"l-pre-b", "l-pre-old", "l-pre-old-b"}
     assert await c.fetchval("SELECT title FROM chat_sessions WHERE id = 's-bt'") == derive_session_title("What should we cook for dinner tonight")
+
+
+# a turn whose metadata spells the member with JSON escapes has no literal id in its text: the prefilter's "any backslash" arm finds
+# it on PostgreSQL too (``ESCAPE '!'``: the default LIKE escape there IS the backslash), and a backslash alone is not ownership
+async def test_a_member_spelled_with_json_escapes_is_found_on_postgres(world):
+    a, b = world.a, world.b
+    await _seed(world)
+    c = await world.raw()
+    escaped = "".join("\\u%04x" % ord(ch) for ch in a)
+    await c.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('esc-a', $1, 'user', 'A, escaped', $2)",
+                    f"s-{b}", '{"user_id":"%s"}' % escaped)
+    await c.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('esc-b', $1, 'user', 'B, cafe', $2)",
+                    f"s-{b}", json.dumps({"user_id": b, "note": "caf\u00e9"}))
+    await mof.forget_user(a)
+    left = await world.ids("chat_messages", "session_id = $1", f"s-{b}")
+    assert "esc-a" not in left, "A's escaped spelling is found and deleted"
+    assert "esc-b" in left, "B's turn with an escaped character stays"

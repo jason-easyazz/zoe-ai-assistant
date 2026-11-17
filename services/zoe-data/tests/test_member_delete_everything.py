@@ -472,15 +472,19 @@ def test_every_json_spelling_of_the_owner_is_found_and_an_id_inside_text_is_not_
                 ("v2", '{ "user_id" : "%s" }' % A, "spaced"),
                 ("v3", '{"panel": "p1",\n  "user_id":   "%s", "x": 2}' % A, "key order and newlines"),
                 ("v4", json.dumps({"user_id": B, "note": "said to " + A}), "B's turn whose metadata merely mentions A"),
-                ("v5", None, "a turn in B's session that says " + A + " in its text")):
+                ("v5", None, "a turn in B's session that says " + A + " in its text"),
+                # valid JSON may spell A with escapes: no literal "ann" in the text at all
+                ("v6", '{"user_id":"%s"}' % "".join("\\u%04x" % ord(c) for c in A), "A spelled with \\u escapes"),
+                ("v7", '{"\\u0075ser_id":"%s"}' % "".join("\\u%04x" % ord(c) for c in A), "the key escaped too"),
+                ("v8", json.dumps({"user_id": B, "note": "caf\u00e9"}), "B's turn with an escaped character")):
             await store.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES (?, 's-b', 'user', ?, ?)",
                                 (mid, content, meta))
         await store.commit()
     asyncio.run(seed())
     _delete(svc)
     left = _ids(store, "chat_messages")
-    assert not {"v1", "v2", "v3"} & left, "every spelling of A's ownership is found and deleted"
-    assert {"v4", "v5"} <= left, "an id inside text or inside another member's metadata is not ownership"
+    assert not {"v1", "v2", "v3", "v6", "v7"} & left, "every spelling of A's ownership is found and deleted, escaped ones too"
+    assert {"v4", "v5", "v8"} <= left, "an id inside text or inside another member's metadata is not ownership"
 
 
 def test_the_transcript_query_renders_for_postgres(env):
@@ -492,7 +496,8 @@ def test_the_transcript_query_renders_for_postgres(env):
     sql, args = db_pool._adapt_params(mof.TRANSCRIPT_SQL, params)
     assert "$1" in sql and "$2" in sql and "$3" in sql and "?" not in sql and list(args) == list(params)
     assert sql.count("CAST(cm.metadata AS TEXT) LIKE") == 2 and "cm.metadata LIKE" not in sql.replace("CAST(cm.metadata AS TEXT) LIKE", "")
-    assert args[1] == f"%{A}%", "the prefilter is the bare id: it cannot miss any JSON spelling"
+    assert args[1] == f"%{A}%", "the prefilter is the bare id for every literal JSON spelling"
+    assert args[2] == "%\\%" and sql.endswith("LIKE $3 ESCAPE '!'"), "...and any backslash, so an escaped spelling cannot hide"
 
 
 # ── blocker 1: the panel purge is queued or the delete fails ─────────────────────────────────────────────────────────────────
