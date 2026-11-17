@@ -297,9 +297,9 @@ async def remember(clause: str, user_id: str, *, utterance: str = "", session_id
     except Exception as exc:  # noqa: BLE001
         logger.debug("ask_to_remember identity check skipped: %s", type(exc).__name__)
     try:
-        from memory_service import get_memory_service, scrub_pii
+        from memory_service import get_memory_service, scrub_pii_async
 
-        scrubbed, reject = scrub_pii(clause)
+        scrubbed, reject = await scrub_pii_async(clause, contact=False)   # what ingest stores: a phone / address is a fact to keep
         if reject or scrubbed != clause:
             # a card / SSN is REJECTED by the store; a password / PIN / key is REDACTED in place - either way the
             # words the owner wants kept are not what would be stored, so nothing is, and Zoe says so
