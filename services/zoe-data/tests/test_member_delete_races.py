@@ -643,3 +643,26 @@ def test_a_reminder_scheduled_when_the_erase_mark_is_unreadable_keeps_no_row_and
             return rid, (await cur.fetchone())[0]
     assert asyncio.run(go()) == ("", 0)
     assert registered == []
+
+
+def test_an_unreadable_erase_mark_refuses_a_bound_turns_store_write(monkeypatch):
+    """The ONE store-write guard fails closed too: inside a bound turn, a member-owned write with an unreadable mark is refused."""
+    import erase_watermark
+
+    async def unreadable(*_a, **_k):
+        raise erase_watermark.Unavailable("store down")
+
+    monkeypatch.setattr(erase_watermark, "watermark", unreadable)
+
+    async def go():
+        token = erase_watermark.turn_open(None, A)
+        ctx = erase_watermark.turn_bind(token)
+        try:
+            await erase_watermark.store_write_guard("INSERT INTO lists (id) VALUES ('x')")   # a member-owned table the guard judges
+            return "written"
+        except erase_watermark.TurnWriteRefused:
+            return "refused"
+        finally:
+            erase_watermark.turn_unbind(ctx)
+            erase_watermark.turn_close(token)
+    assert asyncio.run(go()) == "refused"

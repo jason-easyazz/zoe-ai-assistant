@@ -513,7 +513,7 @@ async def store_write_guard(sql: str, conn: Any = None) -> None:
     ``TurnWriteRefused`` BEFORE the statement runs. Outside a turn it costs one ContextVar read; inside one, one mark read per
     member-owned write, read on the CALLER's connection (``conn``: no second pooled connection, so a busy pool neither slows the write
     nor turns the check into an unreadable mark). A member delete's own statements are never judged (``user_erase_gate.whole_member_erase``
-    unbinds). An unreadable mark lets the write run (the late-write rule's choice for a turn's own save; the erase fails closed)."""
+    unbinds). An unreadable mark REFUSES the write (fail closed, as ``turn_write_refused``)."""
     bound = _TURN_CTX.get()
     if bound is None:
         return
@@ -541,7 +541,9 @@ async def store_write_guard(sql: str, conn: Any = None) -> None:
         else:
             mark = await watermark(member, backend=backend)
     except Unavailable:
-        return
+        # FAIL CLOSED: a turn that may have outlived its member's delete never writes member-owned content on a guess
+        logger.warning("ERASE_WATERMARK_STORE_WRITE_UNREADABLE table=%s", table)
+        raise TurnWriteRefused(table) from None
     import user_erase_gate
 
     if user_erase_gate.in_progress(member) or (mark is not None and bound[1] <= mark):
