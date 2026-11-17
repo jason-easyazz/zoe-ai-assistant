@@ -441,3 +441,16 @@ def test_a_phone_number_is_stripped_whatever_separates_its_groups(sep):
 def test_an_address_is_stripped_whatever_separates_its_parts(sep):
     r = scrub_query(f"pizza delivery 12{sep}Maple{sep}Street tonight")
     assert "maple" not in r.query, (sep, r)
+
+
+@pytest.mark.parametrize("memory", ["The spare key is in the red-box", "The spare key is in the red.box", "The spare key is in the red_box"])
+@pytest.mark.parametrize("raw", ["red box replacement prices", "red-box replacement prices", "red boxes replacement prices"])
+def test_a_compound_in_the_stored_memory_protects_every_spelling(memory, raw):
+    r = scrub_query(raw, PrivateTerms.of(memory=[memory]))
+    flat = set(re.split(r"[\W_]+", r.query)) if r.send else set()
+    assert not ({"red"} & flat and {"box", "boxes"} & flat), r
+
+
+def test_a_two_letter_part_of_a_hyphenated_name_is_private_as_a_whole_word():
+    r = scrub_query("bo violin lessons price", PrivateTerms.of(names=["Bo-Peep"]))
+    assert "bo" not in r.query.split(), r

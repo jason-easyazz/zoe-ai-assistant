@@ -69,6 +69,7 @@ _ADDR_SEP = r"[\s.,\-_/\u2010-\u2015\u2212]+"
 _HEX_RE = re.compile(r"(?i)^[0-9a-f]{16,}$")
 _LOOKALIKE_SCRIPTS = frozenset({"LATIN", "CYRILLIC", "GREEK", "ARMENIAN", "CHEROKEE"})
 _PART_RE = re.compile(r"[^\W_]+")
+_COMPOUND_SPLIT = re.compile(r"[.\-'’_/]")
 # Digits and signs written in place of letters ("m1rabel", "t0biah").
 _LOOKALIKE = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "$": "s", "@": "a"})
 
@@ -142,7 +143,7 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
         parts = [p for p in parts if p]
         name_words.update(parts)  # every word of a person's name is private on its own
         # ...and so is each half of a hyphenated or apostrophised one ("Mary-Jane", "O'Brien" -> "brien").
-        name_words.update(f for f in (fold(x) for x in _PART_RE.findall(_clean(name))) if len(f) >= MIN_PRIVATE_LEN)
+        name_words.update(f for f in (fold(x) for x in _PART_RE.findall(_clean(name))) if len(f) >= 2)
         if len(parts) > 1:
             phrases.append(tuple(parts))
     for place in terms.places:
@@ -205,7 +206,8 @@ def _memory_runs(tokens: list[str], terms: PrivateTerms, lex: dict) -> set[int]:
     if len(content) < 2:
         return hit
     for text in terms.memory:
-        mem = [_run_word(f) for f in (fold(w) for w in _words(_clean(text))) if f and not _padding(f) and f not in lex["drop_words"]]
+        mem = [_run_word(f) for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w))
+               if f and not _padding(f) and f not in lex["drop_words"]]
         pairs = set(zip(mem, mem[1:]))
         for (i, a), (j, b) in zip(content, content[1:]):
             if (a, b) in pairs:
@@ -332,7 +334,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     # so a memory phrase joined by punctuation is still a run of two words. Same three views per part.
     part_idx, part_views = [], ([], [], [])
     for i, w in enumerate(words):
-        for p in re.split(r"[.\-'’_/]", w):
+        for p in _COMPOUND_SPLIT.split(w):
             f = fold(p)
             if not f:
                 continue
