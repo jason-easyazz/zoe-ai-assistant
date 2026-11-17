@@ -429,7 +429,8 @@ def test_a_comma_after_the_house_number_is_still_an_address():
     assert "maple" not in r.query and "12" not in r.query.split(), r
 
 
-_SEPARATORS = [" ", "-", ".", ",", ", ", "_", "/", "\u2011", "\u2013", "\u2212", " - ", "\u00a0", "(", ")", "·", "|", "~", "*", ":", ";"]
+_SEPARATORS = [" ", "-", ".", ",", ", ", "_", "/", "\u2011", "\u2013", "\u2212", " - ", "\u00a0", "(", ")", "·", "|", "~", "*", ":", ";",
+               "    ", "....", " -- ", "\t\t\t\t", " . . . "]
 
 
 @pytest.mark.parametrize("sep", _SEPARATORS)
@@ -455,3 +456,9 @@ def test_a_compound_in_the_stored_memory_protects_every_spelling(memory, raw):
 def test_a_two_letter_part_of_a_hyphenated_name_is_private_as_a_whole_word():
     r = scrub_query("bo violin lessons price", PrivateTerms.of(names=["Bo-Peep"]))
     assert "bo" not in r.query.split(), r
+
+
+@pytest.mark.parametrize("code", ["\u0664\u0664\u0661\u0667", "\u096a\u096a\u0967\u096d", "\uff14\uff14\uff11\uff17", "4417"])
+def test_a_known_memory_number_is_stripped_in_any_script_of_digits(code):
+    r = scrub_query(f"gate code {code} keypad reset instructions manual", PrivateTerms.of(memory=["The gate code is 4417"]))
+    assert code not in r.query and "4417" not in r.query, r

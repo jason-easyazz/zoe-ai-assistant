@@ -63,7 +63,7 @@ _WORD_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
 _LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,24}[/?#:]")
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
-_PHONE_RE = re.compile(r"(?<![^\W_])\+?\d+(?:[\W_]{1,3}\d+)+(?![^\W_])")   # ANY separator between digit groups: 0491,570,006 / 0491_570_006 too
+_PHONE_RE = re.compile(r"(?<![^\W_])\+?\d+(?:[\W_]+\d+)+(?![^\W_])")   # ANY run of separators between digit groups, any length
 # what may sit between the parts of an address: whitespace or punctuation ("12, Maple.Street", "12 Maple-Street")
 _ADDR_SEP = r"[\s.,\-_/\u2010-\u2015\u2212]+"
 _HEX_RE = re.compile(r"(?i)^[0-9a-f]{16,}$")
@@ -119,11 +119,15 @@ def fold(text: str) -> str:
 
 
 def _clean(raw: str) -> str:
-    """NFKC; invisible format characters removed (so they cannot split a name); other controls become a space."""
+    """NFKC; every decimal digit written as its ASCII digit ("٤٤١٧" is 4417, so it meets the same number checks);
+    invisible format characters removed (so they cannot split a name); other controls become a space."""
     out = []
     for ch in unicodedata.normalize("NFKC", raw):
         cat = unicodedata.category(ch)
         if cat == "Cf":
+            continue
+        if cat == "Nd":
+            out.append(str(unicodedata.digit(ch)))
             continue
         out.append(" " if cat.startswith("C") or cat.startswith("Z") else ch)
     return "".join(out)
