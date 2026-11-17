@@ -930,13 +930,32 @@ def test_changed_to_introduces_the_value(text):
     assert out.endswith(R) and "zebrafiddle" not in out and "12 34" not in out, out
 
 
-@pytest.mark.parametrize("text", ["my password changed", "the password reset link expired", "the password was reset to be safe"])
-def test_changed_without_a_value_is_judged_as_before(text):
-    assert "zebrafiddle" not in scrub_pii(text)[0]
+@pytest.mark.parametrize("text", ["my password changed", "the password reset link expired"])
+def test_changed_without_a_value_is_kept_as_said(text):
+    assert scrub_pii(text) == (text, None)
+    assert scrub_pii("my password changed to zebrafiddle")[0] == "my password changed to [REDACTED]"   # control: with a value
 
 
-def test_a_tab_joins_card_and_phone_digit_groups_too():
-    assert scrub_pii("card 4111\t1111\t1111\t1111")[1] == "luhn_cc"
-    for text in ("call me on 0400\t555\t101", "my mobile is +61\t400\t555\t101"):
-        out, _ = scrub_pii(text)
-        assert R in out and "555" not in out, out
+@pytest.mark.parametrize("text,gone", [
+    ("my BSB is 062 - 000", ("062", "000")), ("my account number is 1234   5678", ("1234", "5678")),
+    ("my account number is 1234 -  5678", ("1234", "5678")), ("the door code is" + " " * 41 + "5791", ("5791",)),
+    ("the door code is" + " " * 500 + "5791", ("5791",)), ("the wifi key is" + " " * 500 + "zebrafiddle", ("zebrafiddle",)),
+    ("my pin" + " " * 60 + "12 - 34", ("12", "34")), ("password" + "\t" * 50 + "is" + "\t" * 50 + "zebrafiddle", ("zebrafiddle",)),
+])
+def test_no_count_of_spaces_between_label_connector_value_or_groups_lets_a_secret_through(text, gone):
+    """Review (PR #2660), the class: whitespace runs are folded before judging, so there is no limit to count past."""
+    out, reject = scrub_pii(text)
+    assert reject is None and R in out and not any(g in out for g in gone), out
+
+
+def test_a_text_with_nothing_to_redact_keeps_its_spacing_exactly():
+    said = "we  walked\tto the   shops\nand  back"
+    assert scrub_pii(said) == (said, None)
+
+
+def test_ten_thousand_spaces_stay_linear():
+    import time
+    for big in ("the door code is" + " " * 10000 + "5791", "my account number is 1" + " 2" * 10000, "password " + " - " * 5000 + "x"):
+        t0 = time.monotonic()
+        scrub_pii(big)
+        assert time.monotonic() - t0 < 0.5

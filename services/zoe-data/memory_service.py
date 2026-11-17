@@ -1593,7 +1593,7 @@ _CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|defini
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
 #: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
 #: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
-_TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[\s-]\d{2,12}){0,3}"
+_TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,3}"
 _CODE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
@@ -1654,7 +1654,7 @@ def _scrub_quoted(text: str) -> str:
 
 
 #: a PIN said without "is" (``my pin 4821``, ``my pin 12 34``, ``pin 1 2 3 4``): three digits, or digit groups; "pin 3 photos" stays
-_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[\s-]\d{2,12}){0,2}|\d{1,2}(?:[\s-]\d{1,4}){1,7})\b")
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,2}|\d{1,2}(?:(?:\s?[-–]\s?|\s)\d{1,4}){1,7})\b")
 #: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
 #: after the label is kept only when it is on this CLOSED list - a word that says the sentence is ABOUT the password, not its
 #: value. Nouns and states first, then function words (a connector, pronoun or adverb is never the value itself).
@@ -1676,7 +1676,7 @@ _PASSWORD_NOT_VALUES = (
 #: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
 #: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
 #: token, and the match is anchored on the label (linear: the adversarial timing test)
-_PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[\s-]\d{2,12}){0,3}"
+_PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,3}"
 #: words SKIPPED after a bare label (at most four), the word after them judged: "my password now <value>" / "password please
 #: <value>" redact the value; "change your password now" (a modifier, then nothing) is kept
 #: (not changed / reset / set / updated / to: after a bare label they are a compound - "password reset link", "password change")
@@ -1726,7 +1726,7 @@ _ACCOUNT_RE = re.compile(
     rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)"
     # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
     # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
-    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?:\s{1,2}[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
+    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?:(?:\s?[-–]\s?|\s)[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
 )
 _EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
 _SPOKEN_EMAIL_RE = re.compile(
@@ -1968,7 +1968,25 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
+#: any run of horizontal whitespace (a tab, several spaces, a no-break space) is ONE separator: the text is judged with every such
+#: run folded to a single space, so no pattern needs a count of how many spaces may sit between a label, its connector, its value
+#: or two digit groups (review, PR #2660: every counted limit was a way through). Line breaks are kept. One linear substitution.
+_WS_RUN_RE = re.compile(r"[ \t\f\v\u00a0\u2000-\u200a\u202f\u3000]{2,}|[\t\f\v\u00a0\u2000-\u200a\u202f\u3000]")
+
+
 def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """``_scrub_pii`` over the text with whitespace runs folded (``_WS_RUN_RE``). Nothing to redact: the text comes back exactly as
+    given; a redacted text keeps the folded spacing."""
+    if not text:
+        return text, None
+    folded = _WS_RUN_RE.sub(" ", text)
+    out, reject = _scrub_pii(folded, contact=contact)
+    if reject or out == folded:
+        return text, reject
+    return out, None
+
+
+def _scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     """Return (possibly-redacted-text, reject_reason_or_None). Pure, compiled regexes only, never logs.
 
     REJECT (the whole text is refused): a Luhn-valid card, an SSN, a labelled TOTP, an AWS key, a PEM key, a JWT, an
