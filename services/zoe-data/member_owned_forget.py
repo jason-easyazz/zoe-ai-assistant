@@ -328,13 +328,18 @@ async def _transcript(r: _Run, user_id: str) -> None:
             sess_owner[str(x[0])] = str(x[1] or "")
     gone = [s for s in empty if sess_owner.get(s, "") in (user_id, *_GUESTS) or s not in sess_owner]
     # EMPTIED but KEPT: a session ANOTHER member owns whose every turn was the member's (a candidate only through ``touched``, so the erase
-    # removed at least one turn there and none is left). The row stays (it is that member's); EVERY run in it goes, whoever started it:
-    # no turn it answered survives, so its reply text can only derive from the member's deleted turns. Its title (made from the session's
-    # first words: the member's) is reset.
+    # removed at least one turn there and none is left). The row stays (it is that member's). Its runs follow the shared-run rule (a run
+    # the session's owner or another member can be shown to have started stays, as on main; the member's and unattributable ones go),
+    # and its title is reset only when the member's own words made it (``member_titles``) - a title its owner typed stays, as on main.
     kept_empty = [s for s in empty if s not in set(gone)]
     for at in range(0, len(kept_empty), _CHUNK):
         part = kept_empty[at:at + _CHUNK]
-        await r.run(f"UPDATE chat_sessions SET title = 'New Chat' WHERE id IN ({', '.join('?' * len(part))})", tuple(part))
+        current = {str(x[0]): str(x[1] or "") for x in await r.rows(
+            f"SELECT id, title FROM chat_sessions WHERE id IN ({', '.join('?' * len(part))})", tuple(part))}
+        theirs = [sid for sid in part if current.get(sid, "") in member_titles.get(sid, set())]
+        if theirs:
+            await r.run(f"UPDATE chat_sessions SET title = 'New Chat' WHERE id IN ({', '.join('?' * len(theirs))})", tuple(theirs))
+    await _shared_runs(r, user_id, kept_empty)
     # a shared session the member owned is handed to a remaining participant, or goes when none is left (``_hand_over``); then the runs
     # of every surviving session they owned or spoke in; then the gone sessions (children before parents: the FK-order test)
     # CONCURRENT WRITES: another member may add a turn to one of these sessions after it was classified. Every delete below is
@@ -353,7 +358,7 @@ async def _transcript(r: _Run, user_id: str) -> None:
     await _shared_runs(r, user_id, surviving)
     await _retitle(r, surviving, member_titles, set(owned))
     still_empty = "NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = {t}.{c})"
-    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty,
+    await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans,
                    still_empty.format(t="chat_ag_ui_runs", c="session_id"))
     await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans, still_empty.format(t="chat_sessions", c="id"))
     # ...and a session that delete KEPT (another member wrote a turn into it after the check) is a surviving session now: never left

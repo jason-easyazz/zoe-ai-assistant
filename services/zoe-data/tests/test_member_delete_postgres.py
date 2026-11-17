@@ -334,10 +334,10 @@ async def test_a_session_another_member_owns_that_held_only_the_members_turns_lo
     await x("INSERT INTO chat_messages (id, session_id, role, content) VALUES ('bo-1', 's-b-own', 'user', 'B alone')")
     await x("INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events) VALUES ('run-bo', 's-b-own', 'r-bo', '[]')")
     await mof.forget_user(a)
-    assert tuple(await c.fetchrow("SELECT user_id, title FROM chat_sessions WHERE id = 's-b-only-a'")) == (b, "New Chat"), \
+    assert tuple(await c.fetchrow("SELECT user_id, title FROM chat_sessions WHERE id = 's-b-only-a'")) == (b, "what A asked"), \
         "the row stays B's"
     assert not await world.ids("chat_messages", "session_id = 's-b-only-a'")
-    assert not await world.ids("chat_ag_ui_runs", "session_id = 's-b-only-a'"), "no run of the emptied session survives"
+    assert await world.ids("chat_ag_ui_runs", "session_id = 's-b-only-a'") == {"run-oa-b"}, "B's run stays (as on main)"
     assert await world.ids("chat_ag_ui_runs", "session_id = $1", f"s-{b}") == {f"run-{b}"}, "B's run stays, the unattributable one goes"
     assert await world.ids("chat_messages", "session_id = $1", f"s-{b}") == {f"m-{b}"}
     assert await world.ids("chat_ag_ui_runs", "session_id = 's-b-own'") == {"run-bo"}, "untouched"

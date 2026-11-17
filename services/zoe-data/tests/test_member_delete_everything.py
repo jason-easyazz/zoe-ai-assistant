@@ -1300,9 +1300,11 @@ def test_a_session_another_member_owns_that_held_only_the_members_turns_keeps_it
         await store.commit()
     asyncio.run(seed())
     _delete(svc)
-    assert not _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b-only-a'"), "no run of the emptied session survives"
+    # main keeps B's run and B's own title: the run B started stays, the unattributable one goes; 'what A asked' was not made from
+    # A's words ("A asks" derives another title), so it stays too (no-regression rule, owner 2026-11-18)
+    assert {r[0] for r in _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b-only-a'")} == {"run-oa-b"}
     assert not _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-b-only-a'")
-    assert _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-b-only-a'") == [(B, "New Chat")], "the row stays B's"
+    assert _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-b-only-a'") == [(B, "what A asked")], "the row stays B's"
     assert {r[0] for r in _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b'")} == {"run-sb-b"}
     assert {r[0] for r in _q(store, "SELECT id FROM chat_messages WHERE session_id = 's-b'")} == {"m6"}
     assert _q(store, "SELECT id FROM chat_ag_ui_runs WHERE session_id = 's-b-own'") == [("run-bo",)], "untouched"
