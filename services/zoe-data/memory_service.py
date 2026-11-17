@@ -1512,7 +1512,7 @@ def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, 
 
     Up to ``_MAX_MODIFIERS`` modifiers are skipped (kept as said); then the next word decides:
 
-    * nothing left: after a word connector (``excuse``) no value was said - kept; after ":" / "=" those words ARE the value;
+    * nothing left: those words ARE the value ("my password is still"): redacted, after a word connector as after ":" / "=";
     * with ``excuse`` and a STATE / TIME / PLACE word (``_LABELLED_NOT_VALUES``, where the module has one): kept only while nothing
       after it can be the secret - a state / time word must be followed by a place / time phrase, a conjunction or a modifier
       (``_STATE_TAIL_OK``), else the next word is the value; a later introducer in the clause ("as", "the name", "but was")
@@ -1524,10 +1524,10 @@ def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, 
     base = m.start(3)
     at = lambda k: base + len(_join(toks[:k]))     # noqa: E731 - absolute offset of token k (the tokens are lossless)
     i = 0
-    while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
-        i += 1
+    # NO word is skipped as a "modifier" (review, PR #2660): "still" / "now" / "reset" can itself be the secret, so the first
+    # word after the connector is always judged as the value (default-redact)
     if i == len(toks) or not any(t for _sp, t in toks[i:]):   # modifiers only
-        return head + (_join(toks[:i]) if excuse else _REDACT), at(i)
+        return head + _REDACT, at(i)               # "is still" / "is now": the modifier can itself be the secret - fail closed
     kept = _join(toks[:i])
     word = _norm_word(toks[i][1])
     end = _clause_end(toks, i + 1)
@@ -1670,7 +1670,10 @@ _FOR_PASSWORD_RE = re.compile(
     rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
 )
 _ACCOUNT_RE = re.compile(
-    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)"
+    # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
+    # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
+    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?: {1,2}[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
 )
 _EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
 _SPOKEN_EMAIL_RE = re.compile(
@@ -1946,7 +1949,7 @@ def _excerpt_said_tag(user_id: str, raw: Optional[str], stored: str) -> str:
 # ── write-time provenance (PR #2574): every NEW row names its source - a saved turn, or an explicit non-turn kind ──────────
 #: the explicit provenance kinds a row from NO saved chat turn carries (``metadata["source_kind"]``) instead of an empty id. A caller
 #: may pass one in ``metadata["source_kind"]``; the writer lanes below get theirs here; a row with no turn evidence at all is
-#: ``no_turn`` (nothing a turn forget could ever match it by).
+#: ``no_turn`` unless its deterministic user-turn lane leaves it legacy-shaped for a words match.
 NON_TURN_KINDS = frozenset({"no_turn", "omi_recording", "provider", "restore", "curated", "ui", "notes", "journal", "mcp",
                             "skybridge", "lab", "model"})
 #: writer lane -> its non-turn kind: lanes that never write from a saved chat turn, even when they carry an excerpt
@@ -1979,7 +1982,8 @@ def turn_id_mode() -> str:
 def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Optional[str],
                       user_turn_id: Optional[str]) -> dict:
     """The provenance keys a new row is stamped with (``source_turn`` or ``source_kind``), or ``{_UNBOUND_KEY: True}`` when the
-    row carries turn evidence (an excerpt / a turn id) yet names neither. The saved turn: the caller's ``source_turn``, else the
+    row carries turn evidence (an excerpt / a turn id) yet names neither. A deterministic user-turn writer without evidence
+    stays unmarked and uncounted. The saved turn: the caller's ``source_turn``, else the
     turn the words are (``turn_forget.turn_ref``, resolved now while they are as said). Never raises."""
     src_turn = str(extra.pop("source_turn", "") or "")
     kind = str(extra.pop("source_kind", "") or "")
@@ -2000,7 +2004,7 @@ def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Op
     if src_turn:
         return {"source_turn": src_turn}
     if not (source_excerpt or "").strip() and not (user_turn_id or "").strip():
-        return {"source_kind": "no_turn"}
+        return {} if (source or "").strip() in _auth.DETERMINISTIC_USER_WRITERS else {"source_kind": "no_turn"}
     return {_UNBOUND_KEY: True}
 
 

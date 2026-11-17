@@ -447,11 +447,11 @@ def twin_basis(target: Any, candidate: Any) -> str:
     ``ask_to_remember.siblings_of``): how a CANDIDATE row may be found a twin of a forget TARGET (``classify`` of each).
 
     * ``BY_ID``: both are bound to the SAME saved turn - a twin by id (the matcher's content check still applies);
-    * ``BY_WORDS``: the candidate is LEGACY or ``no_turn`` (no source named) - the matcher's excerpt / clock / content words decide;
-    * ``""``: NEVER a twin, however identical its words - a candidate bound to ANOTHER saved turn, or to a NAMED non-turn source
+    * ``BY_WORDS``: the candidate is LEGACY (no source named) - the matcher's excerpt / clock / content words decide;
+    * ``""``: NEVER a twin, however identical its words - a candidate bound to ANOTHER saved turn, or to a non-turn source
       (KIND: an Omi recording, a provider, a restore ...; only that row's own forget takes it)."""
     ck, cs = classify(candidate)
-    if ck == LEGACY or (ck == KIND and cs == "no_turn"):   # no source named at all: only its words can tell (a capture's copy)
+    if ck == LEGACY:
         return BY_WORDS
     if ck == TURN:
         tk, ts = classify(target)

@@ -389,12 +389,15 @@ def test_row_is_from_turn_consults_no_words_for_a_bound_or_non_turn_row():
 
 def test_every_new_fact_row_names_its_source_or_is_counted_unbound(world, monkeypatch, caplog):
     """(a) for the fact store: a row from a saved turn carries its id; a row with no turn evidence, or from a non-turn lane, an
-    explicit ``source_kind``; a row WITH turn evidence and neither is counted (shadow, default) and REFUSED under enforce - never
+    explicit ``source_kind`` (user-turn lanes stay unmarked); a row WITH turn evidence and neither is counted (shadow, default) and REFUSED under enforce - never
     silently stored id-less. The log line carries a code and counts only."""
     svc, chat = world
     caplog.set_level(logging.INFO)
-    plain = run(svc.ingest("User likes tea", user_id=UID, source="chat_regex", status="approved"))
-    assert run(svc.get(plain.id)).metadata.get("source_kind") == "no_turn"
+    before_plain = memory_service.UNBOUND["no_source_turn"]
+    plain = run(svc.ingest("User likes zindle", user_id=UID, source="chat_regex", status="approved"))
+    assert not {"source_turn", "source_kind"} & set(run(svc.get(plain.id)).metadata)
+    assert memory_service.UNBOUND["no_source_turn"] == before_plain
+    assert memory_service._write_provenance(UID, "turn_digest", {}, None, None) == {"source_kind": "no_turn"}
     # a lane that never writes from a saved chat turn names its kind even with an excerpt (a pendant recording's quote)
     assert memory_service._write_provenance(UID, "omi_review", {}, "the locksmith is on Example Lane", None) == {
         "source_kind": "omi_recording"}
@@ -1361,7 +1364,7 @@ def test_no_twin_matcher_pulls_a_non_turn_or_other_turn_row_into_a_forget(matche
             "user_id": UID, "status": "approved", "source_excerpt": said, "added_ts": now, "timestamp": now,
             "tags": "explicit,ask_to_remember", **prov})
     target = row("target", **({"source_turn": "m-target"} if target_kind == "turn" else {}))
-    rows = [target, row("omi", source_kind="omi_recording"), row("provider", source_kind="provider"),
+    rows = [target, row("omi", source_kind="omi_recording"), row("provider", source_kind="provider"), row("no-turn", source_kind="no_turn"),
             row("other-turn", source_turn="m-another-turn"), row("legacy")]
     if target_kind == "turn":
         rows.append(row("same-turn", source_turn="m-target"))
@@ -1370,7 +1373,7 @@ def test_no_twin_matcher_pulls_a_non_turn_or_other_turn_row_into_a_forget(matche
         async def list_by_status(self, **_kw):
             return rows
     got = {r.id for r in run(_twin_matchers()[matcher](_Svc(), target))}
-    assert not {"omi", "provider", "other-turn"} & got, got
+    assert not {"omi", "provider", "no-turn", "other-turn"} & got, got
     assert "legacy" in got, got
     if target_kind == "turn":
         assert "same-turn" in got, got
@@ -1411,3 +1414,37 @@ def test_a_topic_forget_after_a_restart_reaches_the_turn_of_each_matched_row(wor
     assert chat.off(mid), "the turn's transcript is still readable"
     assert "o-restart" not in {o["id"] for o in run(night_store.get_backend().observations(UID))}, "the observation survived"
     assert any(mid in mids for mids, _t in side_stores["notes"]), side_stores["notes"]
+
+
+def test_a_topic_forget_erases_only_matching_legacy_observations(world):
+    svc, chat = world
+    said = "My zindle florns beside the vesk"
+    turn_forget.note_user_turn(UID, said)
+    for oid, quote in (("o-zindle", said), ("o-quarn", "My quarn draves beside the plim")):
+        run(night_store.get_backend().put_observation(night_store.obs_row(
+            id=oid, user_id=UID, turn_id="", quote=quote, day="2026-10-08", said_at=time.time())))
+    res = run(forget_topic.forget(svc, UID, "zindle"))
+    assert not res.store_down and not res.failed and res.turns_retracted == 1
+    assert {o["id"] for o in run(night_store.get_backend().observations(UID))} == {"o-quarn"}
+
+
+@pytest.mark.parametrize("path", ["row", "turn"])
+@pytest.mark.parametrize("status", ["pending", "disputed"])
+def test_a_forget_takes_every_live_row_of_its_source_turn(world, path, status):
+    svc, chat = world
+    ref = run(svc.ingest("User florns the zindle", user_id=UID, source="chat_regex", status="approved",
+                         metadata={"source_turn": "m-zindle"}))
+    pending = run(svc.ingest("User draves the quarn", user_id=UID, source="chat_regex", status=status,
+                             metadata={"source_turn": "m-zindle"}))
+    other = run(svc.ingest("User vesks the plim", user_id=UID, source="chat_regex", status=status,
+                           metadata={"source_turn": "m-quarn"}))
+    assert ref and pending and other
+    exp = mp.Explained(seq=1, row_id=ref.id if path == "row" else "", ts=time.time(),
+                       text=ref.text, quote="", turn_id="xw-zindle@m-zindle")
+    if path == "row":
+        reply = run(pa.forget_it(UID, exp, svc=svc))
+    else:
+        reply = run(pa._forget_turn(UID, exp, svc=svc))
+    assert reply.startswith("Done")
+    assert run(svc.get(pending.id)).metadata["status"] == "rejected"
+    assert run(svc.get(other.id)).metadata["status"] == status

@@ -1456,12 +1456,20 @@ async def _target_plan(user_id: str, exp: "mp.Explained", ref: Any = None, *extr
     return tuple(mids), source_only, forget_record.Plan(mids=list(mids), entries=entries, **legacy)
 
 
+async def _live_forget_rows(svc: Any, user_id: str) -> list:
+    """Every live status: retired / erased rows (superseded, archived, rejected) need no new forget."""
+    rows = []
+    for status in ("approved", "pending", "disputed"):
+        rows.extend(await asyncio.wait_for(svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT), READ_BUDGET_S))
+    return rows
+
+
 async def _bound_rows(svc: Any, user_id: str, mids: tuple, *, skip: Any = ()) -> list:
-    """The owner's approved rows bound to these saved turns (``classify`` TURN, by id only), but ``skip``. RAISES on a store failure."""
+    """The owner's live rows bound to these saved turns (``classify`` TURN, by id only), but ``skip``. RAISES on a store failure."""
     if not mids:
         return []
     want, skip = {(turn_forget.TURN, m) for m in mids}, set(skip or ())
-    rows = await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S)
+    rows = await _live_forget_rows(svc, user_id)
     return [r for r in rows if r.id not in skip and _owns(r.metadata or {}, user_id) and turn_forget.classify(r) in want]
 
 
@@ -1528,8 +1536,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
 
 async def _resolve_turn_target(svc: Any, user_id: str, exp: "mp.Explained") -> Any:
     mids, source_only, plan = await _target_plan(user_id, exp)     # a legacy entry's words -> its saved turns, FIRST
-    rows = [r for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT),
-                                              READ_BUDGET_S) if _owns(r.metadata or {}, user_id)]
+    rows = [r for r in await _live_forget_rows(svc, user_id) if _owns(r.metadata or {}, user_id)]
     key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
     # the rows of the quoted turn (``turn_forget.partition``): a bound row by its saved-turn id only (a non-turn row is no turn's);
     # a LEGACY row by its excerpt holding the quote - as said, or as redacted (over-inclusive, legacy only); a target bound to a
