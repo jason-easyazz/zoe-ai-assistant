@@ -348,14 +348,19 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for k in span:
             if tokens[k] not in lex["question_words"]:
                 drop.setdefault(k, "address")
-    # A number right after a code word is a code, known or not ("my gate code is 1234", "wifi password 5521"); so is a
-    # token mixing the code word with digits ("pin1234").
+    # A number right after a code word is a code, known or not ("my gate code is 1234", "wifi password 5521"), and so is
+    # the first content word after it, digits or not ("gate code swordfish"; "promo code dominos" loses "dominos" - the
+    # accepted cost); so is a token mixing the code word with digits ("pin1234").
     codes = lex.get("code_words", frozenset())
     for ci, tok in enumerate(tokens):
         if tok in codes:
             for k in range(ci + 1, min(len(tokens), ci + 1 + CODE_NUMBER_AFTER)):
                 if any(c.isdigit() for c in tokens[k]):
                     drop.setdefault(k, "code")
+            for k in range(ci + 1, len(tokens)):
+                if tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"]:
+                    drop.setdefault(k, "code")
+                    break
         elif any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
             drop.setdefault(ci, "code")
     # The words after a password word ARE the password, digits or not ("my password swordfish"): the next

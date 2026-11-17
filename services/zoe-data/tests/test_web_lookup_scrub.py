@@ -549,3 +549,10 @@ def test_a_number_not_after_a_code_word_still_leaves():
 def test_the_words_after_a_password_word_never_leave(raw, secret):
     r = scrub_query(raw)
     assert not (secret & set(r.query.split())), r
+
+
+@pytest.mark.parametrize("raw", ["gate code swordfish keypad reset instructions", "the alarm code is bluebird panel manual",
+                                 "garage pin tango opener manual"])
+def test_a_word_valued_code_after_a_code_word_never_leaves(raw):
+    r = scrub_query(raw)
+    assert not ({"swordfish", "bluebird", "tango"} & set(r.query.split())), r
