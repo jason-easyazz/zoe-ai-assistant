@@ -470,3 +470,12 @@ def test_a_lowercase_name_after_a_relation_word_is_stripped_without_any_cue(raw)
     r = scrub_query(raw)
     name = raw.split()[-1] if raw.split()[-1] != "tonight" else raw.split()[-2]
     assert name not in r.query.split(), r
+
+
+@pytest.mark.parametrize("raw", ["rose x wood violin lessons price", "rose 2 wood violin lessons price", "rose x 2 wood violin lessons",
+                                 "ro x se wood violin lessons", "rose wood violin lessons price", "rosewood violin lessons price"])
+def test_a_known_name_split_around_padding_never_leaves(raw):
+    r = scrub_query(raw, PrivateTerms.of(names=["Rosewood"]))
+    # what a reader gets once the filler is ignored
+    squeezed = "".join(w for w in re.split(r"[\W_]+", r.query) if len(w) > 1 and not w.isdigit())
+    assert not r.send or "rosewood" not in squeezed, r

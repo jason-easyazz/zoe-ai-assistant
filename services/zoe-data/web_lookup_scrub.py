@@ -408,8 +408,11 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     # Belt and braces: the query that is about to leave is checked again, whole and with spaces removed.
     # ...and once more with look-alike digits read as letters ("m1 ra bel").
     # ...and with digits removed altogether ("rose2 mary" padding a known name, "blue4 planter" a memory span).
+    # ...and every one of those with padding words removed (a lone letter or number: "rose x wood", "rose 2 wood").
     plain_query = query.translate(_LOOKALIKE)
-    for view in (query, plain_query, re.sub(r"\d", "", query)):
+    views = [query, plain_query, re.sub(r"\d", "", query)]
+    views += [" ".join(w for w in v.split() if not _padding(fold(w))) for v in views]
+    for view in views:
         squeezed = fold(view)
         for s in singles:
             if s in {fold(x) for w in view.split() for x in [w, *re.split(r"[.\-'’]", w)] if x} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \
@@ -419,9 +422,9 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
             if "".join(phrase) in squeezed:
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if any(_memory_runs([fold(w) for w in re.split(r"[\s.\-'’_/]+", view)], terms, lex) or _memory_runs([fold(w) for w in view.split()], terms, lex)
-           for view in (query, plain_query, re.sub(r"\d", "", query))):
+           for view in views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-    if "@" in query or not query or any(g in squeezed for g in glue):
+    if "@" in query or not query or any(g in fold(view) for view in views for g in glue):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)
 
