@@ -348,6 +348,14 @@ async def _transcript(r: _Run, user_id: str) -> None:
         if owner == user_id:
             await _hand_over(r, user_id, sid)
     await _retitle(r, [sid for sid, _owner in kept])
+    # ...and every RESCUED session (one the conditional run delete skipped because a turn arrived: gone, orphaned or emptied-but-kept)
+    # gets the shared-run rule: a run the member started or nobody can be shown to have started goes (it holds their reply text)
+    rescued = []
+    for at in range(0, len(gone + orphans + kept_empty), _CHUNK):
+        part = (gone + orphans + kept_empty)[at:at + _CHUNK]
+        rescued += [str(x[0]) for x in await r.rows(
+            f"SELECT DISTINCT session_id FROM chat_messages WHERE session_id IN ({', '.join('?' * len(part))})", tuple(part))]
+    await _shared_runs(r, user_id, rescued)
 
 
 async def _originated_ui_actions(r: _Run, user_id: str) -> None:

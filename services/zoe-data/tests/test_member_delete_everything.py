@@ -1509,3 +1509,4 @@ def test_a_session_the_member_owned_that_another_member_wrote_into_after_the_che
     assert row and row[0][0] == B, row
     assert row[0][1] != "about my plans", "never A's title"
     assert "late-b-own" in _ids(store, "chat_messages")
+    assert "run-a" not in _ids(store, "chat_ag_ui_runs"), "the run answering A's turn (unattributed) goes from the rescued session too"
