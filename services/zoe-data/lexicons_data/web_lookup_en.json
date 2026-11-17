@@ -169,6 +169,15 @@
     "otp",
     "pw"
   ],
+  "secret_words": [
+    "password",
+    "passwords",
+    "passphrase",
+    "passwd",
+    "pw",
+    "passkey",
+    "secret"
+  ],
   "naming_words": [
     "called",
     "named"
