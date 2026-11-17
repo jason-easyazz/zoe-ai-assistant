@@ -158,12 +158,20 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
             singles.add(parts[0])
         elif parts:
             phrases.append(tuple(parts))
-    for text in terms.memory:  # a capitalised word that does not open the text reads as a proper noun
+    singles |= _memory_singles(terms.memory, lex["drop_words"])
+    return singles | name_words, phrases, name_words
+
+
+@lru_cache(maxsize=8)
+def _memory_singles(memory: tuple[str, ...], drop_words: frozenset) -> frozenset:
+    """A memory's numbers and its capitalised words that do not open the text (proper nouns), parsed once per memory set."""
+    out: set[str] = set()
+    for text in memory:
         for i, w in enumerate(_words(_clean(text))):
             f = fold(w)
-            if f and (any(c.isdigit() for c in f) or (i > 0 and w[:1].isupper() and f not in lex["drop_words"])):
-                singles.add(f)
-    return singles | name_words, phrases, name_words
+            if f and (any(c.isdigit() for c in f) or (i > 0 and w[:1].isupper() and f not in drop_words)):
+                out.add(f)
+    return frozenset(out)
 
 
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
@@ -231,31 +239,45 @@ def _padding(t: str) -> bool:
     return t.isdigit() or len(t) <= 1
 
 
+@lru_cache(maxsize=8)
+def _memory_pairs(memory: tuple[str, ...], drop_words: frozenset) -> frozenset:
+    """Every adjacent content-word pair of every memory text, parsed ONCE per memory set (the run check is called many
+    times per query: three views, compound parts, after every drop, in the tripwire). Padding skipped, plurals removed."""
+    pairs: set[tuple[str, str]] = set()
+    for text in memory:
+        mem = [_run_word(f) for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w))
+               if f and not _padding(f) and f not in drop_words]
+        pairs.update(zip(mem, mem[1:]))
+    return frozenset(pairs)
+
+
 def _memory_runs(tokens: list[str], terms: PrivateTerms, lex: dict) -> set[int]:
     """Indexes of query tokens that sit in a run of two or more content words shared with a memory text."""
     hit: set[int] = set()
     # padding (a standalone number, a single letter) is skipped on BOTH sides, and words are compared without a plural ending
     content = [(i, _run_word(t)) for i, t in enumerate(tokens) if t and not _padding(t) and t not in lex["drop_words"]
                and t not in lex["question_words"]]
-    if len(content) < 2:
+    if len(content) < 2 or not terms.memory:
         return hit
-    for text in terms.memory:
-        mem = [_run_word(f) for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w))
-               if f and not _padding(f) and f not in lex["drop_words"]]
-        pairs = set(zip(mem, mem[1:]))
-        for (i, a), (j, b) in zip(content, content[1:]):
-            if (a, b) in pairs:
-                hit.update((i, j))
+    pairs = _memory_pairs(terms.memory, lex["drop_words"])
+    for (i, a), (j, b) in zip(content, content[1:]):
+        if (a, b) in pairs:
+            hit.update((i, j))
     return hit
 
 
-def _memory_glue(terms: PrivateTerms, lex: dict) -> set[str]:
-    """Every span of two to four memory words holding two content words, squeezed into one string (eight letters or
-    more), so a memory phrase is still seen when it is glued, hyphenated or padded with a number."""
+def _memory_glue(terms: PrivateTerms, lex: dict) -> frozenset:
+    return _memory_glue_of(terms.memory, lex["drop_words"])
+
+
+@lru_cache(maxsize=8)
+def _memory_glue_of(memory: tuple[str, ...], drop_words: frozenset) -> frozenset:
+    """Every span of two to four memory words holding two content words, squeezed into one string, so a memory phrase is
+    still seen when it is glued, hyphenated or padded with a number. Parsed once per memory set."""
     glue: set[str] = set()
-    for text in terms.memory:
+    for text in memory:
         raw = [f for f in (fold(p) for w in _words(_clean(text)) for p in _COMPOUND_SPLIT.split(w)) if f]
-        is_content = [f not in lex["drop_words"] for f in raw]
+        is_content = [f not in drop_words for f in raw]
         content = [f for f, c in zip(raw, is_content) if c]
         glue.update(a + b for a, b in zip(content, content[1:]))
         for i in range(len(raw)):
@@ -265,7 +287,7 @@ def _memory_glue(terms: PrivateTerms, lex: dict) -> set[str]:
     # every length: a glued phrase that IS a whole word ("ox bow" -> "oxbow") is matched at any length; only the search INSIDE
     # a longer word keeps MEMORY_GLUE_MIN, so two short words cannot hide in every query. A coincidental match refuses or
     # strips (the accepted cost).
-    return glue
+    return frozenset(glue)
 
 
 def scrub_query(raw: object, terms: PrivateTerms | None = None, *, lexicon: dict | None = None) -> ScrubResult:
@@ -500,9 +522,13 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         squeezed = fold(view)
         if _split_across_filler(view, singles):
             return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
+        view_words = {fold(x) for w in view.split() for x in [w, *re.split(r"[.\-'’]", w)] if x}   # once per view, not per term
+        if view_words & singles:
+            return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
+        if _short_joins(view) & singles:
+            return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         for s in singles:
-            if s in {fold(x) for w in view.split() for x in [w, *re.split(r"[.\-'’]", w)] if x} or (len(s) >= 4 and s in squeezed and _glued_span(view, s)) \
-                    or (len(s) < 4 and _split_exactly(view, s)):
+            if len(s) >= 4 and s in squeezed and _glued_span(view, s):
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
         for phrase in phrases:
             if "".join(phrase) in squeezed:
@@ -510,10 +536,12 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     if any(_memory_runs([fold(w) for w in re.split(r"[\s.\-'’_/]+", view)], terms, lex) or _memory_runs([fold(w) for w in view.split()], terms, lex)
            for view in views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-    if any(set(re.findall(r"\d{3,}", fold(view))) & {n for s_ in singles for n in re.findall(r"\d{3,}", s_)} for view in views):
+    folded_views = [fold(view) for view in views]
+    if any(set(re.findall(r"\d{3,}", fv)) & mem_numbers for fv in folded_views):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
-    if "@" in query or not query or any(g in fold(view) for view in views for g in glue_inside) \
-            or any({fold(w), _run_word(fold(w))} & glue for view in views for w in re.split(r"[\W_]+", view) if w):
+    out_words = {fold(w) for view in views for w in re.split(r"[\W_]+", view) if w}
+    if "@" in query or not query or any(g in fv for fv in folded_views for g in glue_inside) \
+            or (out_words | {_run_word(w) for w in out_words}) & glue:
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)
 
@@ -564,20 +592,20 @@ def _emit_ok(word: str, allow: frozenset, units: frozenset) -> bool:
     return all((x.isdigit() and len(x) <= 4) or (len(x) >= 2 and x in allow) for x in parts)
 
 
-def _split_exactly(query: str, single: str) -> bool:
-    """True when a run of two or more kept words joins to EXACTLY ``single`` ("ki m" for Kim, "b o" for Bo). Short
-    names are matched only this way: containment across words would refuse ordinary queries ("pizza lasagna" holds
-    "al")."""
+def _short_joins(query: str) -> set[str]:
+    """Every string under four letters that a run of two or more words joins into EXACTLY ("ki m" -> "kim", "b o" -> "bo").
+    A short private word is matched against this set only: containment across words would refuse ordinary queries
+    ("pizza lasagna" holds "al"). Built once per view, so the cost does not grow with the number of private words."""
     toks = [fold(w) for w in query.split()]
+    out: set[str] = set()
     for i in range(len(toks)):
         acc = toks[i]
         for j in range(i + 1, len(toks)):
             acc += toks[j]
-            if acc == single:
-                return True
-            if len(acc) >= len(single):
+            if len(acc) >= 4:
                 break
-    return False
+            out.add(acc)
+    return out
 
 
 def _glued_span(query: str, single: str) -> bool:
