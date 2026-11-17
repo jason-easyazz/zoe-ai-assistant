@@ -216,7 +216,7 @@ async def _said_mids(user_id: str, turns: list, hits: dict, rows: Any = ()) -> l
             add([mid])
         elif kind == turn_forget.LEGACY:
             add(await turn_forget.resolve_legacy_ids(user_id, ((getattr(r, "metadata", {}) or {}).get("source_excerpt"),)))
-    return out
+    return await exact_words.turn_copies(user_id, out) if out else []
 
 
 def fold_name_text(text: str) -> str:

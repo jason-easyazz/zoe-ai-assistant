@@ -847,10 +847,10 @@ def test_a_tapped_correction_whose_preflight_read_fails_keeps_the_tap_armed(env,
     rid = row_id(env, "Swimming")
     real, down = env.svc.get, {"on": True}
 
-    async def flaky(row):
+    async def flaky(row, **kw):
         if down["on"]:
             raise RuntimeError("store hiccup")
-        return await real(row)
+        return await real(row, **kw)
 
     monkeypatch.setattr(env.svc, "get", flaky)
     mv.tap(PANEL, ME, rid, "Swimming is on Friday at 9")

@@ -153,3 +153,70 @@ def test_mcp_forget_read_is_strict():
     _check_strict(source, ("forget",))
     with pytest.raises(AssertionError):
         _check_strict(source.replace("strict=True", "strict=False"), ("forget",))
+
+
+FORGET_MODULES = (
+    "turn_forget.py", "provenance_answers.py", "forget_topic.py", "ask_to_remember.py",
+    "memory_space.py", "memory_curation.py", "memory_forget_alias.py", "forget_record.py",
+    "intent_router.py", "mcp_server.py", "memories_voice.py", "routers/memories.py",
+)
+# Function name -> reason: these reads supply replies / displays, never erase targets or completion decisions.
+DISPLAY_READS = {
+    "_live_equivalent": "Only chooses the already-remembered reply after an explicit teach; never retracts an ask.",
+    "asked_rows": "Only called by recall_reply to display approved asks.",
+    "memory_list": "MCP listing only; the review and forget branches read their targets again.",
+    "list_memories": "REST listing only; mutations read their targets again.",
+    "list_review_queue": "Displays proposals and contradiction text; review reads its target again.",
+}
+
+
+def _check_module_reads(source):
+    class Reads(ast.NodeVisitor):
+        function = ""
+
+        def visit_AsyncFunctionDef(self, node):
+            previous, self.function = self.function, node.name
+            self.generic_visit(node)
+            self.function = previous
+
+        visit_FunctionDef = visit_AsyncFunctionDef
+
+        def visit_If(self, node):
+            previous = self.function
+            if (isinstance(node.test, ast.Compare) and ast.unparse(node.test.left) == "name"
+                    and len(node.test.comparators) == 1
+                    and isinstance(node.test.comparators[0], ast.Constant)
+                    and node.test.comparators[0].value == "memory_list"):
+                self.function = "memory_list"
+                for child in node.body:
+                    self.visit(child)
+                self.function = previous
+                for child in node.orelse:
+                    self.visit(child)
+            else:
+                self.generic_visit(node)
+
+        def visit_Call(self, node):
+            f = node.func
+            read = (isinstance(f, ast.Attribute)
+                    and (f.attr == "list_by_status" or (f.attr == "get" and ast.unparse(f.value) == "svc")))
+            read = read or (isinstance(f, ast.Name) and f.id == "getter")
+            if read and self.function not in DISPLAY_READS:
+                assert any(k.arg == "strict" and isinstance(k.value, ast.Constant) and k.value.value is True
+                           for k in node.keywords), (self.function, node.lineno, ast.unparse(node))
+            self.generic_visit(node)
+
+    Reads().visit(ast.parse(source))
+
+
+@pytest.mark.parametrize("filename", FORGET_MODULES)
+def test_all_forget_module_point_reads_and_scans_are_strict(filename):
+    _check_module_reads((ROOT / filename).read_text())
+
+
+@pytest.mark.parametrize("filename", FORGET_MODULES)
+@pytest.mark.parametrize("read", ['svc.get("zindle-row")', 'svc.list_by_status(status="approved")'])
+def test_module_read_guard_rejects_a_lenient_forget_read(filename, read):
+    source = (ROOT / filename).read_text() + f"\nasync def forget_zindle():\n    await {read}\n"
+    with pytest.raises(AssertionError, match="forget_zindle"):
+        _check_module_reads(source)

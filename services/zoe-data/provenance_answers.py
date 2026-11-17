@@ -645,7 +645,7 @@ async def gather(user_id: str, *, svc: Any = None, strict: bool = False) -> Know
     import own_words
 
     svc = svc or _svc_default()
-    rows = await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, **({"strict": True} if strict else {})), READ_BUDGET_S)
+    rows = await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, strict=True), READ_BUDGET_S)
     rows = await _drop_forgotten(user_id, rows, _row_words)
     known = Known()
     for ref in rows:
@@ -1084,7 +1084,7 @@ async def evidence_for_row(user_id: str, row_id: str, *, svc: Any = None) -> Evi
     import recall_evidence
 
     svc = svc or _svc_default()
-    ref = await asyncio.wait_for(svc.get(row_id), READ_BUDGET_S)
+    ref = await asyncio.wait_for(svc.get(row_id, strict=True), READ_BUDGET_S)
     ev = Evidence(row_id=row_id)
     if ref is None:
         ev.refusal = FORGOTTEN_REPLY
@@ -1324,7 +1324,7 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
         if not new:
             mp.mark_explained(user_id, exp.row_id, text=exp.text, quote=exp.quote, awaiting_fix=True, now=now)
             return FIX_NEEDS_SENTENCE
-        old_ref = await asyncio.wait_for(svc.get(exp.row_id), READ_BUDGET_S)
+        old_ref = await asyncio.wait_for(svc.get(exp.row_id, strict=True), READ_BUDGET_S)
         twins = await twins_of(user_id, old_ref, svc=svc, strict=strict_twins) if old_ref is not None else []
         await _speculation_barrier()
         res = await correction_apply.apply_row_correction(user_id, exp.row_id, new, utterance=utterance, session_id=session_id,
@@ -1353,7 +1353,7 @@ async def _finish_superseded(user_id: str, session_id: str, utterance: str, valu
     the new words - ``memory_space.correct_row`` retires the twins that remain. "" when the row is not in that state."""
     import memory_space
 
-    ref = await asyncio.wait_for(svc.get(row_id), READ_BUDGET_S)
+    ref = await asyncio.wait_for(svc.get(row_id, strict=True), READ_BUDGET_S)
     if ref is None or str((ref.metadata or {}).get("status") or "").lower() != "superseded":
         return ""
     new = fix_text(ref.text or "", value)

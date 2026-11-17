@@ -234,7 +234,7 @@ async def review_memory(
         raise HTTPException(status_code=400, detail="action must be approve|reject|edit")
     svc = _svc()
     # Safety: callers can only review their own memories unless they're admin.
-    current = await svc.get(memory_id, strict=True) if action == "reject" else await svc.get(memory_id)
+    current = await svc.get(memory_id, strict=True)
     if current is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     owner = current.metadata.get("user_id") or current.metadata.get("wing")
