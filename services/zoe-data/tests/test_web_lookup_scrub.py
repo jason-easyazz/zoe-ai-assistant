@@ -574,3 +574,13 @@ def test_a_large_memory_set_does_not_make_a_query_slow():
     for q in ["weather forecast tomorrow", "best garden tools australia", "pizza delivery 12 Maple Street tonight"]:
         scrub_query(q, terms)
     assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("raw,private", [("email bill@example for violin lessons", {"bill", "example"}),
+                                         ('email "rose home"@example.com violin lessons', {"rose", "home", "example"}),
+                                         ("email 'rose home'@example.com violin lessons", {"rose", "home", "example"}),
+                                         ("email bill@ for violin lessons", {"bill"}),
+                                         ("email bill\uff20example.com violin lessons", {"bill", "example"})])
+def test_an_email_in_any_shape_never_leaves(raw, private):
+    r = scrub_query(raw)
+    assert not (private & set(re.split(r"[\W_]+", r.query))), r

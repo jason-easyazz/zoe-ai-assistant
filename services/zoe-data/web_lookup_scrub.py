@@ -61,7 +61,9 @@ _WORD_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
 # is what lets a link carry data ("example.com?token=..."). A bare domain alone ("sites like reddit.com") is a
 # word, not a link.
 _LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,24}[/?#:]")
-_EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+# ANY "@" and everything glued to it, dot or no dot, quoted local part or not ("bill@example", "\"rose home\"@example.com");
+# an "@" this misses is still refused by the final tripwire
+_EMAIL_RE = re.compile(r"""(?:"[^"]*"|'[^']*'|[^\s@]*)@[^\s@]*""")
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
 _PHONE_RE = re.compile(r"(?<![^\W_])\+?\d+(?:[\W_]+\d+)+(?![^\W_])")   # ANY run of separators between digit groups, any length
 # what may sit between the parts of an address: ANY run of non-alphanumerics ("12, Maple.Street", "12:Maple:Street",
