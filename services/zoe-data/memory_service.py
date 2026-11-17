@@ -49,6 +49,7 @@ from user_prefs import MEMORY_OPT_OUT_SOURCES
 import logging
 import math
 import os
+import bisect
 import re
 import threading
 import time
@@ -1347,7 +1348,7 @@ def is_emotional_memory(ref: MemoryRef) -> bool:
 # PII scrubber
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _TOTP_RE = re.compile(r"(?:\b|:\s*)(\d{6})\b")
-_CC_RE = re.compile(r"\b(?:\d[ \t-]*?){13,19}\b")
+_CC_RE = re.compile(r"\b(?:\d[\s-]*?){13,19}\b")   # a card takes ANY whitespace between groups, a line break included
 _SECRET_LABEL_RE = re.compile(
     r"(?i)(?:^|\W)(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b",
 )
@@ -1424,6 +1425,7 @@ def _norm_word(token: str) -> str:
 _QUOTES = "\"'‘’“”"
 #: the closing mark of each opening quote
 _CLOSE_QUOTE = {'"': '"', "'": "'", "‘": "’", "’": "’", "“": "”", "”": "”"}
+_QUOTE_CHARS = frozenset(_CLOSE_QUOTE.values())
 
 
 #: the value slot read after a label: the rest of the SENTENCE, at most this many characters (a bounded window keeps every
@@ -1625,25 +1627,37 @@ _QUOTED_PREFIX_RE = re.compile(
 _CLAUSE_END_RE = re.compile(r"[.;!?\n](?=\s|$)")
 
 
+def _closers(text: str) -> dict:
+    """Every position where a quote character CLOSES a value (not followed by a letter, digit or "_"), per character, ascending:
+    built in ONE pass, so each "where does this quote close?" is a bisect, never a scan of the rest of the text."""
+    out: dict = {}
+    n = len(text)
+    for k, ch in enumerate(text):
+        if ch in _QUOTE_CHARS and (k + 1 == n or not (text[k + 1].isalnum() or text[k + 1] == "_")):
+            out.setdefault(ch, []).append(k)
+    return out
+
+
+def _close_at(closers: dict, close: str, after: int) -> int:
+    """The first closing position of ``close`` at or after ``after``, or -1."""
+    ks = closers.get(close) or ()
+    i = bisect.bisect_left(ks, after)
+    return ks[i] if i < len(ks) else -1
+
+
 def _scrub_quoted(text: str) -> str:
     """Every quoted value after a secret label, to its closing quote (one followed by a space, punctuation or the end - so an
     apostrophe inside, "my dog's", does not close it) or, never closed, to the end of the clause. One left-to-right pass."""
-    out, pos = [], 0
+    out, pos, closers = [], 0, None
     while True:
         m = _QUOTED_PREFIX_RE.search(text, pos)
         if m is None:
             break
         start = m.end()
         close = _CLOSE_QUOTE.get(text[start], text[start])
-        end, k = -1, start + 1
-        while True:
-            k = text.find(close, k)
-            if k < 0:
-                break
-            if k + 1 == len(text) or not (text[k + 1].isalnum() or text[k + 1] == "_"):
-                end = k + 1
-                break
-            k += 1
+        if closers is None:
+            closers = _closers(text)
+        end = _close_at(closers, close, start + 1) + 1 or -1
         if end < 0:                                         # never closed: to the end of the clause
             c = _CLAUSE_END_RE.search(text, start + 1)
             end = c.start() if c else len(text)
@@ -1842,15 +1856,12 @@ _SENTENCE_END_RE = re.compile(r"[.;!?](?=\s|$)|\n")
 _NET_OPEN = "\"'‘“"
 
 
-def _net_end(text: str, start: int) -> int:
+def _net_end(text: str, start: int, closers: dict) -> int:
     """Where the value starting at ``start`` ends: its closing quote (one not followed by a letter or digit), else the sentence end."""
     if text[start] in _NET_OPEN:
-        close = _CLOSE_QUOTE.get(text[start], text[start])
-        k = text.find(close, start + 1)
-        while k >= 0:
-            if k + 1 == len(text) or not (text[k + 1].isalnum() or text[k + 1] == "_"):
-                return k + 1
-            k = text.find(close, k + 1)
+        k = _close_at(closers, _CLOSE_QUOTE.get(text[start], text[start]), start + 1)
+        if k >= 0:
+            return k + 1
     m = _SENTENCE_END_RE.search(text, start)
     return m.start() if m else len(text)
 
@@ -1869,7 +1880,7 @@ def _label_net(text: str) -> str:
     and the output built from slices - never a rescan after a replacement (linear: the 1,600-repetition timing test)."""
     hits = sorted([(m.start(), 0, m.end()) for m in _NET_CONN_RE.finditer(text)]
                   + [(m.start(), 1, m.end()) for m in _NET_BARE_RE.finditer(text)])   # the earliest label; a connector form first
-    out, pos = [], 0
+    out, pos, closers = [], 0, None
     for start, _bare, stop in hits:
         if start < pos:
             continue                                        # inside a value already taken
@@ -1878,7 +1889,9 @@ def _label_net(text: str) -> str:
             pos = stop + len(_REDACT)
             continue
         out.append(text[pos:stop] + _REDACT)
-        pos = max(_net_end(text, stop), stop + 1)
+        if closers is None:
+            closers = _closers(text)
+        pos = max(_net_end(text, stop, closers), stop + 1)
     out.append(text[pos:])
     return "".join(out)
 

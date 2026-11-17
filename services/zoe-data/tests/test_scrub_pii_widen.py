@@ -973,3 +973,29 @@ def test_a_secret_carried_onto_the_next_line_goes_too(text, gone, kept):
 def test_a_number_on_the_line_after_ordinary_text_is_kept():
     said = "the bins go out friday\n42 is the bus"
     assert scrub_pii(said) == (said, None)
+
+
+def test_many_unclosed_quotes_stay_linear():
+    """Review (PR #2660): the closing quotes are indexed once; 8,000 unclosed quoted values are not 8,000 scans of the text."""
+    import time
+    big = 'password is "abc.\n' * 8000
+    t0 = time.monotonic()
+    out, _ = scrub_pii(big)
+    assert time.monotonic() - t0 < 0.5 and "abc" not in out
+
+
+def test_a_card_split_over_lines_is_still_a_card():
+    assert scrub_pii("card 4111\n1111\n1111\n1111", contact=False)[1] == "luhn_cc"
+
+
+def test_single_digits_one_per_line_after_a_pin_all_go():
+    out, _ = scrub_pii("my pin is 1\n2\n3\n4")
+    assert out == "my pin is [REDACTED]", out
+
+
+@pytest.mark.parametrize("value", ["zebra!fiddle", "zebra;fiddle", "zebra?fiddle", "zebra,fiddle", "zebra.fiddle"])
+@pytest.mark.parametrize("form", ["my password is {v}", "the wifi key is {v}", "my password {v}", "password: {v}"])
+def test_punctuation_inside_a_labelled_value_goes_with_it(form, value):
+    """Review (PR #2574): a labelled value is everything to the boundary, punctuation included."""
+    out, _ = scrub_pii(form.format(v=value))
+    assert out.endswith(R) and "zebra" not in out and "fiddle" not in out, out
