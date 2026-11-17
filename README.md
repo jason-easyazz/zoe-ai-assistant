@@ -75,7 +75,7 @@ systemd user services for the latency-sensitive ones.
 | Brain (LLM) | `llama-server` (Gemma 4 E4B-QAT + MTP drafter, llama.cpp) | 11434 | systemd (host) |
 | API   | `zoe-data` (primary backend: chat, voice path, memory, Skybridge) | 8000 | systemd (host) |
 | STT   | Moonshine v2 Medium (in-process in `zoe-data`) | none | systemd (host) |
-| TTS   | `kokoro-tts` (Kokoro, then Edge TTS, then espeak-ng waterfall) | 10201 (loopback) | systemd (host) |
+| TTS   | `kokoro-tts` (Kokoro only: no fallback voice, nothing off-box) | 10201 (loopback) | systemd (host) |
 
 ### Brain sidecars and modules (opt-in units, enabled on the reference deployment)
 

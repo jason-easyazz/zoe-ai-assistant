@@ -52,6 +52,10 @@ with its own README/RUNBOOK and is self-contained.
   loop; templates kept under the lab, never installed by any script; dispatch defaults to
   `dry`, it idles while `~/.zoe/self_heal_paused` exists, and its GitHub landing only ever
   opens DRAFT PRs).
+  `zoe-os/` -> `scripts/setup/systemd/zoe-os-shadow-kernel.service` (the Zoe OS SHADOW kernel, `labs/zoe-os/shadow_daemon.py`: a long-running
+  stdlib process that records every real list add beside the live path in its OWN store under `~/.zoe/os-shadow/`; never authoritative, owner
+  opt-in, never auto-installed or auto-enabled, and inert until `ZOE_OS_LIST_SHADOW=shadow` is also set for zoe-data. zoe-data reaches it ONLY over
+  its Unix socket (`services/zoe-data/os_shadow.py`, no import from `labs/`); contract `docs/knowledge/zoe-os-list-shadow.md`).
   No other lab may ship a unit without amending this contract.)
 - ⚠ **`labs/flue-zoe-brain-2x/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
   are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`
@@ -550,3 +554,22 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
+- `zoe-os/` — **Zoe OS kernel** (binding local contract: [zoe-os/AGENTS.md](zoe-os/AGENTS.md); `docs/architecture/zoe-os.md`): stdlib Python, SQLite in a temp dir,
+  synthetic people. An event spine (closed set of kinds, private by default, durable append, capability-filtered
+  subscriptions, bounded queues with lag-to-replay, replay, forget with cascade + on-disk erase + a re-publish
+  shield), skill manifests and per-person grants with one enforcer, an action dispatcher with read-back receipts and
+  a claim-without-receipt detector, a per-person attention router, three toy skills (one deliberately malicious) and
+  thin bridge adapters for five production call sites. Never imported by production, no flag, no unit; in-process, so
+  it proves the rules and NOT isolation. Regression net: its ~510 tests are in the REQUIRED `validate` gate (2026-11-15):
+  `labs/zoe-os/conftest.py` marks every test under it `ci_safe`, and `validate.yml`'s `tests/unit` shards + `collect` take the path
+  `labs/zoe-os/tests` beside `tests/unit`. Keep them hosted-runner safe (no network, model, household data, root); the
+  second-OS-user tests self-skip off root. `brain-lab-app` Node tests are NOT in CI yet. Hand-run:
+  `python3 -m pytest -p no:cacheprovider -q labs/zoe-os/tests`; every guarantee has a monkeypatched negative control
+  (README table). `bench.py` is one capped benchmark (60 s, 100k events). README is a record, not a contract.
+  `zoe_os/brain/` is the brain bridge (`docs/architecture/zoe-os-brain-bridge.md`): an adapter that presents the kernel's
+  declared actions as tools and turns a tool call into one kernel `act` (the brain proposes, the kernel disposes),
+  proven with a scripted and a recorded driver; NO real model turn has run through it (single llama slot shared with
+  the household), and it must not be wired to `flue-zoe-brain-2x/`. `bench_brain.py` measures the hop.
+  `shadow_daemon.py` is the one long-running entry point: the kernel + the lab list, reminder and alarm drivers (plus its own `list.remove` over the list rows) for zoe-data's SHADOW of list add / list remove / reminder create / alarm create (`docs/knowledge/zoe-os-list-shadow.md`, `docs/knowledge/zoe-os-integration.md`),
+  started only by the owner-installed `zoe-os-shadow-kernel.service` (see Forbidden); `services/zoe-data/tests/test_os_shadow_contract.py` runs the zoe-data client against it
+  and is skipped with a named reason when this lab is absent.

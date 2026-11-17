@@ -49,6 +49,7 @@ from user_prefs import MEMORY_OPT_OUT_SOURCES
 import logging
 import math
 import os
+import bisect
 import re
 import threading
 import time
@@ -62,6 +63,8 @@ import memory_authority as _auth
 import memory_forgotten as _forgotten
 import own_words as _own_words
 import memory_temporal as _temporal
+import erase_watermark as _erase_watermark
+import user_erase_gate as _erase_gate
 from live_store_guard import (
     LiveStoreViolation,
     assert_palace_open_allowed,
@@ -413,6 +416,45 @@ def collection_op(timeout: float | None = None):
             _OPS_COND.notify_all()
 
 
+# ── ZOE_MEMORY_TICK_DEFER_S (default 0 = unchanged; 1.0 the candidate): see MemoryService._schedule_tick ─────────────────
+_TICK_DEFER_MAX_S = 10.0
+_TICK_READ_WAIT_MAX_S = 2.0
+_TICK_READ_POLL_S = 0.05
+_PROMPT_READS = [0]   # prompt reads in flight in this process (load_for_prompt / search); counted only while deferring
+
+
+def _tick_defer_s() -> float:
+    try:
+        from typed_env import flag
+
+        v = float(flag("ZOE_MEMORY_TICK_DEFER_S"))
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return v if 0.0 < v <= _TICK_DEFER_MAX_S else 0.0
+
+
+def _tick_query_hash(query: str) -> str:
+    """The distinct-query key ``tick_access`` stores (first 16 hex of sha1 of the lower-cased, stripped query)."""
+    return hashlib.sha1(query.lower().strip().encode()).hexdigest()[:16]
+
+
+class _PromptRead:
+    """``with _PromptRead():`` around a prompt read; counted only while ticks are deferred (0 = no bookkeeping)."""
+
+    __slots__ = ("on",)
+
+    def __enter__(self):
+        self.on = _tick_defer_s() > 0.0
+        if self.on:
+            _PROMPT_READS[0] += 1
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            _PROMPT_READS[0] = max(0, _PROMPT_READS[0] - 1)
+        return False
+
+
 def _leased_call(fn, *args):
     with collection_op():
         return fn(*args)
@@ -698,6 +740,11 @@ def compact_drawers_index_sync(
 # maintenance gate (collection ops drained, new openers blocked) because ``VACUUM`` needs the file to itself.
 _ERASE_MAX_NEEDLES = 24          # verification scans every file once per needle: bound the cost
 _ERASE_NEEDLE_BYTES = 40         # a head window of each forgotten text; >= 12 bytes or it is noise
+
+
+def _log_erase_drop(lane: str) -> None:
+    """The ONE line a write dropped by the erase gate leaves: the writer's lane and a fixed code - never the member, the text or an id."""
+    logger.info("ERASE_GATE_DROP lane=%s code=erased_since_scheduled", lane or "-")
 
 
 def physical_erase_enabled() -> bool:
@@ -1240,7 +1287,9 @@ def _stamp_claim(md: dict[str, Any], claim: Any) -> None:
         # the quote and the value are slices of the owner's turn: they pass the SAME PII scrub the evidence excerpt does, and a claim
         # that would carry anything the scrub touches is not stored at all (the fact beside it was scrubbed separately)
         for field_ in (parsed.quote, parsed.obj):
-            scrubbed, reject = scrub_pii(field_)
+            if len(field_ or "") > SCRUB_INLINE_MAX:          # a claim field is a few words: longer is not stamped (fail closed)
+                return
+            scrubbed, reject = scrub_pii(bounded(field_, SCRUB_INLINE_MAX, 0))
             if reject or scrubbed != field_:
                 return
         md["claim"] = parsed.to_json()
@@ -1301,7 +1350,7 @@ def is_emotional_memory(ref: MemoryRef) -> bool:
 # PII scrubber
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _TOTP_RE = re.compile(r"(?:\b|:\s*)(\d{6})\b")
-_CC_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
+_CC_RE = re.compile(r"\b(?:\d[\s-]*?){13,19}\b")   # a card takes ANY whitespace between groups, a line break included
 _SECRET_LABEL_RE = re.compile(
     r"(?i)(?:^|\W)(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b",
 )
@@ -1310,6 +1359,632 @@ _PEM_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _BANKING_CONTEXT_RE = re.compile(r"(?i)\b(iban|bank|account|swift|bic|transfer)\b")
+#: where another secret STARTS: a suffix (below) never takes a label word, nor a conjunction (and / but / or / plus - not "also" /
+#: "then", which are value MODIFIERS: "is actually also <value>") followed within four tokens by a
+#: label or a cue a later pattern needs (a code / key / number word, a contact cue, any digit): "... and secret is ...",
+#: "... and the key safe code is ...", "... and call me on ...", so one match never swallows what a later secret needs
+_LABEL_WORD = (r"(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo|key"
+               r"|number|no|phone|mobile|email|e-mail|address|call|ring|text|live|lives|at|on"
+               # the first word of every labelled account / identity number (``_ACCOUNT_LABELS``)
+               r"|account|acct|bank|bsb|sort|routing|member|membership|customer|client|policy|licence|license|passport|tax"
+               r"|medicare|card|iban|abn|tfn|ssn|social|national|driver|drivers|driver's|vehicle|rego|registration|student|employee"
+               r"|staff|patient|health|insurance|loyalty|frequent)\b")
+_NEXT_LABEL = (r"(?!(?:and|but|or|plus)\s{1,8}(?:[^\s,;.!?]+\s{1,8}){0,3}(?:" + _LABEL_WORD + r"|[^\s,;.!?]*\d)"
+               r"|(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo)\b)")
+#: the rest of the SENTENCE after the value's first word, in a bounded window (``_SLOT_CHARS``): ``_judge_match`` decides
+#: where the value ends in it
+_SUFFIX = r"([^.;!?\n]{0,400})"
+#: the WORD connectors after a secret label: "is" / "was", and the other forms a value is said with ("will be", "should be",
+#: "has been", "are", "isn't" ...). Each is one fixed phrase with bounded inner spaces (no adjacent unbounded whitespace runs)
+_CONNECT_ALTS = (r"isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
+                 r"|(?:has|had|have)\s{1,8}been")
+# not inside a longer word or a contraction; a quote straight after the connector with no space ("is'zebrafiddle'") is the
+# value's OPENER, as main reads it (review, PR #2660)
+_CONNECT_WORDS = (
+    # the newer connectors end at a word boundary ("are" is not the start of "area"); "is" / "was" take whatever follows, glued
+    # word characters included ("is4821", "iszebrafiddle"), exactly as main does. The ONE exclusion is a contraction: an
+    # apostrophe + t / s / re / ve / d / ll with no closing quote straight after ("isn't", "the password's on the fridge")
+    r"(?:(?:isn't|isn’t|wasn't|wasn’t|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
+    r"|(?:has|had|have)\s{1,8}been)(?!\w)|is|was)(?!['’](?:t|s|re|ve|d|ll|nt)(?![\w'’]))")
+_LABELLED_SECRET_RE = re.compile(
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:" + _CONNECT_WORDS
+    + r")(?:\s*[:=])?|[:=])\s*)"
+    # the value stops before trailing punctuation (the clause stays readable). The connector is UNAMBIGUOUS: "is" / "was" takes an
+    # optional ":" / "=" only together with the spaces in front of it (``(?:\s*[:=])?``), so no two whitespace runs can split the
+    # same spaces - two adjacent runs around an optional ":" were quadratic on a long run of trailing whitespace (bot review)
+    r"(\S+?)(?=[.,;!?]{0,8}(?:\s|$))" + _SUFFIX,
+)
+#: FAIL CLOSED: right after a secret label + is / was / : / = the next value word is ALWAYS redacted - a password can be any word,
+#: "wrong" or "on" included, and over-redacting "my password is wrong" costs nothing. MODIFIERS say nothing about what follows:
+#: they are SKIPPED (at most ``_MAX_MODIFIERS``), so the word after them is the one redacted ("is still <value>", "is not <value>
+#: any more"); a label followed by modifiers only ("my password is still") said no value and is kept.
+_VALUE_MODIFIERS = frozenset({
+    "still", "now", "also", "too", "actually", "really", "just", "currently", "definitely", "probably", "always", "usually",
+    "simply", "basically", "literally", "only", "again", "already", "not", "never", "no", "longer", "changed", "reset", "set",
+    "updated", "to",
+})
+_MAX_MODIFIERS = 4
+#: a first word that INTRODUCES the value: the value is the next words, so up to six more tokens of the clause go with it
+_LABELLED_INTRODUCERS = frozenset({"the", "a", "an", "my", "our", "your", "his", "her", "their", "its", "this", "that", "these",
+                                   "those", "called", "named", "like", "same", "as", "spelled", "spelt", "reads", "says"})
+#: after the redacted first word, any of these later in the clause introduces a value after all ("is saved as <value>", "is saved
+#: under the name <value>", "is not working but was <value>"): everything after it, to the end of the clause, is redacted too
+_STATE_THEN_VALUE = frozenset({"as", "like", "called", "named", "name", "word", "words", "value", "reads", "says", "spelt", "spelled",
+                               "is", "was", "be", "been", "are", "were", "=", ":"})
+#: a value ends where a NEW clause starts: a conjunction followed by a pronoun ("... and I am allergic to peanuts")
+_CLAUSE_CONJ = frozenset({"and", "but", "so", "because", "then", "or", "while", "although"})
+_CLAUSE_SUBJECT = frozenset({"i", "we", "you", "he", "she", "they", "it", "my", "our", "your", "his", "her", "their", "i'm",
+                             "we're", "it's", "there"})
+
+
+_VERB_INTRO = frozenset({"is", "was", "be", "been", "are", "were"})
+
+
+#: a LATER value in the same clause: "<label> is <word> <words>: <value>" / "... = <value>" - the first word went (fail closed) and the
+#: value after the colon goes too. Bounded (60 characters, one clause); a value already redacted is left as it is
+_LABELLED_LATER_VALUE_RE = re.compile(
+    r"(?i)\b((?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\s*(?:is|was)\b"
+    r"[^.;!?\n:=]{0,60}?[:=]\s*)(?!\[REDACTED\])\S+"
+)
+
+
+def _norm_word(token: str) -> str:
+    return token.strip(".,;:!?\"'’").lower()
+
+
+_QUOTES = "\"'‘’“”"
+#: the closing mark of each opening quote
+_CLOSE_QUOTE = {'"': '"', "'": "'", "‘": "’", "’": "’", "“": "”", "”": "”"}
+_QUOTE_CHARS = frozenset(_CLOSE_QUOTE.values())
+
+
+#: the value slot read after a label: the rest of the SENTENCE, at most this many characters (a bounded window keeps every
+#: search linear); a value still running at the window's end is redacted on to its clause end (``_boundary``)
+_SLOT_CHARS = 400
+#: after a comma the value goes on only when the next word introduces it again (", as <value>", ", or <value>")
+_COMMA_CONTINUE = frozenset({"as", "like", "called", "named", "aka", "or", "i.e.", "ie"})
+_DETERMINERS = frozenset({"the", "a", "an", "this", "that", "these", "those"})
+#: a word that closes the sentence's value without being part of it ("the password is hunter2 btw", "... is x ok?")
+_VALUE_ENDERS = frozenset({"btw", "ok", "okay", "thanks", "thx", "please", "though", "anyway", "lol", "haha", "yeah", "right",
+                           "cheers", "fyi"})
+#: where a clause ends in raw text (the window-overflow case): a sentence end, a comma not followed by an introducer, or a
+#: conjunction followed by a new subject - the same rules as ``_clause_end``. One alternation, no nested repeat: linear
+_BOUNDARY_RE = re.compile(
+    r"[.;!?\n]|,(?!\s{0,8}(?:as|like|called|named|aka|or)\b)"
+    r"|\s(?:" + "|".join(sorted(_CLAUSE_CONJ)) + r")\s{1,8}(?:"
+    + "|".join(sorted((_CLAUSE_SUBJECT | _DETERMINERS) - {"i'm", "we're", "it's"})) + r")\b", re.I)
+
+
+def _later_introducer(toks: "list[tuple[str, str]]", k: int, i: int) -> bool:
+    """Does token ``k`` (after the slot's first word ``i``) introduce a value? A word like "as" / "name" anywhere in the clause;
+    a verb ("was") only right after that word or right after a conjunction ("... but was <value>") - "and the dog is fed" has
+    its own subject, so its "is" introduces nothing about the secret."""
+    w = _norm_word(toks[k][1])
+    if w not in _STATE_THEN_VALUE:
+        return False
+    return w not in _VERB_INTRO or k == i + 1 or _norm_word(toks[k - 1][1]) in _CLAUSE_CONJ
+
+
+def _clause_end(toks: "list[tuple[str, str]]", start: int) -> int:
+    """The index where the value starting at ``start`` ends: a comma not followed by an introducer (the next item of a list,
+    "..., alarm code 4821"), or a conjunction opening a new clause (a pronoun / determiner next: "... and I am allergic", "... and
+    the dog is fed"), else the end of the slot."""
+    for j in range(start, len(toks)):
+        w = _norm_word(toks[j][1])
+        if "," in toks[j][0] and w not in _COMMA_CONTINUE:
+            return j
+        if w in _VALUE_ENDERS:
+            return j
+        if w in _CLAUSE_CONJ and j + 1 < len(toks) and _norm_word(toks[j + 1][1]) in (_CLAUSE_SUBJECT | _DETERMINERS):
+            return j
+    return len(toks)
+
+
+def _slot_tokens(first: str, suffix: str) -> "list[tuple[str, str]]":
+    """``(separator, word)`` pairs, LOSSLESS: joined back they are exactly ``first + suffix`` (a trailing separator is a pair
+    with an empty word)."""
+    parts = re.split(r"([\s,]+)", suffix or "")
+    toks = [("", first + parts[0])]
+    toks += [(parts[k], parts[k + 1]) for k in range(1, len(parts) - 1, 2)]
+    return toks
+
+
+def _join(toks: "list[tuple[str, str]]") -> str:
+    return "".join(sp + t for sp, t in toks)
+
+
+def _boundary(text: str, start: int) -> int:
+    m = _BOUNDARY_RE.search(text, start)
+    return m.start() if m else len(text)
+
+
+def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, int]":
+    """One label + connector + value slot (groups 1-4): ``(what replaces text[m.start():stop], stop)``. The driver resumes
+    scanning at ``stop``, so whatever was not judged here (a kept clause's words, the text after a value) is still scanned.
+
+    Up to ``_MAX_MODIFIERS`` modifiers are skipped (kept as said); then the next word decides:
+
+    * nothing left: those words ARE the value ("my password is still"): redacted, after a word connector as after ":" / "=";
+    * with ``excuse`` and a STATE / TIME / PLACE word (``_LABELLED_NOT_VALUES``, where the module has one): kept only while nothing
+      after it can be the secret - a state / time word must be followed by a place / time phrase, a conjunction or a modifier
+      (``_STATE_TAIL_OK``), else the next word is the value; a later introducer in the clause ("as", "the name", "but was")
+      redacts everything after it;
+    * anything else - an introducer included: FAIL CLOSED, the value is the rest of the clause (``_clause_end``; past the
+      window, ``_boundary``)."""
+    head = m.group(1) + m.group(2)
+    toks = _slot_tokens(m.group(3), m.group(4))
+    base = m.start(3)
+    at = lambda k: base + len(_join(toks[:k]))     # noqa: E731 - absolute offset of token k (the tokens are lossless)
+    i = 0
+    # NO word is skipped as a "modifier" (review, PR #2660): "still" / "now" / "reset" can itself be the secret, so the first
+    # word after the connector is always judged as the value (default-redact)
+    if i == len(toks) or not any(t for _sp, t in toks[i:]):   # modifiers only
+        return head + _REDACT, at(i)               # "is still" / "is now": the modifier can itself be the secret - fail closed
+    kept = _join(toks[:i])
+    word = _norm_word(toks[i][1])
+    end = _clause_end(toks, i + 1)
+    overflow = end == len(toks) and len(m.group(4)) >= _SLOT_CHARS
+    stop = _boundary(text, m.end()) if overflow else at(end)
+    not_values = globals().get("_LABELLED_NOT_VALUES") or frozenset()
+    if excuse and word in not_values:
+        j = next((k for k in range(i + 1, end) if _later_introducer(toks, k, i)), None)
+        if (j is None and word not in _PLACE_WORDS and i + 1 < end and toks[i + 1][1]
+                and _norm_word(toks[i + 1][1]) not in _STATE_TAIL_OK):
+            j = i                                  # "is written zebrafiddle": the word straight after is the value
+        if j is not None and j + 1 < end:
+            return head + kept + _join(toks[i:j + 1]) + toks[j + 1][0] + _REDACT, stop
+        return head + kept + toks[i][0] + toks[i][1], at(i + 1)
+    return head + kept + toks[i][0] + _REDACT, stop
+
+
+def _drive(rx: "re.Pattern[str]", text: str, excuse: "Callable[[re.Match[str]], bool]") -> str:
+    """Every match of a label pattern, judged in turn (``_judge_match``); the next search starts where the judged part ended, so
+    a kept clause's words and the text after a value are still scanned. Iterative (no recursion), each search bounded by the
+    slot window: linear."""
+    out, pos = [], 0
+    while True:
+        m = rx.search(text, pos)
+        if m is None:
+            out.append(text[pos:])
+            return "".join(out)
+        rendered, stop = _judge_match(m, text, excuse=excuse(m))
+        out.append(text[pos:m.start()] + rendered)
+        pos = max(stop, m.start(3) + 1)
+
+
+def _never(_m: "re.Match[str]") -> bool:
+    return False
+
+
+def _always(_m: "re.Match[str]") -> bool:
+    return True
+
+
+def _labelled_excuse(m: "re.Match[str]") -> bool:
+    """After a WORD connector ("is", "will be") a state / place word may be kept; after ":" / "=" nothing is excused."""
+    return not any(c in m.group(2) for c in ":=")
+
+
+def _scrub_labelled(text: str) -> str:
+    return _LABELLED_LATER_VALUE_RE.sub(r"\1" + _REDACT, _drive(_LABELLED_SECRET_RE, text, _labelled_excuse))
+
+# ── widened classes (2026-11-15). Every label list is CLOSED and lives HERE only; a label never redacts without a value
+# (a code / number needs a digit), so "the alarm code changed", "the dress code is casual" and "pineapple" are untouched.
+#: what a code opens (``the door code is 5791``, ``code for the gate: 0042``)
+_CODE_LABELS = ("front door", "back door", "side door", "door", "alarm", "gate", "garage", "safe", "lockbox", "lock box",
+                "key safe", "keysafe", "key box", "keypad", "padlock", "bike lock", "lock", "locker", "security", "entry",
+                "access", "wifi", "wi-fi", "network", "router")
+#: the words that make a label a secret
+_CODE_WORDS = ("code", "pin", "passcode", "password", "combination", "combo", "key")
+#: labelled account / identity numbers that are neither Luhn-valid nor IBAN-shaped
+_ACCOUNT_LABELS = ("account number", "account no", "account #", "acct number", "acct no", "bank account", "bsb",
+                   "sort code", "routing number", "routing no", "member number", "member no", "membership number",
+                   "membership no", "customer number", "customer no", "client number", "policy number",
+                   "licence number", "license number", "driver's licence", "drivers licence", "driver's license",
+                   "drivers license", "passport number", "passport no", "tax file number", "tfn", "medicare number",
+                   "medicare card number", "national insurance number", "ni number", "social security number",
+                   "card number")
+#: street-type words an address ends in (``12 Example Street``)
+_STREET_TYPES = ("street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr", "court", "ct", "crescent",
+                 "cres", "place", "pl", "boulevard", "blvd", "way", "terrace", "tce", "parade", "pde", "close", "cl",
+                 "highway", "hwy", "circuit", "cct", "grove", "square", "sq", "esplanade", "esp", "mews", "promenade",
+                 "quay", "alley")
+#: the labels a phone number follows ("my number is 9123 4567", "call me on ...", "ring the shop at ...")
+_PHONE_NOUNS = ("phone", "mobile", "cell", "landline", "fax", "whatsapp", "telephone", "tel", "number", "contact")
+_PHONE_VERBS = ("call", "ring", "text", "phone", "reach", "contact", "sms", "message")
+
+
+def _alt(words: tuple[str, ...]) -> str:
+    return "|".join(re.escape(w).replace(r"\ ", r"\s+") for w in sorted(words, key=len, reverse=True))
+
+
+_CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an optional word between two \s* is quadratic on a long space run
+#: the connector plus any number of filler words before the value ("the door code is actually really just 5791"): the list is CLOSED and
+#: each repeat consumes one whole word, so the run stays linear (pinned by the long-filler timing test)
+_CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|definitely|really|only)\s{1,8})*)"
+#: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
+#: more digit groups (``12 34``). The two token runs are BOUNDED (64 characters each side of the digit): an unbounded lazy run was
+#: retried from every label inside a long digit-free token ("door-code-door-code-...": quadratic; review, PR #2660). A longer
+#: token is not lost: the label net takes whatever follows a label that this pattern did not
+_TOKEN = r"\S{0,64}?\d\S{0,64}?(?=[.,;!?]{0,8}(?:\s|$))(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,3}"
+_CODE_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
+    rf"{_CONNECT_FILL}({_TOKEN})"
+)
+#: THE CLASS RULE (review, PR #2660): once a secret LABEL is seen, the value needs NO shape - letters only ("the wifi key is
+#: zebrafiddle"), digit pairs, spelled-out numbers, symbols: with a connector the first word and the rest of the clause go
+#: (``_judge_match``, nothing excused); without one, the word after the label goes unless it is on the closed about-the-secret
+#: list (``_PASSWORD_NOT_VALUES``: "the alarm code changed"). The digit shapes (``_CODE_RE``, ``_BARE_PIN_RE``) stay as the extra net
+_CODE_LABEL_FORMS = (
+    rf"(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)})")
+_CODE_LABELLED_RE = re.compile(
+    rf"(?i)\b({_CODE_LABEL_FORMS}|pin(?:\s+(?:number|code))?|passcode)\b"
+    r"(\s{0,8}(?:(?:" + _CONNECT_WORDS + r")(?:\s{0,8}[:=])?|[:=]|'s|’s)\s{0,8})"
+    r"(?!\[REDACTED\])(\S+?)(?=[.,;!?]{0,8}(?:\s|$))" + _SUFFIX
+)
+#: a QUOTED value after any secret label (labelled, bare, "for / to <thing>", a code label), whatever the words: it runs to its
+#: closing quote, or - never closed - to the end of the clause, with NO token cap (a quoted nine-word passphrase loses all nine).
+#: The prefix is bounded everywhere; the close is an index scan from the opening quote (``_scrub_quoted``): linear
+_QUOTED_PREFIX_RE = re.compile(
+    r"(?i)\b(?:(?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30}"
+    rf"|(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    r"|password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b"
+    r"\s{0,8}(?:(?:" + _CONNECT_WORDS + r"|'s|’s)(?:\s{0,8}[:=])?\s{0,8}|[:=-]\s{0,8})?"
+    rf"(?:(?:{_alt(tuple(_VALUE_MODIFIERS))})\s{{1,8}}){{0,4}}"
+    r"(?=[\"“”]|['‘’](?![sS]\b))"     # an opening quote - never the apostrophe of "password's" (a double quote is never one)
+)
+_CLAUSE_END_RE = re.compile(r"[.;!?\n](?=\s|$)")
+
+
+def _closers(text: str) -> dict:
+    """Every position where a quote character CLOSES a value (not followed by a letter, digit or "_"), per character, ascending:
+    built in ONE pass, so each "where does this quote close?" is a bisect, never a scan of the rest of the text."""
+    out: dict = {}
+    n = len(text)
+    for k, ch in enumerate(text):
+        if ch in _QUOTE_CHARS and (k + 1 == n or not (text[k + 1].isalnum() or text[k + 1] == "_")):
+            out.setdefault(ch, []).append(k)
+    return out
+
+
+def _close_at(closers: dict, close: str, after: int) -> int:
+    """The first closing position of ``close`` at or after ``after``, or -1."""
+    ks = closers.get(close) or ()
+    i = bisect.bisect_left(ks, after)
+    return ks[i] if i < len(ks) else -1
+
+
+def _scrub_quoted(text: str) -> str:
+    """Every quoted value after a secret label, to its closing quote (one followed by a space, punctuation or the end - so an
+    apostrophe inside, "my dog's", does not close it) or, never closed, to the end of the clause. One left-to-right pass."""
+    out, pos, closers = [], 0, None
+    while True:
+        m = _QUOTED_PREFIX_RE.search(text, pos)
+        if m is None:
+            break
+        start = m.end()
+        close = _CLOSE_QUOTE.get(text[start], text[start])
+        if closers is None:
+            closers = _closers(text)
+        end = _close_at(closers, close, start + 1) + 1 or -1
+        if end < 0:                                         # never closed: to the end of the clause
+            c = _CLAUSE_END_RE.search(text, start + 1)
+            end = c.start() if c else len(text)
+        out.append(text[pos:start] + _REDACT)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
+
+
+#: a PIN said without "is" (``my pin 4821``, ``my pin 12 34``, ``pin 1 2 3 4``): three digits, or digit groups; "pin 3 photos" stays
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,2}|\d{1,2}(?:(?:\s?[-–]\s?|\s)\d{1,4}){1,7})\b")
+#: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
+#: after the label is kept only when it is on this CLOSED list - a word that says the sentence is ABOUT the password, not its
+#: value. Nouns and states first, then function words (a connector, pronoun or adverb is never the value itself).
+_PASSWORD_NOT_VALUES = (
+    # what the password is part of / what happened to it
+    "manager", "managers", "reset", "resets", "field", "policy", "policies", "protected", "protection", "prompt", "hint",
+    "box", "change", "changes", "changed", "rules", "rule", "requirements", "strength", "expiry", "expired", "recovery",
+    "generator", "vault", "app", "screen", "page", "form", "login", "entry", "length", "update", "updated", "settings",
+    "wrong", "incorrect", "forgotten", "lost", "leaked", "work", "works", "worked", "working",
+    # SLOT-ENDING function words: what follows them is not the value (a verb / auxiliary - "is" / "was" are the labelled form -,
+    # a preposition starting a phrase about the password - "for the wifi is ..." is the labelled for / to form -, a conjunction,
+    # a pronoun / determiner). The MODIFIERS (now, too, already, please ...) are NOT here: they are skipped and the next word judged
+    "is", "was", "are", "were", "be", "been", "has", "had", "have", "will", "would", "can", "could", "should", "must", "may",
+    "doesn't", "didn't", "isn't", "wasn't", "won't", "can't", "and", "or", "but", "so", "if", "when", "because",
+    "for", "of", "on", "in", "at", "with", "from", "by", "about", "into", "it", "i",
+    "you", "we", "they", "he", "she", "here", "there",
+    # (no article / possessive / demonstrative: they INTRODUCE a value - "my password the word <value>" - and are redacted)
+)
+#: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
+#: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
+#: token, and the match is anchored on the label (linear: the adversarial timing test)
+_PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:(?:\s?[-–]\s?|\s)\d{2,12}){0,3}"
+#: words SKIPPED after a bare label (at most four), the word after them judged: "my password now <value>" / "password please
+#: <value>" redact the value; "change your password now" (a modifier, then nothing) is kept
+#: (not changed / reset / set / updated / to: after a bare label they are a compound - "password reset link", "password change")
+_BARE_MODIFIERS = tuple(sorted((_VALUE_MODIFIERS - {"changed", "reset", "set", "updated", "to"}) | {"then", "yet", "today", "please"}))
+#: an introducer after a bare label takes the rest of the clause with it ("my password the word <value>"), stopping before a label,
+#: at a sentence end, or where a new clause starts (a conjunction then a pronoun: "... and I am allergic"); at most 40 words
+_NEW_CLAUSE = (r"(?!(?:" + "|".join(sorted(_CLAUSE_CONJ)) + r")\s{1,8}(?:" + "|".join(sorted(_CLAUSE_SUBJECT - {"i'm", "we're", "it's"}))
+               + r")\b)")
+_BARE_INTRO = (r"(?:" + "|".join(sorted(_LABELLED_INTRODUCERS, key=len, reverse=True)) + r")\b(?:\s{1,8}" + _NEW_CLAUSE + _NEXT_LABEL
+               + r"[^\s,;.!?]+){0,40}")
+#: WITHOUT a connector ("my password zebrafiddle"): the word after the label (and any modifiers) is redacted unless it is on the
+#: closed list - it says the sentence is ABOUT the password ("password reset link", "my password works")
+_BARE_PASSWORD_RE = re.compile(
+    r"(?i)\b(password|passphrase)\b(\s{1,8}"
+    rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
+    rf"({_BARE_INTRO}|(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-]))(?![-'’=:]){_PASSWORD_VALUE})" + _SUFFIX
+)
+#: a code LABEL said without a connector ("the wifi key zebrafiddle"): the same closed-list rule as a bare password
+_CODE_BARE_RE = re.compile(
+    rf"(?i)\b({_CODE_LABEL_FORMS})\b(\s{{1,8}})"
+    rf"((?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-]))(?![-'’=:\[]){_PASSWORD_VALUE})" + _SUFFIX
+)
+#: WITH a connector ("password: x", "password - x", "my password's x" - the same as "is"): FAIL CLOSED, no word excused; modifiers
+#: are skipped and the word after them redacted
+_BARE_PASSWORD_CONN_RE = re.compile(
+    r"(?i)\b(password|passphrase)((?:\s{0,8}[=:]|'s|’s|\s{1,8}-)\s{0,8}"     # a dash only spaced: "password-protected" is a word
+    rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
+    rf"({_BARE_INTRO}|{_PASSWORD_VALUE})" + _SUFFIX
+)
+
+
+#: "the password for the wifi is <value>" / "... to my laptop was <value>": the labelled form, an explicit connector, no word excused
+#: (an introducer takes the rest of the clause, as in ``_judge_match``)
+#: "the password I use is <value>" / "... that you gave me was <value>": a relative clause (a pronoun and up to three words)
+#: between the label and "is" / "was" - the pronoun ends the BARE slot, so the value is judged here
+_REL_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase|passcode|pin)\s{1,8}(?:(?:that|which)\s{1,8})?(?:i|you|we|they|he|she|it)"
+    r"(?:\s{1,8}[\w'’]{1,30}){1,8}?)(\s{1,8}(?:" + _CONNECT_WORDS + r")\s{1,8})(" + _PASSWORD_VALUE + ")" + _SUFFIX
+)
+
+
+_FOR_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30})"
+    rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
+)
+_ACCOUNT_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of|-|–)\s{{0,8}})?(?:(?:actually|now|just|still|currently|definitely|really|only)\s{{1,8}})*)"
+    # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
+    # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
+    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?:(?:\s?[-–]\s?|\s)[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
+)
+_EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
+_SPOKEN_EMAIL_RE = re.compile(
+    r"(?i)\b(e-?mail(?:\s+address)?(?:\s{1,8}(?:is|was))?\s{0,8}:?\s{1,8})"
+    r"([\w.+-]{1,64}\s+at\s+[\w-]{1,63}(?:\s{1,8}dot\s{1,8}[\w-]{1,63}){0,3}\s+dot\s+[a-z]{2,6})\b"
+)
+#: the separator BETWEEN two digit groups of one phone number: spaces, a dash with optional spaces, or a dot with NO space
+#: after it, and always a digit (or "(") next. A sentence end (". ", "; ", "! ", "? ") or a line break is never inside a
+#: number, so a phone cannot run on into the next number and push it over the digit cap (review, PR #2574)
+_PHONE_SEP = r"(?:[ \t]{0,2}-[ \t]{0,2}|\.|[ \t]{1,3})"   # a tab joins groups as a space does; a line break never
+_PHONE_LABEL_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
+    rf"{_CONNECT}(\+?\(?\d(?:[\d()]|{_PHONE_SEP}(?=[\d(])){{5,40}}\d)"   # 40: room for two numbers (caps below)
+)
+#: unlabelled phone shapes: a leading +, a leading trunk 0 (AU / UK), or the 3-3-4 North American form with - or .
+_PHONE_INTL_RE = re.compile(rf"(?<![\w+])\+\d{{1,3}}[ \t.-]?(?:\(\d{{1,4}}\)[ \t.-]?)?\d(?:\d|{_PHONE_SEP}(?=\d)){{5,40}}\d(?!\w)")
+#: up to 7 groups: two trunk numbers said back to back with a space are taken whole (cap 22 digits below), never split
+_PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ \t.-]?\d{2,5}){1,7}(?!\w|[.,/-]\d)")
+_PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ \t.-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
+#: the earlier WIDE shapes, whose value may cross ". ": run on the same text as the split shapes and UNIONED with them
+#: (``_scrub_phones``), so the split never frees what the wide shape caught ("call me on 0400555101. 12")
+_PHONE_LABEL_WIDE_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
+    rf"{_CONNECT}(\+?\(?\d[\d \t().-]{{5,40}}\d)"
+)
+_PHONE_INTL_WIDE_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ \t.-]?(?:\(\d{1,4}\)[ \t.-]?)?\d[\d \t.-]{5,40}\d(?!\w)")
+#: the NEXT contact number said straight after a redacted one ("call me on 0400 555 101. 9555 0123", "..., or 9555 0123",
+#: a newline, a third number): the split passes above end the first number at the sentence end, and the label the wide fallback
+#: needs is gone by then, so a following number would survive. A separator (punctuation, "or" / "and", a line break), then a
+#: phone-shaped run; ``_chain_sub`` takes each one of 8-30 digits and stops at the first that is not. Linear: the repeat can
+#: always end, and each link is a fixed-width separator plus one token-bounded number (pinned by the chain timing test)
+_CHAIN_SEP = r"(?:\s{0,8}[.,;:/&]{0,2}\s{0,8}(?:(?:or|and|also|alt|else|then)\s{1,8})?)"
+_CHAIN_NUMBER = rf"\+?\(?\d(?:[\d()]|{_PHONE_SEP}(?=[\d(])){{5,40}}\d(?![\w@])"
+_CONTACT_CHAIN_RE = re.compile(rf"\[REDACTED\]((?:(?i:{_CHAIN_SEP}){_CHAIN_NUMBER})+)")
+_CHAIN_LINK_RE = re.compile(rf"((?i:{_CHAIN_SEP}))({_CHAIN_NUMBER})")
+
+
+def _chain_sub(m: "re.Match[str]") -> str:
+    out, pos, chain = [_REDACT], 0, m.group(1)
+    for link in _CHAIN_LINK_RE.finditer(chain):
+        if link.start() != pos or not 8 <= _digits(link.group(2)) <= 30:
+            break
+        out.append(link.group(1) + _REDACT)
+        pos = link.end()
+    return "".join(out) + chain[pos:]
+_UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
+#: a postcode, and any digit groups straight after it. A postcode ends an address, so digits that continue it are the head
+#: of the NEXT number ("... Street, 07700 900123"): they are taken too, never split, so no part of that number survives
+#: (both are redacted: we cannot tell "WA 6000 0400 555 101" from one long number). Bounded: four more groups, single
+#: separators, so it never crosses ". " (review, PR #2574)
+_POSTCODE = r"\d{4,5}\b(?:[ \t.-]?\d{1,10}\b){0,4}"
+#: ``[unit] number Capitalised Name street-type [, Suburb] [STATE] [postcode]``; a lower-case street needs a label below
+_ADDRESS_RE = re.compile(
+    rf"(?<![\w/.-]){_UNIT},?\s{{1,8}}(?:[A-Z][A-Za-z'’-]{{0,40}}\s{{1,8}}){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
+    rf"(?:(?:,\s{{0,8}}|\s{{1,8}})(?:[A-Z][\w'’-]{{0,40}}\s{{1,8}}){{0,3}}(?:[A-Z]{{2,3}}\s{{1,8}})?{_POSTCODE}"
+    r"|,\s{0,8}[A-Z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2})?"
+)
+#: every repeat below is bounded (a fixed-width prefix of at most four words): an unbounded "my my my ... address" prefix
+#: was re-scanned from every word, quadratic on a long input (review thread, PR #2574)
+_ADDRESS_LABEL_RE = re.compile(
+    r"(?i)\b((?:(?:my|our|his|her|their|the|home|postal|street|new|old|billing|delivery|shipping)\s{1,8}){0,4}(?<!ip\s)(?<!mac\s)"
+    r"address(?:\s{1,8}(?:is|was)|\s{0,8}:)\s{0,8})"
+    r"(\d[^.;!?\n]{0,80}?(?=\s{0,8}(?:[.;!?\n]|$)|\s{1,8}(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]*)"
+)   # ^ no end within 80 characters: take the rest of the sentence. A fixed 80-character cut split the NEXT item ("... ring the
+    #   shop on (" | "08) 5550 1202") and freed its tail (pairwise review, 2026-11-16); one greedy class, so still linear
+_LIVE_AT_RE = re.compile(
+    rf"(?i)\b((?:i|we|they|he|she|who)?\s{{0,8}}(?:live|lives|living|stay|stays|staying)\s{{1,8}}at\s{{1,8}})"
+    rf"({_UNIT},?\s{{1,8}}(?:[\w'’-]{{1,40}}\s{{1,8}}){{1,3}}?(?:{_alt(_STREET_TYPES)})\b\.?"
+    rf"(?:(?:,?\s{{1,8}}[A-Za-z][\w'’-]{{0,40}}){{0,3}}?,?\s{{1,8}}{_POSTCODE}|"
+    r",\s{0,8}[A-Za-z][\w'’-]{0,40}(?:\s{1,8}[A-Za-z][\w'’-]{0,40}){0,2}?)?)"
+)
+_PO_BOX_RE = re.compile(r"(?i)\bP\.?\s?O\.?\s+Box\s+\d{1,6}\b")
+_REDACT = "[REDACTED]"
+
+
+def _digits(s: str) -> int:
+    return sum(c.isdigit() for c in s)
+
+
+def _keep_label_if(lo: int, hi: int):
+    def sub(m: "re.Match[str]") -> str:
+        return m.group(1) + m.group(2) + _REDACT if lo <= _digits(m.group(3)) <= hi else m.group(0)
+    return sub
+
+
+def _whole_if(lo: int, hi: int):
+    def sub(m: "re.Match[str]") -> str:
+        return _REDACT if lo <= _digits(m.group(0)) <= hi else m.group(0)
+    return sub
+
+
+# ── THE NET (review of #2660, after an adversarial pass): ONE rule over every secret label, run LAST, for what
+# the grammar above did not take (a value it already redacted keeps the clause end the grammar chose). The grammar above decides
+# what a value looks like; the net does not. After a label (singular or plural, "pass-word", split by a line break) and ANY
+# connector (a word connector, ":" / "=" / "'s" / a spaced dash, any amount of space) everything up to the END OF THE SENTENCE
+# is the value - letters, digit groups, words, symbols, a new clause, a comma tail; a quoted value runs to its closing quote
+# even across sentence ends. With NO connector the same holds unless the next word is on the closed about-the-secret list
+# (``_PASSWORD_NOT_VALUES``: "password reset", "the alarm code changed"). Bounded gaps, one alternation per step: linear.
+_NET_LABELS = (r"pass[-\s]{0,2}words?|pass[-\s]{0,2}codes?|pass[-\s]{0,2}phrases?|pins?|pin\s{1,8}(?:numbers?|codes?)|api[\s_-]?keys?"
+               r"|auth[\s_-]?tokens?|tokens?|secrets?|combinations?|combos?")
+_NET_CODE_FORMS = (
+    rf"(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})s?(?:\s+numbers?)?"
+    rf"|(?:codes?|pins?|passcodes?|passwords?|combinations?|combos?)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)})")
+_NET_CONN_RE = re.compile(
+    rf"(?i)\b(?:{_NET_CODE_FORMS}|{_NET_LABELS})(?![\w-])"
+    # "<label> changed / updated / reset / set to <value>": "to" introduces the value (unlike a bare "password reset")
+    r"\s{0,40}(?:(?:" + _CONNECT_WORDS + r")(?:\s{0,40}[:=])?|[:=]|'s(?!\w)|’s(?!\w)|(?<=\s)-(?=\s)"
+    r"|(?:(?:now|just|been|got|get|gets)\s{1,8}){0,2}(?:changed|updated|reset|set|switched|moved)\s{1,8}(?:back\s{1,8})?to(?![\w'’]))\s{0,40}(?=\S)")
+_NET_BARE_RE = re.compile(
+    rf"(?i)\b(?:{_NET_CODE_FORMS}|pass[-\s]{{0,2}}words?|pass[-\s]{{0,2}}codes?|pass[-\s]{{0,2}}phrases?|api[\s_-]?keys?)(?![\w'’-])"
+    rf"\s{{1,40}}(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)}|{_CONNECT_ALTS})(?![\w'’-]))(?=[^\s\[=:])")
+_SENTENCE_END_RE = re.compile(r"[.;!?](?=\s|$)|\n")
+_NET_OPEN = "\"'‘’“”"
+
+
+def _net_end(text: str, start: int, closers: dict) -> int:
+    """Where the value starting at ``start`` ends: its closing quote (one not followed by a letter or digit), else the sentence end."""
+    if text[start] in _NET_OPEN:
+        k = _close_at(closers, _CLOSE_QUOTE.get(text[start], text[start]), start + 1)
+        if k >= 0:
+            return k + 1
+    m = _SENTENCE_END_RE.search(text, start)
+    return m.start() if m else len(text)
+
+
+#: a secret's NEXT digit groups on the following line(s) ("my pin is 12\n34", "the door code is 57\n91"): the grammar's slot stops at
+#: a line break, so after a redacted secret a line that is only digit groups goes too (each line consumed once: linear)
+_SECRET_NEXT_LINE_RE = re.compile(r"(\[REDACTED\])(?:(?:[ ]?\n)+[ ]?\d[\d \-–]*(?=\n|$))+")
+
+
+def _scrub_label_net(text: str) -> str:
+    return _SECRET_NEXT_LINE_RE.sub(r"\1", _label_net(text)) if "\n" in text else _label_net(text)
+
+
+def _label_net(text: str) -> str:
+    """ONE left-to-right pass: both patterns are scanned once over the whole text (``finditer``), their matches merged by position,
+    and the output built from slices - never a rescan after a replacement (linear: the 1,600-repetition timing test)."""
+    hits = sorted([(m.start(), 0, m.end()) for m in _NET_CONN_RE.finditer(text)]
+                  + [(m.start(), 1, m.end()) for m in _NET_BARE_RE.finditer(text)])   # the earliest label; a connector form first
+    out, pos, closers = [], 0, None
+    for start, _bare, stop in hits:
+        if start < pos:
+            continue                                        # inside a value already taken
+        after = stop + len(_REDACT)                         # ... unless more is glued to the marker ("[REDACTED]x": not the grammar's)
+        if text.startswith(_REDACT, stop) and (after == len(text) or not (text[after].isalnum() or text[after] == "_")):
+            # already taken by the grammar: its own end (clause, closing quote) stands
+            out.append(text[pos:stop + len(_REDACT)])
+            pos = stop + len(_REDACT)
+            continue
+        out.append(text[pos:stop] + _REDACT)
+        if closers is None:
+            closers = _closers(text)
+        pos = max(_net_end(text, stop, closers), stop + 1)
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Labelled codes, PINs / passwords said without "is", labelled account numbers. Never rejects."""
+    if not any(c.isdigit() for c in text):
+        return text
+    text = _CODE_RE.sub(r"\1\2" + _REDACT, text)
+    text = _BARE_PIN_RE.sub(r"\1\2" + _REDACT, text)
+    text = _drive(_BARE_PASSWORD_RE, text, _never)
+    return _ACCOUNT_RE.sub(_keep_label_if(4, 30), text)
+
+
+def _scrub_contact(text: str) -> str:
+    """Email addresses, street addresses, phone numbers. Never rejects."""
+    if "@" in text:
+        text = _EMAIL_RE.sub(_REDACT, text)
+    if " dot " in text.lower():
+        text = _SPOKEN_EMAIL_RE.sub(r"\1" + _REDACT, text)
+    if not any(c.isdigit() for c in text):
+        return text
+    text = _ADDRESS_LABEL_RE.sub(r"\1" + _REDACT, text)
+    text = _LIVE_AT_RE.sub(r"\1" + _REDACT, text)
+    text = _ADDRESS_RE.sub(_REDACT, text)
+    text = _PO_BOX_RE.sub(_REDACT, text)
+    text = _scrub_phones(text)
+    return _CONTACT_CHAIN_RE.sub(_chain_sub, text) if _REDACT in text else text
+
+
+#: (pattern, group whose span is the number, min digits, max digits). The upper caps allow TWO numbers said back to back with
+#: only a space ("0400 555 101 0400 555 202"): a run that long is two phones run together, never a reason to keep both (a card
+#: number is rejected earlier, by the Luhn check)
+_PHONE_SPLIT = ((_PHONE_LABEL_RE, 3, 8, 30), (_PHONE_INTL_RE, 0, 8, 30), (_PHONE_TRUNK_RE, 0, 9, 22), (_PHONE_NANP_RE, 0, 0, 99))
+_PHONE_WIDE = ((_PHONE_LABEL_WIDE_RE, 3, 8, 30), (_PHONE_INTL_WIDE_RE, 0, 8, 30))
+_EDGE_RE = re.compile(r"^([^\w(+]*)(.*?)([^\w)]*)$", re.S)
+
+
+def _spans(text: str, passes) -> list:
+    return [m.span(g) for rx, g, lo, hi in passes for m in rx.finditer(text) if lo <= _digits(m.group(g)) <= hi]
+
+
+def _merge(spans: list) -> list:
+    out: list = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def _scrub_phones(text: str) -> str:
+    """Phone numbers: every pattern runs on the SAME text and the redacted spans are their UNION. The split shapes end a number
+    at a sentence end, so two numbers stay two ``[REDACTED]``; the wide shapes may cross ". " - whatever they cover that the split
+    shapes did not (``0400555101. 12``) is redacted too, its leading / trailing punctuation kept. No pass runs on text an earlier
+    pass already replaced, so a label one pass consumed can never hide the next number from another."""
+    split, wide = _merge(_spans(text, _PHONE_SPLIT)), _spans(text, _PHONE_WIDE)
+    if not split and not wide:
+        return text
+    out, pos, k = [], 0, 0           # ``k``: a forward cursor through the sorted split spans (linear, never rescanned)
+    for a, b in _merge([tuple(s) for s in split] + wide):
+        out.append(text[pos:a])
+        cur = a
+        while k < len(split) and split[k][0] < b:
+            sa, sb = split[k]
+            out.append(_redact_core(text[cur:sa]) + _REDACT)
+            cur = sb
+            k += 1
+        out.append(_redact_core(text[cur:b]))
+        pos = b
+    return "".join(out) + text[pos:]
+
+
+def _redact_core(piece: str) -> str:
+    """A stretch only a wide shape covered: redacted when it holds a digit, its leading / trailing punctuation and spaces kept."""
+    if not any(c.isdigit() for c in piece):
+        return piece
+    lead, _core, trail = _EDGE_RE.match(piece).groups()
+    return lead + _REDACT + trail
 
 
 def _luhn_valid(digits: str) -> bool:
@@ -1328,8 +2003,67 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def scrub_pii(text: str) -> tuple[str, Optional[str]]:
-    """Return (possibly-redacted-text, reject_reason_or_None)."""
+#: any run of horizontal whitespace (a tab, several spaces, a no-break space) is ONE separator: the text is judged with every such
+#: run folded to a single space, so no pattern needs a count of how many spaces may sit between a label, its connector, its value
+#: or two digit groups (review, PR #2660: every counted limit was a way through). Line breaks are kept. One linear substitution.
+_WS_RUN_RE = re.compile(r"[ \t\f\v\u00a0\u2000-\u200a\u202f\u3000]{2,}|[\t\f\v\u00a0\u2000-\u200a\u202f\u3000]")
+
+
+def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """``_scrub_pii`` over the text with whitespace runs folded (``_WS_RUN_RE``). Nothing to redact: the text comes back exactly as
+    given; a redacted text keeps the folded spacing."""
+    if not text:
+        return text, None
+    folded = _WS_RUN_RE.sub(" ", text.replace("\r\n", "\n").replace("\r", "\n") if "\r" in text else text)
+    out, reject = _scrub_pii(folded, contact=contact)
+    if reject or out == folded:
+        return text, reject
+    return out, None
+
+
+#: above this many characters an async caller scrubs in a worker thread (``scrub_pii_async``): the scrub is linear but a very
+#: large text (an uncapped API body) would otherwise hold the event loop; short chat / voice text stays inline, with no hop
+SCRUB_INLINE_MAX = 2000
+
+
+def bounded(text: Optional[str], kept: int, margin: int = 64) -> str:
+    """At most ``kept + margin`` characters of ``text``: the hard bound on what a SYNC caller hands the scrubber (review, PR #2660:
+    a sync scrub of a huge text held the event loop). A caller whose output is STORED never keeps a scrubbed prefix - the whole
+    text decides a reject (a card, a key) - so it refuses an over-length text first and calls this with ``margin=0``."""
+    return (text or "")[:max(0, kept) + max(0, margin)]
+
+
+async def scrub_pii_async(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """``scrub_pii`` for an async caller on a live path: inline up to ``SCRUB_INLINE_MAX`` characters, else off the loop."""
+    kw = {} if contact else {"contact": False}        # the default is passed as before: a one-argument stand-in still works
+    if len(text or "") <= SCRUB_INLINE_MAX:
+        return scrub_pii(text, **kw)
+    return await asyncio.to_thread(scrub_pii, text, **kw)
+
+
+async def scrub_pii_matchable_async(text: str) -> tuple[str, Optional[str]]:
+    """``scrub_pii_matchable`` for an async caller: inline up to ``SCRUB_INLINE_MAX`` characters, else off the loop."""
+    if len(text or "") <= SCRUB_INLINE_MAX:
+        return scrub_pii_matchable(text)
+    return await asyncio.to_thread(scrub_pii_matchable, text)
+
+
+def _scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """Return (possibly-redacted-text, reject_reason_or_None). Pure, compiled regexes only, never logs.
+
+    REJECT (the whole text is refused): a Luhn-valid card, an SSN, a labelled TOTP, an AWS key, a PEM key, a JWT, an
+    IBAN in a banking context. REDACT in place (value -> ``[REDACTED]``, the label kept): a labelled password / PIN /
+    key / token / secret; a labelled door / alarm / gate / garage / safe / lock / wifi code (``_CODE_LABELS``); a PIN or
+    password said without "is" (``my pin 4821``); a labelled account / identity number (``_ACCOUNT_LABELS``).
+
+    ``contact`` (default True) also redacts CONTACT details: email addresses (typed, or a labelled spoken "x at y dot
+    com"), street addresses (number + Capitalised name + ``_STREET_TYPES`` word, or after "my address is" / "I live
+    at"), PO boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
+    a phone label). Every derived verbatim path takes the default, EXCEPT the two copies a forget still finds by their
+    words (the stored source excerpt and the exact-words index: ``scrub_pii_matchable``). ``contact=False`` is for the memory
+    FACT text only (ingest, review edit, candidates, ask-to-remember): "the plumber's number is ..." and "my pickup is at 12
+    Main Street" are household facts the owner asked Zoe to keep, so the fact keeps them.
+    """
     if not text:
         return text, None
 
@@ -1356,12 +2090,37 @@ def scrub_pii(text: str) -> tuple[str, Optional[str]]:
     if _IBAN_RE.search(text) and _BANKING_CONTEXT_RE.search(text):
         return text, "iban"
 
-    redacted = re.sub(
-        r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:is|=|:)\s*)\S+",
-        r"\1\2[REDACTED]",
-        text,
-    )
-    return redacted, None
+    # a bare password (letters-only too) is redacted here as well: ``_scrub_secrets`` skips a text with no digit at all
+    redacted = _drive(_FOR_PASSWORD_RE, _scrub_labelled(_scrub_quoted(text)), _never)
+    redacted = _drive(_REL_PASSWORD_RE, redacted, _always)              # "the password I use is <value>"
+    redacted = _drive(_BARE_PASSWORD_CONN_RE, redacted, _never)       # "password: x", "password's x": fail closed
+    redacted = _drive(_BARE_PASSWORD_RE, redacted, _never)            # a password said without "is", letters-only too
+    redacted = _drive(_CODE_LABELLED_RE, redacted, _never)            # "the wifi key is <anything>": no shape required
+    redacted = _drive(_CODE_BARE_RE, redacted, _never)                # "the wifi key <word>": the closed list only
+    redacted = _scrub_label_net(_scrub_secrets(redacted))            # LAST: whatever the grammar above left after a label
+    return (_scrub_contact(redacted) if contact else redacted), None
+
+
+#: the redaction stored WORDS took before the 2026-11-15 widening: a labelled password / PIN / key / token / secret after
+#: is / = / : (``scrub_pii_matchable`` only)
+_MATCHABLE_SECRET_RE = re.compile(
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:is|=|:)\s*)\S+"
+)
+
+
+def scrub_pii_matchable(text: str) -> tuple[str, Optional[str]]:
+    """``scrub_pii`` as it was before the widening, byte for byte: the same REJECTS, and only a labelled password / PIN / key /
+    token / secret redacted. For the two copies of the owner's words that a forget still finds BY THOSE WORDS - the stored
+    source excerpt (``turn_forget.row_is_from_turn`` compares it with the turn as said; ``ask_to_remember.siblings_of`` and
+    ``provenance_answers`` twins compare two excerpts) and the exact-words index (``exact_words.erase_text``). Redacting a phone
+    or an address there would make a forget miss the row, or take a look-alike from another turn whose excerpt redacts alike.
+    Retired (every caller back on ``scrub_pii``) once forgets match by saved-turn id (PR #2574). Pure, never logs."""
+    if not text:
+        return text, None
+    reject = scrub_pii(text, contact=False)[1]
+    if reject:
+        return text, reject
+    return _MATCHABLE_SECRET_RE.sub(r"\1\2[REDACTED]", text), None
 
 
 #: Cap for the verbatim evidence stored beside a fact (metadata
@@ -1377,12 +2136,15 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     Scrub runs on the whole input before the cut, so truncation can never slice a
     card number below the Luhn check and store its digits. A hard reject (card,
     SSN, key, PEM, JWT…) drops the EXCERPT only — the fact it sits beside was
-    scrubbed separately and is not affected.
+    scrubbed separately and is not affected. The scrub is ``scrub_pii_matchable``: a forget still finds a row by its
+    excerpt's words, so the excerpt is not widened before forgets match by saved-turn id (PR #2574).
     """
     raw = (text or "").strip() if isinstance(text, str) else ""
     if not raw:
         return None
-    scrubbed, reject = scrub_pii(raw)
+    if len(raw) > max(SCRUB_INLINE_MAX, limit):       # too long to judge inline: NO excerpt (fail closed) - never a scrubbed prefix,
+        return None                                   # which could keep the head of a card / key that the whole text would reject
+    scrubbed, reject = scrub_pii_matchable(bounded(raw, max(SCRUB_INLINE_MAX, limit), 0))
     if reject:
         return None
     return scrubbed[:limit].rstrip() or None
@@ -1495,6 +2257,9 @@ class MemoryService:
     def __init__(self, data_dir: str = _MEMPALACE_DATA):
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
+        # ZOE_MEMORY_TICK_DEFER_S: per user, the access ticks waiting for one coalesced write (id -> [n, query hashes])
+        self._pending_ticks: dict[str, dict[str, list]] = {}
+        self._pending_lock = threading.Lock()   # the erase / status paths drop ids from executor threads
         self._seen_keys: _BoundedKeySet = _BoundedKeySet(
             on_evict=self._on_seen_key_evicted
         )
@@ -1543,8 +2308,12 @@ class MemoryService:
         claim: Any = None,
         claim_siblings: Any = (),
         source_ref: Optional[Mapping[str, str]] = None,
+        created_ids: Optional[list[str]] = None,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``created_ids`` is an optional receipt for compensation: append only a row this call CREATED, never a pre-existing
+        candidate or pending row it returned or updated. Callers must not infer creation from the returned MemoryRef.
 
         ``source_ref`` (``memory_authority.external_source_ref``) is REQUIRED for an ``external_source`` writer (a fact a
         connected account's provider gave) and refused for any other: a provider's fact with no pointer is never stored
@@ -1626,6 +2395,17 @@ class MemoryService:
             _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
         except Exception:  # noqa: BLE001
             _event = None
+        if _event is None and source in MEMORY_OPT_OUT_SOURCES:
+            # a present emergency the converter declined (a bystander, two people): as mined it reads as a STANDING condition
+            # ("... cannot get up" under Routines; QA round 10a), so an automatic writer does not file it (medical_safety.unfiled_emergency)
+            try:
+                _unfiled = _ms.unfiled_emergency(text, anchor_text if anchor_text is not None else source_excerpt)
+            except Exception:  # noqa: BLE001
+                _unfiled = False
+            if _unfiled:
+                self._bump("emergency_unfiled", source)
+                logger.info("MEDICAL_EVENT_UNFILED user=%s source=%s", user_id, source)
+                return None
         _mined = None
         if _event is not None:
             logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
@@ -1674,7 +2454,7 @@ class MemoryService:
             metadata = {k: v for k, v in (metadata or {}).items() if k not in _auth.AFFECT_KEYS}
             logger.info("AFFECT_STRIPPED writer=%s", source)
 
-        scrubbed, reject = scrub_pii(text)
+        scrubbed, reject = await scrub_pii_async(text, contact=False)   # the FACT keeps a phone / address the owner asked to keep
         if reject:
             self._bump("pii_reject", source)
             if _METRICS_OK:
@@ -1749,6 +2529,9 @@ class MemoryService:
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            if _erase_gate.erased_since_scheduled(user_id):      # background work scheduled before an erase of this member: dropped
+                _log_erase_drop(source)
+                return None
             if idem_key in self._seen_keys:
                 self._bump("dedup", source)
                 return None
@@ -1767,7 +2550,7 @@ class MemoryService:
             # pending candidate (the user's words stay approved; nothing is lost).
             writer = origin or source
             # an emergency event is resolved on the fact as MINED (its words are what the member's turn supports)
-            auth_text = (scrub_pii(_mined)[0] or scrubbed) if _mined else scrubbed
+            auth_text = ((await scrub_pii_async(_mined, contact=False))[0] or scrubbed) if _mined else scrubbed
             resolved = _auth.resolve_write(
                 writer, auth_text,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
@@ -1861,10 +2644,19 @@ class MemoryService:
                     self._remember_seen_key(user_id, idem_key)
                     return None
 
+            async def _write() -> list:   # CREATED ids only: an overwrite of an existing pending row is an update (never re-creates)
+                if existing is None:
+                    await self._run_sync(self._write_row, mem_id, scrubbed, metadata)
+                    return [mem_id]
+                await self._run_sync(self._update_row, mem_id, scrubbed, metadata)
+                return []
+
+            async def _undo(created):
+                await self._undo_night_write(user_id, created, source or "ingest")
             try:
-                await self._run_sync(
-                    self._write_row, mem_id, scrubbed, metadata
-                )
+                # a night pass (its own process) that began before the member's erase: checked right before and after the write
+                if await _erase_watermark.guarded_write(user_id, source or "ingest", _write, _undo) is None:
+                    return None
             except LiveStoreViolation:
                 raise
             except Exception as exc:
@@ -1873,6 +2665,8 @@ class MemoryService:
                                user_id, source, exc)
                 raise MemoryServiceError(f"write failed: {exc}") from exc
 
+            if created_ids is not None and existing is None:
+                created_ids.append(mem_id)
             self._remember_seen_key(user_id, idem_key)
             if source in MEMORY_OPT_OUT_SOURCES and write_status == "approved":
                 self._note_recent_auto(user_id, mem_id, scrubbed)
@@ -1901,17 +2695,15 @@ class MemoryService:
             return []
         self._require(user_id, "user_id is required")
         try:
-            rows = await self._run_sync(self._metadata_read, user_id, limit)
+            with _PromptRead():
+                rows = await self._run_sync(self._metadata_read, user_id, limit)
         except Exception as exc:
             logger.warning("memory_service: load_for_prompt failed user=%s: %s",
                            user_id, exc)
             return []
         ids = [r.id for r in rows]
         if ids:
-            self._track_background_task(
-                self._tick_access(user_id, ids),
-                name="memory_tick_access_prompt",
-            )
+            self._schedule_tick(user_id, ids, name="memory_tick_access_prompt")
         return rows
 
     async def load_durable_for_hop(self, user_id: str, *, strict: bool = False) -> list[MemoryRef]:
@@ -2035,13 +2827,14 @@ class MemoryService:
         # zero DB work, never crashes or slows a turn.
         depth_by_pid = await self._graph_depth_by_pid(query, user_id)
         try:
-            rows = await asyncio.wait_for(
-                self._run_sync(
-                    self._semantic_search, query, user_id, limit, depth_by_pid,
-                    *(() if as_of_ts is None else (as_of_ts,)),
-                ),
-                timeout=timeout_s,
-            )
+            with _PromptRead():
+                rows = await asyncio.wait_for(
+                    self._run_sync(
+                        self._semantic_search, query, user_id, limit, depth_by_pid,
+                        *(() if as_of_ts is None else (as_of_ts,)),
+                    ),
+                    timeout=timeout_s,
+                )
         except asyncio.TimeoutError:
             logger.debug("memory_service: search timed out after %.1fs", timeout_s)
             return []
@@ -2060,10 +2853,7 @@ class MemoryService:
             rows = await self._with_history(rows, query, user_id, limit, timeout_s)
         if ids:
             # Pass query for unique_query_count tracking in dreaming memory
-            self._track_background_task(
-                self.tick_access(user_id, ids, query=query),
-                name="memory_tick_access_search",
-            )
+            self._schedule_tick(user_id, ids, query=query, name="memory_tick_access_search")
         return rows
 
     async def _with_history(self, rows: list[MemoryRef], query: str, user_id: str, limit: int,
@@ -2152,8 +2942,11 @@ class MemoryService:
             frontier = nxt
         return rows, chain
 
+    # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
+    # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
+    @_erase_gate.whole_member_erase
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
-        """Right-to-be-forgotten. Returns number of rows removed.
+        """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
         A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must not be
         silent. When rows match, a content-free ``delete_user`` INTENT row is written BEFORE anything
@@ -2164,8 +2957,15 @@ class MemoryService:
         survive the purge of the user's own per-row trail (that trail carries text and is removed). A
         sweep that matches no rows writes nothing — it removes nothing. Documented in
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
+        self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
+        # The durable erase WATERMARK before anything is erased (erase_watermark: memory_forgotten, no text): every transcript miner,
+        # in this process or another, skips the member's turns at or before it. Fail closed: no mark, nothing erased (caller retries).
+        try:
+            await _erase_watermark.record(user_id, actor=actor)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: erase watermark not recorded ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
@@ -2181,6 +2981,20 @@ class MemoryService:
             await conversation_notes.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
+        # What Zoe DERIVED about the member (portrait, user-model card, open loops, proactive candidates / deliveries / spoken lines,
+        # pending offers: member_derived_forget). Fail closed. What they AUTHORED or the household shares is an owner decision.
+        try:
+            import member_derived_forget
+            await member_derived_forget.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: derived-store erasure failed ({type(exc).__name__})") from exc
+        # The superseded-value registry (migration 0080): which values the member corrected away. Fail closed; outside the memory lock
+        # (it takes the member's erase gate, which a registry record holds through its commit).
+        try:
+            import memory_value_registry
+            await memory_value_registry.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: value-registry erasure failed ({type(exc).__name__})") from exc
         # Household notifications (notifications_store): titles / messages written for the member. Same rule: fail closed. Outside the
         # memory lock: it takes the member's erase gate, which a notification create holds through its commit.
         try:
@@ -2204,137 +3018,170 @@ class MemoryService:
             await calendar_forget.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: account / calendar erasure failed ({type(exc).__name__})") from exc
-        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
-        async with lock:
-            # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
-            # FIRST, and fail closed: if they cannot be erased nothing else is touched (no "done" audit row, no success), so the
-            # caller retries the whole delete - a store blip must never read as "forgotten" while the words stay readable.
+        async def _gate_erasers_after_lock():
+            """reply_ledger / commitments / omi_recordings, each on its own; returns the pendant erase's failure (never raises)."""
             try:
-                import exact_words
-                await exact_words.delete_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
-            # ... and the night mind's observations (quotes of the same words), threads and run counts - same rule, fail closed
-            try:
-                import night_mind
-                await night_mind.delete_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
-            # ... and the now card (quotes of the same words, by key) - same rule, fail closed
-            try:
-                import now_card
-                await now_card.forget_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
-            # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
-            try:
-                import struggle_detector
-                await struggle_detector.delete_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
-            # ... and the local utterance-text logs (router shadow log, intent misses). They carry no user id, so the TEXT layer of
-            # every record goes household-wide; hash-only rows hold no words and stay. Same rule: fail closed.
-            try:
-                import local_text_logs
-                await asyncio.to_thread(local_text_logs.erase_all_text)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
-            # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
-            # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
-            try:
-                import restraint
-                await restraint.erase_user(user_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
-            # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0069): item ids + outcomes, no
-            # words, but nothing of the person stays. Erased whatever ZOE_OUTCOME_EDGES says; best-effort like restraint.
-            try:
-                import proactive.outcome_edges as outcome_edges
-                await outcome_edges.erase_user(user_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: outcome edges not erased for a deleted user (%s)", type(exc).__name__)
-            # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
-            # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
-            try:
-                import forget_redact
-                forget_redact.clear_turn_caches(user_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
-            # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
-            try:
-                import warm_speaker
-                await asyncio.to_thread(warm_speaker.forget_user, user_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
-            needles: list[str] = []
-            try:
-                ids = await self._run_sync(self._list_ids_for_user, user_id)
-                if ids and physical_erase_enabled():
-                    # heads of the texts about to be erased, held in memory only, to PROVE them gone afterwards
-                    needles = _needles_for_texts(await self._run_sync(self._texts_for_ids_sync, ids))
-                if ids:
-                    tomb_id = _delete_tombstone_id(user_id, ids)
-                    await self._run_sync(
-                        self._append_audit_sync,
-                        tomb_id, user_id, actor, "delete_user",
-                        _delete_tombstone_body(ids), None,
-                        reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
-                    )
-                    await self._run_sync(self._delete_ids, ids)
-                    await self._run_sync(
-                        self._append_audit_sync,
-                        tomb_id, user_id, actor, "delete_user_done",
-                        {"rows_removed": len(ids)}, None, "",
-                    )
-                audit_removed = await self._run_sync(self._delete_audit_for_user_sync, user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: {exc}") from exc
-            # The API delete left the text on disk (free pages, FTS5 index, write-ahead log, orphan HNSW
-            # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
-            if ids or audit_removed:
-                self.last_erase_report = await self._physical_erase(needles)
-            # Purge this user's idempotency-cache entries so re-teaching a
-            # previously known fact after a forget isn't dropped as a
-            # duplicate for the rest of the process lifetime.
-            self._recent_auto.pop(user_id, None)
-            stale_keys = self._seen_keys_by_user.pop(user_id, None)
-            if stale_keys:
-                for key in stale_keys:
-                    self._seen_keys.discard(key)
-            _invalidate_agent_user_facts_cache(user_id)
-            try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
-                import memory_provenance
-                memory_provenance.reset(user_id)
-                import reply_ledger     # ... and so do the persisted per-reply rows (migration 0044)
+                import reply_ledger     # ... the persisted per-reply rows (migration 0044)
                 await reply_ledger.forget_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: reply ledger not erased for a deleted user (%s)", type(exc).__name__)
+            try:
                 import commitments      # ... and the promises Zoe made to them
                 await commitments.forget_user(user_id)
-            except Exception:  # noqa: BLE001
-                pass
-            pendant_failure = None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: commitments not erased for a deleted user (%s)", type(exc).__name__)
             try:   # ... and their pendant recordings (migration 0045) and learned voices: audio, transcript, times, biometrics. FAIL CLOSED:
                 import omi_recordings   # a pendant erase that left anything behind must not read as "forgotten" (the caller retries)
                 await omi_recordings.forget_user(user_id)
             except Exception as exc:  # noqa: BLE001
-                pendant_failure = exc
-            try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
-                import alarms
-                await alarms.forget_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
-            try:   # ... and their speaking register (migration 0066): liked topics are their words. Fail closed.
-                import member_register
-                await member_register.forget_user(user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: register erasure failed ({type(exc).__name__})") from exc
-            try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
-                import contacts_store
-                await contacts_store.forget_user(user_id)
-            except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
-                pass
-            if pendant_failure is not None:
-                raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
-            return len(ids)
+                return exc
+            return None
+
+
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
+                # FIRST, and fail closed: if they cannot be erased nothing else is touched (no "done" audit row, no success), so the
+                # caller retries the whole delete - a store blip must never read as "forgotten" while the words stay readable.
+                try:
+                    import exact_words
+                    await exact_words.delete_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
+                # ... and the night mind's observations (quotes of the same words), threads and run counts - same rule, fail closed
+                try:
+                    import night_mind
+                    await night_mind.delete_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+                # ... and the now card (quotes of the same words, by key) - same rule, fail closed
+                try:
+                    import now_card
+                    await now_card.forget_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
+                # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
+                try:
+                    import struggle_detector
+                    await struggle_detector.delete_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
+                # ... and the local utterance-text logs (router shadow log, intent misses). They carry no user id, so the TEXT layer of
+                # every record goes household-wide; hash-only rows hold no words and stay. Same rule: fail closed.
+                try:
+                    import local_text_logs
+                    await asyncio.to_thread(local_text_logs.erase_all_text)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
+                # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
+                # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
+                try:
+                    import restraint
+                    await restraint.erase_user(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+                # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0069): item ids + outcomes, no
+                # words, but nothing of the person stays. Erased whatever ZOE_OUTCOME_EDGES says; best-effort like restraint.
+                try:
+                    import proactive.outcome_edges as outcome_edges
+                    await outcome_edges.erase_user(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: outcome edges not erased for a deleted user (%s)", type(exc).__name__)
+                # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
+                # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
+                try:
+                    import correction_marker
+                    correction_marker.forget_user(user_id, reason="delete_user")   # pending-correction markers: ids only, never raises
+                    import forget_redact
+                    forget_redact.clear_turn_caches(user_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
+                try:   # ... and the in-process correction memory (value_correction._REMEMBERED: names + values for 6 h). Never raises.
+                    import value_correction
+                    value_correction.forget_user(user_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("memory_service: in-process correction memory not cleared for a deleted user")
+                # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
+                try:
+                    import warm_speaker
+                    await asyncio.to_thread(warm_speaker.forget_user, user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
+                needles: list[str] = []
+                try:
+                    ids = await self._run_sync(self._list_ids_for_user, user_id)
+                    if ids and physical_erase_enabled():
+                        # heads of the texts about to be erased, held in memory only, to PROVE them gone afterwards
+                        needles = _needles_for_texts(await self._run_sync(self._texts_for_ids_sync, ids))
+                    if ids:
+                        tomb_id = _delete_tombstone_id(user_id, ids)
+                        await self._run_sync(
+                            self._append_audit_sync,
+                            tomb_id, user_id, actor, "delete_user",
+                            _delete_tombstone_body(ids), None,
+                            reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
+                        )
+                        await self._run_sync(self._delete_ids, ids)
+                        await self._run_sync(
+                            self._append_audit_sync,
+                            tomb_id, user_id, actor, "delete_user_done",
+                            {"rows_removed": len(ids)}, None, "",
+                        )
+                    audit_removed = await self._run_sync(self._delete_audit_for_user_sync, user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: {exc}") from exc
+                # The API delete left the text on disk (free pages, FTS5 index, write-ahead log, orphan HNSW
+                # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
+                if ids or audit_removed:
+                    self.last_erase_report = await self._physical_erase(needles)
+                # Purge this user's idempotency-cache entries so re-teaching a
+                # previously known fact after a forget isn't dropped as a
+                # duplicate for the rest of the process lifetime.
+                self._recent_auto.pop(user_id, None)
+                stale_keys = self._seen_keys_by_user.pop(user_id, None)
+                if stale_keys:
+                    for key in stale_keys:
+                        self._seen_keys.discard(key)
+                _invalidate_agent_user_facts_cache(user_id)
+                try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
+                    import memory_provenance
+                    memory_provenance.reset(user_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
+                    import alarms
+                    await alarms.forget_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: alarm erasure failed ({type(exc).__name__})") from exc
+                try:   # ... and their speaking register (migration 0066): liked topics are their words. Fail closed.
+                    import member_register
+                    await member_register.forget_user(user_id)
+                except Exception as exc:
+                    raise MemoryServiceError(f"delete_user failed: register erasure failed ({type(exc).__name__})") from exc
+                try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
+                    import contacts_store
+                    await contacts_store.forget_user(user_id)
+                except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
+                    pass
+        finally:
+            # AFTER the memory lock is released (LOCK ORDER, see erase_rows): these three take the member's erase gate, so they
+            # cannot run inside it. They run in a ``finally``: an in-lock step that raised (alarms, the register...) must not skip
+            # them - a member delete is the strongest forget and must not depend on the caller retrying. Each is guarded on its own;
+            # the in-lock error (if any) still propagates afterwards, so the delete still reports failure.
+            pendant_failure = await _gate_erasers_after_lock()
+            try:   # pending-correction markers again, AFTER every store went: one set while the delete ran must not outlive it
+                import correction_marker
+                correction_marker.forget_user(user_id, reason="delete_user")
+            except Exception as exc:  # noqa: BLE001 - never replaces the delete's own result
+                logger.warning("PENDING_CORRECTION clear_failed reason=delete_user user=%s err=%s", user_id, type(exc).__name__)
+        if pendant_failure is not None:   # the pendant erase fails CLOSED (reached only when nothing in the lock raised)
+            raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
+        try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Fail closed: a
+            await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
+        return len(ids)
 
     async def list_by_status(
         self,
@@ -2614,6 +3461,15 @@ class MemoryService:
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            if _erase_gate.erased_since_scheduled(user_id):      # same rule as ingest: an erase since the work was scheduled wins
+                _log_erase_drop(origin or actor)
+                return None
+            if await self._run_sync(self._get_sync, mem_id) is None:
+                return None      # read before the lock, erased since (this process's erase holds this lock): never written back
+            phase = origin or actor or "review"
+
+            async def _undo(created):      # a night pass's write raced an erase in the API process: exactly what it CREATED goes
+                await self._undo_night_write(user_id, created, phase)
             if decision in {"approve", "reject", "archive"}:
                 new_status = {
                     "approve": "approved",
@@ -2655,9 +3511,11 @@ class MemoryService:
                     new_meta["edge_applied_id"] = new_edge
                     new_meta["supersedes_edge_id"] = disputed[len(_EDGE_REF):]
                     disputed = ""
-                await self._run_sync(
-                    self._write_row, mem_id, current.text, new_meta
-                )
+                async def _write_decision() -> list:      # MODIFIES an existing row (update: never re-creates); creates nothing
+                    await self._run_sync(self._update_row, mem_id, current.text, new_meta)
+                    return []
+                if await _erase_watermark.guarded_write(user_id, phase, _write_decision, _undo) is None:
+                    return None
                 await self._append_audit(
                     mem_id=mem_id,
                     user_id=user_id,
@@ -2683,7 +3541,7 @@ class MemoryService:
             new_text = (edits or current.text).strip()
             if not new_text:
                 raise MemoryServiceError("edit decision requires non-empty edits")
-            scrubbed, reject = scrub_pii(new_text)
+            scrubbed, reject = await scrub_pii_async(new_text, contact=False)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
             current_scope = current.metadata.get("scope")
@@ -2783,21 +3641,28 @@ class MemoryService:
             # safe order expert_dispatch._maybe_supersede uses. "superseded" is in
             # _BLOCKED_READ_STATUSES (instantly invisible on read); marking the old
             # row first and then failing the new write would make the fact vanish.
-            await self._run_sync(
-                self._write_row, new_id, scrubbed, new_meta
-            )
-            # Guard new_id != mem_id: an edit whose text+durable identity hash to the
-            # same mem_id just overwrote the row in place, so there is no distinct old
-            # row to retire — superseding it would hide the only surviving copy.
-            if new_id != mem_id:
-                old_meta = dict(current.metadata)
-                old_meta["status"] = "superseded"
-                old_meta["superseded_by_id"] = new_id
-                old_meta.update(_temporal.retire_fields(
-                    old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
-                await self._run_sync(
-                    self._write_row, mem_id, current.text, old_meta
-                )
+            async def _write_edit() -> list:     # CREATES new_id (when it is a new row); only MODIFIES the superseded one
+                created = []
+                if new_id != mem_id and await self._run_sync(self._get_sync, new_id) is None:
+                    await self._run_sync(self._write_row, new_id, scrubbed, new_meta)
+                    created.append(new_id)
+                else:                        # an in-place rewrite (or an existing row): update, never re-create
+                    await self._run_sync(self._update_row, new_id, scrubbed, new_meta)
+                # Guard new_id != mem_id: an edit whose text+durable identity hash to the
+                # same mem_id just overwrote the row in place, so there is no distinct old
+                # row to retire — superseding it would hide the only surviving copy.
+                if new_id != mem_id:
+                    old_meta = dict(current.metadata)
+                    old_meta["status"] = "superseded"
+                    old_meta["superseded_by_id"] = new_id
+                    old_meta.update(_temporal.retire_fields(
+                        old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
+                    await self._run_sync(
+                        self._update_row, mem_id, current.text, old_meta
+                    )
+                return created
+            if await _erase_watermark.guarded_write(user_id, phase, _write_edit, _undo) is None:
+                return None
             await self._append_audit(
                 mem_id=new_id,
                 user_id=user_id,
@@ -3346,17 +4211,29 @@ class MemoryService:
                 return False
             lock = self._user_locks.setdefault(uid, asyncio.Lock())
             async with lock:
+                # the row was read OUTSIDE the lock: an erase that ran since (this process: under this lock) must not have it written
+                # back (the write is an upsert). A night pass's erase runs in ANOTHER process: guarded_write checks before and after.
+                if await self.get(mem_id) is None:
+                    return False
                 md = dict(cur.metadata)
                 md.update(status="archived", reviewed_by=actor,
                           reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
                           review_note=note[:1024], duplicate_of=keeper_id)
                 md.update(_temporal.archive_fields(
                     cur.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
-                await self._run_sync(self._write_row, mem_id, cur.text, md)
-                await self._append_audit(
-                    mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
-                    before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
-                    reason=note)
+
+                async def write() -> list:     # MODIFIES the existing row (update: never re-creates it); creates nothing
+                    await self._run_sync(self._update_row, mem_id, cur.text, md)
+                    await self._append_audit(
+                        mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
+                        before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
+                        reason=note)
+                    return []
+
+                async def undo(created):
+                    await self._undo_night_write(uid, created, "archive_duplicate")
+                if await _erase_watermark.guarded_write(uid, "archive_duplicate", write, undo) is None:
+                    return False
             _invalidate_agent_user_facts_cache(uid)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -3460,7 +4337,7 @@ class MemoryService:
             self._bump("opt_out", writer)
             return None
         try:
-            scrubbed, reject = scrub_pii(text)
+            scrubbed, reject = await scrub_pii_async(text, contact=False)
             if reject or not scrubbed.strip():
                 return None
             md = self._build_metadata(
@@ -3490,7 +4367,21 @@ class MemoryService:
             dup = await self._existing_candidate(user_id, scrubbed, contradicts)
             if dup is not None:
                 return dup.id
-            await self._run_sync(self._write_row, mem_id, scrubbed, md)
+            async def _write():
+                if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
+                    _log_erase_drop(writer)
+                    return None
+                if existing is None:
+                    await self._run_sync(self._write_row, mem_id, scrubbed, md)
+                    return [mem_id]                     # CREATED
+                await self._run_sync(self._update_row, mem_id, scrubbed, md)
+                return []                               # modified an existing pending row: never undone
+
+            async def _undo(created):
+                await self._undo_night_write(user_id, created, writer or "candidate")
+            # a night pass (its own process) that began before the member's erase: checked right before and after the write
+            if await _erase_watermark.guarded_write(user_id, writer or "candidate", _write, _undo) is None:
+                return None
             await self._append_audit(
                 mem_id=mem_id, user_id=user_id, actor=writer, action="authority_candidate",
                 before=None, after={"contradicts_id": contradicts, "kind": kind,
@@ -3647,8 +4538,14 @@ class MemoryService:
                 n += len(ids)
         return n
 
+    async def _undo_night_write(self, user_id: str, ids: Iterable[str], phase: str) -> None:
+        """A night write that raced a member erase (``erase_watermark.guarded_write``) is removed through the audited erase, under the
+        member's lock this caller already holds. RAISES when it cannot (the row must not quietly stay)."""
+        await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
+                              lock_held=True)
+
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
-                         reason: str = "forgotten by request") -> dict[str, Any]:
+                         reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
@@ -3660,12 +4557,36 @@ class MemoryService:
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
         if not want:
             return {"rows_removed": 0}
-        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        # LOCK ORDER (the same everywhere): the member's ERASE GATE (user_erase_gate) is never taken while this service's per-member
+        # memory lock (_user_locks) is held. The writers hold the gate and THEN take the memory lock (omi_review_apply.approve ->
+        # ingest), so the reverse order here deadlocked a pendant approval against a row forget. Every gate-taking eraser therefore
+        # runs before the memory lock is taken (or after it is released).
+        # ``lock_held``: the caller already holds this member's memory lock (a night write undoing itself inside ingest / review /
+        # the candidate write / archive_duplicate:
+        # erase_watermark.guarded_write). The lock is not re-entrant, and the registry step is SKIPPED: it takes the erase gate,
+        # which must never be taken under the memory lock, and the member erase that triggered the undo clears the member's
+        # whole registry itself (delete_user -> memory_value_registry.forget_user, fail closed).
+        if not lock_held:
+            try:
+                # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
+                # to these rows (migration 0080). Before the owned-rows check, so a retry whose rows already went still clears them.
+                # ``gate_held``: a caller INSIDE this member's erase gate (the pendant day review's person / name / recording forgets,
+                # via omi_review_apply.unwrite) says so - the gate is not reentrant, and taking it again here would hang that forget
+                import memory_value_registry
+                await memory_value_registry.erase_for_rows(user_id, want, gate_held=gate_held)
+            except Exception as exc:
+                raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+        lock = contextlib.nullcontext() if lock_held else self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
                 if not owned:
                     return {"rows_removed": 0}
+                try:   # the in-process correction memory naming what these rows said (value_correction; never raises)
+                    import value_correction
+                    value_correction.forget_in_texts(user_id, texts)
+                except Exception:  # noqa: BLE001
+                    pass
                 needles = _needles_for_texts(texts) if physical_erase_enabled() else []
                 tomb_id = _delete_tombstone_id(user_id, owned)
                 await self._run_sync(
@@ -3875,8 +4796,17 @@ class MemoryService:
     async def _recent_paraphrase(self, user_id: str, text: str) -> bool:
         """True when a row an automatic writer stored within ``_RECENT_AUTO_TTL_S`` says the same thing (and is still approved)."""
         now = time.monotonic()
+        try:   # a filed emergency event is the same record as another only by (person, kind, date), never by word overlap (QA round 10a)
+            import medical_safety as _ms
+
+            ev = _ms.event_key(text)
+        except Exception:  # noqa: BLE001
+            _ms, ev = None, None
         for ts, mem_id, stored in reversed(self._recent_auto.get(user_id, ())):
-            if now - ts > _RECENT_AUTO_TTL_S or not _is_paraphrase(text, stored):
+            if now - ts > _RECENT_AUTO_TTL_S:
+                continue
+            sk = _ms.event_key(stored) if ev is not None else None
+            if not ((ev == sk) if (ev is not None and sk is not None) else _is_paraphrase(text, stored)):
                 continue
             try:
                 row = await self._run_sync(self._get_sync, mem_id)
@@ -3906,7 +4836,7 @@ class MemoryService:
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
     _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup", GUEST_DROP,
-                                 "identity_drop"})
+                                 "identity_drop", "emergency_unfiled"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:
@@ -4012,6 +4942,17 @@ class MemoryService:
 
     def _audit_collection(self):
         return _palace_client(self._data_dir).get_or_create_collection(_AUDIT_COLLECTION)
+
+    def _update_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
+        """Rewrite an EXISTING row; a row that is gone stays gone (Chroma ``update`` skips unknown ids, unlike ``upsert``). For a
+        modification a night pass made from a row it read earlier: an erase in another process may have removed it meanwhile."""
+        assert_write_allowed(
+            getattr(self, "_data_dir", _MEMPALACE_DATA), str(metadata.get("user_id") or metadata.get("wing") or ""), "row write")
+        col = self._collection()
+        if callable(getattr(col, "update", None)):
+            col.update(ids=[mem_id], documents=[text], metadatas=[metadata])
+        elif (col.get(ids=[mem_id], include=[]).get("ids") or []):      # a store without update (a lab stand-in): only an existing row
+            col.upsert(ids=[mem_id], documents=[text], metadatas=[metadata])
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
         assert_write_allowed(
@@ -4322,6 +5263,7 @@ class MemoryService:
         return list(result.get("ids") or [])
 
     def _delete_ids(self, ids: list[str]) -> None:
+        self._drop_pending_ticks(ids)   # no deferred access tick outlives the row (ZOE_MEMORY_TICK_DEFER_S)
         col = self._collection()
         col.delete(ids=ids)
 
@@ -4368,6 +5310,8 @@ class MemoryService:
         return rows
 
     def _update_meta_sync(self, mem_id: str, md: dict[str, Any]) -> None:
+        if not _memory_status_visible(md):
+            self._drop_pending_ticks([mem_id])   # moved out of the readable statuses: no queued tick lands on it
         self._collection().update(ids=[mem_id], metadatas=[md])
 
     def _operator_rows_sync(self, user_id: str) -> list[MemoryRef]:
@@ -4420,6 +5364,118 @@ class MemoryService:
             {"id": rid, "text": doc, "metadata": meta}
             for rid, doc, meta in zip(ids, docs, metas)
         ]
+
+    def _schedule_tick(self, user_id: str, ids: list[str], *, name: str, query: Optional[str] = None) -> None:
+        """The access tick of one prompt read (``load_for_prompt`` / ``search``).
+
+        ``ZOE_MEMORY_TICK_DEFER_S`` unset / 0 (the default): the tick starts at once, exactly as before. Set: the tick is
+        queued per user and ONE coalesced write runs after the delay (then waits, bounded, while a prompt read is in
+        flight). Why: started at once, a packet's first read's tick (a chroma get + metadata update) writes while the
+        packet's next read runs, and the reads queue behind the writes - measured on a synthetic 1,500-row throwaway palace
+        (memory_for_prompt as the seam's household fallback calls it, database blocked): p50 78-110 ms with ticks at once
+        vs 44-58 ms without, against the fallback's 0.40 s budget. Coalescing keeps a burst of packets (the harness, a busy
+        household) to one write per user instead of two per packet. Same final metadata: ``access_count`` +1 per read that
+        returned the row, the same distinct-query bookkeeping; only ``last_accessed`` is the flush time."""
+        delay = _tick_defer_s()
+        if delay <= 0.0:
+            coro = self._tick_access(user_id, ids) if query is None else self.tick_access(user_id, ids, query=query)
+            self._track_background_task(coro, name=name)
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return   # no loop to flush on (a sync caller): the tick is best-effort and is dropped, never left queued
+        qh = _tick_query_hash(query) if query else None
+        with self._pending_lock:
+            pend = self._pending_ticks.get(user_id)
+            start = pend is None
+            if start:
+                pend = self._pending_ticks[user_id] = {}
+            for rid in ids:
+                entry = pend.setdefault(rid, [0, []])
+                entry[0] += 1
+                if qh and qh not in entry[1]:
+                    entry[1].append(qh)
+        if start:
+            task = self._track_background_task(self._flush_ticks_later(user_id, delay), name="memory_tick_access_coalesced")
+
+            def _on_done(t: "asyncio.Task[Any]", u: str = user_id, owned: dict = pend) -> None:
+                # cancelled before it ever ran (shutdown): its finally never ran, so drop THIS queue here - a queue left
+                # behind would make every later read of the user join a batch nobody flushes
+                if t.cancelled():
+                    with self._pending_lock:
+                        if self._pending_ticks.get(u) is owned:
+                            self._pending_ticks.pop(u, None)
+
+            task.add_done_callback(_on_done)
+
+    def _drop_pending_ticks(self, ids: Iterable[str] = (), *, user_id: Optional[str] = None) -> None:
+        """Forgotten means forever: a row erased, deleted or moved out of the readable statuses has its queued ticks
+        dropped (``user_id``: the user's whole queue). Thread-safe (called from executor threads). Never raises."""
+        try:
+            drop = {str(i) for i in ids}
+            with self._pending_lock:
+                if user_id is not None:
+                    self._pending_ticks.pop(user_id, None)
+                if drop:
+                    for pend in self._pending_ticks.values():
+                        for rid in drop:
+                            pend.pop(rid, None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _flush_ticks_later(self, user_id: str, delay: float) -> None:
+        """Best-effort, never raises. Reads that arrive while waiting join the same write; a read arriving after the
+        queue is taken starts the next one. Cancelled (shutdown): the queue is dropped, nothing is written."""
+        try:
+            await asyncio.sleep(delay)
+            waited = 0.0
+            while _PROMPT_READS[0] > 0 and waited < _TICK_READ_WAIT_MAX_S:
+                await asyncio.sleep(_TICK_READ_POLL_S)
+                waited += _TICK_READ_POLL_S
+        finally:
+            with self._pending_lock:
+                pend = self._pending_ticks.pop(user_id, None)
+        if not pend:
+            return
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:   # the same lock erase_rows / delete_user hold: an erase never interleaves with this write
+                await self._run_sync(self._tick_access_batch_sync, pend, user_id)
+        except Exception:
+            pass
+
+    def _tick_access_batch_sync(self, pend: dict[str, list], user_id: str = "") -> None:
+        """``_tick_access_sync`` for many reads at once: per row, ``access_count`` + the number of reads that returned it,
+        and each distinct query hash applied with the same capped, never-evicting rule, in arrival order. The rows are
+        RE-READ here and only a row the read path would still serve this user is touched (``_filter_visible``: unexpired,
+        visible to the user, a readable status) - a row rejected, archived, superseded or forgotten since the read gets
+        nothing, and an erased row is simply not returned by the get."""
+        if not pend:
+            return
+        col = self._collection()
+        result = col.get(ids=list(pend), include=["documents", "metadatas"])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        live = {r.id: r.metadata for r in self._filter_visible(result, user_id, now)}
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        got_ids = [i for i in (result.get("ids") or []) if i in live]
+        got_metas = [live[i] for i in got_ids]
+        new_metas = []
+        for rid, meta in zip(got_ids, got_metas):
+            n, hashes = pend.get(rid, [0, []])
+            m = dict(meta) if isinstance(meta, dict) else {}
+            m["access_count"] = int(m.get("access_count", 0) or 0) + int(n)
+            m["last_accessed"] = now_iso
+            if hashes:
+                seen_hashes = [h for h in (m.get("_query_hashes") or "").split(",") if h]
+                for qh in hashes:
+                    if qh not in seen_hashes and len(seen_hashes) < _MAX_QUERY_HASHES:
+                        seen_hashes.append(qh)
+                        m["_query_hashes"] = ",".join(seen_hashes)
+                        m["unique_query_count"] = int(m.get("unique_query_count", 0) or 0) + 1
+            new_metas.append(m)
+        if got_ids:
+            col.update(ids=list(got_ids), metadatas=new_metas)   # metadata-only: no re-embed (see _tick_access_sync)
 
     async def _tick_access(self, user_id: str, ids: Iterable[str]) -> None:
         """Best-effort metadata update - never raises."""
@@ -4476,9 +5532,7 @@ class MemoryService:
         """
         if not ids:
             return
-        query_hash: Optional[str] = None
-        if query:
-            query_hash = hashlib.sha1(query.lower().strip().encode()).hexdigest()[:16]
+        query_hash: Optional[str] = _tick_query_hash(query) if query else None
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         try:
             async with lock:

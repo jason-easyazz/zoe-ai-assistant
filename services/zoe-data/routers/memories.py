@@ -151,6 +151,10 @@ async def list_memories(
     return {"memories": memories, "count": len(memories)}
 
 
+#: the longest proposal body accepted: a memory is a sentence or a paragraph, and every character of it is scrubbed and embedded
+PROPOSAL_MAX_CHARS = 20000
+
+
 @router.post("/proposals")
 async def create_memory_proposal(
     body: MemoryProposalCreate,
@@ -164,6 +168,8 @@ async def create_memory_proposal(
     queue. The write goes straight into MemPalace — no SQLite mirror.
     """
     await require_feature_access(db, user, feature="memories", action="write")
+    if len(body.content or "") > PROPOSAL_MAX_CHARS or len(body.source_excerpt or "") > PROPOSAL_MAX_CHARS:
+        raise HTTPException(status_code=413, detail=f"content too long (max {PROPOSAL_MAX_CHARS} characters)")
     svc = _svc()
     auto_approve = body.confidence >= 0.9 and body.memory_type == "preference"
     status = "approved" if auto_approve else "pending"
@@ -1162,6 +1168,14 @@ async def memory_for_prompt(
     # enter the packet and in what order, from entity triggers + similarity + sticky / cooldown / delay + a token budget. Shadow returns
     # ``result`` untouched (the decision runs in the background and writes one RECALL_GATE line); enforce swaps in the gate's selection.
     # Relevance mode only (the continuity block is budgeted around its closing ask). Never raises: the floor stands.
+    gate_rows: list = []      # the rows an ENFORCE gate rebuilt the packet from (it can pull them from the durable store)
+
+    def _gate_rebuild(rows):
+        gate_rows.extend(rows)
+        return _build_memory_prompt_packet(
+            (memory_slot_check.apply_to_packet(user_id, rows, [], None)[0] if memory_slot_check.mode() != "off" else rows),
+            [], max_facts=limit, evidence=evidence, quotes=quotes, speak=speak, user_id=user_id)
+
     if not continuity and message.strip():
         import recall_gate
 
@@ -1170,9 +1184,7 @@ async def memory_for_prompt(
             mood=bool(emo_turn or _is_continuity_turn(message, user_id)),
             # the gate expands the pool from the durable store: the slot policy applies to the rows it selects too, or a row this
             # check just removed could come back as the selected answer
-            rebuild=lambda rows: _build_memory_prompt_packet(
-                (memory_slot_check.apply_to_packet(user_id, rows, [], None)[0] if memory_slot_check.mode() != "off" else rows),
-                [], max_facts=limit, evidence=evidence, quotes=quotes, speak=speak, user_id=user_id),
+            rebuild=_gate_rebuild,
             # (called in-process the default is the Query() descriptor, not a str: the gate then uses this task's own session)
             session_id=session_id if isinstance(session_id, str) else None,
         )
@@ -1290,7 +1302,34 @@ async def memory_for_prompt(
     # OBJECT, which is truthy and would silently skip the fold for every core / Flue packet.
     if not continuity and tool_call is not True and not _is_continuity_turn(message, user_id):
         result = await _fold_pending_contact_offers(result, user_id, message)
-    return result
+    # the authority check sees every row the packet may carry: the ranked read, the hits, the recent rows and the gate's selection
+    return await _fold_pending_corrections(result, user_id, message,
+                                           list(all_rows) + list(hits) + list(recent or []) + gate_rows)
+
+
+_PENDING_CORRECTION_HEAD = (
+    "## A newer correction from the member\n"
+    "In their own words, said after the memories below were stored. Where they disagree, these words win:"
+)
+
+
+async def _fold_pending_corrections(packet: dict[str, Any], user_id: str, message: str = "",
+                                    rows: Optional[list] = None) -> dict[str, Any]:
+    """The member's pending corrections (``correction_marker``, ZOE_CORRECTION_PENDING_MARKER, default OFF) as the FIRST section
+    of the packet: first so the per-section truncation of the brain seams can never cut it, with a lead-in that dates it after the
+    rows. The packet rides inside the latest user message, after the cached prefix, so this costs the cache nothing the recalled
+    rows do not already cost. Flag off, or no marker: the packet is returned untouched (byte-identical)."""
+    import correction_marker
+
+    texts = await correction_marker.texts_for_packet(user_id, message=message if isinstance(message, str) else "", rows=rows or [])
+    lines = [f'- "{t}"' for t in (_safe_prompt_inline(x, cap=correction_marker.TEXT_CAP) for x in texts) if t]
+    if not lines:
+        return packet
+    block = _PENDING_CORRECTION_HEAD + "\n" + "\n".join(lines)
+    existing = packet.get("packet") or ""
+    packet["packet"] = f"{block}\n\n{existing}" if existing else block
+    packet["pending_corrections"] = len(lines)
+    return packet
 
 
 def _is_continuity_turn(message: str, user_id: str) -> bool:

@@ -5,8 +5,10 @@ Two layers:
      email, coordinate and phone number are each caught; a clean tree and look-alikes are not; the committed digest file
      carries only opaque hex digests (no value it guards, in any form).
   2. THE REAL SCAN, wherever the key is available (``ZOE_PRIVACY_CANARY_KEY`` - the GitHub Actions secret in CI - or
-     ``~/.zoe/privacy-canary/key`` on the box): no tracked file may contain a household canary. Without the key it skips
-     with the reason; the key is an owner-provisioned secret, and a CI run without it is reported as a skip.
+     ``~/.zoe/privacy-canary/key`` on the box): no tracked file may contain a household canary. Without the key,
+     ``privacy_canary.missing_key_policy`` decides (audit row G11): a CI job of this repository that declares the variable
+     but got it empty FAILS (the secret is not provisioned), as does any run with ``ZOE_PRIVACY_CANARY_REQUIRED=1``; a fork PR,
+     Dependabot, a local run, or a job that does not declare it skips with a warning naming why.
 
 Negative control (run by hand when written): the pre-scrub copies of ``scripts/setup/create_users.sql``,
 ``homeassistant/configuration.yaml`` and ``services/zoe-data/tests/test_ws_roles.py`` from origin/main hit 22 times
@@ -17,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import warnings
 from pathlib import Path
 
 import pytest
@@ -90,8 +93,43 @@ def test_the_committed_digest_file_is_opaque():
 def test_no_tracked_file_carries_a_household_canary():
     key = pc.load_key()
     if key is None:
-        pytest.skip("privacy canary key not available (owner-provisioned: ZOE_PRIVACY_CANARY_KEY secret or "
-                    "~/.zoe/privacy-canary/key) - the real scan did not run")
+        verdict, why = pc.missing_key_policy()
+        if verdict == "fail":
+            pytest.fail(why)
+        warnings.warn(f"PRIVACY CANARY NOT RUN: {why}")      # loud in the summary, not only in -rs output
+        pytest.skip(why)
     hits = pc.scan(pc.tracked_files(ROOT), key, pc.load_digests())
     assert not hits, "household canary in tracked file(s) - replace with obvious placeholders:\n  " + "\n  ".join(
         f"{p}:{n} ({k})" for p, n, k in hits)
+
+
+# -- the missing-key policy (audit row G11): loud, and a FAIL where the scan must run --------------------------------------
+def _event(tmp_path, *, fork: bool, full_name: str = "owner/repo"):
+    p = tmp_path / "event.json"
+    p.write_text(json.dumps({"pull_request": {"head": {"repo": {"fork": fork, "full_name": full_name}}}}))
+    return str(p)
+
+
+def _actions(**extra):
+    return {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "owner/repo", "GITHUB_ACTOR": "someone", **extra}
+
+
+def test_missing_key_fails_on_this_repos_own_ci_runs(tmp_path):
+    """Negative control for the old behaviour (an unconditional skip): a declared-but-empty secret on a push or an
+    own-branch PR is a FAIL, and so is an event payload that cannot be read."""
+    assert pc.missing_key_policy(_actions(ZOE_PRIVACY_CANARY_KEY="", GITHUB_EVENT_NAME="push"))[0] == "fail"
+    own_pr = _actions(ZOE_PRIVACY_CANARY_KEY="", GITHUB_EVENT_NAME="pull_request", GITHUB_EVENT_PATH=_event(tmp_path, fork=False))
+    assert pc.missing_key_policy(own_pr)[0] == "fail"
+    broken = _actions(ZOE_PRIVACY_CANARY_KEY="", GITHUB_EVENT_NAME="pull_request", GITHUB_EVENT_PATH=str(tmp_path / "none"))
+    assert pc.missing_key_policy(broken)[0] == "fail"
+    assert pc.missing_key_policy({"ZOE_PRIVACY_CANARY_REQUIRED": "1"})[0] == "fail"
+
+
+def test_missing_key_skips_where_no_secret_can_exist(tmp_path):
+    fork = _actions(ZOE_PRIVACY_CANARY_KEY="", GITHUB_EVENT_NAME="pull_request", GITHUB_EVENT_PATH=_event(tmp_path, fork=True))
+    other = _actions(ZOE_PRIVACY_CANARY_KEY="", GITHUB_EVENT_NAME="pull_request",
+                     GITHUB_EVENT_PATH=_event(tmp_path, fork=False, full_name="someone-else/repo"))
+    bot = _actions(ZOE_PRIVACY_CANARY_KEY="", GITHUB_EVENT_NAME="push", GITHUB_ACTOR="dependabot[bot]")
+    for env in (fork, other, bot, {}, _actions(GITHUB_EVENT_NAME="push")):
+        verdict, why = pc.missing_key_policy(env)
+        assert verdict == "skip" and "did NOT run" in why, env

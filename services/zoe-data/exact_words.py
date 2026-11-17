@@ -326,7 +326,7 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         import memory_provenance
         if memory_provenance.is_off_record(user_id, text):   # BM5: off the record is never indexed
             return False
-        from memory_service import is_guest_memory_user, scrub_pii
+        from memory_service import is_guest_memory_user, scrub_pii_matchable_async
         if is_guest_memory_user(user_id) or speaker_verified is False:
             return False
         import own_words
@@ -337,7 +337,8 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         if (len(owner_text.split()) < MIN_WORDS or own_words.instruction_shaped(owner_text)
                 or _is_a_question(owner_text) or wants(owner_text)):
             return False
-        scrubbed, reject = scrub_pii(owner_text)
+        # a forget erases an indexed turn by its words (``erase_text``): not widened before forgets match by turn id (#2574)
+        scrubbed, reject = await scrub_pii_matchable_async(owner_text)
         if reject or not scrubbed.strip():
             return False
         if await _shielded(user_id, scrubbed):
@@ -684,7 +685,11 @@ async def backfill_recent(user_id: str, *, hours: Optional[int] = None) -> int:
             if not rows:
                 break
             seen += len(rows)
-            for row in rows:
+            # never re-copy a turn said at or before the member's erase watermark (erase_watermark). Unreadable: raises, caught below
+            # (nothing written tonight; the catch-up is idempotent, so the next run redoes it)
+            import erase_watermark
+            for row in await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[4] if len(r) > 4 else r[2],
+                                                          reader="exact_words_backfill"):
                 _mid, content, epoch, metadata = row[0], row[1], row[2], row[3]
                 if speaker_rejected(metadata):
                     continue

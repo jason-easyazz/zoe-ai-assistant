@@ -582,3 +582,11 @@ async def test_a_rejected_speaker_is_recorded_as_a_guest(fresh):
     sd.observe("voice", "what's on my calendar", "You have 2 events.", A, "voice-panel-hall-1", speaker_verified=False)
     await sd.drain()
     assert fresh.data and {r["user_id"] for r in fresh.data} == {"guest"} and fresh.data[0]["summary"] == ""
+
+
+async def test_a_member_row_redacts_a_contact_in_the_summary(fresh):
+    said = "call the plumber on 0400 000 000 at 1 Example St please"
+    await feed(item(said), item(said))
+    assert fresh.data and fresh.data[0]["summary"]
+    summary = fresh.data[0]["summary"]
+    assert "0400" not in summary and "example st" not in summary.lower()

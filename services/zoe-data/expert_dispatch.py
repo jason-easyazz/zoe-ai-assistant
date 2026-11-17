@@ -656,8 +656,8 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         # so the caller can reply honestly (QA review F13).
         outcome = "skip"
         try:
-            from memory_service import scrub_pii
-            _, _pii_reject = scrub_pii(text)
+            from memory_service import scrub_pii_async
+            _, _pii_reject = await scrub_pii_async(text)
             if _pii_reject:
                 outcome = "dropped"
         except Exception:

@@ -42,6 +42,17 @@ def row(i, text, **meta):
     return SimpleNamespace(id=f"mem{i}", text=text, metadata=meta)
 
 
+@pytest.fixture(autouse=True)
+def _restraint_turn_marks_start_empty():
+    """``restraint`` keeps the speaker verdict it noted for a member's LAST turn, process-wide and keyed by member. A test here
+    that asks for facts without noting a turn of its own read the mark an earlier test left: after
+    ``test_preamble_placement_is_the_block_before_the_words``, the unconfirmed-voice test below was handed the fact it asserts
+    is withheld (found 2026-11-14 with the file in random order: 1 failed with every seed; file order hides it)."""
+    import restraint
+    restraint._reset_state()
+    yield
+
+
 @pytest.fixture
 def svc(monkeypatch):
     for k in (hop.ENV, "ZOE_MEMORY_AUTHORITY", "ZOE_RECALL_DURABLE_NO_DECAY", "ZOE_SEAM_RECALL_INJECT",
