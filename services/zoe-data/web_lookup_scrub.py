@@ -63,7 +63,7 @@ _WORD_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
 _LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,24}[/?#:]")
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
-_PHONE_RE = re.compile(r"(?<![^\W_])\+?\d[\d\s().\-/–—·]{5,}\d(?![^\W_])")   # any separator: 0491/570/006 too
+_PHONE_RE = re.compile(r"(?<![^\W_])\+?\d[\d\s().\-/\u2010-\u2015\u2212·]{5,}\d(?![^\W_])")   # any separator: 0491/570/006, 0491‑570‑006 too
 _HEX_RE = re.compile(r"(?i)^[0-9a-f]{16,}$")
 _LOOKALIKE_SCRIPTS = frozenset({"LATIN", "CYRILLIC", "GREEK", "ARMENIAN", "CHEROKEE"})
 _PART_RE = re.compile(r"[^\W_]+")
@@ -258,7 +258,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     text = _strip(_COORD_RE, "coordinates", text)
     street = "|".join(sorted(map(re.escape, lex["street_types"]), key=len, reverse=True))
     if street:
-        addr = re.compile(rf"(?i)\b\d{{1,5}}[a-z]?(?:\s*/\s*\d{{1,5}})?\s+(?:[^\W\d_][\w'’\-]*\s+){{1,3}}(?:{street})\b\.?")
+        addr = re.compile(rf"(?i)\b\d{{1,5}}[a-z]?(?:\s*/\s*\d{{1,5}})?(?:\s*,)?\s+(?:[^\W\d_][\w'’\-]*\s+){{1,3}}(?:{street})\b\.?")
         text = _strip(addr, "address", text)
     text = _strip(_PHONE_RE, "number", text, ok=lambda m: sum(c.isdigit() for c in m.group(0)) >= 7)
 
@@ -353,6 +353,14 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         # dictionary words; its folded form "glutenfree" is none)
         if i not in drop and tok and tok not in lex["drop_words"] and not _allowed(words[i].casefold(), allow, units):
             drop[i] = "unknown"
+    # dropping a word can JOIN two memory words ("red xqzv box" leaves "red box"): re-check the survivors, same three views,
+    # until nothing more is dropped
+    while True:
+        alive = [i for i in range(len(tokens)) if i not in drop]
+        joined = {alive[k] for view in (tokens, plains, bare) for k in _memory_runs([view[i] for i in alive], terms, lex)}
+        if not joined:
+            break
+        drop.update({i: "memory" for i in joined})
 
     def _content(idx: Iterable[int]) -> int:
         return sum(1 for i in idx if tokens[i] and tokens[i] not in lex["drop_words"] and tokens[i] not in lex["question_words"])
@@ -399,6 +407,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for phrase in phrases:
             if "".join(phrase) in squeezed:
                 return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
+    if any(_memory_runs([fold(w) for w in view.split()], terms, lex) for view in (query, plain_query, re.sub(r"\d", "", query))):
+        return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     if "@" in query or not query or any(g in squeezed for g in glue):
         return ScrubResult(False, "", REASON_TRIPWIRE, stripped, kind_set)
     return ScrubResult(True, query, REASON_OK, stripped, kind_set)

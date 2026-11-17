@@ -407,3 +407,22 @@ def test_a_separator_sweep_finds_no_way_to_split_a_short_memory_phrase():
         if {"red", "r3d", "red2", "reds"} & flat and {"box", "b0x", "box2", "boxes"} & flat:
             leaks.append((left + sep + right, r.query))
     assert leaks == [], leaks[:5]
+
+
+@pytest.mark.parametrize("raw", ["red xqzv box replacement prices", "red qq zzkx box replacement prices"])
+def test_dropping_an_unknown_word_cannot_join_a_memory_phrase(raw):
+    r = scrub_query(raw, PrivateTerms.of(memory=["The spare key is in the red box"]))
+    flat = set(r.query.split()) if r.send else set()
+    assert not ({"red"} & flat and {"box"} & flat), r
+
+
+@pytest.mark.parametrize("raw", ["pizza delivery call 0491\u2011570\u2011006 tonight", "pizza delivery call 0491\u2212570\u2212006 tonight",
+                                 "pizza delivery call 0491\u2010570\u2010006 tonight"])
+def test_a_phone_number_with_unicode_hyphens_is_stripped(raw):
+    r = scrub_query(raw)
+    assert "0491" not in r.query and "570" not in r.query, r
+
+
+def test_a_comma_after_the_house_number_is_still_an_address():
+    r = scrub_query("pizza delivery 12, Maple Street tonight")
+    assert "maple" not in r.query and "12" not in r.query.split(), r
