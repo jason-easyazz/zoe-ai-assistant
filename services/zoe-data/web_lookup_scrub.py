@@ -168,7 +168,6 @@ def _private_singles(terms: PrivateTerms, lex: dict) -> tuple[set[str], list[tup
 
 MEMORY_GLUE_MIN = 6  # a glued memory phrase this long or longer is also matched INSIDE a token (any length as a whole token)
 ADDRESS_NUMBER_AFTER = 3  # ...or this many after it ("Maple Street number 12", "Maple St no. 12")
-CODE_NUMBER_AFTER = 3  # a number this many words after a code word is the code ("gate code is 1234", "pin: 0000")
 NAME_SPLIT_WINDOW = 5  # a known name split into 2-3 pieces anywhere inside this many words is refused
 
 
@@ -347,29 +346,18 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for k in span:
             if tokens[k] not in lex["question_words"]:
                 drop.setdefault(k, "address")
-    # A number right after a code word is a code, known or not ("my gate code is 1234", "wifi password 5521"), and so is
-    # the first content word after it, digits or not ("gate code swordfish"; "promo code dominos" loses "dominos" - the
-    # accepted cost); so is a token mixing the code word with digits ("pin1234").
-    codes = lex.get("code_words", frozenset())
-    for ci, tok in enumerate(tokens):
-        if tok in codes:
-            for k in range(ci + 1, min(len(tokens), ci + 1 + CODE_NUMBER_AFTER)):
-                if any(c.isdigit() for c in tokens[k]):
-                    drop.setdefault(k, "code")
-            for k in range(ci + 1, len(tokens)):
-                if tokens[k] and tokens[k] not in lex["drop_words"] and tokens[k] not in lex["question_words"]:
-                    drop.setdefault(k, "code")
-                    break
-        elif any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
-            drop.setdefault(ci, "code")
-    # EVERYTHING after a password word may be the password, digits or not, however long ("my password swordfish",
-    # "password correct horse battery staple sunset"): no cap to outgrow, so every word after it goes. Only the words
-    # before it can leave; "password reset tips" loses "reset tips" - the accepted cost.
-    secrets = lex.get("secret_words", frozenset())
-    first_secret = next((ci for ci, tok in enumerate(tokens) if tok in secrets), None)
+    # EVERYTHING after a code or password word may be the secret, digits or not, however many words ("gate code is 1234",
+    # "safe combination red blue green", "password correct horse battery staple sunset"): no window or cap to outgrow, so
+    # every word after the first such word goes and only the words before it can leave. "promo code dominos" and
+    # "password reset tips" lose their tails - the accepted cost. A token mixing a code word with digits ("pin1234") goes too.
+    codes = lex.get("code_words", frozenset()) | lex.get("secret_words", frozenset())
+    first_secret = next((ci for ci, tok in enumerate(tokens) if tok in codes), None)
     if first_secret is not None:
         for k in range(first_secret + 1, len(tokens)):
             drop.setdefault(k, "code")
+    for ci, tok in enumerate(tokens):
+        if any(c.isdigit() for c in tok) and any(tok.startswith(c) or tok.endswith(c) for c in codes if len(c) >= 3):
+            drop.setdefault(ci, "code")
     # A known number from memory (3+ digits: a gate code) is private INSIDE any token, whatever is glued to it ("4417mhz").
     mem_numbers = {n for s_ in singles for n in re.findall(r"\d{3,}", s_)}
     for i, tok in enumerate(tokens):

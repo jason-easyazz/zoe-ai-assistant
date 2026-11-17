@@ -77,7 +77,9 @@ STRIPPED = [
     ("is tobiah@example.com a known scam sender address", "known scam sender address", {"email"}),
     ("pollen count today at -31.9523, 115.8613 forecast", "pollen count today forecast", {"coordinates"}),
     ("council bin day for 12 Larkspur Lane this week schedule", "council bin day week schedule", {"address"}),
-    ("gate code 4417 keypad reset instructions manual", "keypad reset instructions manual", {"memory", "private"}),
+    # a remembered code with no code word before it is stripped and the rest sent ("gate code 4417 ..." refuses: everything
+    # after a code word goes, see test_a_code_after_a_code_word_never_leaves_even_unknown)
+    ("keypad 4417 reset instructions manual", "keypad reset instructions manual", {"private"}),
     ("ｍｉｒａｂｅｌ shellfish allergy dangerous", "shellfish allergy dangerous", {"private"}),
     ("Mira​bel shellfish allergy dangerous", "shellfish allergy dangerous", {"private"}),
     ("m.i.r.a.b.e.l shellfish allergy dangerous", "shellfish allergy dangerous", {"private"}),
@@ -555,7 +557,7 @@ def test_the_words_after_a_password_word_never_leave(raw, secret):
 
 
 @pytest.mark.parametrize("raw", ["gate code swordfish keypad reset instructions", "the alarm code is bluebird panel manual",
-                                 "garage pin tango opener manual"])
+                                 "garage pin tango opener manual", "safe combination red blue green reset instructions"])
 def test_a_word_valued_code_after_a_code_word_never_leaves(raw):
     r = scrub_query(raw)
-    assert not ({"swordfish", "bluebird", "tango"} & set(r.query.split())), r
+    assert not ({"swordfish", "bluebird", "tango", "red", "blue", "green"} & set(r.query.split())), r
