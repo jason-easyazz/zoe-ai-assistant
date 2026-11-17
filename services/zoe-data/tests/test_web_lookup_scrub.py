@@ -598,3 +598,15 @@ def test_an_email_in_any_shape_never_leaves(raw, private):
 def test_a_postal_or_unit_number_never_leaves(raw):
     r = scrub_query(raw)
     assert not any(ch.isdigit() for ch in r.query), r
+
+
+@pytest.mark.parametrize("raw,private", [
+    ("pizza delivery call 0491 xqzv 570 xqzv 006 tonight", {"0491", "570", "006"}),
+    ("my-wife bill birthday gift ideas", {"bill"}),
+    ("my wife is rose birthday gift ideas", {"rose"}),
+    ("weather 51.5072 north 0.1276 west today forecast", {"51", "5072", "0", "1276", "51.5072", "0.1276"}),
+    ("wifi-password correct horse battery staple router reset", {"correct", "horse", "battery", "staple"}),
+])
+def test_review_thread_reproductions_never_leave(raw, private):
+    r = scrub_query(raw)
+    assert not (private & set(re.split(r"[\s\-]+", r.query))), r

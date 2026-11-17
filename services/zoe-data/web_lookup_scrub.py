@@ -65,6 +65,7 @@ _LINK_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+(?:\.[a
 # ANY "@" and everything glued to it, dot or no dot, quoted local part or not ("bill@example", "\"rose home\"@example.com");
 # an "@" this misses is still refused by the final tripwire
 _EMAIL_RE = re.compile(r"""(?:"[^"]*"|'[^']*'|[^\s@]*)@[^\s@]*""")
+_COORD_PART_RE = re.compile(r"(?<![\w.])[-+]?\d{1,3}\.\d{3,}(?![\w.])")   # one coordinate alone: "51.5072 north"
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
 _PHONE_RE = re.compile(r"(?<![^\W_])\+?\d+(?:[\W_]+\d+)+(?![^\W_])")   # ANY run of separators between digit groups, any length
 # what may sit between the parts of an address: ANY run of non-alphanumerics ("12, Maple.Street", "12:Maple:Street",
@@ -369,6 +370,7 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     if _LINK_RE.search(text):
         return ScrubResult(False, "", REASON_LINK)
     text = _strip(_COORD_RE, "coordinates", text)
+    text = _strip(_COORD_PART_RE, "coordinates", text)
     street = "|".join(sorted(map(re.escape, lex["street_types"]), key=len, reverse=True))
     if street:
         addr = re.compile(rf"(?i)(?<![^\W_])\d{{1,5}}[a-z]?(?:\s*/\s*\d{{1,5}})?{_ADDR_SEP}(?:[^\W\d_][^\W_]*(?:['’][^\W_]+)*{_ADDR_SEP}){{1,3}}(?:{street})(?![^\W_])\.?")
@@ -434,7 +436,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
     # every word after the first such word goes and only the words before it can leave. "promo code dominos" and
     # "password reset tips" lose their tails - the accepted cost. A token mixing a code word with digits ("pin1234") goes too.
     codes = lex.get("code_words", frozenset()) | lex.get("secret_words", frozenset())
-    first_secret = next((ci for ci, tok in enumerate(tokens) if tok in codes), None)
+    first_secret = next((ci for ci, tok in enumerate(tokens)
+                         if tok in codes or {fold(p) for p in _COMPOUND_SPLIT.split(words[ci])} & codes), None)
     if first_secret is not None:
         for k in range(first_secret + 1, len(tokens)):
             drop.setdefault(k, "code")
@@ -447,14 +450,19 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         if set(re.findall(r"\d{3,}", tok)) & mem_numbers:
             drop.setdefault(i, "memory")
     # Phone digits padded with single letters ("0491 x 570 x 006"): a run of number tokens and lone letters holding 7+
-    # digits across 2+ numbers is a phone number, padding and all.
+    # digits across 2+ numbers is a phone number, padding and all. Between two numbers any single letters and ONE longer
+    # word are padding ("0491 x y 570", "0491 xqzv 570 xqzv 006"); two longer words in a row end the run.
     i = 0
     while i < len(tokens):
-        j, digits, numbers = i, 0, 0
-        while j < len(tokens) and tokens[j] and (tokens[j].isdigit() or (len(tokens[j]) == 1 and numbers)):
+        j, digits, numbers, gap = i, 0, 0, 0
+        while j < len(tokens) and tokens[j] and (tokens[j].isdigit() or (numbers and (len(tokens[j]) == 1 or gap == 0))):
             if tokens[j].isdigit():
-                digits, numbers = digits + len(tokens[j]), numbers + 1
+                digits, numbers, gap = digits + len(tokens[j]), numbers + 1, 0
+            elif len(tokens[j]) > 1:   # single letters are always padding; one longer word between numbers is too
+                gap += 1
             j += 1
+        while j > i and not tokens[j - 1].isdigit():   # a trailing pad word is not part of the number
+            j -= 1
         if numbers >= 2 and digits >= 7:
             for k in range(i, j):
                 drop.setdefault(k, "number")
@@ -477,9 +485,12 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         for i in range(len(tokens) - n + 1):
             if phrase in (tuple(tokens[i:i + n]), tuple(plains[i:i + n]), tuple(bare[i:i + n])):   # l4rkspur, blue4
                 drop.update({k: "private" for k in range(i, i + n)})
-    for i, tok in enumerate(tokens[:-1]):  # "my friend Dana", "our dog called Biscuit"
-        if tok not in lex["relation_words"]:
+    for i, tok in enumerate(tokens[:-1]):  # "my friend Dana", "our dog called Biscuit", "my-wife bill"
+        compound = [fold(p) for p in _COMPOUND_SPLIT.split(words[i]) if fold(p)]
+        if tok not in lex["relation_words"] and not (len(compound) > 1 and compound[-1] in lex["relation_words"]):
             continue
+        if tok not in lex["relation_words"]:
+            tok = compound[-1]
         j = i + 1
         named = tokens[j] in lex["naming_words"]
         if named:
@@ -491,7 +502,8 @@ def _scrub(raw: object, terms: PrivateTerms, lex: dict) -> ScrubResult:
         # After a PERSON relation word the first word is a name with no cue at all ("concerts for partner bill"); a weaker
         # query is the owner-accepted cost. A pet word ("dog food") is an everyday noun, so it still needs a cue ("our dog",
         # "dog called biscuit", "Dog Biscuit"), and so does the second word (a surname), or every relation word eats two.
-        owned = i > 0 and tokens[i - 1] in lex.get("possessive_words", frozenset())   # "my friend", not "dog food"
+        owned = (i > 0 and tokens[i - 1] in lex.get("possessive_words", frozenset())) \
+            or (len(compound) > 1 and compound[0] in lex.get("possessive_words", frozenset()))   # "my friend", "my-wife"
         cued = named or owned or words[j][:1].isupper() if j < len(tokens) else False
         if j < len(tokens) and tokens[j] and tokens[j] not in lex["drop_words"] and tokens[j] not in lex["question_words"] \
                 and (cued or tok not in lex.get("cue_relation_words", frozenset())):
