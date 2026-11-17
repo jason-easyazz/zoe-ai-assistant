@@ -400,9 +400,8 @@ def _names_member(value: Any, user_id: str, *, under_identity: bool = False) -> 
 async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
     """Actions queued BEFORE ``origin_user_id`` was recorded (no origin in their queued ledger event) that NAME the member: their
     payload or any ledger event carries the member's id as a value (found by a text prefilter on the JSON-quoted id, each confirmed
-    by parsing). Nothing else: an un-attributable pre-upgrade row (a guest kiosk's toast whose payload names nobody) may be another
-    member's, and a member delete never reaches into another member's rows (cross-member reach; the panel poll fails such a row as
-    stale, it is never shown). The member's own rows (``user_id``) go with ``ui_actions`` in ``OWNED``. An action WITH an origin is
+    by parsing), and every origin-less pre-upgrade row a GUEST / kiosk identity owns (it may hold the member's words with no id, and
+    it is no member's row). An origin-less row another MEMBER owns stays: a member delete never reaches into another member's rows. The member's own rows (``user_id``) go with ``ui_actions`` in ``OWNED``. An action WITH an origin is
     decided by its origin only (``_originated_ui_actions``)."""
     quoted = f"%{json.dumps(str(user_id))}%"
     cand = {str(x[0]) for x in await r.rows("SELECT id FROM ui_actions WHERE payload LIKE ?", (quoted,)) if x[0]}
@@ -431,6 +430,24 @@ async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
             if _names_member(payload, user_id) or any(_names_member(d, user_id) for _, d in evs) or (
                     isinstance(payload, str) and json.dumps(str(user_id)) in payload):
                 out.add(aid)
+    # ...and every pre-upgrade action a GUEST / kiosk identity owns with no recorded origin: it can hold the member's words with no id
+    # in it, nobody can be shown to have queued it, and it belongs to NO member - so removing it reaches into nobody else's rows. A
+    # member-owned origin-less row stays (it is that member's).
+    guests = await r.rows(f"SELECT id FROM ui_actions WHERE COALESCE(user_id, '') IN ({', '.join('?' * len(_GUESTS))}) "
+                          "OR user_id LIKE 'guest-%'", tuple(_GUESTS))
+    gids = sorted({str(x[0]) for x in guests if x[0]} - out)
+    for at in range(0, len(gids), _CHUNK):
+        part = gids[at:at + _CHUNK]
+        marks = ", ".join("?" * len(part))
+        with_origin = set()
+        for aid, data in await r.rows(f"SELECT action_id, event_data FROM ui_action_ledger WHERE event_type = 'queued' AND action_id IN "
+                                      f"({marks})", tuple(part)):
+            try:
+                if isinstance(json.loads(data) if isinstance(data, str) else None, dict) and "origin_user_id" in json.loads(data):
+                    with_origin.add(str(aid))
+            except ValueError:
+                pass
+        out |= set(part) - with_origin                          # an action WITH an origin is decided by it (``_originated_ui_actions``)
     return out
 
 

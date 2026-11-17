@@ -643,8 +643,8 @@ async def turn_write_refused(session_id: Optional[str], lane: str, user_id: Opti
     else the turn's member) was erased at or after the turn BEGAN (its start, never the moment the speaker was resolved). Asked twice
     by every writer: right before its write and right after it (undoing the write when True) - a delete that lands between the two
     finds the row with its erase or is caught by the second check, since the mark is recorded before anything is erased, and the mark
-    is DURABLE, so this holds for a turn in any process. No turn known: False. An unreadable mark: False (a turn's own save is never
-    dropped on a guess; the erase itself fails closed on an unreadable store)."""
+    is DURABLE, so this holds for a turn in any process. No turn known: False. An unreadable mark: True (fail closed - a turn that
+    outlived a delete must not write the member's content back on a guess)."""
     began = turn_began(session_id)
     if began is None:
         return False
@@ -661,7 +661,10 @@ async def turn_write_refused(session_id: Optional[str], lane: str, user_id: Opti
     try:
         return await send_refused(uid, began, lane)
     except Unavailable:
-        return False
+        # FAIL CLOSED: an unreadable mark cannot prove the member was not deleted, and a turn that outlived a completed delete would
+        # otherwise write their content back. The turn's own save is dropped on a store outage (the cost); nothing private survives.
+        logger.warning("ERASE_WATERMARK_TURN_WRITE_UNREADABLE lane=%s", lane)
+        return True
 
 
 def hold_session_turn(session_id: Optional[str]) -> Optional[str]:

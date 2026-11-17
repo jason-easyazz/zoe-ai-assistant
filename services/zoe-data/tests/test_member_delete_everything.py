@@ -1350,9 +1350,8 @@ def test_a_surviving_session_titled_by_the_members_first_turn_loses_their_words_
 
 
 def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_member(env, store):
-    """Rows queued before origin_user_id was recorded: one whose payload names the member goes; one naming another member stays; an
-    origin-less row that names nobody stays even when it is old and still queued (it may be another member's: a member delete never
-    reaches across members), and so does an old pre-upgrade row another member owns."""
+    """Rows queued before origin_user_id was recorded: every one a GUEST / kiosk owns goes (it may hold the member's words with no id
+    in it, and it is no member's row); an origin-less row another MEMBER owns stays, even one whose free text equals the id."""
     svc, _col = env
 
     async def seed():
@@ -1373,9 +1372,9 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
     asyncio.run(seed())
     _delete(svc)
     left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
-    assert left == {"pre-b", "pre-old", "pre-old-b", "pre-fresh", "pre-text"}, left
-    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old", "l-pre-old-b", "l-pre-fresh",
-                                                                                     "l-pre-text"}
+    # guest-owned origin-less rows go (they may hold A's words with no id, and they are no member's); member-owned ones stay
+    assert left == {"pre-old-b", "pre-text"}, left
+    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-old-b", "l-pre-text"}
 
 
 def _stalled_fire_across_a_delete(env, store, monkeypatch, push_check):

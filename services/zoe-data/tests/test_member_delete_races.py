@@ -573,3 +573,23 @@ def test_a_turn_that_begins_while_the_members_delete_runs_writes_nothing():
             erase_watermark.turn_close(token)
         return during, other
     assert asyncio.run(go()) == (True, False)
+
+
+def test_an_unreadable_erase_mark_refuses_a_turns_write(monkeypatch):
+    """FAIL CLOSED: a turn that may have outlived its member's delete does not write when the mark cannot be read."""
+    import erase_watermark
+
+    async def unreadable(*_a, **_k):
+        raise erase_watermark.Unavailable("store down")
+
+    monkeypatch.setattr(erase_watermark, "watermark", unreadable)
+
+    async def go():
+        token = erase_watermark.turn_open(None, A)
+        ctx = erase_watermark.turn_bind(token)
+        try:
+            return await erase_watermark.turn_write_refused(None, "transcript")
+        finally:
+            erase_watermark.turn_unbind(ctx)
+            erase_watermark.turn_close(token)
+    assert asyncio.run(go()) is True
