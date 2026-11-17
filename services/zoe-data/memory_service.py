@@ -2035,9 +2035,10 @@ def bounded(text: Optional[str], kept: int, margin: int = 64) -> str:
 
 async def scrub_pii_async(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     """``scrub_pii`` for an async caller on a live path: inline up to ``SCRUB_INLINE_MAX`` characters, else off the loop."""
+    kw = {} if contact else {"contact": False}        # the default is passed as before: a one-argument stand-in still works
     if len(text or "") <= SCRUB_INLINE_MAX:
-        return scrub_pii(text, contact=contact)
-    return await asyncio.to_thread(scrub_pii, text, contact=contact)
+        return scrub_pii(text, **kw)
+    return await asyncio.to_thread(scrub_pii, text, **kw)
 
 
 async def scrub_pii_matchable_async(text: str) -> tuple[str, Optional[str]]:
