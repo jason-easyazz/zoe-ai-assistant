@@ -1513,6 +1513,8 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         for tw in twins:
             if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_explained") is not None:
                 gone.append(tw.id)
+            else:
+                plan.failed()
         if hasattr(svc, "erase_rows"):
             try:
                 from memory_service import physical_erase_enabled
@@ -1520,6 +1522,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 if physical_erase_enabled():
                     await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)")
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
+                plan.failed()
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
                 import turn_forget
 
@@ -1531,7 +1534,11 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         try:
             await _erase_words(user_id, exp, ref.text or "")
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
+            plan.failed()
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
+        if plan.has_failed:
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
         await plan.ok()

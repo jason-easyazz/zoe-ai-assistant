@@ -1372,10 +1372,17 @@ def parked_unfinished() -> int:
 class Plan:
     def __init__(self, user_id: str, entry: Optional[dict]) -> None:
         self.user_id, self.entry = user_id, entry
+        self.has_failed = False
+
+    def failed(self) -> None:
+        """A step failed: keep every planned id for replay, even if the caller later calls ok."""
+        self.has_failed = True
 
     async def ok(self) -> None:
         """Every step confirmed: the plan's ids leave the park. Never raises (an id left behind names nothing that still exists,
         and the next replay drops it)."""
+        if self.has_failed:
+            return
         entry, self.entry = self.entry, None
         if entry is None:
             return

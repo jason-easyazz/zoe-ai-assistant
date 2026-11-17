@@ -457,3 +457,5 @@ tests/unit/test_reap_stale_omnigent_runners.py` (offline, `ci_safe`, canned
 fixtures + a fake clock + synthetic `/proc` trees — no network, no live
 Omnigent), plus the dogfood pattern — review changes to this script with the
 script itself.
+
+- Shadow report rejected-line counts are shown separately; malformed lines cannot change a verb's comparison verdict or latency evidence.

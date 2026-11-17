@@ -1445,21 +1445,6 @@ async def test_an_answer_that_is_not_certain_always_probes_off_the_loop_and_the_
     assert await forget_probes() == (0, True)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("caller", ["last", "explained", "topic"])
-async def test_an_ordinary_erase_failure_is_still_only_logged_by_the_three_spoken_forgets(kernel, callers, caller):
-    """The control for ``os_shadow.unconfirmed``: a row erase that fails for a reason that is NOT the shadow keeps its old outcome
-    (the rows stay hidden, the forget is reported) and leaves nothing remembered for a repeat."""
-    import turn_forget
-
-    st = callers
-    await st.said()
-    st.svc.ordinary_failure = True
-    forgotten, out = await st.run(caller)
-    assert forgotten, out
-    assert st.svc.rows["r1"].metadata["status"] in ("rejected", "archived") and turn_forget.unerased(MEMBER) == []
-    assert (MEMBER, "t1") not in st.backend.rows
-
 
 def test_unconfirmed_reads_the_cause_chain_and_nothing_else():
     shadow = os_shadow.ShadowForgetUnavailable("refused (parked)")
@@ -1623,6 +1608,7 @@ async def test_an_entity_forget_whose_row_erase_the_shadow_did_not_confirm_is_pa
     reply = await entity(ordinary)
     assert reply != entity.incomplete and "forgot" in reply.lower() and entity.cascades == ["Dana"]
     assert ordinary.rows["r1"].metadata["status"] == "archived" and len(entity.marked) == 1
+    assert _parked_rows(kernel)[MEMBER]["rows"] == ["r1"]
 
 
 @pytest.fixture
@@ -2396,3 +2382,161 @@ async def test_a_row_already_deleted_still_gets_its_owned_audit_and_residue_clea
     result = await svc.erase_rows("member-quartz", ["row-quartz"], actor="member-quartz", finish_missing=True)
     assert result["rows_removed"] == 0 and result["audit_removed"] == 1
     assert list(audit) == ["audit-topaz"] and scrubbed == [[]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["last", "explained", "topic", "screen", "guardian", "curation"])
+async def test_ordinary_erase_failure_keeps_the_plan_until_replay(ordinary_callers, caller):
+    kernel, st = ordinary_callers
+    await st.said()
+    st.svc.ordinary_failure = True
+    forgotten, out = await st.run(caller)
+    assert not forgotten, out
+    assert _parked_rows(kernel)[MEMBER]["rows"] == ["r1"]
+    assert "r1" in st.svc.rows
+    st.svc.ordinary_failure = False
+    os_shadow._planning.clear()        # the in-flight hold expired: the next replay can finish
+    await os_shadow._finish_erases()
+    assert st.svc.rows == {} and not (kernel.state / "pending-erases.json").exists()
+    assert (MEMBER, "t1") not in st.backend.rows or caller not in WORDS
+
+
+@pytest.fixture
+def ordinary_callers(tmp_path, monkeypatch):
+    """Ordinary storage failures: the kernel confirms, with no socket or worker needed."""
+    from types import SimpleNamespace
+
+    async def confirmed(*args, **kwargs):
+        return 0
+
+    async def inline(fn, *args, **kwargs):
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(fn, *args, **kwargs).result()
+
+    # These tests exercise durable erases, not executor/socket wakeups.
+    monkeypatch.setattr(os_shadow.asyncio, "to_thread", inline)
+    os_shadow._reset_for_tests()
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path))
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    monkeypatch.setattr(os_shadow, "SETTLE_S", 0)
+    for name in ("forget_for_erase", "erase_topic"):
+        monkeypatch.setattr(os_shadow, name, confirmed)
+    monkeypatch.setattr(os_shadow, "_kick_erases", lambda: None)
+    stores = callers.__wrapped__(None, monkeypatch)
+    yield SimpleNamespace(state=tmp_path), next(stores)
+    stores.close()
+    os_shadow._reset_for_tests()
+
+
+def _assert_plan_failures_marked(sources):
+    found = set()
+    for filename, source in sources.items():
+        tree = ast.parse(source)
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            starts = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "plan" for t in n.targets)
+                      and isinstance(n.value, ast.Await) and isinstance(n.value.value, ast.Call)
+                      and ((isinstance(n.value.value.func, ast.Attribute)
+                            and n.value.value.func.attr in {"plan_erase", "_plan_forget"})
+                           or (isinstance(n.value.value.func, ast.Name) and n.value.value.func.id == "_plan_forget"))]
+            ends = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id == "plan" and n.func.attr == "ok"]
+            if not starts or not ends:
+                continue
+            found.add((filename, fn.name))
+            called = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                      and min(starts) < n.lineno < max(ends)}
+            helpers = [n for n in ast.walk(fn) if isinstance(n, ast.AsyncFunctionDef) and n is not fn and n.name in called]
+            for handler in ast.walk(fn):
+                if not isinstance(handler, ast.ExceptHandler):
+                    continue
+                if not (min(starts) < handler.lineno < max(ends)
+                        or any(h.lineno < handler.lineno < h.end_lineno for h in helpers)):
+                    continue
+                # Failure to acquire the plan precedes the planned sequence.
+                if any(isinstance(n, ast.Try) and handler in n.handlers
+                       and any(n.lineno <= start <= n.body[-1].end_lineno for start in starts)
+                       for n in ast.walk(fn)):
+                    continue
+                # The one exemption: a step that only clears IN-PROCESS correction memory (``value_correction``, no await): nothing
+                # durable is left behind, and its failure must never break the forget (tests/test_value_correction_forget.py).
+                owner = next(n for n in ast.walk(fn) if isinstance(n, ast.Try) and handler in n.handlers)
+                body = "\n".join(ast.unparse(b) for b in owner.body)
+                if ("value_correction" in body or body.strip() == "clear()") and "await" not in body:
+                    continue
+                marked = any(isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                             and ast.unparse(n.value.func) == "plan.failed" for n in ast.walk(handler))
+                assert marked or isinstance(handler.body[-1], ast.Raise), (filename, fn.name, handler.lineno)
+    return found
+
+
+def test_every_planned_sequence_marks_caught_failures_with_a_negative_control():
+    sources = {}
+    for path in SVC.rglob("*.py"):
+        if "tests" in path.relative_to(SVC).parts:
+            continue
+        source = path.read_text()
+        if "plan_erase(" in source or "_plan_forget(" in source:
+            sources[str(path.relative_to(SVC))] = source
+    assert _assert_plan_failures_marked(sources) == {
+        ("intent_router.py", "_execute_forget_last"), ("intent_router.py", "execute_intent"),
+        ("provenance_answers.py", "_erase_words"), ("provenance_answers.py", "forget_it"),
+        ("forget_topic.py", "_forget"), ("memory_space.py", "forget_row"),
+        ("memory_space.py", "guardian_forget"), ("memory_curation.py", "_forget_locked"),
+    }
+    with pytest.raises(AssertionError):
+        _assert_plan_failures_marked({**sources, "intent_router.py": sources["intent_router.py"].replace(
+            "if plan is not None:\n                    plan.failed()",
+            "if plan is not None:\n                    pass")})
+    for name in ("intent_router.py", "provenance_answers.py", "forget_topic.py"):
+        planted = {**sources, name: sources[name].replace("plan.failed()", "pass")}
+        with pytest.raises(AssertionError):
+            _assert_plan_failures_marked(planted)
+
+
+@pytest.mark.asyncio
+async def test_failed_plan_ok_keeps_the_disk_park(ordinary_callers):
+    kernel, _ = ordinary_callers
+    plan = await os_shadow.plan_erase("member-azurite", rows=["row-azurite"])
+    plan.failed()
+    await plan.ok()
+    assert _parked_rows(kernel)["member-azurite"]["rows"] == ["row-azurite"]
+    assert plan.has_failed and plan.entry is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["last", "explained", "topic"])
+async def test_failure_marker_control_recreates_false_confirmation(ordinary_callers, monkeypatch, caller):
+    _, st = ordinary_callers
+    await st.said()
+    st.svc.ordinary_failure = True
+    monkeypatch.setattr(os_shadow.Plan, "failed", lambda self: None)
+    forgotten, out = await st.run(caller)
+    assert forgotten, out             # the old false confirmation: the main regression assertion would fail
+    assert "r1" in st.svc.rows
+
+
+@pytest.mark.asyncio
+async def test_entity_ordinary_failure_keeps_its_reply_and_cascade_and_parks_for_replay(ordinary_callers, monkeypatch):
+    kernel, _ = ordinary_callers
+
+    async def confirmed(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr(os_shadow, "erase_entity", confirmed)
+    forget = entity.__wrapped__(None, monkeypatch)
+    store = _EntityStore(fail="ordinary")
+    reply = await forget(store)
+    assert reply != forget.incomplete and "forgot" in reply.lower()
+    assert forget.cascades == ["Dana"] and forget.marked == []
+    assert store.rows["r1"].metadata["status"] == "archived"
+    assert _parked_rows(kernel)[MEMBER]["rows"] == ["r1"]
+    store.fail = None
+    os_shadow._planning.clear()
+    await os_shadow._finish_erases()
+    assert store.rows == {} and not (kernel.state / "pending-erases.json").exists()

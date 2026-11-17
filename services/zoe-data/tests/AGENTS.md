@@ -73,3 +73,7 @@ Background + plan: `docs/architecture/brain-tool-selection-reliability.md`.
 
 - `test_os_shadow_forget.py` also covers observation/thread obligations with the real `night_store.MemoryBackend`, index loss,
   a simulated restart and a failing replay. Its planned-eraser/replay AST comparison rejects both a new unplanned eraser and a removed replay step.
+
+- Planned forget failures use `Plan.failed()`; `Plan.ok()` cannot clear a failed plan. `test_os_shadow_forget.py` checks every planned caller's caught failures with AST mutation controls, and ordinary erase failures through disk parking and replay (six callers). Its `ordinary_callers` fixture confirms the kernel seam without sockets; executor calls still run off-loop, with synchronous joins for sandbox compatibility.
+
+- Failure markers retain replay obligations; they do not universally require an early reply. Entity-forget ordinary physical-erase failures keep the existing reply and cascade, with archived rows parked for replay.

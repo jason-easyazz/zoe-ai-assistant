@@ -273,7 +273,7 @@ def render(s: dict) -> str:
             rows.append(f"{verb} disagreements: " + ", ".join(f"{k}={n}" for k, n in v["disagree_by_reason"].items()))
     rows.append("")
     for verb, v in s["verbs"].items():
-        rows.append(f"{verb}: " + _pass_line(v))
+        rows.append(f"{verb}: " + _pass_line(v) + f" [rejected lines {s['rejected']}]")
     rows += ["", f"list add: logged {s['adds_logged']}    compared: {s['compared']}    match: {s['match']} ({rate})",
              f"list add kernel hop (publish + act), {s['hop_answered']} answered: p50 {s['hop_ms_p50']} ms, p95 {s['hop_ms_p95']} ms",
              f"list add kernel unavailable: {s['kernel_unavailable']}    timeouts: {s['timeouts']}",

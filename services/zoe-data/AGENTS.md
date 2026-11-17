@@ -326,3 +326,5 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Shadow erase plans (`os_shadow.ERASE_KINDS`) carry ids for index turns, transcript flags, memory rows (including their audit/residue cleanup),
   night observations/threads, conversation notes, value-registry entries and topic offers. Every added durable eraser in a planned sequence
   must have a plan selector and replay path; `tests/test_os_shadow_forget.py` compares the sets with mutation controls.
+
+- A failed erase step marks `Plan.failed()` so `Plan.ok()` retains ids for replay. Entity forget still completes its ledger, cascade and offer withdrawal after an ordinary physical-erase failure, with rows archived; only an unconfirmed shadow failure stops that path. Existing partial-failure replies remain intact.

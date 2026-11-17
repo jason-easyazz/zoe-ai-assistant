@@ -356,7 +356,7 @@ def test_an_older_kernel_is_named_on_the_not_comparable_line(tmp_path, capsys):
     out = capsys.readouterr().out
     line = next(ln for ln in out.splitlines() if ln.startswith("reminder_create: "))
     assert line.startswith("reminder_create: NOT COMPARABLE YET (schedule_unproven: 30)")
-    assert line.endswith("(an older kernel without due_at on 30 of 35)")
+    assert line.endswith("(an older kernel without due_at on 30 of 35) [rejected lines 0]")
 
 
 @pytest.mark.parametrize("cut", ["OS_SHADOW_ACT", "OS_SHADOW_ACT\n", "x OS_SHADOW_ACT verb=reminder_create src=service cls=on",
@@ -385,3 +385,13 @@ def test_only_recognised_kernel_answers_supply_hop_evidence(state):
     else:
         assert v["hop_answered"] == 200 and v["verdict"]["pass"]
     assert rep.ANSWERED_KERNEL_STATES == {"verified", "unverified", "uncertain", "refused"}
+
+
+@pytest.mark.parametrize("rejected", [0, 2, 3, 200])
+def test_rejected_lines_are_reported_without_changing_the_verdict(rejected):
+    recs = rep.parse([act("alarm_create", hop=2.0)] * 200)
+    summary = rep.summarize(recs, rejected=rejected)
+    assert summary["verbs"]["alarm_create"]["verdict"]["pass"]
+    verdict_line = next(ln for ln in rep.render(summary).splitlines() if ln.startswith("alarm_create: "))
+    assert f"rejected lines {rejected}" in verdict_line
+    assert "PASS" in verdict_line

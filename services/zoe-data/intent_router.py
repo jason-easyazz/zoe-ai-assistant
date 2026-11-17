@@ -4011,8 +4011,8 @@ _FORGET_CASCADE_INCOMPLETE = (
 
 
 async def _forget_entity_unconfirmed(user_id: str) -> str:
-    """An entity forget stopped because the Zoe OS shadow did not confirm, before its cascade ran. Two durable records finish it
-    even if the member never repeats it: the rows it had archived are parked by the row eraser (``pending-erases.json``, finished by
+    """An entity forget stopped before its cascade ran. Two durable records finish it
+    even if the member never repeats it: the planned rows are parked before the archive (``pending-erases.json``, finished by
     the shadow's replay), and EVERY cascade step is left pending here (``memory_forget_cascade``'s own markers, no name), so the next
     healthy retry pass clears the derived stores from the ledger. Never raises."""
     try:
@@ -4134,6 +4134,7 @@ async def _execute_forget_last(user_id: str) -> str:
         try:
             return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
         except Exception as exc:  # noqa: BLE001
+            plan.failed()
             logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
             return False
 
@@ -4141,6 +4142,7 @@ async def _execute_forget_last(user_id: str) -> str:
         if await _reject(r):
             gone.append(r)
         else:
+            plan.failed()
             failed += 1
     # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
     try:
@@ -4155,14 +4157,16 @@ async def _execute_forget_last(user_id: str) -> str:
                 if await _reject(_sib):
                     gone.append(_sib)
                 else:
+                    plan.failed()
                     failed += 1
     except Exception as exc:  # noqa: BLE001
+        plan.failed()
         logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
     # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
     # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
     # The Zoe OS shadow (os_shadow.py) is forgotten first inside each shared eraser. When it cannot confirm, NOTHING more is erased and
     # the reply is never "forgot": the rejected rows are remembered (turn_forget.keep_unerased) and the target stays, so "forget that"
-    # again finishes rows and words once the kernel answers. Any other physical-erase failure leaves the rows rejected, as before.
+    # again finishes rows and words once the store answers. Any failed step keeps the plan parked and is never confirmed.
     carried = turn_forget.unerased(user_id)      # rows an earlier, unconfirmed forget of this member already rejected
     erase_ids = [r.id for r in gone] + carried
     finished_earlier = False
@@ -4174,6 +4178,7 @@ async def _execute_forget_last(user_id: str) -> str:
                 await turn_forget.clear_unerased(user_id)
                 finished_earlier = bool(carried)
         except Exception as exc:  # noqa: BLE001
+            plan.failed()
             logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
             if await turn_forget.keep_unerased(user_id, erase_ids, exc):
                 return FORGET_STORE_DOWN_REPLY
@@ -4182,6 +4187,7 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.erase_text(user_id, text)
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
+        plan.failed()
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
         import os_shadow
         await exact_words.park_transcript(user_id, text, exc)      # the saved turn's flag, by id, for the shadow's replay (unconfirmed only)
@@ -4191,24 +4197,28 @@ async def _execute_forget_last(user_id: str) -> str:
         import value_correction
         value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
         value_correction.forget_in_texts(user_id, [text])
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - in-process memory only: nothing durable is left, so it never fails the plan
         pass
     try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
         import conversation_notes
         await conversation_notes.erase_for_text(user_id, text, at=ts)
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
+        plan.failed()
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
         failed += 1
     try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
         import memory_value_registry
         await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
+        plan.failed()
         logger.warning("memory_forget_last: value registry erase failed (%s)", type(exc).__name__)
         failed += 1
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:
         # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
         return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
+    if plan.has_failed:
+        return FORGET_STORE_DOWN_REPLY
     await plan.ok()      # every step confirmed: the plan leaves the park (a return above left it for the shadow's replay)
     if gone:
         # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
@@ -4583,6 +4593,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         # FTS5 index, the write-ahead log and orphan HNSW dirs - once the archive has succeeded (the archive
         # is the fail-safe: a failed erase leaves a hidden row, never a recalled one). ZOE_MEMORY_PHYSICAL_ERASE=0
         # restores archive-only. Counts only are logged; never the name.
+        plan = None  # No approved rows means there is no row plan to retain.
+
         async def _erase_named(archived_ids: list[str]) -> None:
             if not hasattr(svc, "erase_rows"):
                 return
@@ -4621,8 +4633,10 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             except Exception as exc:  # noqa: BLE001 - the rows are archived either way
                 logger.warning("memory_forget_entity: physical erase failed (%s) - rows stay archived",
                                type(exc).__name__)
+                if plan is not None:
+                    plan.failed()
                 import os_shadow
-                if os_shadow.unconfirmed(exc):   # the kernel stopped after the entry check: NOT confirmed; the repeat sweeps the archived rows
+                if os_shadow.unconfirmed(exc):
                     raise
 
         if not matches:
@@ -4630,7 +4644,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # line / open loop may still name them
             try:
                 await _erase_named([])
-            except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
+            except Exception:  # noqa: BLE001 - only an unconfirmed shadow erase stops the cascade
                 return await _forget_entity_unconfirmed(user_id)
             _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
             if not _cascade_ok:
@@ -4652,14 +4666,18 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 forgotten += 1
                 if ref is not None:      # None = the archive was refused / did nothing: never erase on top of that
                     archived_ids.append(r.id)
+                else:
+                    plan.failed()
             except Exception as exc:
+                plan.failed()
                 logger.warning("memory_forget_entity: archive failed id=%s: %s",
                                r.id, exc)
         try:
             await _erase_named(archived_ids)
-        except Exception:  # noqa: BLE001 - only the unconfirmed shadow forget is raised (above)
+        except Exception:  # noqa: BLE001 - only an unconfirmed shadow erase stops the cascade
+            plan.failed()
             return await _forget_entity_unconfirmed(user_id)
-        await plan.ok()
+        await plan.ok()  # A failed archive or physical erase keeps the row ids parked.
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")
