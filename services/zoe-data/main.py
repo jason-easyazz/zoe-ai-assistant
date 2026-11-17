@@ -2178,6 +2178,9 @@ app = FastAPI(
 from middleware.logging import StructuredLoggingMiddleware
 
 app.add_middleware(StructuredLoggingMiddleware)
+# Member requests are turns for their duration (auth._bind_request_turn): a removal waits for them and refuses their late writes.
+from auth import RequestTurnMiddleware as _RequestTurnMiddleware  # noqa: E402
+app.add_middleware(_RequestTurnMiddleware)
 
 # Browser origins permitted to make credentialed requests. This base list plus
 # the ZOE_ALLOWED_WS_ORIGINS extras (resolved by _allowed_browser_origins) are

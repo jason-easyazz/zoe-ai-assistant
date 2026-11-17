@@ -542,3 +542,96 @@ def test_a_device_token_bound_to_a_member_under_removal_is_refused(monkeypatch):
     assert e.value.status_code == 401
     who["id"] = "member-b"
     assert asyncio.run(auth.get_current_user(Req()))["user_id"] == "member-b"
+
+
+def _turn_app(monkeypatch, user):
+    """A tiny app: RequestTurnMiddleware around one route that depends on the real get_current_user (zoe-auth faked)."""
+    import auth
+    import erase_watermark
+    from fastapi import Depends, FastAPI
+
+    async def validate(_sid):
+        return dict(user)
+    monkeypatch.setattr(auth, "_validate_with_auth_service", validate)
+
+    async def not_removed(_uid):
+        return False
+    monkeypatch.setattr(auth, "_under_removal", not_removed)
+    monkeypatch.setattr(auth.relay_ingress, "is_relay", lambda _req: False)
+    auth._session_cache.clear()
+    seen = {}
+    app = FastAPI()
+
+    @app.post("/write")
+    async def write(u=Depends(auth.get_current_user)):
+        seen["bound"] = erase_watermark._TURN_CTX.get()
+        seen["inflight"] = erase_watermark.inflight_turns(user["user_id"])
+        return {"ok": True}
+    app.add_middleware(auth.RequestTurnMiddleware)
+    return app, seen
+
+
+def test_a_members_request_is_a_turn_while_it_runs_and_is_closed_after(monkeypatch):
+    """#2669 review P1: a request already past auth when a removal began could write after the erase (no bound turn, so the store
+    write guard never judged it, and the delete did not wait for it). A signed-in member's request is now a turn for its duration:
+    bound (so every member-owned write is judged against its START) and counted in flight (so the delete waits for it), then closed.
+    Negative control: a guest opens no turn."""
+    from fastapi.testclient import TestClient
+    import erase_watermark
+
+    app, seen = _turn_app(monkeypatch, {"user_id": A, "role": "member", "username": "a"})
+    r = TestClient(app).post("/write", headers={"X-Session-ID": "sess-a"})
+    assert r.status_code == 200
+    assert seen["bound"] is not None and seen["inflight"] == 1, "bound and in flight while the route runs"
+    assert erase_watermark.inflight_turns(A) == 0, "closed once the response is sent"
+
+    app, seen = _turn_app(monkeypatch, {"user_id": "guest", "role": "guest", "username": "guest"})
+    TestClient(app).post("/write", headers={"X-Session-ID": "sess-g"})
+    assert seen["bound"] is None and seen["inflight"] == 0
+
+
+def test_without_the_middleware_no_request_turn_is_opened(monkeypatch):
+    """A direct call (or an app without RequestTurnMiddleware) opens nothing, so no turn can leak and stall a later delete."""
+    import auth
+    import erase_watermark
+
+    class Req:
+        scope = {}
+        headers = {"X-Session-ID": "sess-x"}
+
+    async def validate(_sid):
+        return {"user_id": A, "role": "member", "username": "a"}
+    monkeypatch.setattr(auth, "_validate_with_auth_service", validate)
+
+    async def not_removed(_uid):
+        return False
+    monkeypatch.setattr(auth, "_under_removal", not_removed)
+    monkeypatch.setattr(auth.relay_ingress, "is_relay", lambda _req: False)
+    auth._session_cache.clear()
+    assert asyncio.run(auth.get_current_user(Req()))["user_id"] == A
+    assert erase_watermark.inflight_turns(A) == 0
+
+
+def test_an_unsigned_admin_override_cannot_start_a_removal(monkeypatch):
+    """#2669 review P1: require_admin passes the header-less family-admin promotion (ZOE_UNAUTHENTICATED_ROLE), so an anonymous LAN
+    caller could durably bar another member. The route now needs a signed-in administrator. Negative control: a real admin session
+    passes the check."""
+    from fastapi import HTTPException
+    from routers import member_removal as route
+
+    class Req:
+        def __init__(self, sid):
+            self.headers = {"X-Session-ID": sid} if sid else {}
+    started = []
+
+    async def advance(*a, **k):
+        started.append(a)
+    monkeypatch.setattr(route.member_removal, "advance", advance)
+    override = {"user_id": "family-admin", "role": "admin", "unauthenticated_override": True}
+    for admin, sid in ((override, ""), ({"user_id": ADMIN, "role": "admin", "auth_degraded": True}, "s1"),
+                       ({"user_id": ADMIN, "role": "admin"}, "")):
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(route.remove_member(A, Req(sid), admin))
+        assert e.value.status_code == 403
+    assert started == [], "no removal step ran"
+    route._signed_in_admin({"user_id": ADMIN, "role": "admin"}, Req("s1"))      # a signed-in admin passes

@@ -25,8 +25,17 @@ def _session(request: Request) -> str:
     return str(request.headers.get("X-Session-ID") or request.headers.get("x-session-id") or "")
 
 
+def _signed_in_admin(admin: dict, request: Request) -> None:
+    """Removing a member is destructive and lasting: it needs an administrator who actually SIGNED IN. ``require_admin`` also passes
+    the header-less ZOE_UNAUTHENTICATED_ROLE=family-admin promotion and a degraded identity; neither is a person, and an anonymous
+    LAN caller must never be able to bar another member (the job's first step, before the missing session stops it)."""
+    if admin.get("unauthenticated_override") or admin.get("auth_degraded") or not _session(request):
+        raise HTTPException(status_code=403, detail="Sign in as an administrator to remove a member")
+
+
 @router.post("/{user_id}/remove", status_code=202)
 async def remove_member(user_id: str, request: Request, admin: dict = Depends(require_admin)):
+    _signed_in_admin(admin, request)
     target = str(user_id or "").strip()
     if not member_removal.valid_member_id(target):
         raise HTTPException(status_code=400, detail="Not a member id")

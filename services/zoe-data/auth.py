@@ -119,7 +119,7 @@ async def _under_removal(user_id: str) -> bool:
     return False
 
 
-async def _removal_gate(user: Optional[dict]) -> Optional[dict]:
+async def _removal_gate(user: Optional[dict], request: Any = None) -> Optional[dict]:
     """The removal barrier for a resolved identity (session, cache miss, or relay). Returns the identity to use: unchanged when its
     member is not being removed; RAISES 401 when they are. When the removal row cannot be read it RAISES 503, or - only with
     ZOE_AUTH_FAIL_CLOSED explicitly off - returns a degraded GUEST, never the member (an outage must not let a member under removal
@@ -139,7 +139,59 @@ async def _removal_gate(user: Optional[dict]) -> Optional[dict]:
         return out
     if under_removal:
         raise HTTPException(status_code=401, detail="This account is being removed")
+    if request is not None:
+        _bind_request_turn(request, user)     # a member let through is a turn for the rest of the request
     return user
+
+
+#: the scope key under which a request's member turns are listed; RequestTurnMiddleware creates the list and closes every turn in it
+#: when the response has been sent. No list (a direct call, a test without the middleware): no turn is opened, so none can leak.
+REQUEST_TURNS_KEY = "zoe_request_turns"
+
+
+def _bind_request_turn(request: Any, user: Optional[dict]) -> None:
+    """Make a signed-in MEMBER's request a turn for its duration (``erase_watermark.turn_open`` + ``turn_bind``): every member-owned
+    store write it makes is then judged by ``store_write_guard`` against the request's START, so a request that was already past auth
+    when a removal began cannot write after the erase; and the member delete waits for it like any turn (cancelling it once stale).
+    Guests, degraded identities and principals with no member id open nothing."""
+    uid = str((user or {}).get("user_id") or "")
+    if not uid or uid == GUEST_USER_ID or (user or {}).get("auth_degraded"):
+        return
+    scope = getattr(request, "scope", None)
+    turns = scope.get(REQUEST_TURNS_KEY) if isinstance(scope, dict) else None
+    if not isinstance(turns, list):
+        return
+    try:
+        import erase_watermark
+
+        token = erase_watermark.turn_open(None, uid)
+        turns.append(token)
+        erase_watermark.turn_bind(token)
+    except Exception as exc:  # noqa: BLE001 - never fail a request over its turn record
+        logger.warning("request turn not recorded (%s)", type(exc).__name__)
+
+
+class RequestTurnMiddleware:
+    """Pure ASGI: gives every HTTP request a list for its member turns (``_bind_request_turn``) and closes them all once the response
+    has finished - streamed responses included, since it runs after the app returns."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        scope[REQUEST_TURNS_KEY] = []
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            tokens = scope.pop(REQUEST_TURNS_KEY, None) or []
+            if tokens:
+                import erase_watermark
+
+                for token in tokens:
+                    erase_watermark.turn_close(token)
 
 
 def _cache_set(session_id: str, user: dict):
@@ -270,7 +322,7 @@ async def get_current_user(request: Request) -> dict:
     # whenever the flag is off, so with the flag off this line changes nothing.
     if relay_ingress.is_relay(request):
         # the relay resolves its own sessions (fresh sign-in at the panel): the removal barrier applies to them all the same
-        return await _removal_gate(await relay_ingress.resolve_user(request))
+        return await _removal_gate(await relay_ingress.resolve_user(request), request)
 
     session_id = request.headers.get("X-Session-ID", "")
     device_token = request.headers.get("X-Device-Token", "")
@@ -289,7 +341,7 @@ async def get_current_user(request: Request) -> dict:
         if _resolved is not None:
             # OUTSIDE the try: the removal gate's 401/503 must reach the caller, not be swallowed. A panel principal has no member
             # id and passes unchanged; with ZOE_DEVICE_TOKEN_BINDS_MEMBER=1 the token resolves to its MEMBER, who is gated here.
-            return await _removal_gate(_resolved)
+            return await _removal_gate(_resolved, request)
         # Invalid/unknown token → fall through to unauthenticated behaviour
 
     if not session_id:
@@ -315,6 +367,7 @@ async def get_current_user(request: Request) -> dict:
             _session_cache.pop(session_id, None)
             raise HTTPException(status_code=401, detail="This account is being removed")
         _refine_traffic_class(cached)
+        _bind_request_turn(request, cached)
         return cached
 
     validated = await _validate_with_auth_service(session_id)
@@ -349,6 +402,7 @@ async def get_current_user(request: Request) -> dict:
         return gated
     _cache_set(session_id, validated)
     _refine_traffic_class(validated)
+    _bind_request_turn(request, validated)
     return validated
 
 
