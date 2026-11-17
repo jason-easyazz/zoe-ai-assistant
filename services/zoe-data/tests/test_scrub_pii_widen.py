@@ -859,7 +859,8 @@ def test_a_labelled_secret_needs_no_shape(form, value, tail):
     """Review (PR #2660), the class rule: after a secret label and its connector the value is redacted whatever its characters."""
     out, _ = scrub_pii(form.format(v=value) + tail)
     assert R in out and not any(part in out.split() for part in value.split()), out
-    assert tail.strip(" .") in out, out
+    if tail.startswith("."):
+        assert tail.strip(" .") in out, out                  # the next sentence is never taken
 
 
 @pytest.mark.parametrize("text,want", [
@@ -873,3 +874,26 @@ def test_a_secret_said_without_a_connector_goes_too(text, want):
                                   "the wifi password works", "I lost the door key"])
 def test_talk_about_a_code_without_a_value_is_kept(text):
     assert scrub_pii(text) == (text, None)
+
+
+@pytest.mark.parametrize("text", [
+    "passwords are ZorbLime", "api keys are ZorbLime", "PINS are 1 2 3 4", "door codes are ZorbLime", "api key ZorbLime",
+    "token's ZorbLime", "secret's ZorbLime", "passcode seven two nine four", "token - ZorbLime", "passcode - seven two nine four",
+    "door code - 12 34", "network key - ZorbLime", "door code is         ZorbLime", "combination is 12 34",
+    'combination is "violet, otters drift"', 'password will be "violet, otters drift"', 'password has been "violet and the otters drift"',
+    'password is "s amber, river"', "password's !@#$%^&*", "wifi key !@#$%^&*", "pass-word is ZorbLime", "pass\nword is ZorbLime",
+])
+def test_the_net_takes_every_labelled_secret_the_grammar_missed(text):
+    """An adversarial pass over the label path (PR #2660): plural labels, possessive and dash connectors, long gaps, a bare
+    "combination", quotes after the newer connectors, symbol-leading values, split labels - nothing of the value is left."""
+    out, _ = scrub_pii(text)
+    assert out.endswith(R) and not any(w in out for w in ("Zorb", "violet", "otters", "amber", "river", "seven", "nine", "12", "1 2", "!@#")), out
+
+
+def test_the_net_is_linear_on_long_input():
+    import time
+    for big in ("password is " + " " * 20000 + "x", "pin " * 5000, "password " + "1 " * 10000, "door code is " + "a," * 10000,
+                "passwords are " + "\"" + "a " * 10000):
+        t0 = time.monotonic()
+        scrub_pii(big)
+        assert time.monotonic() - t0 < 2.0

@@ -1618,9 +1618,9 @@ _QUOTED_PREFIX_RE = re.compile(
     r"(?i)\b(?:(?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30}"
     rf"|(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     r"|password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b"
-    r"\s{0,8}(?:(?:is|was|'s|’s)\b(?:\s{0,8}[:=])?\s{0,8}|[:=-]\s{0,8})?"
+    r"\s{0,8}(?:(?:" + _CONNECT_WORDS + r"|'s|’s)(?:\s{0,8}[:=])?\s{0,8}|[:=-]\s{0,8})?"
     rf"(?:(?:{_alt(tuple(_VALUE_MODIFIERS))})\s{{1,8}}){{0,4}}"
-    r"(?=[\"'‘’“”](?![sS]\b))"     # an opening quote - never the apostrophe of "password's"
+    r"(?=[\"“”]|['‘’](?![sS]\b))"     # an opening quote - never the apostrophe of "password's" (a double quote is never one)
 )
 _CLAUSE_END_RE = re.compile(r"[.;!?\n](?=\s|$)")
 
@@ -1818,6 +1818,58 @@ def _whole_if(lo: int, hi: int):
     return sub
 
 
+# ── THE NET (review of #2660, after an adversarial pass): ONE rule over every secret label, run LAST, for what
+# the grammar above did not take (a value it already redacted keeps the clause end the grammar chose). The grammar above decides
+# what a value looks like; the net does not. After a label (singular or plural, "pass-word", split by a line break) and ANY
+# connector (a word connector, ":" / "=" / "'s" / a spaced dash, any amount of space) everything up to the END OF THE SENTENCE
+# is the value - letters, digit groups, words, symbols, a new clause, a comma tail; a quoted value runs to its closing quote
+# even across sentence ends. With NO connector the same holds unless the next word is on the closed about-the-secret list
+# (``_PASSWORD_NOT_VALUES``: "password reset", "the alarm code changed"). Bounded gaps, one alternation per step: linear.
+_NET_LABELS = (r"pass[-\s]{0,2}words?|pass[-\s]{0,2}codes?|pass[-\s]{0,2}phrases?|pins?|pin\s{1,8}(?:numbers?|codes?)|api[\s_-]?keys?"
+               r"|auth[\s_-]?tokens?|tokens?|secrets?|combinations?|combos?")
+_NET_CODE_FORMS = (
+    rf"(?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})s?(?:\s+numbers?)?"
+    rf"|(?:codes?|pins?|passcodes?|passwords?|combinations?|combos?)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)})")
+_NET_CONN_RE = re.compile(
+    rf"(?i)\b(?:{_NET_CODE_FORMS}|{_NET_LABELS})(?![\w-])"
+    r"\s{0,40}(?:(?:" + _CONNECT_WORDS + r")(?:\s{0,40}[:=])?|[:=]|'s(?!\w)|’s(?!\w)|(?<=\s)-(?=\s))\s{0,40}(?=\S)")
+_NET_BARE_RE = re.compile(
+    rf"(?i)\b(?:{_NET_CODE_FORMS}|pass[-\s]{{0,2}}words?|pass[-\s]{{0,2}}codes?|pass[-\s]{{0,2}}phrases?|api[\s_-]?keys?)(?![\w'’-])"
+    rf"\s{{1,40}}(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)}|{_CONNECT_WORDS[3:-13]})(?![\w'’-]))(?=[^\s\[=:])")
+_SENTENCE_END_RE = re.compile(r"[.;!?](?=\s|$)|\n")
+_NET_OPEN = "\"'‘“"
+
+
+def _net_end(text: str, start: int) -> int:
+    """Where the value starting at ``start`` ends: its closing quote (one not followed by a letter or digit), else the sentence end."""
+    if text[start] in _NET_OPEN:
+        close = _CLOSE_QUOTE.get(text[start], text[start])
+        k = text.find(close, start + 1)
+        while k >= 0:
+            if k + 1 == len(text) or not (text[k + 1].isalnum() or text[k + 1] == "_"):
+                return k + 1
+            k = text.find(close, k + 1)
+    m = _SENTENCE_END_RE.search(text, start)
+    return m.start() if m else len(text)
+
+
+def _scrub_label_net(text: str) -> str:
+    out, pos = [], 0
+    while True:
+        a, b = _NET_CONN_RE.search(text, pos), _NET_BARE_RE.search(text, pos)
+        m = min((x for x in (a, b) if x), key=lambda x: (x.start(), x is b), default=None)   # the earliest label; a connector form first
+        if m is None:
+            out.append(text[pos:])
+            return "".join(out)
+        if text.startswith(_REDACT, m.end()):               # already taken by the grammar: its own end (clause, closing quote) stands
+            out.append(text[pos:m.end() + len(_REDACT)])
+            pos = m.end() + len(_REDACT)
+            continue
+        end = _net_end(text, m.end())
+        out.append(text[pos:m.end()] + _REDACT)
+        pos = max(end, m.end() + 1)
+
+
 def _scrub_secrets(text: str) -> str:
     """Labelled codes, PINs / passwords said without "is", labelled account numbers. Never rejects."""
     if not any(c.isdigit() for c in text):
@@ -1961,7 +2013,7 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     redacted = _drive(_BARE_PASSWORD_RE, redacted, _never)            # a password said without "is", letters-only too
     redacted = _drive(_CODE_LABELLED_RE, redacted, _never)            # "the wifi key is <anything>": no shape required
     redacted = _drive(_CODE_BARE_RE, redacted, _never)                # "the wifi key <word>": the closed list only
-    redacted = _scrub_secrets(redacted)
+    redacted = _scrub_label_net(_scrub_secrets(redacted))            # LAST: whatever the grammar above left after a label
     return (_scrub_contact(redacted) if contact else redacted), None
 
 
