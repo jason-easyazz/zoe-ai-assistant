@@ -1198,6 +1198,7 @@ async def _save_chat_message(
         # catch-up) cannot reclassify a turn the gate refused as the owner's own words. Only a rejection is recorded:
         # no verdict / verified leaves the metadata exactly as before.
         meta["speaker_verified"] = False
+    row_id = message_id or uuid.uuid4().hex     # chosen BEFORE the bookkeeping: the turn's identity for every store a forget erases
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): number the user's turn (so "why did you say that?" can find the reply before it) and
     # claim an off-the-record turn at its FIRST sight. An off-the-record user turn - and the reply to it, which can restate it -
     # is saved flagged `off_record`, so the readers that rebuild memory from this table at night (digest, idle consolidation, the
@@ -1208,12 +1209,13 @@ async def _save_chat_message(
         if user_id and role == "user":
             if count_turn:   # the voice lane saves the same user turn twice (at its start and with the reply): count it once
                 _mp.note_user_turn(user_id, clean_content, session_id)
-                try:   # what "forget that" points at: the owner's previous TURN, never the newest memory write (turn_forget)
-                    import turn_forget as _tf
+            try:   # what "forget that" points at: the owner's previous TURN (turn_forget) - noted NOW, so a capture that starts
+                import turn_forget as _tf   # before the insert lands still binds to it; its saved-turn id joins only once COMMITTED
 
+                if count_turn:
                     _tf.note_user_turn(user_id, clean_content)
-                except Exception:  # noqa: BLE001
-                    pass
+            except Exception:  # noqa: BLE001
+                pass
             if _mp.claim_turn(user_id, clean_content):
                 meta["off_record"] = True
             else:
@@ -1243,10 +1245,11 @@ async def _save_chat_message(
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content, metadata) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                ((message_id or uuid.uuid4().hex), session_id, role, clean_content, metadata),
+                (row_id, session_id, role, clean_content, metadata),
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
+        _note_forget_id(user_id, role, clean_content, row_id)   # committed: now its id is the turn's identity
         return True
     except Exception as _sme:
         # Warning, not debug: a dropped save means the reply the user saw is
@@ -1255,7 +1258,23 @@ async def _save_chat_message(
             "_save_chat_message failed (%s turn for session %s dropped): %s",
             role, session_id, _sme,
         )
+        # NOT durable: no id is recorded (the turn itself was noted above, so "forget that" still binds to it); the recovery
+        # save's committed id becomes the turn's identity (``_note_forget_id``)
         return False
+
+
+def _note_forget_id(user_id, role: str, content: str, mid: str) -> None:
+    """The saved-turn id every row derived from the owner's turn carries (``turn_forget.Turn.mids``), recorded ONLY once that row
+    has COMMITTED: an id whose insert failed names no transcript row, so facts stamped with it and a forget by it would miss the
+    recovered copy. Each committed copy's id joins the turn (the voice lane saves one turn twice). Never raises."""
+    if not user_id or role != "user" or not mid:
+        return
+    try:
+        import turn_forget as _tf
+
+        _tf.note_saved_copy(user_id, content, mid)
+    except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
+        pass
 
 
 async def _touch_chat_session(db, *, session_id: str, content: str, user_id: str | None = None) -> None:

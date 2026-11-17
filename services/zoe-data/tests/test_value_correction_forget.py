@@ -247,7 +247,7 @@ def _forget_last(monkeypatch, text):
             return object()
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
 
-    async def from_turn(svc, uid, t, ts):
+    async def from_turn(svc, uid, t, ts, **_kw):          # (mids=: the turn's saved-turn ids)
         return []
 
     async def noop(*a, **k):
@@ -435,7 +435,6 @@ def test_an_unrelated_text_drops_nothing():
 def _one_shot_failure(monkeypatch, step):
     """Make one destructive step of the topic forget fail ONCE (then work), as a store blip would."""
     import conversation_notes
-    import forget_topic
 
     left = {"n": 1}
 
@@ -446,10 +445,13 @@ def _one_shot_failure(monkeypatch, step):
                 raise ConnectionError("pool lost")
             return await real(*a, **k)
         return flaky
+    import exact_words
+
+    # the forget record's steps (forget_record): the words = the transcript flag, the notes = the notes erase by id
     if step == "words":
-        monkeypatch.setattr(forget_topic, "_erase_words", once(forget_topic._erase_words))
+        monkeypatch.setattr(exact_words, "flag_transcript_turns", once(exact_words.flag_transcript_turns))
     elif step == "notes":
-        monkeypatch.setattr(conversation_notes, "erase_topic", once(conversation_notes.erase_topic))
+        monkeypatch.setattr(conversation_notes, "erase_ids", once(conversation_notes.erase_ids))
     elif step == "archive":
         monkeypatch.setattr(_Svc, "review", once(_Svc.review))
     return left
@@ -542,16 +544,16 @@ def test_an_unrelated_name_drops_nothing():
 
 # ── the call sites, by AST, each with its break-the-fix control ─────────────────────────────
 
-# forget_topic.forget is a thin wrapper (it clears the pending-correction markers in a finally, after the body); the body that
-# makes these calls is forget_topic._forget.
+# forget_topic.forget is a thin wrapper (it clears the pending-correction markers in a finally, after the body); the clears run in
+# forget_topic._resolve (the forget record's resolution: before anything is destroyed).
 CALL_SITES = (
     ("memory_service.py", "delete_user", "forget_user"),
     ("memory_forget_cascade.py", "_clear", "forget_matching"),
-    ("forget_topic.py", "_forget", "forget_matching"),
-    ("forget_topic.py", "_forget", "forget_in_texts"),
+    ("forget_topic.py", "_resolve", "forget_matching"),
+    ("forget_topic.py", "_resolve", "forget_in_texts"),
     ("intent_router.py", "_execute_forget_last", "forget_in_texts"),
     ("intent_router.py", "_execute_forget_last", "forget_turns"),
-    ("forget_topic.py", "_forget", "forget_turns"),
+    ("forget_topic.py", "_resolve", "forget_turns"),
     ("memory_service.py", "erase_rows", "forget_in_texts"),
 )
 

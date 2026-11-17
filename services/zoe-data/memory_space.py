@@ -245,44 +245,32 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     """Forget ONE of the caller's rows: ``'forgotten'`` | ``'gone'`` (absent, someone else's, or already forgotten - one answer)
     | ``'protected'`` (a curated row a child may not remove, :func:`curated_locked`).
 
-    The steps of ``provenance_answers.forget_it``: reject the row and its twins (one utterance leaves several), erase them for
-    real when physical erase is on, remove the owner's verbatim words. RAISES when a step could not finish (the row may already
-    be hidden): calling again redoes EVERY remaining step - a row that is already rejected is finished the same way, twins and
-    erase included - so the caller must not report a forget that did not hold.
-    """
+    ONE forget record (forget_record) with the steps of ``provenance_answers.forget_it``: the row, its twins (one utterance leaves
+    several) and the rows bound to its saved turns hidden and erased, the owner's words behind them erased everywhere. RAISES when a
+    step could not finish: the record stays open and calling again finishes it, so the caller must not report a forget that did
+    not hold."""
+    import forget_record
+
     svc = svc or pa._svc_default()
     rid = str(row_id or "").strip()
     if not rid:
         return "gone"
-    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
-    if ref is None or not pa._owns(ref.metadata or {}, user_id):
-        return "gone"
-    status = str((ref.metadata or {}).get("status") or "approved").lower()
-    if status not in ("approved", "rejected"):
-        return "gone"          # pending / disputed / archived rows are not on the screen: nothing here to forget
-    if await curated_locked(user_id, ref.metadata):
+    ref = await asyncio.wait_for(svc.get(rid, strict=True), pa.READ_BUDGET_S)
+    mine = ref is not None and pa._owns(ref.metadata or {}, user_id)
+    status = str((ref.metadata or {}).get("status") or "approved").lower() if mine else ""
+    if mine and status not in ("approved", "rejected"):
+        mine = False           # pending / disputed / archived rows are not on the screen: nothing here to forget
+    if mine and await curated_locked(user_id, ref.metadata):
         return "protected"
-    exp = _explained_for(rid, ref)
-    twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
-    if status == "approved":
-        if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
-            raise RuntimeError("memory store refused the forget")
-    gone = [ref.id]
-    for tw in twins:
-        if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
-            raise RuntimeError("memory store refused a twin's forget")
-        gone.append(tw.id)
-    physical = False
-    if hasattr(svc, "erase_rows"):
-        from memory_service import physical_erase_enabled
-
-        if physical_erase_enabled():
-            # a failed physical erase is NOT "forgotten": the text is still on disk. The rows stay rejected; a retry finishes it.
-            await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
-            physical = True
-    erased = await pa._erase_words(user_id, exp, ref.text or "")
-    logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
-    if status == "rejected" and len(gone) == 1 and not erased and not physical:
+    out = await forget_record.forget(user_id, code="memory_space_row", key=f"row:{rid}", svc=svc,
+                                     resolve=(lambda: pa.resolve_row(svc, user_id, _explained_for(rid, ref), ref)) if mine
+                                     else pa._nothing)
+    if out.nothing:
+        return "gone"
+    if not out.complete:
+        raise RuntimeError(f"forget not finished ({','.join(out.failed) or type(out.error).__name__})")
+    logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(out.plan.rows))
+    if status == "rejected" and not out.resumed and not pa._removed(out) and len(out.plan.rows) == 1:
         return "gone"          # already forgotten earlier and nothing was left to remove
     return "forgotten"
 
@@ -296,43 +284,33 @@ def _explained_for(rid: str, ref: Any) -> "mp.Explained":
 
 
 def guardian_forget_open(meta: dict) -> bool:
-    """True when a row is one a guardian's forget may act on: still approved, OR rejected BY an earlier guardian forget that did not
-    finish (its twins / physical erase / verbatim words may remain), so the retry resumes every remaining step instead of the review
-    route treating the already-rejected row as an ordinary reject and reporting success."""
+    """True when a row is one a guardian's forget may act on: still approved, OR rejected BY an earlier guardian forget (its record
+    may still be open), so the review route does not treat the already-rejected row as an ordinary reject and report success."""
     status = str((meta or {}).get("status") or "approved").lower()
     return status == "approved" or (status == "rejected" and (meta or {}).get("review_note") == "guardian_forget")
 
 
 async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = None) -> str:
     """An ADMIN forgets ONE approved row of ANOTHER member on their behalf - the grown-up's one step for a child, whose own
-    screen and voice forget are refused ("ask a grown-up"). The same steps as :func:`forget_row` (the row AND the twins one
+    screen and voice forget are refused ("ask a grown-up"). The same record as :func:`forget_row` (the row AND the twins one
     utterance left, physical erase when on, the member's verbatim words), but every reject is the admin's
     (``origin="admin"``, operator class), never the member's own. ``'forgotten'`` | ``'gone'`` (absent, not ``owner``'s, or
     not approved). RAISES when a step could not finish; calling again finishes it. Minor-affect safety cell (c),
     docs/governance/emotional-safety-note.md section 4.1: a feeling must not survive the guardian's forget in a twin."""
+    import forget_record
+
     svc = svc or pa._svc_default()
     rid = str(row_id or "").strip()
-    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S) if rid else None
-    if ref is None or not pa._owns(ref.metadata or {}, owner):
+    ref = await asyncio.wait_for(svc.get(rid, strict=True), pa.READ_BUDGET_S) if rid else None
+    ok = ref is not None and pa._owns(ref.metadata or {}, owner) and guardian_forget_open(ref.metadata or {})
+    out = await forget_record.forget(owner, code="guardian_row", key=f"row:{rid}", svc=svc, actor=actor, origin="admin",
+                                     resolve=(lambda: pa.resolve_row(svc, owner, _explained_for(rid, ref), ref)) if ok
+                                     else pa._nothing)
+    if out.nothing:
         return "gone"
-    if not guardian_forget_open(ref.metadata or {}):
-        return "gone"
-    twins = await pa.twins_of(owner, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the forget
-    gone = []
-    for row in (ref, *twins):
-        if str((row.metadata or {}).get("status") or "").lower() == "rejected":
-            gone.append(row.id)                  # this row's reject already landed (an earlier, unfinished attempt): go on to the rest
-            continue
-        if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is None:
-            raise RuntimeError("memory store refused the guardian's forget")
-        gone.append(row.id)
-    if hasattr(svc, "erase_rows"):
-        from memory_service import physical_erase_enabled
-
-        if physical_erase_enabled():
-            await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
-    await pa._erase_words(owner, _explained_for(rid, ref), ref.text or "")
-    logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
+    if not out.complete:
+        raise RuntimeError(f"guardian forget not finished ({','.join(out.failed) or type(out.error).__name__})")
+    logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(out.plan.rows))
     return "forgotten"
 
 
@@ -355,14 +333,14 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
     new = " ".join(str(new_text or "").split())[:TEXT_MAX_CHARS]
     if not rid:
         return "gone"
-    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
+    ref = await asyncio.wait_for(svc.get(rid, strict=True), pa.READ_BUDGET_S)
     if ref is None or not pa._owns(ref.metadata or {}, user_id):
         return "gone"
     status = str((ref.metadata or {}).get("status") or "approved").lower()
     if status == "superseded" and new:
         # a RETRY of this very correction whose twin retire did not finish: the successor already holds ``new`` - finish the twins
         succ_id = str((ref.metadata or {}).get("superseded_by_id") or "")
-        succ = await asyncio.wait_for(svc.get(succ_id), pa.READ_BUDGET_S) if succ_id else None
+        succ = await asyncio.wait_for(svc.get(succ_id, strict=True), pa.READ_BUDGET_S) if succ_id else None
         if (succ is not None and pa._owns(succ.metadata or {}, user_id)
                 and " ".join((succ.text or "").split()) == new and correction_apply.enabled()):
             twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc, strict=True) if tw.id != succ_id]

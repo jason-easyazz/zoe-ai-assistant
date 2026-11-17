@@ -1356,6 +1356,491 @@ _PEM_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _BANKING_CONTEXT_RE = re.compile(r"(?i)\b(iban|bank|account|swift|bic|transfer)\b")
+#: where another secret STARTS: a suffix (below) never takes a label word, nor a conjunction (and / but / or / plus - not "also" /
+#: "then", which are value MODIFIERS: "is actually also <value>") followed within four tokens by a
+#: label or a cue a later pattern needs (a code / key / number word, a contact cue, any digit): "... and secret is ...",
+#: "... and the key safe code is ...", "... and call me on ...", so one match never swallows what a later secret needs
+_LABEL_WORD = (r"(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo|key"
+               r"|number|no|phone|mobile|email|e-mail|address|call|ring|text|live|lives|at|on"
+               # the first word of every labelled account / identity number (``_ACCOUNT_LABELS``)
+               r"|account|acct|bank|bsb|sort|routing|member|membership|customer|client|policy|licence|license|passport|tax"
+               r"|medicare|card|iban|abn|tfn|ssn|social|national|driver|drivers|driver's|vehicle|rego|registration|student|employee"
+               r"|staff|patient|health|insurance|loyalty|frequent)\b")
+_NEXT_LABEL = (r"(?!(?:and|but|or|plus)\s{1,8}(?:[^\s,;.!?]+\s{1,8}){0,3}(?:" + _LABEL_WORD + r"|[^\s,;.!?]*\d)"
+               r"|(?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token|code|combination|combo)\b)")
+#: the rest of the SENTENCE after the value's first word, in a bounded window (``_SLOT_CHARS``): ``_judge_match`` decides
+#: where the value ends in it
+_SUFFIX = r"([^.;!?\n]{0,400})"
+#: the WORD connectors after a secret label: "is" / "was", and the other forms a value is said with ("will be", "should be",
+#: "has been", "are", "isn't" ...). Each is one fixed phrase with bounded inner spaces (no adjacent unbounded whitespace runs)
+_CONNECT_WORDS = (r"(?:isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
+                  r"|(?:has|had|have)\s{1,8}been)(?![\w'’])")
+_LABELLED_SECRET_RE = re.compile(
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:" + _CONNECT_WORDS + r")(?:\s*[:=])?|[:=])\s*)"
+    # the value stops before trailing punctuation (the clause stays readable). The connector is UNAMBIGUOUS: "is" / "was" takes an
+    # optional ":" / "=" only together with the spaces in front of it (``(?:\s*[:=])?``), so no two whitespace runs can split the
+    # same spaces - two adjacent runs around an optional ":" were quadratic on a long run of trailing whitespace (bot review)
+    r"([^\s,;!?]+?)(?=[.,;!?]*(?:\s|$))" + _SUFFIX,
+)
+#: after "<label> is / was" (NOT after = or :, which always introduce a value) the first word is kept only when it says what STATE
+#: the secret is in or WHERE it is, or negates: a closed, whole-word list. Deliberately tighter than ``_PASSWORD_NOT_VALUES``: no
+#: article, possessive or other word that commonly INTRODUCES a value ("is the word ...", "is my dog's name") - those redact.
+_LABELLED_NOT_VALUES = frozenset({
+    # STATE words: no value follows them in the clause ("is wrong", "is still working")
+    "wrong", "incorrect", "invalid", "valid", "expired", "working", "broken", "gone", "lost", "forgotten", "missing", "saved",
+    "stored", "kept", "written", "hidden", "weak", "strong", "long", "short", "blank", "empty", "unset", "fine", "ok", "okay",
+    # TIME words: when it happened, not what it is ("was reset yesterday")
+    "yesterday", "today", "tonight", "recently", "earlier", "lately",
+    # PLACE words that start a location phrase ("is on the fridge", "is in my notebook", "is with my sister")
+    "on", "in", "under", "behind", "inside", "with", "somewhere", "there", "here",
+})
+#: MODIFIERS say nothing about what follows: they are SKIPPED (at most ``_MAX_MODIFIERS``) and the rule is applied to the NEXT word,
+#: so "is still <value>", "is not <value> any more" redact the value while "is still working", "is no longer valid" are kept.
+#: Moved out of the slot-ending list (a value CAN follow them): still, now, too, also, not; changed / reset / set / updated
+#: ("was changed to <value>"), with "to" skipped after them; old / new / different (as adjectives they can sit in front of a value:
+#: "is new <value>") left the lists entirely: they are redacted like any other word.
+_VALUE_MODIFIERS = frozenset({
+    "still", "now", "also", "too", "actually", "really", "just", "currently", "definitely", "probably", "always", "usually",
+    "simply", "basically", "literally", "only", "again", "already", "not", "never", "no", "longer", "changed", "reset", "set",
+    "updated", "to",
+})
+_MAX_MODIFIERS = 4
+#: a first word that INTRODUCES the value: the value is the next words, so up to six more tokens of the clause go with it
+_LABELLED_INTRODUCERS = frozenset({"the", "a", "an", "my", "our", "your", "his", "her", "their", "its", "this", "that", "these",
+                                   "those", "called", "named", "like", "same", "as", "spelled", "spelt", "reads", "says"})
+#: after a kept STATE word, any of these later in the clause introduces a value after all ("is saved as <value>", "is saved under
+#: the name <value>", "is not working but was <value>"): everything after it, to the end of the clause, is redacted
+_STATE_THEN_VALUE = frozenset({"as", "like", "called", "named", "name", "word", "words", "value", "reads", "says", "spelt", "spelled",
+                               "is", "was", "be", "been", "are", "were", "=", ":"})
+#: a value ends where a NEW clause starts: a conjunction followed by a pronoun ("... and I am allergic to peanuts")
+_CLAUSE_CONJ = frozenset({"and", "but", "so", "because", "then", "or", "while", "although"})
+_CLAUSE_SUBJECT = frozenset({"i", "we", "you", "he", "she", "they", "it", "my", "our", "your", "his", "her", "their", "i'm",
+                             "we're", "it's", "there"})
+
+
+_VERB_INTRO = frozenset({"is", "was", "be", "been", "are", "were"})
+#: the PLACE words of ``_LABELLED_NOT_VALUES``: they start a location phrase ("is on the fridge", "is with my sister"), so the
+#: words after them are that place, not checked against ``_STATE_TAIL_OK``
+_PLACE_WORDS = frozenset({"on", "in", "under", "behind", "inside", "with", "somewhere", "there", "here"})
+#: what may directly follow a KEPT state word: a place / time phrase, a conjunction, a modifier, punctuation-led words. Anything
+#: else straight after "is written" / "is saved" / "is kept" could be the secret itself, so it is redacted (fail closed)
+_STATE_TAIL_OK = frozenset({
+    "on", "in", "under", "behind", "inside", "with", "at", "near", "by", "from", "for", "since", "until", "till", "to", "into",
+    "onto", "over", "beside", "next", "somewhere", "there", "here", "everywhere", "anywhere", "yesterday", "today", "tonight",
+    "tomorrow", "recently", "earlier", "lately", "before", "after", "ago", "again", "now", "though", "anyway", "too", "either",
+    "please", "thanks", "sadly", "unfortunately", "apparently",
+}) | _CLAUSE_CONJ | _VALUE_MODIFIERS
+#: modifiers that may sit between a kept state word and what follows it without excusing it ("to" starts a place phrase instead)
+_STATE_TAIL_ADVERBS = _VALUE_MODIFIERS - {"to"}
+
+
+#: a kept "<label> is [modifiers] on the fridge: <value>": the value after a colon / equals sign later in the SAME clause (bounded)
+_LABELLED_KEPT_VALUE_RE = re.compile(
+    r"(?i)\b((?:password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\s*(?:is|was)\s+"
+    r"(?:(?:" + "|".join(sorted(_VALUE_MODIFIERS, key=len, reverse=True)) + r")\s{1,8}){0,4}"
+    r"(?:" + "|".join(sorted(_LABELLED_NOT_VALUES, key=len, reverse=True)) + r")\b[^.;!?\n:=]{0,60}?[:=]\s*)\S+"
+)
+
+
+def _norm_word(token: str) -> str:
+    return token.strip(".,;:!?\"'’").lower()
+
+
+#: the value slot read after a label: the rest of the SENTENCE, at most this many characters (a bounded window keeps every
+#: search linear); a value still running at the window's end is redacted on to its clause end (``_boundary``)
+_SLOT_CHARS = 400
+#: after a comma the value goes on only when the next word introduces it again (", as <value>", ", or <value>")
+_COMMA_CONTINUE = frozenset({"as", "like", "called", "named", "aka", "or", "i.e.", "ie"})
+_DETERMINERS = frozenset({"the", "a", "an", "this", "that", "these", "those"})
+#: a word that closes the sentence's value without being part of it ("the password is hunter2 btw", "... is x ok?")
+_VALUE_ENDERS = frozenset({"btw", "ok", "okay", "thanks", "thx", "please", "though", "anyway", "lol", "haha", "yeah", "right",
+                           "cheers", "fyi"})
+#: where a clause ends in raw text (the window-overflow case): a sentence end, a comma not followed by an introducer, or a
+#: conjunction followed by a new subject - the same rules as ``_clause_end``. One alternation, no nested repeat: linear
+_BOUNDARY_RE = re.compile(
+    r"[.;!?\n]|,(?!\s{0,8}(?:as|like|called|named|aka|or)\b)"
+    r"|\s(?:" + "|".join(sorted(_CLAUSE_CONJ)) + r")\s{1,8}(?:"
+    + "|".join(sorted((_CLAUSE_SUBJECT | _DETERMINERS) - {"i'm", "we're", "it's"})) + r")\b", re.I)
+
+
+def _later_introducer(toks: "list[tuple[str, str]]", k: int, i: int) -> bool:
+    """Does token ``k`` (after the slot's first word ``i``) introduce a value? A word like "as" / "name" anywhere in the clause;
+    a verb ("was") only right after that word or right after a conjunction ("... but was <value>") - "and the dog is fed" has
+    its own subject, so its "is" introduces nothing about the secret."""
+    w = _norm_word(toks[k][1])
+    if w not in _STATE_THEN_VALUE:
+        return False
+    return w not in _VERB_INTRO or k == i + 1 or _norm_word(toks[k - 1][1]) in _CLAUSE_CONJ
+
+
+def _clause_end(toks: "list[tuple[str, str]]", start: int) -> int:
+    """The index where the value starting at ``start`` ends: a comma not followed by an introducer (the next item of a list,
+    "..., alarm code 4821"), or a conjunction opening a new clause (a pronoun / determiner next: "... and I am allergic", "... and
+    the dog is fed"), else the end of the slot."""
+    for j in range(start, len(toks)):
+        w = _norm_word(toks[j][1])
+        if "," in toks[j][0] and w not in _COMMA_CONTINUE:
+            return j
+        if w in _VALUE_ENDERS:
+            return j
+        if w in _CLAUSE_CONJ and j + 1 < len(toks) and _norm_word(toks[j + 1][1]) in (_CLAUSE_SUBJECT | _DETERMINERS):
+            return j
+    return len(toks)
+
+
+def _slot_tokens(first: str, suffix: str) -> "list[tuple[str, str]]":
+    """``(separator, word)`` pairs, LOSSLESS: joined back they are exactly ``first + suffix`` (a trailing separator is a pair
+    with an empty word)."""
+    parts = re.split(r"([\s,]+)", suffix or "")
+    toks = [("", first + parts[0])]
+    toks += [(parts[k], parts[k + 1]) for k in range(1, len(parts) - 1, 2)]
+    return toks
+
+
+def _join(toks: "list[tuple[str, str]]") -> str:
+    return "".join(sp + t for sp, t in toks)
+
+
+def _boundary(text: str, start: int) -> int:
+    m = _BOUNDARY_RE.search(text, start)
+    return m.start() if m else len(text)
+
+
+def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, int]":
+    """One label + connector + value slot (groups 1-4): ``(what replaces text[m.start():stop], stop)``. The driver resumes
+    scanning at ``stop``, so whatever was not judged here (a kept clause's words, the text after a value) is still scanned.
+
+    Up to ``_MAX_MODIFIERS`` modifiers are skipped (kept as said); then the next word decides:
+
+    * nothing left: those words ARE the value ("my password is still"): redacted, after a word connector as after ":" / "=";
+    * with ``excuse`` and a STATE / TIME / PLACE word (``_LABELLED_NOT_VALUES``, where the module has one): kept only while nothing
+      after it can be the secret - a state / time word must be followed by a place / time phrase, a conjunction or a modifier
+      (``_STATE_TAIL_OK``), else the next word is the value; a later introducer in the clause ("as", "the name", "but was")
+      redacts everything after it;
+    * anything else - an introducer included: FAIL CLOSED, the value is the rest of the clause (``_clause_end``; past the
+      window, ``_boundary``)."""
+    head = m.group(1) + m.group(2)
+    toks = _slot_tokens(m.group(3), m.group(4))
+    base = m.start(3)
+    at = lambda k: base + len(_join(toks[:k]))     # noqa: E731 - absolute offset of token k (the tokens are lossless)
+    i = 0
+    # NO word is skipped as a "modifier" (review, PR #2660): "still" / "now" / "reset" can itself be the secret, so the first
+    # word after the connector is always judged as the value (default-redact)
+    if i == len(toks) or not any(t for _sp, t in toks[i:]):   # modifiers only
+        return head + _REDACT, at(i)               # "is still" / "is now": the modifier can itself be the secret - fail closed
+    kept = _join(toks[:i])
+    word = _norm_word(toks[i][1])
+    end = _clause_end(toks, i + 1)
+    overflow = end == len(toks) and len(m.group(4)) >= _SLOT_CHARS
+    stop = _boundary(text, m.end()) if overflow else at(end)
+    not_values = globals().get("_LABELLED_NOT_VALUES") or frozenset()
+    if excuse and word in not_values:
+        j = next((k for k in range(i + 1, end) if _later_introducer(toks, k, i)), None)
+        if j is None and word not in _PLACE_WORDS:
+            n = i + 1                              # "is saved now zebrafiddle": adverbs between do not excuse what follows
+            while n < end and n - i <= _MAX_MODIFIERS and _norm_word(toks[n][1]) in _STATE_TAIL_ADVERBS:
+                n += 1
+            if n < end and toks[n][1] and _norm_word(toks[n][1]) not in _STATE_TAIL_OK:
+                j = n - 1                          # "is written zebrafiddle": the word after is the value
+            elif overflow and i + 1 < end:
+                j = i                              # the clause runs past the window: nothing beyond it was judged, fail closed
+        if j is not None and j + 1 < end:
+            return head + kept + _join(toks[i:j + 1]) + toks[j + 1][0] + _REDACT, stop
+        return head + kept + toks[i][0] + toks[i][1], at(i + 1)
+    return head + kept + toks[i][0] + _REDACT, stop
+
+
+def _drive(rx: "re.Pattern[str]", text: str, excuse: "Callable[[re.Match[str]], bool]") -> str:
+    """Every match of a label pattern, judged in turn (``_judge_match``); the next search starts where the judged part ended, so
+    a kept clause's words and the text after a value are still scanned. Iterative (no recursion), each search bounded by the
+    slot window: linear."""
+    out, pos = [], 0
+    while True:
+        m = rx.search(text, pos)
+        if m is None:
+            out.append(text[pos:])
+            return "".join(out)
+        rendered, stop = _judge_match(m, text, excuse=excuse(m))
+        out.append(text[pos:m.start()] + rendered)
+        pos = max(stop, m.start(3) + 1)
+
+
+def _never(_m: "re.Match[str]") -> bool:
+    return False
+
+
+def _always(_m: "re.Match[str]") -> bool:
+    return True
+
+
+def _labelled_excuse(m: "re.Match[str]") -> bool:
+    """After a WORD connector ("is", "will be") a state / place word may be kept; after ":" / "=" nothing is excused."""
+    return not any(c in m.group(2) for c in ":=")
+
+
+def _scrub_labelled(text: str) -> str:
+    return _LABELLED_KEPT_VALUE_RE.sub(r"\1" + _REDACT, _drive(_LABELLED_SECRET_RE, text, _labelled_excuse))
+
+# ── widened classes (2026-11-15). Every label list is CLOSED and lives HERE only; a label never redacts without a value
+# (a code / number needs a digit), so "the alarm code changed", "the dress code is casual" and "pineapple" are untouched.
+#: what a code opens (``the door code is 5791``, ``code for the gate: 0042``)
+_CODE_LABELS = ("front door", "back door", "side door", "door", "alarm", "gate", "garage", "safe", "lockbox", "lock box",
+                "key safe", "keysafe", "key box", "keypad", "padlock", "bike lock", "lock", "locker", "security", "entry",
+                "access", "wifi", "wi-fi", "network", "router")
+#: the words that make a label a secret
+_CODE_WORDS = ("code", "pin", "passcode", "password", "combination", "combo", "key")
+#: labelled account / identity numbers that are neither Luhn-valid nor IBAN-shaped
+_ACCOUNT_LABELS = ("account number", "account no", "account #", "acct number", "acct no", "bank account", "bsb",
+                   "sort code", "routing number", "routing no", "member number", "member no", "membership number",
+                   "membership no", "customer number", "customer no", "client number", "policy number",
+                   "licence number", "license number", "driver's licence", "drivers licence", "driver's license",
+                   "drivers license", "passport number", "passport no", "tax file number", "tfn", "medicare number",
+                   "medicare card number", "national insurance number", "ni number", "social security number",
+                   "card number")
+#: street-type words an address ends in (``12 Example Street``)
+_STREET_TYPES = ("street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr", "court", "ct", "crescent",
+                 "cres", "place", "pl", "boulevard", "blvd", "way", "terrace", "tce", "parade", "pde", "close", "cl",
+                 "highway", "hwy", "circuit", "cct", "grove", "square", "sq", "esplanade", "esp", "mews", "promenade",
+                 "quay", "alley")
+#: the labels a phone number follows ("my number is 9123 4567", "call me on ...", "ring the shop at ...")
+_PHONE_NOUNS = ("phone", "mobile", "cell", "landline", "fax", "whatsapp", "telephone", "tel", "number", "contact")
+_PHONE_VERBS = ("call", "ring", "text", "phone", "reach", "contact", "sms", "message")
+
+
+def _alt(words: tuple[str, ...]) -> str:
+    return "|".join(re.escape(w).replace(r"\ ", r"\s+") for w in sorted(words, key=len, reverse=True))
+
+
+_CONNECT = r"(\s{0,8}(?:(?:is|was|=|:|'s|’s)\s{0,8})?)"   # bounded: an optional word between two \s* is quadratic on a long space run
+#: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
+#: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
+#: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
+_TOKEN = r"[^\s,;!?]*?\d[^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,12}){0,3}"
+_CODE_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
+    rf"{_CONNECT}({_TOKEN})"
+)
+#: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2})\b")
+#: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
+#: after the label is kept only when it is on this CLOSED list - a word that says the sentence is ABOUT the password, not its
+#: value. Nouns and states first, then function words (a connector, pronoun or adverb is never the value itself).
+_PASSWORD_NOT_VALUES = (
+    # what the password is part of / what happened to it
+    "manager", "managers", "reset", "resets", "field", "policy", "policies", "protected", "protection", "prompt", "hint",
+    "box", "change", "changes", "changed", "rules", "rule", "requirements", "strength", "expiry", "expired", "recovery",
+    "generator", "vault", "app", "screen", "page", "form", "login", "entry", "length", "update", "updated", "settings",
+    "wrong", "incorrect", "forgotten", "lost", "leaked", "work", "works", "worked", "working",
+    # SLOT-ENDING function words: what follows them is not the value (a verb / auxiliary - "is" / "was" are the labelled form -,
+    # a preposition starting a phrase about the password - "for the wifi is ..." is the labelled for / to form -, a conjunction,
+    # a pronoun / determiner). The MODIFIERS (now, too, already, please ...) are NOT here: they are skipped and the next word judged
+    "is", "was", "are", "were", "be", "been", "has", "had", "have", "will", "would", "can", "could", "should", "must", "may",
+    "doesn't", "didn't", "isn't", "wasn't", "won't", "can't", "and", "or", "but", "so", "if", "when", "because",
+    "for", "of", "on", "in", "at", "with", "from", "by", "about", "into", "it", "i",
+    "you", "we", "they", "he", "she", "here", "there",
+)
+#: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
+#: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
+#: token, and the match is anchored on the label (linear: the adversarial timing test)
+_PASSWORD_VALUE = r"[^\s,;!?.][^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,12}){0,3}"
+#: words SKIPPED after a bare label (at most four), the word after them judged: "my password now <value>" / "password please
+#: <value>" redact the value; "change your password now" (a modifier, then nothing) is kept
+#: (not changed / reset / set / updated / to: after a bare label they are a compound - "password reset link", "password change")
+_BARE_MODIFIERS = tuple(sorted((_VALUE_MODIFIERS - {"changed", "reset", "set", "updated", "to"}) | {"then", "yet", "today", "please"}))
+_BARE_PASSWORD_RE = re.compile(
+    r"(?i)\b(password|passphrase)\b(\s{0,8}(?:(?:=|:|-|'s|’s)\s{0,8})?"
+    rf"(?:(?:{_alt(_BARE_MODIFIERS)})\s{{1,8}}){{0,4}})"
+    rf"((?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)})(?![\w'’-])){_PASSWORD_VALUE})" + _SUFFIX
+)
+
+
+#: "the password I use is <value>" / "... that you gave me was <value>": a relative clause (a pronoun and up to three words)
+#: between the label and "is" / "was" - the pronoun ends the BARE slot, so the value is judged here (state words kept)
+_REL_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase|passcode|pin)\s{1,8}(?:(?:that|which)\s{1,8})?(?:i|you|we|they|he|she|it)"
+    r"(?:\s{1,8}[\w'’]{1,30}){1,8}?)(\s{1,8}(?:" + _CONNECT_WORDS + r")\s{1,8})(" + _PASSWORD_VALUE + ")" + _SUFFIX
+)
+
+
+#: "the password for the wifi is <value>" / "... to my laptop was <value>": the labelled form, an explicit connector, no word excused
+#: (an introducer takes the rest of the clause, as in ``_judge_match``)
+_FOR_PASSWORD_RE = re.compile(
+    r"(?i)\b((?:password|passphrase)\s{1,8}(?:for|to)\s{1,8}(?:(?:the|my|our)\s{1,8})?[\w'’-]{1,30})"
+    rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
+)
+_ACCOUNT_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)"
+    # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
+    # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
+    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?: {1,2}[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
+)
+_EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
+_SPOKEN_EMAIL_RE = re.compile(
+    r"(?i)\b(e-?mail(?:\s+address)?(?:\s{1,8}(?:is|was))?\s{0,8}:?\s{1,8})"
+    r"([\w.+-]{1,64}\s+at\s+[\w-]{1,63}(?:\s{1,8}dot\s{1,8}[\w-]{1,63}){0,3}\s+dot\s+[a-z]{2,6})\b"
+)
+#: the separator BETWEEN two digit groups of one phone number: spaces, a dash with optional spaces, or a dot with NO space
+#: after it, and always a digit (or "(") next. A sentence end (". ", "; ", "! ", "? ") or a line break is never inside a
+#: number, so a phone cannot run on into the next number and push it over the digit cap (review, PR #2574)
+_PHONE_SEP = r"(?: {0,2}- {0,2}|\.| {1,3})"
+_PHONE_LABEL_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
+    rf"{_CONNECT}(\+?\(?\d(?:[\d()]|{_PHONE_SEP}(?=[\d(])){{5,40}}\d)"   # 40: room for two numbers (caps below)
+)
+#: unlabelled phone shapes: a leading +, a leading trunk 0 (AU / UK), or the 3-3-4 North American form with - or .
+_PHONE_INTL_RE = re.compile(rf"(?<![\w+])\+\d{{1,3}}[ .-]?(?:\(\d{{1,4}}\)[ .-]?)?\d(?:\d|{_PHONE_SEP}(?=\d)){{5,40}}\d(?!\w)")
+#: up to 7 groups: two trunk numbers said back to back with a space are taken whole (cap 22 digits below), never split
+_PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,7}(?!\w|[.,/-]\d)")
+_PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
+#: the earlier WIDE shapes, whose value may cross ". ": run on the same text as the split shapes and UNIONED with them
+#: (``_scrub_phones``), so the split never frees what the wide shape caught ("call me on 0400555101. 12")
+_PHONE_LABEL_WIDE_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s{{1,8}}[\w'’]{{1,40}}){{0,2}}?\s+(?:on|at))\b"
+    rf"{_CONNECT}(\+?\(?\d[\d ().-]{{5,40}}\d)"
+)
+_PHONE_INTL_WIDE_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[\d .-]{5,40}\d(?!\w)")
+#: the NEXT contact number said straight after a redacted one ("call me on 0400 555 101. 9555 0123", "..., or 9555 0123",
+#: a newline, a third number): the split passes above end the first number at the sentence end, and the label the wide fallback
+#: needs is gone by then, so a following number would survive. A separator (punctuation, "or" / "and", a line break), then a
+#: phone-shaped run; ``_chain_sub`` takes each one of 8-30 digits and stops at the first that is not. Linear: the repeat can
+#: always end, and each link is a fixed-width separator plus one token-bounded number (pinned by the chain timing test)
+_CHAIN_SEP = r"(?:\s{0,8}[.,;:/&]{0,2}\s{0,8}(?:(?:or|and|also|alt|else|then)\s{1,8})?)"
+_CHAIN_NUMBER = rf"\+?\(?\d(?:[\d()]|{_PHONE_SEP}(?=[\d(])){{5,40}}\d(?![\w@])"
+_CONTACT_CHAIN_RE = re.compile(rf"\[REDACTED\]((?:(?i:{_CHAIN_SEP}){_CHAIN_NUMBER})+)")
+_CHAIN_LINK_RE = re.compile(rf"((?i:{_CHAIN_SEP}))({_CHAIN_NUMBER})")
+
+
+def _chain_sub(m: "re.Match[str]") -> str:
+    out, pos, chain = [_REDACT], 0, m.group(1)
+    for link in _CHAIN_LINK_RE.finditer(chain):
+        if link.start() != pos or not 8 <= _digits(link.group(2)) <= 30:
+            break
+        out.append(link.group(1) + _REDACT)
+        pos = link.end()
+    return "".join(out) + chain[pos:]
+_UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s{0,8}\d{1,5}[A-Za-z]?\s{0,8}[,/]?\s{0,8})?\d{1,5}[A-Za-z]?(?:\s{0,8}[/-]\s{0,8}\d{1,5}[A-Za-z]?)?"
+#: a postcode, and any digit groups straight after it. A postcode ends an address, so digits that continue it are the head
+#: of the NEXT number ("... Street, 07700 900123"): they are taken too, never split, so no part of that number survives
+#: (both are redacted: we cannot tell "WA 6000 0400 555 101" from one long number). Bounded: four more groups, single
+#: separators, so it never crosses ". " (review, PR #2574)
+_POSTCODE = r"\d{4,5}\b(?:[ .-]?\d{1,10}\b){0,4}"
+#: ``[unit] number Capitalised Name street-type [, Suburb] [STATE] [postcode]``; a lower-case street needs a label below
+_ADDRESS_RE = re.compile(
+    rf"(?<![\w/.-]){_UNIT},?\s{{1,8}}(?:[A-Z][A-Za-z'’-]{{0,40}}\s{{1,8}}){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
+    rf"(?:(?:,\s{{0,8}}|\s{{1,8}})(?:[A-Z][\w'’-]{{0,40}}\s{{1,8}}){{0,3}}(?:[A-Z]{{2,3}}\s{{1,8}})?{_POSTCODE}"
+    r"|,\s{0,8}[A-Z][\w'’-]{0,40}(?:\s{1,8}[A-Z][\w'’-]{0,40}){0,2})?"
+)
+#: every repeat below is bounded (a fixed-width prefix of at most four words): an unbounded "my my my ... address" prefix
+#: was re-scanned from every word, quadratic on a long input (review thread, PR #2574)
+_ADDRESS_LABEL_RE = re.compile(
+    r"(?i)\b((?:(?:my|our|his|her|their|the|home|postal|street|new|old|billing|delivery|shipping)\s{1,8}){0,4}(?<!ip\s)(?<!mac\s)"
+    r"address(?:\s{1,8}(?:is|was)|\s{0,8}:)\s{0,8})"
+    r"(\d[^.;!?\n]{0,80}?(?=\s{0,8}(?:[.;!?\n]|$)|\s{1,8}(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]*)"
+)   # ^ no end within 80 characters: take the rest of the sentence. A fixed 80-character cut split the NEXT item ("... ring the
+    #   shop on (" | "08) 5550 1202") and freed its tail (pairwise review, 2026-11-16); one greedy class, so still linear
+_LIVE_AT_RE = re.compile(
+    rf"(?i)\b((?:i|we|they|he|she|who)?\s{{0,8}}(?:live|lives|living|stay|stays|staying)\s{{1,8}}at\s{{1,8}})"
+    rf"({_UNIT},?\s{{1,8}}(?:[\w'’-]{{1,40}}\s{{1,8}}){{1,3}}?(?:{_alt(_STREET_TYPES)})\b\.?"
+    rf"(?:(?:,?\s{{1,8}}[A-Za-z][\w'’-]{{0,40}}){{0,3}}?,?\s{{1,8}}{_POSTCODE}|"
+    r",\s{0,8}[A-Za-z][\w'’-]{0,40}(?:\s{1,8}[A-Za-z][\w'’-]{0,40}){0,2}?)?)"
+)
+_PO_BOX_RE = re.compile(r"(?i)\bP\.?\s?O\.?\s+Box\s+\d{1,6}\b")
+_REDACT = "[REDACTED]"
+
+
+def _digits(s: str) -> int:
+    return sum(c.isdigit() for c in s)
+
+
+def _keep_label_if(lo: int, hi: int):
+    def sub(m: "re.Match[str]") -> str:
+        return m.group(1) + m.group(2) + _REDACT if lo <= _digits(m.group(3)) <= hi else m.group(0)
+    return sub
+
+
+def _whole_if(lo: int, hi: int):
+    def sub(m: "re.Match[str]") -> str:
+        return _REDACT if lo <= _digits(m.group(0)) <= hi else m.group(0)
+    return sub
+
+
+def _scrub_secrets(text: str) -> str:
+    """Labelled codes, PINs / passwords said without "is", labelled account numbers. Never rejects."""
+    if not any(c.isdigit() for c in text):
+        return text
+    text = _CODE_RE.sub(r"\1\2" + _REDACT, text)
+    text = _BARE_PIN_RE.sub(r"\1\2" + _REDACT, text)
+    text = _drive(_BARE_PASSWORD_RE, text, _never)
+    return _ACCOUNT_RE.sub(_keep_label_if(4, 30), text)
+
+
+def _scrub_contact(text: str) -> str:
+    """Email addresses, street addresses, phone numbers. Never rejects."""
+    if "@" in text:
+        text = _EMAIL_RE.sub(_REDACT, text)
+    if " dot " in text.lower():
+        text = _SPOKEN_EMAIL_RE.sub(r"\1" + _REDACT, text)
+    if not any(c.isdigit() for c in text):
+        return text
+    text = _ADDRESS_LABEL_RE.sub(r"\1" + _REDACT, text)
+    text = _LIVE_AT_RE.sub(r"\1" + _REDACT, text)
+    text = _ADDRESS_RE.sub(_REDACT, text)
+    text = _PO_BOX_RE.sub(_REDACT, text)
+    text = _scrub_phones(text)
+    return _CONTACT_CHAIN_RE.sub(_chain_sub, text) if _REDACT in text else text
+
+
+#: (pattern, group whose span is the number, min digits, max digits). The upper caps allow TWO numbers said back to back with
+#: only a space ("0400 555 101 0400 555 202"): a run that long is two phones run together, never a reason to keep both (a card
+#: number is rejected earlier, by the Luhn check)
+_PHONE_SPLIT = ((_PHONE_LABEL_RE, 3, 8, 30), (_PHONE_INTL_RE, 0, 8, 30), (_PHONE_TRUNK_RE, 0, 9, 22), (_PHONE_NANP_RE, 0, 0, 99))
+_PHONE_WIDE = ((_PHONE_LABEL_WIDE_RE, 3, 8, 30), (_PHONE_INTL_WIDE_RE, 0, 8, 30))
+_EDGE_RE = re.compile(r"^([^\w(+]*)(.*?)([^\w)]*)$", re.S)
+
+
+def _spans(text: str, passes) -> list:
+    return [m.span(g) for rx, g, lo, hi in passes for m in rx.finditer(text) if lo <= _digits(m.group(g)) <= hi]
+
+
+def _merge(spans: list) -> list:
+    out: list = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def _scrub_phones(text: str) -> str:
+    """Phone numbers: every pattern runs on the SAME text and the redacted spans are their UNION. The split shapes end a number
+    at a sentence end, so two numbers stay two ``[REDACTED]``; the wide shapes may cross ". " - whatever they cover that the split
+    shapes did not (``0400555101. 12``) is redacted too, its leading / trailing punctuation kept. No pass runs on text an earlier
+    pass already replaced, so a label one pass consumed can never hide the next number from another."""
+    split, wide = _merge(_spans(text, _PHONE_SPLIT)), _spans(text, _PHONE_WIDE)
+    if not split and not wide:
+        return text
+    out, pos, k = [], 0, 0           # ``k``: a forward cursor through the sorted split spans (linear, never rescanned)
+    for a, b in _merge([tuple(s) for s in split] + wide):
+        out.append(text[pos:a])
+        cur = a
+        while k < len(split) and split[k][0] < b:
+            sa, sb = split[k]
+            out.append(_redact_core(text[cur:sa]) + _REDACT)
+            cur = sb
+            k += 1
+        out.append(_redact_core(text[cur:b]))
+        pos = b
+    return "".join(out) + text[pos:]
+
+
+def _redact_core(piece: str) -> str:
+    """A stretch only a wide shape covered: redacted when it holds a digit, its leading / trailing punctuation and spaces kept."""
+    if not any(c.isdigit() for c in piece):
+        return piece
+    lead, _core, trail = _EDGE_RE.match(piece).groups()
+    return lead + _REDACT + trail
 
 
 def _luhn_valid(digits: str) -> bool:
@@ -1374,8 +1859,21 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def scrub_pii(text: str) -> tuple[str, Optional[str]]:
-    """Return (possibly-redacted-text, reject_reason_or_None)."""
+def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """Return (possibly-redacted-text, reject_reason_or_None). Pure, compiled regexes only, never logs.
+
+    REJECT (the whole text is refused): a Luhn-valid card, an SSN, a labelled TOTP, an AWS key, a PEM key, a JWT, an
+    IBAN in a banking context. REDACT in place (value -> ``[REDACTED]``, the label kept): a labelled password / PIN /
+    key / token / secret; a labelled door / alarm / gate / garage / safe / lock / wifi code (``_CODE_LABELS``); a PIN or
+    password said without "is" (``my pin 4821``); a labelled account / identity number (``_ACCOUNT_LABELS``).
+
+    ``contact`` (default True) also redacts CONTACT details: email addresses (typed, or a labelled spoken "x at y dot
+    com"), street addresses (number + Capitalised name + ``_STREET_TYPES`` word, or after "my address is" / "I live
+    at"), PO boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
+    a phone label). Every excerpt / verbatim path takes the default. ``contact=False`` is for the memory FACT text only
+    (ingest, review edit, candidates, ask-to-remember): "the plumber's number is ..." and "my pickup is at 12 Main
+    Street" are household facts the owner asked Zoe to keep, so the fact keeps them while the excerpt beside it does not.
+    """
     if not text:
         return text, None
 
@@ -1402,12 +1900,12 @@ def scrub_pii(text: str) -> tuple[str, Optional[str]]:
     if _IBAN_RE.search(text) and _BANKING_CONTEXT_RE.search(text):
         return text, "iban"
 
-    redacted = re.sub(
-        r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:is|=|:)\s*)\S+",
-        r"\1\2[REDACTED]",
-        text,
-    )
-    return redacted, None
+    # a bare password (letters-only too) is redacted here as well: ``_scrub_secrets`` skips a text with no digit at all
+    redacted = _drive(_FOR_PASSWORD_RE, _scrub_labelled(text), _never)
+    redacted = _drive(_REL_PASSWORD_RE, redacted, _always)              # "the password I use is <value>"
+    redacted = _drive(_BARE_PASSWORD_RE, redacted, _never)            # a password said without "is", letters-only too
+    redacted = _scrub_secrets(redacted)
+    return (_scrub_contact(redacted) if contact else redacted), None
 
 
 #: Cap for the verbatim evidence stored beside a fact (metadata
@@ -1432,6 +1930,93 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     if reject:
         return None
     return scrubbed[:limit].rstrip() or None
+
+
+def _excerpt_said_tag(user_id: str, raw: Optional[str], stored: str) -> str:
+    """``turn_forget.said_tag`` of the excerpt as said, only when the boundary changed it; '' otherwise. Never raises."""
+    try:
+        import turn_forget
+
+        if not isinstance(raw, str) or turn_forget.norm(raw) == turn_forget.norm(stored):
+            return ""
+        import memory_forgotten
+
+        return memory_forgotten.said_tag(user_id, turn_forget.norm(raw))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# ── write-time provenance (PR #2574): every NEW row names its source - a saved turn, or an explicit non-turn kind ──────────
+#: the explicit provenance kinds a row from NO saved chat turn carries (``metadata["source_kind"]``) instead of an empty id. A caller
+#: may pass one in ``metadata["source_kind"]``; the writer lanes below get theirs here; a row with no turn evidence at all is
+#: ``no_turn`` unless its deterministic user-turn lane leaves it legacy-shaped for a words match.
+NON_TURN_KINDS = frozenset({"no_turn", "omi_recording", "provider", "restore", "curated", "ui", "notes", "journal", "mcp",
+                            "skybridge", "lab", "model"})
+#: writer lane -> its non-turn kind: lanes that never write from a saved chat turn, even when they carry an excerpt
+_LANE_KINDS = {
+    "omi_review": "omi_recording", "external_source": "provider", "contacts": "provider", "operator_restore": "restore",
+    "curator": "curated", "proposal": "ui", "review_ui": "ui", "notes": "notes", "journal": "journal", "mcp": "mcp",
+    "skybridge_action": "skybridge", "skybridge": "skybridge", "mempalace_baseline": "lab", "prompt_packet_measure": "lab",
+    "synthesis": "model", "consolidation": "model", "music_digest": "model", "ambient": "model", "profile-analysis": "model",
+    "hindsight_retain_candidate": "model", "decay_sweep": "model", "implicit_supersede": "model",
+}
+TURN_ID_FLAG = "ZOE_MEMORY_TURN_ID_REQUIRED"
+_UNBOUND_KEY = "_zoe_unbound_turn"
+#: rows that carried turn evidence but could name no saved turn and no kind (``MEMORY_WRITE_UNBOUND``); a count, never text
+UNBOUND = {"no_source_turn": 0}
+
+
+def turn_id_mode() -> str:
+    """``enforce`` = a write that cannot name its source is REFUSED (``ingest`` returns None, ``no_source_turn`` counted);
+    ``shadow`` (default) = it is stored and counted, and its row stays legacy-shaped (a forget then matches it by its words). Read
+    per call."""
+    try:
+        from typed_env import env_str
+
+        raw = env_str("ZOE_MEMORY_TURN_ID_REQUIRED").lower()   # literal on purpose: tools/audit/flag_inventory.py greps it
+    except Exception:  # noqa: BLE001
+        raw = ""
+    return "enforce" if raw == "enforce" else "shadow"
+
+
+def _write_provenance(user_id: str, source: str, extra: dict, source_excerpt: Optional[str],
+                      user_turn_id: Optional[str]) -> dict:
+    """The provenance keys a new row is stamped with (``source_turn`` or ``source_kind``), or ``{_UNBOUND_KEY: True}`` when the
+    row carries turn evidence (an excerpt / a turn id) yet names neither. A deterministic user-turn writer without evidence
+    stays unmarked and uncounted. The saved turn: the caller's ``source_turn``, else the
+    turn the words are (``turn_forget.turn_ref``, resolved now while they are as said). Never raises."""
+    src_turn = str(extra.pop("source_turn", "") or "")
+    kind = str(extra.pop("source_kind", "") or "")
+    if src_turn:
+        return {"source_turn": src_turn}
+    # a NON-TURN source (the caller's explicit kind, else its lane's) wins over a coincidental words match with a recent chat turn:
+    # a pendant quote that happens to equal what was just typed is still the recording's, never that turn's
+    if kind not in NON_TURN_KINDS:
+        kind = _LANE_KINDS.get((source or "").strip(), "")
+    if kind:
+        return {"source_kind": kind}
+    try:
+        import turn_forget
+
+        src_turn = turn_forget.turn_ref(user_id, source_excerpt or "")
+    except Exception:  # noqa: BLE001
+        src_turn = ""
+    if src_turn:
+        return {"source_turn": src_turn}
+    if not (source_excerpt or "").strip() and not (user_turn_id or "").strip():
+        return {} if (source or "").strip() in _auth.DETERMINISTIC_USER_WRITERS else {"source_kind": "no_turn"}
+    return {_UNBOUND_KEY: True}
+
+
+def _refuse_unbound(md: dict, writer: str) -> bool:
+    """Take the unbound marker off ``md``: True = REFUSE the write (``enforce``). Counted and logged with a code either way, never
+    the text."""
+    if not md.pop(_UNBOUND_KEY, False):
+        return False
+    UNBOUND["no_source_turn"] += 1
+    mode = turn_id_mode()
+    logger.info("MEMORY_WRITE_UNBOUND code=no_source_turn writer=%s mode=%s n=%d", writer, mode, UNBOUND["no_source_turn"])
+    return mode == "enforce"
 
 
 def _opt_out_writer(source: str, origin: Optional[str] = None) -> bool:
@@ -1738,7 +2323,7 @@ class MemoryService:
             metadata = {k: v for k, v in (metadata or {}).items() if k not in _auth.AFFECT_KEYS}
             logger.info("AFFECT_STRIPPED writer=%s", source)
 
-        scrubbed, reject = scrub_pii(text)
+        scrubbed, reject = scrub_pii(text, contact=False)   # the FACT keeps a phone / address; its excerpt does not
         if reject:
             self._bump("pii_reject", source)
             if _METRICS_OK:
@@ -1834,7 +2419,7 @@ class MemoryService:
             # pending candidate (the user's words stay approved; nothing is lost).
             writer = origin or source
             # an emergency event is resolved on the fact as MINED (its words are what the member's turn supports)
-            auth_text = (scrub_pii(_mined)[0] or scrubbed) if _mined else scrubbed
+            auth_text = (scrub_pii(_mined, contact=False)[0] or scrubbed) if _mined else scrubbed
             resolved = _auth.resolve_write(
                 writer, auth_text,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
@@ -1899,6 +2484,9 @@ class MemoryService:
                 text=scrubbed,
                 captured_at=captured_at,
             )
+            if _refuse_unbound(metadata, writer):   # a write that cannot name its source (enforce): refused and counted
+                self._bump("no_source_turn", source)
+                return None
             for k in _auth.SOURCE_REF_KEYS:   # a pointer comes from ``source_ref`` only, never from caller metadata
                 metadata.pop(k, None)
             metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id, source_ref=source_ref))
@@ -2291,6 +2879,11 @@ class MemoryService:
             await reminder_delivery.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: reminder delivery ledger erasure failed ({type(exc).__name__})") from exc
+        try:   # open forget records (forget_record.py: app_settings rows, ids only). Fail closed.
+            import forget_record
+            await forget_record.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: forget record erasure failed ({type(exc).__name__})") from exc
         # The feed spine (migration 0078) and the calendar store (0052): connected accounts + their secrets and sync runs, the member's
         # own email addresses / phone numbers, their calendars and synced events. Fail closed; outside the lock (each takes the erase gate).
         try:
@@ -2474,13 +3067,16 @@ class MemoryService:
         status: str = "pending",
         limit: int = 100,
         offset: int = 0,
+        strict: bool = False,
     ) -> list[MemoryRef]:
-        """List rows for a user by status, newest first."""
+        """List rows for a user by status, newest first. Strict reads raise on store failures."""
         self._require(user_id, "user_id is required")
         try:
             rows = await self._run_sync(self._list_by_status_sync, user_id, status)
         except Exception as exc:
             logger.warning("memory_service: list_by_status failed: %s", exc)
+            if strict:
+                raise
             return []
         return rows[offset: offset + limit]
 
@@ -2558,12 +3154,14 @@ class MemoryService:
             )
         return archived
 
-    async def get(self, mem_id: str) -> Optional[MemoryRef]:
-        """Fetch a single row by id."""
+    async def get(self, mem_id: str, *, strict: bool = False) -> Optional[MemoryRef]:
+        """Fetch a single row by id; strict reads raise on store failures, not absence."""
         try:
             row = await self._run_sync(self._get_sync, mem_id)
         except Exception as exc:
             logger.warning("memory_service: get failed id=%s: %s", mem_id, exc)
+            if strict:
+                raise
             return None
         return row
 
@@ -2825,7 +3423,7 @@ class MemoryService:
             new_text = (edits or current.text).strip()
             if not new_text:
                 raise MemoryServiceError("edit decision requires non-empty edits")
-            scrubbed, reject = scrub_pii(new_text)
+            scrubbed, reject = scrub_pii(new_text, contact=False)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
             current_scope = current.metadata.get("scope")
@@ -2891,7 +3489,7 @@ class MemoryService:
                 "access_count", "embedding_model_version", "idempotency_key", "tags",
                 "concept_tags", "related_ids", "unique_query_count", "consolidation_count",
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
-                "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
+                "source_excerpt", "source_excerpt_said", "source_turn", "source_kind", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
                 # validity interval: the NEW row's own (written by _build_metadata)
                 *_temporal.KEYS,
@@ -2911,6 +3509,16 @@ class MemoryService:
                 if strip_affect and key in _AFFECT_CANDIDATE_KEYS:
                     continue
                 new_meta[key] = value
+            # the excerpt's identity (keyed tag + provenance) travels only with THAT excerpt (a new excerpt from another turn is not
+            # its words): an edit of a bound row stays bound to its turn, of a legacy row stays legacy (matched by its words)
+            if not edit_excerpt and new_meta.get("source_excerpt") == current.metadata.get("source_excerpt"):
+                for _k in ("source_turn", "source_kind", _UNBOUND_KEY):
+                    new_meta.pop(_k, None)
+                for _k in ("source_excerpt_said", "source_turn", "source_kind"):
+                    if current.metadata.get(_k):
+                        new_meta[_k] = current.metadata[_k]
+            elif _refuse_unbound(new_meta, writer):
+                raise MemoryServiceError("edit refused: no source turn (no_source_turn)")
             for k in _auth.SOURCE_REF_KEYS:   # from ``source_ref`` only (caller metadata cannot plant a pointer)
                 new_meta.pop(k, None)
             new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref, source_ref=source_ref))
@@ -3621,7 +4229,7 @@ class MemoryService:
             self._bump("opt_out", writer)
             return None
         try:
-            scrubbed, reject = scrub_pii(text)
+            scrubbed, reject = scrub_pii(text, contact=False)
             if reject or not scrubbed.strip():
                 return None
             md = self._build_metadata(
@@ -3630,6 +4238,7 @@ class MemoryService:
                 tags=["authority_candidate"], entity_type=entity_type, entity_id=entity_id,
                 expires_at=None, text=scrubbed,
             )
+            md.pop(_UNBOUND_KEY, None)   # no excerpt, no turn id: never unbound (``source_kind`` = no_turn or the lane's kind)
             cand_cls = cls or (_auth.MODEL_FROM_TURN if _auth.writer_class(writer) == _auth.MODEL_FROM_TURN
                                else _auth.MODEL_FROM_TRANSCRIPT)
             if _auth.writer_class(writer) == _auth.EXTERNAL_SOURCE:
@@ -4034,9 +4643,17 @@ class MemoryService:
         # Every write path (ingest, review edit, carry-forward) builds metadata
         # here, so the excerpt is scrubbed at this one boundary — no caller can
         # store raw text by skipping its own scrub.
+        # the saved turn the row came from (or its explicit non-turn kind, ``_write_provenance``): a forget erases BY THIS ID, never
+        # by the excerpt, which the boundary redacts below (two turns that differ by an address redact alike)
+        md.update(_write_provenance(user_id, source, extra, source_excerpt, user_turn_id))
         excerpt = scrub_source_excerpt(source_excerpt)
         if excerpt:
             md["source_excerpt"] = excerpt
+            # a redacted (or cut) excerpt no longer says WHICH turn it was: beside ``source_turn`` the row keeps the keyed tag
+            # of the words as said - an audit identity (what a one-time id backfill can map from), never matched by a forget
+            said = _excerpt_said_tag(user_id, source_excerpt, excerpt)
+            if said:
+                md["source_excerpt_said"] = said
         if event_scope:
             md["scope"] = str(event_scope)
         _promote_event_metadata(md, extra)

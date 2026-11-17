@@ -214,6 +214,23 @@ def key_hash(user_id: str, name: str) -> str:
     return _Hasher(user_id).hash(key)
 
 
+def _said_key(user_id: str) -> bytes:
+    m = _master()
+    return hmac.new(m, b"zoe.said.v1|" + user_id.encode("utf-8"), hashlib.sha256).digest() if m and user_id else b""
+
+
+def said_tag(user_id: str, words: str) -> str:
+    """A KEYED identity for words a write boundary redacted before storing (a contact detail in an exact-words turn or a fact
+    row's excerpt): ``<key fingerprint>.<hmac>`` of the words as said, while the row keeps only the redacted copy. Keyed with
+    the ledger secret: a bare hash of a sentence around a phone number is reversed by trying every number. The caller normalises ``words``. An AUDIT identity stamped beside the saved-turn id (what a one-time id backfill can
+    map a redacted row back to its saved turn by); no forget matches it. '' when unconfigured or no words."""
+    key = _said_key(user_id)
+    if not key or not (words or "").strip():
+        return ""
+    fp = hmac.new(key, b"fp", hashlib.sha256).hexdigest()[:6]
+    return fp + "." + hmac.new(key, words.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
 # ── storage ──────────────────────────────────────────────────────────────────
 
 class Backend(Protocol):

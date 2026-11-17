@@ -153,6 +153,8 @@ def _exact_words_in_process_index():
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     struggle_detector.set_backend(struggle_detector.MemoryBackend())   # struggle_events too (delete_user / forget fail closed)
+    import forget_record
+    forget_record.set_backend(forget_record.MemoryBackend())   # open forget records: app_settings in production, in process here
     yield
     erase_watermark.set_backend(None)
     exact_words.set_backend(None)

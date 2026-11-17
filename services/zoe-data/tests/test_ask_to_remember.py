@@ -584,3 +584,61 @@ def test_guest_predicate_is_the_shared_one_case_and_device_token_included():
         assert atr._is_guest(uid) is True, uid
     for uid in ("jason", "demo_user", "guestavo"):
         assert atr._is_guest(uid) is False, uid
+
+
+@pytest.mark.parametrize("said,kept", [
+    ("Remember that my plumber's number is 0400 000 000", "my plumber's number is 0400 000 000"),
+    ("Remember that the plumber works from 1 Example St", "the plumber works from 1 Example St"),
+])
+def test_a_contact_fact_the_owner_asks_to_keep_is_stored_intact(svc, said, kept):
+    """scrub_pii(contact=False): a tradesperson's number or address is a household fact, not a secret."""
+    assert say(svc, said) in atr._CONFIRM
+    assert [r.text for r in rows(svc)] == [kept]
+
+
+# ── forgotten means forever, for a contact the owner asked to keep (review thread, PR #2574) ──────────────────────────
+# The fact is stored with its phone / address intact (contact=False) but its excerpt is stored REDACTED, so "forget that" must
+# not find the row by comparing the turn as said with that copy. It finds it by the ask's own turn id (or its saved-turn id:
+# tests/test_forget_by_turn_id.py); a row written before the contact scrub (raw excerpt) is still found. Negative control: on
+# 4500293f8 the first two tests fail (the fact survives the forget).
+
+CONTACT_ASKS = ["Remember that my plumber's number is 0400 000 000", "Remember that the plumber works from 1 Example St"]
+
+
+def _gone(svc, fragment):
+    live = [r.text for s in ("approved", "pending") for r in rows(svc, status=s)]
+    return not any(fragment in t for t in live)
+
+
+@pytest.mark.parametrize("said", CONTACT_ASKS)
+def test_forget_that_takes_a_contact_fact_and_leaves_an_unrelated_one(svc, said):
+    assert say(svc, said) in atr._CONFIRM and len(rows(svc)) == 1
+    run(svc.ingest("I work night shifts in the hospital pharmacy", user_id=UID, source="chat_regex", status="approved"))
+    assert _execute(svc, "memory_forget_last").startswith("Done — I forgot")
+    assert _gone(svc, "plumber")                                                     # rejected: not served
+    assert [r.text for r in rows(svc)] == ["I work night shifts in the hospital pharmacy"]   # the control stays
+    assert say(svc, "What did I ask you to remember?") == atr.NOTHING_ASKED          # not recalled
+
+
+@pytest.mark.parametrize("said", CONTACT_ASKS)
+@pytest.mark.parametrize("broken", [False, True])
+def test_forget_that_still_finds_a_row_written_before_the_contact_scrub(svc, said, monkeypatch, broken):
+    """A TRUE legacy row (written before provenance): the excerpt holds the turn as said, no recomputable turn id, and NO
+    provenance of any kind (no source_turn, no source_kind, no keyed tag), so only the legacy words fallback can find it.
+    Control (``broken``): with that fallback disabled the row survives and the forget is not confirmed - the id path cannot
+    pass this test for it."""
+    import turn_forget
+
+    assert say(svc, said) in atr._CONFIRM
+    (rid,) = list(svc._col.rows)
+    doc, meta = svc._col.rows[rid]
+    legacy = {k: v for k, v in meta.items() if k not in ("source_turn", "source_kind", "source_excerpt_said")}
+    svc._col.rows[rid] = (doc, {**legacy, "source_excerpt": said, "user_turn_id": "legacy-0"})
+    assert turn_forget.classify(svc._col.rows[rid][1])[0] == turn_forget.LEGACY
+    if broken:
+        monkeypatch.setattr(turn_forget, "_legacy_row_is_from_turn", lambda *a, **k: False)
+    reply = _execute(svc, "memory_forget_last")
+    if broken:
+        assert not reply.startswith("Done — I forgot") and not _gone(svc, "plumber")
+    else:
+        assert reply.startswith("Done — I forgot") and _gone(svc, "plumber")

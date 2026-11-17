@@ -138,7 +138,7 @@ TABLES: tuple[Store, ...] = (
        entity="forget_redact.on_forget"),
     _t("chat_feedback", WORDS, GAP, "Holds a corrected_response (words); neither path reaches it."),
     _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
-    _t("pending_suggestions", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),   # Zoe's offers; topic forget: forget_topic._withdraw_offers
+    _t("pending_suggestions", WORDS, REACHED, member=_DERIVED_M, entity="memory_forget_cascade._run"),   # Zoe's offers; topic forget: the forget record's offers step (forget_record._offers)
     # --- member-owned product data: the member's own lists, notes, calendar, journal, money ---
     _t("notes", WORDS, GAP, _OWN + " Holds free text."),
     _t("journal_entries", WORDS, GAP, _OWN + " Holds free text."),
@@ -278,6 +278,10 @@ OTHER: tuple[Store, ...] = (
     Store("reminder_phone_ledger", "db", METADATA, REACHED, "app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the "
           "at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows.",
           member="reminder_delivery.forget_user", markers=("reminder_phone:",)),
+    Store("forget_records", "db", METADATA, REACHED, "app_settings rows forget_rec:<member>:<hash> = an OPEN forget's write-ahead record "
+          "(forget_record.py): row / saved-turn / entry / observation / note / registry / offer ids and step codes, never words. Closed (deleted) "
+          "when every step is done; delete_user removes the member's open records.",
+          member="forget_record.forget_user", markers=("forget_rec:",)),
     Store("omi_audio_files", "file", BIOMETRIC, REACHED, "Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files).",
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",

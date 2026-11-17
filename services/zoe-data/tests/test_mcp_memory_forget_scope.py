@@ -28,7 +28,7 @@ class _Svc:
         self.md = md
         self.reviews = []
 
-    async def get(self, mem_id):
+    async def get(self, mem_id, *, strict=False):
         return None if mem_id == "gone" else types.SimpleNamespace(id=mem_id, metadata=self.md)
 
     async def review(self, mem_id, **kw):

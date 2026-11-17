@@ -1007,6 +1007,9 @@ def test_forget_it_reaches_the_observations_saved_from_the_same_turn_and_the_sam
     first, second = rows[0], rows[1]
     assert run(nm.erase_words(UID, first["turn_id"], "")) >= 1                      # by the turn it came from
     assert first["id"] not in {o["id"] for o in lab.obs_rows.values()}
-    assert run(nm.erase_words(UID, "", second["quote"], "")) >= 1                    # or by the words the answer quoted
+    assert second["turn_id"]                                                         # every observation is saved with its turn
+    assert run(nm.erase_words(UID, "", second["quote"], "")) == 0                    # so its words never match it (PR #2574)
+    lab.obs_rows[second["id"]]["turn_id"] = ""                                       # one saved before the turn ids (legacy)
+    assert run(nm.erase_words(UID, "", second["quote"], "")) >= 1                    # is found by the words the answer quoted
     assert second["id"] not in {o["id"] for o in lab.obs_rows.values()}
     assert lab.obs_rows                                                              # other notes stay

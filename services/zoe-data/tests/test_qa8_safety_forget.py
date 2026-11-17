@@ -49,11 +49,18 @@ def svc(monkeypatch):
 
     flagged: list = []
 
-    async def flag(user_id, text):
-        flagged.append((user_id, text))
-        return 1
+    said: dict = {}
 
-    monkeypatch.setattr(exact_words, "forget_transcript", flag)
+    async def resolve(user_id, text):            # a turn noted with no saved-turn id: its words resolve to the saved turn
+        said[f"m-{len(said)}"] = text
+        return [f"m-{len(said) - 1}"]
+
+    async def flag(user_id, mids):               # the forget record flags it BY that id
+        flagged.extend((user_id, said[m]) for m in mids if m in said)
+        return len(mids)
+
+    monkeypatch.setattr(exact_words, "legacy_transcript_ids", resolve)
+    monkeypatch.setattr(exact_words, "flag_transcript_turns", flag)
     turn_forget.reset()
     exact_words.set_backend(exact_words.MemoryBackend())
     s.flagged = flagged

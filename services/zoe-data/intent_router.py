@@ -4069,9 +4069,12 @@ def _forget_preview(text: str) -> str:
 
 
 async def _execute_forget_last(user_id: str) -> str:
-    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - the rows written from it, its in-flight capture
-    (refused from now on), its exact-words index entry and its transcript row (flagged off the record for the nightly
-    readers). Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. Never raises."""
+    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - its in-flight capture is refused from here on, then ONE
+    forget record (forget_record) of everything it left: the rows written from it and their twins (hidden, then erased), its
+    transcript row (flagged off the record), its exact-words entries, observations, notes, the card citing its rows and the
+    registry entries. Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. A step that fails
+    leaves the record open: "forget that" again finishes it from the record. Never raises."""
+    import forget_record
     import turn_forget
 
     turn = turn_forget.previous_turn(user_id)
@@ -4080,91 +4083,44 @@ async def _execute_forget_last(user_id: str) -> str:
         return FORGET_WHICH_REPLY
     if not turn.text:
         return FORGET_ALREADY_REPLY
-    text, ts = turn.text, turn.ts
+    text = turn.text
     # FIRST: from here on nothing this turn's capture writes can land (the digest may still be minutes away)
     turn_forget.retract(user_id, turn)
+    seen: list = []
+
+    async def resolve():
+        plan, rows = await turn_forget.resolve_turn(svc, user_id, turn)
+        seen.extend(rows)
+        return plan
+
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
-        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts)
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
-    gone: list = []
-    failed = 0
-
-    async def _reject(row) -> bool:
-        try:
-            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
-            return False
-
-    for r in rows:
-        if await _reject(r):
-            gone.append(r)
-        else:
-            failed += 1
-    # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
-    try:
-        import ask_to_remember as _atr_f
-
-        ids = {r.id for r in gone}
-        for r in list(gone):
-            for _sib in await _atr_f.siblings_of(svc, user_id, r):
-                if _sib.id in ids:
-                    continue
-                ids.add(_sib.id)
-                if await _reject(_sib):
-                    gone.append(_sib)
-                else:
-                    failed += 1
-    except Exception as exc:  # noqa: BLE001
-        logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
-    # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
-    # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
-    if gone and hasattr(svc, "erase_rows"):
-        try:
-            from memory_service import physical_erase_enabled
-            if physical_erase_enabled():
-                await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
-    try:
-        import exact_words
-        await exact_words.erase_text(user_id, text)
-        await exact_words.forget_transcript(user_id, text)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
-    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
+    out = await forget_record.forget(user_id, code="forget_last", key=turn_forget.record_key(turn), resolve=resolve, svc=svc)
+    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED): holds nothing that outlives the process
         import value_correction
         value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
         value_correction.forget_in_texts(user_id, [text])
     except Exception:  # noqa: BLE001
         pass
-    try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
-        import conversation_notes
-        await conversation_notes.erase_for_text(user_id, text, at=ts)
-    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
-        logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
-        failed += 1
-    try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
-        import memory_value_registry
-        await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])
-    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
-        logger.warning("memory_forget_last: value registry erase failed (%s)", type(exc).__name__)
-        failed += 1
-    logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
-    if failed:
-        # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
-        return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
-    if gone:
+    rows = list(out.plan.rows) if out.plan is not None else []
+    logger.info("memory_forget_last: user=%s rows=%d complete=%s failed=%s", user_id, len(rows), out.complete, ",".join(out.failed))
+    if not out.complete:
+        # some of it is still saved: say so; the record stays open, so "forget that" again finishes the same turn
+        return FORGET_PARTIAL_REPLY if rows and out.started and "reject" not in out.failed else FORGET_STORE_DOWN_REPLY
+    if rows:
         # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
         # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
         turn_forget.mark_forgotten(user_id, turn)
-        more = len(gone) - 1
+        first = next((r.text for r in seen if r.id == rows[0]), "")
+        if not first:
+            return "Done — I forgot what you said there."
+        more = len(rows) - 1
         tail = f" (and {more} more from what you said there)" if more > 0 else ""
-        return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
+        return f"Done — I forgot: \"{_forget_preview(first)}\"{tail}."
     if text.rstrip().endswith("?"):
         return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
     return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
@@ -4471,25 +4427,17 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     "I won't bring it up meanwhile - please tell me again in a moment.")
         try:
             svc = get_memory_service()
-            # Semantic search surfaces the ranked rows; the approved list makes
+            # Semantic search surfaces the ranked rows; the live-status list makes
             # the sweep complete even when the entity falls outside search's
             # top-k. Both sides still pass the strict name filter below.
             rows = list(await svc.search(name, user_id=user_id, limit=25))
-            # Paginate the approved sweep: a single limit=1000 page would let a
+            # Paginate the live sweep: a single limit=1000 page would let a
             # privacy request silently miss rows for users with bigger stores.
             # ... and the facts that were REPLACED (superseded) too: they are kept as history ("where did I live
             # before?"), so a forgotten name left in one would come back through that read.
-            for _status in ("approved", "superseded"):
-                offset = 0
-                while True:
-                    page = await svc.list_by_status(
-                        user_id=user_id, status=_status, limit=1000, offset=offset)
-                    if not page:
-                        break
-                    rows.extend(page)
-                    if len(page) < 1000:
-                        break
-                    offset += len(page)
+            from turn_forget import live_rows
+
+            rows.extend(await live_rows(svc, user_id, extra_statuses=("superseded",)))
         except Exception as exc:
             logger.info("memory_forget_entity: lookup failed: %s", exc)
             return "I couldn't reach the memory store right now, so nothing was changed."
@@ -4527,28 +4475,18 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 from memory_service import physical_erase_enabled
                 if not physical_erase_enabled():
                     return
-                # ... plus the rows the approved sweep can never reach: a pending / disputed / superseded /
-                # archived / rejected row naming the entity holds the same text (an edited fact's old version,
-                # a model's candidate). They carry no recall to hide, so they go straight to erase.
+                # ... plus retired rows and any live rows left by an earlier attempt. They still hold
+                # the entity text, so every status goes through the physical erase sweep.
                 erase_ids = list(archived_ids)
                 seen_ids.update(archived_ids)
-                for st in ("pending", "disputed", "superseded", "archived", "rejected"):
-                    off = 0
-                    while True:
-                        page = await svc.list_by_status(user_id=user_id, status=st, limit=1000, offset=off)
-                        if not page:
-                            break
-                        for r in page:
-                            _md = getattr(r, "metadata", {}) or {}
-                            if (getattr(r, "id", "") and r.id not in seen_ids
-                                    and (_md.get("user_id") == user_id or _md.get("wing") == user_id)
-                                    and (name_re.search(getattr(r, "text", "") or "")
-                                         or name_re.search(str(_md.get("retire_quote") or "")))):
-                                erase_ids.append(r.id)
-                                seen_ids.add(r.id)
-                        if len(page) < 1000:
-                            break
-                        off += len(page)
+                for r in await live_rows(svc, user_id, extra_statuses=("superseded", "archived", "rejected")):
+                    _md = getattr(r, "metadata", {}) or {}
+                    if (getattr(r, "id", "") and r.id not in seen_ids
+                            and (_md.get("user_id") == user_id or _md.get("wing") == user_id)
+                            and (name_re.search(getattr(r, "text", "") or "")
+                                 or name_re.search(str(_md.get("retire_quote") or "")))):
+                        erase_ids.append(r.id)
+                        seen_ids.add(r.id)
                 if not erase_ids:
                     return
                 erased = await svc.erase_rows(user_id, erase_ids, actor=user_id,

@@ -222,7 +222,7 @@ def test_R4_a_forgotten_entity_is_not_served_after_the_tombstone_or_the_erase(la
 def test_R4b_the_erase_fails_closed_a_store_failure_is_raised_never_confirmed(lab, monkeypatch):
     write_night()
 
-    async def boom(user_id, pattern):
+    async def boom(user_id, pattern, **_kw):            # the real seam also takes only_ids= (raise the STORE error, not a TypeError)
         raise RuntimeError("store down")
 
     monkeypatch.setattr(lab, "erase_matching", boom)

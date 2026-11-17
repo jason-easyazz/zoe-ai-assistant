@@ -1966,7 +1966,23 @@ async def erase_entity(user_id: str, name: str) -> int:
 
     try:
         async with _user_lock(user_id):
-            n = int(await night_store.get_backend().erase_matching(user_id, name_pattern(name)) or 0)
+            backend = night_store.get_backend()
+            rx = name_pattern(name)
+            # FIRST (same order as ``erase_words``): a thread that SURVIVES the name erase - its title does not name it, some of its
+            # observations do not - is repaired from the observations that stay, so its anchors / topic keep no trace of the name.
+            # Pattern-based throughout, so a retry after any failure finds the same rows again.
+            obs = await backend.observations(user_id)
+            hit = {o["id"] for o in obs if rx.search(o.get("quote") or "")}
+            threads = await backend.threads(user_id)
+            titled = {t["id"] for t in threads if rx.search(t.get("title") or "")}        # erase_matching deletes these whole
+            removed: "dict[str, int]" = {t["id"]: 0 for t in threads
+                                         if t["id"] not in titled and rx.search(str(t.get("anchors") or "").replace("@", ""))}
+            for o in obs:
+                tid = str(o.get("thread_id") or "")
+                if o["id"] in hit and tid and tid not in titled:
+                    removed[tid] = removed.get(tid, 0) + 1
+            await _rederive_threads(backend, user_id, removed, exclude=hit)
+            n = int(await backend.erase_matching(user_id, rx) or 0)
     except Exception as exc:  # noqa: BLE001
         if _no_table(exc):
             return 0
@@ -1979,25 +1995,130 @@ def _flat(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+def partition_observations(obs: Any) -> tuple[list, list]:
+    """``(bound, legacy)`` observations (``turn_forget.split``): bound = saved with the turn's id, erased by that id alone; legacy =
+    saved with none - the ONLY observations a text matcher is ever handed (``erase_words``)."""
+    import turn_forget
+    return turn_forget.split(obs, key=lambda o: {"quote": o.get("quote"), "turn_id": o.get("turn_id")})
+
+
+def _row_anchors(obs: "list[dict]", title: str) -> "set[str]":
+    """``anchors_of`` over STORED observations (``who`` is the stored string): the names and distinctive words they carry."""
+    out: "set[str]" = set()
+    for o in obs:
+        out |= {"@" + n for n in ({w.lower() for w in re.findall(r"[A-Za-z]{3,}", str(o.get("who") or ""))}
+                                  | set(names_in(str(o.get("quote") or "")))) - _NOT_NAMES}
+        out |= set(_words(str(o.get("quote") or ""))[:14])
+    return out | set(_words(title))
+
+
+async def _rederive_threads(backend: Any, user_id: str, thread_ids: "dict[str, int]", *, exclude: "set[str]" = frozenset()) -> int:
+    """After an id-scoped erase took observations out of these threads (``thread_ids``: thread -> how many): every SURVIVING thread's derived fields are rebuilt from
+    the observations it still has, so none carries the erased turn's content. A thread's title is copied text or a model summary
+    of its moments and records no provenance, so it is KEPT only when every one of its distinctive words is still in a surviving
+    quote; otherwise it is re-derived the way an unnamed group is titled (the first eight words of the earliest surviving quote).
+    anchors (copied words and names), topic, last_feeling, weight_max, the day range and mentions_n are recomputed from the
+    survivors. No model call. ``exclude`` = the observations ABOUT TO BE erased: the threads are repaired from "observations minus
+    those" BEFORE the erase, so a failure here leaves every observation in place and the retry finds the same ones again.
+    Returns the threads rewritten."""
+    if not thread_ids:
+        return 0
+    threads = {t["id"]: t for t in await backend.threads(user_id) if t["id"] in thread_ids}
+    n = 0
+    for tid, t in threads.items():
+        live = [o for o in await backend.observations(user_id, thread_id=tid)
+                if (o.get("quote") or "").strip() and o["id"] not in exclude]
+        if not live:
+            continue                                   # an orphan is removed by ``erase_matching`` itself
+        live.sort(key=lambda o: (o.get("said_at") or 0.0, o["id"]))
+        quotes = [str(o["quote"]) for o in live]
+        kept = set().union(*(set(_words(q)) for q in quotes))
+        title = str(t.get("title") or "")
+        if not title or not set(_words(title)) <= kept:
+            title = " ".join(quotes[0].split()[:8])
+        feel = [o for o in live if (o.get("feeling") or "none") != "none"]
+        days = [str(o.get("day") or "") for o in live if o.get("day")]
+        row = dict(t, title=title, anchors=" ".join(sorted(_row_anchors(live, title)))[:600],
+                   topic=topic_of(quotes + [title]), last_feeling=(feel[-1]["feeling"] if feel else "none"),
+                   weight_max=max(int(o.get("weight") or 1) for o in live),
+                   mentions_n=max(len(live), int(t.get("mentions_n") or 0) - int(thread_ids.get(tid, 0))),
+                   first_day=(min(days) if days else t.get("first_day", "")), last_day=(max(days) if days else t.get("last_day", "")))
+        if row != t:
+            await backend.put_thread(row)
+            n += 1
+    if n:
+        logger.info("NIGHT_MIND_FORGET code=threads_rederived n=%d", n)
+    return n
+
+
+def _words_hit(user_id: str, bound: list, legacy: list, tid: str, wanted: list) -> list:
+    from exact_words import legacy_words_overlap
+
+    hit = [o for o in bound if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
+    old = [o for o in legacy if (o["quote"] or "").strip() and any(legacy_words_overlap(o["quote"], w) for w in wanted)]
+    if old:
+        logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(old))
+    return hit + old
+
+
+async def legacy_observation_ids(user_id: str, *texts: str) -> list:
+    """The ids of this user's LEGACY observations (saved with no turn id) whose quote sits inside - or contains - any of ``texts``, as said or as redacted:
+    what a forget of those words resolves to BEFORE it erases anything (``forget_record``). A store failure is RAISED."""
+    wanted = [str(x) for x in texts if len(_flat(x).split()) >= 2]
+    if not (user_id or "").strip() or not wanted:
+        return []
+    try:
+        _bound, legacy = partition_observations(await night_store.get_backend().observations(user_id))
+    except Exception as exc:  # noqa: BLE001
+        if _no_table(exc):
+            return []
+        raise
+    return [str(o["id"]) for o in _words_hit(user_id, [], legacy, "", wanted)]
+
+
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
-    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn: those saved from that turn id, and
-    those whose quote sits inside - or contains - any of ``texts`` (the displayed quote, the row text). "Forget it" after an explained answer must
-    reach what the night pass saved from the same words, which ``erase_entity`` (name-based) does not. A store failure is RAISED."""
+    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. PER ROW
+    (``partition_observations``): a BOUND observation (saved with a turn id) goes only when its id is ``turn_id`` - another turn's
+    observation can hold the very same words (a look-alike whose difference the scrub removed), so no text is compared with it;
+    a LEGACY observation (saved with no turn id) goes when its quote sits inside - or contains - any of ``texts`` (as said or as redacted), whether or not
+    ``turn_id`` is given (over-inclusive there by design). A store failure is RAISED."""
     if not (user_id or "").strip():
         return 0
-    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
     tid = str(turn_id or "").strip()
+    wanted = [str(x) for x in texts if len(_flat(x).split()) >= 2]
     if not wanted and not tid:
         return 0
+    return await _erase_observations(user_id, lambda bound, legacy: _words_hit(user_id, bound, legacy, tid, wanted))
+
+
+async def erase_observations(user_id: str, ids) -> int:
+    """Delete these observations by id (a forget record's resolved legacy observations) and re-derive their threads. Idempotent;
+    a store failure is RAISED."""
+    want = {str(i) for i in (ids or ()) if i}
+    if not (user_id or "").strip() or not want:
+        return 0
+    return await _erase_observations(user_id, lambda bound, legacy: [o for o in bound + legacy if str(o["id"]) in want])
+
+
+async def _erase_observations(user_id: str, pick) -> int:
     async with _user_lock(user_id):
         try:
             backend = night_store.get_backend()
-            hit = [o["quote"] for o in await backend.observations(user_id)
-                   if (tid and str(o["turn_id"]) == tid) or any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
-            hit = [q for q in hit if (q or "").strip()]
+            hit = pick(*partition_observations(await backend.observations(user_id)))
+            hit = [o for o in hit if (o["quote"] or "").strip()]
             if not hit:
                 return 0
-            n = int(await backend.erase_matching(user_id, re.compile("|".join(re.escape(q) for q in sorted(set(hit), key=len, reverse=True)))) or 0)
+            pattern = re.compile("|".join(re.escape(q) for q in sorted({o["quote"] for o in hit}, key=len, reverse=True)))
+            # a thread that SURVIVES (it still has other observations) must not keep fields derived from what is erased: repaired
+            # FIRST, from the observations minus the hit set, so a failure here (or in the erase) leaves the hit observations
+            # findable and a retry repairs and erases them again
+            removed: "dict[str, int]" = {}
+            for o in hit:
+                if o.get("thread_id"):
+                    removed[str(o["thread_id"])] = removed.get(str(o["thread_id"]), 0) + 1
+            n = await _rederive_threads(backend, user_id, removed, exclude={o["id"] for o in hit})
+            # ``only_ids`` always: the pattern alone would also take another turn's observation that holds the same words
+            n += int(await backend.erase_matching(user_id, pattern, only_ids=sorted(o["id"] for o in hit)) or 0)
         except Exception as exc:  # noqa: BLE001
             if _no_table(exc):
                 return 0

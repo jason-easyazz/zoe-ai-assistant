@@ -19,9 +19,10 @@ The contract here:
   made outside any capture scope is refused only when its evidence excerpt IS a retracted turn's words.
   ``MemoryService.ingest`` and ``MemoryService.review(edit)`` consult it (an explicit re-teach by the owner is exempt, exactly
   like the forget ledger).
-* ``rows_from_turn`` finds the rows already written FROM that turn: its ``user_turn_id`` hash, or a source excerpt that is
-  exactly the turn's words (never "contains" - a longer turn that merely includes the words is another turn), and never a
-  row written before the turn was said.
+* ``rows_from_turn`` finds the rows already written FROM that turn: a row carrying a saved-turn id (``source_turn``, stamped at
+  write time by ``turn_ref``) by that id alone (``Turn.mids``); an OLD row without one by its ``user_turn_id`` (the extractors'
+  hash, or the ask-to-remember id ``ask_to_remember.turn_ids_for``) or a source excerpt that is exactly the turn's words AS SAID -
+  never a redacted excerpt, never "contains", and never a row written before the turn was said.
 * ``mark_forgotten`` drops the turn's words from the notes, ONLY once every row was removed: until then the target stays, so
   "forget that" again retries the same turn (a store failure must never leave rows behind a "done").
 
@@ -50,8 +51,31 @@ TURN_TTL_S = 1800.0
 RETRACT_TTL_S = 6 * 3600.0
 #: A row is "from" a turn only if it was written no earlier than this before the turn was saved (clock slack).
 ROW_SLACK_S = 5.0
-#: How many recent rows (per status) are read when looking for a turn's rows.
-SCAN_LIMIT = 200
+#: Live memory rows every forget scanner must cover. Retired statuses are added explicitly by callers.
+LIVE_FORGET_STATUSES = ("approved", "pending", "disputed")
+
+
+async def live_rows(svc: Any, user_id: str, *, extra_statuses: tuple = (),
+                    read_budget_s: Optional[float] = None) -> list:
+    """Every live row, paged to exhaustion and de-duplicated by id. Read failures propagate.
+
+    A caller's optional read budget applies to each page, as it did to each status read.
+    """
+    import asyncio
+
+    rows = {}
+    for status in dict.fromkeys((*LIVE_FORGET_STATUSES, *extra_statuses)):
+        offset = 0
+        while True:
+            read = svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset, strict=True)
+            page = await read if read_budget_s is None else await asyncio.wait_for(read, read_budget_s)
+            rows.update((r.id, r) for r in page)
+            if len(page) < 1000:
+                break
+            offset += len(page)
+    return list(rows.values())
+
+
 _MAX_USERS = 512
 _MAX_TURNS = 6
 _MAX_RETRACTED = 16
@@ -66,6 +90,9 @@ class Turn:
     ts: float
     h: str
     tid: int = 0
+    # the saved-turn (``chat_messages.id``) ids of this turn: its identity in every store a forget erases BY ID (the voice lane
+    # saves one turn twice, so there can be two)
+    mids: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -182,9 +209,9 @@ def is_forget_instruction(text: str) -> bool:
 
 # ── the turn notes ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-def note_user_turn(user_id: Optional[str], text: str, *, now: Optional[float] = None) -> None:
-    """Record a saved USER turn. Only identified users; a repeat of the newest turn (the voice lane saves its turn twice) is
-    one turn. Never raises."""
+def note_user_turn(user_id: Optional[str], text: str, *, now: Optional[float] = None, mid: str = "") -> None:
+    """Record a saved USER turn and its saved-turn id ``mid``. Only identified users; a repeat of the newest turn (the voice lane
+    saves its turn twice) is one turn, and its id joins that turn's ``mids``. Never raises."""
     try:
         clean = (text or "").strip()
         if not clean or not _tracked(user_id):
@@ -199,8 +226,10 @@ def note_user_turn(user_id: Optional[str], text: str, *, now: Optional[float] = 
                     _turns.popitem(last=False)
             _turns.move_to_end(user_id)
             if dq and dq[-1].h == h and dq[-1].text:
+                if mid and mid not in dq[-1].mids:
+                    dq[-1].mids = dq[-1].mids + (str(mid),)
                 return
-            dq.append(Turn(clean, t, h, next(_IDS)))
+            dq.append(Turn(clean, t, h, next(_IDS), (str(mid),) if mid else ()))
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a turn
         logger.debug("turn_forget.note_user_turn failed", exc_info=True)
 
@@ -217,8 +246,59 @@ def previous_turn(user_id: Optional[str], *, now: Optional[float] = None) -> Opt
             return None
         if turn.text and is_forget_turn(turn.text):
             continue
-        return Turn(turn.text, turn.ts, turn.h, turn.tid)
+        return Turn(turn.text, turn.ts, turn.h, turn.tid, turn.mids)
     return None
+
+
+def note_saved_copy(user_id: Optional[str], text: str, mid: str) -> None:
+    """A second saved row of an already-noted turn (the voice lane's save with the reply): its id joins that turn's ``mids``, so a
+    forget reaches both rows. Never adds a turn. Never raises."""
+    try:
+        h = turn_hash((text or "").strip())
+        with _LOCK:
+            for turn in reversed(list(_turns.get(user_id or "") or ())):
+                if turn.h == h:
+                    if mid and mid not in turn.mids:
+                        turn.mids = turn.mids + (str(mid),)
+                    return
+    except Exception:  # noqa: BLE001
+        logger.debug("turn_forget.note_saved_copy failed", exc_info=True)
+
+
+#: how recent the newest noted turn must be for an unscoped in-turn write to take its id by containment (``turn_ref``)
+REF_WINDOW_S = 300.0
+
+
+def turn_ref(user_id: Optional[str], raw: Any) -> str:
+    """The saved-turn id a write derived from the words ``raw`` comes from, resolved at WRITE time while the words are still as
+    said: the capture scope's own turn, else the ONE noted turn whose words are ``raw`` or begin with it (a writer may cut the
+    excerpt). '' when none or several (the row then has no id, and a forget treats it as an old row). Never raises."""
+    try:
+        uid = user_id or ""
+        cap = _CAPTURE.get()
+        with _LOCK:
+            turns = list(_turns.get(uid) or ())
+        if cap is not None and cap[0] == uid and cap[1]:
+            for t in turns:
+                if t.tid == cap[1]:
+                    return t.mids[0] if t.mids else ""
+        key = norm(raw if isinstance(raw, str) else "")
+        if len(key) < 6:
+            return ""
+        hits = {t.mids[0] for t in turns if t.mids and t.text and (norm(t.text) == key or norm(t.text).startswith(key))}
+        if len(hits) == 1:
+            return next(iter(hits))
+        if hits:
+            return ""
+        # an in-turn write outside a capture scope (a brain tool's span, an ask's clause): the turn being handled is the NEWEST
+        # noted one, and only when it holds the words and was said within ``REF_WINDOW_S``
+        newest = turns[-1] if turns else None
+        if newest is not None and newest.mids and newest.text and time.time() - newest.ts <= REF_WINDOW_S \
+                and key in norm(newest.text):
+            return newest.mids[0]
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def turns_matching(user_id: Optional[str], predicate, *, now: Optional[float] = None) -> list:
@@ -228,7 +308,7 @@ def turns_matching(user_id: Optional[str], predicate, *, now: Optional[float] = 
         t = _now(now)
         with _LOCK:
             turns = list(_turns.get(user_id or "") or ())
-        return [Turn(x.text, x.ts, x.h, x.tid) for x in turns
+        return [Turn(x.text, x.ts, x.h, x.tid, x.mids) for x in turns
                 if x.text and t - x.ts <= TURN_TTL_S and not is_forget_turn(x.text) and predicate(x.text)]
     except Exception:  # noqa: BLE001
         return []
@@ -343,37 +423,261 @@ def _added_ts(meta: dict) -> Optional[float]:
         return None
 
 
-def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None) -> bool:
-    """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash, or its source excerpt is
-    exactly the turn's words. Never "one contains the other" (a longer turn that includes the words is another turn), never
-    by time alone, and never a row written before the turn was said."""
-    meta = meta or {}
+_PLACEHOLDER = "[redacted]"
+#: the explicit provenance a row from NO saved turn carries instead of an id (``memory_service`` stamps it at write time)
+KIND_KEY = "source_kind"
+
+
+TURN, KIND, LEGACY = "turn", "kind", "legacy"
+_ENTRY_SEP, _ENTRY_KIND = "@", "src:"     # an exact-words entry id: ``xw-<key>[~<tag>]@<saved-turn id>`` or ``...@src:<kind>``
+
+
+def classify(row: Any) -> tuple[str, str]:
+    """THE one place a forget decides what a row IS, per row - for every store a forget reaches:
+
+    * an exact-words entry id (a ``str``): ``@<id>`` / ``@src:<kind>`` / no ``@``;
+    * a night-mind observation (a mapping with ``quote`` and ``turn_id``): its ``turn_id`` / none;
+    * a memory row (``.metadata``) or its metadata: ``source_turn`` / ``source_kind`` / neither.
+
+    Returns ``(TURN, <saved-turn id>)`` - erased by that id only; ``(KIND, <non-turn source kind>)`` - bound to a source that is
+    no saved turn: only that row goes, by its own key, and nothing else is matched for it (no transcript, no words); or
+    ``(LEGACY, "")`` - written before provenance was stamped: the ONLY kind a text matcher is ever handed."""
+    if isinstance(row, str):
+        if _ENTRY_SEP not in row:
+            return LEGACY, ""
+        p = row.rpartition(_ENTRY_SEP)[2]
+        if not p:
+            return LEGACY, ""
+        return (KIND, p[len(_ENTRY_KIND):]) if p.startswith(_ENTRY_KIND) else (TURN, p)
+    meta = getattr(row, "metadata", row)
+    meta = meta if isinstance(meta, dict) else {}
+    if "quote" in meta and "turn_id" in meta and "source_turn" not in meta:
+        tid = str(meta.get("turn_id") or "").strip()
+        return (TURN, tid) if tid else (LEGACY, "")
+    src = str(meta.get("source_turn") or "")
+    if src:
+        return TURN, src
+    kind = str(meta.get(KIND_KEY) or "")
+    return (KIND, kind) if kind else (LEGACY, "")
+
+
+#: ``twin_basis`` results
+BY_ID, BY_WORDS = "id", "words"
+
+
+def twin_basis(target: Any, candidate: Any) -> str:
+    """THE one rule every twin / sibling matcher applies BEFORE its own words criteria (``provenance_answers.twins_of``,
+    ``ask_to_remember.siblings_of``): how a CANDIDATE row may be found a twin of a forget TARGET (``classify`` of each).
+
+    * ``BY_ID``: both are bound to the SAME saved turn - a twin by id (the matcher's content check still applies);
+    * ``BY_WORDS``: the candidate is LEGACY (no source named) - the matcher's excerpt / clock / content words decide;
+    * ``""``: NEVER a twin, however identical its words - a candidate bound to ANOTHER saved turn, or to a non-turn source
+      (KIND: an Omi recording, a provider, a restore ...; only that row's own forget takes it)."""
+    ck, cs = classify(candidate)
+    if ck == LEGACY:
+        return BY_WORDS
+    if ck == TURN:
+        tk, ts = classify(target)
+        return BY_ID if tk == TURN and ts == cs else ""
+    return ""
+
+
+def provenance(meta: Optional[dict]) -> tuple[str, str]:
+    """``classify`` of a memory row's metadata (kept name)."""
+    return classify(meta or {})
+
+
+def split(rows: Any, key: Any = None) -> tuple[list, list]:
+    """``(bound, legacy)`` by ``classify`` (``key`` picks what to classify from each row): a bound row (TURN or KIND) never
+    meets a text matcher; only a legacy row does. Every store's partition is this."""
+    bound, legacy = [], []
+    for r in rows or ():
+        (legacy if classify(key(r) if key else r)[0] == LEGACY else bound).append(r)
+    return bound, legacy
+
+
+def partition(rows: Any) -> tuple[list, list]:
+    """``(bound, legacy)`` of memory rows (``.metadata``): ``split``."""
+    return split(rows)
+
+
+def target_of(entry_id: str = "", meta: Optional[dict] = None) -> tuple[tuple, bool]:
+    """What a forget TARGET (an explained answer's exact-words entry and / or its memory row) names: ``(mids, source_only)``.
+    ``mids`` = its saved-turn ids; ``source_only`` = it names no saved turn but IS bound to a non-turn source (only that row goes,
+    nothing is matched for it); neither = a legacy target (the words fallback)."""
+    mids, kinds = [], 0
+    for c in (classify(entry_id) if entry_id else (LEGACY, ""), classify(meta) if meta else (LEGACY, "")):
+        if c[0] == TURN and c[1] not in mids:
+            mids.append(c[1])
+        elif c[0] == KIND:
+            kinds += 1
+    return tuple(mids), bool(kinds and not mids)
+
+
+def scrubbed_form(text: str) -> str:
+    """``text`` as the write boundary would have stored it as an excerpt (what a legacy redacted excerpt is compared with)."""
+    try:
+        from memory_service import scrub_source_excerpt
+
+        return norm(scrub_source_excerpt(text) or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def excerpt_forms(text: str) -> tuple:
+    """An excerpt in BOTH forms a comparison may meet: as stored (lower-case, whitespace collapsed) and as the write boundary would
+    store it now (``scrubbed_form``). A row written before the wider scrub kept its contact as said, while a quote or a newer row's
+    excerpt holds it redacted: compared in one form only, the same words never match."""
+    raw = re.sub(r"\s+", " ", text or "").strip().lower()
+    if not raw:
+        return ()
+    scrubbed = scrubbed_form(text)
+    return (raw, scrubbed) if scrubbed and scrubbed != raw else (raw,)
+
+
+def forms_overlap(a: tuple, b: tuple) -> bool:
+    """One of the ``excerpt_forms`` of ``a`` lies inside one of ``b``'s, or the other way round."""
+    return any(x and y and (x in y or y in x) for x in a for y in b)
+
+
+def _legacy_row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float], turn_ids: frozenset) -> bool:
+    """The TEXT matcher, for a LEGACY row only (``partition``): its ``user_turn_id`` is the turn's hash or one of ``turn_ids``
+    (the ask-to-remember id), or its excerpt is exactly the turn's words as said - or, an excerpt the boundary redacted, exactly
+    the turn's words as the boundary would have stored them (a look-alike turn that redacts alike goes too: over-forgetting is
+    accepted HERE, never keeping words the owner forgot). Never "one contains the other", never a row written before the turn."""
     if turn_ts is not None:
         ts = _added_ts(meta)
         if ts is not None and ts < turn_ts - ROW_SLACK_S:
             return False
     tid = str(meta.get("user_turn_id") or "")
-    if tid and any(tid.startswith(p) for p in extractor_turn_ids(turn_text)):
+    if tid and (tid in turn_ids or any(tid.startswith(p) for p in extractor_turn_ids(turn_text))):
         return True
     ex, key = norm(str(meta.get("source_excerpt") or "")), norm(turn_text)
-    return bool(ex and key and ex == key)
+    if not (ex and key):
+        return False
+    from exact_words import legacy_words_equal
+
+    return legacy_words_equal(str(meta.get("source_excerpt") or ""), turn_text)
 
 
-async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Optional[float] = None) -> list:
-    """The owner's approved / pending rows written from this turn (``row_is_from_turn``). RAISES on a store failure (a forget
-    must not be confirmed when the store could not be read)."""
-    out, seen = [], set()
-    for status in ("approved", "pending"):
-        for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT):
-            if r.id in seen:
-                continue
-            m = r.metadata or {}
-            if (m.get("user_id") or m.get("wing") or user_id) != user_id:
-                continue
-            if row_is_from_turn(m, turn_text, turn_ts):
-                seen.add(r.id)
-                out.append(r)
+def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None, *,
+                     turn_ids: frozenset = frozenset(), mids: tuple = ()) -> bool:
+    """Was a row (its metadata) written FROM this turn? A row with a saved-turn id is the turn's exactly when that id is one of
+    ``mids`` - its words are never consulted; a row of a non-turn source kind is no turn's; only a LEGACY row (written before the
+    ids) is matched by its words (``_legacy_row_is_from_turn``)."""
+    kind, value = provenance(meta)
+    if kind == "turn":
+        return value in set(mids or ())
+    if kind == "kind":
+        return False
+    return _legacy_row_is_from_turn(meta or {}, turn_text, turn_ts, turn_ids)
+
+
+async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Optional[float] = None, *,
+                         mids: tuple = ()) -> list:
+    """The owner's live rows written from this turn (``mids`` = its saved-turn ids): the bound rows by id alone,
+    the legacy rows by their words (``partition``; a legacy match is logged ``TURN_FORGET code=legacy_text n=``). RAISES on a
+    store failure (a forget must not be confirmed when the store could not be read)."""
+    rows = [r for r in await live_rows(svc, user_id)
+            if ((r.metadata or {}).get("user_id") or (r.metadata or {}).get("wing") or user_id) == user_id]
+    bound, legacy = partition(rows)
+    want = set(mids or ())
+    out = [r for r in bound if provenance(r.metadata)[0] == "turn" and provenance(r.metadata)[1] in want]
+    if legacy:
+        try:
+            import ask_to_remember
+
+            turn_ids = ask_to_remember.turn_ids_for(user_id, turn_text)
+        except Exception:  # noqa: BLE001
+            turn_ids = frozenset()
+        old = [r for r in legacy if _legacy_row_is_from_turn(r.metadata or {}, turn_text, turn_ts, turn_ids)]
+        if old:
+            logger.info("TURN_FORGET code=legacy_text n=%d", len(old))
+        out += old
     return out
+
+
+async def resolve_legacy_ids(user_id: str, texts: Any) -> tuple:
+    """The saved-turn ids a LEGACY target's words resolve to (``exact_words.legacy_transcript_ids``: the transcript turns holding
+    them, as said or as redacted; over-inclusive by design). Resolved FIRST and handed back to the caller, so everything bound to
+    those turns - facts written by the upgraded writers, observations, entries - goes too, not only what carries no id. RAISES on a
+    store failure (the caller must not confirm)."""
+    import exact_words
+
+    out: list = []
+    for w in dict.fromkeys(t for t in (texts or ()) if t and str(t).strip()):
+        out += [m for m in await exact_words.legacy_transcript_ids(user_id, w) if m not in out]
+    if out:
+        logger.info("TURN_FORGET code=legacy_resolved ids=%d", len(out))
+    return tuple(out)
+
+
+async def legacy_targets(user_id: str, texts: Any, *, at: Optional[float] = None) -> dict:
+    """What a forgotten turn's WORDS name among the LEGACY rows (written before saved-turn ids: no id to erase them by), resolved to
+    THEIR ids before anything is erased (``forget_record.Plan`` fields): exact-words entries, night-mind observations, conversation
+    notes (by the words or the turn's time ``at``). Over-inclusive by design, legacy rows only. RAISES on a store failure."""
+    import conversation_notes
+    import exact_words
+    import night_mind
+
+    words = [w for w in dict.fromkeys(texts or ()) if w and str(w).strip()]
+    out: dict = {"entries": [], "obs": [], "notes": []}
+    for w in words:
+        out["entries"] += [e for e in await exact_words.legacy_entry_ids(user_id, w) if e not in out["entries"]]
+    if words:
+        out["obs"] = await night_mind.legacy_observation_ids(user_id, *words)
+        logger.info("TURN_FORGET code=legacy_text texts=%d", len(words))
+    if words or at is not None:
+        out["notes"] = await conversation_notes.ids_for_turn_words(user_id, words, at=at)
+    return out
+
+
+async def erase_turn_words(user_id: str, mids: Any = (), texts: Any = (), *, at: Optional[float] = None) -> int:
+    """Erase what a turn's WORDS left outside the memory rows - its saved transcript turn (flagged ``off_record``), the night mind's
+    observations, the conversation notes, the exact-words entries: BOUND rows by the saved-turn ids ``mids`` only, LEGACY rows by
+    ``texts`` (resolved to their ids first, ``legacy_targets``); with no ids, the words also resolve to the saved turns holding
+    them. The same step functions a forget record runs (``forget_record.run_plan``), without the record: a caller that hides rows
+    too uses ``forget_record.forget``. RAISES on a store failure."""
+    import exact_words
+    import forget_record
+
+    ids = [str(m) for m in dict.fromkeys(mids or ()) if m]
+    ids = await exact_words.turn_copies(user_id, ids) if ids else list(await resolve_legacy_ids(user_id, texts))
+    plan = forget_record.Plan(mids=ids, **await legacy_targets(user_id, texts, at=at))
+    return await forget_record.run_plan(user_id, plan)
+
+
+def record_key(turn: "Turn") -> str:
+    """The forget record of THIS turn instance: by its saved-turn ids (stable across a restart), else by the in-process instance."""
+    return "turn:" + ",".join(sorted(turn.mids)) if turn.mids else f"tid:{_BOOT}:{turn.tid}"
+
+
+_BOOT = hashlib.sha1(f"{time.time()}:{id(_LOCK)}".encode()).hexdigest()[:12]
+
+
+async def resolve_turn(svc: Any, user_id: str, turn: "Turn") -> Any:
+    """"forget that": the whole target set of the turn, as ids (``forget_record.Plan``), BEFORE anything is erased: its saved turns
+    (every committed copy; a turn noted with none, the saved turns its words resolve to), the rows written from it (``rows_from_turn``)
+    and their "remember that X" twins (``ask_to_remember.siblings_of``), the legacy rows its words name (``legacy_targets``) and the
+    value registry's content id of it. RAISES on a store failure (nothing destroyed: not confirmed)."""
+    import ask_to_remember
+    import exact_words
+    import forget_record
+    import value_correction
+
+    text, ts = turn.text, turn.ts
+    mids = tuple(await exact_words.turn_copies(user_id, turn.mids)) if turn.mids else await resolve_legacy_ids(user_id, (text,))
+    rows = await rows_from_turn(svc, user_id, text, ts, mids=mids)
+    have = {r.id for r in rows}
+    for r in list(rows):
+        for sib in await ask_to_remember.siblings_of(svc, user_id, r):
+            if sib.id not in have:
+                have.add(sib.id)
+                rows.append(sib)
+    tid = value_correction.turn_id_of(user_id, text)
+    plan = forget_record.Plan(rows=[r.id for r in rows], mids=list(mids), reg_turns=[tid] if tid else [],
+                              **await legacy_targets(user_id, (text,), at=ts))
+    return plan, rows
 
 
 def reset() -> None:  # tests
@@ -384,5 +688,6 @@ def reset() -> None:  # tests
 
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
-    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset",
+    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset", "provenance", "partition", "erase_turn_words", "classify",
+    "split", "target_of", "resolve_legacy_ids", "resolve_turn", "record_key", "legacy_targets",
 ]

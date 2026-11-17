@@ -170,3 +170,84 @@ def test_style_line_is_the_first_style_sentence_scrubbed():
         "She prefers blunt feedback."
     assert c.style_line("She runs a lot.") == ""
     assert c.style_line("She is direct; her password is hunter2.") == ""
+
+
+def test_a_contact_fact_never_reaches_the_card():
+    """The card is a derived copy: an address (which the card's own phone / e-mail guard does not see) is dropped because
+    scrub_pii redacts it."""
+    assert "Example St" not in card([ref("User's plumber works from 1 Example St.", "relationship")])
+    assert card([ref("User's plumber works from 1 Example St.", "relationship")]) == ""
+
+
+# ── forgotten means forever includes the STORED card (cross-review, PR #2574) ─────────────────────────────────────────────────
+
+class _CardDb:
+    """``user_model_cards`` for one member: the two statements ``invalidate_for_rows`` / ``load_card_block`` issue."""
+
+    def __init__(self, card=None):
+        self.card = card                       # (card_json, card_text, version) or None
+
+    def ctx(self):
+        import contextlib
+
+        store = self
+
+        class _Cur:
+            def __init__(self, row):
+                self.row = row
+
+            async def fetchone(self):
+                return self.row
+
+        class _Db:
+            async def execute(self, sql, params=()):
+                if sql.lstrip().upper().startswith("DELETE FROM USER_MODEL_CARDS"):
+                    store.card = None
+                    return _Cur(None)
+                if "card_text" in sql and store.card is not None:
+                    return _Cur(store.card)
+                if "card_json" in sql and store.card is not None:
+                    return _Cur((store.card[0],))
+                return _Cur(None)
+
+            async def commit(self):
+                return None
+
+        @contextlib.asynccontextmanager
+        async def _c():
+            yield _Db()
+        return _c()
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_a_forget_deletes_the_stored_card_that_cites_the_forgotten_row(monkeypatch):
+    import json
+
+    import db_pool
+
+    body = json.dumps({"items": [["fact", "User's kayak paddles live in the blue shed", "zoe_demo_row1"],
+                                 ["fact", "User likes tea", "zoe_demo_row2"]]})
+    db = _CardDb((body, "- User's kayak paddles live in the blue shed\n- User likes tea", "v1"))
+    monkeypatch.setattr(db_pool, "get_db_ctx", db.ctx)
+    assert _run(c.invalidate_for_rows("demo_card_user", ["zoe_demo_other"])) == 0 and db.card is not None   # not cited: kept
+    assert _run(c.invalidate_for_rows("demo_card_user", ["zoe_demo_row1"])) == 1 and db.card is None        # cited: deleted
+    # the next serve with no stored card degrades to "no card" (no rebuild asked) - it never raises on the hot path
+    assert _run(c.load_card_block("demo_card_user", build_missing=False)) == {"version": "", "text": ""}
+
+
+def test_with_no_card_store_the_invalidation_is_a_no_op_and_a_lost_store_raises(monkeypatch):
+    import db_pool
+
+    def never():
+        raise RuntimeError("db_pool not initialised - call init_pool() first")
+    monkeypatch.setattr(db_pool, "get_db_ctx", never)
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: False)
+    assert _run(c.invalidate_for_rows("demo_card_user", ["zoe_demo_row1"])) == 0          # a bare / lab run: nothing to delete
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: True)
+    with pytest.raises(RuntimeError):
+        _run(c.invalidate_for_rows("demo_card_user", ["zoe_demo_row1"]))                 # a LOST pool: not confirmed, retried

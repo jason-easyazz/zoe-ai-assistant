@@ -236,6 +236,27 @@ def turn_id(user_id: str, clause: str) -> str:
     return "atr-" + hashlib.sha1(f"{user_id}|{_norm(clause)}".encode("utf-8")).hexdigest()[:16]
 
 
+def turn_ids_for(user_id: str, text: str) -> frozenset:
+    """The ``user_turn_id``s ``remember`` could have stamped for the owner turn ``text`` (the clause as parsed, and its own-words
+    form): "forget that" finds the ask's row by its id, never by the excerpt (which the write boundary redacts). Never raises."""
+    try:
+        p = parse(text)
+        if p is None or p.kind != "remember" or not (p.clause or "").strip():
+            return frozenset()
+        clauses = {p.clause.strip()}
+        try:
+            import own_words
+
+            own = own_words.analyze(p.clause.strip())
+            if own.changed and own.text.strip():
+                clauses.add(own.text.strip())
+        except Exception:  # noqa: BLE001
+            pass
+        return frozenset(turn_id(user_id, c) for c in clauses)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
 # ── the write ────────────────────────────────────────────────────────────────────────────────
 
 async def _speculation_barrier() -> None:
@@ -299,7 +320,7 @@ async def remember(clause: str, user_id: str, *, utterance: str = "", session_id
     try:
         from memory_service import get_memory_service, scrub_pii
 
-        scrubbed, reject = scrub_pii(clause)
+        scrubbed, reject = scrub_pii(clause, contact=False)   # what ingest stores: a phone / address is a fact to keep
         if reject or scrubbed != clause:
             # a card / SSN is REJECTED by the store; a password / PIN / key is REDACTED in place - either way the
             # words the owner wants kept are not what would be stored, so nothing is, and Zoe says so
@@ -463,19 +484,24 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
     row the post-turn capture derived from the same turn (``ref`` is whichever the forget found first). Same owner,
     within ``SIBLING_WINDOW_S``, the same turn (equal source excerpts, then overlap >= ``SIBLING_MIN_OVERLAP``)
     or, with no excerpt on one side, one row's content words wholly inside the other's; when ``ref`` is the derived row only an
-    ask row counts. Never raises."""
+    ask row counts. Never another turn's look-alike: a second ask (its own ask id); rows carrying saved-turn ids (``source_turn``)
+    are twins only of the same id; rows with none (legacy) by their words. Never raises."""
     try:
         meta = ref.metadata or {}
         ts = _added_ts(meta)
         if ts <= 0:
             return []
-        rows = await svc.list_by_status(user_id=user_id, status="approved", limit=1000)
+        import turn_forget
+
+        rows = await turn_forget.live_rows(svc, user_id)
         ref_is_ask = is_ask_row(meta)
         out = []
         for r in rows:
             if r.id == ref.id:
                 continue
             m = r.metadata or {}
+            if (m.get("user_id") or m.get("wing") or user_id) != user_id:
+                continue
             if abs(_added_ts(m) - ts) > SIBLING_WINDOW_S:
                 continue
             if not ref_is_ask and not is_ask_row(m):
@@ -483,6 +509,14 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             # the same TURN: when both rows carry the words they were written from, those words must agree (the
             # capture truncates, so one containing the other counts); a different turn is a different fact
             ex_a, ex_b = _norm(meta.get("source_excerpt")), _norm(m.get("source_excerpt"))
+            # look-alikes from ANOTHER turn: two asks are two asks (each has its own ask id)
+            ta, tb = str(meta.get("user_turn_id") or ""), str(m.get("user_turn_id") or "")
+            if ref_is_ask and is_ask_row(m) and ta and tb and ta != tb:
+                continue
+            # THE TWIN RULE (``turn_forget.twin_basis``): a candidate of another saved turn or of a non-turn source is NEVER
+            # a sibling by its words; the same saved turn, or a LEGACY candidate, goes on to the words criteria below
+            if not turn_forget.twin_basis(meta, m):
+                continue
             same_turn = False
             if ex_a and ex_b:
                 if ex_a not in ex_b and ex_b not in ex_a:

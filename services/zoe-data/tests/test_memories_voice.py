@@ -806,9 +806,9 @@ def test_control_without_the_restraint_wall_family_conflict_would_reach_the_card
 def test_control_without_the_owner_filter_another_members_row_would_be_forgotten(seeded, monkeypatch):
     real = pa.gather
 
-    async def everyone(user_id, *, svc=None):
-        a = await real(ME, svc=svc)
-        b = await real(OTHER, svc=svc)
+    async def everyone(user_id, *, svc=None, strict=False):
+        a = await real(ME, svc=svc, strict=strict)
+        b = await real(OTHER, svc=svc, strict=strict)
         a.items += b.items
         return a
 
@@ -847,10 +847,10 @@ def test_a_tapped_correction_whose_preflight_read_fails_keeps_the_tap_armed(env,
     rid = row_id(env, "Swimming")
     real, down = env.svc.get, {"on": True}
 
-    async def flaky(row):
+    async def flaky(row, **kw):
         if down["on"]:
             raise RuntimeError("store hiccup")
-        return await real(row)
+        return await real(row, **kw)
 
     monkeypatch.setattr(env.svc, "get", flaky)
     mv.tap(PANEL, ME, rid, "Swimming is on Friday at 9")
@@ -940,7 +940,9 @@ def test_the_agreeing_row_goes_when_an_opposite_one_sits_beside_it(env):
 
 
 def test_a_retry_after_a_half_done_untapped_forget_finishes_the_same_row(seeded, monkeypatch):
-    real, state = pa._erase_words, {"down": True, "ran": 0}
+    import exact_words
+
+    real, state = exact_words.erase_turns, {"down": True, "ran": 0}      # the forget record's exact-words step
 
     async def flaky(*a, **kw):
         state["ran"] += 1
@@ -948,7 +950,7 @@ def test_a_retry_after_a_half_done_untapped_forget_finishes_the_same_row(seeded,
             raise RuntimeError("cleanup failed")    # the row is already rejected when the cleanup step fails
         return await real(*a, **kw)
 
-    monkeypatch.setattr(pa, "_erase_words", flaky)
+    monkeypatch.setattr(exact_words, "erase_turns", flaky)
     assert say("forget that I like dark roast coffee", ME) == pa.STORE_DOWN_REPLY
     assert not any("dark roast" in t for t in approved(seeded)), "the row is already rejected: a fresh search cannot see it"
     state["down"] = False

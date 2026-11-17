@@ -156,26 +156,21 @@ def _preview(text: str) -> str:
     return p if len(p) <= 80 else p[:77].rstrip() + "…"
 
 
-async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
-    """Every row of the owner's (approved / pending / disputed / superseded) holding the whole topic. RAISES on a store
+async def _owned_rows(svc: Any, user_id: str, groups: list, *, mids: Any = ()) -> list:
+    """Owned topic matches (live + superseded), plus live rows bound to ``mids``. RAISES on a store
     failure: a forget must never be confirmed from a read that did not happen."""
-    out, seen = [], set()
-    for status in ("approved", "pending", "disputed", "superseded"):
-        offset = 0
-        while True:
-            page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
-            if not page:
-                break
-            for r in page:
-                md = getattr(r, "metadata", {}) or {}
-                if getattr(r, "id", "") in seen or (md.get("user_id") or md.get("wing")) != user_id:
-                    continue
-                if row_matches(groups, getattr(r, "text", "") or "") or row_matches(groups, str(md.get("retire_quote") or "")):
-                    seen.add(r.id)
-                    out.append(r)
-            if len(page) < 1000:
-                break
-            offset += len(page)
+    import turn_forget
+
+    want = {(turn_forget.TURN, mid) for mid in mids}
+    out = []
+    for r in await turn_forget.live_rows(svc, user_id, extra_statuses=("superseded",)):
+        md = getattr(r, "metadata", {}) or {}
+        if (md.get("user_id") or md.get("wing")) != user_id:
+            continue
+        if ((groups and (row_matches(groups, getattr(r, "text", "") or "")
+                        or row_matches(groups, str(md.get("retire_quote") or ""))))
+                or (md.get("status") in turn_forget.LIVE_FORGET_STATUSES and turn_forget.classify(r) in want)):
+            out.append(r)
     return out
 
 
@@ -193,32 +188,35 @@ async def _index_hits(user_id: str, groups: list) -> dict:
     return hits
 
 
-async def _erase_words(user_id: str, groups: list) -> tuple:
-    """The owner's words about the topic: the in-process recent turns (retracted, so a capture in flight never lands) and the
-    exact-words index entries (deleted), plus the saved transcript turn of each (flagged off the record). RAISES when the index
-    could not be read or written (a forget that could not erase the words is not confirmed)."""
+async def _said_mids(user_id: str, turns: list, hits: dict, rows: Any = ()) -> list:
+    """The saved-turn ids of the owner's words about the topic: each retracted recent turn's ids (a turn noted with none: the saved
+    turns its words resolve to), each exact-words entry's (a legacy entry's words resolved the same way; a non-turn entry names
+    none) AND each matched row's own saved turn (``source_turn``): after a restart, with no recent turn and no indexed entry, the
+    row is the only thing that still names the turn (a legacy row resolves its excerpt through the turn-forget helper), and its
+    transcript / observations / notes go by that id. RAISES on a store
+    failure."""
     import exact_words
     import turn_forget
 
-    retracted = 0
-    for turn in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text)):
-        turn_forget.retract(user_id, turn)
-        # the saved transcript turn too, whether or not the exact-words index holds it: the nightly readers (digest, idle
-        # consolidation) re-mine chat_messages long after the in-process wall has expired (RAISES: not confirmed if not flagged)
-        await exact_words.forget_transcript(user_id, turn.text)
-        turn_forget.mark_forgotten(user_id, turn)
-        retracted += 1
-    erased = 0
-    backend = exact_words.get_backend()
-    hits = await _index_hits(user_id, groups)
-    if hits:
-        erased = int(await backend.delete(user_id, list(hits)) or 0)
-        for text in hits.values():
-            try:
-                await exact_words.forget_transcript(user_id, text)
-            except Exception as exc:  # noqa: BLE001 - the index row is gone; the transcript flag is the second line
-                logger.warning("forget_topic: transcript flag failed (%s)", type(exc).__name__)
-    return retracted, erased
+    out: list = []
+
+    def add(mids) -> None:
+        out.extend(m for m in mids if m not in out)
+    for t in turns:
+        add(t.mids or await exact_words.legacy_transcript_ids(user_id, t.text))
+    for tid, text in hits.items():
+        kind, mid = turn_forget.classify(tid)              # PER ROW: by its saved turn / its words / a non-turn source: none
+        if kind == turn_forget.TURN:
+            add([mid])
+        elif kind == turn_forget.LEGACY:
+            add(await exact_words.legacy_transcript_ids(user_id, text))
+    for r in rows or ():
+        kind, mid = turn_forget.classify(r)                # a bound row names its saved turn; only a legacy row resolves its excerpt
+        if kind == turn_forget.TURN:
+            add([mid])
+        elif kind == turn_forget.LEGACY:
+            add(await turn_forget.resolve_legacy_ids(user_id, ((getattr(r, "metadata", {}) or {}).get("source_excerpt"),)))
+    return await exact_words.turn_copies(user_id, out) if out else []
 
 
 def fold_name_text(text: str) -> str:
@@ -241,13 +239,10 @@ def name_keys(text: str) -> set:
     return out
 
 
-async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) -> int:
+def _offer_matcher(groups: list, forgotten_texts: list):
     """The pending offers about the topic go with it (QA round 9: "forget that I told you about my sister" left "add Bea (your
     sister) as a contact?" pending, and it was offered twice more): an offer holding the topic words, or one whose proposed name
-    was said in a forgotten turn / row. RAISES when the offers could not be read or deleted: the forget is then NOT confirmed
-    (``store_down``, the same honest outcome as a failed notes erase) and the member's repeat runs it again."""
-    import pending_suggestions
-
+    was said in a forgotten turn / row."""
     said = set().union(*(name_keys(t) for t in forgotten_texts)) if forgotten_texts else set()
 
     def matches(text: str) -> bool:
@@ -255,11 +250,7 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
         # ANY whole name or part the forgotten words hold withdraws the offer (over-withdrawing is harmless, a survivor is not)
         names = re.findall(r'"name":\s*"((?:[^"\\]|\\.)*)"', text or "")
         return row_matches(groups, text) or any(name_keys(n) & said for n in names)
-
-    gone = await pending_suggestions.withdraw_matching(user_id, matches)
-    if gone:
-        logger.info("forget_topic: user=%s offers_withdrawn=%d", user_id, gone)
-    return gone
+    return matches
 
 
 async def forget(svc: Any, user_id: str, topic: str) -> Result:
@@ -275,129 +266,115 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
             logger.warning("PENDING_CORRECTION clear_failed reason=forget_topic user=%s err=%s", user_id, type(exc).__name__)
 
 
-async def _forget(svc: Any, user_id: str, topic: str) -> Result:
-    res = Result()
-    groups = topic_groups(topic)
-    if not groups:
-        return res
-    try:     # an EARLIER forget's registry erase that failed (its durable marker): finish it before this one
-        import memory_forget_cascade
+async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict) -> Any:
+    """The topic's whole target set as ids (``forget_record.Plan``), BEFORE anything is erased: the rows holding the topic, the
+    recent turns that said it (retracted here: the in-process wall, so a capture in flight never lands) and the exact-words entries
+    that hold it, their saved turns, the notes / registry entries / pending offers about it. RAISES on a store failure."""
+    import conversation_notes
+    import forget_record
+    import memory_value_registry
+    import night_mind
+    import pending_suggestions
+    import turn_forget
 
-        await memory_forget_cascade.retry_pending(user_id)
-    except Exception:  # noqa: BLE001 - never raises; a failure leaves the marker for the next healthy pass
-        pass
-    try:
-        rows = await _owned_rows(svc, user_id, groups)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("forget_topic: store unavailable (%s)", type(exc).__name__)
-        res.store_down = True
-        return res
+    rows = await _owned_rows(svc, user_id, groups)
     res.found = len(rows)
     if len(rows) > MAX_ROWS:
         res.too_many = True            # nothing is touched - rows AND words: ask which part
-        return res
-    import turn_forget
-
-    said = [t.text for t in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))]
-    # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
-    # same turns and rows (and so the same names) again
-    try:
-        # the names come from every place the words still are: the recent turns, the rows, and the PERSISTED exact-words index
-        # (after a restart the turn "my sister Bea lives in Hobart" may be nowhere else; QA round 9 review). An unreadable index
-        # raises here: not confirmed.
-        indexed = list((await _index_hits(user_id, groups)).values())
-        await _withdraw_offers(user_id, groups, said + indexed + [getattr(r, "text", "") or "" for r in rows])
-    except Exception as exc:  # noqa: BLE001 - not confirmed: an offer about the topic may still be pending
-        logger.warning("forget_topic: pending offers not withdrawn (%s) - not confirmed", type(exc).__name__)
-        try:        # "I won't bring it up meanwhile": the offer reads (pending_suggestions) withhold what a tombstone names
-            import memory_tombstones
-
-            for word in min(groups, key=len):
-                memory_tombstones.add(user_id, word)       # in-process and short (the durable answer is the honest reply)
-        except Exception:  # noqa: BLE001
-            pass
-        res.store_down = True
-        return res
-    # EVERY clear keyed by the retracted turns (their ids or their words) runs HERE: after the evidence is gathered (the recent
-    # turns, the persisted exact-words index, the rows) and BEFORE any step that destroys it (the words erase, the notes erase,
-    # the archive). A destructive step that fails afterwards then leaves nothing correction-shaped behind for its retry to miss.
-    # Each clear is guarded on its own: one failing never skips another.
-    turn_texts = list(said) + list(indexed)
+        return None
+    turns = turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))
+    for turn in turns:
+        turn_forget.retract(user_id, turn)
+    # the names come from every place the words still are: the recent turns, the rows, and the PERSISTED exact-words index
+    # (after a restart the turn "my sister Bea lives in Hobart" may be nowhere else; QA round 9 review)
+    hits = await _index_hits(user_id, groups)
+    mids = await _said_mids(user_id, turns, hits, rows)
+    # Erasing a saved turn takes every live fact derived from it, regardless of its wording.
+    if mids:
+        rows = list({r.id: r for r in [*rows, *(await _owned_rows(svc, user_id, [], mids=mids))]}.values())
+    res.found = len(rows)
+    if len(rows) > MAX_ROWS:
+        res.too_many = True
+        return None
+    said = [t.text for t in turns] + list(hits.values())
+    legacy_words = list(dict.fromkeys([*said, *((r.metadata or {}).get("source_excerpt") or ""
+                                               for r in rows if turn_forget.classify(r)[0] == turn_forget.LEGACY)]))
     row_texts = [getattr(r, "text", "") or "" for r in rows]
     try:
         import value_correction
     except Exception:  # noqa: BLE001
         value_correction = None
+    reg_turns = [value_correction.turn_id_of(user_id, t) for t in said] if value_correction is not None else []
+    plan = forget_record.Plan(
+        rows=[r.id for r in rows], mids=mids, entries=list(hits),
+        obs=await night_mind.legacy_observation_ids(user_id, *legacy_words),
+        notes=await conversation_notes.ids_for_topic(user_id, lambda text: row_matches(groups, text)),
+        reg=await memory_value_registry.ids_for_names(user_id, lambda name: any(row_matches([g], name) for g in groups)),
+        reg_turns=reg_turns, reg_topic=True,
+        offers=await pending_suggestions.ids_matching(user_id, _offer_matcher(groups, said + row_texts)),
+        n={"found": len(rows), "retracted": len(turns), "words": len(hits)})
     if value_correction is not None:
-        # the in-process correction memory: a correction about any topic word, one SAID in a retracted turn (a correction said
-        # before any row existed holds no topic word in its subject or values), or one whose subject the turns / rows name
+        # the in-process correction memory (never outlives the process): a correction about any topic word, one SAID in a
+        # retracted turn, or one whose subject the turns / rows name. Each clear on its own: one failing never skips another.
         for clear in (lambda: value_correction.forget_matching(user_id, lambda text: any(row_matches([g], text) for g in groups)),
-                      lambda: value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, t) for t in turn_texts]),
-                      lambda: value_correction.forget_in_texts(user_id, turn_texts + row_texts)):
+                      lambda: value_correction.forget_turns(user_id, reg_turns),
+                      lambda: value_correction.forget_in_texts(user_id, said + row_texts)):
             try:
                 clear()
-            except Exception:  # noqa: BLE001 - in-process and never raises; nothing here may break the forget
+            except Exception:  # noqa: BLE001
                 pass
-    # The superseded-value registry (0080), the durable turn-keyed clear, also BEFORE anything that destroys the evidence it is found by: the retracted turns' ids
-    # come from the turn notes and the exact-words index, which ``_erase_words`` below blanks. A failure here leaves both intact
-    # (so the member's repeat finds the same turns) AND a durable pending marker in the forget ledger (``value_registry_topic``):
-    # the next healthy pass over-forgets the member's registry entries even if nobody repeats the forget.
-    try:     # entries tied to these rows, about a person a topic word names, or recorded from a retracted turn (raises on a store error)
-        import memory_value_registry
-        import value_correction
+    seen["preview"] = _preview(rows[0].text) if rows else ""
+    if not (plan.rows or plan.mids or plan.entries or plan.obs or plan.notes or plan.reg or plan.offers or reg_turns):
+        return None
+    return plan
 
-        await memory_value_registry.erase_topic(user_id, row_ids=[r.id for r in rows],
-                                                name_matches=lambda name: any(row_matches([g], name) for g in groups),
-                                                turn_ids=[value_correction.turn_id_of(user_id, t) for t in list(said) + list(indexed)])
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forget_topic: value registry erase failed (%s) - nothing else erased, retry recorded", type(exc).__name__)
-        try:
-            import memory_forget_cascade
 
-            await memory_forget_cascade._mark_pending(user_id, [memory_forget_cascade.VALUE_REGISTRY_TOPIC])
-        except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
+async def _forget(svc: Any, user_id: str, topic: str) -> Result:
+    import forget_record
+    import turn_forget
+
+    res = Result()
+    groups = topic_groups(topic)
+    if not groups:
+        return res
+    seen: dict = {}
+    key = forget_record.words_key(user_id, "topic", " | ".join(sorted(" ".join(sorted(g)) for g in groups)))
+    try:     # an EARLIER forget's unfinished steps (the entity cascade's markers, OTHER open forget records): finish them first. This
+        import memory_forget_cascade      # topic's own open record is finished below by this request (and answered for)
+
+        await memory_forget_cascade.retry_pending(user_id, skip_records=(forget_record.storage_key(user_id, key),))
+    except Exception:  # noqa: BLE001 - never raises; a failure leaves them for the next healthy pass
+        pass
+    out = await forget_record.forget(user_id, code="topic", key=key, svc=svc, resolve=lambda: _resolve(svc, user_id, groups, res, seen))
+    if out.nothing or res.too_many:
+        return res
+    if not out.complete:
+        try:    # "I won't bring it up meanwhile": the offer reads (pending_suggestions) withhold what a tombstone names
+            import memory_tombstones
+
+            for word in min(groups, key=len):
+                memory_tombstones.add(user_id, word)           # in-process and short (the durable answer is the honest reply)
+        except Exception:  # noqa: BLE001
             pass
+    if not out.started or out.plan is None:
+        logger.info("forget_topic: store unavailable (%s)", type(out.error).__name__ if out.error else "-")
         res.store_down = True
         return res
-    try:
-        # the words before the rows, like every forget: the in-flight capture of those turns cannot land
-        res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forget_topic: words erase failed (%s)", type(exc).__name__)
-        res.store_down = True
-        return res
-    try:     # the member's short notes about past conversations that are about the topic (conversation_notes; raises on a store error)
-        import conversation_notes
-
-        await conversation_notes.erase_topic(user_id, lambda text: row_matches(groups, text))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
-        res.store_down = True
-        return res
-    archived: list = []
-    for r in rows:
-        try:
-            ref = await svc.review(r.id, decision="archive", actor=user_id, note="forget_topic")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("forget_topic: archive failed (%s)", type(exc).__name__)
-            ref = None
-        if ref is None:
-            res.failed += 1            # never erased on top of a failed archive: it stays hidden-or-recalled, and is SAID
+    n = out.plan.n
+    res.found, res.turns_retracted, res.words_erased = n.get("found", res.found), n.get("retracted", 0), n.get("words", 0)
+    if not out.complete:
+        if "reject" in out.failed:
+            res.failed = res.found          # never erased on top of a failed archive: it stays hidden-or-recalled, and is SAID
         else:
-            archived.append(r)
-    if archived and hasattr(svc, "erase_rows"):
-        try:
-            from memory_service import physical_erase_enabled
-
-            if physical_erase_enabled():
-                await svc.erase_rows(user_id, [r.id for r in archived], actor=user_id, reason="forgotten by request (topic)")
-        except Exception as exc:  # noqa: BLE001 - archived rows are hidden from every read either way
-            logger.warning("forget_topic: physical erase failed (%s) - rows stay archived", type(exc).__name__)
-    res.forgotten = len(archived)
-    if archived:
-        res.preview = _preview(archived[0].text)
-    logger.info("forget_topic: user=%s found=%d forgotten=%d failed=%d retracted=%d words=%d",
-                user_id, res.found, res.forgotten, res.failed, res.turns_retracted, res.words_erased)
+            res.store_down = True
+        logger.warning("forget_topic: not finished (%s) - the record stays open", ",".join(out.failed))
+        return res
+    for turn in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text)):
+        turn_forget.mark_forgotten(user_id, turn)
+    res.forgotten = len(out.plan.rows)
+    res.preview = seen.get("preview", "")
+    logger.info("forget_topic: user=%s found=%d forgotten=%d retracted=%d words=%d",
+                user_id, res.found, res.forgotten, res.turns_retracted, res.words_erased)
     return res
 
 
@@ -422,6 +399,8 @@ def reply(res: Result, topic: str) -> str:
                 "so that part is still saved. Say it again in a minute and I'll finish.")
     more = res.forgotten - 1
     tail = f" (and {more} more)" if more > 0 else ""
+    if not res.preview:
+        return f"Done — I've forgotten what you told me about that{tail}."
     return f"Done — I forgot: \"{res.preview}\"{tail}."
 
 

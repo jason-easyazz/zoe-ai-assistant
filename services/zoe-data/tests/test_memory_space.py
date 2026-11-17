@@ -317,7 +317,9 @@ def test_a_forget_that_cannot_finish_is_503_not_ok(seeded, monkeypatch):
     async def boom(*_a, **_k):
         raise RuntimeError("exact-words store down")
 
-    monkeypatch.setattr(pa, "_erase_words", boom)
+    import exact_words
+
+    monkeypatch.setattr(exact_words, "erase_turns", boom)      # the forget record's exact-words step (pa._erase_words is gone)
     rid = row_id(seeded, ME, "dark roast")
     r = as_member().post(f"/api/memories/mine/{rid}/forget", headers=H)
     assert r.status_code == 503, "the verbatim words could not be erased: never report 'forgotten'"

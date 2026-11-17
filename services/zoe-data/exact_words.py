@@ -289,6 +289,51 @@ def turn_key(user_id: str, text: str, said_at: float) -> str:
     return "xw-" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:20]
 
 
+_TAG_SEP = "~"            # an indexed turn's id: ``xw-<key>[~<said tag>][@<saved-turn id>]``
+_MID_SEP = "@"
+_REDACT_WORD = "redacted"
+PLACEHOLDER = "[redacted]"
+
+
+def _said_tag(user_id: str, text: str) -> str:
+    """The keyed tag of a turn's words AS SAID (``memory_forgotten.said_tag``), stamped beside a redacted turn's id as its audit
+    identity (what a one-time id backfill could map from); '' when the ledger secret is unset. No forget matches it."""
+    try:
+        import memory_forgotten
+        import turn_forget
+        return memory_forgotten.said_tag(user_id, turn_forget.norm(text))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_KIND_PREFIX = "src:"     # ``@src:<kind>``: an entry from no saved turn names its source kind instead of an id
+#: the closed set of sources an entry may come from that are NOT a saved chat turn (an explicit provenance, never an empty id)
+NON_TURN_KINDS = frozenset({"lab"})
+#: entries refused because they could name no source (``EXACT_WORDS_REFUSED code=no_source_turn``); a count, never words
+REFUSED = {"no_source_turn": 0}
+
+
+def mid_of(turn_id: str) -> str:
+    """The saved-turn (``chat_messages.id``) id an indexed turn's id carries (``turn_forget.classify``); '' for a legacy entry and
+    for an entry from a non-turn source (``@src:<kind>``)."""
+    import turn_forget
+    kind, value = turn_forget.classify(turn_id or "")
+    return value if kind == turn_forget.TURN else ""
+
+
+def is_legacy(turn_id: str) -> bool:
+    """An entry indexed BEFORE saved-turn ids (``turn_forget.classify``): only these are ever matched by their words."""
+    import turn_forget
+    return turn_forget.classify(turn_id or "")[0] == turn_forget.LEGACY
+
+
+def partition(rows: Iterable) -> tuple[list, list]:
+    """``(bound, legacy)`` of ``(turn_id, text)`` index rows (``turn_forget.split``): a bound entry (a saved-turn id or a source
+    kind) is erased by its id alone; only a legacy entry is handed to a text matcher."""
+    import turn_forget
+    return turn_forget.split(rows, key=lambda row: row[0])
+
+
 def _is_a_question(text: str) -> bool:
     """A whole turn that is one question ("what's on tomorrow?"): the owner asked, they did not say anything about it."""
     t = _squash(text)
@@ -318,8 +363,11 @@ async def _shielded(user_id: str, text: str) -> bool:
 
 
 async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None, turn_id: Optional[str] = None,
-                     source: str = "chat", speaker_verified: Optional[bool] = None) -> bool:
-    """Index one owner turn. True when a row was written. Never raises."""
+                     source: str = "chat", speaker_verified: Optional[bool] = None, message_id: str = "",
+                     provenance: str = "") -> bool:
+    """Index one owner turn. True when a row was written. Never raises. ``message_id`` = the saved turn (``chat_messages.id``)
+    the words are; without it the post-turn capture's turn (``turn_forget.turn_ref``); a caller with no saved turn passes an
+    explicit ``provenance`` kind (``NON_TURN_KINDS``). With none of the three the entry is refused (``REFUSED``)."""
     try:
         if not enabled() or not (user_id or "").strip() or not (text or "").strip():
             return False
@@ -340,6 +388,25 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         scrubbed, reject = scrub_pii(owner_text)
         if reject or not scrubbed.strip():
             return False
+        # the saved turn the words came from (the backfill knows it; the post-turn hook resolves it while the words are as said):
+        # a forget erases the entry BY THIS ID (``erase_turns``)
+        # EVERY new entry names its source: a saved-turn id, or (no saved turn behind it) an explicit kind. One that can name
+        # neither is refused and counted, never stored id-less (an id-less entry would be matched by its words, like a legacy one)
+        import turn_forget
+        mid = str(message_id or "") or turn_forget.turn_ref(user_id, text)
+        if not mid and provenance in NON_TURN_KINDS:
+            mid = _KIND_PREFIX + provenance
+        if not mid:
+            REFUSED["no_source_turn"] += 1
+            logger.info("EXACT_WORDS_REFUSED code=no_source_turn n=%d", REFUSED["no_source_turn"])
+            return False
+        tag = ""
+        if scrubbed != owner_text:
+            # the stored words no longer say WHICH turn they were (two addresses redact alike): the audit tag rides beside the id;
+            # nothing left but the placeholder = nothing worth keeping
+            tag = _said_tag(user_id, owner_text)
+            if not [t for t in content_tokens(scrubbed) if t != _REDACT_WORD]:
+                return False
         if await _shielded(user_id, scrubbed):
             return False
         when = float(said_at) if said_at is not None else time.time()
@@ -347,7 +414,8 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
         cols = tokens_column(kept)
         if not cols:
             return False
-        return bool(await get_backend().add(user_id, turn_id or turn_key(user_id, kept, when), when, kept, cols, source))
+        tid = (turn_id or turn_key(user_id, kept, when)) + (_TAG_SEP + tag if tag else "") + _MID_SEP + mid
+        return bool(await get_backend().add(user_id, tid, when, kept, cols, source))
     except Exception as exc:  # noqa: BLE001 - the index is an extra; a turn never fails on it
         logger.warning("exact_words: turn not indexed (%s)", type(exc).__name__)
         return False
@@ -536,19 +604,82 @@ async def erase_turn(user_id: str, turn_id: str) -> int:
     return int(await get_backend().delete(user_id, [turn_id]) or 0)
 
 
-async def erase_text(user_id: str, text: str) -> int:
-    """Delete this user's indexed turns whose words ARE ``text`` (case/space-blind) or contain it - "forget it" after "why did you
-    say that?" removes the owner's turn that was just quoted back, not only the fact. Like ``erase_entity`` a store failure is
-    RAISED (a forget that could not erase the words must not be confirmed). 0 = nothing matched."""
-    key = _squash(text or "").lower().strip(" .!?\"'")
-    if not (user_id or "").strip() or len(key) < 6:
+async def erase_turns(user_id: str, mids: Iterable[str]) -> int:
+    """Delete this user's indexed turns that came from these saved turns (``chat_messages`` ids): the ONLY way a forget finds an
+    entry that carries one. A store failure is RAISED. 0 = none."""
+    want = {str(m) for m in (mids or ()) if m}
+    if not (user_id or "").strip() or not want:
         return 0
     backend = get_backend()
-    needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
-    if not needle:
-        return 0
-    ids = [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()]
+    bound, _legacy = partition(await backend.rows_matching(user_id, ""))
+    ids = [tid for tid, _t in bound if mid_of(tid) in want]
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
+
+
+def _legacy_forms(text: str) -> list[str]:
+    """The forms a LEGACY text matcher looks for: the words as given, and as the write boundary would have stored them (a legacy
+    entry or quote may hold the redaction placeholder). Case/space-blind; a form that is only the placeholder is dropped."""
+    out = []
+    for form in (text or "", _scrub(text or "")):
+        key = _squash(form).lower().strip(" .!?\"'")
+        if len(key) >= 6 and key.replace(PLACEHOLDER, "").strip(" .,;:") and key not in out:
+            out.append(key)
+    return out
+
+
+def _scrub(text: str) -> str:
+    try:
+        import memory_service
+        limit = getattr(memory_service, "SCRUB_INLINE_MAX", None)
+        if limit is not None and len(text) > limit:
+            return ""
+        return memory_service.scrub_pii(text)[0] or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def legacy_words_equal(a: str, b: str) -> bool:
+    """Legacy words match by equality as said or as the exact-words boundary redacts them."""
+    return bool(set(_legacy_forms(a)) & set(_legacy_forms(b)))
+
+
+def legacy_words_overlap(a: str, b: str) -> bool:
+    """One sits inside the other, as said or as redacted (a legacy night-mind observation keeps a SPAN of the turn, and an older
+    one keeps it unredacted while the upgraded index holds the redacted form)."""
+    fa, fb = [f for f in _legacy_forms(a) if f], [f for f in _legacy_forms(b) if f]
+    return any(x in y or y in x for x in fa for y in fb)
+
+
+def _needle(key: str) -> str:
+    return max((t for t in re.findall(r"[a-z0-9']+", key) if t != _REDACT_WORD), key=len, default="")
+
+
+async def legacy_entry_ids(user_id: str, text: str) -> list[str]:
+    """The ids of this user's LEGACY indexed turns (written before saved-turn ids: ``partition``) whose words ARE ``text`` or contain
+    it, as said or as the boundary would have redacted it (``_legacy_forms``): what a forget of those words resolves to BEFORE it
+    erases anything (``forget_record``). A bound entry is never matched here (``erase_turns``). Over-inclusive by design for legacy
+    entries only (``EXACT_WORDS_FORGET code=legacy_text n=``). A store failure is RAISED."""
+    forms = _legacy_forms(text)
+    if not (user_id or "").strip() or not forms:
+        return []
+    _bound, legacy = partition(await get_backend().rows_matching(user_id, ""))   # a bound entry is NEVER matched by its words
+    ids = [tid for tid, t in legacy if any(k in _squash(t or "").lower() for k in forms)]
+    if ids:
+        logger.info("EXACT_WORDS_FORGET code=legacy_text n=%d", len(ids))
+    return ids
+
+
+async def erase_entries(user_id: str, ids: Iterable[str]) -> int:
+    """Delete these indexed turns by id (a forget record's resolved entries). Idempotent; a store failure is RAISED."""
+    want = list(dict.fromkeys(str(i) for i in (ids or ()) if i))
+    if not (user_id or "").strip() or not want:
+        return 0
+    return int(await get_backend().delete(user_id, want) or 0)
+
+
+async def erase_text(user_id: str, text: str) -> int:
+    """Delete the LEGACY indexed turns ``legacy_entry_ids`` names. A store failure is RAISED. 0 = nothing matched."""
+    return await erase_entries(user_id, await legacy_entry_ids(user_id, text))
 
 
 async def _transcript_candidates(user_id: str, needle: str) -> list[tuple]:
@@ -571,31 +702,100 @@ async def _set_transcript_metadata(row_id: str, metadata: str) -> None:
         await db.commit()
 
 
-async def forget_transcript(user_id: str, text: str) -> int:
-    """Flag the owner's saved turns that contain ``text`` as ``off_record`` so the nightly readers (this module's catch-up, the
-    digest, idle consolidation) never rebuild a forgotten turn from the transcript: deleting the index row alone lets the catch-up
-    re-index the surviving turn overnight. The history itself stays. Like ``erase_text`` a store failure is RAISED (a forget that
-    could not hold must not be confirmed). Only with the SQL index (the lab and tests have no ``chat_messages``); 0 = nothing matched."""
-    key = _squash(text or "").lower().strip(" .!?\"'")
-    if not (user_id or "").strip() or len(key) < 6 or not isinstance(get_backend(), SqlBackend):
-        return 0
-    needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
-    if not needle:
-        return 0
+#: how far apart two saved rows of ONE spoken turn can be (``_transcript_rows_by_id``): the voice lane's second save waits at most
+#: ``routers.voice_tts._ARRIVAL_SETTLE_TIMEOUT_S`` (10 s) for the arrival insert before writing the row itself, so the two commits
+#: are seconds apart; 120 s is that wait plus a generous margin for a slow commit. The same words further apart are two turns.
+COPY_WINDOW_S = 120.0
+
+
+async def _transcript_rows_by_id(user_id: str, mids: list) -> list[tuple]:
+    """``(id, metadata)`` of the owner's saved USER turns with these ids AND every other committed copy of each (the same session,
+    role and words, saved within ``COPY_WINDOW_S`` of it: the voice lane can commit one spoken turn twice - the arrival save, and the reply's save when the arrival
+    outcome was not confirmed in time). The copies are the DURABLE link between one turn's rows (the in-process ``Turn.mids`` is
+    lost on a restart), so a forget by any id of a turn reaches all of them. Postgres only; tests replace this seam."""
+    from db_pool import get_db_ctx  # type: ignore[import]
+    from user_filters import message_owner_expr
+    marks = ", ".join("?" for _ in mids)
+    sql = ("SELECT cm.id, cm.metadata FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
+           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND (cm.id IN (" + marks + ") OR EXISTS ("
+           "SELECT 1 FROM chat_messages t WHERE t.id IN (" + marks + ") AND t.role = 'user' AND t.session_id = cm.session_id "
+           "AND t.content = cm.content "
+           "AND ABS(EXTRACT(EPOCH FROM (cm.created_at::timestamptz - t.created_at::timestamptz))) <= ?))")
+    async with get_db_ctx() as db:
+        return [tuple(r) for r in await (await db.execute(sql, (user_id, *mids, *mids, COPY_WINDOW_S))).fetchall()]
+
+
+async def turn_copies(user_id: str, mids: Iterable[str]) -> list[str]:
+    """``mids`` plus every committed transcript copy of those turns (``_transcript_rows_by_id``): what a forget by id erases, so an
+    entry or observation stamped with ANOTHER copy's id (the nightly catch-up indexing the second row) goes too. RAISES on a store
+    failure. Without the SQL index: ``mids`` as given."""
+    want = list(dict.fromkeys(str(m) for m in (mids or ()) if m))
+    if not (user_id or "").strip() or not want or not isinstance(get_backend(), SqlBackend):
+        return want
+    return list(dict.fromkeys([*want, *(str(r[0]) for r in await _transcript_rows_by_id(user_id, want))]))
+
+
+def _off_record_meta(metadata: Any) -> str:
     import json
+    try:
+        meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else {}
+    except ValueError:
+        meta = {}
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    meta["off_record"] = True
+    return json.dumps(meta)
+
+
+async def flag_transcript_turns(user_id: str, mids: Iterable[str]) -> int:
+    """Flag these saved turns (``chat_messages`` ids, the owner's own) ``off_record``, so the nightly readers (this module's
+    catch-up, the digest, idle consolidation) never rebuild a forgotten turn: BY ID, the only way a forget names a turn whose
+    words were redacted anywhere. Already-flagged rows count as done. RAISES on a store failure. Only with the SQL index."""
+    want = list(dict.fromkeys(str(m) for m in (mids or ()) if m))
+    if not (user_id or "").strip() or not want or not isinstance(get_backend(), SqlBackend):
+        return 0
+    from memory_provenance import OFF_RECORD_JSON_MARK
+    n = 0
+    for row_id, metadata in await _transcript_rows_by_id(user_id, want):
+        if OFF_RECORD_JSON_MARK not in str(metadata or ""):
+            await _set_transcript_metadata(str(row_id), _off_record_meta(metadata))
+        n += 1
+    return n
+
+
+async def _legacy_transcript_rows(user_id: str, text: str) -> list[tuple]:
+    """``(id, metadata)`` of the saved user turns holding ``text`` - as said, or (a redacted legacy quote) as the boundary would
+    have redacted them: how a LEGACY forget target (an entry or row written before the ids) resolves to saved turns. Over-inclusive
+    by design (a look-alike turn is returned too). One read (``_transcript_candidates``). RAISES on a store failure. SQL index only."""
+    forms = _legacy_forms(text)
+    if not (user_id or "").strip() or not forms or not isinstance(get_backend(), SqlBackend):
+        return []
+    out: dict = {}
+    for key in forms:
+        needle = _needle(key)
+        if not needle:
+            continue
+        for row_id, content, meta in await _transcript_candidates(user_id, needle):
+            said = _squash(str(content or "")).lower()
+            if key in said or (PLACEHOLDER in key and key in _squash(_scrub(str(content or ""))).lower()):
+                out.setdefault(str(row_id), meta)
+    return list(out.items())
+
+
+async def legacy_transcript_ids(user_id: str, text: str) -> list[str]:
+    """The saved-turn ids a LEGACY target's words resolve to (``_legacy_transcript_rows``)."""
+    return [rid for rid, _m in await _legacy_transcript_rows(user_id, text)]
+
+
+async def forget_transcript(user_id: str, text: str) -> int:
+    """Flag the saved turns a LEGACY target's words resolve to ``off_record`` (from the rows that one read returned: no second
+    read by id), so the nightly readers never rebuild them. A forget with saved-turn ids uses ``flag_transcript_turns`` and never
+    this. RAISES on a store failure. 0 = nothing newly flagged."""
     from memory_provenance import OFF_RECORD_JSON_MARK
     flagged = 0
-    for row_id, content, metadata in await _transcript_candidates(user_id, needle):
-        if key not in _squash(str(content or "")).lower() or OFF_RECORD_JSON_MARK in str(metadata or ""):
-            continue
-        try:
-            meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else {}
-        except ValueError:
-            meta = {}
-        meta = dict(meta) if isinstance(meta, dict) else {}
-        meta["off_record"] = True
-        await _set_transcript_metadata(str(row_id), json.dumps(meta))
-        flagged += 1
+    for row_id, meta in await _legacy_transcript_rows(user_id, text):
+        if OFF_RECORD_JSON_MARK not in str(meta or ""):
+            await _set_transcript_metadata(row_id, _off_record_meta(meta))
+            flagged += 1
     return flagged
 
 
@@ -692,8 +892,9 @@ async def backfill_recent(user_id: str, *, hours: Optional[int] = None) -> int:
                 _mid, content, epoch, metadata = row[0], row[1], row[2], row[3]
                 if speaker_rejected(metadata):
                     continue
-                # no turn id: the content key (the post-turn hook's), so a turn the hook already indexed is one row, not two
-                if await index_turn(user_id, str(content or ""), said_at=float(epoch or time.time()), source="backfill"):
+                # the content key (the post-turn hook's) plus the saved-turn id: a turn the hook already indexed is one row, not two
+                if await index_turn(user_id, str(content or ""), said_at=float(epoch or time.time()), source="backfill",
+                                    message_id=str(_mid or "")):
                     wrote += 1
             last = rows[-1]
             nxt = (str(last[4]), str(last[0]))
