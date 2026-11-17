@@ -63,6 +63,40 @@ def test_an_unreadable_file_fails_the_erase_and_the_retry_leaves_nothing_of_the_
     assert B in left, "the other member's records stay"
 
 
+def test_a_summary_that_cannot_be_removed_leaves_the_records_so_the_retry_cleans_the_report_too(tmp_path, monkeypatch):
+    """The derived files go FIRST: when a corrupt summary cannot be removed the erase raises with the member's records still in
+    place, so the retry finds that night again and leaves no summary and no rendered report naming them (records-first left a
+    readable report the retry skipped)."""
+    import pathlib
+
+    import self_review as m
+
+    monkeypatch.setattr(m, "state_dir", lambda: tmp_path)
+    records = tmp_path / f"2026-01-01{m.RECORDS_SUFFIX}"
+    records.write_text(json.dumps({"user_id": A, "turn_id": "t1", "text": "a's words"}) + "\n"
+                       + json.dumps({"user_id": B, "turn_id": "t2", "text": "b's words"}) + "\n")
+    summary = tmp_path / f"2026-01-01{m.SUMMARY_SUFFIX}"
+    summary.write_text('{"events": [{"member": "ann"')                     # corrupt: it must be removed
+    report = m.report_path("2026-01-01", tmp_path)
+    report.write_text("a's words in the old report")
+    real_unlink = pathlib.Path.unlink
+
+    def failing_unlink(self, *args, **kwargs):
+        if self == summary:
+            raise PermissionError("summary cannot be removed")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", failing_unlink)
+    with pytest.raises(OSError):
+        asyncio.run(m.delete_user(A))
+    assert "a's words" in records.read_text(), "the records stay until the derived files are clean"
+    monkeypatch.setattr(pathlib.Path, "unlink", real_unlink)
+    asyncio.run(m.delete_user(A))                                # the retry
+    left = "".join(p.read_text() for p in tmp_path.iterdir() if p.is_file() and not p.name.startswith("."))
+    assert '"ann"' not in left and "a's" not in left, left
+    assert "b's words" in left, "the other member's records stay"
+
+
 def test_the_warm_speaker_memo_that_cannot_be_loaded_fails_the_erase_strict_and_stays_lenient_otherwise(monkeypatch):
     import warm_speaker
 

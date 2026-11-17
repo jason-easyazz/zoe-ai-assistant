@@ -1075,7 +1075,9 @@ def _rewrite(d: Path, keep: Callable[[dict], bool], *, strict_uid: Optional[str]
             continue
         removed += len(recs) - len(kept) + named
         night = p.name[: -len(RECORDS_SUFFIX)]
-        _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept) + "".join(ln + "\n" for ln in raw_kept))
+        # The DERIVED files (summary, report) are cleaned FIRST and the records last: if a summary cannot be removed the raise
+        # leaves the member's records in place, so a retry finds them and cleans everything again (records first would make
+        # the retry skip this night and leave a readable report behind).
         try:
             summary = json.loads(summary_path(night, d).read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -1092,6 +1094,7 @@ def _rewrite(d: Path, keep: Callable[[dict], bool], *, strict_uid: Optional[str]
             summary["examples"] = {c: [i for i in ids if i not in gone] for c, ids in (summary.get("examples") or {}).items()}
             _write_private(summary_path(night, d), json.dumps(summary, indent=1, sort_keys=True))
         _write_private(report_path(night, d), render_report(night, kept, summary))
+        _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept) + "".join(ln + "\n" for ln in raw_kept))
     return removed
 
 

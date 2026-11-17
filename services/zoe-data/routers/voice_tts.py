@@ -178,6 +178,10 @@ async def _label_member_clip(member: str) -> None:
 
     _ew.turn_identify(member)
     clip = _vc.current_clip()
+    if not clip:
+        # no clip saved this turn (the usual case, and always with the clip flags off): nothing to label or drop, so the voice
+        # path pays neither watermark read nor a worker dispatch - ``record`` was a no-op here before the guard too
+        return
     refused = await _ew.turn_write_refused(None, "voice_clip", member)
     if not refused:
         # the sidecar write is blocking file I/O: a worker thread (a copy of this context, so ``record`` finds this turn's clip)

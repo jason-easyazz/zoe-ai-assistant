@@ -522,3 +522,26 @@ def test_a_clip_whose_wav_cannot_be_dropped_keeps_its_owner_label_and_the_retry_
     side = tmp_path / "turn-a.verdict.json"
     assert wav.exists() and side.exists() and '"ann"' in side.read_text(), "the audio keeps its owner label"
     assert voice_clips.erase_member(A) == 1 and not wav.exists() and not side.exists(), "the retry removes both"
+
+
+def test_with_no_clip_the_voice_turn_pays_no_watermark_read_or_worker_dispatch(monkeypatch):
+    """The clip guard costs the voice path nothing when the turn saved no clip (the usual case, and always with the clip flags
+    off): the speaker is identified for the delete, and neither the watermark nor a worker thread is touched."""
+    import erase_watermark
+    import routers.voice_tts as vt
+    import voice_clips
+
+    identified = []
+    monkeypatch.setattr(erase_watermark, "turn_identify", identified.append)
+    monkeypatch.setattr(voice_clips, "current_clip", lambda: None)
+
+    async def no_read(*_a, **_k):
+        raise AssertionError("the watermark was read with no clip to label")
+
+    def no_thread(*_a, **_k):
+        raise AssertionError("a worker was dispatched with no clip to label")
+
+    monkeypatch.setattr(erase_watermark, "turn_write_refused", no_read)
+    monkeypatch.setattr(vt.asyncio, "to_thread", no_thread)
+    asyncio.run(vt._label_member_clip(A))
+    assert identified == [A], "the delete still learns whose turn this is"
