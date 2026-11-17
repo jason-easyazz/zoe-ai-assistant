@@ -821,9 +821,11 @@ def verify_moment(item: Any, chunk: "Sequence[Turn]", alias: "dict[str, Turn]", 
 
 def _unstorable(span: str) -> bool:
     try:
-        from memory_service import scrub_pii
+        from memory_service import SCRUB_INLINE_MAX, bounded, scrub_pii
 
-        redacted, why = scrub_pii(span)
+        if len(span or "") > SCRUB_INLINE_MAX:        # a quote that long is not kept (fail closed), and is never scrubbed inline
+            return True
+        redacted, why = scrub_pii(bounded(span, SCRUB_INLINE_MAX, 0))
         if why or redacted != span:        # a labelled password / passcode / API key comes back REDACTED with no reason: it is still a secret - never kept
             return True
     except Exception:  # noqa: BLE001 - the PII scrubber is the memory service's: if it cannot be loaded the quote is not kept (fail closed)

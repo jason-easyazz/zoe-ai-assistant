@@ -672,9 +672,11 @@ async def _keep_words_bounded(turn: sig.Turn, *texts: str) -> bool:
 
 def _scrub(text: str) -> Optional[str]:
     try:
-        from memory_service import scrub_pii
+        from memory_service import SCRUB_INLINE_MAX, bounded, scrub_pii
 
-        out, reject = scrub_pii(text)
+        if len(text or "") > SCRUB_INLINE_MAX:        # too long to judge inline: no words at all (fail closed), never a prefix
+            return None
+        out, reject = scrub_pii(bounded(text, SCRUB_INLINE_MAX, 0))
         return None if reject else out
     except Exception:  # noqa: BLE001
         return None

@@ -79,6 +79,10 @@ def _fakes(monkeypatch, action, match_id, *, pii_reject=False):
     ma.is_candidate = lambda ref: False
     ms = types.ModuleType("memory_service")
     ms.scrub_pii = lambda text: (text, pii_reject)
+
+    async def _scrub_async(text, **_k):                                 # the async form expert_dispatch awaits
+        return text, pii_reject
+    ms.scrub_pii_async = _scrub_async
     for mod in (mq, mm, ma, ms):
         monkeypatch.setitem(sys.modules, mod.__name__, mod)
 

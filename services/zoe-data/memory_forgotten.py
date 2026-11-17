@@ -387,6 +387,23 @@ async def active_hashes(user_id: str, *, strict: bool = False) -> frozenset[str]
     return fresh | mem
 
 
+async def active_hashes_on(db: Any, user_id: str) -> frozenset[str]:
+    """The user's active forgotten-entity hashes read on the CALLER's connection ``db`` (inside its transaction), uncached: for a
+    writer that must decide under its own lock (``routines_store._guarded_write``), where the 30 s per-process cache and a second
+    borrowed connection are both wrong. The default Postgres ledger is queried on ``db`` (the same statement as
+    ``PostgresBackend.active_hashes``); any other backend (tests, lab) is asked directly. This process's own un-persisted forgets
+    (the overlay) are included. RAISES on a failure: the caller fails closed."""
+    now_iso = _iso(_now())
+    backend = get_backend()
+    if isinstance(backend, PostgresBackend):
+        cur = await db.execute("SELECT key_hash FROM memory_forgotten WHERE user_id = ? AND shield_until > ?", (user_id, now_iso))
+        fresh = {str(r[0]) for r in await cur.fetchall()}
+    else:
+        fresh = set(await backend.active_hashes(user_id, now_iso))
+    mem = {h for h, until in _overlay.get(user_id, {}).items() if until > now_iso}
+    return frozenset(fresh | mem)
+
+
 # ── the API ──────────────────────────────────────────────────────────────────
 
 async def add(user_id: str, name: str, *, actor: str = "", scope: str = SCOPE_ENTITY,

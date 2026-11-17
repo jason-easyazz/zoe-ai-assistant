@@ -73,7 +73,7 @@ Generated from `household_text.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: household_text.py -->
 
-101 stores: a per-subject forget reaches 45, delete-my-data reaches 48, both 39, neither 47.
+104 stores: a per-subject forget reaches 48, delete-my-data reaches 51, both 42, neither 47.
 
 | store | class | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner | evidence |
 |---|---|---|---|---|---|---|---|---|---|
@@ -94,6 +94,9 @@ Generated from `household_text.py`; do not edit by hand.
 | `omi_day_reviews` | primary | `pg:omi_day_reviews` | the pendant day review (meetings, lists, reminders) | `omi_day_review.erase_entity` | `omi_day_review.forget_user` | reached | no age limit: kept until deleted | omi_day_review.py | - |
 | `omi_day_candidates` | primary | `pg:omi_day_candidates` | day-review candidates (words lifted from the day) | `omi_day_review.erase_entity` | `omi_day_review.forget_user` | reached | no age limit: kept until deleted | omi_day_review.py | - |
 | `conversation_notes` | primary | `pg:conversation_notes` | short notes about past conversations | `conversation_notes.erase_entity` | `conversation_notes.forget_user` | reached | no age limit: kept until deleted | conversation_notes.py | - |
+| `routines` | primary | `pg:routines` | routine names as the member said them | `routines_store.erase_entity` | `routines_store.forget_user` | reached | no age limit: kept until deleted | routines_store.py | - |
+| `routine_steps` | primary | `pg:routine_steps` | routine checklist lines, verbatim (a medicine line can name a medicine) | `routines_store.erase_entity` | `routines_store.forget_user` | reached | no age limit: kept until deleted | routines_store.py | - |
+| `routine_day_steps` | primary | `pg:routine_day_steps` | one day's checklist lines, verbatim, and one-off lines | `routines_store.erase_entity` | `routines_store.forget_user` | reached | no age limit: kept until deleted | routines_store.py | - |
 | `memory_value_registry` | primary | `pg:memory_value_registry` | superseded-value registry (ids, closed labels and numbers such as an age) | `memory_value_registry.erase_entity` | `memory_value_registry.forget_user` | reached | no age limit: kept until deleted | memory_value_registry.py | - |
 | `contact_fields` | primary | `pg:contact_fields` | contact details (names, addresses, notes) | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py | - |
 | `source_contacts` | primary | `pg:source_contacts` | synced contact cards | `contacts_store.forget_entity` | `contacts_store.forget_user` | reached | no age limit: kept until deleted | contacts_store.py | - |
