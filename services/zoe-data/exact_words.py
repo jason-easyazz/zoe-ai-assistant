@@ -644,6 +644,8 @@ async def _transcript_candidates(user_id: str, needle: str) -> list[tuple]:
 async def _transcript_rows(user_id: str, ids: list) -> list[tuple]:
     """The owner's saved user turns with these ids: ``(id, content, metadata)`` (a parked words erase, finished by id). Postgres
     only; tests replace this seam."""
+    if not ids:
+        return []                    # "IN ()" is not SQL
     from db_pool import get_db_ctx  # type: ignore[import]
     from user_filters import message_owner_expr
     sql = ("SELECT cm.id, cm.content, cm.metadata FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
