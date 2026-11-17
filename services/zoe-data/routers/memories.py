@@ -151,6 +151,10 @@ async def list_memories(
     return {"memories": memories, "count": len(memories)}
 
 
+#: the longest proposal body accepted: a memory is a sentence or a paragraph, and every character of it is scrubbed and embedded
+PROPOSAL_MAX_CHARS = 20000
+
+
 @router.post("/proposals")
 async def create_memory_proposal(
     body: MemoryProposalCreate,
@@ -164,6 +168,8 @@ async def create_memory_proposal(
     queue. The write goes straight into MemPalace — no SQLite mirror.
     """
     await require_feature_access(db, user, feature="memories", action="write")
+    if len(body.content or "") > PROPOSAL_MAX_CHARS or len(body.source_excerpt or "") > PROPOSAL_MAX_CHARS:
+        raise HTTPException(status_code=413, detail=f"content too long (max {PROPOSAL_MAX_CHARS} characters)")
     svc = _svc()
     auto_approve = body.confidence >= 0.9 and body.memory_type == "preference"
     status = "approved" if auto_approve else "pending"
