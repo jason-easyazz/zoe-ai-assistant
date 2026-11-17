@@ -336,6 +336,18 @@ async def _transcript(r: _Run, user_id: str) -> None:
     await r.by_ids("DELETE FROM chat_ag_ui_runs WHERE session_id", gone + orphans + kept_empty,
                    still_empty.format(t="chat_ag_ui_runs", c="session_id"))
     await r.by_ids("DELETE FROM chat_sessions WHERE id", gone + orphans, still_empty.format(t="chat_sessions", c="id"))
+    # ...and a session that delete KEPT (another member wrote a turn into it after the check) is a surviving session now: never left
+    # the member's, never titled with their words. Handed to that participant when the member owned it (``_hand_over``), retitled
+    # from the turns that stay either way.
+    kept = []
+    for at in range(0, len(gone + orphans), _CHUNK):
+        part = (gone + orphans)[at:at + _CHUNK]
+        kept += [(str(x[0]), str(x[1] or "")) for x in await r.rows(
+            f"SELECT id, user_id FROM chat_sessions WHERE id IN ({', '.join('?' * len(part))})", tuple(part))]
+    for sid, owner in kept:
+        if owner == user_id:
+            await _hand_over(r, user_id, sid)
+    await _retitle(r, [sid for sid, _owner in kept])
 
 
 async def _originated_ui_actions(r: _Run, user_id: str) -> None:
@@ -359,14 +371,21 @@ async def _originated_ui_actions(r: _Run, user_id: str) -> None:
     await r.by_ids("DELETE FROM ui_actions WHERE id", mine)
 
 
-def _names_member(value: Any, user_id: str) -> bool:
-    """Whether any string anywhere in a parsed JSON value IS the member's id (a payload's / ledger event's target, recipient, user)."""
+#: the JSON keys whose value says WHO an action is for or from. Only these are ownership evidence: a free-text field that happens to
+#: equal the id (B's toast "message": "ann") says nothing about whose row it is, and a member delete never reaches into another's rows
+_IDENTITY_KEYS = frozenset({"user_id", "target_user_id", "target_user", "recipient", "recipient_id", "member", "member_id", "for_user",
+                            "for_user_id", "to_user", "to_user_id", "origin_user_id", "owner", "owner_id", "speaker_id"})
+
+
+def _names_member(value: Any, user_id: str, *, under_identity: bool = False) -> bool:
+    """Whether a parsed JSON value names the member in an IDENTITY field (``_IDENTITY_KEYS``, at any depth: a payload's / ledger
+    event's target, recipient, user). A bare string counts only as the value of such a key (or an item of a list under one)."""
     if isinstance(value, str):
-        return value == user_id
+        return under_identity and value == user_id
     if isinstance(value, dict):
-        return any(_names_member(v, user_id) for v in value.values())
+        return any(_names_member(v, user_id, under_identity=str(k) in _IDENTITY_KEYS) for k, v in value.items())
     if isinstance(value, list):
-        return any(_names_member(v, user_id) for v in value)
+        return any(_names_member(v, user_id, under_identity=under_identity) for v in value)
     return False
 
 

@@ -1361,7 +1361,9 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
                 ("pre-b", "guest", {"target_user_id": B, "message": "synthetic words"}, None, None),
                 ("pre-old", "guest", {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
                 ("pre-old-b", B, {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
-                ("pre-fresh", "guest", {"message": "synthetic words"}, "queued", "2999-01-01T00:00:00Z"))
+                ("pre-fresh", "guest", {"message": "synthetic words"}, "queued", "2999-01-01T00:00:00Z"),
+                # B's toast whose free text happens to be A's id: free text is not ownership
+                ("pre-text", B, {"target_user_id": B, "message": A, "lines": [A]}, None, None))
         for aid, owner, payload, status, made in rows:
             await x("INSERT INTO ui_actions (id, user_id, payload, status, created_at) VALUES (?, ?, ?, ?, ?)",
                     (aid, owner, json.dumps(payload), status, made))
@@ -1371,8 +1373,9 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
     asyncio.run(seed())
     _delete(svc)
     left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
-    assert left == {"pre-b", "pre-old", "pre-old-b", "pre-fresh"}, left
-    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old", "l-pre-old-b", "l-pre-fresh"}
+    assert left == {"pre-b", "pre-old", "pre-old-b", "pre-fresh", "pre-text"}, left
+    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old", "l-pre-old-b", "l-pre-fresh",
+                                                                                     "l-pre-text"}
 
 
 def _stalled_fire_across_a_delete(env, store, monkeypatch, push_check):
@@ -1451,10 +1454,13 @@ def test_a_turn_written_into_an_emptied_session_after_the_check_survives_with_it
     a parent delete can never cascade to a turn written after the check."""
     svc, _col = env
     real = mof._retitle
+    state = {"done": False}
 
     async def b_speaks_now(r, surviving):
-        await r.db.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('late-b', 's-kiosk', 'user', "
-                           "'B, just now', ?)", (_meta(B),))
+        if not state["done"]:                                   # once: B speaks between the check and the delete
+            state["done"] = True
+            await r.db.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('late-b', 's-kiosk', 'user', "
+                               "'B, just now', ?)", (_meta(B),))
         return await real(r, surviving)
     monkeypatch.setattr(mof, "_retitle", b_speaks_now)
     _delete(svc)
@@ -1482,3 +1488,24 @@ def test_an_enrolment_is_a_turn_of_the_member_and_is_refused_once_they_are_delet
             other = True
         return during, after, stored, other
     assert asyncio.run(go()) == (1, 0, False, True)
+
+
+def test_a_session_the_member_owned_that_another_member_wrote_into_after_the_check_is_handed_over_and_retitled(env, store, monkeypatch):
+    """A's own session was emptied by the erase and classified to go; B writes into it before the conditional delete runs, so the session
+    stays. It is then a surviving session: handed to B (never left A's) and retitled from B's turn (never A's words)."""
+    svc, _col = env
+    real = mof._retitle
+    state = {"done": False}
+
+    async def b_speaks_now(r, surviving):
+        if not state["done"]:
+            state["done"] = True
+            await r.db.execute("INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES ('late-b-own', 's-a', 'user', "
+                               "'what B asked just now', ?)", (_meta(B),))
+        return await real(r, surviving)
+    monkeypatch.setattr(mof, "_retitle", b_speaks_now)
+    _delete(svc)
+    row = _q(store, "SELECT user_id, title FROM chat_sessions WHERE id = 's-a'")
+    assert row and row[0][0] == B, row
+    assert row[0][1] != "about my plans", "never A's title"
+    assert "late-b-own" in _ids(store, "chat_messages")
