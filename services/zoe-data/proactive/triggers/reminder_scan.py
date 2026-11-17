@@ -345,6 +345,15 @@ class ReminderScanTrigger(ProactiveTrigger):
     trigger_type = "reminder_scan"
 
     async def check(self, db) -> list[TriggerResult]:
+        # One delivery from the moment the reminders are READ: every row this scan schedules is stamped with that start
+        # (``schedule_reminder`` takes ``erase_watermark.delivery_began``), so a scan that pauses across a member delete can never
+        # write a cached title back - the row is "made" before the erase mark and is refused.
+        import erase_watermark
+
+        with erase_watermark.delivery(erase_watermark._now()):
+            return await self._check(db)
+
+    async def _check(self, db) -> list[TriggerResult]:
         now_utc = datetime.now(timezone.utc)
 
         # Fetch active, unacknowledged, non-deleted reminders that have a due_time

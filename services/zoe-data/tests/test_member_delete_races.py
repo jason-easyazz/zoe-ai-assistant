@@ -547,3 +547,29 @@ def test_with_no_clip_the_voice_turn_pays_no_watermark_read_or_worker_dispatch(m
     monkeypatch.setattr(vt.asyncio, "to_thread", no_thread)
     asyncio.run(vt._label_member_clip(A))
     assert identified == [A], "the delete still learns whose turn this is"
+
+
+def test_a_turn_that_begins_while_the_members_delete_runs_writes_nothing():
+    """A turn that began AFTER the delete's first mark passes the began <= mark rule until the final mark: while the delete runs
+    (``user_erase_gate.erase_span``) every write of the member's turns is refused outright."""
+    import erase_watermark
+    import user_erase_gate
+
+    async def go():
+        with user_erase_gate.erase_span(A):
+            token = erase_watermark.turn_open(None, A)              # begins mid-delete
+            ctx = erase_watermark.turn_bind(token)
+            try:
+                during = await erase_watermark.turn_write_refused(None, "transcript")
+            finally:
+                erase_watermark.turn_unbind(ctx)
+                erase_watermark.turn_close(token)
+        token = erase_watermark.turn_open(None, B)                  # another member is unaffected
+        ctx = erase_watermark.turn_bind(token)
+        try:
+            other = await erase_watermark.turn_write_refused(None, "transcript")
+        finally:
+            erase_watermark.turn_unbind(ctx)
+            erase_watermark.turn_close(token)
+        return during, other
+    assert asyncio.run(go()) == (True, False)

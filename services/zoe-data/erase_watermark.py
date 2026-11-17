@@ -542,7 +542,9 @@ async def store_write_guard(sql: str, conn: Any = None) -> None:
             mark = await watermark(member, backend=backend)
     except Unavailable:
         return
-    if mark is not None and bound[1] <= mark:
+    import user_erase_gate
+
+    if user_erase_gate.in_progress(member) or (mark is not None and bound[1] <= mark):
         logger.warning("ERASE_WATERMARK_STORE_WRITE_REFUSED table=%s", table)
         raise TurnWriteRefused(table)
 
@@ -560,7 +562,9 @@ async def member_write(user_id: str):
     token = turn_open(None, str(user_id or ""))
     ctx = turn_bind(token)
     try:
-        if await watermark(str(user_id)) is not None:
+        import user_erase_gate
+
+        if user_erase_gate.in_progress(str(user_id)) or await watermark(str(user_id)) is not None:
             logger.warning("ERASE_WATERMARK_MEMBER_WRITE_REFUSED")
             raise MemberErased(str(user_id))
         yield
@@ -650,6 +654,10 @@ async def turn_write_refused(session_id: Optional[str], lane: str, user_id: Opti
         entries = ([_TURNS.get(bound[0])] if bound is not None else
                    [e for e in list(_TURNS.values()) if session_id and e["session"] == str(session_id)])
         uid = next((e["member"] for e in entries if e and e["member"]), "")
+    import user_erase_gate
+
+    if uid and user_erase_gate.in_progress(str(uid)):    # a delete of this member is running: its first mark may predate the turn
+        return True
     try:
         return await send_refused(uid, began, lane)
     except Unavailable:
