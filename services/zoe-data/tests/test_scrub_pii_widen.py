@@ -525,7 +525,7 @@ def test_every_modifier_then_a_state_word_is_redacted():
 
 @pytest.mark.parametrize("text", [
     # modifiers only after "is" / "was": no value was said; and no connector at all (the bare label's closed list)
-    "the password was reset", "my password is still", "change your password now", "change your password again",
+    "change your password now", "change your password again",
     "my password no longer works", "the password reset link expired", "the password change worked",
 ])
 def test_modifier_forms_that_carry_no_value_are_kept(text):
@@ -823,3 +823,10 @@ def test_a_state_word_followed_by_its_value_is_redacted(text):
     "is spelled X"): the value after them is redacted."""
     out, _ = scrub_pii(text.format(w="zebrafiddle"))
     assert "zebrafiddle" not in out and R in out, out
+
+
+@pytest.mark.parametrize("w", ["still", "now", "reset", "not", "to"])
+def test_a_modifier_that_is_the_whole_value_is_redacted(w):
+    """Review (PR #2660): a word on the modifier list can itself be the password; with nothing after it, it is the value."""
+    out, _ = scrub_pii(f"my password is {w}")
+    assert out == f"my password is {R}", out
