@@ -514,13 +514,13 @@ def test_fail_closed_every_modifier_and_every_chain_of_two_before_an_invented_wo
 
 
 def test_every_modifier_then_a_state_word_is_redacted():
-    """Exhaustive: after "is" / "was", any modifier (and two) followed by a former state / place word - that word is the value."""
+    """Exhaustive: after "is" / "was", any modifier (and two) is itself the value: it and the words after it are redacted."""
     ms = _ms()
     for mod in sorted(ms._VALUE_MODIFIERS):
         for word in STATE_WORDS:
-            for text in (f"my password is {mod} {word}", f"the passcode was {mod} {mod} {word}"):
+            for text, head in ((f"my password is {mod} {word}", "my password is "), (f"the passcode was {mod} {mod} {word}", "the passcode was ")):
                 out, _ = scrub_pii(text)
-                assert word not in out.lower().split()[-1:] and R in out, (text, out)
+                assert out.startswith(head + R) and mod not in out[len(head):].split(), (text, out)
 
 
 @pytest.mark.parametrize("text", [
@@ -533,10 +533,10 @@ def test_modifier_forms_that_carry_no_value_are_kept(text):
 
 
 @pytest.mark.parametrize("text,want", [
-    ("my password is still working", "my password is still [REDACTED]"), ("my password is not working", "my password is not [REDACTED]"),
-    ("my password is now on the fridge", "my password is now [REDACTED]"),
-    ("my password is no longer valid", "my password is no longer [REDACTED]"),
-    ("the password was reset yesterday", "the password was reset [REDACTED]"),      # formerly a MUST_NOT row
+    ("my password is still working", "my password is [REDACTED]"), ("my password is not working", "my password is [REDACTED]"),
+    ("my password is now on the fridge", "my password is [REDACTED]"),
+    ("my password is no longer valid", "my password is [REDACTED]"),
+    ("the password was reset yesterday", "the password was [REDACTED]"),      # formerly a MUST_NOT row
 ])
 def test_modifier_then_a_state_word_after_is_loses_the_word(text, want):
     """Formerly kept; fail closed now (review of #2660): the word after the modifiers is redacted, whatever it is."""
@@ -830,3 +830,18 @@ def test_a_modifier_that_is_the_whole_value_is_redacted(w):
     """Review (PR #2660): a word on the modifier list can itself be the password; with nothing after it, it is the value."""
     out, _ = scrub_pii(f"my password is {w}")
     assert out == f"my password is {R}", out
+
+
+@pytest.mark.parametrize("w", ["still", "now", "reset", "not", "to"])
+@pytest.mark.parametrize("tail", ["", ", please remember it", " and my email is fine"])
+def test_no_word_after_a_secret_label_is_excused_as_a_modifier(w, tail):
+    """Review (PR #2660): the modifier exemption is gone - the first word after the connector is the value, whatever it is."""
+    out, _ = scrub_pii(f"my password is {w}{tail}")
+    assert out.startswith(f"my password is {R}") and f"is {w}" not in out, out
+
+
+@pytest.mark.parametrize("value", ["AB12CD3456", "AB1234CD5678", "AB-12-CD-34"])
+def test_a_labelled_id_number_goes_as_a_whole_token(value):
+    """Review (PR #2660): letters and digits in any order, dash-joined: the WHOLE token after the label, never a part of it."""
+    assert scrub_pii(f"passport number {value}")[0] == f"passport number {R}"
+    assert scrub_pii(f"my passport number is {value} ok")[0] == f"my passport number is {R} ok"

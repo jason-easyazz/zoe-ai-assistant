@@ -1504,8 +1504,8 @@ def _judge_match(m: "re.Match[str]", text: str, *, excuse: bool) -> "tuple[str, 
     base = m.start(3)
     at = lambda k: base + len(_join(toks[:k]))     # noqa: E731 - absolute offset of token k (the tokens are lossless)
     i = 0
-    while i < len(toks) and i < _MAX_MODIFIERS and _norm_word(toks[i][1]) in _VALUE_MODIFIERS:
-        i += 1
+    # NO word is skipped as a "modifier" (review, PR #2660): "still" / "now" / "reset" can itself be the secret, so the first
+    # word after the connector is always judged as the value (default-redact)
     if i == len(toks) or not any(t for _sp, t in toks[i:]):   # modifiers only
         return head + _REDACT, at(i)               # "is still" / "is now": the modifier can itself be the secret - fail closed
     kept = _join(toks[:i])
@@ -1706,7 +1706,10 @@ _FOR_PASSWORD_RE = re.compile(
     rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
 )
 _ACCOUNT_RE = re.compile(
-    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)"
+    # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
+    # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
+    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?: {1,2}[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
 )
 _EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
 _SPOKEN_EMAIL_RE = re.compile(
