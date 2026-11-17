@@ -5659,7 +5659,7 @@ def _prune_shadow_log(*, gone: str = "", keep=None) -> "int | None":
     except FileNotFoundError:
         return 0
     except OSError as exc:
-        log.warning("shadow log prune: %s", exc)
+        log.warning("shadow log prune: %s", type(exc).__name__)   # an OSError carries the path
         return None
     removed = 0
     try:
@@ -5684,7 +5684,7 @@ def _prune_shadow_log(*, gone: str = "", keep=None) -> "int | None":
         if not removed:
             os.unlink(tmp)
     except OSError as exc:
-        log.warning("shadow log prune failed: %s", exc)
+        log.warning("shadow log prune failed: %s", type(exc).__name__)   # an OSError carries the path
         try:
             os.unlink(tmp)
         except OSError:
@@ -5730,7 +5730,7 @@ def _apply_roster(roster, guests=None) -> None:
             if _applied_roster.get("shadow") != key and _prune_shadow_log(keep=keep) is not None:
                 _applied_roster["shadow"] = key
     except Exception as exc:  # noqa: BLE001
-        log.warning("roster apply failed: %s", exc)
+        log.warning("roster apply failed: %s", type(exc).__name__)   # never a path or a member id
 
 
 def _enroll_stop_reason() -> str:
