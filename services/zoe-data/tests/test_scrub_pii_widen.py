@@ -897,3 +897,39 @@ def test_the_net_is_linear_on_long_input():
         t0 = time.monotonic()
         scrub_pii(big)
         assert time.monotonic() - t0 < 2.0
+
+
+def test_many_labelled_secrets_in_one_text_stay_linear():
+    """Review (PR #2660): the net never rescans from the top; 1,600 labelled secrets in one text are scrubbed in one pass."""
+    import time
+    big = "password is abc. " * 1600
+    scrub_pii("password is abc. " * 50)                      # warm the patterns
+    t0 = time.monotonic()
+    out, _ = scrub_pii(big)
+    took = time.monotonic() - t0
+    assert "abc" not in out and took < 0.5, took
+
+
+@pytest.mark.parametrize("text,gone", [
+    ("my BSB is 062\t000", ("062", "000")), ("my account number is 1234\t5678", ("1234", "5678")),
+    ("my account number is 1234\n5678", ("1234", "5678")), ("my pin 12\t34", ("12", "34")), ("the door code is 57\t91", ("57", "91")),
+])
+def test_digit_groups_joined_by_any_whitespace_go_together(text, gone):
+    out, _ = scrub_pii(text)
+    assert R in out and not any(g in out for g in gone), out
+
+
+@pytest.mark.parametrize("text", [
+    "my password changed to zebrafiddle", "my password updated to zebrafiddle", "my password reset to zebrafiddle",
+    "the wifi key changed to zebrafiddle", "my pin changed to 12 34", "the door code was set to zebrafiddle",
+    "my password has been changed back to zebrafiddle",
+])
+def test_changed_to_introduces_the_value(text):
+    """Review (PR #2574 / #2660): "<label> changed / updated / reset / set to <value>" - "to" is a connector here."""
+    out, _ = scrub_pii(text)
+    assert out.endswith(R) and "zebrafiddle" not in out and "12 34" not in out, out
+
+
+@pytest.mark.parametrize("text", ["my password changed", "the password reset link expired", "the password was reset to be safe"])
+def test_changed_without_a_value_is_judged_as_before(text):
+    assert "zebrafiddle" not in scrub_pii(text)[0]

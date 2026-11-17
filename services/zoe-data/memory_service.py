@@ -1593,7 +1593,7 @@ _CONNECT_FILL = _CONNECT[:-1] + r"(?:(?:actually|now|just|still|currently|defini
 #: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
 #: more digit groups (``12 34``). The two token runs stay unbounded ON PURPOSE: they cannot cross whitespace, start only right
 #: after a label, and a cap would let an over-long secret through unredacted (linear: pinned by the adversarial timing test)
-_TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[ -]\d{2,12}){0,3}"
+_TOKEN = r"\S*?\d\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[\s-]\d{2,12}){0,3}"
 _CODE_RE = re.compile(
     rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
     rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
@@ -1654,7 +1654,7 @@ def _scrub_quoted(text: str) -> str:
 
 
 #: a PIN said without "is" (``my pin 4821``, ``my pin 12 34``, ``pin 1 2 3 4``): three digits, or digit groups; "pin 3 photos" stays
-_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[ -]\d{2,12}){0,2}|\d{1,2}(?:[ -]\d{1,4}){1,7})\b")
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s{0,8}(?:(?:is|was|=|:|-)\s{0,8})?)(\d{3,}(?:[\s-]\d{2,12}){0,2}|\d{1,2}(?:[\s-]\d{1,4}){1,7})\b")
 #: a password / passphrase said without "is" is redacted BY DEFAULT, letters-only included (``my password zebrafiddle``): the word
 #: after the label is kept only when it is on this CLOSED list - a word that says the sentence is ABOUT the password, not its
 #: value. Nouns and states first, then function words (a connector, pronoun or adverb is never the value itself).
@@ -1676,7 +1676,7 @@ _PASSWORD_NOT_VALUES = (
 #: label, separator, value: one whitespace-free token (digit groups may follow) that must not be on the closed list. "<label> is /
 #: was" belongs to ``_LABELLED_SECRET_RE`` (its tighter list), never to this pattern. Every repeat is bounded or confined to one
 #: token, and the match is anchored on the label (linear: the adversarial timing test)
-_PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[ -]\d{2,12}){0,3}"
+_PASSWORD_VALUE = r"[^\s,;!?.]\S*?(?=[.,;!?]{0,8}(?:\s|$))(?:[\s-]\d{2,12}){0,3}"
 #: words SKIPPED after a bare label (at most four), the word after them judged: "my password now <value>" / "password please
 #: <value>" redact the value; "change your password now" (a modifier, then nothing) is kept
 #: (not changed / reset / set / updated / to: after a bare label they are a compound - "password reset link", "password change")
@@ -1726,7 +1726,7 @@ _ACCOUNT_RE = re.compile(
     rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)"
     # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
     # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
-    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?: {1,2}[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
+    r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?:\s{1,2}[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
 )
 _EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
 _SPOKEN_EMAIL_RE = re.compile(
@@ -1832,7 +1832,9 @@ _NET_CODE_FORMS = (
     rf"|(?:codes?|pins?|passcodes?|passwords?|combinations?|combos?)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)})")
 _NET_CONN_RE = re.compile(
     rf"(?i)\b(?:{_NET_CODE_FORMS}|{_NET_LABELS})(?![\w-])"
-    r"\s{0,40}(?:(?:" + _CONNECT_WORDS + r")(?:\s{0,40}[:=])?|[:=]|'s(?!\w)|’s(?!\w)|(?<=\s)-(?=\s))\s{0,40}(?=\S)")
+    # "<label> changed / updated / reset / set to <value>": "to" introduces the value (unlike a bare "password reset")
+    r"\s{0,40}(?:(?:" + _CONNECT_WORDS + r")(?:\s{0,40}[:=])?|[:=]|'s(?!\w)|’s(?!\w)|(?<=\s)-(?=\s)"
+    r"|(?:(?:now|just|been|got|get|gets)\s{1,8}){0,2}(?:changed|updated|reset|set|switched|moved)\s{1,8}(?:back\s{1,8})?to(?![\w'’]))\s{0,40}(?=\S)")
 _NET_BARE_RE = re.compile(
     rf"(?i)\b(?:{_NET_CODE_FORMS}|pass[-\s]{{0,2}}words?|pass[-\s]{{0,2}}codes?|pass[-\s]{{0,2}}phrases?|api[\s_-]?keys?)(?![\w'’-])"
     rf"\s{{1,40}}(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)}|{_CONNECT_WORDS[3:-13]})(?![\w'’-]))(?=[^\s\[=:])")
@@ -1854,20 +1856,22 @@ def _net_end(text: str, start: int) -> int:
 
 
 def _scrub_label_net(text: str) -> str:
+    """ONE left-to-right pass: both patterns are scanned once over the whole text (``finditer``), their matches merged by position,
+    and the output built from slices - never a rescan after a replacement (linear: the 1,600-repetition timing test)."""
+    hits = sorted([(m.start(), 0, m.end()) for m in _NET_CONN_RE.finditer(text)]
+                  + [(m.start(), 1, m.end()) for m in _NET_BARE_RE.finditer(text)])   # the earliest label; a connector form first
     out, pos = [], 0
-    while True:
-        a, b = _NET_CONN_RE.search(text, pos), _NET_BARE_RE.search(text, pos)
-        m = min((x for x in (a, b) if x), key=lambda x: (x.start(), x is b), default=None)   # the earliest label; a connector form first
-        if m is None:
-            out.append(text[pos:])
-            return "".join(out)
-        if text.startswith(_REDACT, m.end()):               # already taken by the grammar: its own end (clause, closing quote) stands
-            out.append(text[pos:m.end() + len(_REDACT)])
-            pos = m.end() + len(_REDACT)
+    for start, _bare, stop in hits:
+        if start < pos:
+            continue                                        # inside a value already taken
+        if text.startswith(_REDACT, stop):                  # already taken by the grammar: its own end (clause, closing quote) stands
+            out.append(text[pos:stop + len(_REDACT)])
+            pos = stop + len(_REDACT)
             continue
-        end = _net_end(text, m.end())
-        out.append(text[pos:m.end()] + _REDACT)
-        pos = max(end, m.end() + 1)
+        out.append(text[pos:stop] + _REDACT)
+        pos = max(_net_end(text, stop), stop + 1)
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _scrub_secrets(text: str) -> str:
