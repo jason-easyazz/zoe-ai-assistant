@@ -714,6 +714,29 @@ def test_a_line_naming_a_forgotten_entity_is_withheld_from_the_day_copy_while_it
     assert store.q("SELECT COUNT(*) FROM routine_day_steps WHERE text = 'call Quinn'") == [(1,)]   # withheld, not erased: the cascade erases
 
 
+def test_get_routine_withholds_what_a_forget_covers_while_its_erase_is_pending(store):
+    """``get_routine`` is a read like ``day_copy`` / ``list_routines``: after "forget Quinn" is recorded and before (or after a failed)
+    cascade, a routine NAMED for Quinn is not returned at all, and a template step naming Quinn is withheld from any other routine."""
+    r = _mk(steps=("call Quinn", "bins"))
+    named = run(rs.create_routine(ALEX, "Quinn visit", "window", steps=("tidy",)))
+    assert [s["text"] for s in run(rs.get_routine(ALEX, r["id"]))["steps"]] == ["call Quinn", "bins"]   # control: shown before
+    _forget(ALEX, "Quinn")                                                       # recorded; the cascade has not run yet
+    assert [s["text"] for s in run(rs.get_routine(ALEX, r["id"]))["steps"]] == ["bins"]
+    assert run(rs.get_routine(ALEX, named["id"])) is None
+    assert store.q("SELECT COUNT(*) FROM routine_steps WHERE text = 'call Quinn' AND deleted = 0") == [(1,)]   # withheld, not erased
+
+
+def test_get_routine_withholds_on_an_unreadable_ledger(store, monkeypatch):
+    """An unreadable forgotten-entity ledger counts as forgotten on a read (withhold, never leak)."""
+    r = _mk(steps=("call Quinn",))
+
+    async def down(*_a, **_k):
+        raise memory_forgotten.LedgerUnavailable("down")
+    monkeypatch.setattr(memory_forgotten, "configured", lambda: True)
+    monkeypatch.setattr(memory_forgotten, "active_hashes_on", down)
+    assert run(rs.get_routine(ALEX, r["id"])) is None
+
+
 # -- cross-member reach: every entry point that takes an id from a caller ------------------------------------------------------------
 def _outcome(coro):
     try:

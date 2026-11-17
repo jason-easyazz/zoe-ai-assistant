@@ -26,8 +26,9 @@ path names its SUBJECT member (whose routine), its ACTOR member(s) (who acts; a 
 carries, and runs inside ``_guarded_write``, which holds the erase gate of each member involved (sorted id order) and, inside ONE
 real transaction with the same per-member advisory locks the erasers take, re-checks each member's erase mark (a write that began
 before a member erase is refused, ``erased``) and the entity shield (the in-flight tombstone and the durable ``memory_forgotten``
-ledger, exact words, fail closed: a forgotten name is never written, ``names_forgotten``). Reads apply no forgotten-entity filter:
-the shield on write plus the gated erasers leave nothing to hide, and a failed erase fails the cascade (it is retried).
+ledger, exact words, fail closed: a forgotten name is never written, ``names_forgotten``). Every READ that returns routine text
+(``get_routine``, ``list_routines``, ``day_copy``, ``live_lines``) applies the same shield: a forget's erase may still be pending or
+have failed (the cascade is retried), and its words are withheld meanwhile.
 
 LOGS: one marker per event, codes and counts only - ``ROUTINE event=<prompted|ticked|skipped|snoozed|undo|missed|refused|created|
 step_added|one_off> kind=<k> via=<said|tapped|-> verified=<0|1> member=<hash8> routine=<hash8>``; never a step's text or a name.
@@ -440,12 +441,19 @@ async def _steps(db, routine_id: str) -> list[dict]:
 
 
 async def get_routine(viewer: Optional[str], routine_id: str) -> Optional[dict]:
-    """The routine with its template steps, or None when it does not exist OR the viewer may not see it (never a 403 oracle)."""
+    """The routine with its template steps, or None when it does not exist, the viewer may not see it (never a 403 oracle), or its
+    NAME names an entity its subject or the viewer has forgotten. A template step naming a forgotten entity is withheld. The same
+    shield on READ as ``list_routines`` / ``day_copy`` / ``live_lines``: a forget's erase may still be pending or have failed (it is
+    retried), and nothing it covers is shown meanwhile. ``names_forgotten`` opens its own connection, so it runs after this one."""
     async with _db() as db:
         r = await _load(db, routine_id)
         if r is None or not can_see(r, viewer):
             return None
-        r["steps"] = await _steps(db, routine_id)
+        steps = await _steps(db, routine_id)
+    who = {r["user_id"], None if _guest(viewer) else viewer}
+    if await names_forgotten(who, r["name"]):
+        return None
+    r["steps"] = [st for st in steps if not await names_forgotten(who, st["text"])]
     return r
 
 
