@@ -1251,3 +1251,16 @@ def test_nested_repeat_shapes_grow_linearly(shape):
     small, big = took(4000), took(16000)
     assert small < 0.5, (shape, small)
     assert big < 8 * small + 0.2, (shape, small, big)          # quadratic would be 16x
+
+
+@pytest.mark.parametrize("label", ["pin", "password", "token"])
+@pytest.mark.parametrize("glue", ["is'{v}'", 'is"{v}"', "is‘{v}’", ":'{v}'", "='{v}'", "is“{v}”"])
+def test_a_quote_straight_after_the_connector_opens_the_value(label, glue):
+    """Review (PR #2660), a regression against main: "my pin is'zebrafiddle'" - no space before the quote."""
+    out, _ = scrub_pii(f"my {label} " + glue.format(v="zebrafiddle"))
+    assert "zebrafiddle" not in out and R in out, out
+
+
+def test_a_contraction_is_still_not_a_connector_plus_quote():
+    assert scrub_pii("the password's on the fridge")[0].startswith("the password's")
+    assert "zebrafiddle" not in scrub_pii("my password isn't zebrafiddle")[0]

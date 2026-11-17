@@ -1376,8 +1376,11 @@ _NEXT_LABEL = (r"(?!(?:and|but|or|plus)\s{1,8}(?:[^\s,;.!?]+\s{1,8}){0,3}(?:" + 
 _SUFFIX = r"([^.;!?\n]{0,400})"
 #: the WORD connectors after a secret label: "is" / "was", and the other forms a value is said with ("will be", "should be",
 #: "has been", "are", "isn't" ...). Each is one fixed phrase with bounded inner spaces (no adjacent unbounded whitespace runs)
-_CONNECT_WORDS = (r"(?:isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
-                  r"|(?:has|had|have)\s{1,8}been)(?![\w'’])")
+_CONNECT_ALTS = (r"isn't|isn’t|wasn't|wasn’t|is|was|are|were|(?:will|would|should|must|can|could|may|might|shall)\s{1,8}be"
+                 r"|(?:has|had|have)\s{1,8}been")
+# not inside a longer word or a contraction; a quote straight after the connector with no space ("is'zebrafiddle'") is the
+# value's OPENER, as main reads it (review, PR #2660)
+_CONNECT_WORDS = "(?:" + _CONNECT_ALTS + r")(?!\w|['’](?:t|s|re|ve|d|ll|nt)\b)"
 _LABELLED_SECRET_RE = re.compile(
     r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:(?:" + _CONNECT_WORDS
     + r")(?:\s*[:=])?|[:=])\s*)"
@@ -1854,7 +1857,7 @@ _NET_CONN_RE = re.compile(
     r"|(?:(?:now|just|been|got|get|gets)\s{1,8}){0,2}(?:changed|updated|reset|set|switched|moved)\s{1,8}(?:back\s{1,8})?to(?![\w'’]))\s{0,40}(?=\S)")
 _NET_BARE_RE = re.compile(
     rf"(?i)\b(?:{_NET_CODE_FORMS}|pass[-\s]{{0,2}}words?|pass[-\s]{{0,2}}codes?|pass[-\s]{{0,2}}phrases?|api[\s_-]?keys?)(?![\w'’-])"
-    rf"\s{{1,40}}(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)}|{_CONNECT_WORDS[3:-13]})(?![\w'’-]))(?=[^\s\[=:])")
+    rf"\s{{1,40}}(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)}|{_CONNECT_ALTS})(?![\w'’-]))(?=[^\s\[=:])")
 _SENTENCE_END_RE = re.compile(r"[.;!?](?=\s|$)|\n")
 _NET_OPEN = "\"'‘’“”"
 
