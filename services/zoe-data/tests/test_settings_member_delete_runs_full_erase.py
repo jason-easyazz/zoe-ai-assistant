@@ -354,6 +354,10 @@ def test_a_cached_session_of_a_member_under_removal_cannot_write_a_note(world, m
     app.dependency_overrides[get_db] = lambda: _DB()
     auth._session_cache.clear()
     auth._BARRED.clear()
+
+    async def zoe_auth_validates(sid):        # zoe-auth faked: the test must never reach a live sign-in service (CI has none)
+        return {"sess-a": {"user_id": A, "role": "member"}, "sess-b": {"user_id": "member-b", "role": "member"}}.get(sid)
+    monkeypatch.setattr(auth, "_validate_with_auth_service", zoe_auth_validates)
     auth._cache_set("sess-a", {"user_id": A, "role": "member"})
     auth._cache_set("sess-b", {"user_id": "member-b", "role": "member"})
     asyncio.run(mr.advance(A, actor=ADMIN, session_id=""))                    # step 1 only (no admin session: stops at the barrier)
