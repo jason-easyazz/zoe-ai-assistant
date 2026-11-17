@@ -164,14 +164,14 @@ def _cap(text: str, limit: int) -> str:
 
 def compact_fact(text: str) -> str:
     """'User is allergic to peanuts.' → 'allergic to peanuts'; '' when unusable."""
-    from memory_service import scrub_pii  # type: ignore[import]
+    from memory_service import bounded, scrub_pii  # type: ignore[import]
 
     t = re.sub(r"\s+", " ", text or "").strip().rstrip(".!")
     if not t or t[0] in "{[" or _NAME_FACT.match(t):
         return ""
     for rx, repl in _LEADS:
         t = rx.sub(repl, t, count=1)
-    t, reject = scrub_pii(t)
+    t, reject = scrub_pii(bounded(t, ITEM_MAX_CHARS))
     if reject or "[REDACTED]" in t or _CONTACT.search(_ISO_DATE.sub("", t)) or len(t) < 3:
         return ""
     return _cap(t, ITEM_MAX_CHARS)
@@ -221,11 +221,11 @@ def is_tentative(meta: dict[str, Any], text: str = "") -> bool:
 
 def style_line(portrait: str | None) -> str:
     """The narrative portrait's first 'how they communicate' sentence, or ''."""
-    from memory_service import scrub_pii  # type: ignore[import]
+    from memory_service import bounded, scrub_pii  # type: ignore[import]
 
     for sentence in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", portrait or "").strip()):
         if _STYLE.search(sentence):
-            s, reject = scrub_pii(sentence)
+            s, reject = scrub_pii(bounded(sentence, STYLE_MAX_CHARS))
             return "" if reject or "[REDACTED]" in s else _cap(s, STYLE_MAX_CHARS)
     return ""
 

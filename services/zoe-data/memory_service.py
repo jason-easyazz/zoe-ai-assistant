@@ -1287,7 +1287,9 @@ def _stamp_claim(md: dict[str, Any], claim: Any) -> None:
         # the quote and the value are slices of the owner's turn: they pass the SAME PII scrub the evidence excerpt does, and a claim
         # that would carry anything the scrub touches is not stored at all (the fact beside it was scrubbed separately)
         for field_ in (parsed.quote, parsed.obj):
-            scrubbed, reject = scrub_pii(field_)
+            if len(field_ or "") > SCRUB_INLINE_MAX:          # a claim field is a few words: longer is not stamped (fail closed)
+                return
+            scrubbed, reject = scrub_pii(bounded(field_, SCRUB_INLINE_MAX, 0))
             if reject or scrubbed != field_:
                 return
         md["claim"] = parsed.to_json()
@@ -2015,6 +2017,13 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
 SCRUB_INLINE_MAX = 2000
 
 
+def bounded(text: Optional[str], kept: int, margin: int = 64) -> str:
+    """The part of ``text`` a SYNC caller may hand the scrubber: what it keeps (``kept`` characters) plus a margin, so a secret cut at
+    the edge lies wholly outside what is kept and no caller scrubs more than it stores (review, PR #2660: a sync scrub of a huge
+    text held the event loop). ``margin=0`` after a length guard."""
+    return (text or "")[:max(0, kept) + max(0, margin)]
+
+
 async def scrub_pii_async(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     """``scrub_pii`` for an async caller on a live path: inline up to ``SCRUB_INLINE_MAX`` characters, else off the loop."""
     if len(text or "") <= SCRUB_INLINE_MAX:
@@ -2126,8 +2135,7 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     # an excerpt is short: only its first SCRUB_INLINE_MAX characters are ever scrubbed, so no excerpt path (``_build_metadata``,
     # ``retire_with_quote``) can hold the event loop on a huge input. The cut is far past ``limit`` (+ a card's length), so a
     # card sliced by it lies wholly beyond what is kept
-    raw = raw[:max(SCRUB_INLINE_MAX, limit + 64)]
-    scrubbed, reject = scrub_pii_matchable(raw)
+    scrubbed, reject = scrub_pii_matchable(bounded(raw, max(SCRUB_INLINE_MAX, limit)))
     if reject:
         return None
     return scrubbed[:limit].rstrip() or None

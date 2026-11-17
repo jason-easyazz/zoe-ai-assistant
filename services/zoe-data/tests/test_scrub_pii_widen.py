@@ -1103,7 +1103,10 @@ def _scrub_call_sites():
             for ch in ast.iter_child_nodes(node):
                 here = (ch.name, isinstance(ch, ast.AsyncFunctionDef)) if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
                 if isinstance(ch, ast.Call) and (getattr(ch.func, "id", None) or getattr(ch.func, "attr", None)) in _BLOCKING_SCRUBS:
-                    found.append((os.path.basename(path), here[0] if here else "<module>", bool(here and here[1])))
+                    arg = ch.args[0] if ch.args else None
+                    capped = (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Slice)) or (
+                        isinstance(arg, ast.Call) and getattr(arg.func, "id", None) == "bounded")
+                    found.append((os.path.basename(path), here[0] if here else "<module>", bool(here and here[1]), capped))
                 walk(ch, here)
         walk(tree, None)
     return found
@@ -1115,12 +1118,20 @@ def test_no_async_function_calls_a_blocking_scrub_and_every_sync_scrubber_is_kno
     known list - a new one fails here until its input bound is stated."""
     sites = _scrub_call_sites()
     assert sites, "the scan found nothing: it is broken"
-    bad_async = sorted({(f, fn) for f, fn, is_async in sites if is_async and (f, fn) not in _ASYNC_OK})
-    unknown_sync = sorted({(f, fn) for f, fn, is_async in sites if not is_async and (f, fn) not in _SYNC_WRAPPERS})
+    bad_async = sorted({(f, fn) for f, fn, is_async, _c in sites if is_async and (f, fn) not in _ASYNC_OK})
+    unknown_sync = sorted({(f, fn) for f, fn, is_async, _c in sites if not is_async and (f, fn) not in _SYNC_WRAPPERS})
     assert not bad_async, bad_async
     assert not unknown_sync, unknown_sync
-    # negative control: the scan sees a blocking call inside an async function
-    assert ("memory_digest.py", "_extract_open_loops", True) in sites
+    # every SYNC caller hands the scrubber a HARD-bounded argument: a slice, or ``bounded(...)``; a bare variable fails. The two
+    # scrubbers themselves are the only exception (they are what is being bounded)
+    unbounded = sorted({(f, fn) for f, fn, is_async, capped in sites
+                        if not capped and (f, fn) not in {("memory_service.py", "scrub_pii"), ("memory_service.py", "scrub_pii_matchable"),
+                                                          ("memory_service.py", "scrub_pii_async"),
+                                                          ("memory_service.py", "scrub_pii_matchable_async")}})
+    assert not unbounded, unbounded
+    # negative controls: the scan sees a blocking call inside an async function, and tells a capped argument from a bare one
+    assert ("memory_digest.py", "_extract_open_loops", True, True) in sites
+    assert ("memory_service.py", "scrub_pii_matchable", False, False) in sites
 
 
 def test_a_huge_excerpt_and_a_huge_turn_do_not_hold_the_loop(monkeypatch):
@@ -1170,3 +1181,18 @@ def test_the_proposals_endpoint_refuses_an_oversized_body(monkeypatch):
         asyncio.run(memories.create_memory_proposal(MemoryProposalCreate(content="x" * (memories.PROPOSAL_MAX_CHARS + 1)),
                                                     user={"user_id": "member-px"}, db=None))
     assert exc.value.status_code == 413
+
+
+def test_struggle_detector_scrubs_only_what_a_summary_keeps():
+    """Behaviour (review, PR #2660): the two struggle entry points go through ``_scrub``, which scrubs a bounded slice - a 144k
+    turn costs what a short one does."""
+    import time
+    import struggle_detector as sd
+
+    big = 'password is "abc.\n' * 8000
+    sd._scrub("warm the import and the patterns")
+    t0 = time.monotonic()
+    out = sd._scrub(big)
+    assert time.monotonic() - t0 < 0.05, "the whole turn was scrubbed"
+    assert out is not None and "abc" not in out and out.count("[REDACTED]") <= 16      # a slice, not 8,000 secrets
+    assert sd._scrub("my password is zebrafiddle") == "my password is [REDACTED]"

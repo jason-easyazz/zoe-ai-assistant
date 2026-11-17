@@ -672,9 +672,9 @@ async def _keep_words_bounded(turn: sig.Turn, *texts: str) -> bool:
 
 def _scrub(text: str) -> Optional[str]:
     try:
-        from memory_service import scrub_pii
+        from memory_service import bounded, scrub_pii
 
-        out, reject = scrub_pii(text)
+        out, reject = scrub_pii(bounded(text, SUMMARY_MAX))   # only what a summary keeps (+ margin) is scrubbed: bounded work
         return None if reject else out
     except Exception:  # noqa: BLE001
         return None
