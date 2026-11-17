@@ -721,6 +721,8 @@ def test_the_wide_phone_shape_is_unioned_with_the_split_one(text):
     "my password is written as {w}", "my password is spelled {w}", "my password is spelt {w}", "the password reads {w}",
     "my password is written {w}", "my password is kept as {w}", "my password is stored as {w}", "my password is hidden as {w}",
     "my password written as {w}", "the pin is saved as {w}",
+    "my token is saved now {w}", "my password is written again {w}", "my token is stored still now {w}",
+    "my token is saved " + "on paper " * 60 + "as {w}",
 ])
 def test_a_state_word_followed_by_its_value_is_redacted(text):
     """Review (PR #2574): "written", "saved", "stored", "kept", "hidden" ... can be followed by the value ("is written as X",
