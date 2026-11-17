@@ -122,13 +122,14 @@ class MemoryBackend:
         keep = None if only_ids is None else set(only_ids)
         gone = [i for i, r in self.obs_rows.items() if r["user_id"] == user_id and pattern.search(r["quote"] or "")
                 and (keep is None or i in keep)]
-        for i in gone:
-            del self.obs_rows[i]
-        alive = {r["thread_id"] for r in self.obs_rows.values() if r["user_id"] == user_id}
+        alive = {r["thread_id"] for i, r in self.obs_rows.items() if r["user_id"] == user_id and i not in gone}
         orphan = [i for i, t in self.thread_rows.items()
                   if t["user_id"] == user_id and ((keep is None and pattern.search(t["title"] or "")) or (i not in alive and gone))]
+        # Threads first: a failed delete must leave the observations available to a retry.
         for i in orphan:
             del self.thread_rows[i]
+        for i in gone:
+            del self.obs_rows[i]
         return len(gone) + len(orphan)
 
     async def delete_user(self, user_id):
@@ -217,20 +218,26 @@ class SqlBackend:
         obs = await self.observations(user_id)
         keep = None if only_ids is None else set(only_ids)
         gone = [r["id"] for r in obs if pattern.search(r["quote"] or "") and (keep is None or r["id"] in keep)]
-        n = 0
-        async with self._ctx() as db:
-            for i in gone:
-                cur = await db.execute("DELETE FROM night_observations WHERE user_id = ? AND id = ?", (user_id, i))
-                n += int(getattr(cur, "rowcount", 0) or 0)
-            await db.commit()
         alive = {r["thread_id"] for r in obs if r["id"] not in set(gone)}
         orphan = [t["id"] for t in await self.threads(user_id)
                   if (keep is None and pattern.search(t["title"] or "")) or (t["id"] not in alive and gone)]
+        n = 0
         async with self._ctx() as db:
-            for i in orphan:
-                cur = await db.execute("DELETE FROM night_threads WHERE user_id = ? AND id = ?", (user_id, i))
-                n += int(getattr(cur, "rowcount", 0) or 0)
-            await db.commit()
+            tx = getattr(db, "transaction", None)
+            # asyncpg auto-commits individual statements; SQLite needs an explicit rollback on failure.
+            async with (tx() if callable(tx) else contextlib.nullcontext()):
+                if not callable(tx):
+                    await db.execute("BEGIN")
+                try:
+                    for table, ids in (("night_observations", gone), ("night_threads", orphan)):
+                        for i in ids:
+                            cur = await db.execute(f"DELETE FROM {table} WHERE user_id = ? AND id = ?", (user_id, i))
+                            n += int(getattr(cur, "rowcount", 0) or 0)
+                    await db.commit()
+                except BaseException:
+                    if not callable(tx):
+                        await db.execute("ROLLBACK")
+                    raise
         return n
 
     async def delete_user(self, user_id):
