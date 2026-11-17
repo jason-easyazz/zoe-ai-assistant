@@ -1365,7 +1365,9 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
                 ("pre-old-b", B, {"message": "synthetic words"}, "queued", "2020-01-01T00:00:00Z"),
                 ("pre-fresh", "guest", {"message": "synthetic words"}, "queued", "2999-01-01T00:00:00Z"),
                 # B's toast whose free text happens to be A's id: free text is not ownership
-                ("pre-text", B, {"target_user_id": B, "message": A, "lines": [A]}, None, None))
+                ("pre-text", B, {"target_user_id": B, "message": A, "lines": [A]}, None, None),
+                # B's own row that NAMES A in an identity field: still B's row, never reached by A's delete
+                ("pre-b-names-a", B, {"target_user_id": A}, None, None))
         for aid, owner, payload, status, made in rows:
             await x("INSERT INTO ui_actions (id, user_id, payload, status, created_at) VALUES (?, ?, ?, ?, ?)",
                     (aid, owner, json.dumps(payload), status, made))
@@ -1377,8 +1379,9 @@ def test_pre_upgrade_kiosk_actions_without_an_origin_go_only_when_they_name_the_
     left = {r for r in _ids(store, "ui_actions") if r.startswith("pre-")}
     # guest-owned origin-less rows that name no other member go (they may hold A's words with no id); one aimed at B (pre-b) is
     # B's and stays, as do member-owned ones
-    assert left == {"pre-b", "pre-old-b", "pre-text"}, left
-    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old-b", "l-pre-text"}
+    assert left == {"pre-b", "pre-old-b", "pre-text", "pre-b-names-a"}, left
+    assert {r for r in _ids(store, "ui_action_ledger") if r.startswith("l-pre-")} == {"l-pre-b", "l-pre-old-b", "l-pre-text",
+                                                                                     "l-pre-b-names-a"}
 
 
 def _stalled_fire_across_a_delete(env, store, monkeypatch, push_check):

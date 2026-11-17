@@ -276,10 +276,10 @@ async def _consume_scheduled_sends(user_id: str) -> int:
     # A fire that ALREADY claimed a row is not stopped by fired=1; it is stopped at delivery time: _fire_reminder refuses a send whose
     # member has an erase mark at or after the row (written before this step). Cancel errors are NOT swallowed (fail closed: the
     # delete is retried); only "this process runs no scheduler" is not an error - the jobstore is shared, and the consumed row cannot fire.
-    from proactive.scheduler import cancel_job
+    from proactive.scheduler import cancel_job, run_blocking
     for job in jobs:
         try:
-            cancel_job(job)
+            await run_blocking(cancel_job, job)   # the jobstore is synchronous: never on the event loop (voice turns share it)
         except RuntimeError as exc:
             if "not started" not in str(exc):
                 raise
@@ -443,8 +443,13 @@ async def _preupgrade_ui_actions(r: _Run, user_id: str) -> set:
                 events.setdefault(str(aid), []).append((str(etype or ""), json.loads(data) if isinstance(data, str) else None))
             except ValueError:
                 events.setdefault(str(aid), []).append((str(etype or ""), None))
-        payloads = {str(x[0]): x[1] for x in await r.rows(f"SELECT id, payload FROM ui_actions WHERE id IN ({marks})", tuple(part))}
+        rows = await r.rows(f"SELECT id, payload, user_id FROM ui_actions WHERE id IN ({marks})", tuple(part))
+        payloads = {str(x[0]): x[1] for x in rows}
+        owners = {str(x[0]): str(x[2] or "").strip() for x in rows}
         for aid in part:
+            owner = owners.get(aid, "")
+            if owner and owner != user_id and not _is_guest(owner):
+                continue                                        # ANOTHER member's own row: never reached, whatever it names
             evs = events.get(aid, [])
             if any(t == "queued" and isinstance(d, dict) and "origin_user_id" in d for t, d in evs):
                 continue                                        # recorded after the upgrade: its origin decides
