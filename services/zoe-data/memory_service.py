@@ -1737,7 +1737,7 @@ _FOR_PASSWORD_RE = re.compile(
     rf"(\s{{0,8}}(?:is|was|=|:)\s{{0,8}})({_PASSWORD_VALUE})" + _SUFFIX
 )
 _ACCOUNT_RE = re.compile(
-    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of)\s{{0,8}})?)"
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s{{0,8}}(?:(?:is|was|=|:|#|of|-|–)\s{{0,8}})?(?:(?:actually|now|just|still|currently|definitely|really|only)\s{{1,8}})*)"
     # the WHOLE token after the label: letters and digits in any order, dash-joined, then any further space-separated group that
     # holds a digit ("AB12CD3456", "AB-12-CD-34", "1234 5678 9"); never a part of a token
     r"((?=[A-Za-z0-9-]{0,40}\d)[A-Za-z0-9]{1,40}(?:-[A-Za-z0-9]{1,40}){0,8}(?:(?:\s?[-–]\s?|\s)[A-Za-z0-9-]{0,20}\d[A-Za-z0-9-]{0,20}){0,8})(?![A-Za-z0-9])"
@@ -1853,7 +1853,7 @@ _NET_BARE_RE = re.compile(
     rf"(?i)\b(?:{_NET_CODE_FORMS}|pass[-\s]{{0,2}}words?|pass[-\s]{{0,2}}codes?|pass[-\s]{{0,2}}phrases?|api[\s_-]?keys?)(?![\w'’-])"
     rf"\s{{1,40}}(?!(?:{_alt(tuple(_PASSWORD_NOT_VALUES) + _BARE_MODIFIERS)}|{_CONNECT_WORDS[3:-13]})(?![\w'’-]))(?=[^\s\[=:])")
 _SENTENCE_END_RE = re.compile(r"[.;!?](?=\s|$)|\n")
-_NET_OPEN = "\"'‘“"
+_NET_OPEN = "\"'‘’“”"
 
 
 def _net_end(text: str, start: int, closers: dict) -> int:
@@ -1867,8 +1867,8 @@ def _net_end(text: str, start: int, closers: dict) -> int:
 
 
 #: a secret's NEXT digit groups on the following line(s) ("my pin is 12\n34", "the door code is 57\n91"): the grammar's slot stops at
-#: a line break, so after a redacted secret a line that is only digit groups goes too (bounded: eight lines, 40 characters each)
-_SECRET_NEXT_LINE_RE = re.compile(r"(\[REDACTED\])(?:[ ]?\n[ ]?\d[\d \-–]{0,40}(?=\n|$)){1,8}")
+#: a line break, so after a redacted secret a line that is only digit groups goes too (each line consumed once: linear)
+_SECRET_NEXT_LINE_RE = re.compile(r"(\[REDACTED\])(?:(?:[ ]?\n)+[ ]?\d[\d \-–]*(?=\n|$))+")
 
 
 def _scrub_label_net(text: str) -> str:
@@ -1884,7 +1884,9 @@ def _label_net(text: str) -> str:
     for start, _bare, stop in hits:
         if start < pos:
             continue                                        # inside a value already taken
-        if text.startswith(_REDACT, stop):                  # already taken by the grammar: its own end (clause, closing quote) stands
+        after = stop + len(_REDACT)                         # ... unless more is glued to the marker ("[REDACTED]x": not the grammar's)
+        if text.startswith(_REDACT, stop) and (after == len(text) or not (text[after].isalnum() or text[after] == "_")):
+            # already taken by the grammar: its own end (clause, closing quote) stands
             out.append(text[pos:stop + len(_REDACT)])
             pos = stop + len(_REDACT)
             continue
@@ -2001,7 +2003,7 @@ def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
     given; a redacted text keeps the folded spacing."""
     if not text:
         return text, None
-    folded = _WS_RUN_RE.sub(" ", text)
+    folded = _WS_RUN_RE.sub(" ", text.replace("\r\n", "\n").replace("\r", "\n") if "\r" in text else text)
     out, reject = _scrub_pii(folded, contact=contact)
     if reject or out == folded:
         return text, reject

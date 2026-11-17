@@ -999,3 +999,33 @@ def test_punctuation_inside_a_labelled_value_goes_with_it(form, value):
     """Review (PR #2574): a labelled value is everything to the boundary, punctuation included."""
     out, _ = scrub_pii(form.format(v=value))
     assert out.endswith(R) and "zebra" not in out and "fiddle" not in out, out
+
+
+@pytest.mark.parametrize("text,gone", [
+    ("my account number is actually 12345678", ("12345678",)), ("my passport number is actually AB1234567", ("AB1234567",)),
+    ("my BSB is now 062 000", ("062", "000")), ("my account number - 12345678", ("12345678",)),
+    ("my pin is 12\n34\r\n56", ("12", "34", "56")), ("my pin is 1\n2\n3\n4\n5\n6\n7\n8\n9\n0", ("\n0", "\n9")),
+])
+def test_fillers_dash_connectors_crlf_and_long_line_runs(text, gone):
+    """Review (PR #2660; main leaks these too): fillers and a dash before a labelled ID; CRLF and any number of digit lines."""
+    out, _ = scrub_pii(text)
+    assert R in out and not any(g in out for g in gone), out
+
+
+def test_many_digit_lines_after_a_secret_stay_linear():
+    import time
+    t0 = time.monotonic()
+    out, _ = scrub_pii("my pin is 1" + "\n2" * 20000)
+    assert time.monotonic() - t0 < 0.5 and out == "my pin is [REDACTED]"
+
+
+@pytest.mark.parametrize("text,gone", [
+    ("passwords is [REDACTED]zebrafiddle", ("zebrafiddle",)), ("passwords is ”plum. zebrafiddle”", ("plum", "zebrafiddle")),
+    ("combinations is ’plum. zebrafiddle’", ("plum", "zebrafiddle")), ("password is 12\n" + "3" * 42, ("333",)),
+    ("passwords is 12\n\n34", ("12", "34")),
+])
+def test_survivors_of_the_second_adversarial_pass(text, gone):
+    """PR #2660, second adversarial pass: a literal marker glued to a value, right-hand quotes as openers after the net's labels,
+    a long digit line, a blank line between digit lines."""
+    out, _ = scrub_pii(text)
+    assert R in out and not any(g in out for g in gone), out
