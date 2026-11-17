@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 import forget_match as fm
+from turn_forget import LIVE_FORGET_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ ACTION = "forget_alias"
 SESSION = "forget-alias"        # not tied to a conversation: the questions surface on every session until answered
 MAX_QUESTIONS = 3               # per forget; the rest are counted as ``over_cap`` in the reject ledger, not asked
 MAX_RUN = 3                     # a split spelling is at most this many adjacent tokens
-STATUSES = ("approved", "pending", "disputed", "superseded", "archived", "rejected")
+
+STATUSES = (*LIVE_FORGET_STATUSES, "superseded", "archived", "rejected")
 ASKED_TTL_S = 600.0             # how long an asked-aloud question stays bindable to a bare yes / no
 INSTRUCTION = " Say yes to forget it too, or no to leave it."
 

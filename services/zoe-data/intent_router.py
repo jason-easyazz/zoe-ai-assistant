@@ -4427,15 +4427,17 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     "I won't bring it up meanwhile - please tell me again in a moment.")
         try:
             svc = get_memory_service()
-            # Semantic search surfaces the ranked rows; the approved list makes
+            # Semantic search surfaces the ranked rows; the live-status list makes
             # the sweep complete even when the entity falls outside search's
             # top-k. Both sides still pass the strict name filter below.
             rows = list(await svc.search(name, user_id=user_id, limit=25))
-            # Paginate the approved sweep: a single limit=1000 page would let a
+            # Paginate the live sweep: a single limit=1000 page would let a
             # privacy request silently miss rows for users with bigger stores.
             # ... and the facts that were REPLACED (superseded) too: they are kept as history ("where did I live
             # before?"), so a forgotten name left in one would come back through that read.
-            for _status in ("approved", "superseded"):
+            from turn_forget import LIVE_FORGET_STATUSES
+
+            for _status in (*LIVE_FORGET_STATUSES, "superseded"):
                 offset = 0
                 while True:
                     page = await svc.list_by_status(
@@ -4483,12 +4485,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 from memory_service import physical_erase_enabled
                 if not physical_erase_enabled():
                     return
-                # ... plus the rows the approved sweep can never reach: a pending / disputed / superseded /
-                # archived / rejected row naming the entity holds the same text (an edited fact's old version,
-                # a model's candidate). They carry no recall to hide, so they go straight to erase.
+                # ... plus retired rows and any live rows left by an earlier attempt. They still hold
+                # the entity text, so every status goes through the physical erase sweep.
                 erase_ids = list(archived_ids)
                 seen_ids.update(archived_ids)
-                for st in ("pending", "disputed", "superseded", "archived", "rejected"):
+                for st in (*LIVE_FORGET_STATUSES, "superseded", "archived", "rejected"):
                     off = 0
                     while True:
                         page = await svc.list_by_status(user_id=user_id, status=st, limit=1000, offset=off)

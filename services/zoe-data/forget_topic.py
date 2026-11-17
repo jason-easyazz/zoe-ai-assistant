@@ -156,11 +156,14 @@ def _preview(text: str) -> str:
     return p if len(p) <= 80 else p[:77].rstrip() + "…"
 
 
-async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
-    """Every row of the owner's (approved / pending / disputed / superseded) holding the whole topic. RAISES on a store
+async def _owned_rows(svc: Any, user_id: str, groups: list, *, mids: Any = ()) -> list:
+    """Owned topic matches (live + superseded), plus live rows bound to ``mids``. RAISES on a store
     failure: a forget must never be confirmed from a read that did not happen."""
+    import turn_forget
+
+    want = {(turn_forget.TURN, mid) for mid in mids}
     out, seen = [], set()
-    for status in ("approved", "pending", "disputed", "superseded"):
+    for status in (*turn_forget.LIVE_FORGET_STATUSES, "superseded"):
         offset = 0
         while True:
             page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
@@ -170,7 +173,9 @@ async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
                 md = getattr(r, "metadata", {}) or {}
                 if getattr(r, "id", "") in seen or (md.get("user_id") or md.get("wing")) != user_id:
                     continue
-                if row_matches(groups, getattr(r, "text", "") or "") or row_matches(groups, str(md.get("retire_quote") or "")):
+                if ((groups and (row_matches(groups, getattr(r, "text", "") or "")
+                                or row_matches(groups, str(md.get("retire_quote") or ""))))
+                        or (status in turn_forget.LIVE_FORGET_STATUSES and turn_forget.classify(r) in want)):
                     seen.add(r.id)
                     out.append(r)
             if len(page) < 1000:
@@ -293,6 +298,14 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
     # the names come from every place the words still are: the recent turns, the rows, and the PERSISTED exact-words index
     # (after a restart the turn "my sister Bea lives in Hobart" may be nowhere else; QA round 9 review)
     hits = await _index_hits(user_id, groups)
+    mids = await _said_mids(user_id, turns, hits, rows)
+    # Erasing a saved turn takes every live fact derived from it, regardless of its wording.
+    if mids:
+        rows = list({r.id: r for r in [*rows, *(await _owned_rows(svc, user_id, [], mids=mids))]}.values())
+    res.found = len(rows)
+    if len(rows) > MAX_ROWS:
+        res.too_many = True
+        return None
     said = [t.text for t in turns] + list(hits.values())
     row_texts = [getattr(r, "text", "") or "" for r in rows]
     try:
@@ -301,7 +314,7 @@ async def _resolve(svc: Any, user_id: str, groups: list, res: Result, seen: dict
         value_correction = None
     reg_turns = [value_correction.turn_id_of(user_id, t) for t in said] if value_correction is not None else []
     plan = forget_record.Plan(
-        rows=[r.id for r in rows], mids=await _said_mids(user_id, turns, hits, rows), entries=list(hits),
+        rows=[r.id for r in rows], mids=mids, entries=list(hits),
         obs=await night_mind.legacy_observation_ids(user_id, *said),
         notes=await conversation_notes.ids_for_topic(user_id, lambda text: row_matches(groups, text)),
         reg=await memory_value_registry.ids_for_names(user_id, lambda name: any(row_matches([g], name) for g in groups)),

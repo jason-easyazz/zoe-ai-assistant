@@ -438,7 +438,7 @@ async def test_topic_forget_flags_the_transcript_before_its_final_clear(monkeypa
         order.append("clear")
         return real_clear(user_id, reason)
     turn_forget.note_user_turn(MEMBER, "the book club meets on tuesdays now", mid="m-book-club")
-    monkeypatch.setattr(forget_topic, "_owned_rows", lambda *a: _ret([]))
+    monkeypatch.setattr(forget_topic, "_owned_rows", lambda *a, **k: _ret([]))
     monkeypatch.setattr(forget_topic, "_index_hits", lambda *a: _ret({}))
     monkeypatch.setattr(exact_words, "flag_transcript_turns", flag)
     monkeypatch.setattr(conversation_notes, "ids_for_topic", lambda *a: _ret([]))

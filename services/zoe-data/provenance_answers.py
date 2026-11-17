@@ -1369,7 +1369,7 @@ _TWIN_OVERLAP = 0.5
 
 
 async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = False) -> list:
-    """The other approved rows ONE utterance left behind (the extractor's twin and the digest's): same owner, same evidence
+    """The other live rows ONE utterance left behind (the extractor's twin and the digest's): same owner, same evidence
     excerpt or turn id, or captured within five minutes of it with most of the same content words - so "forget it" does not leave
     the fact standing in a sibling. Never raises - unless ``strict`` (a write that must not go ahead blind: forget / correct), which
     lets a failed lookup propagate so the caller can stop BEFORE the write instead of leaving a twin behind an empty list."""
@@ -1391,7 +1391,7 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
             if not _ref_forms:
                 _ref_forms.append(turn_forget.excerpt_forms(str(meta.get("source_excerpt") or "")))
             return _ref_forms[0]
-        for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
+        for r in await _live_forget_rows(svc, user_id):
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
             m = r.metadata or {}
@@ -1459,9 +1459,9 @@ async def _target_plan(user_id: str, exp: "mp.Explained", ref: Any = None, *extr
 async def _live_forget_rows(svc: Any, user_id: str) -> list:
     """Every live status: retired / erased rows (superseded, archived, rejected) need no new forget."""
     rows = []
-    for status in ("approved", "pending", "disputed"):
+    for status in turn_forget.LIVE_FORGET_STATUSES:
         rows.extend(await asyncio.wait_for(svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT), READ_BUDGET_S))
-    return rows
+    return list({r.id: r for r in rows}.values())
 
 
 async def _bound_rows(svc: Any, user_id: str, mids: tuple, *, skip: Any = ()) -> list:

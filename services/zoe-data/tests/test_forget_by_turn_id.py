@@ -1449,3 +1449,56 @@ def test_a_forget_takes_every_live_row_of_its_source_turn(world, path, status):
     assert reply.startswith("Done")
     assert run(svc.get(pending.id)).metadata["status"] == "rejected"
     assert run(svc.get(other.id)).metadata["status"] == status
+
+
+@pytest.mark.parametrize("status", ["pending", "disputed"])
+def test_forget_that_takes_every_live_status_bound_to_the_turn(world, status):
+    svc, chat = world
+    said = "My zindle florns beside the vesk"
+    mid = "m-live-zindle"
+    chat.rows[mid] = [said, {"user_id": UID}]
+    turn_forget.note_user_turn(UID, said, mid=mid)
+    target = run(svc.ingest("User draves a quarn", user_id=UID, source="chat_regex", status=status,
+                            metadata={"source_turn": mid}))
+    other = run(svc.ingest("User vesks a plim", user_id=UID, source="chat_regex", status=status,
+                           metadata={"source_turn": "m-other-zindle"}))
+    assert target and other
+    reply = run(intent_router._execute_forget_last(UID))
+    assert reply.startswith("Done"), reply
+    assert run(svc.get(target.id)).metadata["status"] == "rejected"
+    assert run(svc.get(other.id)).metadata["status"] == status
+    assert chat.off(mid)
+
+
+@pytest.mark.parametrize("status", ["approved", "pending", "disputed"])
+def test_topic_forget_expands_saved_turns_to_facts_without_topic_words(world, status, monkeypatch):
+    svc, chat = world
+    mid = "m-topic-zindle"
+    chat.rows[mid] = ["My plumber keeps the zindle in a glorp shed", {"user_id": UID}]
+    matched = run(svc.ingest("User's plumber keeps a zindle", user_id=UID, source="chat_regex",
+                             status="approved", metadata={"source_turn": mid}))
+    paraphrase = run(svc.ingest("User draves a quarn in the glorp shed", user_id=UID, source="chat_regex",
+                                status=status, metadata={"source_turn": mid}))
+    other = run(svc.ingest("User vesks a plim beside the glorp shed", user_id=UID, source="chat_regex",
+                           status="approved", metadata={"source_turn": "m-other-zindle"}))
+    nonturn = run(svc.ingest("User stores a flarn in the glorp shed", user_id=UID, source="chat_regex",
+                             status="approved", metadata={"source_kind": "omi_recording"}))
+    assert matched and paraphrase and other and nonturn
+    erased = []
+
+    async def erase_rows(user_id, ids, **_kw):
+        assert user_id == UID
+        for rid in ids:
+            assert svc._collection().rows[rid][1]["status"] == "archived"
+            svc._collection().rows.pop(rid)
+            erased.append(rid)
+        return {"rows_removed": len(ids)}
+    monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "1")
+    monkeypatch.setattr(svc, "erase_rows", erase_rows)
+    res = run(forget_topic.forget(svc, UID, "my plumber"))
+    assert res.forgotten and not (res.failed or res.store_down or res.too_many), res
+    assert set(erased) == {matched.id, paraphrase.id}
+    assert len(erased) == len(set(erased)), "a row was erased twice"
+    assert run(svc.get(paraphrase.id)) is None
+    assert chat.off(mid)
+    assert {other.text, nonturn.text} <= _approved(svc)

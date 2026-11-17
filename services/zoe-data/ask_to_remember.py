@@ -491,13 +491,18 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
         ts = _added_ts(meta)
         if ts <= 0:
             return []
-        rows = await svc.list_by_status(user_id=user_id, status="approved", limit=1000)
+        import turn_forget
+
+        rows = {r.id: r for status in turn_forget.LIVE_FORGET_STATUSES
+                for r in await svc.list_by_status(user_id=user_id, status=status, limit=1000)}.values()
         ref_is_ask = is_ask_row(meta)
         out = []
         for r in rows:
             if r.id == ref.id:
                 continue
             m = r.metadata or {}
+            if (m.get("user_id") or m.get("wing") or user_id) != user_id:
+                continue
             if abs(_added_ts(m) - ts) > SIBLING_WINDOW_S:
                 continue
             if not ref_is_ask and not is_ask_row(m):
@@ -509,7 +514,6 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
             ta, tb = str(meta.get("user_turn_id") or ""), str(m.get("user_turn_id") or "")
             if ref_is_ask and is_ask_row(m) and ta and tb and ta != tb:
                 continue
-            import turn_forget
             # THE TWIN RULE (``turn_forget.twin_basis``): a candidate of another saved turn or of a non-turn source is NEVER
             # a sibling by its words; the same saved turn, or a LEGACY candidate, goes on to the words criteria below
             if not turn_forget.twin_basis(meta, m):
