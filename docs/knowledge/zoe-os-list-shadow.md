@@ -177,7 +177,8 @@ stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be m
 
 **Turn on** (after 1-3 are merged and deployed):
 
-    mkdir -p ~/.zoe/os-shadow && chmod 700 ~/.zoe/os-shadow
+    # the state directory: made EMPTY, marked, and settled (about 4 s) before anything is written into it. Never mkdir / copy it by hand.
+    python3 ~/assistant/services/zoe-data/os_shadow.py --init
     # the roster: every member id, once (and again when a member is added). Ids only; the count is all it prints.
     docker exec zoe-database psql -U zoe -d zoe -tAc "SELECT id FROM users ORDER BY id" | xargs python3 ~/assistant/services/zoe-data/os_shadow.py --write-roster
     cp ~/assistant/scripts/setup/systemd/zoe-os-shadow-kernel.service ~/.config/systemd/user/
@@ -186,6 +187,38 @@ stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be m
     systemctl --user is-active zoe-os-shadow-kernel.service && ls -l ~/.zoe/os-shadow/
     # the flag, then a zoe-data restart
     echo 'ZOE_OS_LIST_SHADOW=shadow' >> ~/assistant/services/zoe-data/.env && systemctl --user restart zoe-data
+
+**The state directory settles before it holds anything (owner decision 2026-11-17: "redesign the setup step").** With no kernel
+installed a forget must cost a spoken turn nothing, so zoe-data answers "no shadow state" from memory: no thread, no stat. That is
+only sound if shadow state cannot exist before every process has seen its directory. The rule, in `os_shadow.py` and (the same text,
+pinned equal by `tests/test_os_shadow_settle.py`) `labs/zoe-os/zoe_os/shadow_state.py`:
+
+* whoever makes the directory makes it EMPTY, writes `settled.json` (a time, the boot id and the directory's own device / inode: no
+  personal data) and waits `SETTLE_S` (4 s) before any data file appears. Every zoe-data writer goes through `ensure_state_dir`
+  (a parked forget or erase, `--write-roster`, `--init`, `--restore`); the kernel goes through `shadow_state.require_settled`;
+* a zoe-data process looks for the directory at start-up and then every `POLL_S` (1 s), and trusts a "no directory" answer for
+  `TRUST_S` (3 s) only. `SETTLE_S > TRUST_S`, so by the time anything can be recorded every process has seen the directory or
+  stopped trusting its answer and looks at the disk (in a thread). Once the directory exists every forget looks: data means the
+  kernel path (fail closed), no data yet means there is provably nothing to forget;
+* the settle wait never runs on a turn's event loop (it refuses to): a park takes it in the executor thread, once, when the
+  directory is first made; the owner's tool and the kernel take it at start.
+
+**Restore rule: install and restore go through the tool; never copy the directory by hand.**
+
+    python3 ~/assistant/services/zoe-data/os_shadow.py --restore /path/to/a/backup/copy/of/os-shadow
+
+It makes and settles the directory, then merges in ONLY the parked forgets and parked erases (ids) and, if there is none, the roster.
+The kernel's record (`kernel/`) is NOT restored: it is a disposable copy and a backup of it can hold what a member has had forgotten
+since; credentials are re-issued at every kernel start. The off-box backup leaves `~/.zoe/os-shadow` out (`zoe_offbox.py`
+`ZOE_TREE_EXCLUDES`), so no job copies it.
+
+What happens to a directory copied in by hand (`cp -r`, an rsync, a restore outside the tool): its marker is missing, unreadable,
+from the future, too young for the data beside it, or another directory's (a copy has a different inode). **The kernel refuses to
+start and says why** (`refusing to start: ... Remove the state directory, or restore it with os_shadow.py --restore`); it deletes
+nothing. **zoe-data treats the data as state PRESENT**: every forget goes to the kernel, nothing answers, the forget is parked and
+FAILS (the member is told it is not forgotten) until the owner removes the directory or restores through the tool. One honest limit:
+a hand copy appears with its data at once, so a process that looked less than `TRUST_S` ago can answer one forget from memory in
+those seconds; that data is never served, and the owner's only way forward is to remove it.
 
 **Verify**: add one item by voice, then `grep 'OS_SHADOW_ACT verb=list_add' ~/.zoe-logs/zoe-data.*  | tail -3` shows `result=match`.
 **Read a week**: `python3 scripts/maintenance/os_shadow_report.py ~/.zoe-logs/zoe-data.*`.

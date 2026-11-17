@@ -180,7 +180,7 @@ def provisioned() -> bool:
 
 #: every file or directory the shadow kernel or this client ever leaves in the state directory (``labs/zoe-os/shadow_daemon.py``):
 #: the credentials, the roster, the ids the kernel can still forget, the kernel's own store, and the parked forgets
-STATE_NAMES = ("creds.json", "people.json", "known-people.json", "kernel", "pending-forgets.json", "pending-erases.json")
+STATE_NAMES = ("creds.json", "people.json", "known-people.json", "kernel", "pending-forgets.json", "pending-erases.json")   # = DATA_NAMES (pinned)
 
 
 def shadow_state_exists() -> bool:
@@ -199,33 +199,171 @@ def shadow_state_exists() -> bool:
     return bool(names & set(STATE_NAMES))
 
 
-# ---- "is there any shadow state?" answered ON the loop ---------------------------------------------------------------------------------
-# A forget with the flag off and no shadow state is a no-op, and must cost a spoken forget NOTHING: no executor hop, no disk probe.
-# The answer is established OFF the turn (at import, and by any probe) and kept fresh by a small daemon thread that stats the state
-# directory every ``STATE_POLL_S`` until state appears. It only ever saves work for "certainly no state"; everything else probes:
-#   * state written by THIS process (a park, the roster): ``_state_installed`` flips the answer at once, before the write returns;
-#   * state written by ANOTHER process (the owner installs the kernel, a night job, an MCP server): seen by the poll within
-#     ``STATE_POLL_S``;
-#   * the poller is dead or stalled, the directory setting changed, or nothing was ever established: the cached answer is not used
-#     (it must be younger than ``3 * STATE_POLL_S`` and for this directory) and the forget probes the disk in a thread, as before.
-# Once state is seen the answer is "exists" and stays so until a probe says otherwise: with state, every forget goes to the kernel.
-STATE_POLL_S = 1.0
+# ---- the state directory settles before it holds anything; "no shadow state" is then answered from memory ----------------------------
+# >>> settle: SHARED TEXT. The same lines live in services/zoe-data/os_shadow.py and labs/zoe-os/zoe_os/shadow_state.py (neither
+# imports the other); services/zoe-data/tests/test_os_shadow_settle.py fails when the two copies differ by one character.
+#
+# THE RULE. Shadow state cannot exist until every process has seen its directory. Whoever makes the state directory makes it EMPTY,
+# writes the settle marker, and waits SETTLE_S before any data file appears in it. A zoe-data process answers "no shadow state"
+# from memory only while its last look at the disk said "no directory" less than TRUST_S ago; SETTLE_S is longer than TRUST_S, so
+# by the time there is anything to forget, every process has either seen the directory or stopped trusting its answer.
+#
+# The marker binds to THIS directory (device and inode: a copy of the directory is a different one) and to the moment it was made:
+# on the same boot the age is read on the monotonic clock (CLOCK_MONOTONIC is one clock for every process on the box and does not
+# step); after a reboot every process has started since and its start-up look saw the directory, so the marker is settled; with no
+# boot id to compare, the wall clock is used and a marker from the future is not trusted. Anything unreadable is not trusted.
+MARKER = "settled.json"
+POLL_S = 1.0                         # how often a zoe-data process looks for the directory
+TRUST_S = 3 * POLL_S                 # how long its "no directory" answer is trusted
+SETTLE_S = 4 * POLL_S                # how long a new directory stays empty of data: longer than TRUST_S
+DATA_NAMES = ("creds.json", "people.json", "known-people.json", "kernel", "pending-forgets.json", "pending-erases.json")
+
+
+class Unsettled(OSError):
+    """The state directory holds data it must not hold yet, or data with no trustworthy settle marker (a copy made by hand)."""
+
+
+def boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def clock():
+    """``(wall, monotonic, boot id)`` now."""
+    return time.time(), time.monotonic(), boot_id()
+
+
+def has_data(d):
+    """Does the directory hold any data file? Unreadable counts as yes (fail closed)."""
+    try:
+        names = set(os.listdir(d))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return bool(names & set(DATA_NAMES))
+
+
+def read_marker(d):
+    """The settle marker of state directory ``d``, or None when it is missing, unreadable, malformed or another directory's."""
+    try:
+        with open(os.path.join(d, MARKER), encoding="utf-8") as fh:
+            m = json.load(fh)
+        st = os.stat(d)
+        ok = (isinstance(m, dict) and m.get("v") == 1 and isinstance(m.get("boot"), str)
+              and all(type(m.get(k)) in (int, float) and math.isfinite(m[k]) for k in ("wall", "mono", "settle_s"))
+              and m["settle_s"] >= 0 and m.get("dev") == st.st_dev and m.get("ino") == st.st_ino)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return m if ok else None
+
+
+def marker_left(m, wall, mono, boot, settle_s):
+    """Seconds until the directory may hold data (0.0 = settled), or None when the marker cannot be trusted (fail closed)."""
+    if m is None:
+        return None
+    need = max(float(m["settle_s"]), float(settle_s))
+    if boot and m["boot"] == boot:
+        age = mono - m["mono"]           # the same boot: the monotonic clock, which no clock step moves
+    elif boot and m["boot"]:
+        return 0.0                       # a reboot since: every process started after the directory existed
+    else:
+        age = wall - m["wall"]           # no boot id to compare: the wall clock, and never a marker from the future
+    if not age >= 0:
+        return None
+    return need - age if need > age else 0.0
+
+
+def write_marker(d, wall, mono, boot, settle_s):
+    """Write the marker unless one is already there (two creators: the first one's time stands). No personal data."""
+    st = os.stat(d)
+    tmp = os.path.join(d, f".{MARKER}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as fh:
+            json.dump({"v": 1, "wall": wall, "mono": mono, "boot": boot, "settle_s": settle_s, "dev": st.st_dev, "ino": st.st_ino}, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.link(tmp, os.path.join(d, MARKER))
+    except FileExistsError:
+        pass
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def settle(d, now=clock, sleep=time.sleep, settle_s=None):
+    """Make state directory ``d`` ready to hold data, and return only when it may. BLOCKING for up to the settle time (a new
+    directory): a start-up, a tool or a worker thread, never an event loop.
+
+    * no directory: it is made EMPTY (0700) with its marker, then this waits the settle time;
+    * an empty directory with no marker of its own (made by hand, or left by a marker copied from elsewhere): adopted the same way;
+    * a marker still young: waits what is left, UNLESS data is already there (written too early): ``Unsettled``;
+    * data and no trustworthy marker (a copy made by hand, a restore that did not go through the tool): ``Unsettled``.
+    Returns the seconds it waited."""
+    settle_s = SETTLE_S if settle_s is None else settle_s
+    try:
+        os.makedirs(d, mode=0o700)
+    except FileExistsError:
+        pass
+    m = read_marker(d)
+    if m is None:
+        if has_data(d):
+            raise Unsettled("data with no settle marker of this directory: not made by the install / restore tool")
+        try:
+            os.unlink(os.path.join(d, MARKER))       # a marker that is not this directory's (copied in): replaced
+        except FileNotFoundError:
+            pass
+        write_marker(d, *now(), settle_s)
+        m = read_marker(d)
+    waited, left = 0.0, marker_left(m, *now(), settle_s)
+    while left is not None and left > 0:
+        if has_data(d):
+            raise Unsettled("data inside the settle window: written before every process could have seen the directory")
+        step = min(left, 0.25)
+        sleep(step)
+        waited += step
+        left = marker_left(m, *now(), settle_s)
+    if left is None:
+        raise Unsettled("the settle marker cannot be trusted (unreadable, or from the future)")
+    return waited
+# <<< settle
+
+
+
+class ShadowStateUnsettled(Unsettled):
+    """zoe-data's name for Unsettled (a park that could not be made because the directory is not fit to hold data)."""
+
+
+# A forget with the flag off and no shadow state is a no-op and costs a spoken forget NOTHING: no executor hop, no stat, no disk
+# at all. "No state" here means "no state DIRECTORY", and the answer is the cached one alone - sound because of THE RULE above:
+#   * established OFF the turn (at import, and by any probe), then kept fresh by a daemon thread that looks every POLL_S;
+#   * the time recorded with an answer is taken BEFORE the look at the disk, so an answer is never younger than it claims;
+#   * trusted only for this directory and for TRUST_S: a dead or stalled poller, a changed directory setting, or nothing
+#     established yet means the forget probes the disk itself, in a thread;
+#   * this process making the directory flips the answer at once (_state_installed); another process making it is seen by
+#     the poll, and until then there is provably no data in it (SETTLE_S > TRUST_S);
+#   * a process that starts after the directory exists sees it at import, during the settle window included.
+# Once the directory exists every forget probes (in a thread): data means the kernel path, fail closed; none means nothing to forget.
+_mono = time.monotonic                               # the cache's clock (tests inject one)
 _state_lock = threading.Lock()
-_state_known: tuple = ("", True, 0.0)                # (state directory, state exists, time.monotonic() it was last confirmed)
-_state_seq = 0                                       # bumped when this process installs state: an older "no state" reading is void
+_state_known: tuple = ("", True, 0.0)                # (state directory, the directory exists, _mono() BEFORE that look)
+_state_seq = 0                                       # bumped when this process makes the directory: an older "absent" reading is void
 _state_poller: Optional[threading.Thread] = None
 _state_stop = threading.Event()
 
 
 def _no_state() -> bool:
-    """True only when it is certain, WITHOUT touching the disk, that there is no shadow state. Loop-safe: reads memory only."""
+    """True only when it is certain, WITHOUT touching the disk, that there is no state directory. Loop-safe: memory only."""
     d, exists, at = _state_known
-    return not exists and time.monotonic() - at < 3 * STATE_POLL_S and d == str(state_dir())
+    return not exists and _mono() - at < TRUST_S and d == str(state_dir())
 
 
-def _state_dir_present() -> bool:
-    """ONE stat of the state directory, made on the loop by a forget (see ``_nothing_to_forget``). Anything but a clean "it is not
-    there" counts as present."""
+def _dir_exists() -> bool:
     try:
         os.stat(state_dir())
     except FileNotFoundError:
@@ -235,57 +373,78 @@ def _state_dir_present() -> bool:
     return True
 
 
-def _nothing_to_forget() -> bool:
-    """May a FORGET be answered "nothing recorded here" without a thread? Never from the cached answer alone: another process can
-    install or restore shadow storage after the last poll, and a forget in that window would skip the kernel AND the park. So the
-    cache is only a hint, and the forget itself makes one stat of the state directory on the loop (a single syscall, no executor
-    hop): only when the cache says "no state" AND the directory is not there is the answer certain. A directory that exists - even
-    an empty one - takes the normal path (the probe in a thread, then the kernel or the park)."""
-    return _no_state() and not _state_dir_present()
-
-
 def _state_installed() -> None:
-    """This process is about to write (or has written) shadow state: every forget from now on goes to the kernel."""
+    """This process is about to make (or write into) the state directory: no forget of this process skips the disk from here on."""
     global _state_known, _state_seq
     with _state_lock:
         _state_seq += 1
-        _state_known = (str(state_dir()), True, time.monotonic())
+        _state_known = (str(state_dir()), True, _mono())
+
+
+def _look(d: str, seq: int, at: float, exists: bool) -> None:
+    global _state_known
+    with _state_lock:
+        if exists or seq == _state_seq:              # an "absent" look that raced this process making the directory is void
+            _state_known = (d, exists, at)
 
 
 def _state_probe() -> bool:
-    """Read the disk and record the answer. BLOCKING: a thread or start-up, never the loop. Starts the poller while there is none."""
-    global _state_known, _state_poller
-    d, seq = str(state_dir()), _state_seq
-    exists = shadow_state_exists()
+    """Look at the disk: is there DATA to forget (shadow_state_exists)? Records whether the directory exists, and starts the
+    poller while it does not. BLOCKING: a thread or start-up, never the loop."""
+    global _state_poller
+    d, seq, at = str(state_dir()), _state_seq, _mono()
+    exists = _dir_exists()
+    _look(d, seq, at, exists)
     with _state_lock:
-        if exists or seq == _state_seq:              # a "no state" read that raced this process installing state is void
-            _state_known = (d, exists, time.monotonic())
         if not exists and not (_state_poller is not None and _state_poller.is_alive() and _state_poller.name == d):
             _state_stop.clear()
             _state_poller = threading.Thread(target=_state_poll, args=(d,), name=d, daemon=True)
             _state_poller.start()
-    return exists
+    return exists and shadow_state_exists()
 
 
 def _state_poll(d: str) -> None:
-    """Keep "no state" fresh for directory ``d``; ends when state appears, the directory setting changes, or a reset asks."""
-    global _state_known
+    """Keep "no directory" fresh for d; ends when the directory appears, the setting changes, or a reset asks."""
     me = threading.current_thread()
-    while not _state_stop.wait(STATE_POLL_S):
+    while not _state_stop.wait(POLL_S):
         try:
             if _state_poller is not me or str(state_dir()) != d:
                 return
-            seq = _state_seq
-            exists = shadow_state_exists()
-            with _state_lock:
-                if _state_poller is not me:
-                    return
-                if exists or seq == _state_seq:
-                    _state_known = (d, exists, time.monotonic())
+            seq, at = _state_seq, _mono()
+            exists = _dir_exists()
+            if _state_poller is not me:
+                return
+            _look(d, seq, at, exists)
             if exists:
                 return
         except Exception:  # noqa: BLE001 - the answer goes stale and forgets probe the disk themselves (the safe side)
             return
+
+
+def ensure_state_dir() -> Path:
+    """The ONE way zoe-data makes the state directory or first writes into it (a park, the roster, the owner's --init / --restore):
+    the directory is made EMPTY with its settle marker and this WAITS the settle time before returning, so no data file appears in
+    a directory some process has not seen (settle). A directory that already holds data needs no wait (every process either
+    saw it or probes); whether that data may be SERVED is the kernel's gate. BLOCKING for up to SETTLE_S when the directory
+    is new: a worker / executor thread or the CLI, and it REFUSES to run on an event loop."""
+    _state_installed()
+    d = state_dir()
+    if has_data(str(d)):
+        return d
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("ensure_state_dir may wait the settle time: never on the event loop")
+    try:
+        settle(str(d), clock, _sleep, SETTLE_S)
+    except Unsettled as exc:
+        raise ShadowStateUnsettled(str(exc)) from exc
+    return d
+
+
+_sleep = time.sleep                                  # the settle wait (tests inject one)
 
 
 def _load_creds() -> tuple[str, dict]:
@@ -954,13 +1113,19 @@ class _pending_locked:
     """The parked-forget file is read-modify-written only under BOTH a thread lock and an ``flock`` on a sibling lock file, so two
     forgets (two threads, or zoe-data and a second process) never overwrite each other. Held only for one read or one write."""
 
+    def __init__(self, create: bool = False) -> None:
+        self.create, self.fd = create, None       # create: a WRITER of new data (a park); it makes the directory, and settles it
+
     def __enter__(self):
         import fcntl
 
         _pending_mutex.acquire()
         try:
             path = _pending_path()
-            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if self.create:
+                ensure_state_dir()        # empty directory + marker + the settle wait, before any data file (never on the loop)
+            elif not path.parent.is_dir():
+                return self               # a reader with no directory: nothing is parked, and reading never makes the directory
             self.fd = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(self.fd, fcntl.LOCK_EX)
         except BaseException:
@@ -970,7 +1135,8 @@ class _pending_locked:
 
     def __exit__(self, *exc):
         try:
-            os.close(self.fd)             # closing drops the flock
+            if self.fd is not None:
+                os.close(self.fd)         # closing drops the flock
         finally:
             _pending_mutex.release()
         return False
@@ -1008,7 +1174,6 @@ def _durable_write(path: Path, payload) -> None:
         _fsync_dir(path.parent)       # the unlink is a directory change: durable too, or a crash could bring the file back
         return
     _state_installed()                # this IS shadow state: no forget may skip the kernel from here on
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -1040,7 +1205,7 @@ def _pending_add(member: str) -> None:
     """Park a forget for a later replay. RAISES if it cannot be made durable: the caller then fails the erase closed. Blocking (an
     ``flock`` wait and two fsyncs): never call it on the event loop (``_forget`` hands it to an executor)."""
     global _pending_members
-    with _pending_locked():
+    with _pending_locked(create=True):
         members = _pending_read() + [member]
         _pending_write(members)
         _pending_members = frozenset(members)
@@ -1146,7 +1311,7 @@ def park_erase(member: str, *, rows=(), turns=(), messages=()) -> None:
     """Record, durably, what is left to erase for ``member`` (merged into what is already parked). BLOCKING and it RAISES when it
     cannot be made durable: a thread, never the loop."""
     add = {"rows": rows, "turns": turns, "messages": messages}
-    with _pending_locked():
+    with _pending_locked(create=True):
         todo = _erases_read()
         entry = todo.setdefault(str(member), {k: [] for k in ERASE_KINDS})
         for k in ERASE_KINDS:
@@ -1203,9 +1368,8 @@ async def nudge() -> None:
 
 async def drop_parked_erases(user_id: str) -> None:
     """A member delete finished: nothing of theirs is left to erase, so their parked entry (ids) goes too. No disk and no thread
-    thread when there is certainly no shadow state (the forget's own rule: the cached answer plus one stat). Raises when the entry
-    could not be removed."""
-    if _nothing_to_forget():
+    thread when there is certainly no state directory (the forget's own rule). Raises when the entry could not be removed."""
+    if _no_state():
         return
     if not await asyncio.to_thread(_state_probe):
         return
@@ -1326,7 +1490,7 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
     strict = mode() == "shadow"
     _note_loop()
     if not strict:
-        if _nothing_to_forget():      # the common case with no kernel installed: memory plus ONE stat on the loop, no thread
+        if _no_state():               # no state directory, answered from memory ALONE: no thread, no stat (see THE RULE)
             return 0
         # not certain: the state check stats and lists a directory, in a thread, never on the event loop
         if not await asyncio.to_thread(_state_probe):
@@ -1403,28 +1567,72 @@ async def erase_topic(user_id: str, topic: str) -> int:
 
 # ---- the roster, for the owner's one-off export ----------------------------------------------------------------------------------------
 def write_roster(ids, dest: Optional[Path] = None) -> list:
-    """Write ``people.json`` (the member ids) beside the kernel's credentials, 0600. The owner runs it once, and again when a member is
-    added (the kernel reads it at start). Ids only; never printed."""
+    """Write people.json (the member ids) beside the kernel's credentials, 0600. The owner runs it once, and again when a member is
+    added (the kernel reads it at start). Ids only; never printed. With no dest it goes into the state directory, which is made
+    and SETTLED first (ensure_state_dir: blocks up to the settle time when the directory is new)."""
     clean = sorted(_roster_ids(ids))
-    path = dest or (state_dir() / "people.json")
     if dest is None:
-        _state_installed()            # the roster IS shadow state: no forget may skip the kernel from here on
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = ensure_state_dir() / "people.json"
+    else:
+        path = dest
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         json.dump({"people": clean}, fh)
     return clean
 
 
+def restore(src: Path) -> dict:
+    """Zoe's restore of a shadow state directory from a backup copy src: the ONLY supported way (never copy the directory by
+    hand: the kernel refuses a directory that was not made here, and a hand copy can appear before a process has seen it).
+
+    The directory is made and settled first (ensure_state_dir). Then ONLY what is safe to bring back is merged in: the parked
+    forgets and parked erases (ids; replaying a forget twice is harmless) and, when there is none here, the roster. The kernel's
+    RECORD (kernel/) is deliberately NOT restored: it is a disposable copy, and a backup of it can hold what a member has had
+    forgotten since. Credentials are re-issued by the kernel at start. Returns counts only."""
+    src = Path(src)
+    d = ensure_state_dir()
+    out = {"forgets": 0, "erases": 0, "roster": 0}
+    try:
+        members = [str(x) for x in json.loads((src / "pending-forgets.json").read_text("utf-8"))]
+    except FileNotFoundError:
+        members = []
+    for member in members:
+        _pending_add(member)
+        out["forgets"] += 1
+    try:
+        erases = json.loads((src / "pending-erases.json").read_text("utf-8"))
+    except FileNotFoundError:
+        erases = {}
+    for member, entry in erases.items():
+        park_erase(str(member), **{k: entry.get(k) or () for k in ERASE_KINDS})
+        out["erases"] += 1
+    if not (d / "people.json").exists() and (src / "people.json").exists():
+        out["roster"] = len(write_roster(json.loads((src / "people.json").read_text("utf-8"))["people"]))
+    return out
+
+
 def main(argv: Optional[list] = None) -> int:
-    """``python3 os_shadow.py --write-roster ID [ID ...]``: the owner's one-off roster export. Prints the COUNT only."""
+    """The owner's tool (counts only are printed; each step makes and SETTLES the state directory first):
+
+        os_shadow.py --init                         make the state directory (empty, marker, the settle wait)
+        os_shadow.py --write-roster ID [ID ...]     the roster export
+        os_shadow.py --restore BACKUP_DIR           bring back parked forgets / erases and the roster from a backup copy"""
     import sys
 
     args = list(sys.argv[1:] if argv is None else argv)
+    if args == ["--init"]:
+        ensure_state_dir()
+        print("state directory ready")
+        return 0
     if args[:1] == ["--write-roster"] and len(args) > 1:
         print(f"roster: {len(write_roster(args[1:]))} members written")
         return 0
-    print("usage: os_shadow.py --write-roster ID [ID ...]", file=sys.stderr)
+    if args[:1] == ["--restore"] and len(args) == 2:
+        got = restore(Path(args[1]))
+        print(f"restored: {got['forgets']} parked forgets, {got['erases']} parked erases, roster {got['roster']} members")
+        return 0
+    print("usage: os_shadow.py --init | --write-roster ID [ID ...] | --restore BACKUP_DIR", file=sys.stderr)
     return 2
 
 

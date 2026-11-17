@@ -1315,24 +1315,20 @@ async def test_a_caller_never_says_forgotten_while_the_kernel_cannot_confirm_and
     assert not (kernel.state / "pending-forgets.json").exists() and not (kernel.state / "pending-erases.json").exists()
 
 
-#: with no shadow state: in-loop stats of the state directory per forget = its shadow checks (the four entry points and the delete's
-#: drop for "direct"; the erasers' own checks, plus the caller's confirmation where it has one, for the callers)
-STATS = {"direct": 5, "last": 2, "explained": 3, "topic": 2, "screen": 3, "guardian": 3, "unwrite": 2, "curation": 2}
-
-
-def _spy_on_the_loop(monkeypatch):
+def _spy_on_the_loop(monkeypatch, under):
     """Record every executor hop and every look at the disk made from the calling (event-loop) thread: ``asyncio.to_thread``, the
-    loop's ``run_in_executor``, the shadow's own probe, and pathlib's stat / exists / is_dir / iterdir."""
+    loop's ``run_in_executor``, the shadow's own probes, pathlib's stat / exists / is_dir / is_file / iterdir, and ``os.stat`` /
+    ``os.listdir`` / ``os.scandir`` / ``os.path.exists`` / ``isdir`` / ``lexists`` of anything at or below ``under``."""
     import asyncio
     import threading
 
     seen, me = [], threading.get_ident()
 
-    def spy(owner, name):
+    def spy(owner, name, only_paths=False):
         real = getattr(owner, name)
 
         def wrapped(*args, **kwargs):
-            if threading.get_ident() == me:
+            if threading.get_ident() == me and (not only_paths or str(args[0] if args else "").startswith(str(under))):
                 seen.append(name)
             return real(*args, **kwargs)
 
@@ -1340,26 +1336,31 @@ def _spy_on_the_loop(monkeypatch):
 
     spy(asyncio, "to_thread")
     spy(type(asyncio.get_running_loop()), "run_in_executor")
-    spy(os_shadow, "shadow_state_exists")
-    if hasattr(os_shadow, "_state_dir_present"):
-        spy(os_shadow, "_state_dir_present")
+    for name in ("shadow_state_exists", "_dir_exists", "_state_probe", "has_data", "read_marker"):
+        if hasattr(os_shadow, name):
+            spy(os_shadow, name)
     for name in ("stat", "exists", "is_dir", "is_file", "iterdir"):
         spy(Path, name)
+    import os
+    for name in ("stat", "listdir", "scandir"):
+        spy(os, name, only_paths=True)
+    for name in ("exists", "isdir", "lexists"):
+        spy(os.path, name, only_paths=True)
     return seen
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("caller", ["direct", *CALLERS])
-async def test_with_no_shadow_state_a_forget_makes_no_executor_hop_and_no_disk_probe_on_the_turn(kernel, callers, monkeypatch, tmp_path, caller):
-    """Flag off, no kernel ever installed, the answer established at start-up (``_state_probe``, what the import does): a forget
-    through every caller - and the four shadow entry points directly - hops to no executor and looks at no file from the loop, and
-    forgets as it always did. The spy's own control is the test below (a forget that is NOT certain is seen probing)."""
+async def test_with_no_shadow_state_a_forget_makes_no_executor_hop_and_no_look_at_the_disk(kernel, callers, monkeypatch, tmp_path, caller):
+    """Flag off, no state directory, the answer established at start-up (``_state_probe``, what the import does): a forget through
+    every caller - and the four shadow entry points, the delete's drop and the retry pass's nudge directly - records NOTHING: no
+    executor hop, no stat, no listing. The spy's own control is the next test (a forget that is not certain IS seen probing)."""
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
     monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path / "absent"))
     getattr(os_shadow, "_state_probe", lambda: None)()               # start-up, off the turn
     st = callers
     await st.said()
-    seen = _spy_on_the_loop(monkeypatch)
+    seen = _spy_on_the_loop(monkeypatch, tmp_path)
     if caller == "direct":
         assert [await os_shadow.forget_for_erase(MEMBER), await os_shadow.forget_user(MEMBER), await os_shadow.erase_entity(MEMBER, "Dana"),
                 await os_shadow.erase_topic(MEMBER, "the garden"), await os_shadow.drop_parked_erases(MEMBER),
@@ -1368,27 +1369,25 @@ async def test_with_no_shadow_state_a_forget_makes_no_executor_hop_and_no_disk_p
         forgotten, out = await st.run(caller)
         assert forgotten, out
         assert st.svc.rows == {} and (caller not in WORDS or (MEMBER, "t1") not in st.backend.rows)
-    # no hop and no probe: the ONLY look at the disk is the forget's own single stat of the state directory, once per shadow check
-    # (a forget never confirms from the cached answer alone). A spoken "forget that" makes two checks (the row eraser, the word
-    # eraser), "forget it" three.
-    assert seen == ["_state_dir_present"] * STATS[caller]
+    assert seen == []
     assert kernel.calls == [] and not (tmp_path / "absent").exists()
 
 
 @pytest.mark.asyncio
-async def test_shadow_state_that_appears_later_is_noticed_and_an_unsure_answer_always_probes(kernel, monkeypatch, tmp_path):
-    """Staleness, every way state can appear after start-up, each failing toward CHECKING: (1) nothing established -> the forget
-    probes, in a thread; (2) another process writes state -> the poll sees it and the next forget goes to the kernel; (3) this
-    process writes state (the roster) -> the very next forget does, with no wait; (4) the poller has stopped -> the cached answer
-    expires and the forget probes again."""
+async def test_an_answer_that_is_not_certain_always_probes_off_the_loop_and_the_directory_is_what_ends_certainty(kernel, monkeypatch, tmp_path):
+    """Every way the cached "no directory" answer stops being usable, each failing toward CHECKING (in a thread, never the loop):
+    (1) nothing established; (2) another process makes the directory - EMPTY, as the rule demands - and the poll sees it: forgets
+    probe from then on, and with no data yet there is provably nothing to forget; data arriving later is never skipped; (3) this
+    process makes the directory: the very next forget probes, with no poll; (4) the poller has stopped: the answer expires."""
     import asyncio
     import threading
 
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
-    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 0.05)
-    where = []
-    real = os_shadow.shadow_state_exists
-    monkeypatch.setattr(os_shadow, "shadow_state_exists", lambda: where.append(threading.get_ident()) or real())
+    monkeypatch.setattr(os_shadow, "POLL_S", 0.05)
+    monkeypatch.setattr(os_shadow, "TRUST_S", 0.15)
+    looks = []
+    real = os_shadow._dir_exists
+    monkeypatch.setattr(os_shadow, "_dir_exists", lambda: looks.append(threading.get_ident()) or real())
     loop_thread = threading.get_ident()
 
     def fresh(name):
@@ -1396,54 +1395,43 @@ async def test_shadow_state_that_appears_later_is_noticed_and_an_unsure_answer_a
         monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(d))
         return d
 
-    # (1) nothing established for this directory: the forget itself probes, off the loop, and is then answered from memory
+    async def forget_probes():
+        del looks[:]
+        got = await os_shadow.forget_for_erase(MEMBER)
+        mine = [t for t in looks if t != getattr(os_shadow._state_poller, "ident", None)]
+        return got, bool(mine) and loop_thread not in mine
+
+    # (1) nothing established for this directory: the forget itself looks, off the loop, and is then answered from memory
     d = fresh("one")
-    assert await os_shadow.forget_for_erase(MEMBER) == 0 and where and loop_thread not in where
-    # (2) ANOTHER process installs a kernel (a file this process did not write): noticed by the poll, then never skipped
+    assert await forget_probes() == (0, True) and os_shadow._no_state() and not d.exists()
+    # (2) another process makes the directory EMPTY: the poll notices, and the forget stops trusting memory
     d.mkdir()
-    (d / "creds.json").write_text("{}")
-    for _ in range(100):
+    for _ in range(200):
         if not os_shadow._no_state():
             break
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.01)
     assert not os_shadow._no_state()
+    assert await forget_probes() == (0, True)                           # looked, found no data: nothing to forget
+    (d / "kernel").mkdir()                                              # the data arrives (after the settle time, by the rule)
     with pytest.raises(os_shadow.ShadowForgetUnavailable):
-        await os_shadow.forget_for_erase(MEMBER)                       # state, and no kernel answers: fails closed
-    # (2b) ... and in the window BEFORE any poll: the cache still says "no state", yet no forget entry confirms from it
-    d = fresh("window")
-    assert not d.exists()
-    assert await os_shadow.forget_for_erase(MEMBER) == 0
-    assert not d.exists()                                               # a no-state forget creates nothing
-    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 30.0)               # no poll will come within this test
-    os_shadow._state_known = (str(d), False, time.monotonic())
-    d.mkdir()
-    (d / "kernel").mkdir()                                              # shadow storage restored by another process
-    assert os_shadow._no_state()                                        # the cache has NOT noticed
-    for forget in (lambda: os_shadow.forget_user(MEMBER), lambda: os_shadow.erase_entity(MEMBER, "Dana"),
-                   lambda: os_shadow.erase_topic(MEMBER, "the garden"), lambda: os_shadow.forget_for_erase(MEMBER)):
-        os_shadow._state_known = (str(d), False, time.monotonic())
-        with pytest.raises(os_shadow.ShadowForgetUnavailable):
-            await forget()
-    assert json.loads((d / "pending-forgets.json").read_text()) == [MEMBER]
-    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 0.05)
-    # (3) THIS process writes state: the next forget does not skip, without waiting for any poll
+        await os_shadow.forget_for_erase(MEMBER)                        # state, and no kernel answers: fails closed, parked
+    # (3) THIS process makes the directory: the next forget does not answer from memory, without waiting for any poll
     d = fresh("three")
-    assert await os_shadow.forget_for_erase(MEMBER) == 0 and os_shadow._no_state()
-    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 30.0)               # no poll can help within this test
-    os_shadow._state_known = (str(d), False, time.monotonic())
-    os_shadow.write_roster([MEMBER])
+    assert await forget_probes() == (0, True) and os_shadow._no_state()
+    monkeypatch.setattr(os_shadow, "POLL_S", 30.0)                      # no poll can help within this test
+    monkeypatch.setattr(os_shadow, "SETTLE_S", 0.0)
+    await asyncio.to_thread(os_shadow.write_roster, [MEMBER])
     assert not os_shadow._no_state()
     with pytest.raises(os_shadow.ShadowForgetUnavailable):
         await os_shadow.forget_for_erase(MEMBER)
-    # (4) the poller is gone: the answer is not trusted past three poll intervals, and the forget probes the disk again
-    monkeypatch.setattr(os_shadow, "STATE_POLL_S", 0.05)
+    # (4) the poller is gone: the answer is not trusted past TRUST_S, and the forget looks at the disk again
+    monkeypatch.setattr(os_shadow, "POLL_S", 0.05)
     d = fresh("four")
-    assert await os_shadow.forget_for_erase(MEMBER) == 0 and os_shadow._no_state()
+    assert await forget_probes() == (0, True) and os_shadow._no_state()
     os_shadow._state_stop.set()
     await asyncio.sleep(0.4)
     assert not os_shadow._no_state()
-    del where[:]
-    assert await os_shadow.forget_for_erase(MEMBER) == 0 and where and loop_thread not in where
+    assert await forget_probes() == (0, True)
 
 
 @pytest.mark.asyncio
