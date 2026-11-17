@@ -2052,17 +2052,19 @@ async def _rederive_threads(backend: Any, user_id: str, thread_ids: "dict[str, i
 
 
 def _words_hit(user_id: str, bound: list, legacy: list, tid: str, wanted: list) -> list:
+    from exact_words import legacy_words_overlap
+
     hit = [o for o in bound if tid and str(o["turn_id"]) == tid and (o["quote"] or "").strip()]
-    old = [o for o in legacy if (o["quote"] or "").strip() and any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+    old = [o for o in legacy if (o["quote"] or "").strip() and any(legacy_words_overlap(o["quote"], w) for w in wanted)]
     if old:
         logger.info("NIGHT_MIND_FORGET code=legacy_text n=%d", len(old))
     return hit + old
 
 
 async def legacy_observation_ids(user_id: str, *texts: str) -> list:
-    """The ids of this user's LEGACY observations (saved with no turn id) whose quote sits inside - or contains - any of ``texts``:
+    """The ids of this user's LEGACY observations (saved with no turn id) whose quote sits inside - or contains - any of ``texts``, as said or as redacted:
     what a forget of those words resolves to BEFORE it erases anything (``forget_record``). A store failure is RAISED."""
-    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    wanted = [str(x) for x in texts if len(_flat(x).split()) >= 2]
     if not (user_id or "").strip() or not wanted:
         return []
     try:
@@ -2078,12 +2080,12 @@ async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn. PER ROW
     (``partition_observations``): a BOUND observation (saved with a turn id) goes only when its id is ``turn_id`` - another turn's
     observation can hold the very same words (a look-alike whose difference the scrub removed), so no text is compared with it;
-    a LEGACY observation (saved with no turn id) goes when its quote sits inside - or contains - any of ``texts``, whether or not
+    a LEGACY observation (saved with no turn id) goes when its quote sits inside - or contains - any of ``texts`` (as said or as redacted), whether or not
     ``turn_id`` is given (over-inclusive there by design). A store failure is RAISED."""
     if not (user_id or "").strip():
         return 0
     tid = str(turn_id or "").strip()
-    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    wanted = [str(x) for x in texts if len(_flat(x).split()) >= 2]
     if not wanted and not tid:
         return 0
     return await _erase_observations(user_id, lambda bound, legacy: _words_hit(user_id, bound, legacy, tid, wanted))

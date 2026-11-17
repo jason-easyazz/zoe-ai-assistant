@@ -555,7 +555,9 @@ def _legacy_row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float
     ex, key = norm(str(meta.get("source_excerpt") or "")), norm(turn_text)
     if not (ex and key):
         return False
-    return ex == key or (_PLACEHOLDER in ex and ex == scrubbed_form(turn_text))
+    from exact_words import legacy_words_equal
+
+    return legacy_words_equal(str(meta.get("source_excerpt") or ""), turn_text)
 
 
 def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None, *,
