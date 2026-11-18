@@ -330,6 +330,51 @@ def test_a_dropped_connection_mid_call_is_unavailable_not_a_crash(kernel):
     assert os_shadow.counters() == {"kernel_unavailable": 1}
 
 
+def test_restart_drops_all_connections_and_recovers_after_one_window(monkeypatch):
+    client = os_shadow._Kernel()
+    now = [100.0]
+    generation = [0]
+    loads = []
+    class Stub:
+        def __init__(self, path, skill, credential, until):
+            self.generation = generation[0]
+            self.closed = False
+        def call(self, op, until, **args):
+            if self.generation != generation[0]:
+                raise os_shadow.KernelUnavailable("closed")
+            return {"verified": True}
+        def close(self):
+            self.closed = True
+    def creds():
+        loads.append(generation[0])
+        return "stub", {"voice": b"v", "brain": b"b"}
+    monkeypatch.setattr(os_shadow, "_Conn", Stub)
+    monkeypatch.setattr(os_shadow, "_load_creds", creds)
+    monkeypatch.setattr(os_shadow.time, "monotonic", lambda: now[0])
+    client.call("voice", "publish", kind="utterance", subject=MEMBER, payload={"text": "synthetic plum"})
+    client.call("brain", "act", action="list.add", on_behalf_of=MEMBER,
+                args={"item": "synthetic plum", "list": "basket"})
+    # Both accepted sockets became stale when the stub kernel restarted.
+    old = list(client.conns.values())
+    generation[0] += 1
+    with pytest.raises(os_shadow.KernelUnavailable):
+        client.call("voice", "publish", kind="utterance", subject=MEMBER, payload={"text": "synthetic pear"})
+    first_trip = client.down_until
+    assert not client.conns
+    assert all(conn.closed for conn in old)
+    with pytest.raises(os_shadow.KernelUnavailable, match="circuit"):
+        client.call("brain", "act", action="list.add", on_behalf_of=MEMBER,
+                    args={"item": "synthetic pear", "list": "basket"})
+    assert client.down_until == first_trip
+    now[0] = first_trip + 0.01
+    result = client.call("brain", "act", action="list.add", on_behalf_of=MEMBER,
+                         args={"item": "synthetic pear", "list": "basket"})
+    assert result["verified"]
+    assert loads == [0, 0, 1]
+    for skill in list(client.conns):
+        client.drop(skill)
+
+
 # ---- availability, speed, safety -------------------------------------------------------------------------------------------------------
 def test_kernel_down_is_one_code_per_add_and_the_circuit_stops_reconnecting(kernel, caplog):
     caplog.set_level(logging.INFO, logger="os_shadow")
