@@ -1406,6 +1406,12 @@ class Plan:
     drop = ok        # the forget stopped BEFORE its first step (the store refused to hide the row): nothing began, nothing to finish
 
 
+def in_play() -> bool:
+    """Is the shadow part of this forget at all? The switch is on, or shadow state exists (a memory read: the same cached answer
+    ``plan_erase`` starts from; no disk, no thread). False = behave exactly as before the shadow existed."""
+    return mode() == "shadow" or not _no_state()
+
+
 async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:
     """Park the whole plan of a multi-step forget (see above) and return its handle. ``rows``: memory row ids. ``words``: an async
     callable returning ids by ``ERASE_KINDS`` (``exact_words.words_plan`` plus the caller's other stores);

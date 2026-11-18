@@ -1492,9 +1492,13 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                     from memory_service import physical_erase_enabled
 
                     if physical_erase_enabled():
+                        import os_shadow
+
                         erased = await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
-                        if ((erased or {}).get("physical") or {}).get("ok") is False:     # no plan yet on this repeat path: a failed
-                            raise RuntimeError("physical erase did not confirm")          # physical erase keeps the carried rows
+                        # no plan yet on this repeat path: with the shadow in play a physical erase that did not confirm keeps the
+                        # carried rows; with it off this is main's path exactly (cleared, and the forget goes on)
+                        if os_shadow.in_play() and ((erased or {}).get("physical") or {}).get("ok") is False:
+                            raise RuntimeError("physical erase did not confirm")
                         await turn_forget.clear_unerased(user_id)
                         left = len(carried)
                 left += await _erase_words(user_id, exp, ref.text or "")

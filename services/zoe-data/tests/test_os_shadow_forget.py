@@ -2650,7 +2650,7 @@ def _assert_erase_results_noted(sources):
                     # the one other accepted form: on a path with NO plan yet (the repeat of an earlier forget), a physical erase
                     # that did not confirm RAISES, which keeps the carried rows
                     if (isinstance(note, ast.If) and '.get("ok") is False' in ast.unparse(note.test).replace("'", '"')
-                            and isinstance(note.body[-1], ast.Raise)):
+                            and "os_shadow.in_play()" in ast.unparse(note.test) and isinstance(note.body[-1], ast.Raise)):
                         continue
                     assert isinstance(note, ast.Expr) and isinstance(note.value, ast.Call)
                     assert ast.unparse(note.value.func) == "plan.note_erase"
@@ -2668,3 +2668,16 @@ def test_planned_erase_results_are_noted_with_negative_control():
         mutated[name] = sources[name].replace("plan.note_erase(result=erased)", "pass", 1)
         with pytest.raises(AssertionError):
             _assert_erase_results_noted(mutated)
+
+
+def test_in_play_is_false_with_the_switch_off_and_no_state(monkeypatch):
+    """Review (PR #2679), no regression against main: the repeat-forget path raises on a soft physical-erase failure ONLY when
+    the shadow is in play; with the switch off and no shadow state it is main's path (carried rows cleared, the forget goes on)."""
+    monkeypatch.setattr(os_shadow, "mode", lambda: "off")
+    monkeypatch.setattr(os_shadow, "_no_state", lambda: True)
+    assert os_shadow.in_play() is False
+    monkeypatch.setattr(os_shadow, "_no_state", lambda: False)
+    assert os_shadow.in_play() is True                         # state present: the shadow is in play even with the switch off
+    monkeypatch.setattr(os_shadow, "mode", lambda: "shadow")
+    monkeypatch.setattr(os_shadow, "_no_state", lambda: True)
+    assert os_shadow.in_play() is True
