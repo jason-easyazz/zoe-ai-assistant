@@ -18,6 +18,10 @@ It does not set the order of work: `docs/ROADMAP.md` owns that, and the cut-over
 replace `docs/knowledge/open-problems.md`: problems that have nothing to do with a kernel seam stay there. Where a row here repeats
 a ledger line, it says so.
 
+## How it is used from 2026-11-18
+
+Tick each area's rows as that area moves. Remove its dead code, duplicate paths, stale flags, unused tables and stale docs in the same work.
+
 ## How to read this page
 
 - **Tree read:** `origin/main` at `3826afa24`. The implementation map was read at `fec650907`; `git diff fec650907 3826afa24 --

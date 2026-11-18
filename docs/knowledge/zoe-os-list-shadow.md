@@ -170,6 +170,10 @@ with the flag off, with the kernel dead, refusing, closing the connection mid-ca
 
 ## 7. Owner steps (nothing is done by the PRs)
 
+**2026-11-18 first live run:** The kernel ran from main under an active systemd unit. Three demo list adds each logged `kernel=verified result=match`, with 3 to 12 ms round trips. It was turned off for the train deploy. The rehearsal matched 300 of 300 adds: round trip p50 5.9 ms, p95 11.0 ms; added caller cost p50 0.010 ms; kernel memory about 22 MB.
+
+A state folder made by hand has no settle marker and the train kernel refuses it. Always use `os_shadow.py --init`. This page describes watch-only mode; that mode ends when lists move behind `ZOE_OS_LISTS`.
+
 **Merge order.** (1) the zoe-data PRs (hook, forget reach, report) can land on `main` alone: with the flag off they do nothing. (2) The lab
 stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be merged before the kernel exists on `main`: the daemon needs
 `zoe_os/kernel.py`, `server.py`, `wire.py`, `capability.py`, `receipts.py`, `spine.py` and `brain/drivers.py`. (3) then the kernel PR
@@ -249,9 +253,9 @@ After that a forget is the flag-off no-op again (no shadow state).
 
 ## 8. Not done, not proven
 
-* Not run against a real turn on the live box; not measured under real load. The kernel hop number the brain-bridge record gives (about 0.75 ms
+* Not measured under real household load. The kernel hop number the brain-bridge record gives (about 0.75 ms
   p50 in the lab) is the lab's, not this client's [inferred].
-* The kernel driver's list is in memory, has no dedupe and no list resolution: a week of shadow proves the record, receipts, availability,
+* The kernel driver's list is in memory, has no dedupe and no list resolution: shadow checks exercise the record, receipts, availability,
   latency and forget reach, not that the kernel could replace the live list logic (dedupe, household/personal visibility, list resolution).
 * Children are treated as adults in the shadow roster (no guardian model in `users`); not a consent model for anything authoritative.
 * Reminder create, alarm create and the spoken list remove are shadowed too since the widening, each named in `ZOE_OS_SHADOW_VERBS`

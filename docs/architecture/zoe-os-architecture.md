@@ -8,34 +8,11 @@ related: zoe-os-cutover-plan.md, zoe-os-implementation-map.md, zoe-os.md, zoe-os
   ../research/zoe-os-prior-art-2026-11-15.md
 ---
 
-> **Status 2026-11-15: a proposal, reviewed, partly adopted.** An independent review (a different vendor's model, reading the code)
-> returned "adopt with changes; do not authorise the proposed rework as written". What is ADOPTED: the boundary (the kernel decides
-> actions and records; data streams never pass through it; reads follow its rules), its own service, its own system user, a home
-> under `services/`, standard-library Python with a size budget, only the main service calling it, and the owner's five choices
-> (recorded in `zoe-os-cutover-plan.md`). What is NOT adopted yet: **"the kernel keeps decisions, not content"**. It stays the
-> intended direction, but the stores already built (rows rebuilt from the kernel's own verified receipts) give guarantees the
-> replacement has not specified, so they are kept for the first cut-over. Before any rework, a complete action protocol must be
-> written and reviewed: the caller allocates the action id; one transaction in the main database records the change, the id, the
-> version acted on and the before-state reference; settlement is deduplicated; a stale approval cannot cross a forget or a consent
-> change; historical "why" and undo work from versions, never from today's row. Other corrections taken from the review: a
-> "forgotten" refusal is a real refusal and never falls back (fixed in the authority client); cached read rules need a revocation
-> protocol with a stated staleness bound; text the model merely read needs provenance carried with the data, not a label on the
-> turn; account removal keeps an item only on an EXPLICIT acceptance ("keep it", or an accepted invitation), a contribution keeps
-> only the contributor's own material, missing evidence means delete, UNREADABLE evidence means stop and retry; the removal job
-> persists a barrier before deactivation and keeps it afterwards; reminders and alarms already set still fire while the kernel is
-> down (only changes are refused); the kernel's file is NOT low-sensitivity (schedules and relationships are in it) and is backed
-> up and protected like any other household data; the one-millisecond figure is withdrawn for any design with a second call until
-> measured.
+> **Status 2026-11-18:** The direct cut-over decision below supersedes the 2026-11-15 rollout and data-store proposals where they differ. The remaining study is historical design context.
 
-# Zoe OS: the architecture decision
+## Direct cut-over (owner, 2026-11-18)
 
-The owner asked for a software architect's deep dive on where the kernel should be, and asked: "shouldn't most things go
-through the kernel?" This page answers both, decides every engineering question the plan and the implementation map left open,
-and leaves the owner only the choices that are about his household (section H).
-
-Labels: **[code]** read in the tree (path given), **[lab]** measured in the lab by earlier work and reported in the records named,
-**[web]** read on the page cited, **[inferred]** my reasoning, **[unverified]** believed but not confirmed. Nothing was run for this
-page and nothing live was read or changed.
+The kernel decides and records; each area's data stays in its existing store. One door per area in zoe-data asks the kernel, which records who and which turn; zoe-data makes the change and reports the outcome. A kernel no is final. If unreachable, the change proceeds and is recorded as not checked; decide separately where a wrong yes can do harm. From lists onward the service is `zoe-os-kernel`, state is in `~/.zoe/os`, and each area has one fall-back flag. Remove the shadow-named unit, flag and folder with lists.
 
 ## The two-minute summary
 
@@ -131,12 +108,11 @@ change (E.4).
 
 ### A.3 Every kind of thing Zoe does
 
-"Kernel down" describes the end state, after a verb's old rule copy has been removed (plan Phase 6). During the cut-over every
-"decide" verb still has its old path as a fallback, so a kernel outage changes nothing a person can notice.
+When the kernel is unreachable, changes proceed and are recorded as not checked, subject to the area-specific harm rule above.
 
 | Thing Zoe does | Answer | Reason | Kernel down (end state) |
 |---|---|---|---|
-| An action that changes household state (list, reminder, alarm, calendar, note, contact, routine step) | **Decide** | consent and receipts are the point; one decision of about 1 ms per action | refused honestly ("I can't change your lists right now, nothing changed"); see owner choice H1 |
+| An action that changes household state (list, reminder, alarm, calendar, note, contact, routine step) | **Decide** | consent and receipts are the point; one decision of about 1 ms per action | proceeds and is recorded as not checked, subject to the area-specific harm rule |
 | A read of a person's data (a list shown, "what's on my calendar") | **Not through**, kernel's rule | a read happens dozens of times per screen and per turn; the check is the visibility rule, applied by one function | reads go on: the rule is cached, and it cannot change while the kernel is down, because only the kernel changes it |
 | Something Zoe says or sends unprompted (reminder firing, offer, notice, push) | **Decide** (the "may Zoe speak or send now" gate) | the owner's principle 10 and the attention budget live in one place; not on a reply's path | unprompted speech and sends are held (silence is the safe failure); requested speech is unaffected |
 | A memory write | **Record** | memory is Zoe's strongest system with its own authority layer; the kernel learns of it so one forget covers both | memory works; the record catches up from a bounded queue |
@@ -336,7 +312,7 @@ coding agent, Omnigent and the night window all run as the same user (`p0-deroot
 ### B.4 Data: one home per fact
 
 The owner decided the kernel's own file (D3). This study adds which facts live where. Each fact has exactly one source of truth;
-the other side holds a projection that a drift report checks.
+area rows remain in their existing store; the kernel records decisions and outcomes.
 
 | Fact | Source of truth | Projection |
 |---|---|---|
@@ -344,7 +320,7 @@ the other side holds a projection that a drift report checks.
 | Permissions, sharing, household settings, attention settings | **kernel** | the main database's `visibility` columns, written from kernel decisions so reads stay one SQL filter |
 | What was done, by whom, why; receipts; undo eligibility; refusals | **kernel** | none |
 | Forget shields (fingerprints), the forget ledger | **kernel**. A restore brings back everything in the backup, forgotten things included (owner, 2026-11-16): nothing is replayed after one | none |
-| When a reminder or alarm fires next | **kernel** (the schedule maths) | the main service's scheduler is told |
+| When a reminder or alarm fires next | existing store and scheduler | kernel decision and record |
 | Item words, notes, labels, event titles, contacts, memories | **main database** | the kernel holds fingerprints only (A.6) |
 
 ### B.5 Language and runtime: stay in Python, standard library only
@@ -557,7 +533,7 @@ its own.
   kept for the undo window, then purged; forget purges at once.
 - **"Tick off" stays its own spoken action** and ticks: "tick off milk", "I got the milk", "cross off milk" (crossing off a paper
   list marks it done). "Remove", "take off" and "delete" delete. One table of phrases in the intent layer, tested both ways.
-- Shadow agreement for list remove is only meaningful after this lands (map R8); WP-28 moves the shadow hook to that one function.
+- Route list remove through the one list door; no further shadow stage is planned.
 
 ### D.4 Timers: reported, not decided
 
@@ -715,15 +691,8 @@ kernel.
 
 **Edits to the cut-over plan and the work packages:**
 
-1. **DEFERRED (see the status note at the top): Phase 3 item 1 would change** from "a durable list store in the kernel" to "a
-   durable decision record keyed by the main database's row id and a fingerprint", once the action protocol is written and
-   reviewed. The first cut-over keeps the stores already built. The intended shape, for that later rework: a `settle` operation: propose (decide, about 1 ms) → the main service writes the row → commit →
-   settle with the row id and fingerprint. An unsettled receipt is "uncertain" and is resolved by the reconcile (closes map R3 and
-   G18). The idempotency key (adopted) is the proposal's id, carried by settle and by the fallback.
-2. **DEFERRED, not a prerequisite for landing:** the rework package for the authority kernel and the reminders-and-alarms
-   branch (drop item text, reminder notes and alarm labels from kernel rows; keep the schedule maths and rules; add the "no
-   free-text column" schema test). It waits for the reviewed action protocol; the lab stack lands with its current stores, and
-   the kernel's file is treated and backed up as household data meanwhile.
+1. **Changed 2026-11-18:** Existing stores keep area rows. The kernel decides and records, and zoe-data reports the outcome.
+2. The earlier proposal to retain duplicate kernel area stores for the first cut-over is dropped.
 3. **WP-03 is required before Phase 3, not optional.** Keep the os-kernel-production draft's single source-location setting; point
    it at `services/zoe-os/`. Replace that draft's section 13 ("retain labs") with B.2.
 4. **Add "kernel on its own user" (B.3 step 1) before Phase 3;** move "the main service on its own user" (de-root) before Phase 6.
