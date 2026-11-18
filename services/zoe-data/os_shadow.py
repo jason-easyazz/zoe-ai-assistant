@@ -829,11 +829,7 @@ class _Kernel:
             path, creds = _load_creds()
             if skill not in creds:
                 raise KernelUnavailable("no_credential")
-            try:
-                c = self.conns[skill] = _Conn(path, skill, creds[skill], until)
-            except (KernelUnavailable, OSError):
-                self.down_until = time.monotonic() + CIRCUIT_S
-                raise
+            c = self.conns[skill] = _Conn(path, skill, creds[skill], until)
         return c
 
     def drop(self, skill: str) -> None:
@@ -852,8 +848,9 @@ class _Kernel:
             self.drop(skill)
             raise
         except (KernelUnavailable, OSError) as exc:
-            self.drop(skill)
             if not (isinstance(exc, KernelUnavailable) and exc.args[:1] == ("circuit",)):
+                for connected in list(self.conns):
+                    self.drop(connected)
                 self.down_until = time.monotonic() + CIRCUIT_S
             raise
 
