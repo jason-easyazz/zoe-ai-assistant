@@ -47,10 +47,29 @@ class Shadow:
         return err
 
 
+def settled(path: Path) -> None:
+    """A state directory as the install tool leaves it, a minute later: its settle marker is old enough (no real wait)."""
+    from zoe_os import shadow_state
+    wall, mono, boot = shadow_state.clock()
+    shadow_state.write_marker(str(path), wall - 60, mono - 60, boot, shadow_state.SETTLE_S)
+
+
+def test_the_daemon_refuses_a_directory_that_was_copied_in_by_hand():
+    """Data with no settle marker (a raw copy, a restore outside the tool): the kernel says why and does not serve it."""
+    path = Path(tempfile.mkdtemp(prefix="zd"))
+    path.chmod(0o700)
+    (path / "people.json").write_text(json.dumps({"people": [A, B]}))
+    proc = subprocess.run([sys.executable, "-B", str(DAEMON), "--dir", str(path)], capture_output=True, text=True, timeout=30,
+                          env={"PATH": os.environ["PATH"], "HOME": str(path)})
+    assert proc.returncode != 0 and "refusing to start" in proc.stderr and "kernel up" not in proc.stdout
+    assert not (path / "creds.json").exists() and not (path / "kernel").exists()
+
+
 @pytest.fixture
 def state():
     path = Path(tempfile.mkdtemp(prefix="zd"))           # short: a socket path is <= 107 bytes
     path.chmod(0o700)
+    settled(path)
     (path / "people.json").write_text(json.dumps({"people": [A, B]}))
     running: list[Shadow] = []
     yield path, running
@@ -85,6 +104,27 @@ def test_a_forget_on_the_wire_leaves_none_of_the_members_words_in_any_file_and_k
     assert known(state[0]) == sorted([A, B])                           # A is still on the roster: still a member
     with pytest.raises(Refused, match="trusted surface"):
         d.brain.call("forget", subject=B, actor=B)                     # a skill cannot speak for a person
+
+
+def test_a_forgotten_member_still_on_the_roster_acts_again_and_is_recorded_afresh_without_a_restart(state):
+    """Forgetting a member's data must not lock them out. The forget erases their record-only grant with the rest; their NEXT act
+    gets it back (not before: until then nothing names them), in the SAME daemon. The kernel's own content shield still holds:
+    the very words they had forgotten are refused, new ones are recorded. The control: a member who is NOT on the roster gets
+    nothing back."""
+    d = start(state)
+    assert d.add(A, MARK.decode())["verified"] is True
+    assert d.panel.call("forget", subject=A, actor=A)["count"] >= 2
+    assert holding(state[0], A.encode()) in ([], ["known-people.json", "people.json"], ["people.json"])    # nothing in the record
+    again = d.add(A, "synthetic quince words")
+    assert again["verified"] is True and again["on_behalf_of"] == A        # recorded afresh, no restart
+    with pytest.raises(Refused):
+        d.add(A, MARK.decode())                                            # the forgotten words themselves stay forgotten
+    assert d.panel.call("forget", subject=A, actor=A)["count"] >= 2        # ... and what they did since is forgettable again
+    assert d.add(A, "synthetic medlar words")["verified"] is True
+    assert d.add(B, "synthetic other words")["verified"] is True           # B was never touched
+    from zoe_os.wire import WireError
+    with pytest.raises(WireError):
+        d.add("member-nobody", "synthetic stranger words")                 # control: not a member: not even a person here
 
 
 def test_a_member_taken_off_the_roster_stays_forgettable_until_forgotten_then_leaves_known_people(state):

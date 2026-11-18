@@ -388,7 +388,7 @@ class _SkippingReviewSvc:
         self._review_result = review_result
         self.review_calls = 0
 
-    async def list_by_status(self, *, user_id, status, limit):
+    async def list_by_status(self, *, user_id, status, limit, strict=False):
         return list(self._rows.values())
 
     async def get(self, mem_id):

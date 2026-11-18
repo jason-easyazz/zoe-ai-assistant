@@ -1380,7 +1380,9 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None, strict: bool = Fa
         excerpt = str(meta.get("source_excerpt") or "").strip().lower()
         turn = str(meta.get("user_turn_id") or "")
         out = []
-        for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
+        # ``strict`` (a forget deciding what else to erase): a store failure RAISES instead of reading as "no twins"
+        listing = svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, **({"strict": True} if strict else {}))
+        for r in await asyncio.wait_for(listing, READ_BUDGET_S):
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
             m = r.metadata or {}
@@ -1423,18 +1425,40 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
     cannot index it again. RAISES on a store failure (the caller must not confirm a forget that did not hold). Returns what it removed
     or flagged."""
     import exact_words
+    import os_shadow
 
+    texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
+    # PARK FIRST (os_shadow.plan_erase): the index turn goes by id below, and with it the only lead to the saved transcript turn - so
+    # every id this erase will touch is durable before its first step; cleared when all have confirmed, else finished by the replay
+    plan = await os_shadow.plan_erase(user_id, words=lambda: exact_words.words_plan(user_id, texts, [exp.turn_id] if exp.turn_id else (), night=True))
     n = 0
     if exp.turn_id:
         n += await exact_words.erase_turn(user_id, exp.turn_id)
     for words in {w for w in (exp.quote, exp.text, *extra) if w}:
         n += await exact_words.erase_text(user_id, words)
-        n += await exact_words.forget_transcript(user_id, words)
+        try:
+            n += await exact_words.forget_transcript(user_id, words)
+        except Exception as exc:  # noqa: BLE001 - raised on; the saved turn's flag is parked by id when the shadow did not confirm
+            await exact_words.park_transcript(user_id, words, exc)
+            raise
     # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that held
     import night_mind
 
     n += await night_mind.erase_words(user_id, exp.turn_id, exp.quote, exp.text, *extra)
+    await plan.ok()
     return n
+
+
+async def _plan_forget(user_id: str, row_ids: list, exp: "mp.Explained", *extra: str):
+    """PARK FIRST for a row forget (``forget_it``, the memories-screen forget, a guardian's): the rows about to be hidden AND the
+    words that go after them, durable before the first reject (``os_shadow.plan_erase``). The caller calls ``.ok()`` when every
+    step has confirmed; anything else leaves the plan for the shadow's replay."""
+    import exact_words
+    import os_shadow
+
+    texts = [w for w in dict.fromkeys((exp.quote, exp.text, *extra)) if w]
+    return await os_shadow.plan_erase(user_id, rows=row_ids, words=lambda: exact_words.words_plan(
+        user_id, texts, [exp.turn_id] if exp.turn_id else (), night=True))
 
 
 def _rearm(user_id: str, exp: "mp.Explained") -> None:
@@ -1458,22 +1482,39 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
             # the row was rejected already - possibly by an earlier "forget it" whose word erase failed: finish that job (idempotent)
             try:
-                left = await _erase_words(user_id, exp, ref.text or "")
+                # ... or one whose row erase the Zoe OS shadow did not confirm (turn_forget.keep_unerased): those rows (this one and
+                # its twins) are erased first; a failure of either step keeps the target
+                import turn_forget
+
+                left = 0
+                carried = turn_forget.unerased(user_id)
+                if carried and hasattr(svc, "erase_rows"):
+                    from memory_service import physical_erase_enabled
+
+                    if physical_erase_enabled():
+                        await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
+                        await turn_forget.clear_unerased(user_id)
+                        left = len(carried)
+                left += await _erase_words(user_id, exp, ref.text or "")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
                 _rearm(user_id, exp)
                 return STORE_DOWN_REPLY
             mp.clear_explained(user_id)
             return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"." if left else FORGET_GONE_REPLY
-        twins = await twins_of(user_id, ref, svc=svc)
+        twins = await twins_of(user_id, ref, svc=svc, strict=True)     # a failed lookup stops the forget BEFORE it starts
         await _speculation_barrier()
+        plan = await _plan_forget(user_id, [ref.id, *(tw.id for tw in twins)], exp, ref.text or "")   # PARK FIRST, before the reject
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
         if done is None:
+            await plan.drop()
             return STORE_DOWN_REPLY
         gone = [ref.id]
         for tw in twins:
             if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_explained") is not None:
                 gone.append(tw.id)
+            else:
+                plan.failed()
         if hasattr(svc, "erase_rows"):
             try:
                 from memory_service import physical_erase_enabled
@@ -1481,13 +1522,26 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 if physical_erase_enabled():
                     await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)")
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
+                plan.failed()
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
+                import turn_forget
+
+                if await turn_forget.keep_unerased(user_id, gone, exc):
+                    # ... but NOT when the Zoe OS shadow could not confirm (os_shadow.py): nothing more is erased, the reply is not
+                    # "forgot", and "forget it" again (the row is rejected by then) erases these rows and the words
+                    _rearm(user_id, exp)
+                    return STORE_DOWN_REPLY
         try:
             await _erase_words(user_id, exp, ref.text or "")
         except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
+            plan.failed()
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
             _rearm(user_id, exp)
             return STORE_DOWN_REPLY
+        if plan.has_failed:
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
+        await plan.ok()
         mp.clear_explained(user_id)
         logger.info("PROVENANCE_FORGET user=%s rows=%d", user_id, len(gone))
         return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"."
@@ -1511,7 +1565,8 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
         gone = 0
         key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
         if key:
-            for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S):
+            for r in await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT, strict=True),
+                                            READ_BUDGET_S):
                 ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
                 if _owns(r.metadata or {}, user_id) and ex and (ex == key or key in ex):
                     if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:

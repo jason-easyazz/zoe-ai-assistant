@@ -52,6 +52,7 @@ from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders 
 from zoe_os.capability import Person, person_from_entry  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
+from zoe_os import shadow_state  # noqa: E402
 
 # trusted origin adapters: the voice surface records the utterance that is the cause of an act; the panel is the surface that
 # relays a person's forget. Same manifests the lab tests use (tests/world.py ADAPTERS).
@@ -172,6 +173,22 @@ class ShadowServer(KernelServer):
     def __init__(self, kernel: Kernel, path: str, *, state: Path, roster) -> None:
         super().__init__(kernel, path)
         self.state, self.roster = state, frozenset(roster)
+        self.forgotten: set = set()      # roster members whose whole record (their record-only grant with it) was forgotten since the start
+
+    def _op_act(self, conn, a: dict) -> dict:
+        self.record_again(a.get("on_behalf_of"))
+        return super()._op_act(conn, a)
+
+    def record_again(self, person) -> None:
+        """A roster member whose whole record was forgotten acts again: forgetting a member's data must not lock them out. The
+        forget erased their record-only grant along with everything else that names them (rightly: nothing may name them after
+        it), and until now only the next START gave it back, so every later act of theirs was refused "no grant from that
+        person". It is installed again HERE, at their next act and not before: between the forget and that act nothing in the
+        record names them. The same grant ``build`` gives every roster member; never consent, and only ever in a shadow store."""
+        if person in self.forgotten and person in self.roster and person in self.kernel.grants.people:
+            self.forgotten.discard(person)
+            if self.kernel.grants.of("brain", person) is None:
+                self.kernel.grants.grant(person, "brain", acts=list(ACTS), record_only=True)
 
     def _op_forget(self, conn, a: dict) -> dict:
         out = super()._op_forget(conn, a)                         # under the kernel lock (KernelServer._answer)
@@ -187,6 +204,8 @@ class ShadowServer(KernelServer):
         member, and people.json names them); one off the roster leaves the file, then the kernel's people (so a later forget is
         the kernel's own "never knew them", and nothing new can be recorded about them)."""
         people = self.kernel.grants.people
+        if subject in self.roster:
+            self.forgotten.add(subject)   # still a member: recorded afresh when they act again (record_again)
         if subject in self.roster or subject not in people:
             return
         write_known(self.state, (p for p in people if p != subject))
@@ -279,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", help="state directory (else $OSLAB_SHADOW_DIR, else ~/.zoe/os-shadow)")
     state = state_dir(ap.parse_args(argv).dir)
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shadow_state.require_settled(state)   # makes and settles a missing dir; refuses data with no trustworthy settle marker
     os.umask(0o077)                       # the database, its WAL and the credentials are this user's alone
     k, srv, creds = build(state)
     write_creds(state, srv.path, creds)

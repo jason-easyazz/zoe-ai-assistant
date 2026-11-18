@@ -101,3 +101,7 @@ Owner direction 2026-11-15; phases, proofs and decisions are in `docs/architectu
 ## Child DOX Index
 
 None.
+
+- `zoe_os/shadow_state.py` is the kernel side of the shadow state directory's SETTLE rule (a new directory is made empty, marked, and waits before it holds data; data with no trustworthy marker is refused). Its block between `# >>> settle` and `# <<< settle` is the SAME TEXT as the one in `services/zoe-data/os_shadow.py`: change both together (`services/zoe-data/tests/test_os_shadow_settle.py` fails otherwise). `shadow_daemon.py` must call `shadow_state.require_settled(state)` before it reads or writes anything in the state directory.
+
+- `shadow_daemon.py`: a roster member whose whole record was forgotten gets their record-only grant back at their NEXT act (`ShadowServer.record_again`), never at the forget itself (nothing may name them in between) and never for someone off the roster. Pinned by `tests/test_shadow_daemon.py` and, from the client side, `services/zoe-data/tests/test_os_shadow_contract.py`.

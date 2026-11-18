@@ -73,7 +73,7 @@ Generated from `household_text.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: household_text.py -->
 
-103 stores: a per-subject forget reaches 47, delete-my-data reaches 50, both 41, neither 47.
+104 stores: a per-subject forget reaches 48, delete-my-data reaches 51, both 42, neither 47.
 
 | store | class | location (pattern) | text | forget reaches | delete-my-data reaches | status | retention | owner | evidence |
 |---|---|---|---|---|---|---|---|---|---|
@@ -141,6 +141,7 @@ Generated from `household_text.py`; do not edit by hand.
 | `openclaw_approvals` | primary | `pg:openclaw_approvals` | old OpenClaw request text (retired, no writer) | - | - | gap | no age limit: kept until deleted | none (retired; read by routers/chat.py) | - |
 | `openclaw_run_state` | primary | `pg:openclaw_run_state` | old OpenClaw request/response text (retired) | - | - | gap | no age limit: kept until deleted | routers/chat.py (retired lane) | - |
 | `palace_sqlite` | primary | `~/.mempalace/**/chroma.sqlite3` | the memory palace: every remembered fact | `memory_residue.scrub_sqlite` | `memory_service.delete_user` | reached | no age limit: kept until deleted | memory_service.py | - |
+| `zoe_os_shadow_kernel` | primary | `$ZOE_OS_SHADOW_DIR (~/.zoe/os-shadow/kernel/zoe-os.db)` | the Zoe OS shadow kernel's spine: an event and a receipt per shadowed write (the item, note or time) | `os_shadow.erase_entity` | `os_shadow.forget_user` | reached | no age limit: kept until deleted | os_shadow.py (the kernel writes it; zoe-data only proposes) | - |
 | `chroma_collections` | primary | `chroma:mempalace_drawers, chroma:mempalace_audit` | the palace's collections (same store) | `memory_residue.scrub_sqlite` | `memory_service._delete_ids` | reached | no age limit: kept until deleted | memory_service.py | - |
 | `router_shadow_log` | primary | `services/zoe-data/data/router_head_shadow.jsonl(.N)` | utterance text beside its hash | `local_text_logs.erase_entity` | `local_text_logs.erase_all_text` | reached | text stripped after ZOE_TEXT_LOG_RETENTION_DAYS (30) | semantic_router.py (local_text_logs.py erases) | - |
 | `intent_miss_log` | primary | `~/training/data/intent-misses.jsonl` | utterances the intent router missed (crudely masked) | `local_text_logs.erase_entity` | `local_text_logs.erase_all_text` | reached | dropped after ZOE_TEXT_LOG_RETENTION_DAYS (30) | intent_router.py (local_text_logs.py erases) | - |

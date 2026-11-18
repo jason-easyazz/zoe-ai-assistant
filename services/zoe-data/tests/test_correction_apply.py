@@ -50,7 +50,7 @@ class FakeSvc:
         self.rows[rid] = MemoryRef(id=rid, text=text, metadata={"status": "approved", **meta})
         return self.rows[rid]
 
-    async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0):
+    async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0, strict=False):
         rows = [r for r in self.rows.values()
                 if r.metadata.get("status") == status and r.metadata.get("user_id") == user_id]
         return rows[offset:offset + limit]

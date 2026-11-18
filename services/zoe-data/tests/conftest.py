@@ -82,6 +82,17 @@ os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-bac
 # forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
 os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
 os.environ["ZOE_OMI_REPASS_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "omi-repass")      # the night re-pass hypotheses + work files: forget_user() / sweep_work() DELETE here
+# The Zoe OS shadow client (os_shadow.py): EVERY path it reads (credentials, roster, the kernel's socket named in creds.json, the parked
+# forgets and their lock) lives under ZOE_OS_SHADOW_DIR, default ~/.zoe/os-shadow - the LIVE install. MemoryService.delete_user and
+# the forget paths call it unconditionally, so without this pin a test's member delete could reach the live kernel or write its park
+# file. Pinned before any import (the module starts its worker at import when the flag is on: pinned off here too); each test then gets
+# its own empty directory (``_os_shadow_private_state``) and a guard fails any test that leaves the client on a real state dir.
+# UNCONDITIONAL (never setdefault): an inherited value - the live dir, or an empty one that falls back to it - must not survive.
+# shadow-pin-start
+os.environ["ZOE_OS_SHADOW_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "os-shadow")
+os.environ["ZOE_OS_LIST_SHADOW"] = "off"
+os.environ["ZOE_OS_SHADOW_VERBS"] = "list_add"
+# shadow-pin-end
 # The known state paths that default under ``~/.zoe`` (2026-10-29: the suite wrote 6 test panel ids into the LIVE ``~/.zoe/warm-speaker.json``.
 # ``warm_speaker._path()`` refuses the live file only while ``PYTEST_CURRENT_TEST`` is set, and its ``warm-speaker-save`` thread outlives the
 # test that spawned it - the save ran with the guard off and landed on the real path). A session-wide pin makes the real path unreachable
@@ -128,6 +139,61 @@ _ERASE_PATHS = {
 }
 for _var, _leaf in _ERASE_PATHS.items():
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+
+
+def _shadow_dir_violation() -> str:
+    """'' when the Zoe OS shadow client points at a test directory; else what is wrong. The real install is ~/.zoe/os-shadow (and
+    anything under ~/.zoe); a test's own directory is under the session store or pytest's tmp."""
+    raw = os.environ.get("ZOE_OS_SHADOW_DIR", "")
+    if not raw:
+        return "ZOE_OS_SHADOW_DIR unset: the client falls back to ~/.zoe/os-shadow (the live install)"
+    where = os.path.realpath(raw)
+    live = os.path.realpath(os.path.join(os.path.expanduser("~"), ".zoe"))
+    if where == live or where.startswith(live + os.sep):
+        return "ZOE_OS_SHADOW_DIR points under ~/.zoe (the live install)"
+    return ""
+
+
+@pytest.fixture
+def shadow_dir_violation():
+    """The guard itself, for test_os_shadow_test_isolation.py (inline here so a copied conftest loads on its own)."""
+    return _shadow_dir_violation
+
+
+_shadow_bad_uses: list = []        # the guard's record of THIS test: every shadow-dir read made while the env pointed at a real dir
+
+
+@pytest.fixture
+def shadow_guard_uses():
+    """The guard's record for this test (test_os_shadow_test_isolation.py's negative control reads and then clears it)."""
+    return _shadow_bad_uses
+
+
+@pytest.fixture(autouse=True)
+def _os_shadow_private_state(monkeypatch, tmp_path):
+    """Each test: its own EMPTY shadow directory (no kernel ever provisioned: a forget is the flag-off no-op, nothing is parked), the
+    switch off unless the test turns it on. The guard: ``os_shadow.state_dir`` (the ONE place the client, the authority and the speaker
+    find every path) is wrapped, and a test FAILS if the client read its state dir while the env pointed at the live install (unset,
+    empty, or under ~/.zoe). A test that clears the env on purpose without touching the client (the flag-default smoke test) is not
+    a violation: only a USE is."""
+    import os_shadow
+
+    monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path / "os-shadow"))
+    monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+    del _shadow_bad_uses[:]
+    real = os_shadow.state_dir
+
+    def guarded_state_dir():
+        bad = _shadow_dir_violation()
+        if bad:
+            _shadow_bad_uses.append(bad)
+        return real()
+
+    monkeypatch.setattr(os_shadow, "state_dir", guarded_state_dir)
+    yield
+    uses = list(_shadow_bad_uses)
+    del _shadow_bad_uses[:]
+    assert not uses, f"this test used the Zoe OS shadow client against a real state dir: {uses[0]}"
 
 
 @pytest.fixture(autouse=True)

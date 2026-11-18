@@ -398,6 +398,11 @@ async def unwrite(user_id: str, rows: list, *, gate_held: bool = False) -> int:
         elif r.get("kind") == "conversation_note":
             notes.append(ref if ref.startswith("conversation_notes:") else
                          (f"conversation_notes_by_candidate:{r['id']}" if not ref and r.get("status") == "approving" and r.get("id") else ""))
+    if any(notes) or mem or orphans or rels:
+        # the Zoe OS shadow first (os_shadow.py), before the notes below go (the row eraser repeats it): confirmed, or this RAISES and
+        # nothing is deleted. A no-op with no shadow state at all.
+        import os_shadow
+        await os_shadow.forget_for_erase(user_id)
     n = 0
     if any(notes):
         import conversation_notes

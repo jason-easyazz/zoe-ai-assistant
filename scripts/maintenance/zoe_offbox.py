@@ -107,6 +107,7 @@ ZOE_TREE_EXCLUDES = (
     "omi-repass",              # the night re-pass's hypotheses (the words, 7-day retention) + worker outputs (speaker embeddings): never off-box
     "recall-gate-trace",       # the owner's opt-in recall-gate trace: raw turns + row text, 7-day retention; never off-box
     "compaction-salvage-*",    # transient emergency spill files
+    "os-shadow",               # the Zoe OS shadow's state: a disposable copy that settles before it holds data and is never copied back by hand (os_shadow.py --restore)
     "env", "secrets",          # the secrets tier owns these
 )
 # ssl/ and config/ (SECRET_TREES, below) are walked RECURSIVELY as Sources: the relay's household CA lives in ssl/relay/

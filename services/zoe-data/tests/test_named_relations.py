@@ -204,7 +204,7 @@ class FakeSvc:
         self.rows[mem_id].metadata.update(entity_type=entity_type, entity_id=entity_id)
         return True
 
-    async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0):
+    async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0, strict=False):
         rows = [r for r in self.rows.values()
                 if r.metadata.get("status") == status and r.metadata.get("user_id") == user_id]
         return rows[offset:offset + limit]

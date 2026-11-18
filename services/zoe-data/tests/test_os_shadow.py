@@ -64,8 +64,10 @@ class FakeKernel:
         self.connections = 0
         self.act_mode = "ok"
         self.forget_mode = "ok"
+        self.known = None                      # the members the kernel knows (None = everyone): a stranger's forget is refused
         self.reply_mode = "ok"
         self.close_on = None
+        self.old_kernel = False                        # a kernel from before remind.set took due_at
         self.delay = 0.0
         self.stall: dict = {}                  # (stage, connection number) -> seconds the kernel sits on that stage
         self._seq = 0
@@ -138,10 +140,15 @@ class FakeKernel:
             self._seq += 1
             return self._ok(conn, req, {"seq": self._seq, "kind": a["kind"], "subject": a.get("subject")})
         if op == "forget":
+            if self.known is not None and a.get("subject") not in self.known:
+                return self._refuse(conn, req, "only a person can ask to forget")     # the lab kernel's words for a stranger
             if self.forget_mode == "refuse_all":
                 return self._refuse(conn, req, "not theirs to forget")
             if self.forget_mode == "refuse_scoped" and ("entity" in a or "topic" in a):
                 return self._refuse(conn, req, "nothing to match")
+            if self.forget_mode.startswith("reply:"):          # the forget's result as raw JSON text
+                body = ('{"v":1,"id":%d,"ok":true,"result":%s}' % (req["id"], self.forget_mode.split(":", 1)[1])).encode()
+                return conn.sendall(struct.pack(">I", len(body)) + body)
             return self._ok(conn, req, {"count": 3, "upto": self._seq})
         if op != "act":
             return self._refuse(conn, req, "unknown op")
@@ -153,6 +160,12 @@ class FakeKernel:
             return
         if mode == "close":
             raise ConnectionError
+        if a["action"] == "remind.set":                   # the kernel's check_params (labs/zoe-os/zoe_os/receipts.py)
+            known = {"note", "in_minutes", "asked"} | (set() if self.old_kernel else {"due_at"})
+            if set(a["args"]) - known:
+                return self._refuse(conn, req, "unknown argument")      # an older kernel: due_at is an unknown argument
+            if ("in_minutes" in a["args"]) == ("due_at" in a["args"]):
+                return self._refuse(conn, req, "needs exactly one of its alternative arguments")
         if mode.startswith("raw_result:"):                # the act's result as raw JSON text (NaN, Infinity, 1e400 ...)
             body = ('{"v":1,"id":%d,"ok":true,"result":%s}' % (req["id"], mode.split(":", 1)[1])).encode()
             return conn.sendall(struct.pack(">I", len(body)) + body)
@@ -160,16 +173,31 @@ class FakeKernel:
             return _send(conn, self._frame(req, {"ok": False, "error": {"code": self.error_code, "reason": self.error_code}}))
         if mode == "wrong_shape":
             return self._ok(conn, req, {"hello": 1})
-        proof = {"item": a["args"]["item"]}
+        # the read-back each lab driver returns (labs/zoe-os/zoe_os/brain/drivers.py): list -> item, reminder -> note, alarm -> time.
+        # A reminder's read-back says when, as the STORED absolute instant (due_at as given, or the fake kernel's clock at receipt + the
+        # minutes), like the kernel's ``Reminders.added``; an older kernel's read-back has the note only.
+        pkey, akey = {"remind.set": ("note", "note"), "alarm.set": ("alarm", "time")}.get(a["action"], ("item", "item"))
+        proof = {pkey: a["args"][akey]}
+        if a["action"] == "remind.set" and not self.old_kernel:
+            proof["due_at"] = a["args"]["due_at"] if "due_at" in a["args"] else int(os_shadow._wall()) + 60 * a["args"]["in_minutes"]
         verified, outcome, member = True, "verified", a["on_behalf_of"]
         if mode == "unverified":
             verified, outcome, proof = False, "unverified", None
         elif mode == "uncertain":
             verified, outcome, proof = False, "uncertain", None
         elif mode == "item_differs":
-            proof = {"item": a["args"]["item"] + " x"}
+            proof[pkey] = a["args"][akey] + " x"
+        elif mode == "wrong_time":                      # the WHEN differs, the WHAT is right
+            if a["action"] == "remind.set":
+                proof["due_at"] += 300
+            elif a["action"] == "alarm.set":
+                proof["alarm"] = "23:59" if a["args"]["time"] != "23:59" else "00:00"
+        elif mode == "late_by_delay" and "due_at" in proof:           # minutes taken from the commit, not the send
+            proof["due_at"] += self.late_s
+        elif mode == "no_schedule":
+            proof.pop("due_at", None)
         elif mode == "wrong_member":
-            member = "someone-else"                    # a receipt that acted for another member
+            member = "someone-else"
         elif mode == "no_member":
             member = None
         elif mode == "list_differs":
@@ -194,6 +222,7 @@ def kernel(monkeypatch):
     (state / "people.json").write_text(json.dumps({"people": [MEMBER]}))
     monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(state))
     monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "shadow")
+    monkeypatch.delenv("ZOE_OS_SHADOW_VERBS", raising=False)       # the default: list add only
     monkeypatch.setattr(os_shadow, "OP_TIMEOUT_S", 0.3)
     os_shadow._reset_for_tests()
     assert os_shadow.revive()                                       # what start-up does: the worker is up before any turn
@@ -247,11 +276,18 @@ def test_a_real_add_is_recorded_as_an_event_and_a_receipt_and_matches(kernel, ca
     ops = [(s, op) for s, op, _ in kernel.calls]
     assert ops == [("voice", "publish"), ("brain", "act")]            # the surface records the cause; the brain acts on it
     pub, act = kernel.calls[0][2], kernel.calls[1][2]
-    assert pub["kind"] == "utterance" and pub["subject"] == MEMBER and pub["payload"] == {"text": os_shadow.UTTERANCE_TEXT}
+    # the fixed text plus a random tag (never a household word): one constant text for every write was shielded by the member's first
+    # forget, and the real kernel then refused every later write of theirs (test_os_shadow_contract.py runs that against it)
+    assert pub["kind"] == "utterance" and pub["subject"] == MEMBER and set(pub["payload"]) == {"text"}
+    fixed, tag = pub["payload"]["text"].rsplit(" ", 1)
+    assert fixed == os_shadow.UTTERANCE_TEXT and len(tag) == 16 and int(tag, 16) >= 0
     assert act["action"] == "list.add" and act["on_behalf_of"] == MEMBER and act["caused_by"] == [1]
     assert act["args"] == {"item": ITEM, "list": "Shopping", "asked": 1}
-    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_LIST_ADD" in r.getMessage()]
-    assert line.startswith("OS_SHADOW_LIST_ADD src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=")
+    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
+    assert line.startswith("OS_SHADOW_ACT verb=list_add src=spoken cls=shopping live=added kernel=verified result=match reason=- hop_ms=")
+    add()
+    settle(2)
+    assert kernel.calls[2][2]["payload"]["text"] != pub["payload"]["text"]            # no two cause events carry the same string
 
 
 @pytest.mark.parametrize("mode,result,kstate,reason", [
@@ -274,7 +310,7 @@ def test_each_mismatch_class_is_named_and_logged_as_codes(kernel, caplog, mode, 
     add()
     settle(1)
     assert os_shadow.counters() == {result: 1}
-    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_LIST_ADD" in r.getMessage()]
+    (line,) = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
     assert f"kernel={kstate} result={result} reason={reason} " in line
 
 
@@ -303,7 +339,7 @@ def test_kernel_down_is_one_code_per_add_and_the_circuit_stops_reconnecting(kern
         add()
     settle(3)
     assert os_shadow.counters() == {"kernel_unavailable": 3}
-    lines = [r.getMessage() for r in caplog.records if "OS_SHADOW_LIST_ADD" in r.getMessage()]
+    lines = [r.getMessage() for r in caplog.records if "OS_SHADOW_ACT verb=list_add" in r.getMessage()]
     assert len(lines) == 3 and all("kernel=none result=kernel_unavailable" in ln for ln in lines)
     assert "reason=circuit" in lines[1]               # the second add did not even try to connect
 
@@ -335,6 +371,34 @@ def test_a_member_outside_the_roster_is_never_proposed(kernel):
     add(user="someone-else")
     settle(1)
     assert os_shadow.counters() == {"member_not_in_roster": 1} and kernel.calls == []
+
+
+@pytest.mark.parametrize("entries,expected", [
+    ([MEMBER], {MEMBER}),
+    ([{"id": MEMBER, "role": "adult"}], {MEMBER}),
+    ([{"id": MEMBER, "role": "adult"}, "member-b"], {MEMBER, "member-b"}),
+    ([{"id": MEMBER, "role": "adult"}, {}, {"role": "adult"}, {"id": None},
+      {"id": 12}, {"id": []}, {"id": "   "}, None, 12, ""], {MEMBER}),
+], ids=["plain-id", "object-id", "mixed", "malformed-ignored"])
+def test_roster_entries_are_ids_and_listed_members_are_proposed(kernel, entries, expected):
+    (kernel.state / "people.json").write_text(json.dumps({"people": entries}))
+    os_shadow._roster_cache = (0.0, None, frozenset())
+    assert os_shadow.roster() == frozenset(expected)
+    for member in sorted(expected):
+        add(user=member)
+    settle(len(expected))
+    assert os_shadow.counters() == {"match": len(expected)}
+    assert {args["on_behalf_of"] for _, op, args in kernel.calls if op == "act"} == expected
+
+
+def test_write_roster_extracts_ids_from_mixed_entries(tmp_path):
+    dest = tmp_path / "people.json"
+    assert os_shadow.write_roster([
+        {"id": MEMBER, "role": "adult"}, " member-b ", MEMBER, {}, {"id": None},
+        {"id": 12}, {"id": []}, "", None,
+    ], dest) == [MEMBER, "member-b"]
+    assert json.loads(dest.read_text()) == {"people": [MEMBER, "member-b"]}
+    assert dest.stat().st_mode & 0o777 == 0o600
 
 
 def test_a_member_erased_after_the_add_was_queued_is_dropped(kernel, monkeypatch):
@@ -373,7 +437,7 @@ def test_the_log_line_carries_no_words(kernel, caplog):
     add(item="tangerines for Quillon", list_name="Quillon's list")
     settle(1)
     text = " ".join(r.getMessage() for r in caplog.records)
-    assert "OS_SHADOW_LIST_ADD" in text and not any(w in text for w in ("Quillon", "tangerine"))
+    assert "OS_SHADOW_ACT verb=list_add" in text and not any(w in text for w in ("Quillon", "tangerine"))
 
 
 def test_the_hook_costs_almost_nothing(kernel, monkeypatch, capsys):
@@ -402,13 +466,22 @@ def _service_files():
     return [p for p in SVC.rglob("*.py") if not skip.intersection(p.relative_to(SVC).parts)]
 
 
+def _lab_imports(source, *, forbid_labs=False, forbid_path=False):
+    tree = ast.parse(source)
+    imports = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    imports |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+    path = any(isinstance(n, ast.Attribute) and n.attr == "path" and isinstance(n.value, ast.Name)
+               and n.value.id == "sys" for n in ast.walk(tree))
+    return bool(imports & ({"zoe_os", "labs"} if forbid_labs else {"zoe_os"}) or forbid_path and path)
+
+
 def test_zoe_data_never_imports_the_lab_kernel():
-    src = (SVC / "os_shadow.py").read_text("utf-8")
-    imports = {a.name.split(".")[0] for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Import) for a in n.names}
-    imports |= {n.module.split(".")[0] for n in ast.walk(ast.parse(src)) if isinstance(n, ast.ImportFrom) and n.module}
-    assert not ({"zoe_os", "labs"} & imports) and "sys.path" not in src
+    assert not _lab_imports((SVC / "os_shadow.py").read_text("utf-8"), forbid_labs=True, forbid_path=True)
     for p in _service_files():
-        assert "from zoe_os" not in p.read_text("utf-8") and "import zoe_os" not in p.read_text("utf-8"), p.name
+        assert not _lab_imports(p.read_text("utf-8")), p.name
+    for statement in ("import zoe_os", "from zoe_os import Kernel", "import zoe_os as k", "import labs", "sys.path.append('lab')"):
+        assert _lab_imports(statement, forbid_labs=True, forbid_path=True)
+        assert not _lab_imports("# " + statement + "\n" + repr(statement), forbid_labs=True, forbid_path=True)
 
 
 def test_the_worker_is_the_only_thread_and_it_is_a_daemon(kernel):
@@ -458,11 +531,28 @@ def test_revive_never_waits_on_a_contended_start_and_many_revives_start_one_work
 def test_no_turn_path_calls_the_worker_start():
     """Structure pin: the hook functions never call _ensure_worker / revive / Thread (only start-up and the forget path may)."""
     tree = ast.parse((SVC / "os_shadow.py").read_text("utf-8"))
-    hooks = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name.startswith("note_")]
+    hooks = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and (n.name.startswith("note_") or n.name in ("_note", "_door"))]
     assert hooks
     for fn in hooks:
         called = {getattr(c.func, "id", getattr(c.func, "attr", "")) for c in ast.walk(fn) if isinstance(c, ast.Call)}
         assert not called & {"_ensure_worker", "revive", "Thread", "start"}, fn.name
+
+
+def _import_start_stmt(source):
+    """The statement that runs when the module is IMPORTED and is the last thing it does: the module's last statement, or, when
+    that is the ``if __name__ == "__main__": ... else: ...`` guard, the single statement of its ``else`` (the import branch)."""
+    last = ast.parse(source).body[-1]
+    if (isinstance(last, ast.If) and isinstance(last.test, ast.Compare) and isinstance(last.test.left, ast.Name)
+            and last.test.left.id == "__name__" and len(last.orelse) == 1):
+        return last.orelse[0]
+    return last
+
+
+def _ends_with_import_start(source):
+    last = _import_start_stmt(source)
+    return (isinstance(last, ast.Expr) and isinstance(last.value, ast.Call)
+            and isinstance(last.value.func, ast.Name) and last.value.func.id == "_start_at_import"
+            and not last.value.args and not last.value.keywords)
 
 
 def test_the_worker_starts_at_import_while_shadow_so_no_turn_starts_it(kernel):
@@ -471,7 +561,15 @@ def test_the_worker_starts_at_import_while_shadow_so_no_turn_starts_it(kernel):
     os_shadow._start_at_import()
     assert os_shadow._worker is not None and os_shadow._worker.is_alive()
     src = (SVC / "os_shadow.py").read_text("utf-8")
-    assert src.rstrip().endswith("_start_at_import()        # service start-up, never a turn (see _ensure_worker)")
+    assert _ends_with_import_start(src)
+    lines = src.splitlines(keepends=True)
+    last = _import_start_stmt(src)
+    pad = " " * last.col_offset
+    for replacement in ("pass  # _start_at_import()", repr("_start_at_import()")):       # the call gone, its name kept in text
+        mutated = ("".join(lines[:last.lineno - 1]) + pad + replacement
+                   + "  # service start-up, never a turn (see _ensure_worker)\n" + "".join(lines[last.end_lineno:]))
+        ast.parse(mutated)                                    # the mutation is valid Python, so the check below is a real refusal
+        assert not _ends_with_import_start(mutated)
 
 
 def test_the_import_start_is_a_no_op_with_the_flag_off(kernel, monkeypatch):
@@ -491,14 +589,14 @@ def test_a_forgotten_refusal_is_classed_forgotten_even_when_it_names_arguments()
 
 # ---- every outcome is ONE line, and the closed set is exactly what can be written --------------------------------------------------
 def _lines(caplog):
-    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("OS_SHADOW_LIST_ADD ")]
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("OS_SHADOW_ACT ")]
 
 
 def _result(line):
     return line.split(" result=", 1)[1].split(" ", 1)[0]
 
 
-FIELDS = ["src", "cls", "live", "kernel", "result", "reason", "hop_ms", "q_ms"]
+FIELDS = ["verb", "src", "cls", "live", "kernel", "result", "reason", "hop_ms", "q_ms"]
 
 
 def _sweep(kernel, monkeypatch):
@@ -518,7 +616,8 @@ def _sweep(kernel, monkeypatch):
         one(code, add)
     kernel.act_mode = "ok"
     one("kernel_did_live_refused", lambda: os_shadow._q.put(          # no call site feeds a live refusal yet: the worker can still say it
-        ("add", MEMBER, "spoken", "shopping", "refused", ITEM, "Shopping", user_erase_gate.generation(MEMBER), time.perf_counter())))
+        ("act", "list_add", MEMBER, "spoken", "shopping", "refused", {"item": ITEM, "list": "Shopping"},
+         user_erase_gate.generation(MEMBER), time.perf_counter(), time.time())))
     one("member_not_in_roster", lambda: add(user="someone-else"))
     one("live_noop", lambda: add(landed=False))
     one("no_input", lambda: add(item=" "))
@@ -527,13 +626,17 @@ def _sweep(kernel, monkeypatch):
         one("dropped_erased", add)                                    # at the door
     user_erase_gate.reset()
     one("dropped_erased", lambda: os_shadow._q.put(                   # in the worker: queued before an erase finished
-        ("add", MEMBER, "spoken", "shopping", "added", ITEM, "Shopping", -1, time.perf_counter())))
+        ("act", "list_add", MEMBER, "spoken", "shopping", "added", {"item": ITEM, "list": "Shopping"}, -1, time.perf_counter(),
+         time.time())))
     with monkeypatch.context() as m:
         m.setattr(os_shadow, "_worker_alive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         one("shadow_error", add)                                      # reason=hook
     with monkeypatch.context() as m:
         m.setattr(os_shadow, "roster", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         one("shadow_error", add)                                      # reason=worker
+    with monkeypatch.context() as m:
+        m.setattr(os_shadow, "kernel_args", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+        one("not_expressible", add)                                   # a field the worker could not read: reason=parse
     kernel.delay = 1.0
     one("timeout", add)
     kernel.delay = 0.0
@@ -562,7 +665,8 @@ def test_every_note_add_outcome_writes_exactly_one_line(kernel, caplog, monkeypa
         assert [kv.split("=", 1)[0] for kv in ln.split()[1:]] == FIELDS, ln
     errors = [ln for ln in lines if _result(ln) == "shadow_error"]
     assert sorted(ln.split(" reason=", 1)[1].split()[0] for ln in errors) == ["hook", "worker"]
-    assert set(want) == set(os_shadow.RESULTS), set(os_shadow.RESULTS) ^ set(want)   # every code is reachable; nothing outside it
+    when_only = {"schedule_differs", "schedule_unproven"}            # a list add has no WHEN: driven per verb in test_os_shadow_verbs.py
+    assert set(want) | when_only == set(os_shadow.RESULTS), set(os_shadow.RESULTS) ^ (set(want) | when_only)
 
 
 def test_the_flag_off_writes_no_line(kernel, caplog, monkeypatch):
@@ -576,7 +680,7 @@ def test_the_flag_off_writes_no_line(kernel, caplog, monkeypatch):
 
 def test_a_code_outside_results_is_written_as_shadow_error_not_dropped(kernel, caplog):
     caplog.set_level(logging.INFO, logger="os_shadow")
-    os_shadow._finish("brand_new_code", source="spoken", cls="shopping", live="added")
+    os_shadow._finish("list_add", "brand_new_code", source="spoken", cls="shopping", live="added")
     (line,) = _lines(caplog)
     assert " result=shadow_error reason=code " in line and os_shadow.counters() == {"shadow_error": 1}
 
@@ -619,8 +723,8 @@ def test_no_literal_code_outside_results_reaches_the_emitter():
     tree = _module_tree()
     found = set()
     for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_finish" and n.args:
-            found |= _consts(n.args[0])
+        if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_finish" and len(n.args) > 1:
+            found |= _consts(n.args[1])                               # _finish(verb, result, ...)
         if isinstance(n, ast.Dict):
             found |= {v for k, val in zip(n.keys, n.values) if isinstance(k, ast.Constant) and k.value == "result" for v in _consts(val)}
         if isinstance(n, ast.Assign):
@@ -630,8 +734,9 @@ def test_no_literal_code_outside_results_reaches_the_emitter():
                 for tn, v in zip(names, vals):
                     if getattr(tn, "id", "") in ("result", "outcome"):
                         found |= _consts(v)
-    for name in ("_door",):
-        found |= {c for r in ast.walk(_fn(tree, name)) if isinstance(r, ast.Return) and r.value is not None for c in _consts(r.value)}
+    for r in ast.walk(_fn(tree, "_door")):                            # (outcome, cls)
+        if isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple):
+            found |= _consts(r.value.elts[0])
     for r in ast.walk(_fn(tree, "compare")):
         if isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple):
             found |= _consts(r.value.elts[0])
@@ -640,7 +745,7 @@ def test_no_literal_code_outside_results_reaches_the_emitter():
 
 
 def test_every_outcome_path_goes_through_the_one_emitter():
-    """Structure: only ``_finish`` counts or logs an add; it is called once in ``note_add`` and once in ``_do_add``, each from a
+    """Structure: only ``_finish`` counts or logs a write; it is called once in ``_note`` and once in ``_do_act``, each from a
     ``finally``; every return of the outcome functions names an outcome (falling off the end would write nothing)."""
     tree = _module_tree()
     callers: dict = {}
@@ -649,15 +754,21 @@ def test_every_outcome_path_goes_through_the_one_emitter():
             if isinstance(c, ast.Call) and getattr(c.func, "id", "") in ("_tally", "_log", "_finish"):
                 callers.setdefault(c.func.id, []).append(fn.name)
     assert callers["_tally"] == ["_finish"] and callers["_log"] == ["_finish"]
-    assert sorted(callers["_finish"]) == ["_do_add", "note_add"]
-    for name in ("note_add", "_do_add"):
+    assert sorted(callers["_finish"]) == ["_do_act", "_note"]
+    for name in ("_note", "_do_act"):
         tries = [t for t in ast.walk(_fn(tree, name)) if isinstance(t, ast.Try) and t.finalbody]
         assert len(tries) == 1 and any(getattr(c.func, "id", "") == "_finish" for f in tries[0].finalbody for c in ast.walk(f)
                                        if isinstance(c, ast.Call)), name
         assert not [r for r in ast.walk(_fn(tree, name)) if isinstance(r, ast.Return)], f"{name} must have one exit"
-    for name in ("_door", "_add_outcome"):
+    for name in ("_door", "_act_outcome"):
         fn = _fn(tree, name)
         assert isinstance(fn.body[-1], ast.Return) and all(r.value is not None for r in ast.walk(fn) if isinstance(r, ast.Return)), name
+
+
+def test_every_code_a_verb_check_can_return_is_a_result():
+    for action, checks in os_shadow.VERBS.values():
+        for _pkey, _akey, differs, missing in checks:
+            assert differs in os_shadow.RESULTS and (missing is None or missing in os_shadow.RESULTS), action
 
 
 # ---- for whom, and whose reply ----------------------------------------------------------------------------------------------------

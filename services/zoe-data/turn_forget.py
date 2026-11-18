@@ -364,7 +364,7 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
     must not be confirmed when the store could not be read)."""
     out, seen = [], set()
     for status in ("approved", "pending"):
-        for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT):
+        for r in await svc.list_by_status(user_id=user_id, status=status, limit=SCAN_LIMIT, strict=True):
             if r.id in seen:
                 continue
             m = r.metadata or {}
@@ -376,13 +376,128 @@ async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Option
     return out
 
 
+# ── rows a forget hid but could not erase ────────────────────────────────────────────────────────────────────────────
+
+#: {user_id: [row ids]} - rows a forget already hid (rejected / archived) whose physical erase the Zoe OS shadow did not confirm.
+#: Ids only, never words; in-process like the turn notes (the retry target lives here too), bounded like them.
+_unerased: "OrderedDict[str, list]" = OrderedDict()
+_MAX_UNERASED = 512
+
+
+def unerased(user_id: Optional[str]) -> list:
+    with _LOCK:
+        return list(_unerased.get(user_id or "") or ())
+
+
+async def keep_unerased(user_id: str, ids: list, exc: BaseException) -> bool:
+    """A forget's physical erase of ``ids`` (rows it had already hidden) failed with ``exc``. True when that is the Zoe OS shadow not
+    confirming (``os_shadow.unconfirmed``): the caller must NOT say "forgotten" and must keep its target. The row eraser has by then
+    PARKED the ids durably (``os_shadow.park_unconfirmed`` in ``MemoryService.erase_rows``: the replay finishes them with no further request, across a
+    restart); here they are also remembered in this process, so the member's repeat - whose lookups (approved / pending rows) no
+    longer find hidden rows - adds ``unerased`` to what it erases.
+
+    False for any other failure: the rows stay hidden and the forget goes on, as it always did. Never raises."""
+    try:
+        import os_shadow
+
+        if not os_shadow.unconfirmed(exc):
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    want = list(dict.fromkeys(str(i) for i in ids if i))
+    with _LOCK:
+        _unerased[user_id] = want[-_MAX_UNERASED:]
+        _unerased.move_to_end(user_id)
+        while len(_unerased) > _MAX_USERS:
+            _unerased.popitem(last=False)
+    return True
+
+
+async def clear_unerased(user_id: str, ids: Optional[list] = None) -> None:
+    """The rows were erased (by the member's repeat, or by ``finish_parked``): forget them here and in the durable park. Touches the
+    disk only when something was remembered. Never raises (a stale parked id erases nothing: the replay is idempotent)."""
+    with _LOCK:
+        had = _unerased.pop(user_id, None)
+    if not had and not ids:
+        return
+    try:
+        import asyncio
+
+        import os_shadow
+
+        await asyncio.to_thread(os_shadow.erases_done, user_id, {"rows": list(ids or had)})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TURN_FORGET user=%s parked erase not cleared (%s)", user_id, type(exc).__name__)
+
+
+async def finish_parked(user_id: str, entry: dict) -> dict:
+    """Finish a parked erase once the kernel has confirmed (``os_shadow._finish_erases``). ``entry``: ``rows`` / ``turns`` /
+    ``messages`` / ``observations`` / ``threads`` / ``notes`` / ``values`` / ``offers`` ids. Returns what is LEFT, in the same shape (``{}`` = everything is done): the caller clears only the rest.
+
+    EVERY parked id is erased, whatever its row's status (approved, superseded, rejected, archived, anything): a parked id was
+    chosen by a forget - a curation forget parks the current row AND its superseded revisions - and a status filter belongs to
+    DISCOVERY, never to the replay of an explicit plan. The parked index turns and transcript rows go by id
+    (``exact_words.finish_parked``); for each parked row that still exists, the member's verbatim words behind it are erased first
+    (the row's own turn id and source quote), then the rows.
+
+    The stores selected by words are erased from their parked ids FIRST: their source index/row may already be gone.
+    Missing rows still go through erase_rows for their audit/residue cleanup. A row that is still there after the erase
+    (the eraser would not take it: not this member's, physical erase switched off, a store that kept it) is LEFT, never cleared.
+    RAISES on a store failure - a failed READ included (``MemoryService.get(strict=True)``: "could not look" is never "gone") - and then
+    nothing is cleared; because the words go before the rows a repeat still finds them. Idempotent."""
+    import exact_words
+    import conversation_notes
+    import memory_value_registry
+    import night_mind
+    import pending_suggestions
+
+    if entry.get("observations") or entry.get("threads"):
+        await night_mind.erase_ids(user_id, entry.get("observations") or (), entry.get("threads") or ())
+    if entry.get("notes"):
+        await conversation_notes.erase_ids(user_id, entry["notes"])
+    if entry.get("values"):
+        await memory_value_registry.erase_ids(user_id, entry["values"])
+    if entry.get("offers"):
+        await pending_suggestions.erase_ids(user_id, entry["offers"])
+    await exact_words.finish_parked(user_id, entry.get("turns") or (), entry.get("messages") or ())
+    row_ids = list(dict.fromkeys(str(i) for i in entry.get("rows") or () if i))
+    if not row_ids:
+        return {}
+    import memory_space
+    import provenance_answers as pa
+    from memory_service import get_memory_service, physical_erase_enabled
+
+    svc = get_memory_service()
+    # ``strict=True``: None is a DEFINITE not-found; a read that failed RAISES (a plain ``get`` answers None for it, and a hiccup
+    # would clear the park). Both the look before the erase and the read-back after it.
+    present = []
+    for rid in row_ids:
+        ref = await svc.get(rid, strict=True)
+        if ref is None:
+            continue                  # the row is gone; its audit/residue cleanup below still runs
+        present.append(rid)
+        if pa._owns(ref.metadata or {}, user_id):
+            await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
+    if not physical_erase_enabled():
+        return {"rows": row_ids}
+    result = await svc.erase_rows(user_id, row_ids, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)", finish_missing=True)
+    if (result.get("physical") or {}).get("ok") is False:
+        return {"rows": row_ids}   # rows can be gone while their physical cleanup still needs retrying
+    left = [rid for rid in present if await svc.get(rid, strict=True) is not None]      # read back: done only when the row is gone
+    if not left:
+        with _LOCK:
+            _unerased.pop(user_id, None)
+    return {"rows": left} if left else {}
+
+
 def reset() -> None:  # tests
     with _LOCK:
         _turns.clear()
         _retracted.clear()
+        _unerased.clear()
 
 
 __all__ = [
     "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
-    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset",
+    "rows_from_turn", "row_is_from_turn", "is_forget_turn", "unerased", "keep_unerased", "clear_unerased", "finish_parked", "reset",
 ]

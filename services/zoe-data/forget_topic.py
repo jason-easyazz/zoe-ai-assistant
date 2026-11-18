@@ -149,6 +149,7 @@ class Result:
     preview: str = ""
     words_erased: int = 0
     notes: list = field(default_factory=list)
+    finished_earlier: int = 0      # rows an earlier, unconfirmed forget had already hidden, erased by this one (turn_forget.unerased)
 
 
 def _preview(text: str) -> str:
@@ -163,7 +164,7 @@ async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
     for status in ("approved", "pending", "disputed", "superseded"):
         offset = 0
         while True:
-            page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset)
+            page = await svc.list_by_status(user_id=user_id, status=status, limit=1000, offset=offset, strict=True)
             if not page:
                 break
             for r in page:
@@ -212,12 +213,18 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
     backend = exact_words.get_backend()
     hits = await _index_hits(user_id, groups)
     if hits:
-        erased = int(await backend.delete(user_id, list(hits)) or 0)
+        # the transcript flag before the index delete: forget_transcript forgets the Zoe OS shadow first (os_shadow.py), and when the
+        # kernel does not confirm that, the indexed words must still be here for the member's repeat to find
         for text in hits.values():
             try:
                 await exact_words.forget_transcript(user_id, text)
-            except Exception as exc:  # noqa: BLE001 - the index row is gone; the transcript flag is the second line
+            except Exception as exc:  # noqa: BLE001 - the transcript flag is the second line (the index row goes below)
                 logger.warning("forget_topic: transcript flag failed (%s)", type(exc).__name__)
+                import os_shadow
+
+                if os_shadow.unconfirmed(exc):
+                    raise
+        erased = int(await backend.delete(user_id, list(hits)) or 0)
     return retracted, erased
 
 
@@ -241,7 +248,7 @@ def name_keys(text: str) -> set:
     return out
 
 
-async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) -> int:
+async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list, *, plan_only: bool = False) -> int | list[str]:
     """The pending offers about the topic go with it (QA round 9: "forget that I told you about my sister" left "add Bea (your
     sister) as a contact?" pending, and it was offered twice more): an offer holding the topic words, or one whose proposed name
     was said in a forgotten turn / row. RAISES when the offers could not be read or deleted: the forget is then NOT confirmed
@@ -256,8 +263,8 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
         names = re.findall(r'"name":\s*"((?:[^"\\]|\\.)*)"', text or "")
         return row_matches(groups, text) or any(name_keys(n) & said for n in names)
 
-    gone = await pending_suggestions.withdraw_matching(user_id, matches)
-    if gone:
+    gone = await pending_suggestions.withdraw_matching(user_id, matches, **({"plan_only": True} if plan_only else {}))
+    if gone and not plan_only:
         logger.info("forget_topic: user=%s offers_withdrawn=%d", user_id, gone)
     return gone
 
@@ -298,7 +305,48 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         return res
     import turn_forget
 
+    # The Zoe OS list shadow's kernel record of the topic (os_shadow.py) FIRST, before the first step that removes anything (the
+    # pending offers, the value registry, the words, the rows): fail closed whenever shadow state exists (a no-op with none),
+    # retried by the marker. Nothing was erased, so the member's repeat finds the same turns and rows.
+    try:
+        import os_shadow
+
+        await os_shadow.erase_topic(user_id, topic)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: Zoe OS shadow erase failed (%s) - nothing erased, retry recorded", type(exc).__name__)
+        try:
+            import memory_forget_cascade
+
+            await memory_forget_cascade._mark_pending(user_id, ["os_shadow"])
+        except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
+            pass
+        res.store_down = True
+        return res
     said = [t.text for t in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))]
+
+    async def _words_plan() -> dict:
+        import exact_words
+
+        hits = await _index_hits(user_id, groups)
+        import conversation_notes
+        import memory_value_registry
+        import value_correction
+
+        indexed = list(hits.values())
+        found = await exact_words.words_plan(user_id, [*said, *indexed], list(hits))
+        found["notes"] = await conversation_notes.erase_topic(user_id, lambda text: row_matches(groups, text), plan_only=True) or ()
+        found["offers"] = await _withdraw_offers(user_id, groups, said + indexed + [r.text or "" for r in rows], plan_only=True) or ()
+        found["values"] = await memory_value_registry.erase_topic(
+            user_id, row_ids=[r.id for r in rows], name_matches=lambda name: any(row_matches([g], name) for g in groups),
+            turn_ids=[value_correction.turn_id_of(user_id, t) for t in said + indexed], plan_only=True) or ()
+        return found
+
+    try:    # PARK FIRST (os_shadow.plan_erase): the rows, the index turns and the transcript turns this forget will touch, before any step
+        plan = await os_shadow.plan_erase(user_id, rows=[r.id for r in rows], words=_words_plan)
+    except Exception as exc:  # noqa: BLE001 - the plan could not be made durable: nothing is started
+        logger.warning("forget_topic: plan not parked (%s)", type(exc).__name__)
+        res.store_down = True
+        return res
     # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
     # same turns and rows (and so the same names) again
     try:
@@ -308,6 +356,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         indexed = list((await _index_hits(user_id, groups)).values())
         await _withdraw_offers(user_id, groups, said + indexed + [getattr(r, "text", "") or "" for r in rows])
     except Exception as exc:  # noqa: BLE001 - not confirmed: an offer about the topic may still be pending
+        plan.failed()
         logger.warning("forget_topic: pending offers not withdrawn (%s) - not confirmed", type(exc).__name__)
         try:        # "I won't bring it up meanwhile": the offer reads (pending_suggestions) withhold what a tombstone names
             import memory_tombstones
@@ -315,6 +364,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
             for word in min(groups, key=len):
                 memory_tombstones.add(user_id, word)       # in-process and short (the durable answer is the honest reply)
         except Exception:  # noqa: BLE001
+            plan.failed()
             pass
         res.store_down = True
         return res
@@ -327,6 +377,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
     try:
         import value_correction
     except Exception:  # noqa: BLE001
+        plan.failed()
         value_correction = None
     if value_correction is not None:
         # the in-process correction memory: a correction about any topic word, one SAID in a retracted turn (a correction said
@@ -350,12 +401,14 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
                                                 name_matches=lambda name: any(row_matches([g], name) for g in groups),
                                                 turn_ids=[value_correction.turn_id_of(user_id, t) for t in list(said) + list(indexed)])
     except Exception as exc:  # noqa: BLE001
+        plan.failed()
         logger.warning("forget_topic: value registry erase failed (%s) - nothing else erased, retry recorded", type(exc).__name__)
         try:
             import memory_forget_cascade
 
             await memory_forget_cascade._mark_pending(user_id, [memory_forget_cascade.VALUE_REGISTRY_TOPIC])
         except Exception:  # noqa: BLE001 - logged inside; the repeat still finds every turn (nothing was erased)
+            plan.failed()
             pass
         res.store_down = True
         return res
@@ -363,6 +416,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         # the words before the rows, like every forget: the in-flight capture of those turns cannot land
         res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
     except Exception as exc:  # noqa: BLE001
+        plan.failed()
         logger.warning("forget_topic: words erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
@@ -371,6 +425,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
 
         await conversation_notes.erase_topic(user_id, lambda text: row_matches(groups, text))
     except Exception as exc:  # noqa: BLE001
+        plan.failed()
         logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
@@ -379,20 +434,37 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
         try:
             ref = await svc.review(r.id, decision="archive", actor=user_id, note="forget_topic")
         except Exception as exc:  # noqa: BLE001
+            plan.failed()
             logger.warning("forget_topic: archive failed (%s)", type(exc).__name__)
             ref = None
         if ref is None:
+            plan.failed()
             res.failed += 1            # never erased on top of a failed archive: it stays hidden-or-recalled, and is SAID
         else:
             archived.append(r)
-    if archived and hasattr(svc, "erase_rows"):
+    carried = turn_forget.unerased(user_id)      # rows an earlier, unconfirmed forget of this member already hid
+    erase_ids = [r.id for r in archived] + carried
+    if erase_ids and hasattr(svc, "erase_rows"):
         try:
             from memory_service import physical_erase_enabled
 
             if physical_erase_enabled():
-                await svc.erase_rows(user_id, [r.id for r in archived], actor=user_id, reason="forgotten by request (topic)")
+                await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)")
+                await turn_forget.clear_unerased(user_id)
+                res.finished_earlier = len(carried)
         except Exception as exc:  # noqa: BLE001 - archived rows are hidden from every read either way
+            plan.failed()
             logger.warning("forget_topic: physical erase failed (%s) - rows stay archived", type(exc).__name__)
+            if await turn_forget.keep_unerased(user_id, erase_ids, exc):
+                # ... but NOT when the Zoe OS shadow could not confirm (os_shadow.py): the forget is not confirmed, and the member's
+                # repeat finishes these same rows
+                res.store_down = True
+                return res
+    if plan.has_failed and not res.failed:
+        res.store_down = True
+        return res
+    if not res.failed:
+        await plan.ok()      # every step confirmed: the plan leaves the park (any return above left it for the shadow's replay)
     res.forgotten = len(archived)
     if archived:
         res.preview = _preview(archived[0].text)
@@ -410,7 +482,7 @@ def reply(res: Result, topic: str) -> str:
         return (f"That touches {res.found} things I've saved, so I haven't forgotten any of it. "
                 "Tell me which part (a few more words) and I'll forget just that.")
     if not res.found:
-        if res.turns_retracted or res.words_erased:
+        if res.turns_retracted or res.words_erased or res.finished_earlier:
             # it was said but not filed yet (the capture runs minutes behind): it is forgotten, never "nothing saved" (QA round 8)
             return "Done — I've forgotten what you told me about that, so it won't be kept. Nothing else was changed."
         return "I couldn't find anything saved about that, so nothing was changed."

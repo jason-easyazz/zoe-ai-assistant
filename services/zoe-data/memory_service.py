@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import datetime
 import hashlib
 import json
@@ -2966,6 +2967,13 @@ class MemoryService:
             await _erase_watermark.record(user_id, actor=actor)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: erase watermark not recorded ({type(exc).__name__})") from exc
+        # The Zoe OS list shadow's kernel record (os_shadow.py): every list item proposed to it, in its events, receipts and driver. Fail
+        # closed whenever shadow state exists; a no-op when no kernel was ever installed. Outside the lock (it queues behind adds in flight).
+        try:
+            import os_shadow
+            await os_shadow.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
         # waits for an approval already writing (that write needs this lock for its ingest - inside the lock it would deadlock) and
         # moves the generation so every later approval is dropped. The approved fact it may have written is then enumerated below.
@@ -3187,6 +3195,15 @@ class MemoryService:
             await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
+        # LAST, once every eraser above has confirmed: what an earlier forget of theirs left parked for erase (the Zoe OS shadow's
+        # pending-erases.json, ids only) is dropped - this delete erased every row and word those ids name. Never earlier: a delete
+        # that fails part-way (or a process that dies) must leave the parked plan for the replay or the retried delete to finish.
+        # Fail closed (the delete is retried; everything above is idempotent). No disk and no thread with no shadow state directory.
+        try:
+            import os_shadow
+            await os_shadow.drop_parked_erases(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: parked erases not dropped ({type(exc).__name__})") from exc
         return len(ids)
 
     async def list_by_status(
@@ -3196,13 +3213,18 @@ class MemoryService:
         status: str = "pending",
         limit: int = 100,
         offset: int = 0,
+        strict: bool = False,
     ) -> list[MemoryRef]:
-        """List rows for a user by status, newest first."""
+        """List rows for a user by status, newest first. A store failure is logged and reads as an empty list - unless
+        ``strict``: then it RAISES (``MemoryServiceError``). A forget that decides WHAT to erase from this listing must pass
+        ``strict=True``: "could not look" must never read as "nothing there"."""
         self._require(user_id, "user_id is required")
         try:
             rows = await self._run_sync(self._list_by_status_sync, user_id, status)
         except Exception as exc:
             logger.warning("memory_service: list_by_status failed: %s", exc)
+            if strict:
+                raise MemoryServiceError(f"list_by_status failed: {type(exc).__name__}") from exc
             return []
         return rows[offset: offset + limit]
 
@@ -3280,12 +3302,16 @@ class MemoryService:
             )
         return archived
 
-    async def get(self, mem_id: str) -> Optional[MemoryRef]:
-        """Fetch a single row by id."""
+    async def get(self, mem_id: str, *, strict: bool = False) -> Optional[MemoryRef]:
+        """Fetch a single row by id. A read failure is logged and answered None - unless ``strict``: then it RAISES
+        (``MemoryServiceError``), and None means ONLY that the store holds no such row. For a caller that must tell "gone" from
+        "could not look": the replay of a parked erase clears an id only on a definite not-found (``turn_forget.finish_parked``)."""
         try:
             row = await self._run_sync(self._get_sync, mem_id)
         except Exception as exc:
             logger.warning("memory_service: get failed id=%s: %s", mem_id, exc)
+            if strict:
+                raise MemoryServiceError(f"get failed: {type(exc).__name__}") from exc
             return None
         return row
 
@@ -4531,14 +4557,19 @@ class MemoryService:
                     texts.append(str(doc or ""))
         return owned, texts
 
-    def _delete_audit_for_rows_sync(self, row_ids: list[str]) -> int:
+    def _delete_audit_for_rows_sync(self, row_ids: list[str], *, user_id: Optional[str] = None) -> int:
         """Delete the per-row audit trail (it carries the row's text in ``before`` / ``after`` and the
         forget note in ``reason``) of rows being erased. Tombstones are never matched: they name no row."""
         col = self._audit_collection()
         n = 0
         for i in range(0, len(row_ids), 100):
-            got = col.get(where={"mempalace_id": {"$in": row_ids[i:i + 100]}})
+            query = {"where": {"mempalace_id": {"$in": row_ids[i:i + 100]}}}
+            if user_id is not None:
+                query["include"] = ["metadatas"]
+            got = col.get(**query)
             ids = list(got.get("ids") or [])
+            if user_id is not None:
+                ids = [rid for rid, meta in zip(ids, got.get("metadatas") or []) if (meta or {}).get("user_id") == user_id]
             if ids:
                 col.delete(ids=ids)
                 n += len(ids)
@@ -4548,16 +4579,18 @@ class MemoryService:
         """A night write that raced a member erase (``erase_watermark.guarded_write``) is removed through the audited erase, under the
         member's lock this caller already holds. RAISES when it cannot (the row must not quietly stay)."""
         await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
-                              lock_held=True)
+                              lock_held=True, reach_shadow=False)   # the night's own fresh rows, never shadowed; under the memory lock
 
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
-                         reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False) -> dict[str, Any]:
+                         reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False,
+                         reach_shadow: bool = True, finish_missing: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
         (:func:`erase_residue_sync`: free pages, FTS5, write-ahead log, orphan HNSW dirs, verified). Only
         rows ``user_id`` owns are touched. ``reason`` must never carry the forgotten name. Fail-closed: if the
-        intent row cannot be written nothing is deleted. Returns counts only."""
+        intent row cannot be written nothing is deleted. ``finish_missing`` is the parked replay: clean the owned audit trail and
+        physical residue even when the rows already went, and raise if physical cleanup fails. Returns counts only."""
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "erase_rows")
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
@@ -4572,6 +4605,19 @@ class MemoryService:
         # erase_watermark.guarded_write). The lock is not re-entrant, and the registry step is SKIPPED: it takes the erase gate,
         # which must never be taken under the memory lock, and the member erase that triggered the undo clears the member's
         # whole registry itself (delete_user -> memory_value_registry.forget_user, fail closed).
+        if reach_shadow:
+            # The Zoe OS shadow's record of this member (os_shadow.forget_for_erase): the turn behind these rows may have made shadowed
+            # list adds / reminders / alarms, and the kernel cannot target one turn, so the member's whole shadow record goes. FAIL
+            # CLOSED, flag on or off (a no-op only with no shadow state at all), OUTSIDE the memory lock like the registry step.
+            # ``reach_shadow=False`` only for a system undo of rows the night itself just wrote (never shadowed): see the pin.
+            try:
+                import os_shadow
+                await os_shadow.forget_for_erase(user_id)
+            except Exception as exc:
+                # not confirmed: the ids are PARKED (pending-erases.json, ids only) so the shadow's replay finishes the erase even
+                # if nobody asks again - here, at the one eraser every row forget goes through (a caller may already have hidden them)
+                await os_shadow.park_unconfirmed(user_id, rows=want)
+                raise MemoryServiceError(f"erase_rows failed: Zoe OS shadow erasure failed ({type(exc).__name__})") from exc
         if not lock_held:
             try:
                 # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
@@ -4587,7 +4633,14 @@ class MemoryService:
             try:
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
                 if not owned:
-                    return {"rows_removed": 0}
+                    if not finish_missing:
+                        return {"rows_removed": 0}
+                    # A parked erase can resume after the row delete but before its audit/residue cleanup.
+                    audit_removed = await self._run_sync(functools.partial(self._delete_audit_for_rows_sync, user_id=user_id), want)
+                    report = await self._physical_erase([])
+                    if report.get("ok") is False:
+                        raise MemoryServiceError("physical erase did not confirm")
+                    return {"rows_removed": 0, "audit_removed": audit_removed, "physical": report}
                 try:   # the in-process correction memory naming what these rows said (value_correction; never raises)
                     import value_correction
                     value_correction.forget_in_texts(user_id, texts)
@@ -4599,7 +4652,10 @@ class MemoryService:
                     self._append_audit_sync, tomb_id, user_id, actor, "forget_erase",
                     _delete_tombstone_body(owned), None, reason)
                 await self._run_sync(self._delete_ids, owned)
-                audit_removed = await self._run_sync(self._delete_audit_for_rows_sync, owned)
+                if finish_missing:
+                    audit_removed = await self._run_sync(functools.partial(self._delete_audit_for_rows_sync, user_id=user_id), want)
+                else:
+                    audit_removed = await self._run_sync(self._delete_audit_for_rows_sync, owned)
                 await self._run_sync(
                     self._append_audit_sync, tomb_id, user_id, actor, "forget_erase_done",
                     {"rows_removed": len(owned)}, None, "")
@@ -4612,6 +4668,8 @@ class MemoryService:
                 self._seen_keys.discard(key)
             report = await self._physical_erase(needles)
             self.last_erase_report = report
+            if finish_missing and report.get("ok") is False:
+                raise MemoryServiceError("physical erase did not confirm")
             _invalidate_agent_user_facts_cache(user_id)
             return {"rows_removed": len(owned), "audit_removed": audit_removed, "physical": report}
 

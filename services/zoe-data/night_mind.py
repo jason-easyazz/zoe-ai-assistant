@@ -1981,6 +1981,40 @@ def _flat(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+async def words_plan(user_id: str, turn_id: str, *texts: str) -> dict:
+    """The exact ids ``erase_words`` will take, including threads; read before any evidence is removed."""
+    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    tid = str(turn_id or "").strip()
+    if not user_id or (not wanted and not tid):
+        return {}
+    try:
+        backend = night_store.get_backend()
+        obs = await backend.observations(user_id)
+        hit = [o["quote"] for o in obs if (tid and str(o["turn_id"]) == tid)
+               or any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+        hit = [q for q in hit if (q or "").strip()]
+        if not hit:
+            return {}
+        pattern = re.compile("|".join(re.escape(q) for q in sorted(set(hit), key=len, reverse=True)))
+        gone = [o["id"] for o in obs if pattern.search(o["quote"] or "")]
+        alive = {o["thread_id"] for o in obs if o["id"] not in set(gone)}
+        threads = [t["id"] for t in await backend.threads(user_id)
+                   if pattern.search(t["title"] or "") or (t["id"] not in alive and gone)]
+        return {"observations": gone, "threads": threads}
+    except Exception as exc:  # noqa: BLE001
+        if _no_table(exc):
+            return {}
+        raise
+
+
+async def erase_ids(user_id: str, observations=(), threads=()) -> int:
+    """Finish a durable plan without needing the forgotten words. Failures leave its ids parked."""
+    async with _user_lock(user_id):
+        n = await night_store.get_backend().erase_ids(user_id, observations, threads)
+    invalidate(user_id)
+    return n
+
+
 async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
     """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn: those saved from that turn id, and
     those whose quote sits inside - or contains - any of ``texts`` (the displayed quote, the row text). "Forget it" after an explained answer must

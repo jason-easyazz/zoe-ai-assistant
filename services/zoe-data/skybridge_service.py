@@ -4904,7 +4904,9 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     list_name = await _list_name_of(db, list_id)
     from list_service import add_reply
 
-    added, already, new_ids, item_id = await _add_spoken_items(db, user_id, list_id, list_type, list_name, intent.item_text)
+    # list_name IS the resolved row's name here; handed on as landed_name too, so the shadow is told the list the items land on
+    added, already, new_ids, item_id = await _add_spoken_items(db, user_id, list_id, list_type, list_name, intent.item_text,
+                                                               landed_name=list_name)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
@@ -4958,8 +4960,15 @@ def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[
     return [item for item in items if target in str(item.get("text") or "").strip().lower()]
 
 
-async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
-    """Locate an existing list (never create) for a removal, mirroring _find_or_create_list's lookups."""
+async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None,
+                                with_name: bool = False) -> tuple | None:
+    """Locate an existing list (never create) for a removal, mirroring _find_or_create_list's lookups. ``(id, type)``, or with
+    ``with_name`` ``(id, type, name)``: the RESOLVED row's name (the Zoe OS shadow proposes against the list really changed, not the
+    one the words named), read from the row already fetched: no extra query."""
+    def found(row: dict) -> tuple:
+        out = (str(row["id"]), str(row.get("list_type") or list_type))
+        return out + (str(row.get("name") or ""),) if with_name else out
+
     hinted_id, hinted_type = _context_list_hint(context)
     named_type = intent.list_type if intent.list_type_explicit else ""
     list_type = named_type or hinted_type or "shopping"
@@ -4980,7 +4989,7 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         if rows:
             row = dict(rows[0])
             if not named_type or str(row.get("list_type") or "") == named_type:
-                return str(row["id"]), str(row.get("list_type") or list_type)
+                return found(row)
     if intent.list_name:
         # A list the user NAMED ("my chores list"): that list or none - never the default shopping list instead.
         rows = await db.fetch(
@@ -4999,8 +5008,7 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         )
         if not rows:
             return None
-        row = dict(rows[0])
-        return str(row["id"]), str(row.get("list_type") or list_type)
+        return found(dict(rows[0]))
     rows = await db.fetch(
         """
         SELECT id, name, list_type, visibility, created_at,
@@ -5017,8 +5025,7 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         list_type,
     )
     if rows:
-        row = _pick_list_row(rows, intent.list_name)
-        return str(row["id"]), str(row.get("list_type") or list_type)
+        return found(dict(_pick_list_row(rows, intent.list_name)))
     return None
 
 
@@ -5040,7 +5047,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
             "actions": [],
         }
     await _ensure_default_lists(user_id, db)
-    list_target = await _find_list_for_remove(intent, user_id, db, context)
+    list_target = await _find_list_for_remove(intent, user_id, db, context, with_name=True)
     if not list_target:
         return {
             "handled": True,
@@ -5049,7 +5056,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
             "cards": [_status_card("Which list should I use?", "I could not find that list. Show your lists again or name the list to update.")],
             "actions": [],
         }
-    list_id, list_type = list_target
+    list_id, list_type, resolved_name = list_target
     item_rows = await db.fetch(
         """
         SELECT id, list_id, text, completed
@@ -5097,6 +5104,9 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     item_text = normalize_item_text(str(target_item.get("text") or intent.item_text))
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     _audit_list_item("remove", user_id, list_id, item_id)
+    import os_shadow      # after the commit: a no-op unless ZOE_OS_SHADOW_VERBS names list_remove, never raises
+
+    os_shadow.note_list_remove(user_id, source="skybridge", list_type=list_type, list_name=resolved_name or intent.list_name, item=item_text)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]

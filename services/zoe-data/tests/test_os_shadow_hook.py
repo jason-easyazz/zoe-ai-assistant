@@ -202,6 +202,16 @@ class _Pool:
         return _A()
 
 
+def _suggestion_list_name_contract(source):
+    tree = ast.parse(source)
+    assigned = any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "ln" for t in n.targets)
+                   and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Attribute)
+                   and isinstance(n.value.func.value, ast.Name) and n.value.func.value.id == "lt"
+                   and n.value.func.attr == "capitalize" and not n.value.args and not n.value.keywords for n in ast.walk(tree))
+    sql = any(isinstance(n, ast.Constant) and isinstance(n.value, str) and "name=$2" in n.value for n in ast.walk(tree))
+    return assigned and sql
+
+
 @pytest.mark.asyncio
 async def test_an_accepted_suggestion_add_is_shadowed_after_its_commit_and_a_failed_one_is_not(kernel, monkeypatch):
     import pending_suggestions
@@ -641,3 +651,30 @@ def test_find_list_id_is_unchanged_and_find_list_adds_the_name():
     db = _GroceriesDB()
     assert asyncio.run(list_service.find_list_id(db, user_id=MEMBER, list_type="shopping", name="Shopping")) == "L1"
     assert asyncio.run(list_service.find_list(db, user_id=MEMBER, list_type="shopping", name="Shopping")) == ("L1", "Groceries")
+
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_suggestion_is_proposed_against_the_list_row_it_wrote_to(kernel, monkeypatch):
+    """The suggestion path (``_execute_action``) finds its list by the EXACT name ``list_type.capitalize()`` (``name=$2``) or creates
+    it with that name, so the row's name IS that value: the hook passes the same expression (the train review's third finding is
+    not a mismatch; this pins the invariant it relies on)."""
+    import inspect
+
+    import pending_suggestions
+
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    conn = _Conn()
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    out = await pending_suggestions.execute_suggestion("s1", MEMBER)
+    settle(1)
+    assert out["ok"] and [a["args"]["list"] for _, op, a in kernel.calls if op == "act"] == ["Shopping"]
+    src = inspect.getsource(pending_suggestions._execute_action)
+    assert _suggestion_list_name_contract(src)
+    # Remove the assignment, leaving a comment and a string naming the old call.
+    assignment = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "ln" for t in n.targets))
+    lines = src.splitlines(keepends=True)
+    for replacement in ("# ln = lt.capitalize()\n        pass", repr("ln = lt.capitalize()")):
+        changed = lines[:assignment.lineno - 1] + ["        " + replacement + "\n"] + lines[assignment.end_lineno:]
+        assert not _suggestion_list_name_contract("".join(changed))

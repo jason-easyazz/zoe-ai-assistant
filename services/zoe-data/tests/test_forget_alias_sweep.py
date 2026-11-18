@@ -235,7 +235,7 @@ async def test_the_scan_reads_only_the_owners_rows_even_when_the_store_hands_bac
         return types.SimpleNamespace(id=text, text=text, metadata={"user_id": owner, "wing": owner})
 
     class _Leaky:
-        async def list_by_status(self, *, user_id, status, limit, offset):
+        async def list_by_status(self, *, user_id, status, limit, offset, strict=False):
             return [ref("Marisal is mine", USER), ref("Marisal is theirs", OTHER)] if status == "approved" and offset == 0 else []
 
     texts = [t for src, t in await mfa.collect_texts(USER, _Leaky()) if src == "memory"]

@@ -211,11 +211,11 @@ async def _drop_offer(db, offer_id) -> None:
         logger.warning("pending_suggestions: forgotten offer delete failed - still withheld at read time (%s)", type(exc).__name__)
 
 
-async def withdraw_matching(user_id: str, matches) -> int:
+async def withdraw_matching(user_id: str, matches, *, plan_only: bool = False) -> int | list[str]:
     """Delete the member's un-resolved offers whose words satisfy ``matches(text) -> bool`` (a TOPIC forget: "forget that I told
     you about my sister" left "add Bea (your sister) as a contact?" pending, QA round 9). The topic is not a name, so the
     forgotten-entity filter above never saw it. RAISES on a store failure (the forget is then not confirmed)."""
-    gone = 0
+    gone = []
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
@@ -225,15 +225,22 @@ async def withdraw_matching(user_id: str, matches) -> int:
                 if str(r["action_type"] or "") in _FORGET_EXEMPT:
                     continue
                 if matches("\n".join(str(r[k] or "") for k in ("description", "offer_phrase", "pre_filled_slots"))):
-                    await db.execute("DELETE FROM pending_suggestions WHERE id = $1", r["id"])
-                    gone += 1
+                    gone.append(str(r["id"]))
+                    if not plan_only:
+                        await db.execute("DELETE FROM pending_suggestions WHERE id = $1", r["id"])
     except RuntimeError as exc:
         from db_pool import pool_ever_initialised
 
         if "not initialised" in str(exc) and not pool_ever_initialised():
             return 0            # a process that never had a database (a lab / bare unit run) holds no offers; a LOST pool raises
         raise
-    return gone
+    return gone if plan_only else len(gone)
+
+
+async def erase_ids(user_id: str, ids) -> None:
+    async with get_db_ctx() as db:
+        for rid in ids:
+            await db.execute("DELETE FROM pending_suggestions WHERE user_id = $1 AND id = $2", user_id, rid)
 
 
 def person_suggestions_enabled() -> bool:
@@ -1093,6 +1100,11 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
 
             os_shadow.note_add(user_id, source="suggestion", list_type=slots.get("list_type", "shopping"),
                                list_name=str(slots.get("list_type", "shopping")).capitalize(), item=result.get("text"))
+        elif action == "reminder_create" and isinstance(result, dict):
+            import os_shadow      # the member's yes is a real reminder: shadowed after the commit (no due time: the kernel cannot say it)
+
+            os_shadow.note_reminder_create(user_id, source="suggestion", note=result.get("title"), due_date=None, due_time=None,
+                                           recurring=False)
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}

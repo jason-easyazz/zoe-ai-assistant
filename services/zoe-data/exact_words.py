@@ -529,11 +529,121 @@ async def erase_entity(user_id: str, name: str) -> int:
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 
+async def _shadow_first(user_id: str, *, turns=None) -> None:
+    """The Zoe OS shadow step of a words erase (os_shadow.forget_for_erase): before the words go, the member's shadow record goes too,
+    confirmed or this RAISES (the forget must not be confirmed). A no-op with no shadow state at all.
+
+    ``turns``: an async lookup of the index turn ids this erase was about to remove. It runs ONLY when the kernel did not confirm,
+    and what it finds is parked (``pending-erases.json``, ids only) before the raise, so the shadow's replay finishes the erase
+    (``finish_parked``) even if nobody asks again."""
+    import os_shadow
+
+    try:
+        await os_shadow.forget_for_erase(user_id)
+    except os_shadow.ShadowForgetUnavailable:
+        if turns is not None:
+            try:
+                await os_shadow.park_unconfirmed(user_id, turns=list(await turns()))
+            except Exception as exc:  # noqa: BLE001 - the ids could not be read: still not confirmed, only a repeat can finish it
+                logger.error("exact_words: unconfirmed words erase NOT parked (%s)", type(exc).__name__)
+        raise
+
+
+def _key_and_needle(text: str) -> tuple:
+    key = _squash(text or "").lower().strip(" .!?\"'")
+    return key, max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+
+
+async def _transcript_ids(user_id: str, text: str) -> list:
+    """The ids of the owner's saved turns ``forget_transcript(user_id, text)`` would flag ([] when it would do nothing)."""
+    key, needle = _key_and_needle(text)
+    if len(key) < 6 or not needle or not isinstance(get_backend(), SqlBackend):
+        return []
+    from memory_provenance import OFF_RECORD_JSON_MARK
+    return [str(row_id) for row_id, content, metadata in await _transcript_candidates(user_id, needle)
+            if key in _squash(str(content or "")).lower() and OFF_RECORD_JSON_MARK not in str(metadata or "")]
+
+
+async def words_plan(user_id: str, texts: Iterable[str], turn_ids: Iterable[str] = (), *, night: bool = False) -> dict:
+    """Everything a words erase of ``texts`` (``erase_text`` + ``forget_transcript`` each) and of ``turn_ids`` (``erase_turn``) will
+    touch, as ids: ``{"turns": [index turn ids], "messages": [saved-transcript row ids]}``. Reads only; the plan a multi-step
+    forget parks BEFORE its first destructive step (``os_shadow.plan_erase``). ``night=True`` also carries the observation and
+    thread ids selected by ``night_mind.erase_words``. RAISES on a store failure."""
+    texts, turn_ids = list(texts), list(turn_ids)
+    turns, messages = [str(t) for t in turn_ids if t], []
+    backend = get_backend()
+    for text in dict.fromkeys(t for t in texts if t):
+        key, needle = _key_and_needle(text)
+        if len(key) < 6 or not needle:
+            continue
+        turns += [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()]
+        messages += await _transcript_ids(user_id, text)
+    if turns and isinstance(backend, SqlBackend):
+        # the saved turn behind an index turn that is erased BY ID: once the index row is gone nothing else leads to it
+        for _id, text, _ts in await backend.get(user_id, list(dict.fromkeys(turns))):
+            messages += await _transcript_ids(user_id, text)
+    found = {"turns": list(dict.fromkeys(turns)), "messages": list(dict.fromkeys(messages))}
+    if night:
+        import night_mind
+
+        for tid in list(turn_ids) or [""]:
+            for kind, ids in (await night_mind.words_plan(user_id, tid, *texts)).items():
+                found[kind] = list(dict.fromkeys([*found.get(kind, ()), *ids]))
+    return found
+
+
+async def park_transcript(user_id: str, text: str, exc: BaseException) -> None:
+    """A caller's ``forget_transcript(user_id, text)`` failed with ``exc``. When that is the shadow not confirming, park the ids of
+    the saved turns it was about to flag (ids only) so the replay flags them: by then the index entry may already be gone, and an
+    unflagged transcript turn is re-indexed by the nightly catch-up. Never raises (the caller raises its own failure)."""
+    try:
+        import os_shadow
+
+        if not os_shadow.unconfirmed(exc):
+            return
+        await os_shadow.park_unconfirmed(user_id, messages=await _transcript_ids(user_id, text))
+    except Exception as park_exc:  # noqa: BLE001
+        logger.error("exact_words: unconfirmed transcript flag NOT parked (%s)", type(park_exc).__name__)
+
+
+async def finish_parked(user_id: str, turn_ids: Iterable[str], message_ids: Iterable[str]) -> int:
+    """Finish a parked words erase by id (``turn_forget.finish_parked``): each parked index turn's saved transcript turn is flagged
+    off the record (its words are read from the index entry itself) and the entry deleted; parked transcript rows are flagged by id.
+    RAISES on a store failure (the entry stays parked). Idempotent. Returns what it removed or flagged."""
+    import json
+    from memory_provenance import OFF_RECORD_JSON_MARK
+    n = 0
+    backend = get_backend()
+    for tid in turn_ids:
+        for _id, text, _ts in await backend.get(user_id, [tid]):
+            n += await forget_transcript(user_id, text)
+        n += await erase_turn(user_id, tid)
+    ids = [str(i) for i in message_ids if i]
+    if ids:
+        await _shadow_first(user_id)
+        for row_id, _content, metadata in await _transcript_rows(user_id, ids):
+            if OFF_RECORD_JSON_MARK in str(metadata or ""):
+                continue
+            try:
+                meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else {}
+            except ValueError:
+                meta = {}
+            meta = dict(meta) if isinstance(meta, dict) else {}
+            meta["off_record"] = True
+            await _set_transcript_metadata(str(row_id), json.dumps(meta))
+            n += 1
+    return n
+
+
 async def erase_turn(user_id: str, turn_id: str) -> int:
     """Delete ONE indexed turn by its id (the precise form of ``erase_text``: a displayed quote can be shortened). Store failures
     are RAISED. 0 = no such turn."""
     if not (user_id or "").strip() or not (turn_id or "").strip():
         return 0
+    async def turns() -> list:
+        return [turn_id]
+
+    await _shadow_first(user_id, turns=turns)
     return int(await get_backend().delete(user_id, [turn_id]) or 0)
 
 
@@ -546,9 +656,14 @@ async def erase_text(user_id: str, text: str) -> int:
         return 0
     backend = get_backend()
     needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+
+    async def turns() -> list:
+        return [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()] if needle else []
+
+    await _shadow_first(user_id, turns=turns)
     if not needle:
         return 0
-    ids = [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()]
+    ids = await turns()
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 
@@ -563,6 +678,19 @@ async def _transcript_candidates(user_id: str, needle: str) -> list[tuple]:
            "AND LOWER(cm.content) LIKE ? LIMIT 200")
     async with get_db_ctx() as db:
         return [tuple(r) for r in await (await db.execute(sql, (user_id, f"%{needle}%"))).fetchall()]
+
+
+async def _transcript_rows(user_id: str, ids: list) -> list[tuple]:
+    """The owner's saved user turns with these ids: ``(id, content, metadata)`` (a parked words erase, finished by id). Postgres
+    only; tests replace this seam."""
+    if not ids:
+        return []                    # "IN ()" is not SQL
+    from db_pool import get_db_ctx  # type: ignore[import]
+    from user_filters import message_owner_expr
+    sql = ("SELECT cm.id, cm.content, cm.metadata FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
+           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND cm.id IN (" + ", ".join("?" for _ in ids) + ")")
+    async with get_db_ctx() as db:
+        return [tuple(r) for r in await (await db.execute(sql, (user_id, *ids))).fetchall()]
 
 
 async def _set_transcript_metadata(row_id: str, metadata: str) -> None:
@@ -580,6 +708,7 @@ async def forget_transcript(user_id: str, text: str) -> int:
     key = _squash(text or "").lower().strip(" .!?\"'")
     if not (user_id or "").strip() or len(key) < 6 or not isinstance(get_backend(), SqlBackend):
         return 0
+    await _shadow_first(user_id)
     needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
     if not needle:
         return 0

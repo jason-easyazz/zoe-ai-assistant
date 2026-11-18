@@ -64,3 +64,16 @@ Background + plan: `docs/architecture/brain-tool-selection-reliability.md`.
 ## Child DOX Index
 
 - [samantha_live/AGENTS.md](samantha_live/AGENTS.md) — LIVE-integration proofs for the Samantha memory engine (real Gemma + real store), gated off CI, demo-users only: core loop (`test_live_core.py`), dedup/durability (`test_live_dedup.py`), and cross-user isolation / owner resolution / idle timing (`test_live_isolation.py`).
+
+- `test_os_shadow_forget.py`, the forget-caller tests (`callers` / `entity` / `cascade_env` fixtures): behaviour only - each RUNS the caller over an in-memory store whose `erase_rows` forgets the shadow first, against the fake kernel (`forget_mode = "refuse_all"`, from the start or from the moment the eraser is entered), and each has a no-shadow-state or ordinary-failure control. Never prove a call, an order or an absence by reading source text; a structural (AST) check needs a mutation control. `STATE_CHECKS` pins what a forget costs with no shadow state.
+
+- `test_exact_words_transcript_postgres.py` is OPT-IN real-PostgreSQL coverage of the parked transcript flag (`exact_words._transcript_rows`, `park_transcript`, the "messages" finish, across a restart): `ZOE_TEST_PG_URL=postgresql://... python3 -B -m pytest -p no:cacheprovider -q services/zoe-data/tests/test_exact_words_transcript_postgres.py` from the repo root, against a THROWAWAY database only (its name must contain `test` or `scratch`, else it refuses). It builds its own schema from migration 0001's CREATE TABLE text and drops it. Not `ci_safe`; skips without the variable; `ZOE_REQUIRE_PG_TESTS=1` makes a missing URL a failure.
+
+- `test_os_shadow_settle.py` pins the state directory's settle rule on BOTH copies of the shared text (zoe-data's `os_shadow.py` and the lab kernel's `zoe_os/shadow_state.py`, loaded by path): the two blocks are character-identical, a new directory holds no data for the whole wait, every zoe-data writer settles first, a hand-copied directory is refused by the kernel side and is state-present for forgets, and a second process installing during forgets is either seen or has provably written nothing. Clock and sleep are injected: no test waits real seconds.
+
+- `test_os_shadow_forget.py` also covers observation/thread obligations with the real `night_store.MemoryBackend`, index loss,
+  a simulated restart and a failing replay. Its planned-eraser/replay AST comparison rejects both a new unplanned eraser and a removed replay step.
+
+- Planned forget failures use `Plan.failed()`; `Plan.ok()` cannot clear a failed plan. `test_os_shadow_forget.py` checks every planned caller's caught failures with AST mutation controls, and ordinary erase failures through disk parking and replay (six callers). Its `ordinary_callers` fixture confirms the kernel seam without sockets; executor calls still run off-loop, with synchronous joins for sandbox compatibility.
+
+- Failure markers retain replay obligations; they do not universally require an early reply. Entity-forget ordinary physical-erase failures keep the existing reply and cascade, with archived rows parked for replay.
