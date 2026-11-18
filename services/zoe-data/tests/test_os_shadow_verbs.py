@@ -8,6 +8,8 @@ on purpose reads as disagree in the owner's report, verb by verb. Names, notes a
 """
 from __future__ import annotations
 
+import ast
+
 import importlib.util
 import logging
 import re
@@ -290,8 +292,10 @@ WRITERS = {
     "alarm_create": (re.compile(r"(?is)\binsert\s+(?:or\s+\w+\s+)?into\s+" + _T + r"alarms\b"), frozenset(), "note_alarm_create",
                      "alarms", {}),
     "list_remove": (re.compile(r"(?is)\b(?:update\s+" + _T + r"list_items[\"`]?\s+set\s+(?:[^;]*?,\s*)?deleted\s*=\s*(?:1|true)\b"
-                               r"|delete\s+from\s+" + _T + r"list_items\b)"), frozenset(), "note_list_remove", "list_items",
+                               r"|delete\s+from\s+" + _T + r"list_items\b)"), frozenset({"remove_item_record"}), "note_list_remove", "list_items",
                     {"list_service.py::rename_item_on_list": "OUT OF SCOPE: the merge retires a duplicate row; a correction, not a remove",
+                     "list_service.py::remove_item_record": "The shared row writer; callers retain commit ownership",
+                     "skybridge_service.py::_resolve_list_remove_item": "Calls the service hook after commit",
                      "routers/lists.py::delete_item": "OUT OF SCOPE for now: the REST delete reads no item text; shadowing it needs the "
                                                       "text read first (a later, separate change)"}),
 }
@@ -309,7 +313,15 @@ def test_every_writer_function_of_a_shadowed_verb_is_hooked_or_named_with_a_reas
     named = set(excused) | set(by_caller)
     assert bare == named, f"{verb}: a writer function neither reaches os_shadow.{hook} nor is named: {sorted(bare ^ named)}"
     hook_scan.assert_hooked_by_caller(by_caller, frozenset({hook}))
-    assert sites - bare, f"{verb}: no hooked writer found at all (the pattern is wrong)"
+    if verb == "list_remove":
+        service = (hook_scan.SVC / "list_service.py").read_text("utf-8")
+        sky = (hook_scan.SVC / "skybridge_service.py").read_text("utf-8")
+        assert hook_scan.hooked(dict(hook_scan._functions(ast.parse(service)))["note_removed_item"], frozenset({hook}))
+        caller = dict(hook_scan._functions(ast.parse(sky)))["_resolve_list_remove_item"]
+        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "note_removed_item"
+                   for n in ast.walk(caller))
+    else:
+        assert sites - bare, f"{verb}: no hooked writer found at all (the pattern is wrong)"
 
 
 @pytest.mark.parametrize("verb,sql", [

@@ -1384,6 +1384,11 @@ class Plan:
         if self.entry is not None:
             self.has_failed = True
 
+    def note_erase(self, *, result) -> None:
+        """Keep the plan parked when physical erasure did not confirm."""
+        if isinstance(result, dict) and isinstance(result.get("physical"), dict) and result["physical"].get("ok") is False:
+            self.failed()
+
     async def ok(self) -> None:
         """Every step confirmed: the plan's ids leave the park. Never raises (an id left behind names nothing that still exists,
         and the next replay drops it)."""

@@ -2580,3 +2580,91 @@ async def test_ordinary_erase_failure_shadow_off_preserves_caller_result(ordinar
         assert result == forget_topic.Result(found=1, forgotten=1, turns_retracted=1, preview=SAID, words_erased=1)
         assert not result.store_down
     # Shadow-on controls: test_ordinary_erase_failure_keeps_the_plan_until_replay[last/topic].
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shadow", [True, False], ids=["shadow", "off"])
+async def test_forget_that_unconfirmed_physical_erase(ordinary_callers, monkeypatch, shadow, tmp_path):
+    import intent_router
+    import memory_service
+
+    kernel, st = ordinary_callers
+    if not shadow:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_SHADOW_DIR", str(tmp_path / "absent"))
+    real = memory_service.MemoryService(data_dir=str(tmp_path))
+
+    async def inline(fn, *args):
+        return fn(*args)
+
+    async def physical(_needles):
+        return {"ok": False}
+
+    monkeypatch.setattr(real, "_run_sync", inline)
+    monkeypatch.setattr(real, "_owned_rows_sync", lambda uid, ids: (list(ids), [SAID]))
+    monkeypatch.setattr(real, "_append_audit_sync", lambda *args: None)
+    monkeypatch.setattr(real, "_delete_ids", lambda ids: [st.svc.rows.pop(rid, None) for rid in ids])
+    monkeypatch.setattr(real, "_delete_audit_for_rows_sync", lambda ids: 0)
+    monkeypatch.setattr(real, "_physical_erase", physical)
+    monkeypatch.setattr(st.svc, "erase_rows", real.erase_rows)
+    await st.said()
+    forgotten, reply = await st.run("last")
+    if shadow:
+        assert not forgotten and reply == intent_router.FORGET_STORE_DOWN_REPLY
+        assert _parked_rows(kernel)[MEMBER]["rows"] == ["r1"]
+    else:
+        assert forgotten and reply == f'Done — I forgot: "{SAID}".'
+        assert not (tmp_path / "absent" / "pending-erases.json").exists()
+
+
+def test_note_erase_marks_only_real_plans_on_explicit_failure():
+    real = os_shadow.Plan("member-citrine", {"rows": ["row-citrine"]})
+    empty = os_shadow.Plan("member-citrine", None)
+    for result in (None, {}, {"physical": None}, {"physical": {"ok": True}}):
+        real.note_erase(result=result)
+        assert not real.has_failed
+    for plan in (real, empty):
+        plan.note_erase(result={"physical": {"ok": False}})
+    assert real.has_failed and not empty.has_failed
+
+
+def _assert_erase_results_noted(sources):
+    count = 0
+    for source in sources.values():
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            for field in ("body", "orelse", "finalbody"):
+                statements = getattr(node, field, None)
+                if not isinstance(statements, list):
+                    continue
+                for index, stmt in enumerate(statements):
+                    if not (isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Await)
+                            and isinstance(stmt.value.value, ast.Call)
+                            and isinstance(stmt.value.value.func, ast.Attribute)
+                            and stmt.value.value.func.attr == "erase_rows"):
+                        continue
+                    count += 1
+                    assert len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                    assert index + 1 < len(statements)
+                    note = statements[index + 1]
+                    # the one other accepted form: on a path with NO plan yet (the repeat of an earlier forget), a physical erase
+                    # that did not confirm RAISES, which keeps the carried rows
+                    if (isinstance(note, ast.If) and '.get("ok") is False' in ast.unparse(note.test).replace("'", '"')
+                            and isinstance(note.body[-1], ast.Raise)):
+                        continue
+                    assert isinstance(note, ast.Expr) and isinstance(note.value, ast.Call)
+                    assert ast.unparse(note.value.func) == "plan.note_erase"
+                    assert len(note.value.keywords) == 1 and note.value.keywords[0].arg == "result"
+                    assert ast.unparse(note.value.keywords[0].value) == stmt.targets[0].id
+    assert count == 8
+
+
+def test_planned_erase_results_are_noted_with_negative_control():
+    names = ("intent_router", "provenance_answers", "memory_space", "forget_topic", "memory_curation")
+    sources = {name: (SVC / f"{name}.py").read_text() for name in names}
+    _assert_erase_results_noted(sources)
+    for name in names:
+        mutated = dict(sources)
+        mutated[name] = sources[name].replace("plan.note_erase(result=erased)", "pass", 1)
+        with pytest.raises(AssertionError):
+            _assert_erase_results_noted(mutated)

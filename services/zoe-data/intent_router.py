@@ -9,6 +9,8 @@ Pattern priority: domain-specific (calendar, reminder, contact, note) checked
 BEFORE generic list patterns to avoid collisions like "what's on my calendar"
 matching as list_show.
 """
+from list_service import set_item_checked
+
 import asyncio
 import json
 import logging
@@ -3197,9 +3199,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 return f"{item} wasn't on your {friendly}."
             item_id = row["id"]
             list_id = row["list_id"]
-            await db.execute(
-                "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
-            )
+            await set_item_checked(db, user_id=user_id, item_id=item_id, completed=1)
         logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
         import write_receipts
 
@@ -4174,7 +4174,8 @@ async def _execute_forget_last(user_id: str) -> str:
         try:
             from memory_service import physical_erase_enabled
             if physical_erase_enabled():
-                await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
+                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
+                plan.note_erase(result=erased)
                 await turn_forget.clear_unerased(user_id)
                 finished_earlier = bool(carried)
         except Exception as exc:  # noqa: BLE001
@@ -4628,6 +4629,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     return
                 erased = await svc.erase_rows(user_id, erase_ids, actor=user_id,
                                               reason="forgotten by request (entity)")
+                plan.note_erase(result=erased)
                 logger.info("memory_forget_entity: erased=%s ok=%s", erased.get("rows_removed"),
                             (erased.get("physical") or {}).get("ok"))
             except Exception as exc:  # noqa: BLE001 - the rows are archived either way

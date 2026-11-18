@@ -10,7 +10,7 @@ import panel_principal
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access, role_from_user
-from list_service import create_item_record, create_list_record
+from list_service import (create_item_record, create_list_record, update_list_record, delete_list_record, update_item_record, remove_item_record)
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -290,10 +290,7 @@ async def update_list(
 
     updates.append("updated_at = NOW()")
     params.append(list_id)
-    await db.execute(
-        f"UPDATE lists SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
+    await update_list_record(db, user_id=user_id, list_id=list_id, updates=updates, params=params)
     await db.commit()
 
     cursor = await db.execute(
@@ -334,10 +331,7 @@ async def delete_list(
     if not _can_manage_list(dict(row), user):
         raise HTTPException(status_code=403, detail="Not authorised to delete this list")
 
-    await db.execute(
-        "UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?",
-        (list_id,),
-    )
+    await delete_list_record(db, user_id=user_id, list_id=list_id)
     await db.commit()
 
     await broadcaster.broadcast("lists", "list_updated", {"action": "deleted", "list_id": list_id}, user_id=user_id)
@@ -505,10 +499,7 @@ async def update_item(
 
     updates.append("updated_at = NOW()")
     params.extend([item_id, list_id])
-    await db.execute(
-        f"UPDATE list_items SET {', '.join(updates)} WHERE id = ? AND list_id = ?",
-        params,
-    )
+    await update_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id, updates=updates, params=params)
     await db.commit()
 
     cursor = await db.execute(
@@ -558,10 +549,7 @@ async def delete_item(
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    await db.execute(
-        "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?",
-        (item_id, list_id),
-    )
+    await remove_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id)
     await db.commit()
 
     _audit_item("delete", actor, list_id, item_id)

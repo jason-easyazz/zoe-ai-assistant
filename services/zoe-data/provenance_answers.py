@@ -1492,7 +1492,9 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                     from memory_service import physical_erase_enabled
 
                     if physical_erase_enabled():
-                        await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
+                        erased = await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
+                        if ((erased or {}).get("physical") or {}).get("ok") is False:     # no plan yet on this repeat path: a failed
+                            raise RuntimeError("physical erase did not confirm")          # physical erase keeps the carried rows
                         await turn_forget.clear_unerased(user_id)
                         left = len(carried)
                 left += await _erase_words(user_id, exp, ref.text or "")
@@ -1520,7 +1522,8 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 from memory_service import physical_erase_enabled
 
                 if physical_erase_enabled():
-                    await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)")
+                    erased = await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)")
+                    plan.note_erase(result=erased)
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 plan.failed()
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
