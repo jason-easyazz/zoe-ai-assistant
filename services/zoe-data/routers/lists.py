@@ -10,7 +10,7 @@ import panel_principal
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access, role_from_user
-from list_service import (create_item_record, create_list_record, update_list_record, delete_list_record, update_item_record, remove_item_record)
+from list_service import (create_item_record, create_list_record, update_list_record, delete_list_record, update_item_record, remove_item_record, note_item_left)
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -551,6 +551,7 @@ async def delete_item(
 
     await remove_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id)
     await db.commit()
+    await note_item_left(db, user_id, source="rest", list_id=list_id, item_id=item_id)
 
     _audit_item("delete", actor, list_id, item_id)
     await broadcaster.broadcast(

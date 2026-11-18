@@ -39,3 +39,33 @@ def test_one_door():
 
 def test_planted_write_is_caught():
     assert writes("async def f(db):\n    await db.execute('UPDATE list_items SET text = ?')\n")
+
+
+def unhooked_removes(source):
+    offenders = []
+    for function in (n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        calls = sorted((n for n in ast.walk(function) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)),
+                       key=lambda n: (n.lineno, n.col_offset))
+        for call in calls:
+            if call.func.id == "remove_item_record" or (call.func.id == "set_item_checked" and "remove" in function.name):
+                if not any(n.func.id == "note_item_left" and n.lineno > call.lineno for n in calls):
+                    offenders.append(function.name)
+    return offenders
+
+
+def test_remove_callers_observe_after_write():
+    offenders = {}
+    for path in ROOT.rglob("*.py"):
+        relative = path.relative_to(ROOT)
+        if {"tests", "alembic"} & set(relative.parts) or relative.as_posix() == "list_service.py":
+            continue
+        found = unhooked_removes(path.read_text())
+        if found:
+            offenders[relative.as_posix()] = found
+    assert not offenders, offenders
+
+
+def test_remove_hook_scan_negative_control():
+    assert unhooked_removes("async def remove_thing():\n    await set_item_checked()\n") == ["remove_thing"]
+    assert unhooked_removes("async def delete_thing():\n    await remove_item_record()\n") == ["delete_thing"]
+    assert not unhooked_removes("async def remove_thing():\n    await set_item_checked()\n    await note_item_left()\n")

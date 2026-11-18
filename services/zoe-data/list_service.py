@@ -394,14 +394,35 @@ async def remove_item_record(db, *, user_id, item_id, list_id, raw_asyncpg=False
     return await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?", (item_id, list_id))
 
 
-def note_removed_item(user_id, *, list_type, list_name, item):
-    """Record the committed Skybridge removal after the caller's transaction."""
-    os_shadow.note_list_remove(user_id, source="skybridge", list_type=list_type, list_name=list_name, item=item)
+async def note_item_left(db, user_id, *, source: str, list_id, item_id, item: Optional[str] = None,
+                         list_type: Optional[str] = None, list_name: Optional[str] = None) -> None:
+    """Observe a committed removal, without affecting the caller on failure."""
+    try:
+        if not os_shadow.wants("list_remove"):
+            return
+        if item is None or list_type is None or list_name is None:
+            cursor = await db.execute(
+                "SELECT li.text, l.list_type, l.name FROM list_items li JOIN lists l ON li.list_id = l.id "
+                "WHERE li.id = ? AND li.list_id = ?", (item_id, list_id),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return
+            item = row["text"] if item is None else item
+            list_type = row["list_type"] if list_type is None else list_type
+            list_name = row["name"] if list_name is None else list_name
+        os_shadow.note_list_remove(user_id, source=source, list_type=list_type, list_name=list_name, item=item)
+    except Exception:
+        pass  # Shadow observation must never break a committed action.
 
 
-async def set_item_checked(db, *, user_id, item_id, completed, list_id=None):
+async def set_item_checked(db, *, user_id, item_id, completed, list_id=None, raw_asyncpg=False):
     if list_id is not None:
-        return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0", completed, item_id, list_id)
+        if raw_asyncpg:
+            return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0", completed, item_id, list_id)
+        return await db.execute("UPDATE list_items SET completed = ?, updated_at = NOW() WHERE id = ? AND list_id = ? AND deleted = 0", (completed, item_id, list_id))
+    if raw_asyncpg:
+        return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2", completed, item_id)
     if completed:
         return await db.execute("UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,))
     return await db.execute("UPDATE list_items SET completed=0, updated_at=NOW() WHERE id=?", (item_id,))

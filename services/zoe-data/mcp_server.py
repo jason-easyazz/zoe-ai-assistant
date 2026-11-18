@@ -3,8 +3,6 @@ MCP Server for zoe-data.
 Exposes Zoe tools that Hermes skills and local agents can call.
 Runs as a stdio MCP server alongside the REST API.
 """
-from list_service import set_item_checked
-
 import asyncio
 import json
 import random
@@ -15,6 +13,7 @@ from datetime import date, datetime, timedelta
 import os
 
 from runtime_env import bootstrap_runtime_env
+from list_service import note_item_left, set_item_checked
 from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
 from time_utils import today_for_zoe_tz
 from typed_env import env_str  # reads env at CALL time — importing it reads nothing
@@ -1582,6 +1581,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"Item '{text}' not found in {lt} lists"}
         item_id = row["id"]
         await set_item_checked(db, user_id=user_id, item_id=item_id, completed=1)
+        await db.commit()
+        await note_item_left(db, user_id, source="mcp", list_id=row["list_id"], item_id=item_id)
         await _notify_ui("lists", "list_updated", {"action": "item_completed", "list_id": row["list_id"], "item_id": item_id})
         return {"item_id": item_id, "text": text, "status": "completed"}
 

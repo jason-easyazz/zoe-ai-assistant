@@ -296,8 +296,7 @@ WRITERS = {
                     {"list_service.py::rename_item_on_list": "OUT OF SCOPE: the merge retires a duplicate row; a correction, not a remove",
                      "list_service.py::remove_item_record": "The shared row writer; callers retain commit ownership",
                      "skybridge_service.py::_resolve_list_remove_item": "Calls the service hook after commit",
-                     "routers/lists.py::delete_item": "OUT OF SCOPE for now: the REST delete reads no item text; shadowing it needs the "
-                                                      "text read first (a later, separate change)"}),
+                     "routers/lists.py::delete_item": "Calls the service hook after commit"}),
 }
 
 
@@ -316,9 +315,9 @@ def test_every_writer_function_of_a_shadowed_verb_is_hooked_or_named_with_a_reas
     if verb == "list_remove":
         service = (hook_scan.SVC / "list_service.py").read_text("utf-8")
         sky = (hook_scan.SVC / "skybridge_service.py").read_text("utf-8")
-        assert hook_scan.hooked(dict(hook_scan._functions(ast.parse(service)))["note_removed_item"], frozenset({hook}))
+        assert hook_scan.hooked(dict(hook_scan._functions(ast.parse(service)))["note_item_left"], frozenset({hook}))
         caller = dict(hook_scan._functions(ast.parse(sky)))["_resolve_list_remove_item"]
-        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "note_removed_item"
+        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "note_item_left"
                    for n in ast.walk(caller))
     else:
         assert sites - bare, f"{verb}: no hooked writer found at all (the pattern is wrong)"
@@ -766,6 +765,7 @@ async def test_a_card_context_remove_on_a_custom_list_is_shadowed_against_that_l
     monkeypatch.setattr(sky, "_resolve_lists", nothing)
     monkeypatch.setattr(sky, "_audit_list_item", lambda *a, **k: None)
     seen = []
+    monkeypatch.setattr(os_shadow, "wants", lambda verb: True)
     monkeypatch.setattr(os_shadow, "note_list_remove", lambda *a, **k: seen.append(k))
     context = {"cards": [{"content": {"source": "list_show", "list_id": "L9", "list_type": "personal"}}]}
     intent = sky.SkybridgeIntent(domain="lists", action="remove_item", item_text="tent pegs")     # no list named: the card decides
@@ -858,3 +858,129 @@ def test_with_the_shadow_off_an_alarm_create_computes_no_date(monkeypatch):
     dated = [[kw.value for kw in n.keywords if kw.arg == "dated"] for n in hooks]
     assert hooks and all(len(d) == 1 for d in dated), "every note_alarm_create call passes dated="
     assert all(isinstance(d[0], ast.Lambda) for d in dated), "dated= is a lambda (lazy), never an eagerly computed value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["spoken", "mcp", "rest"])
+async def test_list_remove_observes_committed_row(monkeypatch, path):
+    import contextlib
+    import sqlite3
+    import intent_router
+    import mcp_server
+    import routers.lists as lists
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript("CREATE TABLE lists (id TEXT, user_id TEXT, visibility TEXT, list_type TEXT, name TEXT, deleted INT, created_at TEXT);"
+                       "CREATE TABLE list_items (id TEXT, list_id TEXT, text TEXT, completed INT, deleted INT, updated_at TEXT);"
+                       "INSERT INTO lists VALUES ('luz', 'miv', 'personal', 'shopping', 'Vellum', 0, '1');"
+                       "INSERT INTO list_items VALUES ('qir', 'luz', 'womble', 0, 0, '1');")
+    conn.commit()
+
+    class DB:
+        async def execute(self, sql, params=()):
+            return Cursor(conn.execute(sql.replace('NOW()', "'now'"), params))
+        async def commit(self):
+            conn.commit()
+
+    class Cursor:
+        def __init__(self, cursor):
+            self.cursor = cursor
+        async def fetchone(self):
+            return self.cursor.fetchone()
+        async def fetchall(self):
+            return self.cursor.fetchall()
+
+    db = DB()
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+    async def noop(*args, **kwargs):
+        return None
+    async def actor(*args, **kwargs):
+        return {"user_id": "miv"}
+    async def panel_actor(*args, **kwargs):
+        return False, "miv"
+    monkeypatch.setattr(os_shadow, "wants", lambda verb: True)
+    observed = []
+    def note(user, **kwargs):
+        row = conn.execute("SELECT completed, deleted FROM list_items WHERE id='qir'").fetchone()
+        assert not conn.in_transaction
+        assert row["deleted" if path == "rest" else "completed"] == 1
+        observed.append((user, kwargs))
+    monkeypatch.setattr(os_shadow, "note_list_remove", note)
+    monkeypatch.setattr("database.get_db_ctx", ctx)
+    monkeypatch.setattr(intent_router, "_notify_lists_ui", noop)
+    monkeypatch.setattr(mcp_server, "_notify_ui", noop)
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", actor)
+    monkeypatch.setattr(lists, "_item_actor", panel_actor)
+    monkeypatch.setattr(lists, "_require_item_feature", noop)
+    monkeypatch.setattr(lists, "_require_list_item_mutation_access", noop)
+    monkeypatch.setattr(lists.broadcaster, "broadcast", noop)
+    if path == "spoken":
+        await intent_router._execute_list_remove_direct(intent_router.Intent("list_remove", {"item": "womble", "list_type": "shopping"}), "miv")
+    elif path == "mcp":
+        await mcp_server._execute_tool(db, "list_remove_item", {"item_text": "womble", "list_type": "shopping"})
+    else:
+        await lists.delete_item("shopping", "luz", "qir", user={"user_id": "miv"}, db=db)
+    assert observed == [("miv", {"source": path, "item": "womble", "list_type": "shopping", "list_name": "Vellum"})]
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_list_remove_shadow_off_does_not_query(monkeypatch):
+    import list_service
+    class DB:
+        async def execute(self, *args):
+            pytest.fail("shadow off must not query")
+    monkeypatch.setattr(os_shadow, "wants", lambda verb: False)
+    await list_service.note_item_left(DB(), "miv", source="rest", list_id="luz", item_id="qir")
+
+
+class _LeftDB:
+    """A stand-in connection for ``note_item_left``: one row keyed by item id, or a failing read."""
+
+    def __init__(self, row=None, fail=False):
+        self.row, self.fail, self.sql = row, fail, []
+
+    async def execute(self, sql, params=()):
+        self.sql.append(sql)
+        if self.fail:
+            raise RuntimeError("store hiccup")
+        row = self.row
+
+        class _Cur:
+            async def fetchone(self):
+                return row
+        return _Cur()
+
+
+@pytest.mark.parametrize("kind", ["deleted", "ticked"])
+def test_a_removed_item_resolves_its_names_after_the_commit_whichever_way_it_left(monkeypatch, kind):
+    """Review (PR #2679): the lookup runs AFTER the commit, on an item that is by then deleted (REST, skybridge) or ticked off
+    (voice, MCP): its SELECT must not filter on either, and the hook gets the item text and the list's name."""
+    import asyncio
+    import list_service
+
+    seen = []
+    monkeypatch.setattr(os_shadow, "wants", lambda verb: verb == "list_remove")
+    monkeypatch.setattr(os_shadow, "note_list_remove", lambda user_id, **kw: seen.append((user_id, kw)))
+    db = _LeftDB({"text": "plim wafers", "list_type": "shopping", "name": "Quarn list"})
+    asyncio.run(list_service.note_item_left(db, "member-left", source="spoken" if kind == "ticked" else "rest", list_id="l-1", item_id="i-1"))
+    assert seen == [("member-left", {"source": "spoken" if kind == "ticked" else "rest", "list_type": "shopping",
+                                     "list_name": "Quarn list", "item": "plim wafers"})]
+    sql = " ".join(db.sql).lower()
+    assert "deleted" not in sql and "completed" not in sql, sql        # neither state hides the row from the lookup
+
+
+def test_the_remove_hook_never_raises_and_never_queries_when_off(monkeypatch):
+    import asyncio
+    import list_service
+
+    monkeypatch.setattr(os_shadow, "wants", lambda verb: True)
+    monkeypatch.setattr(os_shadow, "note_list_remove", lambda *a, **k: (_ for _ in ()).throw(AssertionError("not reached")))
+    asyncio.run(list_service.note_item_left(_LeftDB(fail=True), "member-left", source="rest", list_id="l-1", item_id="i-1"))   # read fails: swallowed
+    off = _LeftDB({"text": "x", "list_type": "shopping", "name": "y"})
+    monkeypatch.setattr(os_shadow, "wants", lambda verb: False)
+    asyncio.run(list_service.note_item_left(off, "member-left", source="rest", list_id="l-1", item_id="i-1"))
+    assert off.sql == []                                               # switch off: no query at all

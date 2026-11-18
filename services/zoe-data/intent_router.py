@@ -9,8 +9,6 @@ Pattern priority: domain-specific (calendar, reminder, contact, note) checked
 BEFORE generic list patterns to avoid collisions like "what's on my calendar"
 matching as list_show.
 """
-from list_service import set_item_checked
-
 import asyncio
 import json
 import logging
@@ -31,7 +29,7 @@ import contacts_conversation as _cc
 import panel_principal
 import traffic_class
 from log_redaction import utterance_tag as _utt_tag
-from list_service import HouseholdListUnavailable
+from list_service import HouseholdListUnavailable, note_item_left, set_item_checked
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
@@ -3200,6 +3198,8 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
             item_id = row["id"]
             list_id = row["list_id"]
             await set_item_checked(db, user_id=user_id, item_id=item_id, completed=1)
+            await db.commit()
+            await note_item_left(db, user_id, source="spoken", list_id=list_id, item_id=item_id)
         logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
         import write_receipts
 

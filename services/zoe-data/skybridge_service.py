@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from list_service import create_list_record, remove_item_record, set_item_checked, note_removed_item
-
 import asyncio
 import concurrent.futures
 import contextvars
@@ -31,6 +29,7 @@ from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
+from list_service import create_list_record, note_item_left, remove_item_record, set_item_checked
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
 from typed_env import env_bool, env_str
@@ -5063,7 +5062,8 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     item_text = normalize_item_text(str(target_item.get("text") or intent.item_text))
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     _audit_list_item("remove", user_id, list_id, item_id)
-    note_removed_item(user_id, list_type=list_type, list_name=resolved_name or intent.list_name, item=item_text)
+    await note_item_left(db, user_id, source="skybridge", list_id=list_id, item_id=item_id,
+                         list_type=list_type, list_name=resolved_name or intent.list_name, item=item_text)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
@@ -5214,7 +5214,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
     if desired is None:
         desired = not bool(target_item.get("completed"))
     completed_val = 1 if desired else 0
-    update_result = await set_item_checked(db, user_id=user_id, item_id=item_id, list_id=list_id, completed=completed_val)
+    update_result = await set_item_checked(db, user_id=user_id, item_id=item_id, list_id=list_id, completed=completed_val, raw_asyncpg=True)
     if _affected_rows(update_result) == 0:
         refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type}
