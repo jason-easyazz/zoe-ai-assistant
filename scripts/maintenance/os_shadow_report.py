@@ -45,7 +45,7 @@ VERB_ORDER = ("list_add", "list_remove", "reminder_create", "alarm_create")
 UNKNOWN = "unknown"
 ALLOWED = {
     "verb": frozenset(VERB_ORDER),
-    "src": frozenset({"spoken", "single", "skybridge", "rest", "service", "suggestion", "other"}),
+    "src": frozenset({"spoken", "single", "skybridge", "rest", "service", "suggestion", "mcp", "other"}),
     "cls": frozenset({"shopping", "todo", "personal", "other", "once", "repeat", "-"}),
     "live": frozenset({"added", "refused", "noop"}),
     "kernel": frozenset({"verified", "unverified", "uncertain", "refused", "none"}),

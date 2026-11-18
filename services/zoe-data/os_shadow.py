@@ -695,7 +695,7 @@ _lock = threading.Lock()
 LIST_CLASSES = ("shopping", "todo", "personal")
 #: EVERY value each field of the one line can take (``_finish`` maps anything else to ``other`` / ``none``): the line and the counter
 #: keys can never carry a caller's text (``test_marker_text_from_any_caller_argument_never_reaches_a_log_line_or_a_counter``).
-SOURCES = ("spoken", "single", "skybridge", "rest", "suggestion", "service")      # every call site's ``source=``, on every branch
+SOURCES = ("spoken", "single", "skybridge", "rest", "suggestion", "service", "mcp")      # every call site's ``source=``, on every branch
 CLASSES = LIST_CLASSES + ("other", "once", "repeat", "-")       # list classes; reminder / alarm once|repeat; "-" (note_act)
 LIVE = ("added", "refused", "noop")
 KERNEL_STATES = ("verified", "unverified", "uncertain", "refused", "none")
