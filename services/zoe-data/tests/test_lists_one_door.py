@@ -41,13 +41,23 @@ def test_planted_write_is_caught():
     assert writes("async def f(db):\n    await db.execute('UPDATE list_items SET text = ?')\n")
 
 
+def _remove_by_tick(call) -> bool:
+    """A ``set_item_checked`` call that ticks an item OFF with a constant (``completed=1`` / ``True``) is a REMOVE command (voice, the
+    brain tool); a screen tick / untick passes a variable and is not. Judged on the call itself, never on the function's name, so a
+    remove inside a generic dispatcher (``mcp_server._execute_tool``) is still caught."""
+    for kw in call.keywords:
+        if kw.arg == "completed":
+            return isinstance(kw.value, ast.Constant) and bool(kw.value.value)
+    return False
+
+
 def unhooked_removes(source):
     offenders = []
     for function in (n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
         calls = sorted((n for n in ast.walk(function) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)),
                        key=lambda n: (n.lineno, n.col_offset))
         for call in calls:
-            if call.func.id == "remove_item_record" or (call.func.id == "set_item_checked" and "remove" in function.name):
+            if call.func.id == "remove_item_record" or (call.func.id == "set_item_checked" and _remove_by_tick(call)):
                 if not any(n.func.id == "note_item_left" and n.lineno > call.lineno for n in calls):
                     offenders.append(function.name)
     return offenders
@@ -66,6 +76,10 @@ def test_remove_callers_observe_after_write():
 
 
 def test_remove_hook_scan_negative_control():
-    assert unhooked_removes("async def remove_thing():\n    await set_item_checked()\n") == ["remove_thing"]
+    assert unhooked_removes("async def remove_thing():\n    await set_item_checked(completed=1)\n") == ["remove_thing"]
+    # a remove inside a generic dispatcher whose name says nothing about removing (the MCP tool path) is caught too
+    assert unhooked_removes("async def _execute_tool():\n    await set_item_checked(completed=1)\n") == ["_execute_tool"]
+    # a screen tick / untick passes a variable: not a remove
+    assert not unhooked_removes("async def toggle():\n    await set_item_checked(completed=completed_val)\n")
     assert unhooked_removes("async def delete_thing():\n    await remove_item_record()\n") == ["delete_thing"]
-    assert not unhooked_removes("async def remove_thing():\n    await set_item_checked()\n    await note_item_left()\n")
+    assert not unhooked_removes("async def remove_thing():\n    await set_item_checked(completed=1)\n    await note_item_left()\n")
