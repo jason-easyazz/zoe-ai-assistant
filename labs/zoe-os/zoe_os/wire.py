@@ -52,6 +52,11 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "undo": {"person": ((str,), True), "actor": ((str,), True)},
     "describe": {},
     "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
+    # the lists door (``lists.py``): ids only, never an item's text or a list's name
+    "list_ask": {"verb": ((str,), True), "person": ((str,), True), "via": (_OPT_STR, False), "list": (_OPT_STR, False),
+                 "items": ((list,), False), "owner": (_OPT_STR, False), "visibility": (_OPT_STR, False),
+                 "turn": (_OPT_STR, False)},
+    "list_report": {"ask": ((int,), True), "outcome": ((str,), True)},
 }
 
 # error codes (closed)

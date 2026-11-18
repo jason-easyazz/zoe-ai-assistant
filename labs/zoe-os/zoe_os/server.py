@@ -264,6 +264,15 @@ class KernelServer:
         self._person_op(conn, "undo")
         return dataclasses.asdict(self.kernel.actions.undo(a["person"], actor=a["actor"]))
 
+    def _op_list_ask(self, conn: _Conn, a: dict) -> dict:
+        """May this person do this verb to this list? Allowed: the ask id to report against. Refused: a fixed reason code."""
+        return self.kernel.lists.ask(conn.name, a["verb"], a["person"], via=a.get("via"), list_id=a.get("list"),
+                                     items=a.get("items", ()), owner=a.get("owner"), visibility=a.get("visibility"),
+                                     turn=a.get("turn"))
+
+    def _op_list_report(self, conn: _Conn, a: dict) -> dict:
+        return self.kernel.lists.report(conn.name, a["ask"], a["outcome"])
+
     def _op_describe(self, conn: _Conn, a: dict) -> dict:
         """The actions this caller's manifest names that declared their arguments: name, doc,
         params. The brain's tool list is derived from this, never written by hand."""
