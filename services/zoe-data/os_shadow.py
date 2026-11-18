@@ -6,7 +6,11 @@ are compared and logged as one codes-only line. The existing write path stays th
 Flag ``ZOE_OS_LIST_SHADOW`` = ``off`` (default) | ``shadow`` is the ONE switch (it keeps its name: every verb rides it, and the
 forget fail-closed rule hangs off it); ``ZOE_OS_SHADOW_VERBS`` (default ``list_add``) names which verbs are shadowed while it is
 on, so flipping the switch alone still shadows list add only, exactly as before. There is no ``on``: the kernel is never
-authoritative here.
+authoritative for a SHADOWED verb.
+
+The LISTS DOOR is the other half (``ZOE_OS_LISTS=kernel``, default off; ``ask_list`` / ``report_list`` below, called only by
+``list_service``): there the kernel DECIDES a list change before it is made and records it by ids; a refusal is final, an
+unreachable or slow kernel lets the change proceed. While it is on, the watch-only hooks for list verbs are silent (``wants``).
 
 Boundaries (each pinned by ``tests/test_os_shadow.py``):
 
@@ -160,8 +164,27 @@ def verbs() -> frozenset:
 
 
 def wants(verb: str) -> bool:
-    """The switch is ``shadow`` AND the verb is listed: what a call site checks before any extra read it does only for the shadow."""
-    return mode() == "shadow" and verb in verbs()
+    """The switch is ``shadow`` AND the verb is listed: what a call site checks before any extra read it does only for the shadow.
+    A LIST verb is never wanted while ``ZOE_OS_LISTS=kernel``: the lists door (``ask_list``) is then the kernel's one record of a list
+    change, and the watch-only hook would record it a second time."""
+    if mode() != "shadow" or verb not in verbs():
+        return False
+    return not (verb in LIST_SHADOW_VERBS and lists_on())
+
+
+LISTS_FLAG = "ZOE_OS_LISTS"
+LISTS_ASK_MS_FLAG = "ZOE_OS_LISTS_ASK_MS"
+LIST_SHADOW_VERBS = frozenset({"list_add", "list_remove"})
+
+
+def lists_on() -> bool:
+    """``ZOE_OS_LISTS=kernel``: every list change ASKS the kernel first (``ask_list``). Anything else is off: no kernel call."""
+    try:
+        import typed_env
+
+        return str(typed_env.flag(LISTS_FLAG)).strip().lower() == "kernel"
+    except Exception:  # noqa: BLE001 - a flag read must never break a turn
+        return False
 
 
 def state_dir() -> Path:
@@ -1101,6 +1124,184 @@ def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optiona
                                                            "dated": bool(dated() if callable(dated) else dated)}))
 
 
+# ---- the lists door: the kernel DECIDES a list change (ZOE_OS_LISTS=kernel) ----------------------------------------------------------
+#: The wire verbs of ``labs/zoe-os/zoe_os/lists.py``. Ids only cross the socket: never an item's text or a list's name.
+DOOR_VERBS = ("list.create", "list.rename", "list.delete", "list.share", "item.add", "item.remove", "item.tick", "item.edit")
+ASK_DEADLINE_S = 0.150            # the whole ask, queue wait included; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
+DOOR_QUEUE_MAX = 256
+ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
+#: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
+DOOR_REFUSALS = ("unknown_person", "not_owner", "adults_only", "not_in_manifest", "forgotten")
+DOOR_REASONS = ("-", *DOOR_REFUSALS, "other", "timeout", "unavailable", "circuit", "not_provisioned", "no_credential", "protocol",
+                "erasing", "queue_full", "worker", "no_actor", "no_list", "lookup", "bad_verb")
+_door_q: "queue.Queue" = queue.Queue(maxsize=DOOR_QUEUE_MAX)
+_door_worker: Optional[threading.Thread] = None
+_door_guard = threading.Lock()
+
+
+def ask_deadline_s() -> float:
+    try:
+        import typed_env
+
+        ms = int(typed_env.flag(LISTS_ASK_MS_FLAG))
+        return ms / 1000.0 if 1 <= ms <= 5000 else ASK_DEADLINE_S
+    except Exception:  # noqa: BLE001
+        return ASK_DEADLINE_S
+
+
+def _door_log(verb: str, decision: str, reason: str, ask_ms: float) -> None:
+    """ONE line per decided list change; closed codes and a number only."""
+    logger.info("ZOE_OS_ACT area=lists verb=%s decision=%s reason=%s ask_ms=%.1f", verb if verb in DOOR_VERBS else "unknown",
+                decision if decision in (ALLOW, REFUSE, NOT_CHECKED) else NOT_CHECKED,
+                (reason or "-") if (reason or "-") in DOOR_REASONS else "other", float(ask_ms))
+    with _lock:
+        _door_counts[decision] += 1
+
+
+_door_counts: Counter = Counter()
+
+
+def door_counters() -> dict:
+    with _lock:
+        return dict(_door_counts)
+
+
+def note_unchecked(verb: str, reason: str) -> tuple:
+    """A list change the door could not put to the kernel at all (no actor, the list row could not be read): one line, and it proceeds."""
+    _door_log(verb, NOT_CHECKED, reason, 0.0)
+    return NOT_CHECKED, reason, None
+
+
+def _refusal_code(reason: str) -> str:
+    text = (reason or "").strip()
+    if text in DOOR_REFUSALS:
+        return text
+    return "forgotten" if "forgotten" in text.lower() else "other"
+
+
+def _door_parked(user_id: str) -> bool:
+    """Is a forget of this member parked (not yet confirmed by the kernel)? Then nothing new may be recorded about them. An
+    unreadable park file is "yes" for everyone (the change still proceeds; it is only not recorded)."""
+    members = _pending_members
+    if members is None:
+        try:
+            if not _pending_path().parent.is_dir():
+                return False
+            members = _pending_read_locked()
+        except Exception:  # noqa: BLE001
+            return True
+    return user_id in members
+
+
+def _door_ask(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
+    """On the door thread: ``(decision, reason, ask id)``. Only the kernel's own refusal is a refusal; every fault is not_checked."""
+    try:
+        if user_erase_gate.in_progress(user_id) or _door_parked(user_id):
+            return NOT_CHECKED, "erasing", None
+        out = kernel.call(SKILL_BRAIN, "list_ask", until, verb=verb, person=user_id, **args)
+        ask = out.get("ask") if isinstance(out, dict) else None
+        if type(ask) is not int:
+            raise KernelProtocol("no ask id")
+        return ALLOW, "", ask
+    except KernelRefused as exc:
+        return REFUSE, _refusal_code(exc.reason), None
+    except (socket.timeout, TimeoutError):
+        return NOT_CHECKED, "timeout", None
+    except KernelUnavailable as exc:
+        reason = str(exc)[:24].replace(" ", "_")
+        return NOT_CHECKED, reason if reason in DOOR_REASONS else "unavailable", None
+    except KernelProtocol:
+        return NOT_CHECKED, "protocol", None
+    except OSError as exc:
+        return NOT_CHECKED, "timeout" if isinstance(exc, socket.timeout) else "unavailable", None
+    except Exception:  # noqa: BLE001 - the door thread never dies and never raises into a turn
+        return NOT_CHECKED, "worker", None
+
+
+def _door_run() -> None:
+    """The door's own thread and its own connection (a ``_Conn`` is one caller's): asks and reports, in order."""
+    kernel = _Kernel()
+    while True:
+        job = _door_q.get()
+        if job[0] == "stop":
+            for skill in list(kernel.conns):
+                kernel.drop(skill)
+            return
+        try:
+            if job[0] == "ask":
+                _, verb, user_id, args, until, fut = job
+                out = _door_ask(kernel, verb, user_id, args, until)
+                if not fut.done():
+                    fut.set_result(out)
+            else:                     # a report: best effort, bounded; an ask left open is "uncertain" at the kernel's next start
+                kernel.call(SKILL_BRAIN, "list_report", time.monotonic() + OP_TIMEOUT_S, ask=job[1], outcome=job[2])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("ZOE_OS door error=%s", type(exc).__name__)
+
+
+def _ensure_door() -> bool:
+    global _door_worker
+    with _door_guard:
+        if _door_worker is None or not _door_worker.is_alive():
+            _door_worker = threading.Thread(target=_door_run, name="os-lists-door", daemon=True)
+            _door_worker.start()
+    return True
+
+
+async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Optional[str] = None, item_ids=(),
+                   owner: Optional[str] = None, household: bool = False, turn_id: Optional[str] = None) -> tuple:
+    """Ask the kernel whether ``user_id`` may do ``verb`` to a list: ``(allow | refuse | not_checked, reason code, ask id | None)``.
+
+    The caller awaits this BEFORE the change, so it has a hard deadline (``ask_deadline_s``, queue wait included) and all socket
+    work is on the door thread, never the event loop. A refusal is the kernel's own and is final. Anything else that goes wrong
+    (kernel down, circuit open, slow, a reply that is not v1) is ``not_checked``: the caller makes the change as before. Never
+    raises. Writes the change's one ``ZOE_OS_ACT`` line. Call only when ``lists_on()``."""
+    started = time.perf_counter()
+    out: tuple = (NOT_CHECKED, "worker", None)
+    try:
+        uid = (user_id or "").strip()
+        if verb not in DOOR_VERBS:
+            out = (NOT_CHECKED, "bad_verb", None)
+        elif not uid and not panel:
+            out = (NOT_CHECKED, "no_actor", None)
+        else:
+            args: dict = {"visibility": "household" if household else "private"}
+            if panel:
+                args["via"] = "panel"
+            for key, value in (("list", list_id), ("owner", owner), ("turn", turn_id)):
+                if value:
+                    args[key] = str(value)
+            items = [str(i) for i in item_ids if i][:16]
+            if items:
+                args["items"] = items
+            if _door_worker is None or not _door_worker.is_alive():
+                await asyncio.to_thread(_ensure_door)             # a thread start is never on the loop
+            deadline = ask_deadline_s()
+            fut: "concurrent.futures.Future" = concurrent.futures.Future()
+            try:
+                _door_q.put_nowait(("ask", verb, uid or "panel", args, time.monotonic() + deadline, fut))
+                out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=deadline)
+            except queue.Full:
+                out = (NOT_CHECKED, "queue_full", None)
+            except (asyncio.TimeoutError, TimeoutError):
+                out = (NOT_CHECKED, "timeout", None)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - never an exception to the list change
+        out = (NOT_CHECKED, "worker", None)
+    _door_log(verb, out[0], out[1], (time.perf_counter() - started) * 1000)
+    return out
+
+
+def report_list(ask: Optional[int], outcome: str) -> None:
+    """Tell the kernel how an allowed change ended (``done`` | ``failed``). After the commit; never blocks, never raises."""
+    try:
+        if type(ask) is int and outcome in ("done", "failed"):
+            _door_q.put_nowait(("report", ask, outcome))
+    except Exception:  # noqa: BLE001 - dropped: the kernel closes the ask as "uncertain" at its next start
+        pass
+
+
 # ---- forget -------------------------------------------------------------------------------------------------------------------------
 def _pending_path() -> Path:
     return state_dir() / "pending-forgets.json"
@@ -1749,6 +1950,18 @@ def main(argv: Optional[list] = None) -> int:
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
     global _roster_cache, _worker, _down_logged, _pending_members, _erase_members, _loop, _finishing, _state_known, _state_poller
+    global _door_worker
+    if _door_worker is not None and _door_worker.is_alive():
+        _door_q.put(("stop",))
+        _door_worker.join(timeout=5)
+    _door_worker = None
+    while True:
+        try:
+            _door_q.get_nowait()
+        except queue.Empty:
+            break
+    with _lock:
+        _door_counts.clear()
     _down_logged = False
     _pending_members = None           # a restart: the next worker reads the park file before its first job
     _erase_members, _loop, _finishing = None, None, False

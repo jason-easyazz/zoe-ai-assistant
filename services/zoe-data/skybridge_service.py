@@ -29,7 +29,7 @@ from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
-from list_service import create_list_record, note_item_left, remove_item_record, set_item_checked
+from list_service import ListRefused, create_list_record, note_item_left, refusal_line, remove_item_record, set_item_checked
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
 from typed_env import env_bool, env_str
@@ -3566,23 +3566,26 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
     if intent.domain == "weather":
         return await _resolve_weather(intent, user_id, db)
     if intent.domain == "lists":
-        if intent.action == "add_item":
-            return await _resolve_list_add_item(intent, user_id, db, context)
-        if intent.action == "remove_item":
-            return await _resolve_list_remove_item(intent, user_id, db, context)
-        if intent.action == "complete_item":
-            return await _resolve_list_complete_item(intent, user_id, db, context)
-        if intent.action == "rename_item":
-            return await _resolve_list_rename_item(intent, user_id, db, context)
-        if intent.action == "correct_last_item":
-            return await _resolve_list_correct_last(intent, user_id, db, context)
-        if intent.action == "edit_item":
-            return await _resolve_list_edit_item(intent, user_id, db, context)
-        if intent.action == "create_list":
-            return await _resolve_list_create(intent, user_id, db)
-        if intent.action in ("share_list", "unshare_list"):
-            return await _resolve_list_share(intent, user_id, db, context)
-        return await _resolve_lists(intent, user_id, db)
+        try:
+            if intent.action == "add_item":
+                return await _resolve_list_add_item(intent, user_id, db, context)
+            if intent.action == "remove_item":
+                return await _resolve_list_remove_item(intent, user_id, db, context)
+            if intent.action == "complete_item":
+                return await _resolve_list_complete_item(intent, user_id, db, context)
+            if intent.action == "rename_item":
+                return await _resolve_list_rename_item(intent, user_id, db, context)
+            if intent.action == "correct_last_item":
+                return await _resolve_list_correct_last(intent, user_id, db, context)
+            if intent.action == "edit_item":
+                return await _resolve_list_edit_item(intent, user_id, db, context)
+            if intent.action == "create_list":
+                return await _resolve_list_create(intent, user_id, db)
+            if intent.action in ("share_list", "unshare_list"):
+                return await _resolve_list_share(intent, user_id, db, context)
+            return await _resolve_lists(intent, user_id, db)
+        except ListRefused as exc:      # the Zoe OS kernel refused the change (ZOE_OS_LISTS=kernel): final, nothing was written
+            return _list_refused(intent, exc.reason)
     if intent.domain == "people":
         if intent.action == "identity":
             return await _resolve_self_identity(user_id, db, kind=intent.query)
@@ -3699,6 +3702,14 @@ def _affected_rows(result: Any) -> int | None:
         return int(insert_match.group(1))
     match = re.search(r"\b(?:UPDATE|DELETE)\s+(\d+)\b", text)
     return int(match.group(1)) if match else None
+
+
+def _list_refused(intent: SkybridgeIntent, reason: str) -> dict[str, Any]:
+    """The answer for a list change the Zoe OS kernel refused: said plainly, a status card, no action."""
+    line = refusal_line(reason)
+    return {"handled": True,
+            "intent": {"domain": "lists", "action": intent.action, "list_type": intent.list_type, "status": "refused"},
+            "spoken_summary": line, "cards": [_status_card("I can't change that list", line)], "actions": []}
 
 
 def _status_card(title: str, body: str, *, status: str = "Needs context") -> dict[str, Any]:
@@ -4451,7 +4462,10 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
     for list_type, name, description, visibility in DEFAULT_USER_LISTS:
         if list_type in existing_types or (visibility == "family" and list_type in family_types):
             continue
-        await create_list_record(db, user_id=user_id, name=name, list_type=list_type, description=description, visibility=visibility, raw_asyncpg=True, on_conflict=True)
+        try:
+            await create_list_record(db, user_id=user_id, name=name, list_type=list_type, description=description, visibility=visibility, raw_asyncpg=True, on_conflict=True)
+        except ListRefused:
+            continue      # the kernel does not let this caller start lists: seed nothing, and the read that follows still answers
     await _maybe_commit(db)
 
 
@@ -4803,7 +4817,7 @@ async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str,
             new_id = str(uuid.uuid4())
             await create_item_record(
                 db, item_id=new_id, list_id=list_id, text=part,
-                priority="normal", category="", quantity="", raw_asyncpg=True,
+                priority="normal", category="", quantity="", raw_asyncpg=True, user_id=user_id,
             )
             open_rows.append({"id": new_id, "text": part})
             new_ids.append(new_id)

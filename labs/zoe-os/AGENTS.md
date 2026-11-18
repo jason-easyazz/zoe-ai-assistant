@@ -48,7 +48,8 @@ in the same change that makes the kernel the authority for that action, and neve
 
 | Action | State | Flag | Since |
 |---|---|---|---|
-| (none) | lab only | n/a | n/a |
+| list changes (`list.create` / `rename` / `delete` / `share`, `item.add` / `remove` / `tick` / `edit`): the kernel DECIDES and records ids; the rows stay in production | built, default off (not live) | `ZOE_OS_LISTS=kernel` | built 2026-11-19 |
+| everything else | lab only | n/a | n/a |
 
 ## How a feature moves onto the kernel
 
@@ -105,3 +106,5 @@ None.
 - `zoe_os/shadow_state.py` is the kernel side of the shadow state directory's SETTLE rule (a new directory is made empty, marked, and waits before it holds data; data with no trustworthy marker is refused). Its block between `# >>> settle` and `# <<< settle` is the SAME TEXT as the one in `services/zoe-data/os_shadow.py`: change both together (`services/zoe-data/tests/test_os_shadow_settle.py` fails otherwise). `shadow_daemon.py` must call `shadow_state.require_settled(state)` before it reads or writes anything in the state directory.
 
 - `shadow_daemon.py`: a roster member whose whole record was forgotten gets their record-only grant back at their NEXT act (`ShadowServer.record_again`), never at the forget itself (nothing may name them in between) and never for someone off the roster. Pinned by `tests/test_shadow_daemon.py` and, from the client side, `services/zoe-data/tests/test_os_shadow_contract.py`.
+
+- `zoe_os/lists.py` is the lists door (`list_ask` / `list_report` on the wire): the permission table is in its module docstring and each row has a test in `tests/test_lists_door.py`. It stores ids only: never an item's text, a list's name, a snapshot, or a row per existing item (the growth test pins rows per act and zero `snapshot_dependencies` rows). Its rules are household rules by role, not a skill's consent; a new list verb goes in `lists.VERBS`, the table and a test together.

@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import os
 
 from runtime_env import bootstrap_runtime_env
-from list_service import note_item_left, set_item_checked
+from list_service import ListRefused, note_item_left, refusal_line, set_item_checked
 from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
 from time_utils import today_for_zoe_tz
 from typed_env import env_str  # reads env at CALL time — importing it reads nothing
@@ -1530,17 +1530,20 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 found = await _phrase_list(db, user_id, said, lt)
             if found is not None:
                 target_id, lt, ln = found
-        outcome = await add_items_to_list(
-            db,
-            user_id=user_id,
-            list_type=lt,
-            list_name=ln,
-            list_id=target_id,
-            text=args["text"],
-            quantity=args.get("quantity"),
-            category=args.get("category"),
-            new_list_visibility=default_visibility(lt),
-        )
+        try:
+            outcome = await add_items_to_list(
+                db,
+                user_id=user_id,
+                list_type=lt,
+                list_name=ln,
+                list_id=target_id,
+                text=args["text"],
+                quantity=args.get("quantity"),
+                category=args.get("category"),
+                new_list_visibility=default_visibility(lt),
+            )
+        except ListRefused as exc:      # the Zoe OS kernel said no: an error result the brain relays; nothing was added
+            return {"error": refusal_line(exc.reason) + " Nothing was added.", "status": "refused"}
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
         result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"],
@@ -1580,7 +1583,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         if not row:
             return {"error": f"Item '{text}' not found in {lt} lists"}
         item_id = row["id"]
-        await set_item_checked(db, user_id=user_id, item_id=item_id, completed=1)
+        try:
+            await set_item_checked(db, user_id=user_id, item_id=item_id, completed=1)
+        except ListRefused as exc:
+            return {"error": refusal_line(exc.reason) + " Nothing was removed.", "status": "refused"}
         await db.commit()
         await note_item_left(db, user_id, source="mcp", list_id=row["list_id"], item_id=item_id)
         await _notify_ui("lists", "list_updated", {"action": "item_completed", "list_id": row["list_id"], "item_id": item_id})

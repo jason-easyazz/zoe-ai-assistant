@@ -10,7 +10,10 @@ import panel_principal
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access, role_from_user
-from list_service import (create_item_record, create_list_record, update_list_record, delete_list_record, update_item_record, remove_item_record, note_item_left)
+from contextlib import contextmanager
+
+from list_service import (ListRefused, create_item_record, create_list_record, delete_list_record, note_item_left, refusal_line,
+                          remove_item_record, update_item_record, update_list_record)
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -38,6 +41,15 @@ def _viewer_id(user: dict):
     """The id the visibility filter matches ``lists.user_id`` against. A guest owns no list, so it matches none: a guest sees
     family-visible (household) lists only, never a personal list - not even one a guest session once created."""
     return None if panel_principal.is_guest_id(user.get("user_id")) else user["user_id"]
+
+
+@contextmanager
+def _kernel_refusal_is_403():
+    """A list change the Zoe OS kernel refused (``ZOE_OS_LISTS=kernel``) is a 403 with a plain sentence; nothing was written."""
+    try:
+        yield
+    except ListRefused as exc:
+        raise HTTPException(status_code=403, detail=refusal_line(exc.reason)) from None
 
 
 async def _item_actor(request, user: dict, db) -> tuple[bool, str]:
@@ -172,14 +184,15 @@ async def create_list(
 
     user_id = user["user_id"]
 
-    record = await create_list_record(
-        db,
-        user_id=user_id,
-        name=body.name,
-        list_type=list_type,
-        description=body.description or "",
-        visibility=body.visibility,
-    )
+    with _kernel_refusal_is_403():
+        record = await create_list_record(
+            db,
+            user_id=user_id,
+            name=body.name,
+            list_type=list_type,
+            description=body.description or "",
+            visibility=body.visibility,
+        )
     list_id = record["id"]
     await db.commit()
 
@@ -290,7 +303,8 @@ async def update_list(
 
     updates.append("updated_at = NOW()")
     params.append(list_id)
-    await update_list_record(db, user_id=user_id, list_id=list_id, updates=updates, params=params)
+    with _kernel_refusal_is_403():
+        await update_list_record(db, user_id=user_id, list_id=list_id, updates=updates, params=params)
     await db.commit()
 
     cursor = await db.execute(
@@ -331,7 +345,8 @@ async def delete_list(
     if not _can_manage_list(dict(row), user):
         raise HTTPException(status_code=403, detail="Not authorised to delete this list")
 
-    await delete_list_record(db, user_id=user_id, list_id=list_id)
+    with _kernel_refusal_is_403():
+        await delete_list_record(db, user_id=user_id, list_id=list_id)
     await db.commit()
 
     await broadcaster.broadcast("lists", "list_updated", {"action": "deleted", "list_id": list_id}, user_id=user_id)
@@ -357,16 +372,18 @@ async def add_item(
     user_id = user["user_id"]
     target = await _require_list_item_mutation_access(db, list_id, list_type, user, "add", panel)
 
-    record = await create_item_record(
-        db,
-        list_id=list_id,
-        text=body.text,
-        priority=body.priority,
-        category=body.category or "",
-        quantity=body.quantity or "",
-        parent_id=body.parent_id,
-        assigned_to=body.assigned_to,
-    )
+    with _kernel_refusal_is_403():
+        record = await create_item_record(
+            db,
+            list_id=list_id,
+            text=body.text,
+            priority=body.priority,
+            category=body.category or "",
+            quantity=body.quantity or "",
+            parent_id=body.parent_id,
+            assigned_to=body.assigned_to,
+            user_id=user_id,
+        )
     item_id = record["id"]
     await db.commit()
 
@@ -499,7 +516,8 @@ async def update_item(
 
     updates.append("updated_at = NOW()")
     params.extend([item_id, list_id])
-    await update_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id, updates=updates, params=params)
+    with _kernel_refusal_is_403():
+        await update_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id, updates=updates, params=params)
     await db.commit()
 
     cursor = await db.execute(
@@ -549,7 +567,8 @@ async def delete_item(
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    await remove_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id)
+    with _kernel_refusal_is_403():
+        await remove_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id)
     await db.commit()
     await note_item_left(db, user_id, source="rest", list_id=list_id, item_id=item_id)
 

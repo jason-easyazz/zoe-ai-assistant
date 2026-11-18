@@ -617,7 +617,7 @@ async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[O
         lst = await list_service.create_list_record(conn, user_id=uid, name=name, list_type="personal", visibility="personal")
         items = (PACKING_TRAVEL_DOCS if s.get("event_kind") in ("flight", "train") else ()) + PACKING_BASICS
         for text in items:
-            await list_service.create_item_record(conn, list_id=lst["id"], text=text)
+            await list_service.create_item_record(conn, list_id=lst["id"], text=text, user_id=uid)
         await conn.commit()
         write_receipts.record(uid, "list", lst["id"], "anticipation")
         return ("Done - I've started a private packing list with a few basics. Only you can see it.", {"list_id": lst["id"]})

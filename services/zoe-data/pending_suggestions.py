@@ -889,7 +889,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
 
         await create_item_record(
             conn, item_id=item_id, list_id=list_id, text=text,
-            raw_asyncpg=True, normalize_text=False, defaults_only=True,
+            raw_asyncpg=True, normalize_text=False, defaults_only=True, user_id=user_id,
         )
         return {"item_id": item_id, "list_id": list_id, "text": text}
 
