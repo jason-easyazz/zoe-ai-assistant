@@ -1156,9 +1156,17 @@ _forget_marks: Counter = Counter()          # member -> kernel forgets asked for
 _stamp_guard = threading.Lock()             # the forget's read-then-move is one step (the worker thread; asks read on the loop)
 
 
-def erase_stamp(member: str) -> list:
-    """The member's erase stamp NOW. Read it when the ask is made (on the caller's loop) and when a forget is sent."""
-    return [_BOOT, _forget_marks[member]]
+def erase_stamp(member: str, at: Optional[dict] = None) -> list:
+    """The member's erase stamp NOW, or as of ``at`` (a ``stamp_snapshot``). Read it when the ask is made (on the caller's loop)
+    and when a forget is sent."""
+    return [_BOOT, _forget_marks[member] if at is None else int(at.get(member, 0))]
+
+
+def stamp_snapshot() -> dict:
+    """Every member's confirmed-forget count NOW (a small copy; no await, no I/O). Take it BEFORE the first await that reads
+    anything the ask will name: a door that looks the list's owner up could otherwise read the owner before their forget, resume
+    after it, and stamp the ask with the count the forget had just moved on (strictly newer, so the kernel would record it)."""
+    return dict(_forget_marks)
 _door_q: "queue.Queue" = queue.Queue(maxsize=DOOR_QUEUE_MAX)
 _door_worker: Optional[threading.Thread] = None
 _door_guard = threading.Lock()
@@ -1287,10 +1295,12 @@ def _ensure_door() -> bool:
 
 
 async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Optional[str] = None, item_ids=(),
-                   owner: Optional[str] = None, household: bool = False, turn_id: Optional[str] = None) -> tuple:
+                   owner: Optional[str] = None, household: bool = False, turn_id: Optional[str] = None,
+                   stamps_at: Optional[dict] = None) -> tuple:
     """Ask the kernel whether ``user_id`` may do ``verb`` to a list: ``(allow | refuse | not_checked, reason code, ask id | None,
     stamps | None)``. ``stamps`` (an allowed ask only) is what the ask carried, ``{member id: erase_stamp}`` for the acting member
-    and the list's owner, read HERE, before anything is queued; hand it back to ``report_list``.
+    and the list's owner, read HERE, before anything is queued (or as of ``stamps_at``, the caller's ``stamp_snapshot`` taken
+    before it looked the list up); hand it back to ``report_list``.
 
     The caller awaits this BEFORE the change, so it has a hard deadline (``ask_deadline_s``, queue wait included) and all socket
     work is on the door thread, never the event loop. A refusal is the kernel's own and is final. Anything else that goes wrong
@@ -1315,7 +1325,7 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
             items = [str(i) for i in item_ids if i][:16]
             if items:
                 args["items"] = items
-            stamps = {m: erase_stamp(m) for m in ("" if panel else uid, str(owner or "")) if m}
+            stamps = {m: erase_stamp(m, stamps_at) for m in ("" if panel else uid, str(owner or "")) if m}
             if stamps:
                 args["stamps"] = stamps
             # read WITH the stamps, on the loop: an ask made while a member erase is running is never queued (its stamp may already
@@ -1984,20 +1994,26 @@ async def _roster_from_accounts(demo: Optional[dict] = None) -> list:
     from enrollment_state import _account_facts
     from manner_block import ADULT_ROLES, CHILD_ROLES
 
+    import db_pool
+
     demo = demo or {}
-    async with get_compat_db() as db:
-        accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
-        known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
-        entries = []
-        for uid in sorted(accounts | known | frozenset(demo)):
-            role = demo[uid] if uid in demo else None
-            if role is None and uid in accounts:
-                try:
-                    minor, stated = await _account_facts(uid, db=db)
-                    role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
-                except Exception:  # noqa: BLE001 - a role that cannot be read is least access
-                    role = None
-            entries.append({"id": uid, "role": role} if role else uid)
+    await db_pool.init_pool()             # a command, not the service: it opens the database itself and closes it after
+    try:
+        async with get_compat_db() as db:
+            accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
+            known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
+            entries = []
+            for uid in sorted(accounts | known | frozenset(demo)):
+                role = demo[uid] if uid in demo else None
+                if role is None and uid in accounts:
+                    try:
+                        minor, stated = await _account_facts(uid, db=db)
+                        role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
+                    except Exception:  # noqa: BLE001 - a role that cannot be read is least access
+                        role = None
+                entries.append({"id": uid, "role": role} if role else uid)
+    finally:
+        await db_pool.close_pool()
     return entries
 
 
