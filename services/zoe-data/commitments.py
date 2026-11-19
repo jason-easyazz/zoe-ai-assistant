@@ -644,9 +644,10 @@ async def _make_reminder(db, user_id: str, title: str, now: datetime) -> str:
     if not rid:
         return ""
     try:
-        from proactive.triggers.reminders import schedule_reminder
+        from proactive.triggers.reminders import on_connection, schedule_reminder
 
-        await schedule_reminder(user_id=user_id, message=title, send_at=now + timedelta(seconds=45), item_id=rid)
+        with on_connection(db):     # on the connection this sweep already holds: waiting for a second one is how a full pool deadlocks
+            await schedule_reminder(user_id=user_id, message=title, send_at=now + timedelta(seconds=45), item_id=rid)
     except Exception as exc:  # noqa: BLE001 - the scan loop picks the row up if the direct schedule failed
         logger.warning("commitments: direct schedule failed (%s) - the reminder scan will fire it", type(exc).__name__)
     return rid
