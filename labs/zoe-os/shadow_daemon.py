@@ -183,17 +183,18 @@ class ShadowServer(KernelServer):
         self.roster_seen = seen          # which people.json the roster was read from (``roster_identity``)
 
     def _op_act(self, conn, a: dict) -> dict:
-        self.sync_roster()
         self.record_again(a.get("on_behalf_of"))
         return super()._op_act(conn, a)
 
-    def _op_publish(self, conn, a: dict) -> dict:
-        self.sync_roster()               # the utterance that is the cause of a new member's first act names them
-        return super()._op_publish(conn, a)
-
+    # The roster is re-read ONLY where the kernel DECIDES (the lists door). The watch-only ops (publish, act) keep the roster
+    # as loaded, exactly as before the door existed: with lists off nothing here costs a stat or follows a file edit.
     def _op_list_ask(self, conn, a: dict) -> dict:
         self.sync_roster()
         return super()._op_list_ask(conn, a)
+
+    def _op_list_report(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_list_report(conn, a)
 
     def sync_roster(self) -> str:
         """The roster follows ``people.json`` with no restart. Called under the kernel lock (``KernelServer._answer``) before an
@@ -234,11 +235,20 @@ class ShadowServer(KernelServer):
         known = write_known(self.state, ids | recorded_people(self.state / "kernel" / "zoe-os.db"))
         want = {**{p: Person(p) for p in known if p not in members}, **members}
         added = set(want) - set(people)
+        was, was_members = dict(people), k.spine._members
         people.clear()
         people.update(want)
         if added:                        # ids a payload can name: the spine indexes the new members' (rows already written too)
-            k.spine._members = frozenset(people)
-            k.spine._backfill_nested()
+            try:
+                k.spine._members = frozenset(people)
+                k.spine._backfill_nested()
+            except BaseException:
+                # the backfill's transaction rolled back: put memory back too, or the next re-read would find nobody "added",
+                # skip the backfill for good, and leave the new member's older records outside their forget
+                people.clear()
+                people.update(was)
+                k.spine._members = was_members
+                raise
         self.roster = frozenset(ids)
         # ``forgotten`` is NOT trimmed to the roster: a forgotten member taken off the file and put back must still not be
         # granted (nothing names them until they act again; only ``record_again`` clears the mark)

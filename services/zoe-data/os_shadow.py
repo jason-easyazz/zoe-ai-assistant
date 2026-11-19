@@ -2039,33 +2039,51 @@ def write_roster(ids, dest: Optional[Path] = None) -> list:
     return clean
 
 
-#: everyone Zoe knows, each with whether an ACCOUNT exists for them, in one statement (one snapshot of both tables)
-ROSTER_IDS_SQL = ("SELECT u.id, (SELECT COUNT(*) FROM auth_users a WHERE a.user_id = u.id) FROM users u "
-                  "UNION ALL SELECT a.user_id, 1 FROM auth_users a")
+#: everyone Zoe knows with everything a role is decided from (whether an ACCOUNT exists, the role it states, the member's stored
+#: mode), in ONE statement: one snapshot of all three tables, and no per-member lookup after it that could see a later state
+ROSTER_SQL = (
+    "SELECT u.id, CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END, a.role, CASE WHEN m.user_id IS NULL THEN 0 ELSE 1 END, m.mode, m.minor "
+    "FROM users u LEFT JOIN auth_users a ON a.user_id = u.id LEFT JOIN member_modes m ON m.user_id = u.id "
+    "UNION ALL SELECT a.user_id, 1, a.role, CASE WHEN m.user_id IS NULL THEN 0 ELSE 1 END, m.mode, m.minor "
+    "FROM auth_users a LEFT JOIN member_modes m ON m.user_id = a.user_id")
+
+
+def _roster_role(stated, has_mode, mode, minor) -> Optional[str]:
+    """The kernel role an ACCOUNT's facts state: the rule of ``enrollment_state._account_facts`` (a stored mode that says minor,
+    or breaks the minor rule, is a child; else the account's role decides), from one row. None = least access."""
+    import persona_layer
+    from manner_block import ADULT_ROLES, CHILD_ROLES, MINOR_MODES
+
+    is_minor = False
+    if has_mode:
+        try:
+            member = persona_layer.validate_member_mode(mode, bool(minor))
+            is_minor = bool(member.minor or member.mode in MINOR_MODES)
+        except persona_layer.PersonaValidationError:
+            is_minor = True                   # the safest valid state, as ``load_member_mode`` reads such a row
+    stated = str(stated or "").strip().lower()
+    return "child" if is_minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
 
 
 async def _roster_entries(db, demo: Optional[dict] = None) -> list:
     """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states, read through ``db`` (an
     OPEN handle: this never opens or closes the pool, so the running service can call it). Never logs an id. The ``users``
     mirror only says admin / member, so it is never read for a role. No account or an unknown role = a plain id (the kernel's
-    least access). A lookup that FAILS raises: no roster is written from a read that could not be finished. ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
-    from enrollment_state import _account_facts
-    from manner_block import ADULT_ROLES, CHILD_ROLES
-
+    least access). ONE statement (``ROSTER_SQL``): if it fails, nothing is written and the roster in force stays; nothing is
+    looked up per member afterwards. ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
     demo = demo or {}
-    # ONE statement, so one snapshot of both tables: read as two queries, an account created between them would be seen as a
-    # member with no account and written with least access.
-    rows = await (await db.execute(ROSTER_IDS_SQL)).fetchall()
-    known = _roster_ids(row[0] for row in rows)
-    accounts = _roster_ids(row[0] for row in rows if row[1])
+    stated: dict = {}
+    known: set = set()
+    for row in await (await db.execute(ROSTER_SQL)).fetchall():
+        uid = row[0].strip() if isinstance(row[0], str) else ""
+        if not uid:
+            continue
+        known.add(uid)
+        if row[1]:                            # an account exists (the second half of the union repeats such a member: same facts)
+            stated[uid] = _roster_role(row[2], row[3], row[4], row[5])
     entries = []
-    for uid in sorted(accounts | known | frozenset(demo)):
-        role = demo[uid] if uid in demo else None
-        if role is None and uid in accounts:
-            # a lookup that FAILS raises: the whole rewrite is abandoned and the roster in force stays. Writing the member as a
-            # plain id instead would DOWNGRADE an adult to least access until a later good rewrite.
-            minor, stated = await _account_facts(uid, db=db)
-            role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
+    for uid in sorted(known | frozenset(demo)):
+        role = demo[uid] if uid in demo else stated[uid] if uid in stated else None
         entries.append({"id": uid, "role": role} if role else uid)
     return entries
 

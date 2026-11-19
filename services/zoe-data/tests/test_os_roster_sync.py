@@ -252,22 +252,18 @@ async def test_hand_stated_demo_roles_survive_the_services_rewrite_and_never_sta
 
 
 @pytest.mark.asyncio
-async def test_one_failed_account_lookup_abandons_the_rewrite_so_nobody_is_downgraded(house, monkeypatch, caplog):
-    """An adult whose lookup fails during the service's rewrite must stay an adult: the rewrite is abandoned (``failed``) and
-    the roster in force stays, never a plain id for them (least access until a later good rewrite).
+async def test_a_read_that_fails_abandons_the_rewrite_so_nobody_is_downgraded(house, monkeypatch, caplog):
+    """Everything a role is decided from comes from one statement; if it fails the rewrite is abandoned (``failed``) and the
+    roster in force stays: an adult is never written as a plain id (least access until a later good rewrite).
 
-    Negative control: the plain-id fallback back in ``_roster_entries`` -> the roster is rewritten with OWNER as a plain id
-    and the first assert fails."""
-    import enrollment_state
+    Negative control: a failed read answered as an empty result in ``_roster_entries`` -> the service would write a roster
+    without OWNER's role (here: the "never an empty roster" rail catches the fully empty case, so the control used is the
+    statement answering ids with no account facts) and the first assert fails."""
+    class Broken(accounts_fake._DB):
+        async def execute(self, query, params=()):
+            raise RuntimeError("database fault")
 
-    real = enrollment_state._account_facts
-
-    async def flaky(uid, db=None):
-        if uid == OWNER:
-            raise RuntimeError("lookup failed")
-        return await real(uid, db=db)
-
-    monkeypatch.setattr(enrollment_state, "_account_facts", flaky)
+    monkeypatch.setattr(db_compat, "get_compat_db", Broken)
     caplog.set_level("INFO", logger="os_shadow")
     with pytest.raises(list_service.ListRefused):                           # NEW is still unknown: refused, as before the rewrite
         await remove(NEW)
@@ -507,8 +503,11 @@ def _takes_first(fn) -> bool:
     first_await = min([n.lineno for n in ast.walk(fn) if isinstance(n, ast.Await)] or [10 ** 9])
     binds = [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == "stamps_at" and isinstance(n.ctx, ast.Store)]
     assigns = [n for n in ast.walk(fn) if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "stamps_at" for t in n.targets)]
-    return (len(binds) == 1 and len(assigns) == 1 and "stamps_now" in ast.dump(assigns[0].value)
-            and assigns[0].lineno < first_await)
+    if len(binds) != 1 or len(assigns) != 1 or assigns[0].lineno >= first_await:
+        return False
+    value = assigns[0].value                  # the WHOLE right-hand side is ``stamps_now()`` / ``x.stamps_now()``, no arguments
+    return (isinstance(value, ast.Call) and not value.args and not value.keywords
+            and getattr(value.func, "id", getattr(value.func, "attr", "")) == "stamps_now")
 
 
 def _scan(src: str) -> list:
@@ -551,7 +550,8 @@ def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awa
     Every module of the service is scanned, so a caller in a new file is held to it too.
 
     Negative control (planted below): a caller that awaits first, one that passes nothing, one that passes a fresh snapshot
-    and one that reassigns ``stamps_at`` after an await are all reported."""
+    one that reassigns ``stamps_at`` after an await, and one whose value merely CONTAINS a ``stamps_now()`` call are all
+    reported."""
     modules = _modules()
     assert len(modules) > 100 and ROOT / "routers" / "lists.py" in modules
     for path in modules:
@@ -563,9 +563,13 @@ def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awa
                "    await create_list_record(db, user_id='u', stamps_at=stamps_now())\n"
                "async def again(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n    stamps_at = stamps_now()\n"
                "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n"
+               "async def dressed(db):\n    stamps_at = (stamps_now(), None)[1]\n    await db.fetch('x')\n"
+               "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n"
                "async def good(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n"
+               "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n"
+               "async def good_too(db):\n    stamps_at = list_service.stamps_now()\n    await db.fetch('x')\n"
                "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n")
-    assert _scan(planted) == ["late", "silent", "fresh", "again"]
+    assert _scan(planted) == ["late", "silent", "fresh", "again", "dressed"]
     gates = [n for n in ast.walk(ast.parse((ROOT / "list_service.py").read_text("utf-8"))) if isinstance(n, ast.Call)
              and getattr(n.func, "id", "") == "_gate" and any(k.arg in ("owner", "visibility") for k in n.keywords)]
     assert len(gates) == 1 and gates[0].args[1].value == "list.create"

@@ -82,15 +82,29 @@ def test_a_member_added_after_the_start_is_known_without_a_restart_and_has_the_r
     assert d.proc.poll() is None
 
 
-def test_the_first_thing_after_the_file_changes_may_be_an_act_and_the_new_member_is_recorded(state):
-    """The watch-only verbs look at the file too: a new member's first ``list.add`` is recorded with no list ask before it.
+def test_only_the_lists_door_re_reads_the_file_the_watch_only_ops_keep_the_roster_as_loaded(built, monkeypatch):
+    """The roster follows the file where the kernel DECIDES: ``list_ask`` and ``list_report``. ``publish`` and ``act`` (watch-only)
+    behave as before the door existed: no ``stat``, and a file edit does not reach them, so with lists off nothing changes.
 
-    Negative control: ``self.sync_roster()`` removed from ``ShadowServer._op_publish`` -> the utterance that is the cause of the
-    act names nobody the kernel knows and is not accepted (this test fails at the publish)."""
-    d = start(state)
-    write(state[0], [{"id": OWNER, "role": "adult"}, {"id": NEW, "role": "child", "guardians": [OWNER]}])
-    out = d.add(NEW, "synthetic quince words")
-    assert out["verified"] is True and out["on_behalf_of"] == NEW
+    Negative control: ``self.sync_roster()`` put back into ``_op_publish`` / ``_op_act`` -> the count after the watch-only ops is
+    not 0."""
+    daemon, k, srv, state = built
+    looked = []
+    real = srv.sync_roster
+    monkeypatch.setattr(srv, "sync_roster", lambda: looked.append(1) or real())
+    write(state, [{"id": OWNER, "role": "adult"}, {"id": NEW, "role": "adult"}])
+    with k.spine._lock:
+        for op, args in (("_op_publish", {"kind": "nothing", "payload": {}}), ("_op_act", {"action": "nothing", "on_behalf_of": OWNER})):
+            try:
+                getattr(srv, op)(BRAIN, args)
+            except Exception:  # noqa: BLE001 - the op's own answer is not the point: whether it looked at the roster is
+                pass
+    assert looked == [] and NEW not in k.grants.people
+    out = _ask(srv, NEW)                                                    # the door: looked, and NEW is known
+    assert looked == [1] and NEW in k.grants.people
+    with k.spine._lock:
+        srv._op_list_report(BRAIN, {"ask": out["ask"], "outcome": "done"})
+    assert looked == [1, 1]
 
 
 def test_a_role_that_changes_in_the_file_takes_effect_both_ways(state):
@@ -281,6 +295,36 @@ def test_a_forgotten_member_taken_off_the_file_and_put_back_is_still_not_granted
     assert KID.encode() not in (state / "kernel" / "zoe-os.db").read_bytes()
     srv.record_again(KID)                                                   # their next act: granted again, as designed
     assert k.grants.of("brain", KID) is not None
+
+
+def test_a_backfill_that_fails_leaves_the_old_roster_in_memory_and_the_next_re_read_backfills(built, monkeypatch):
+    """The new people are swapped in only if the index backfill committed. If it raises, memory goes back to the roster in
+    force, so the next re-read still sees the member as NEW and backfills: their older records stay inside their forget.
+
+    Negative control: without the roll-back in ``apply_roster`` the retry finds nobody added, never backfills, and the older
+    row survives the new member's forget (the last line fails)."""
+    daemon, k, srv, state = built
+    from zoe_os.events import Event, Kind, Visibility
+    from zoe_os.spine import KERNEL
+
+    old = k.spine._kernel_append(Event(Kind.REFUSAL, KERNEL, visibility=Visibility.KERNEL,
+                                       payload={"who": "brain", "attempted": "act item.add", "list": NEW}))
+    real, calls = k.spine._backfill_nested, []
+
+    def once_broken():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("backfill failed")
+        return real()
+
+    monkeypatch.setattr(k.spine, "_backfill_nested", once_broken)
+    write(state, [{"id": OWNER, "role": "adult"}, {"id": NEW, "role": "adult"}])
+    with pytest.raises(RuntimeError):
+        _ask(srv, NEW)
+    assert NEW not in k.grants.people and NEW not in k.spine._members       # memory is the roster that was in force
+    assert _ask(srv, NEW)["ask"] and len(calls) == 2                        # the next ask re-reads, and backfills
+    assert k.spine.forget(NEW, actor=NEW)
+    assert k.spine._get(old.seq) is None
 
 
 def test_a_new_member_named_inside_an_older_record_is_reached_by_their_forget(built):

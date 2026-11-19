@@ -197,7 +197,7 @@ to be only as current as its last hand-written copy, and the kernel read it once
   (a synthetic id, one of the three roles) or is dropped. Stating some on the command line replaces the kept set; stating none
   keeps it; delete the file to state none.
 * **The kernel reads the file again when it changes** (`shadow_daemon.ShadowServer.sync_roster`, under the kernel lock, before
-  each `list_ask`, `publish` and `act`: one `stat`; the file is opened only when its inode, size or modification time moved).
+  each `list_ask` and `list_report` (the watch-only `publish` and `act` keep the roster as loaded): one `stat`; the file is opened only when its inode, size or modification time moved).
   It applies it exactly as a start would: a new member is known with the role STATED and gets the record-only grant; a changed
   role takes effect; an entry that does not fully say otherwise is least access (`person_from_entry`, the only reader); a member
   taken off the file loses their grant and role but stays a known, least-access, forgettable person while the kernel holds a

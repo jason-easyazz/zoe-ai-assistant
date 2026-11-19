@@ -839,7 +839,8 @@ async def add_item_to_list(
     was already open on the list - nothing is written then); on a dedup
     hit ``item_id`` is the existing duplicate row's id and nothing is written.
     """
-    stamps_at = stamps_now() if stamps_at is None else stamps_at     # before anything is awaited: a list started below is told its owner
+    if stamps_at is None:             # a caller that took its own snapshot earlier hands it in; otherwise take it HERE,
+        stamps_at = stamps_now()      # before anything is awaited: a list started below is told its owner
     text = normalize_item_text(text) or text
     guest = panel_principal.is_guest_id(user_id)
     # the name of the list the row REALLY lands on (the shadow is told that one, not the words): from the row the resolve already
