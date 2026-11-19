@@ -2034,9 +2034,9 @@ def main(argv: Optional[list] = None) -> int:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
         entries = write_roster_from_accounts(demo=demo)
-        said = [entry["role"] for entry in entries if isinstance(entry, dict)]
-        print(f"roster: {len(entries)} members written ({said.count('adult')} adults, {said.count('child')} children, "
-              f"{len(entries) - said.count('adult') - said.count('child')} least access)")
+        roles = [entry["role"] for entry in entries if isinstance(entry, dict)]
+        print(f"roster: {len(entries)} members written ({roles.count('adult')} adults, {roles.count('child')} children, "
+              f"{len(entries) - roles.count('adult') - roles.count('child')} least access)")
         return 0
     if args[:1] == ["--write-roster"] and len(args) > 1:
         print(f"roster: {len(write_roster(args[1:]))} members written")
