@@ -430,6 +430,66 @@ async def test_a_forget_reads_its_stamp_then_moves_on_so_every_earlier_ask_is_at
 
 
 @pytest.mark.asyncio
+async def test_an_ask_stamped_while_the_forget_call_is_outstanding_is_not_newer_than_the_forget(door, monkeypatch):
+    """The interval the kernel cannot see: the forget has been SENT and not yet confirmed (a row- or turn-scoped forget holds no
+    erase span, so the door can ask meanwhile). A stamp read then must be at most the forget's own, because the kernel refuses
+    only what is not strictly newer than its mark; delivered after the forget commits, such an ask writes nothing (the kernel's
+    half: ``labs/zoe-os/tests/test_lists_erase_order.py``, the equal-stamp test). The count moves on only at the kernel's
+    confirmation. Control run: with the count moved BEFORE the kernel call the stamp read during it is newer and this fails."""
+    answer = DoorKernel._answer
+    during = []
+
+    def held(self, conn, skill, req):
+        if req["op"] == "forget":
+            during.append((os_shadow.erase_stamp(OWNER), req["args"]["stamp"]))     # the call is outstanding right now
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", held)
+    assert await os_shadow.forget_for_erase(OWNER) == 3
+    (read, sent), = during
+    assert read == sent
+    assert os_shadow.erase_stamp(OWNER) > sent                    # confirmed: the member acting again is strictly newer
+
+
+@pytest.mark.asyncio
+async def test_a_forget_the_kernel_did_not_confirm_moves_nothing(door, monkeypatch):
+    """A forget whose reply never arrives leaves the count where it was: later asks keep the stamp that (possibly committed)
+    forget carried, so they read as erased until a replay is confirmed, never as newer. Control run: with the count moved in a
+    ``finally`` this fails."""
+    answer = DoorKernel._answer
+    sent = []
+
+    def lost(self, conn, skill, req):
+        if req["op"] == "forget":
+            sent.append(req["args"].get("stamp"))
+            raise ConnectionError
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", lost)
+    before = os_shadow.erase_stamp(OWNER)
+    with pytest.raises(Exception):
+        await os_shadow.forget_for_erase(OWNER)
+    assert sent and sent[0] == before and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
+async def test_an_ask_made_while_a_member_erase_runs_is_never_queued(door, caplog):
+    """Read with the stamps, on the loop: the door thread's own look could come after the erase has ended. Control run: without
+    the loop-side check the ask is queued (it reaches the door thread, which may or may not still see the erase)."""
+    def never(*a, **k):
+        raise AssertionError("queued while the member was being erased")
+
+    with user_erase_gate.erase_span(OWNER):
+        real = os_shadow._door_q.put_nowait
+        os_shadow._door_q.put_nowait = never
+        try:
+            await _proceeds(door, caplog, "remove_item_record", "erasing")
+        finally:
+            os_shadow._door_q.put_nowait = real
+    assert door.ops("list_ask") == []
+
+
+@pytest.mark.asyncio
 async def test_an_entity_or_topic_forget_carries_no_stamp_and_its_whole_member_fallback_does(door):
     """A scoped forget sets no erase mark in the kernel, so it sends none; the over-forget it falls back to is whole-member and is
     stamped. Control run: with ``_forget_call`` stamping scoped forgets too the first assert fails."""

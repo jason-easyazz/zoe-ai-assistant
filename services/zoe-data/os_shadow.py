@@ -1141,8 +1141,8 @@ KERNEL_ERASED = "erased"
 # names; nothing this process checks can close that, the kernel answers when it answers. So every ask and report carries a stamp
 # for each member it names, every whole-member forget carries that member's stamp, and the kernel, under its own lock, records
 # nothing for an ask whose stamp is not strictly newer than the member's newest forget (it keeps that stamp as the member's erase
-# mark). A forget reads its stamp and only then moves the count on (``_forget_call``), so an ask stamped while a forget was
-# outstanding is at most equal to it, and one stamped after the send is strictly newer.
+# mark). A forget sends the current stamp and moves the count on only once the kernel confirmed it (``_forget_call``), so an ask
+# stamped before that confirmation is at most equal to the mark, and one stamped after it is strictly newer.
 # The stamp is ``[boot, count]``, compared as a pair: ``boot`` is when this process started (wall clock, so a later process is newer;
 # a restart resets every count to 0), ``count`` only grows in this process: ``user_erase_gate``'s generation (a whole-member erase)
 # plus the kernel forgets asked for here (``_forget``; a row-, turn-, entity- or topic-scoped forget never moves the generation).
@@ -1315,18 +1315,23 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
             stamps = {m: erase_stamp(m) for m in ("" if panel else uid, str(owner or "")) if m}
             if stamps:
                 args["stamps"] = stamps
-            deadline = ask_deadline_s()                           # ONE budget: the door's start-up draws on it too
-            until = time.monotonic() + deadline
-            fut: "concurrent.futures.Future" = concurrent.futures.Future()
-            try:
-                if _door_worker is None or not _door_worker.is_alive():
-                    await asyncio.wait_for(asyncio.to_thread(_ensure_door), timeout=deadline)   # never a thread start on the loop
-                _door_q.put_nowait(("ask", verb, uid or "panel", args, until, fut))
-                out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=max(0.001, until - time.monotonic()))
-            except queue.Full:
-                out = (NOT_CHECKED, "queue_full", None)
-            except (asyncio.TimeoutError, TimeoutError):
-                out = (NOT_CHECKED, "timeout", None)
+            # read WITH the stamps, on the loop: an ask made while a member erase is running is never queued (its stamp may already
+            # be past the erase's kernel forget, and the door thread's own look could come after the erase has ended)
+            if any(user_erase_gate.in_progress(m) for m in stamps):
+                out = (NOT_CHECKED, "erasing", None)
+            else:
+                deadline = ask_deadline_s()                           # ONE budget: the door's start-up draws on it too
+                until = time.monotonic() + deadline
+                fut: "concurrent.futures.Future" = concurrent.futures.Future()
+                try:
+                    if _door_worker is None or not _door_worker.is_alive():
+                        await asyncio.wait_for(asyncio.to_thread(_ensure_door), timeout=deadline)   # never a thread start on the loop
+                    _door_q.put_nowait(("ask", verb, uid or "panel", args, until, fut))
+                    out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=max(0.001, until - time.monotonic()))
+                except queue.Full:
+                    out = (NOT_CHECKED, "queue_full", None)
+                except (asyncio.TimeoutError, TimeoutError):
+                    out = (NOT_CHECKED, "timeout", None)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - never an exception to the list change
@@ -1808,11 +1813,17 @@ def _forget_call(kernel: _Kernel, member: str, scoped: dict) -> Any:
     kernel sets no mark for a scoped forget: a list ask holds ids only, so it cannot write back what one erased)."""
     if scoped:
         return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
-    with _stamp_guard:                       # read, THEN move on: a stamp read from here on is strictly newer than this forget's,
-        stamp = erase_stamp(member)          # and one read while this forget was outstanding is at most equal to it (the kernel
-        _forget_marks[member] += 1           # treats equal as before the forget)
+    # The forget carries the CURRENT stamp; the count moves on only once the kernel has CONFIRMED it. So a stamp read at any time
+    # before that (before the send, or while the call is outstanding: a row- or turn-scoped forget holds no erase span, the door
+    # can ask meanwhile) is at most equal to the kernel's mark and is refused wherever it lands; one read after is strictly newer.
+    # An ask stamped between the kernel's commit and this move reads ``erased`` (not_checked): the safe side. A forget that fails
+    # moves nothing; two in flight send the same stamp and each confirmation moves on.
+    stamp = erase_stamp(member)
     try:
-        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, stamp=stamp)
+        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, stamp=stamp)
+        with _stamp_guard:
+            _forget_marks[member] += 1
+        return out
     except KernelProtocol as exc:
         if exc.args[:1] != ("bad_request",):
             raise

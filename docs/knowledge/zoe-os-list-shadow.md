@@ -131,9 +131,11 @@ names. A check made in zoe-data cannot close that (the kernel answers when it an
 
 * **The stamp** (`os_shadow.erase_stamp`): `boot` is the wall-clock nanosecond this zoe-data process started, `count` is
   `user_erase_gate`'s generation for the member plus the kernel forgets asked for in this process. Compared as a pair, so a later
-  process is always newer although every count restarts at 0. A forget reads its stamp and only THEN moves the count on, in one
-  step at the send (`_forget_call`): an ask stamped before the send, including one made while a row- or turn-scoped forget was
-  outstanding, is at or before the forget's stamp, and one stamped after it is strictly newer.
+  process is always newer although every count restarts at 0. A forget sends the CURRENT stamp and the count moves on only once
+  the kernel has confirmed it (`_forget_call`): an ask stamped at any time before that confirmation, including while a row- or
+  turn-scoped forget is outstanding, is at or before the forget's stamp, and one stamped after it is strictly newer. An ask
+  stamped between the kernel's commit and the confirmation reads `erased` (the safe side); a forget that is not confirmed moves
+  nothing. An ask made while a member erase runs is never queued (`ask_list` reads the erase gate with the stamps).
 * **The mark** (`erase_stamps` in the kernel's database): one row per forgotten member, keyed by the keyed hash the forget ledger
   already uses (`Spine._owner`; the key is in the same database), holding the newest stamp. It names nobody, survives a kernel
   restart and never moves back.

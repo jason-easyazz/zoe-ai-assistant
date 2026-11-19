@@ -614,9 +614,9 @@ class Spine:
 
     def erased_after(self, person: str, stamp) -> bool:
         """Was ``stamp`` read AT OR BEFORE a whole forget of ``person``? True when it is not strictly newer than their erase mark
-        (the newest stamp a whole-person forget of theirs carried). Equal counts as before: a caller reads the stamp it sends
-        with a forget and only THEN moves its count on, so a write stamped while that forget was still outstanding carries the
-        forget's own stamp, and must not land after it. A write that gives NO stamp for a person who has a mark is treated the
+        (the newest stamp a whole-person forget of theirs carried). Equal counts as before: a caller sends its current stamp with
+        a forget and moves its count on only once the forget is confirmed, so a write stamped while that forget was still
+        outstanding carries the forget's own stamp, and must not land after it. A write that gives NO stamp for a person who has a mark is treated the
         same (an older caller cannot be ordered, so it is not recorded). No mark: False. The mark is keyed by the person's
         keyed hash (``_owner``, as the forget ledger is): nothing in it names them. Call under the lock."""
         mark = self._erase_mark(self._owner(person))
