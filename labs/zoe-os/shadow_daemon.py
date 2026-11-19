@@ -186,7 +186,7 @@ class ShadowServer(KernelServer):
         self.record_again(a.get("on_behalf_of"))
         return super()._op_act(conn, a)
 
-    # The roster is re-read ONLY where the kernel DECIDES (the lists door). The watch-only ops (publish, act) keep the roster
+    # The roster is re-read ONLY where the kernel DECIDES (the door: ``list_ask`` / ``door_ask`` and their reports). The watch-only ops (publish, act) keep the roster
     # as loaded, exactly as before the door existed: with lists off nothing here costs a stat or follows a file edit.
     def _op_list_ask(self, conn, a: dict) -> dict:
         self.sync_roster()
@@ -195,6 +195,14 @@ class ShadowServer(KernelServer):
     def _op_list_report(self, conn, a: dict) -> dict:
         self.sync_roster()
         return super()._op_list_report(conn, a)
+
+    def _op_door_ask(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_door_ask(conn, a)
+
+    def _op_door_report(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_door_report(conn, a)
 
     def sync_roster(self) -> str:
         """The roster follows ``people.json`` with no restart. Called under the kernel lock (``KernelServer._answer``) before an
