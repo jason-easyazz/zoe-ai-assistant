@@ -2854,8 +2854,36 @@ async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
     }
 
 
+# "Cancel that" after a spoken reminder is bound to the reminder that create MADE: its id, noted here only once the create has
+# succeeded, and dropped the moment the next create is ATTEMPTED (so after a refused or failed create there is nothing to
+# cancel, whatever older reminders share its title). Memory only, per member, the conversation context's own two minutes.
+_JUST_SET_REMINDER: dict = {}          # user id -> (reminder id, the title as asked, monotonic time)
+_JUST_SET_WINDOW_S = 120.0
+_JUST_SET_MAX = 256
+
+
+def _note_reminder_just_set(user_id: str, reminder_id: str, title: str) -> None:
+    now = time.monotonic()
+    if len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
+        for uid in [u for u, entry in _JUST_SET_REMINDER.items() if now - entry[2] > _JUST_SET_WINDOW_S]:
+            del _JUST_SET_REMINDER[uid]
+        if len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
+            _JUST_SET_REMINDER.clear()
+    _JUST_SET_REMINDER[user_id] = (reminder_id, title.strip().lower(), now)
+
+
+def _reminder_just_set(user_id: str, title: str) -> Optional[str]:
+    """The id of the reminder this member's last spoken create made, if it is the one this "cancel that" follows (same request,
+    inside the window); else None. The title is only compared with what that create was asked: no reminder is looked up by it."""
+    entry = _JUST_SET_REMINDER.get(user_id)
+    if not entry or time.monotonic() - entry[2] > _JUST_SET_WINDOW_S or entry[1] != title.strip().lower():
+        return None
+    return entry[0]
+
+
 async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
+    _JUST_SET_REMINDER.pop(user_id, None)      # a new create is being attempted: "that" is no longer the one before it
     if slots.get("unsupported_recurrence"):
         return (
             f"I can't repeat a reminder {slots['unsupported_recurrence']} yet, so I haven't set it. "
@@ -2881,7 +2909,10 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
                 recurring_pattern=slots.get("recurrence") or None,
             )
             reminder = await create_reminder_record(payload, user=user, db=db)
-        return _format_response(intent, json.dumps(reminder, default=str))
+        reply = _format_response(intent, json.dumps(reminder, default=str))
+        if reminder.get("id"):
+            _note_reminder_just_set(user_id, str(reminder["id"]), title)       # only now: the reminder exists
+        return reply
     except HTTPException as exc:
         # reminder_service.ReminderPastError: a day or time already gone, nothing stored. A spoken turn is told so; the
         # brain's dispatch endpoint (PAST_IS_AN_ERROR) gets the 422 so its log and the tool result stay honest.
@@ -2895,13 +2926,16 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
 
 
 async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
-    """"cancel that" after a reminder was set (``reminder_cancel``, slot ``title``): the speaker's OWN newest live reminder with
-    that title is cancelled via ``reminder_service.delete_reminder_record``. Always answers; never falls through to the brain."""
+    """"cancel that" right after a spoken reminder (``reminder_cancel`` with ``after=reminder_create``): the reminder THAT create
+    made is cancelled, by its id, via ``reminder_service.delete_reminder_record``. No reminder is ever found by its title: if
+    the create was refused or failed, or this is a second "cancel that", nothing is cancelled and the reply says so. Always
+    answers; never falls through to the brain."""
     from reminder_service import SPOKEN, delete_reminder_record
 
     title = str((intent.slots or {}).get("title") or "").strip()
-    if not title:
-        return SPOKEN["cancel_not_found"]
+    reminder_id = _reminder_just_set(user_id, title)
+    if reminder_id is None:
+        return SPOKEN["cancel_nothing"]
     try:
         from database import get_db_ctx
 
@@ -2909,18 +2943,14 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
             user = await _load_direct_execution_user(db, user_id)
             if not user:
                 return SPOKEN["cancel_failed"]
-            cursor = await db.execute(
-                "SELECT id FROM reminders WHERE user_id = ? AND deleted = 0 AND is_active = 1 AND LOWER(title) = LOWER(?)"
-                " ORDER BY created_at DESC LIMIT 1",
-                (user_id, title),
-            )
-            row = await cursor.fetchone()
-            if row is None:
-                return SPOKEN["cancel_not_found"]
-            await delete_reminder_record(db, user, row["id"], own_only=True)
+            await delete_reminder_record(db, user, reminder_id, own_only=True)
+        _JUST_SET_REMINDER.pop(user_id, None)          # cancelled: a second "cancel that" has nothing to cancel
         return SPOKEN["cancelled"].format(title=title)
     except HTTPException as exc:
-        return SPOKEN["cancel_not_found"] if exc.status_code == 404 else SPOKEN["cancel_failed"]
+        if exc.status_code == 404:
+            _JUST_SET_REMINDER.pop(user_id, None)
+            return SPOKEN["cancel_not_found"]
+        return SPOKEN["cancel_failed"]
     except Exception as exc:  # noqa: BLE001 - the store failing: say nothing changed
         logger.warning("reminder_cancel direct execution failed: %s", type(exc).__name__)
         return SPOKEN["cancel_failed"]
@@ -5418,8 +5448,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if direct_result:
             return direct_result
 
-    if intent.name == "reminder_cancel":
-        return await _execute_reminder_cancel_direct(intent, user_id)
+    if intent.name == "reminder_cancel" and (intent.slots or {}).get("after") == "reminder_create":
+        return await _execute_reminder_cancel_direct(intent, user_id)       # (after a timer: as it always was, below)
 
     if intent.name == "calendar_create":
         direct_result = await _execute_calendar_create_direct(intent, user_id)

@@ -5065,7 +5065,8 @@ async def voice_command(
                 except Exception as _cal_exc:
                     logger.warning("voice/command calendar_create panel failed: %s", _cal_exc)
         # reminder_cancel is "cancel that" right after a reminder was set (conversation_context); its executor always answers.
-        if _quick_intent and _quick_intent.name in ("reminder_create", "reminder_cancel"):
+        if _quick_intent and (_quick_intent.name == "reminder_create" or (
+                _quick_intent.name == "reminder_cancel" and (getattr(_quick_intent, "slots", None) or {}).get("after") == "reminder_create")):
             _allow_quick_reminder = True
             try:
                 from voice_scope import classify as _vscope_rem

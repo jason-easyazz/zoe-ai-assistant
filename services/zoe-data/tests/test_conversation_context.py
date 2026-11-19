@@ -284,7 +284,9 @@ def test_resolve_coreference_reminder_cancel_uses_title():
     )
     name, slots = ctx.resolve_coreference("cancel that")
     assert name == "reminder_cancel"
-    assert slots == {"title": "take pills"}
+    assert slots == {"title": "take pills", "after": "reminder_create"}      # the executor cancels the reminder that create made
+    ctx.activate("timer_set", {"title": "eggs"}, "set an egg timer")
+    assert ctx.resolve_coreference("cancel that") == ("reminder_cancel", {"title": "eggs"})      # after a timer: as it always was
 
 
 def test_resolve_coreference_reminder_show_routes_to_list():

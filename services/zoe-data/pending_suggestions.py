@@ -866,19 +866,25 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
 
 
 def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
-    """(due_date, due_time) of a reminder offer: its slots, else ``when_hint`` read by the spoken-reminder grammar, else as a day."""
+    """(due_date, due_time) of a reminder offer. The offer's own day and time slots and its ``when_hint`` are MERGED (the producer
+    keeps the model's slots and adds the hint beside them): a slot wins for its own field, and the hint fills whichever field has
+    no slot ("date: friday" with the hint "3pm" is Friday at 3 pm, never Friday at the default time). The hint is read by the
+    spoken-reminder grammar, else as a day with a trailing clock time."""
     due_date = slots.get("due_date") or slots.get("date") or None
     due_time = slots.get("due_time") or slots.get("time") or None
     hint = str(slots.get("when_hint") or "").strip()
-    if hint and not (due_date or due_time):
+    if hint and not (due_date and due_time):
         from intent_router import _extract_simple_reminder_slots
 
         parsed = _extract_simple_reminder_slots(f"remind me to {title} {hint}") or {}
         if str(parsed.get("title") or "").strip().lower() == f"{title} {hint}".strip().lower():
             parsed = {}  # the grammar read NOTHING of the hint (it stays in the title and the date is its default "today"): unreadable
-        due_date, due_time = parsed.get("date") or None, parsed.get("time") or None
-        if not (due_date or due_time):
-            due_date, due_time = _day_and_time_of_hint(hint)
+        hint_date, hint_time = parsed.get("date") or None, parsed.get("time") or None
+        if not (hint_date or hint_time):
+            hint_date, hint_time = _day_and_time_of_hint(hint)
+        if not (hint_date or hint_time):
+            return None, None       # the offer says WHEN in words nobody could read: it stays open, never "the slot alone"
+        due_date, due_time = due_date or hint_date, due_time or hint_time
     return due_date, due_time
 
 
