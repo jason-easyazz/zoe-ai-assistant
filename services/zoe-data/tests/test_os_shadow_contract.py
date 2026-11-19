@@ -436,3 +436,41 @@ def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(
         assert not (state / "pending-forgets.json").exists()        # race 3: nothing was parked, nothing had to be
     finally:
         stop(proc)
+
+
+def test_a_member_added_after_the_kernel_started_is_decided_by_the_real_kernel_in_the_same_ask(state, monkeypatch):
+    """Both halves of the roster sync together, this client against the REAL daemon, no restart: the kernel was started knowing
+    one adult; a child is added to Zoe's accounts afterwards. Their first list change has the roster rewritten from the accounts
+    by the service (``os_shadow._roster_sync``), the kernel reads the new file at that very ask and allows it, and it decides by
+    the role the ACCOUNT states (a child may change a household list's items, not delete the list). Before this the answer was
+    ``unknown_person`` until the roster was rewritten by hand and the kernel restarted.
+
+    Control run: with ``self.sync_roster()`` removed from the daemon's ``_op_list_ask`` the file is rewritten but the first
+    answer is ("refuse", "unknown_person"); with the ``_roster_wanted`` call removed from ``ask_list`` it is the same answer and
+    the file is never rewritten."""
+    import db_compat
+    import test_os_shadow_account_roster as accounts_fake
+
+    proc = start(state, [{"id": MEMBER, "role": "adult"}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_LISTS", "kernel")
+        monkeypatch.setenv("ZOE_OS_LISTS_ASK_MS", "2000")
+        monkeypatch.setattr(accounts_fake, "ACCOUNTS", {MEMBER: ("admin", None), OTHER: ("child", None)})
+        monkeypatch.setattr(accounts_fake, "MIRROR", [MEMBER, OTHER])
+        monkeypatch.setattr(db_compat, "get_compat_db", accounts_fake._DB)
+
+        async def run():
+            add = await os_shadow.ask_list("item.add", OTHER, list_id="list-zqx", item_ids=("item-zq1",), owner=MEMBER, household=True)
+            delete = await os_shadow.ask_list("list.delete", OTHER, list_id="list-zqx", owner=MEMBER, household=True)
+            own = await os_shadow.ask_list("list.create", OTHER, list_id="list-zqy", owner=OTHER, household=False)
+            theirs = await os_shadow.ask_list("item.add", MEMBER, list_id="list-zqy", owner=OTHER, household=True)
+            return add[:2], delete[:2], own[:2], theirs[:2]
+
+        assert asyncio.run(run()) == (("allow", ""), ("refuse", "adults_only"), ("allow", ""), ("allow", ""))
+        assert json.loads((state / "people.json").read_text()) == {"people": [{"id": OTHER, "role": "child"},
+                                                                              {"id": MEMBER, "role": "adult"}]}
+        assert os_shadow.roster_counters() == {"written": 1} and proc.poll() is None
+        assert json.loads((state / "known-people.json").read_text())["people"] == sorted([MEMBER, OTHER])
+    finally:
+        stop(proc)

@@ -29,7 +29,7 @@ from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
-from list_service import ListRefused, create_list_record, note_item_left, refusal_line, remove_item_record, set_item_checked
+from list_service import ListRefused, create_list_record, note_item_left, refusal_line, remove_item_record, set_item_checked, stamps_now
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
 from typed_env import env_bool, env_str
@@ -4442,6 +4442,7 @@ def _list_contains_answer(
 
 
 async def _ensure_default_lists(user_id: str, db: Any) -> None:
+    stamps_at = stamps_now()
     if user_id == panel_principal.HOUSEHOLD_VIEWER:
         return  # a panel guest owns nothing and seeds nothing
     rows = await db.fetch(
@@ -4463,7 +4464,7 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
         if list_type in existing_types or (visibility == "family" and list_type in family_types):
             continue
         try:
-            await create_list_record(db, user_id=user_id, name=name, list_type=list_type, description=description, visibility=visibility, raw_asyncpg=True, on_conflict=True)
+            await create_list_record(db, user_id=user_id, name=name, list_type=list_type, description=description, visibility=visibility, raw_asyncpg=True, on_conflict=True, stamps_at=stamps_at)
         except ListRefused:
             continue      # the kernel does not let this caller start lists: seed nothing, and the read that follows still answers
     await _maybe_commit(db)
@@ -4566,6 +4567,7 @@ def _join_names(names: list[str]) -> str:
 
 
 async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    stamps_at = stamps_now()
     if not intent.list_name:
         return {
             "handled": True,
@@ -4601,7 +4603,7 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
         list_type = str(dict(existing[0]).get("list_type") or list_type)
     if not existing:
         list_id = str(uuid.uuid4())
-        status = await create_list_record(db, user_id=user_id, list_id=list_id, name=intent.list_name, list_type=list_type, description="", visibility="personal", raw_asyncpg=True, on_conflict=True)
+        status = await create_list_record(db, user_id=user_id, list_id=list_id, name=intent.list_name, list_type=list_type, description="", visibility="personal", raw_asyncpg=True, on_conflict=True, stamps_at=stamps_at)
         created = _affected_rows(status["status"]) == 1
         await _maybe_commit(db)
         if not created:
@@ -4702,6 +4704,7 @@ async def _resolve_list_share(intent: SkybridgeIntent, user_id: str, db: Any, co
 
 
 async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
+    stamps_at = stamps_now()
     hinted_id, hinted_type = _context_list_hint(context)
     list_type = intent.list_type or hinted_type or "shopping"
     if hinted_id:
@@ -4745,7 +4748,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         user_id = panel_principal.HOUSEHOLD_OWNER_ID  # the household owns what a guest starts (a guest has no users row)
     list_id = str(uuid.uuid4())
     list_name = "Shopping" if list_type == "shopping" else list_type.title()
-    await create_list_record(db, user_id=user_id, list_id=list_id, name=list_name, list_type=list_type, description="", visibility="family" if list_type == "shopping" else "personal", raw_asyncpg=True, on_conflict=True)
+    await create_list_record(db, user_id=user_id, list_id=list_id, name=list_name, list_type=list_type, description="", visibility="family" if list_type == "shopping" else "personal", raw_asyncpg=True, on_conflict=True, stamps_at=stamps_at)
     await _maybe_commit(db)
     rows = await db.fetch(
         """

@@ -864,6 +864,9 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
 
 
 async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
+    import list_service
+
+    stamps_at = list_service.stamps_now()
     if action == "list_add":
         lt = slots.get("list_type", "shopping")
         text = slots.get("item") or slots.get("description", "")
@@ -883,7 +886,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             visibility = "personal" if lt in ("personal", "tasks") else "family"
             from list_service import create_list_record
             await create_list_record(conn, user_id=user_id, list_id=list_id, name=ln, list_type=lt,
-                                     visibility=visibility, raw_asyncpg=True, defaults_only=True)
+                                     visibility=visibility, raw_asyncpg=True, defaults_only=True, stamps_at=stamps_at)
         item_id = str(uuid.uuid4())
         from list_service import create_item_record
 

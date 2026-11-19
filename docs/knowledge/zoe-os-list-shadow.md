@@ -65,7 +65,7 @@ without the lab stack and the contract test starts running the day both are pres
 | what runs | `labs/zoe-os/shadow_daemon.py`: the lab kernel + the lab `Lists` driver + the `Keeper` that erases the driver's rows when the kernel forgets. The driver's rows are **in memory**; the durable record is the spine (events + receipts) |
 | when it is down | the shadow logs ONE line per add with `result=kernel_unavailable` and carries on; a 5 s circuit stops it reconnecting per add; the live add is untouched. `Restart=on-failure` brings it back; the client re-reads `creds.json` on every reconnect, so a re-issued credential needs no zoe-data restart |
 | supervision | systemd only. There is no watchdog: a dead shadow is visible in the report (`kernel_unavailable` count), by design not an alarm |
-| roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json` and restart the unit. A FORGET never consults the roster: it is sent by the member's id whatever `people.json` says now (a member taken off it may still have records); only the kernel's own "never knew them" refusal reads as nothing to forget, which is sound because the daemon keeps every id it was ever started with |
+| roster | the kernel is built with a fixed list of members (`people.json`, read at start). A member not in it is **never proposed** (`member_not_in_roster`), because the kernel could not forget what it recorded about a person it does not know. Add a member = regenerate `people.json`; the kernel reads the file again when it changes (no restart), and with `ZOE_OS_LISTS=kernel` zoe-data regenerates it itself (section 4b). A FORGET never consults the roster: it is sent by the member's id whatever `people.json` says now (a member taken off it may still have records); only the kernel's own "never knew them" refusal reads as nothing to forget, which is sound because the daemon keeps every id it was ever started with |
 
 ## 4. Privacy and forget [code; lab for the kernel's own forget]
 
@@ -155,16 +155,61 @@ names. A check made in zoe-data cannot close that (the kernel answers when it an
 * **Limits.** (1) If the wall clock was ahead when an earlier zoe-data process started, a member forgotten by that process reads as
   `erased` (not recorded, never refused) until the clock passes that start; visible as `reason=erased` lines with no erase in
   progress. (2) The mark orders list asks and reports only; the watch-only shadow acts keep their own ordering (section 4).
-  (4) The door takes its stamp snapshot before its own list lookup (`stamp_snapshot`); a caller that reads the list's owner
-  itself, awaits, and then tells the door the owner is stamped at the door, so an owner forgotten in that caller's own gap is
-  not ordered. Narrow (the owner's lists go with them), written down, not closed.
   (3) An ask naming a list owner who is not on the kernel's roster is REFUSED `unknown_person` and the owner's id is never
-  written (the kernel can only forget, and order asks against, a person it knows). So the roster must be kept current:
-  a member added after the roster was written cannot change lists until it is written again and the kernel restarted.
+  written (the kernel can only forget, and order asks against, a person it knows). The roster is kept current for that reason
+  (section 4b).
+* **A told owner is stamped when the caller learned of them.** For every list that exists the door reads the owner itself, after
+  its own stamp snapshot (`list_service._gate`). The one door that is TOLD an owner is `create_list_record` (the list has no row
+  yet), and its `stamps_at` argument is required: every caller takes `list_service.stamps_now()` as the first thing it does,
+  before anything it awaits, and passes it through, so an owner whose forget is confirmed while the caller is still on its way
+  to the door keeps the stamp from before it (and the kernel records nothing for that ask). Chosen over "the door always reads
+  the owner itself" because there is no row to read for a list that does not exist yet; the argument being required, and a
+  scan of every caller (`tests/test_os_roster_sync.py`), keep a new caller from stamping late. What it does not reach back past
+  is the caller's own entry: who is asking (a session, a spoken turn) was established before it, exactly as for the acting
+  member of every other list change.
 
 Tests: `labs/zoe-os/tests/test_lists_erase_order.py` (the kernel, including the daemon's wire and a restart),
 `services/zoe-data/tests/test_lists_kernel_door.py` (what the client sends), `tests/test_os_shadow_contract.py`
 (`test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget`: this client against the real daemon).
+
+## 4b. The roster follows the accounts, with no restart [code; lab against the real kernel]
+
+The kernel refuses (`unknown_person`) a list change by, or on a list owned by, anyone its roster does not name. The roster used
+to be only as current as its last hand-written copy, and the kernel read it once, at start. Both halves are closed:
+
+* **zoe-data rewrites it (`ZOE_OS_LISTS=kernel` only).** When the door is about to ask for an acting member or a list owner the
+  roster this process last read or wrote does not name (`os_shadow._roster_wanted`, a memory read on the loop), `people.json` is
+  rewritten from the accounts in a task of its own (`_roster_sync`): the same read as the command (`_roster_entries`, through the
+  service's OPEN pool, one borrowed connection; it never opens or closes the pool, which is the command wrapper's job alone), the
+  same roles, every file touch in a thread, the file replaced in one step. It is a lazy trigger at the door, not a hook on member
+  creation, so it covers every way a member comes to exist. The ask that triggered it waits for it for at most 60% of its OWN
+  budget (`ZOE_OS_LISTS_ASK_MS`) and is then put to the kernel once: a rewrite that fits is decided in that very ask; a slower
+  one means that first change is refused once and the next attempt works.
+* **Rate limits.** One rewrite at a time, never sooner than 10 s after the last began (`ROSTER_SYNC_MIN_S`); one id asks for a
+  rewrite at most every 10 minutes (`ROSTER_MISS_S`), so an id that is not a member (a typo, a deleted member, a sentinel) costs
+  one read of the accounts, not one per request; a failed rewrite clears that memory (the 10 s floor stays). While list changes
+  are being made the roster is also rewritten every 15 minutes in the background (`ROSTER_REFRESH_S`), which is how a role stated
+  since (an account made for someone known only as a plain id) and a removed member arrive. An unchanged roster is not
+  rewritten. The service never creates the state directory or the first roster, and never writes an EMPTY one (a household with
+  nobody is the owner's to state, with the command).
+* **Demo roles survive.** The roles stated by hand for synthetic ids (`--write-roster-from-accounts DEMO_ID=ROLE ...`) are kept
+  in `demo-roles.json` beside the roster (0600) and read by every rewrite; each kept pair passes the command line's own rule
+  (a synthetic id, one of the three roles) or is dropped. Stating some on the command line replaces the kept set; stating none
+  keeps it; delete the file to state none.
+* **The kernel reads the file again when it changes** (`shadow_daemon.ShadowServer.sync_roster`, under the kernel lock, before
+  each `list_ask`, `publish` and `act`: one `stat`; the file is opened only when its inode, size or modification time moved).
+  It applies it exactly as a start would: a new member is known with the role STATED and gets the record-only grant; a changed
+  role takes effect; an entry that does not fully say otherwise is least access (`person_from_entry`, the only reader); a member
+  taken off the file loses their grant and role but stays a known, least-access, forgettable person while the kernel holds a
+  record for them, and is nobody once it holds none. A file that is missing or cannot be read changes nothing.
+* **One line, codes only:** `ZOE_OS_ROSTER result=written|same|no_roster|empty|failed` per rewrite; counts in
+  `os_shadow.roster_counters()`. Never an id or a name.
+* **Limits.** (1) Lists off (watch-only shadow): the service rewrites nothing; the kernel still re-reads a file the owner
+  rewrites. (2) A role change reaches the kernel within 15 minutes of list activity, not at once. (3) No guardian links are
+  written yet.
+
+Tests: `labs/zoe-os/tests/test_roster_sync.py` (the kernel, on its wire), `services/zoe-data/tests/test_os_roster_sync.py` (the
+service), `tests/test_os_shadow_contract.py` (`test_a_member_added_after_the_kernel_started_...`: both, against the real daemon).
 
 ## 5. What "the same" means [code]
 
@@ -232,7 +277,7 @@ stack up to the brain bridge (PR #2609 and the ~28 draft PRs under it) must be m
 
     # the state directory: made EMPTY, marked, and settled (about 4 s) before anything is written into it. Never mkdir / copy it by hand.
     python3 ~/assistant/services/zoe-data/os_shadow.py --init
-    # the roster: every member id, once (and again when a member is added). Ids only; the count is all it prints.
+    # the roster: every member id, once. Ids only; the count is all it prints. (With roles: --write-roster-from-accounts, section 4b.)
     docker exec zoe-database psql -U zoe -d zoe -tAc "SELECT id FROM users ORDER BY id" | xargs python3 ~/assistant/services/zoe-data/os_shadow.py --write-roster
     cp ~/assistant/scripts/setup/systemd/zoe-os-shadow-kernel.service ~/.config/systemd/user/
     systemctl --user daemon-reload && systemctl --user enable --now zoe-os-shadow-kernel.service

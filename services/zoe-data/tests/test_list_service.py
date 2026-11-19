@@ -125,6 +125,7 @@ async def test_create_list_record_columns_and_mapping():
         list_type="shopping",
         description="weekly run",
         visibility="personal",
+        stamps_at={},
     )
 
     assert len(db.committed) == 1

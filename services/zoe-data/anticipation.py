@@ -585,6 +585,9 @@ async def _own_row(conn: Any, uid: str, row_id: str) -> Optional[dict]:
 
 async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[Optional[str], dict]:
     """Run the real tool. ``(reply, receipt)``; reply None = unavailable (``ALARMS_OFF``)."""
+    import list_service
+
+    stamps_at = list_service.stamps_now()
     s, kind = r["slots"], r["kind"]
     today = now.astimezone(_tz()).date()
     when = _day(_date(s.get("start_date")) or today, today)
@@ -614,7 +617,8 @@ async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[O
         import write_receipts
 
         name = f"Packing: {(ev.title or 'trip').strip()[:60]}"
-        lst = await list_service.create_list_record(conn, user_id=uid, name=name, list_type="personal", visibility="personal")
+        lst = await list_service.create_list_record(conn, user_id=uid, name=name, list_type="personal", visibility="personal",
+                                                    stamps_at=stamps_at)
         items = (PACKING_TRAVEL_DOCS if s.get("event_kind") in ("flight", "train") else ()) + PACKING_BASICS
         for text in items:
             await list_service.create_item_record(conn, list_id=lst["id"], text=text, user_id=uid)

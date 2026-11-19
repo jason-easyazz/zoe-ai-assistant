@@ -141,7 +141,7 @@ class TxDB(DB):
 #: every door function: (the kernel verb it asks, how to call it as ``who``)
 DOORS = {
     "create_list_record": ("list.create", lambda db, who: list_service.create_list_record(
-        db, user_id=who, name=NAME, list_type="personal", visibility="personal")),
+        db, user_id=who, name=NAME, list_type="personal", visibility="personal", stamps_at=list_service.stamps_now())),
     "create_item_record": ("item.add", lambda db, who: list_service.create_item_record(db, list_id="L1", text=WORD, user_id=who)),
     "remove_item_record": ("item.remove", lambda db, who: list_service.remove_item_record(db, user_id=who, item_id="I1", list_id="L1")),
     "set_item_checked": ("item.tick", lambda db, who: list_service.set_item_checked(db, user_id=who, item_id="I1", completed=1)),
