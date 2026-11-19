@@ -239,7 +239,11 @@ def run_all() -> dict:
             result = asyncio.run(call(rest, mcp, db))
             log.append(["returned", _mask(json.loads(json.dumps(result, default=str)))])
         except Exception as exc:  # noqa: BLE001 - a refusal is part of the record
-            log.append(["raised", getattr(exc, "status_code", None), _mask(str(getattr(exc, "detail", exc)))])
+            # an HTTP error is recorded with its detail (the door's own words); any other exception by its TYPE only: the
+            # interpreter's message for the same fault differs between Python versions (3.10 and 3.12 word UnboundLocalError
+            # differently), and it is the fault, not its wording, that main and this branch must share
+            detail = _mask(str(exc.detail)) if hasattr(exc, "detail") else type(exc).__name__
+            log.append(["raised", getattr(exc, "status_code", None), detail])
         finally:
             _restore()
         out[name] = json.loads(json.dumps(log, default=str))
