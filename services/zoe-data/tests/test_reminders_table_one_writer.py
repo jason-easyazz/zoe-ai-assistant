@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DOOR = "reminder_service.py"
 #: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
 _SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
-WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+" + _SCHEMA + r"[\"`\[]?reminders\b", re.I)
+#: (``ONLY``: Postgres' ``UPDATE ONLY t`` / ``DELETE FROM ONLY t`` write the same table)
+WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA + r"[\"`\[]?reminders\b", re.I)
 
 
 def _texts(tree):
@@ -51,7 +52,9 @@ def test_planted_write_is_caught():
     for sql in ("UPDATE reminders SET title = ?", "INSERT INTO reminders (id) VALUES (?)", "DELETE FROM reminders WHERE id = ?",
                 'UPDATE "public"."reminders" SET x = ?', "insert or replace into reminders (id) values (1)",
                 "UPDATE public.reminders SET x = ?", "UPDATE public1.reminders SET x = ?", "DELETE FROM app_2$x.reminders WHERE id = ?",
-                'INSERT INTO "My Schema 1".reminders (id) VALUES (?)', "UPDATE public . reminders SET x = ?"):
+                'INSERT INTO "My Schema 1".reminders (id) VALUES (?)', "UPDATE public . reminders SET x = ?",
+                # control run: without the optional ONLY in the pattern these three escape and this test fails
+                "UPDATE ONLY reminders SET x = ?", "DELETE FROM ONLY reminders WHERE id = ?", "update only public1.reminders set x = ?"):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
     assert writes("async def f(db, sets):\n    await db.execute(f\"UPDATE reminders SET {', '.join(sets)} WHERE id = ?\")\n")
     # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not, and a split keyword

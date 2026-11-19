@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ERASERS = {}
 #: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
 _SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
-WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+" + _SCHEMA + r"[\"`\[]?(?:lists|list_items)\b", re.I)
+#: (``ONLY``: Postgres' ``UPDATE ONLY t`` / ``DELETE FROM ONLY t`` write the same table)
+WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA + r"[\"`\[]?(?:lists|list_items)\b", re.I)
 
 
 def _texts(tree):
@@ -53,7 +54,9 @@ def test_planted_write_is_caught():
     # (a schema name with a digit or a ``$`` in it is a schema too: ``public1.lists`` escaped the letters-only pattern; control
     # run: with the unquoted schema pattern back to letters and underscores this fails for it)
     for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?',
-                'UPDATE public1.lists SET name = ?', 'DELETE FROM app_2$x.list_items WHERE id = ?', 'UPDATE public . lists SET name = ?'):
+                'UPDATE public1.lists SET name = ?', 'DELETE FROM app_2$x.list_items WHERE id = ?', 'UPDATE public . lists SET name = ?',
+                # control run: without the optional ONLY in the pattern these three escape and this test fails
+                'UPDATE ONLY lists SET name = ?', 'DELETE FROM ONLY list_items WHERE id = ?', 'update only public1.list_items set x = ?'):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
     # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not
     for sql in ('f"UPDATE {schema}.lists SET name = ?"', 'f"DELETE FROM {schema}.list_items WHERE id = ?"',
