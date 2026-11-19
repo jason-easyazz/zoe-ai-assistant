@@ -1497,7 +1497,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                         erased = await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
                         # no plan yet on this repeat path: with the shadow in play a physical erase that did not confirm keeps the
                         # carried rows; with it off this is main's path exactly (cleared, and the forget goes on)
-                        if ((erased or {}).get("physical") or {}).get("ok") is False and await os_shadow.in_play():
+                        if ((erased or {}).get("physical") or {}).get("ok") is False and os_shadow.in_play():
                             raise RuntimeError("physical erase did not confirm")
                         await turn_forget.clear_unerased(user_id)
                         left = len(carried)

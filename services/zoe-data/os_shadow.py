@@ -1403,15 +1403,11 @@ class Plan:
     drop = ok        # the forget stopped BEFORE its first step (the store refused to hide the row): nothing began, nothing to finish
 
 
-async def in_play() -> bool:
-    """Is the shadow part of this forget at all? The switch is on, or shadow state exists - decided exactly as ``plan_erase``
-    decides it: a certain memory answer first, else the disk probe in a thread (an uncertain or expired cache, or an empty state
-    directory, is NOT evidence of state). False = behave exactly as before the shadow existed."""
-    if mode() == "shadow":
-        return True
-    if _no_state():
-        return False
-    return bool(await asyncio.to_thread(_state_probe))
+def in_play() -> bool:
+    """Is the shadow part of a forget that has NO plan (the repeat path)? Only when the switch is on. Switch off = main's path
+    exactly: no cache read, no disk probe, no thread (review, PR #2679: an uncertain cache must not change behaviour, and a probe
+    must not add work to a live forget while the switch is off)."""
+    return mode() == "shadow"
 
 
 async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:
