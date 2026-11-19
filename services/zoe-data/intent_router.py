@@ -2882,11 +2882,48 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
             )
             reminder = await create_reminder_record(payload, user=user, db=db)
         return _format_response(intent, json.dumps(reminder, default=str))
-    except HTTPException:
+    except HTTPException as exc:
+        # reminder_service.ReminderPastError: a day or time already gone, nothing stored. A spoken turn is told so; the
+        # brain's dispatch endpoint (PAST_IS_AN_ERROR) gets the 422 so its log and the tool result stay honest.
+        import reminder_service as _rs
+        if getattr(exc, "spoken", None) and not _rs.PAST_IS_AN_ERROR.get():
+            return exc.spoken
         raise
     except Exception as exc:
         logger.warning("reminder_create direct execution unavailable: %s", exc)
         return None
+
+
+async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
+    """"cancel that" after a reminder was set (``reminder_cancel``, slot ``title``): the speaker's OWN newest live reminder with
+    that title is cancelled via ``reminder_service.delete_reminder_record``. Always answers; never falls through to the brain."""
+    from reminder_service import SPOKEN, delete_reminder_record
+
+    title = str((intent.slots or {}).get("title") or "").strip()
+    if not title:
+        return SPOKEN["cancel_not_found"]
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            user = await _load_direct_execution_user(db, user_id)
+            if not user:
+                return SPOKEN["cancel_failed"]
+            cursor = await db.execute(
+                "SELECT id FROM reminders WHERE user_id = ? AND deleted = 0 AND is_active = 1 AND LOWER(title) = LOWER(?)"
+                " ORDER BY created_at DESC LIMIT 1",
+                (user_id, title),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return SPOKEN["cancel_not_found"]
+            await delete_reminder_record(db, user, row["id"], own_only=True)
+        return SPOKEN["cancelled"].format(title=title)
+    except HTTPException as exc:
+        return SPOKEN["cancel_not_found"] if exc.status_code == 404 else SPOKEN["cancel_failed"]
+    except Exception as exc:  # noqa: BLE001 - the store failing: say nothing changed
+        logger.warning("reminder_cancel direct execution failed: %s", type(exc).__name__)
+        return SPOKEN["cancel_failed"]
 
 
 async def _execute_reminder_list_direct(intent: Intent, user_id: str) -> Optional[str]:
@@ -3972,7 +4009,7 @@ _GUEST_GATED_INTENTS = (
     "list_add", "list_remove", "list_show", "list_rename",
     "calendar_create", "calendar_show",
     "people_", "person_",
-    "reminder_create", "reminder_list",
+    "reminder_create", "reminder_list", "reminder_cancel",
     "memory_",   # remember/store/forget/count — all personal memory
     "note_create", "note_search",
     "journal_",   # create + streak/prompt reads — a guest's journal doesn't exist
@@ -5380,6 +5417,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         direct_result = await _execute_reminder_list_direct(intent, user_id)
         if direct_result:
             return direct_result
+
+    if intent.name == "reminder_cancel":
+        return await _execute_reminder_cancel_direct(intent, user_id)
 
     if intent.name == "calendar_create":
         direct_result = await _execute_calendar_create_direct(intent, user_id)

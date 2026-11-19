@@ -5064,7 +5064,8 @@ async def voice_command(
                     }
                 except Exception as _cal_exc:
                     logger.warning("voice/command calendar_create panel failed: %s", _cal_exc)
-        if _quick_intent and _quick_intent.name == "reminder_create":
+        # reminder_cancel is "cancel that" right after a reminder was set (conversation_context); its executor always answers.
+        if _quick_intent and _quick_intent.name in ("reminder_create", "reminder_cancel"):
             _allow_quick_reminder = True
             try:
                 from voice_scope import classify as _vscope_rem
@@ -5088,10 +5089,10 @@ async def voice_command(
                         "reply": reply_text,
                         "audio_base64": base64.b64encode(_rem_audio.body).decode("ascii"),
                         "content_type": _rem_audio.media_type,
-                        "intent": "reminder_create",
+                        "intent": _quick_intent.name,
                     }
                 except Exception as _rem_exc:
-                    logger.warning("voice/command quick reminder_create failed: %s", _rem_exc)
+                    logger.warning("voice/command quick %s failed: %s", _quick_intent.name, type(_rem_exc).__name__)
         if _quick_intent and _quick_intent.name == "people_search" and _scope_identity_user:
             # Contacts READS ("list my contacts", "who is Percival", "how many contacts do I have") are answered from the contacts by
             # the SAME executor chat uses, not guessed by the 4B: the lookup is a deterministic read of the speaker's own rows. Only

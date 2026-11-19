@@ -301,7 +301,8 @@ WRITERS = {
 
 
 #: verb -> {"file::writer": the one caller that holds the hook, after the transaction the writer runs in}
-HOOKED_BY_CALLER = {"reminder_create": {"pending_suggestions.py::_execute_action": "execute_suggestion"}}
+#: (none today: an accepted reminder suggestion now goes through reminder_service, whose own hook covers it)
+HOOKED_BY_CALLER: dict = {}
 
 
 @pytest.mark.parametrize("verb", sorted(WRITERS))
