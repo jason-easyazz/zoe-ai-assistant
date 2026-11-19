@@ -9,7 +9,7 @@ pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 # Erasure uses dynamically named tables, so has no literal SQL exemption.
 ERASERS = {}
-WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[a-z_]+\.)?[\"`\[]?(?:lists|list_items)\b", re.I)
+WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[\"`\[]?[a-z_]+[\"`\]]?\.)?[\"`\[]?(?:lists|list_items)\b", re.I)
 
 
 def writes(source):
@@ -39,6 +39,10 @@ def test_one_door():
 
 def test_planted_write_is_caught():
     assert writes("async def f(db):\n    await db.execute('UPDATE list_items SET text = ?')\n")
+    # a schema-qualified table, quoted or not, is still a list write
+    for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?'):
+        assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
+    assert not writes("async def f(db):\n    await db.execute('UPDATE listings SET x = ?')\n")
 
 
 def _remove_by_tick(call) -> bool:
