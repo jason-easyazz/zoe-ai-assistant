@@ -72,6 +72,9 @@ def _changed(status) -> int:
     return int(m.group(1)) if m else 0
 
 
+from list_service import set_list_visibility_record
+
+
 async def set_list_visibility(db, *, list_id: str, user_id: str, share: bool) -> dict:
     """Share (``share=True``) or make private the list ``list_id`` for ``user_id``.
 
@@ -95,9 +98,7 @@ async def set_list_visibility(db, *, list_id: str, user_id: str, share: bool) ->
     if share:
         if family:
             return {"status": "already", "name": name, "list_type": ltype}
-        changed = _changed(await db.execute(
-            "UPDATE lists SET visibility = 'family', updated_at = NOW() "
-            "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility <> 'family'", list_id, user_id))
+        changed = _changed(await set_list_visibility_record(db, user_id=user_id, list_id=list_id, share=True))
         if not changed:
             return {"status": "already", "name": name, "list_type": ltype}
         if heads_up_enabled():
@@ -107,9 +108,7 @@ async def set_list_visibility(db, *, list_id: str, user_id: str, share: bool) ->
         return {"status": "locked", "name": name, "list_type": ltype}
     if not family:
         return {"status": "already", "name": name, "list_type": ltype}
-    changed = _changed(await db.execute(
-        "UPDATE lists SET visibility = 'personal', updated_at = NOW() "
-        "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility = 'family'", list_id, user_id))
+    changed = _changed(await set_list_visibility_record(db, user_id=user_id, list_id=list_id, share=False))
     if changed:
         await drop_heads_ups(db, list_id)
     return {"status": "unshared", "name": name, "list_type": ltype}

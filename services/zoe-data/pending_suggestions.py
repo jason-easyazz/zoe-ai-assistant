@@ -881,14 +881,9 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
         else:
             list_id = str(uuid.uuid4())
             visibility = "personal" if lt in ("personal", "tasks") else "family"
-            await conn.execute(
-                "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES ($1,$2,$3,$4,$5)",
-                list_id,
-                user_id,
-                ln,
-                lt,
-                visibility,
-            )
+            from list_service import create_list_record
+            await create_list_record(conn, user_id=user_id, list_id=list_id, name=ln, list_type=lt,
+                                     visibility=visibility, raw_asyncpg=True, defaults_only=True)
         item_id = str(uuid.uuid4())
         from list_service import create_item_record
 

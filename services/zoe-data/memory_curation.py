@@ -465,8 +465,9 @@ async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, s
                                       note="removed by a curator") is not None
     if ok and hasattr(svc, "erase_rows") and physical_erase_enabled():
         chain = await _earlier_revisions(pol, old, svc)
-        await svc.erase_rows(pol.member.user_id, [old.id, *chain], actor=curator.user_id,
+        erased = await svc.erase_rows(pol.member.user_id, [old.id, *chain], actor=curator.user_id,
                              reason="curated note removed by a curator")
+        plan.note_erase(result=erased)
     if ok:
         await plan.ok()
     await _finished(db, curator.user_id, pol.member.user_id, "forget", ok, cat, old.id)

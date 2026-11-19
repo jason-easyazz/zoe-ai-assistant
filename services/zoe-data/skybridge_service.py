@@ -29,6 +29,7 @@ from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
+from list_service import create_list_record, note_item_left, remove_item_record, set_item_checked
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
 from typed_env import env_bool, env_str
@@ -4450,19 +4451,7 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
     for list_type, name, description, visibility in DEFAULT_USER_LISTS:
         if list_type in existing_types or (visibility == "family" and list_type in family_types):
             continue
-        await db.execute(
-            """
-            INSERT INTO lists (id, user_id, name, list_type, description, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
-            """,
-            str(uuid.uuid4()),
-            user_id,
-            name,
-            list_type,
-            description,
-            visibility,
-        )
+        await create_list_record(db, user_id=user_id, name=name, list_type=list_type, description=description, visibility=visibility, raw_asyncpg=True, on_conflict=True)
     await _maybe_commit(db)
 
 
@@ -4598,23 +4587,8 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
         list_type = str(dict(existing[0]).get("list_type") or list_type)
     if not existing:
         list_id = str(uuid.uuid4())
-        status = await db.execute(
-            """
-            INSERT INTO lists (id, user_id, name, list_type, description, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
-            """,
-            list_id,
-            user_id,
-            intent.list_name,
-            list_type,
-            "",
-            # A list made by voice is PRIVATE to whoever made it - on the shared panel too, whatever its type. It becomes
-            # household-visible only on an explicit "share it to the house" (list_sharing.py), never from the device or channel.
-            # (A guest never reaches here - they own no list - and a guest-started SHOPPING list stays family: list_service.)
-            "personal",
-        )
-        created = _affected_rows(status) == 1
+        status = await create_list_record(db, user_id=user_id, list_id=list_id, name=intent.list_name, list_type=list_type, description="", visibility="personal", raw_asyncpg=True, on_conflict=True)
+        created = _affected_rows(status["status"]) == 1
         await _maybe_commit(db)
         if not created:
             raced = await db.fetch(
@@ -4757,19 +4731,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         user_id = panel_principal.HOUSEHOLD_OWNER_ID  # the household owns what a guest starts (a guest has no users row)
     list_id = str(uuid.uuid4())
     list_name = "Shopping" if list_type == "shopping" else list_type.title()
-    await db.execute(
-        """
-        INSERT INTO lists (id, user_id, name, list_type, description, visibility)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
-        """,
-        list_id,
-        user_id,
-        list_name,
-        list_type,
-        "",
-        "family" if list_type == "shopping" else "personal",
-    )
+    await create_list_record(db, user_id=user_id, list_id=list_id, name=list_name, list_type=list_type, description="", visibility="family" if list_type == "shopping" else "personal", raw_asyncpg=True, on_conflict=True)
     await _maybe_commit(db)
     rows = await db.fetch(
         """
@@ -5086,11 +5048,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
         return refreshed
     target_item = matches[0]
     item_id = str(target_item.get("id") or "")
-    remove_result = await db.execute(
-        "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
-        item_id,
-        list_id,
-    )
+    remove_result = await remove_item_record(db, user_id=user_id, item_id=item_id, list_id=list_id, raw_asyncpg=True)
     if _affected_rows(remove_result) == 0:
         refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type}
@@ -5104,9 +5062,8 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     item_text = normalize_item_text(str(target_item.get("text") or intent.item_text))
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     _audit_list_item("remove", user_id, list_id, item_id)
-    import os_shadow      # after the commit: a no-op unless ZOE_OS_SHADOW_VERBS names list_remove, never raises
-
-    os_shadow.note_list_remove(user_id, source="skybridge", list_type=list_type, list_name=resolved_name or intent.list_name, item=item_text)
+    await note_item_left(db, user_id, source="skybridge", list_id=list_id, item_id=item_id,
+                         list_type=list_type, list_name=resolved_name or intent.list_name, item=item_text)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
@@ -5257,12 +5214,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
     if desired is None:
         desired = not bool(target_item.get("completed"))
     completed_val = 1 if desired else 0
-    update_result = await db.execute(
-        "UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
-        completed_val,
-        item_id,
-        list_id,
-    )
+    update_result = await set_item_checked(db, user_id=user_id, item_id=item_id, list_id=list_id, completed=completed_val, raw_asyncpg=True)
     if _affected_rows(update_result) == 0:
         refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type}

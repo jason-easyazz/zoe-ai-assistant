@@ -49,6 +49,9 @@ class _FakeListDB:
             return _Cursor(row)
         return _Cursor()
 
+    async def commit(self):
+        pass
+
     def sql_matching(self, needle):
         return [sql for sql, _ in self.calls if needle in sql]
 

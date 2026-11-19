@@ -351,6 +351,10 @@ async def create_list_record(
     list_type: str,
     visibility: str,
     description: Optional[str] = None,
+    list_id: Optional[str] = None,
+    raw_asyncpg: bool = False,
+    on_conflict: bool = False,
+    defaults_only: bool = False,
 ) -> dict:
     """Insert one row into ``lists`` and return a record dict.
 
@@ -360,20 +364,88 @@ async def create_list_record(
     a no-op) — those are the caller's job. Callers that re-read the row for
     their response may ignore the returned dict.
     """
-    list_id = str(uuid.uuid4())
-    await db.execute(
-        """INSERT INTO lists (id, user_id, name, list_type, description, visibility)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (list_id, user_id, name, list_type, description, visibility),
-    )
+    list_id = list_id or str(uuid.uuid4())
+    columns = "id, user_id, name, list_type"
+    values = (list_id, user_id, name, list_type)
+    if not defaults_only:
+        columns += ", description"
+        values += (description,)
+    columns += ", visibility"
+    values += (visibility,)
+    placeholders = ", ".join(f"${i + 1}" if raw_asyncpg else "?" for i in range(len(values)))
+    sql = f"INSERT INTO lists ({columns}) VALUES ({placeholders})"
+    if on_conflict:
+        sql += " ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING"
+    status = await db.execute(sql, *values) if raw_asyncpg else await db.execute(sql, values)
     return {
         "id": list_id,
+        **({"status": status} if on_conflict else {}),
         "user_id": user_id,
         "name": name,
         "list_type": list_type,
         "description": description,
         "visibility": visibility,
     }
+
+
+async def remove_item_record(db, *, user_id, item_id, list_id, raw_asyncpg=False):
+    if raw_asyncpg:
+        return await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0", item_id, list_id)
+    return await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?", (item_id, list_id))
+
+
+async def note_item_left(db, user_id, *, source: str, list_id, item_id, item: Optional[str] = None,
+                         list_type: Optional[str] = None, list_name: Optional[str] = None) -> None:
+    """Observe a committed removal, without affecting the caller on failure."""
+    try:
+        if not os_shadow.wants("list_remove"):
+            return
+        if item is None or list_type is None or list_name is None:
+            cursor = await db.execute(
+                "SELECT li.text, l.list_type, l.name FROM list_items li JOIN lists l ON li.list_id = l.id "
+                "WHERE li.id = ? AND li.list_id = ?", (item_id, list_id),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return
+            item = row["text"] if item is None else item
+            list_type = row["list_type"] if list_type is None else list_type
+            list_name = row["name"] if list_name is None else list_name
+        os_shadow.note_list_remove(user_id, source=source, list_type=list_type, list_name=list_name, item=item)
+    except Exception:
+        pass  # Shadow observation must never break a committed action.
+
+
+async def set_item_checked(db, *, user_id, item_id, completed, list_id=None, raw_asyncpg=False):
+    if list_id is not None:
+        if raw_asyncpg:
+            return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0", completed, item_id, list_id)
+        return await db.execute("UPDATE list_items SET completed = ?, updated_at = NOW() WHERE id = ? AND list_id = ? AND deleted = 0", (completed, item_id, list_id))
+    if raw_asyncpg:
+        return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2", completed, item_id)
+    if completed:
+        return await db.execute("UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,))
+    return await db.execute("UPDATE list_items SET completed=0, updated_at=NOW() WHERE id=?", (item_id,))
+
+
+async def update_item_record(db, *, user_id, item_id, list_id, updates, params):
+    return await db.execute(f"UPDATE list_items SET {', '.join(updates)} WHERE id = ? AND list_id = ?", params)
+
+
+async def update_list_record(db, *, user_id, list_id, updates, params):
+    return await db.execute(f"UPDATE lists SET {', '.join(updates)} WHERE id = ?", params)
+
+
+async def delete_list_record(db, *, user_id, list_id):
+    return await db.execute("UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?", (list_id,))
+
+
+async def set_list_visibility_record(db, *, user_id, list_id, share):
+    if share:
+        return await db.execute("UPDATE lists SET visibility = 'family', updated_at = NOW() "
+                                "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility <> 'family'", list_id, user_id)
+    return await db.execute("UPDATE lists SET visibility = 'personal', updated_at = NOW() "
+                            "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility = 'family'", list_id, user_id)
 
 
 async def create_item_record(

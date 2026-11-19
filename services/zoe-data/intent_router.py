@@ -29,7 +29,7 @@ import contacts_conversation as _cc
 import panel_principal
 import traffic_class
 from log_redaction import utterance_tag as _utt_tag
-from list_service import HouseholdListUnavailable
+from list_service import HouseholdListUnavailable, note_item_left, set_item_checked
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
@@ -3197,9 +3197,9 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 return f"{item} wasn't on your {friendly}."
             item_id = row["id"]
             list_id = row["list_id"]
-            await db.execute(
-                "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
-            )
+            await set_item_checked(db, user_id=user_id, item_id=item_id, completed=1)
+            await db.commit()
+            await note_item_left(db, user_id, source="spoken", list_id=list_id, item_id=item_id)
         logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
         import write_receipts
 
@@ -4174,7 +4174,8 @@ async def _execute_forget_last(user_id: str) -> str:
         try:
             from memory_service import physical_erase_enabled
             if physical_erase_enabled():
-                await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
+                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
+                plan.note_erase(result=erased)
                 await turn_forget.clear_unerased(user_id)
                 finished_earlier = bool(carried)
         except Exception as exc:  # noqa: BLE001
@@ -4628,6 +4629,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     return
                 erased = await svc.erase_rows(user_id, erase_ids, actor=user_id,
                                               reason="forgotten by request (entity)")
+                plan.note_erase(result=erased)
                 logger.info("memory_forget_entity: erased=%s ok=%s", erased.get("rows_removed"),
                             (erased.get("physical") or {}).get("ok"))
             except Exception as exc:  # noqa: BLE001 - the rows are archived either way

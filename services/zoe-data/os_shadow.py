@@ -695,7 +695,7 @@ _lock = threading.Lock()
 LIST_CLASSES = ("shopping", "todo", "personal")
 #: EVERY value each field of the one line can take (``_finish`` maps anything else to ``other`` / ``none``): the line and the counter
 #: keys can never carry a caller's text (``test_marker_text_from_any_caller_argument_never_reaches_a_log_line_or_a_counter``).
-SOURCES = ("spoken", "single", "skybridge", "rest", "suggestion", "service")      # every call site's ``source=``, on every branch
+SOURCES = ("spoken", "single", "skybridge", "rest", "suggestion", "service", "mcp")      # every call site's ``source=``, on every branch
 CLASSES = LIST_CLASSES + ("other", "once", "repeat", "-")       # list classes; reminder / alarm once|repeat; "-" (note_act)
 LIVE = ("added", "refused", "noop")
 KERNEL_STATES = ("verified", "unverified", "uncertain", "refused", "none")
@@ -1381,6 +1381,11 @@ class Plan:
         if self.entry is not None:
             self.has_failed = True
 
+    def note_erase(self, *, result) -> None:
+        """Keep the plan parked when physical erasure did not confirm."""
+        if isinstance(result, dict) and isinstance(result.get("physical"), dict) and result["physical"].get("ok") is False:
+            self.failed()
+
     async def ok(self) -> None:
         """Every step confirmed: the plan's ids leave the park. Never raises (an id left behind names nothing that still exists,
         and the next replay drops it)."""
@@ -1396,6 +1401,13 @@ class Plan:
         _planning.pop(self.user_id, None)
 
     drop = ok        # the forget stopped BEFORE its first step (the store refused to hide the row): nothing began, nothing to finish
+
+
+def in_play() -> bool:
+    """Is the shadow part of a forget that has NO plan (the repeat path)? Only when the switch is on. Switch off = main's path
+    exactly: no cache read, no disk probe, no thread (review, PR #2679: an uncertain cache must not change behaviour, and a probe
+    must not add work to a live forget while the switch is off)."""
+    return mode() == "shadow"
 
 
 async def plan_erase(user_id: str, *, rows=(), words=None) -> Plan:

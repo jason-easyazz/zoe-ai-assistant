@@ -449,7 +449,8 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
             from memory_service import physical_erase_enabled
 
             if physical_erase_enabled():
-                await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)")
+                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)")
+                plan.note_erase(result=erased)
                 await turn_forget.clear_unerased(user_id)
                 res.finished_earlier = len(carried)
         except Exception as exc:  # noqa: BLE001 - archived rows are hidden from every read either way
