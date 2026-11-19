@@ -520,12 +520,21 @@ def _scan(src: str) -> list:
             for inner in ast.walk(outer):
                 if inner is not outer and isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     _PARENTS.setdefault(id(inner), outer)
+    # every name this module can call the door by: its own name, ``from list_service import create_list_record as X``, and a
+    # plain rebinding ``X = create_list_record`` / ``X = list_service.create_list_record`` (``ls.create_list_record`` after
+    # ``import list_service as ls`` is matched by the attribute name)
+    names = {"create_list_record"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names |= {a.asname for a in node.names if a.name == "create_list_record" and a.asname}
+        elif isinstance(node, ast.Assign) and getattr(node.value, "id", getattr(node.value, "attr", "")) == "create_list_record":
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
     out = []
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name == "create_list_record":
             continue
         calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-                 and getattr(n.func, "id", getattr(n.func, "attr", "")) == "create_list_record"]
+                 and getattr(n.func, "id", getattr(n.func, "attr", "")) in names]
         calls = [c for c in calls if not any(isinstance(g, (ast.FunctionDef, ast.AsyncFunctionDef)) and g is not fn
                                              and any(n is c for n in ast.walk(g)) for g in ast.walk(fn))]
         if not calls:
@@ -570,6 +579,13 @@ def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awa
                "async def good_too(db):\n    stamps_at = list_service.stamps_now()\n    await db.fetch('x')\n"
                "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n")
     assert _scan(planted) == ["late", "silent", "fresh", "again", "dressed"]
+    aliased = ("from list_service import create_list_record as create\nimport list_service as ls\nmake = ls.create_list_record\n"
+               "async def renamed(db):\n    await db.fetch('x')\n    await create(db, user_id='u')\n"
+               "async def through_module(db):\n    await db.fetch('x')\n    await ls.create_list_record(db, user_id='u')\n"
+               "async def rebound(db):\n    await db.fetch('x')\n    await make(db, user_id='u')\n"
+               "async def renamed_good(db):\n    stamps_at = ls.stamps_now()\n    await db.fetch('x')\n"
+               "    await create(db, user_id='u', stamps_at=stamps_at)\n")
+    assert _scan(aliased) == ["renamed", "through_module", "rebound"]         # a caller cannot hide behind another name
     gates = [n for n in ast.walk(ast.parse((ROOT / "list_service.py").read_text("utf-8"))) if isinstance(n, ast.Call)
              and getattr(n.func, "id", "") == "_gate" and any(k.arg in ("owner", "visibility") for k in n.keywords)]
     assert len(gates) == 1 and gates[0].args[1].value == "list.create"

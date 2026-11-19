@@ -281,8 +281,9 @@ class ShadowServer(KernelServer):
         member, and people.json names them); one off the roster leaves the file, then the kernel's people (so a later forget is
         the kernel's own "never knew them", and nothing new can be recorded about them)."""
         people = self.kernel.grants.people
-        if subject in self.roster:
-            self.forgotten.add(subject)   # still a member: recorded afresh when they act again (record_again)
+        # marked whether or not they are on the roster NOW: a member taken off the file, then forgotten, then put back must not
+        # be granted (and so named) by the re-read. Only their own next act clears the mark (record_again).
+        self.forgotten.add(subject)
         if subject in self.roster or subject not in people:
             return
         write_known(self.state, (p for p in people if p != subject))

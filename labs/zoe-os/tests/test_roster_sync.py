@@ -297,6 +297,26 @@ def test_a_forgotten_member_taken_off_the_file_and_put_back_is_still_not_granted
     assert k.grants.of("brain", KID) is not None
 
 
+def test_a_member_removed_then_forgotten_then_put_back_is_still_not_granted(built):
+    """The other order: taken off the file FIRST, then wholly forgotten, then added again. The forgotten mark is kept whether or
+    not the person was on the roster when they were forgotten, so the re-read that brings them back writes no grant naming them.
+
+    Negative control: ``forgot`` marking only a member who is on the roster -> the re-add grants them and the ``is None`` line
+    fails."""
+    daemon, k, srv, state = built
+    write(state, [{"id": OWNER, "role": "adult"}])                           # KID taken off the file
+    assert _ask(srv, OWNER)["ask"]
+    assert k.spine.forget(KID, actor=KID)                                   # ... then forgotten
+    srv.forgot(KID)
+    write(state, [{"id": OWNER, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])     # ... then put back
+    assert _ask(srv, OWNER)["ask"]
+    assert k.grants.of("brain", KID) is None and KID in srv.forgotten
+    k.spine._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    assert KID.encode() not in (state / "kernel" / "zoe-os.db").read_bytes()
+    srv.record_again(KID)
+    assert k.grants.of("brain", KID) is not None
+
+
 def test_a_backfill_that_fails_leaves_the_old_roster_in_memory_and_the_next_re_read_backfills(built, monkeypatch):
     """The new people are swapped in only if the index backfill committed. If it raises, memory goes back to the roster in
     force, so the next re-read still sees the member as NEW and backfills: their older records stay inside their forget.
