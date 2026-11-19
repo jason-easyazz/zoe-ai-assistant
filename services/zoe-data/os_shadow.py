@@ -1148,9 +1148,11 @@ def ask_deadline_s() -> float:
 
 def _door_log(verb: str, decision: str, reason: str, ask_ms: float) -> None:
     """ONE line per decided list change; closed codes and a number only."""
-    logger.info("ZOE_OS_ACT area=lists verb=%s decision=%s reason=%s ask_ms=%.1f", verb if verb in DOOR_VERBS else "unknown",
-                decision if decision in (ALLOW, REFUSE, NOT_CHECKED) else NOT_CHECKED,
-                (reason or "-") if (reason or "-") in DOOR_REASONS else "other", float(ask_ms))
+    verb = verb if verb in DOOR_VERBS else "unknown"
+    decision = decision if decision in (ALLOW, REFUSE, NOT_CHECKED) else NOT_CHECKED
+    reason = (reason or "-") if (reason or "-") in DOOR_REASONS else "other"
+    ask_ms = float(ask_ms)
+    logger.info("ZOE_OS_ACT area=lists verb=%s decision=%s reason=%s ask_ms=%.1f", verb, decision, reason, ask_ms)
     with _lock:
         _door_counts[decision] += 1
 
@@ -1890,6 +1892,63 @@ def write_roster(ids, dest: Optional[Path] = None) -> list:
     return clean
 
 
+ROSTER_ROLES = ("adult", "child", "guest")       # the kernel's own three (labs/zoe-os/zoe_os/capability.py ``ROLES``)
+
+
+async def _roster_from_accounts(demo: Optional[dict] = None) -> list:
+    """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states; never logs an id. The
+    ``users`` mirror only says admin / member, so it is never read for a role. No account, an unknown role or a failed lookup =
+    a plain id (the kernel's least access). ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
+    from db_compat import get_compat_db
+    from enrollment_state import _account_facts
+    from manner_block import ADULT_ROLES, CHILD_ROLES
+
+    demo = demo or {}
+    async with get_compat_db() as db:
+        accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
+        known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
+        entries = []
+        for uid in sorted(accounts | known | frozenset(demo)):
+            role = demo[uid] if uid in demo else None
+            if role is None and uid in accounts:
+                try:
+                    minor, stated = await _account_facts(uid, db=db)
+                    role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
+                except Exception:  # noqa: BLE001 - a role that cannot be read is least access
+                    role = None
+            entries.append({"id": uid, "role": role} if role else uid)
+    return entries
+
+
+def _demo_roles(pairs) -> dict:
+    """``ID=role`` arguments. A role can be stated by hand only for a synthetic (demo / test) id: a person's comes from their
+    account. Raises ``ValueError`` on anything else."""
+    from user_filters import GUEST_USERS, is_synthetic_user
+
+    out = {}
+    for pair in pairs:
+        uid, sep, role = str(pair).partition("=")
+        uid = uid.strip()
+        if not sep or role not in ROSTER_ROLES or not uid or uid in GUEST_USERS or not is_synthetic_user(uid):
+            raise ValueError("a hand-stated role needs DEMO_ID=adult|child|guest, and the id must be a demo id")
+        out[uid] = role
+    return out
+
+
+def write_roster_from_accounts(dest: Optional[Path] = None, demo: Optional[dict] = None) -> list:
+    """Write the kernel roster with roles (see ``_roster_from_accounts``); 0600, replaced in one step."""
+    entries = asyncio.run(_roster_from_accounts(demo))
+    path = ensure_state_dir() / "people.json" if dest is None else Path(dest)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        os.fchmod(fh.fileno(), 0o600)
+        json.dump({"people": entries}, fh)
+    os.replace(tmp, path)
+    return entries
+
+
 def restore(src: Path) -> dict:
     """Zoe's restore of a shadow state directory from a backup copy src: the ONLY supported way (never copy the directory by
     hand: the kernel refuses a directory that was not made here, and a hand copy can appear before a process has seen it).
@@ -1925,6 +1984,7 @@ def main(argv: Optional[list] = None) -> int:
 
         os_shadow.py --init                         make the state directory (empty, marker, the settle wait)
         os_shadow.py --write-roster ID [ID ...]     the roster export
+        os_shadow.py --write-roster-from-accounts [DEMO_ID=ROLE ...]   the roster WITH roles (from the account records)
         os_shadow.py --restore BACKUP_DIR           bring back parked forgets / erases and the roster from a backup copy"""
     import sys
 
@@ -1933,6 +1993,17 @@ def main(argv: Optional[list] = None) -> int:
         ensure_state_dir()
         print("state directory ready")
         return 0
+    if args[:1] == ["--write-roster-from-accounts"]:
+        try:
+            demo = _demo_roles(args[1:])
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        entries = write_roster_from_accounts(demo=demo)
+        said = [entry["role"] for entry in entries if isinstance(entry, dict)]
+        print(f"roster: {len(entries)} members written ({said.count('adult')} adults, {said.count('child')} children, "
+              f"{len(entries) - said.count('adult') - said.count('child')} least access)")
+        return 0
     if args[:1] == ["--write-roster"] and len(args) > 1:
         print(f"roster: {len(write_roster(args[1:]))} members written")
         return 0
@@ -1940,7 +2011,7 @@ def main(argv: Optional[list] = None) -> int:
         got = restore(Path(args[1]))
         print(f"restored: {got['forgets']} parked forgets, {got['erases']} parked erases, roster {got['roster']} members")
         return 0
-    print("usage: os_shadow.py --init | --write-roster ID [ID ...] | --restore BACKUP_DIR", file=sys.stderr)
+    print("usage: os_shadow.py --init | --write-roster ID [ID ...] | --write-roster-from-accounts [DEMO_ID=ROLE ...] | --restore BACKUP_DIR", file=sys.stderr)
     return 2
 
 
