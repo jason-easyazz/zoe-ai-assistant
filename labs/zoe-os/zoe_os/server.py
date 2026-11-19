@@ -242,7 +242,7 @@ class KernelServer:
     def _op_forget(self, conn: _Conn, a: dict) -> dict:
         self._person_op(conn, "forget")
         r = self.kernel.spine.forget(a["subject"], actor=a["actor"], seqs=a.get("seqs"),
-                                     entity=a.get("entity"), topic=a.get("topic"))
+                                     entity=a.get("entity"), topic=a.get("topic"), stamp=a.get("stamp"))
         return {"count": r.count, "upto": r.upto}
 
     def _op_grant(self, conn: _Conn, a: dict) -> dict:
@@ -268,10 +268,10 @@ class KernelServer:
         """May this person do this verb to this list? Allowed: the ask id to report against. Refused: a fixed reason code."""
         return self.kernel.lists.ask(conn.name, a["verb"], a["person"], via=a.get("via"), list_id=a.get("list"),
                                      items=a.get("items", ()), owner=a.get("owner"), visibility=a.get("visibility"),
-                                     turn=a.get("turn"))
+                                     turn=a.get("turn"), stamps=a.get("stamps"))
 
     def _op_list_report(self, conn: _Conn, a: dict) -> dict:
-        return self.kernel.lists.report(conn.name, a["ask"], a["outcome"])
+        return self.kernel.lists.report(conn.name, a["ask"], a["outcome"], stamps=a.get("stamps"))
 
     def _op_describe(self, conn: _Conn, a: dict) -> dict:
         """The actions this caller's manifest names that declared their arguments: name, doc,

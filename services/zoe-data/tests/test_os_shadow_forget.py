@@ -24,7 +24,17 @@ SVC = Path(__file__).resolve().parents[1]
 
 
 def forgets(k):
-    return [(s, a) for s, op, a in k.calls if op == "forget"]
+    """The forgets the kernel was sent, without the erase stamp: a WHOLE-member forget carries one (two non-negative ints) and a
+    scoped forget carries none, checked here on every call; what the stamp means is pinned in ``test_lists_kernel_door.py``."""
+    out = []
+    for s, op, a in k.calls:
+        if op == "forget":
+            a = dict(a)
+            stamp = a.pop("stamp", None)
+            assert (stamp is None) == ("entity" in a or "topic" in a), a.keys()
+            assert stamp is None or (len(stamp) == 2 and all(type(n) is int and n >= 0 for n in stamp))
+            out.append((s, a))
+    return out
 
 
 @pytest.mark.asyncio

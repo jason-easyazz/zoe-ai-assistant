@@ -1131,7 +1131,28 @@ ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
 #: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
 DOOR_REFUSALS = ("unknown_person", "not_owner", "adults_only", "not_in_manifest", "forgotten")
 DOOR_REASONS = ("-", *DOOR_REFUSALS, "other", "timeout", "unavailable", "circuit", "not_provisioned", "no_credential", "protocol",
-                "erasing", "queue_full", "worker", "no_actor", "no_list", "bad_verb")
+                "erasing", "erased", "queue_full", "worker", "no_actor", "no_list", "bad_verb")
+#: the kernel's own word (``labs/zoe-os/zoe_os/lists.py`` ``ERASED``) for an ask or report made before a forget of a member it names.
+#: Not a refusal of the change: the kernel recorded nothing and the change proceeds ``not_checked reason=erased``.
+KERNEL_ERASED = "erased"
+
+# ---- the erase stamp: what orders a list ask against a forget, in the KERNEL ---------------------------------------------------------
+# The door has its own thread and connection, so an ask (or its report) can reach the kernel AFTER a later forget of a member it
+# names; nothing this process checks can close that, the kernel answers when it answers. So every ask and report carries a stamp
+# for each member it names, every whole-member forget carries that member's stamp, and the kernel, under its own lock, records
+# nothing for an ask whose stamp is older than the member's newest forget (it keeps that stamp as the member's erase mark).
+# The stamp is ``[boot, count]``, compared as a pair: ``boot`` is when this process started (wall clock, so a later process is newer;
+# a restart resets every count to 0), ``count`` only grows in this process: ``user_erase_gate``'s generation (a whole-member erase)
+# plus the kernel forgets asked for here (``_forget``; a row-, turn-, entity- or topic-scoped forget never moves the generation).
+# If the wall clock was AHEAD at an earlier start, a member forgotten then reads as "erased" (unrecorded, never refused) until
+# the clock passes that start: the safe direction, visible as ``reason=erased`` lines.
+_BOOT = time.time_ns()
+_forget_marks: Counter = Counter()          # member -> kernel forgets asked for in this process
+
+
+def erase_stamp(member: str) -> list:
+    """The member's erase stamp NOW. Read it when the ask is made (on the caller's loop) and when a forget is sent."""
+    return [_BOOT, user_erase_gate.generation(member) + _forget_marks[member]]
 _door_q: "queue.Queue" = queue.Queue(maxsize=DOOR_QUEUE_MAX)
 _door_worker: Optional[threading.Thread] = None
 _door_guard = threading.Lock()
@@ -1193,38 +1214,14 @@ def _door_parked(user_id: str) -> bool:
     return user_id in members
 
 
-def _door_undo(members) -> None:
-    """An erase of one of these members started or finished WHILE the kernel had their ask (the door has its own thread and
-    connection, so the forget worker's ordering does not cover it): the kernel may have written the ask, or its refusal, AFTER
-    the member's forget. Park a whole-member kernel forget for each, durably, and wake the worker: the replay erases what was
-    written. On the door thread: blocking is fine. Never raises."""
-    try:
-        for member in members:
-            _pending_add(member)
-        _ensure_worker()
-        _q.put_nowait(("replay",))
-    except Exception:  # noqa: BLE001 - a full queue replays before its next job anyway; a failed park is retried by the nightly pass
-        logger.warning("os_shadow: could not park the forget after an ask that raced an erase")
-
-
 def _door_ask(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
     """On the door thread: ``(decision, reason, ask id)``. Only the kernel's own refusal is a refusal; every fault is not_checked.
-    Whatever the outcome (answer, refusal, timeout, fault: the kernel may have written a record in any of them), every member id
-    the ask named (the actor and the list's owner) is re-checked against the erase gate afterwards (``_door_raced``)."""
-    named = sorted({m for m in (user_id, args.get("owner")) if isinstance(m, str) and m and m != "panel"})
-    if any(user_erase_gate.in_progress(m) or _door_parked(m) for m in named):
+    A member who is being erased right now (or whose forget is parked) is not put to the kernel at all: cheap, and it keeps new
+    records out while their forget is outstanding. That is the only erase check made here: an ask that still races a forget is
+    ordered by the KERNEL, from the stamps the ask carries (``erase_stamp``)."""
+    if any(user_erase_gate.in_progress(m) or _door_parked(m) for m in args.get("stamps", ())):
         return NOT_CHECKED, "erasing", None
-    before = {m: user_erase_gate.generation(m) for m in named}
-    out = _door_call(kernel, verb, user_id, args, until)
-    try:
-        raced = [m for m in named if user_erase_gate.generation(m) != before[m] or user_erase_gate.in_progress(m) or _door_parked(m)]
-        if raced:
-            _door_undo(raced)
-            if out[0] == ALLOW:                  # no ask id: nothing more is reported under an erased member's id
-                out = (NOT_CHECKED, "erasing", None)
-    except Exception:  # noqa: BLE001 - the door thread never dies and never raises into a turn
-        pass
-    return out
+    return _door_call(kernel, verb, user_id, args, until)
 
 
 def _door_call(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
@@ -1235,6 +1232,8 @@ def _door_call(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: fl
             raise KernelProtocol("no ask id")
         return ALLOW, "", ask
     except KernelRefused as exc:
+        if (exc.reason or "").strip() == KERNEL_ERASED:      # made before a forget of a member it names: nothing was recorded
+            return NOT_CHECKED, "erased", None
         return REFUSE, _refusal_code(exc.reason), None
     except (socket.timeout, TimeoutError):
         return NOT_CHECKED, "timeout", None
@@ -1264,8 +1263,10 @@ def _door_run() -> None:
                 out = _door_ask(kernel, verb, user_id, args, until)
                 if not fut.done():
                     fut.set_result(out)
-            else:                     # a report: best effort, bounded; an ask left open is "uncertain" at the kernel's next start
-                kernel.call(SKILL_BRAIN, "list_report", time.monotonic() + OP_TIMEOUT_S, ask=job[1], outcome=job[2])
+            else:                     # a report: best effort, bounded; an ask left open is "uncertain" at the kernel's next start.
+                # It carries the ASK's stamps: after a forget of a member it names the kernel refuses it and writes nothing.
+                kernel.call(SKILL_BRAIN, "list_report", time.monotonic() + OP_TIMEOUT_S, ask=job[1], outcome=job[2],
+                            **({"stamps": job[3]} if job[3] else {}))
         except Exception as exc:  # noqa: BLE001
             logger.debug("ZOE_OS door error=%s", type(exc).__name__)
 
@@ -1281,7 +1282,9 @@ def _ensure_door() -> bool:
 
 async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Optional[str] = None, item_ids=(),
                    owner: Optional[str] = None, household: bool = False, turn_id: Optional[str] = None) -> tuple:
-    """Ask the kernel whether ``user_id`` may do ``verb`` to a list: ``(allow | refuse | not_checked, reason code, ask id | None)``.
+    """Ask the kernel whether ``user_id`` may do ``verb`` to a list: ``(allow | refuse | not_checked, reason code, ask id | None,
+    stamps | None)``. ``stamps`` (an allowed ask only) is what the ask carried, ``{member id: erase_stamp}`` for the acting member
+    and the list's owner, read HERE, before anything is queued; hand it back to ``report_list``.
 
     The caller awaits this BEFORE the change, so it has a hard deadline (``ask_deadline_s``, queue wait included) and all socket
     work is on the door thread, never the event loop. A refusal is the kernel's own and is final. Anything else that goes wrong
@@ -1289,6 +1292,7 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
     raises. Writes the change's one ``ZOE_OS_ACT`` line. Call only when ``lists_on()``."""
     started = time.perf_counter()
     out: tuple = (NOT_CHECKED, "worker", None)
+    stamps: dict = {}
     try:
         uid = (user_id or "").strip()
         if verb not in DOOR_VERBS:
@@ -1305,6 +1309,9 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
             items = [str(i) for i in item_ids if i][:16]
             if items:
                 args["items"] = items
+            stamps = {m: erase_stamp(m) for m in ("" if panel else uid, str(owner or "")) if m}
+            if stamps:
+                args["stamps"] = stamps
             deadline = ask_deadline_s()                           # ONE budget: the door's start-up draws on it too
             until = time.monotonic() + deadline
             fut: "concurrent.futures.Future" = concurrent.futures.Future()
@@ -1322,14 +1329,15 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
     except Exception:  # noqa: BLE001 - never an exception to the list change
         out = (NOT_CHECKED, "worker", None)
     _door_log(verb, out[0], out[1], (time.perf_counter() - started) * 1000)
-    return out
+    return (*out, stamps if out[0] == ALLOW and stamps else None)
 
 
-def report_list(ask: Optional[int], outcome: str) -> None:
-    """Tell the kernel how an allowed change ended (``done`` | ``failed``). After the commit; never blocks, never raises."""
+def report_list(ask: Optional[int], outcome: str, stamps: Optional[dict] = None) -> None:
+    """Tell the kernel how an allowed change ended (``done`` | ``failed``). After the commit; never blocks, never raises.
+    ``stamps``: the ones ``ask_list`` returned for this ask (read at the ask, never again here)."""
     try:
         if type(ask) is int and outcome in ("done", "failed"):
-            _door_q.put_nowait(("report", ask, outcome))
+            _door_q.put_nowait(("report", ask, outcome, stamps))
     except Exception:  # noqa: BLE001 - dropped: the kernel closes the ask as "uncertain" at its next start
         pass
 
@@ -1781,14 +1789,30 @@ def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: O
     ``people.json`` may still have events from before). Only the kernel's own "never knew them" is read as nothing to forget."""
     scoped: dict = {"entity": entity} if entity is not None else ({"topic": topic} if topic is not None else {})
     try:
-        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
+        out = _forget_call(kernel, member, scoped)
     except KernelRefused as exc:
         if NEVER_KNOWN in (exc.reason or "").lower():
             return 0
         if not scoped:
             raise
-        out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # unmatchable scope: over-forget, the safe error
+        out = _forget_call(kernel, member, {})    # unmatchable scope: over-forget, the safe error
     return forget_ack(out)
+
+
+def _forget_call(kernel: _Kernel, member: str, scoped: dict) -> Any:
+    """One kernel forget. A WHOLE-member one carries the member's erase stamp, read now, at the send (``erase_stamp``): the kernel
+    keeps it as their erase mark and records nothing for a list ask stamped before it. An entity or topic forget carries none (the
+    kernel sets no mark for a scoped forget: a list ask holds ids only, so it cannot write back what one erased)."""
+    if scoped:
+        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
+    try:
+        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, stamp=erase_stamp(member))
+    except KernelProtocol as exc:
+        if exc.args[:1] != ("bad_request",):
+            raise
+        # a kernel from before the stamp ("unknown argument"): a forget never waits for a kernel restart. Sent as before; that
+        # kernel does not serve stamped list asks either (they end ``not_checked reason=protocol``), so nothing is left unordered.
+        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)
 
 
 #: the kernel's documented forget reply (``labs/zoe-os/zoe_os/server.py`` ``_op_forget`` -> ``spine.ForgetResult``), the same for a
@@ -1841,6 +1865,8 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
             return 0                  # certain nothing was ever recorded here (no state at all) and the shadow is off: nothing to forget
     # anything else goes to the kernel, and is PARKED if it cannot be confirmed there (a missing creds.json included: the kernel's
     # store may still hold the member): "cannot reach" is never "done"
+    # on the loop, before the forget can be sent: every list ask stamped before this moment is older than this forget's stamp
+    _forget_marks[user_id] += 1
     fut: concurrent.futures.Future = concurrent.futures.Future()
     code = ""
     try:
@@ -2074,6 +2100,7 @@ def _reset_for_tests() -> None:
         _state_known, _state_poller = ("", True, 0.0), None
     _forgotten_at.clear()
     _parked_at.clear()
+    _forget_marks.clear()
     if _worker is not None and _worker.is_alive():
         _q.put(("stop",))
         _worker.join(timeout=5)

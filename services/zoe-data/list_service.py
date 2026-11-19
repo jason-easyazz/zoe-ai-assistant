@@ -75,6 +75,7 @@ class Decision:
     reason: str = ""
     ask: Optional[int] = None
     reported: bool = False
+    stamps: Optional[dict] = None       # what the ask carried (``os_shadow.erase_stamp`` per member named); its report carries the same
 
 
 _OFF = Decision("off")
@@ -92,17 +93,17 @@ async def ask_kernel(verb: str, *, user_id: Optional[str], list_id: Optional[str
     """May ``user_id`` do ``verb`` to this list? Never raises. Flag off: ``off``, with no kernel call."""
     if not os_shadow.lists_on():
         return _OFF
-    decision, reason, ask = await os_shadow.ask_list(
+    decision, reason, ask, stamps = await os_shadow.ask_list(
         verb, "" if _is_panel(user_id) else str(user_id), panel=_is_panel(user_id), list_id=list_id,
         item_ids=(item_id,) if item_id else (), owner=list_owner, household=str(visibility or "") == "family", turn_id=turn_id)
-    return Decision(decision, reason, ask)
+    return Decision(decision, reason, ask, stamps=stamps)
 
 
 def report_kernel(decision: Optional[Decision], outcome: str) -> None:
     """Close an allowed ask with ``done`` | ``failed`` (once). A no-op for anything that was not an allowed ask."""
     if decision is not None and decision.decision == "allow" and not decision.reported:
         decision.reported = True
-        os_shadow.report_list(decision.ask, outcome)
+        os_shadow.report_list(decision.ask, outcome, decision.stamps)
 
 
 async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,
