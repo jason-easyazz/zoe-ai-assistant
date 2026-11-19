@@ -2673,11 +2673,21 @@ def test_planned_erase_results_are_noted_with_negative_control():
 def test_in_play_is_false_with_the_switch_off_and_no_state(monkeypatch):
     """Review (PR #2679), no regression against main: the repeat-forget path raises on a soft physical-erase failure ONLY when
     the shadow is in play; with the switch off and no shadow state it is main's path (carried rows cleared, the forget goes on)."""
+    import asyncio
+
+    def probe_must_not_run():
+        raise AssertionError("certain memory answer: no disk probe")
     monkeypatch.setattr(os_shadow, "mode", lambda: "off")
     monkeypatch.setattr(os_shadow, "_no_state", lambda: True)
-    assert os_shadow.in_play() is False
+    monkeypatch.setattr(os_shadow, "_state_probe", probe_must_not_run)
+    assert asyncio.run(os_shadow.in_play()) is False
+    # Review (PR #2679, round 2): an uncertain / expired cache is NOT evidence of state - the disk decides, as in plan_erase
     monkeypatch.setattr(os_shadow, "_no_state", lambda: False)
-    assert os_shadow.in_play() is True                         # state present: the shadow is in play even with the switch off
+    monkeypatch.setattr(os_shadow, "_state_probe", lambda: False)  # empty or missing state directory
+    assert asyncio.run(os_shadow.in_play()) is False
+    monkeypatch.setattr(os_shadow, "_state_probe", lambda: True)   # real state on disk: in play even with the switch off
+    assert asyncio.run(os_shadow.in_play()) is True
     monkeypatch.setattr(os_shadow, "mode", lambda: "shadow")
     monkeypatch.setattr(os_shadow, "_no_state", lambda: True)
-    assert os_shadow.in_play() is True
+    monkeypatch.setattr(os_shadow, "_state_probe", probe_must_not_run)
+    assert asyncio.run(os_shadow.in_play()) is True
