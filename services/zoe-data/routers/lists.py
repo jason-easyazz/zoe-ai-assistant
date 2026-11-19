@@ -12,6 +12,7 @@ from database import get_db
 from guest_policy import require_feature_access, role_from_user
 from fastapi.responses import JSONResponse
 
+import kernel_door
 from list_service import (ListRefused, create_item_record, create_list_record, delete_list_record, note_item_left, refusal_line,
                           remove_item_record, stamps_now, update_item_record, update_list_record)
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
@@ -45,8 +46,9 @@ def _viewer_id(user: dict):
 
 async def list_refused_response(request, exc: ListRefused) -> JSONResponse:
     """A list change the Zoe OS kernel refused (``ZOE_OS_LISTS=kernel``) is a 403 with a plain sentence; nothing was written.
-    Registered on the app (``main.py``), so every REST route that reaches a list door answers the same way."""
-    return JSONResponse(status_code=403, content={"detail": refusal_line(exc.reason)})
+    The app registers the ONE handler for every area's refusal (``kernel_door.refused_response`` in ``main.py``); this is that
+    handler under the lists' name."""
+    return await kernel_door.refused_response(request, exc)
 
 
 async def _item_actor(request, user: dict, db) -> tuple[bool, str]:
