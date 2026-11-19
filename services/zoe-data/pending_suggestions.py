@@ -900,24 +900,45 @@ class _BriefStatement:
 def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
     """(due_date, due_time) of a reminder offer. The offer's own day and time slots and its ``when_hint`` are MERGED (the producer
     keeps the model's slots and adds the hint beside them): a slot wins for its own field, and the hint fills whichever field has
-    no slot ("date: friday" with the hint "3pm" is Friday at 3 pm, never Friday at the default time). The hint is read by the
-    spoken-reminder grammar, else as a day with a trailing clock time."""
+    no slot ("date: friday" with the hint "3pm" is Friday at 3 pm, never Friday at the default time).
+
+    A hint counts only when it was read ENTIRELY: by the spoken-reminder grammar with nothing of it left over, or as a readable
+    day with a trailing clock time. "next week at 3pm" is not "3 pm today": a hint read in part, or not at all, leaves the offer
+    open (None, None), whatever the slots say."""
     due_date = slots.get("due_date") or slots.get("date") or None
     due_time = slots.get("due_time") or slots.get("time") or None
     hint = str(slots.get("when_hint") or "").strip()
     if hint and not (due_date and due_time):
-        from intent_router import _extract_simple_reminder_slots
-
-        parsed = _extract_simple_reminder_slots(f"remind me to {title} {hint}") or {}
-        if str(parsed.get("title") or "").strip().lower() == f"{title} {hint}".strip().lower():
-            parsed = {}  # the grammar read NOTHING of the hint (it stays in the title and the date is its default "today"): unreadable
-        hint_date, hint_time = parsed.get("date") or None, parsed.get("time") or None
+        hint_date, hint_time = _read_hint(title, hint)
         if not (hint_date or hint_time):
-            hint_date, hint_time = _day_and_time_of_hint(hint)
-        if not (hint_date or hint_time):
-            return None, None       # the offer says WHEN in words nobody could read: it stays open, never "the slot alone"
+            return None, None       # the offer says WHEN in words nobody could read in full: it stays open, never "the slot alone"
         due_date, due_time = due_date or hint_date, due_time or hint_time
     return due_date, due_time
+
+
+_HINT_JOINERS = re.compile(r"(?:\s+(?:at|on|by|for))+\s*$", re.IGNORECASE)
+
+
+def _read_hint(title: str, hint: str) -> tuple[str | None, str | None]:
+    """(day, time) a ``when_hint`` says, or (None, None) unless ALL of it was understood."""
+    from fastapi import HTTPException as _HTTPException
+    from intent_router import _extract_simple_reminder_slots
+    from reminder_service import ReminderPastError, normalize_due_date
+
+    parsed = _extract_simple_reminder_slots(f"remind me to {title} {hint}") or {}
+    left = _HINT_JOINERS.sub("", str(parsed.get("title") or "")).strip().lower()
+    if parsed and left == title.strip().lower():
+        return parsed.get("date") or None, parsed.get("time") or None      # the grammar consumed the whole hint
+    # the grammar read none of it, or only a part (its date would then be a default, not what was said): the other reading
+    day, due_time = _day_and_time_of_hint(hint)
+    if day:
+        try:
+            normalize_due_date(day)
+        except ReminderPastError:
+            pass                                    # a real day that has gone: read, and refused later with its own sentence
+        except _HTTPException:
+            return None, None                       # "next week", "sometime soonish": not a day anyone can schedule
+    return day, due_time
 
 
 _HINT_TIME_TAIL = re.compile(r"\s*(?:\bat\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*$", re.IGNORECASE)
