@@ -261,3 +261,18 @@ def test_the_id_shapes_zoe_uses_are_ids(value):
 def test_text_that_is_not_an_id_is_refused(value):
     with pytest.raises(ValueError):
         lists._id(value, optional=False)
+
+
+def test_an_allowed_receipt_and_its_open_ask_land_together_or_not_at_all(tmp_path):
+    """One kernel transaction: a failure writing the open ask leaves NO receipt (a receipt with no open ask is one that restart
+    recovery could never close). Control: with the ask row written after the receipt's transaction, the receipt stays behind."""
+    k = kernel(tmp_path)
+    before = rows(tmp_path)
+    k.lists.spine._db.execute("ALTER TABLE intents RENAME TO intents_away")
+    with pytest.raises(sqlite3.OperationalError):
+        k.lists.ask("door", "item.add", OWNER, list_id="list-qov", items=["item-1"], owner=OWNER, visibility="household")
+    k.lists.spine._db.execute("ALTER TABLE intents_away RENAME TO intents")
+    assert rows(tmp_path) == before
+    out = k.lists.ask("door", "item.add", OWNER, list_id="list-qov", items=["item-1"], owner=OWNER, visibility="household")
+    assert k.lists.report("door", out["ask"], "done")["outcome"] == "done"
+    k.close()

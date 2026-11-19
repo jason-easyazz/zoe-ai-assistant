@@ -132,12 +132,16 @@ class ListDoor:
             for key, value in (("list", list_id), ("items", items), ("owner", owner), ("turn", turn), ("via", via)):
                 if value:
                     payload[key] = value
-            record = self.spine._kernel_append(self._event(person if known else None, payload))
-            intent = self.spine._db.execute(
-                "INSERT INTO intents (ts, skill, action, person, grant_id, accept_seq, caused_by, undoes) VALUES (?,?,?,?,?,?,?,?)",
-                (self.spine._clock(), skill, verb, person if known else PANEL, payload["grant_id"], None,
-                 json.dumps([record.seq]), None)).lastrowid
-            return {"ask": intent, "seq": record.seq}
+            opened: list = []
+
+            def open_ask(seq: int) -> None:      # INSIDE the receipt's transaction: an allowed receipt never exists without its
+                opened.append(self.spine._db.execute(    # open ask (a crash between the two would leave one recovery cannot close)
+                    "INSERT INTO intents (ts, skill, action, person, grant_id, accept_seq, caused_by, undoes) VALUES (?,?,?,?,?,?,?,?)",
+                    (self.spine._clock(), skill, verb, person if known else PANEL, payload["grant_id"], None,
+                     json.dumps([seq]), None)).lastrowid)
+
+            record = self.spine._kernel_append(self._event(person if known else None, payload), open_ask)
+            return {"ask": opened[0], "seq": record.seq}
 
     def report(self, skill: str, ask: int, outcome: str, *, stamps=None) -> dict:
         """Close one open ask of this skill's with what production says happened. Told, never verified: ``verified`` stays False.

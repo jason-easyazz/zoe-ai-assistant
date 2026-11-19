@@ -717,3 +717,27 @@ async def test_a_slow_door_start_is_inside_the_ask_deadline(door, monkeypatch):
     started = time.monotonic()
     out = await os_shadow.ask_list("item.add", OWNER, list_id="L1", household=True)
     assert out[:2] == (os_shadow.NOT_CHECKED, "timeout") and time.monotonic() - started < 0.4
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_suggestion_reports_only_after_its_own_transaction_ends(door, monkeypatch):
+    """``pending_suggestions.execute_suggestion`` holds its own transaction around the list write: the kernel hears ``done`` after
+    that commit, and ``failed`` (never ``done``) when the commit fails. Control: without ``kernel_reports_after`` around that
+    transaction the failed commit is reported ``done``."""
+    import pending_suggestions
+    from test_os_shadow_hook import MEMBER, _Pool
+    from test_os_shadow_hook import _Conn as _Base
+
+    class _Conn(_Base):
+        async def fetch(self, sql, *args):                         # the door's own read of the list row
+            return [{"id": "L1", "user_id": MEMBER, "visibility": "family"}]
+
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(_Conn(fail_commit=True)))
+    assert not (await pending_suggestions.execute_suggestion("s2", MEMBER))["ok"]
+    door.reports(1)
+    assert [r["outcome"] for r in door.ops("list_report")] == ["failed"] * len(door.ops("list_report")) and door.ops("list_report")
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(_Conn()))
+    assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"]
+    door.reports(len(door.ops("list_ask")))
+    assert [r["outcome"] for r in door.ops("list_report")].count("done") >= 1

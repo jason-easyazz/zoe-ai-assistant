@@ -1067,9 +1067,13 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         if mine is not None:
             return mine
     try:
+        import list_service
+
         pool = get_pool()
         async with pool.acquire() as conn:
-            async with conn.transaction():
+            # a list write in here asks the Zoe OS kernel (flag on): its outcome is reported only once THIS transaction has
+            # committed (``done``) or rolled back (``failed``), never while the row could still be undone
+            async with list_service.kernel_reports_after(), conn.transaction():
                 row = await conn.fetchrow(
                     """SELECT action_type, pre_filled_slots FROM pending_suggestions
                        WHERE id = $1 AND user_id = $2 AND resolved = 0""",
