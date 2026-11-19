@@ -231,7 +231,7 @@ def _mcp_reminder_service_harness(monkeypatch):
     service_calls = []
     notify_calls = []
 
-    async def fake_create_reminder_record(payload, *, user, db):
+    async def fake_create_reminder_record(payload, *, user, db, stamps_at=None):
         service_calls.append((payload, user, db))
         return {
             "id": "rem-1",

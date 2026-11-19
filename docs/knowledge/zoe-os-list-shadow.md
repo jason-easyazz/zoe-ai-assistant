@@ -119,6 +119,10 @@ The kernel record holds list items (household words) in the spine, in receipts (
 
 ## 4a. The lists door and a forget: ordered by the kernel [code; lab against the real kernel]
 
+The mechanism in this section is now shared by every area of the door (`os_shadow` door section, `kernel_door.py`; kernel half
+`labs/zoe-os/zoe_os/door.py`). Reminders are the second area: [zoe-os-reminders-door.md](zoe-os-reminders-door.md). What follows
+is written for lists and holds for both.
+
 The lists door (`ZOE_OS_LISTS=kernel`, `os_shadow.ask_list` / `report_list`) has its own thread and connection, so the forget
 worker's FIFO does not cover it: an ask, or the report of an allowed ask, can reach the kernel AFTER a later forget of a member it
 names. A check made in zoe-data cannot close that (the kernel answers when it answers), so the order is the kernel's own:

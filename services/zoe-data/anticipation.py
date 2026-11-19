@@ -610,7 +610,7 @@ async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[O
         user = {"user_id": str(rows[0][0]), "role": str(rows[0][1] or "user"), "username": str(rows[0][2] or "")}
         payload = ReminderCreate(title=f"Leave for your {s.get('label') or 'event'}", due_date=s["start_date"],
                                  due_time=s["leave_time"], visibility="personal")
-        rem = await create_reminder_record(payload, user=user, db=conn, now_utc=now)
+        rem = await create_reminder_record(payload, user=user, db=conn, now_utc=now, stamps_at=stamps_at)
         return (f"Done - I'll remind you to leave by {_clock(s['leave_time'])} {when}.", {"reminder_id": rem.get("id")})
     if kind == "packing":
         import list_service

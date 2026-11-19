@@ -8,9 +8,11 @@ forget fail-closed rule hangs off it); ``ZOE_OS_SHADOW_VERBS`` (default ``list_a
 on, so flipping the switch alone still shadows list add only, exactly as before. There is no ``on``: the kernel is never
 authoritative for a SHADOWED verb.
 
-The LISTS DOOR is the other half (``ZOE_OS_LISTS=kernel``, default off; ``ask_list`` / ``report_list`` below, called only by
-``list_service``): there the kernel DECIDES a list change before it is made and records it by ids; a refusal is final, an
-unreachable or slow kernel lets the change proceed. While it is on, the watch-only hooks for list verbs are silent (``wants``).
+THE DOOR is the other half: ONE mechanism with an area each (``AREAS``; lists ``ZOE_OS_LISTS=kernel``, reminders
+``ZOE_OS_REMINDERS=kernel``, both default off). There the kernel DECIDES a change before it is made and records it by ids; a
+refusal is final, an unreachable or slow kernel lets the change proceed. ``ask_list`` / ``report_list`` are the lists' names for
+it (called only by ``list_service``), ``ask_door`` / ``report_door`` every later area's (``reminder_service``). While an area's
+door is on, the watch-only hooks for its verbs are silent (``wants``).
 
 Boundaries (each pinned by ``tests/test_os_shadow.py``):
 
@@ -1156,7 +1158,14 @@ class _Area(NamedTuple):
     named: bool                       # does the ask carry ``area`` (the area-neutral ops do)
 
 
-AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_VERBS, "list_ask", "list_report", "list", "items", False)}
+#: The reminders area (``labs/zoe-os/zoe_os/remind_door.py``; the service door is ``reminder_service._gate``). Ids only: never a
+#: reminder's title, its day or its time.
+REMINDERS_FLAG = "ZOE_OS_REMINDERS"
+REMINDER_DOOR_VERBS = ("reminder.create", "reminder.edit", "reminder.done", "reminder.snooze", "reminder.delete")
+REMINDER_SHADOW_VERBS = frozenset({"reminder_create"})
+AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_VERBS, "list_ask", "list_report", "list", "items", False),
+         "reminders": _Area(REMINDERS_FLAG, None, REMINDER_DOOR_VERBS, REMINDER_SHADOW_VERBS, "door_ask", "door_report", "target",
+                            None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256

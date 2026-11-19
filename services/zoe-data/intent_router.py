@@ -2867,8 +2867,9 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
     try:
         from database import get_db_ctx
         from models import ReminderCreate
-        from reminder_service import create_reminder_record
+        from reminder_service import ReminderRefused, create_reminder_record, stamps_now
 
+        stamps_at = stamps_now()      # the Zoe OS reminders door: stamped before anything is awaited
         async with get_db_ctx() as db:
             user = await _load_direct_execution_user(db, user_id)
             if not user:
@@ -2880,8 +2881,10 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
                 category=slots.get("category") or "general",
                 recurring_pattern=slots.get("recurrence") or None,
             )
-            reminder = await create_reminder_record(payload, user=user, db=db)
+            reminder = await create_reminder_record(payload, user=user, db=db, stamps_at=stamps_at)
         return _format_response(intent, json.dumps(reminder, default=str))
+    except ReminderRefused as exc:   # the Zoe OS kernel said no (ZOE_OS_REMINDERS=kernel): final, nothing was written, said plainly
+        return exc.line()
     except HTTPException as exc:
         # reminder_service.ReminderPastError: a day or time already gone, nothing stored. A spoken turn is told so; the
         # brain's dispatch endpoint (PAST_IS_AN_ERROR) gets the 422 so its log and the tool result stay honest.
@@ -2897,7 +2900,7 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
 async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
     """"cancel that" after a reminder was set (``reminder_cancel``, slot ``title``): the speaker's OWN newest live reminder with
     that title is cancelled via ``reminder_service.delete_reminder_record``. Always answers; never falls through to the brain."""
-    from reminder_service import SPOKEN, delete_reminder_record
+    from reminder_service import SPOKEN, ReminderRefused, delete_reminder_record
 
     title = str((intent.slots or {}).get("title") or "").strip()
     if not title:
@@ -2919,6 +2922,8 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
                 return SPOKEN["cancel_not_found"]
             await delete_reminder_record(db, user, row["id"], own_only=True)
         return SPOKEN["cancelled"].format(title=title)
+    except ReminderRefused as exc:   # the Zoe OS kernel said no: final, nothing was cancelled
+        return exc.line()
     except HTTPException as exc:
         return SPOKEN["cancel_not_found"] if exc.status_code == 404 else SPOKEN["cancel_failed"]
     except Exception as exc:  # noqa: BLE001 - the store failing: say nothing changed

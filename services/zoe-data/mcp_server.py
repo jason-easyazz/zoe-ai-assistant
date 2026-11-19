@@ -10,6 +10,7 @@ import sys
 import uuid
 import httpx
 from fastapi import HTTPException
+import kernel_door
 from datetime import date, datetime, timedelta
 import os
 
@@ -1433,15 +1434,19 @@ async def _own_reminder_exists(db, reminder_id: str, user_id: str) -> bool:
     return await cursor.fetchone() is not None
 
 
-def _reminder_refusal(exc: HTTPException, reminder_id: str) -> dict:
+def _reminder_refusal(exc: Exception, reminder_id: str) -> dict:
     """A store refusal as the tool's normal error shape: not-found keeps its old line; a past time carries the spoken
-    sentence; anything else (owner-only, role) carries the store's plain message. Never a traceback."""
+    sentence; a Zoe OS kernel refusal (ZOE_OS_REMINDERS=kernel) its plain sentence; anything else (owner-only, role) the
+    store's plain message. Never a traceback."""
+    if isinstance(exc, kernel_door.Refused):
+        return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
     if exc.status_code == 404:
         return {"error": f"Reminder {reminder_id} not found"}
     return {"error": getattr(exc, "spoken", None) or str(exc.detail), "status": "refused"}
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
+    stamps_at = kernel_door.stamps_now()      # for a Zoe OS door that is TOLD who a thing is for (reminder_create): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
 
@@ -1620,7 +1625,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         )
         # Canonical write path (same as routers/reminders.py and intent_router):
         # policy gate + INSERT + notification row + commit + broadcaster.broadcast.
-        reminder = await create_reminder_record(payload, user=actor, db=db)
+        try:
+            reminder = await create_reminder_record(payload, user=actor, db=db, stamps_at=stamps_at)
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no: an error result the brain relays; nothing was made
+            return {"error": exc.line() + " Nothing was made.", "status": "refused"}
         result = {"id": reminder.get("id"), "title": reminder.get("title", args["title"]),
                   "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time"),
                   "priority": reminder.get("priority", payload.priority)}
@@ -2389,7 +2397,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         # own_only: the MCP edit tool has only ever changed the member's OWN reminders (a family row is not theirs to edit).
         try:
             await _rs.update_reminder_record(db, actor, rid, changes, own_only=True)
-        except HTTPException as exc:
+        except (HTTPException, kernel_door.Refused) as exc:
             return _reminder_refusal(exc, rid)
         if _STDIO_WORKER:  # the store broadcast reaches panels only in the zoe-data process
             await _notify_ui("reminders", "reminder_updated", {"id": rid})
@@ -2401,7 +2409,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         rid = args["reminder_id"]
         try:
             await _rs.delete_reminder_record(db, actor, rid, own_only=True)
-        except HTTPException as exc:
+        except (HTTPException, kernel_door.Refused) as exc:
             return _reminder_refusal(exc, rid)
         if _STDIO_WORKER:
             await _notify_ui("reminders", "reminder_deleted", {"id": rid})
@@ -2416,7 +2424,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         # is involved; the old job is cancelled and one is scheduled at the new time. Owner only.
         try:
             reminder = await _rs.snooze_reminder_record(db, actor, rid, minutes)
-        except HTTPException as exc:
+        except (HTTPException, kernel_door.Refused) as exc:
             return _reminder_refusal(exc, rid)
         result = {"id": rid, "snoozed_until": reminder.get("snoozed_until")}
         if _STDIO_WORKER:
