@@ -155,6 +155,9 @@ names. A check made in zoe-data cannot close that (the kernel answers when it an
 * **Limits.** (1) If the wall clock was ahead when an earlier zoe-data process started, a member forgotten by that process reads as
   `erased` (not recorded, never refused) until the clock passes that start; visible as `reason=erased` lines with no erase in
   progress. (2) The mark orders list asks and reports only; the watch-only shadow acts keep their own ordering (section 4).
+  (4) The door takes its stamp snapshot before its own list lookup (`stamp_snapshot`); a caller that reads the list's owner
+  itself, awaits, and then tells the door the owner is stamped at the door, so an owner forgotten in that caller's own gap is
+  not ordered. Narrow (the owner's lists go with them), written down, not closed.
   (3) An ask naming a list owner who is not on the kernel's roster is REFUSED `unknown_person` and the owner's id is never
   written (the kernel can only forget, and order asks against, a person it knows). So the roster must be kept current:
   a member added after the roster was written cannot change lists until it is written again and the kernel restarted.

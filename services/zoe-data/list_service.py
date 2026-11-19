@@ -89,13 +89,15 @@ def _is_panel(user_id: Optional[str]) -> bool:
 
 
 async def ask_kernel(verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,
-                     list_owner: Optional[str] = None, visibility: Optional[str] = None, turn_id: Optional[str] = None) -> Decision:
+                     list_owner: Optional[str] = None, visibility: Optional[str] = None, turn_id: Optional[str] = None,
+                     stamps_at: Optional[dict] = None) -> Decision:
     """May ``user_id`` do ``verb`` to this list? Never raises. Flag off: ``off``, with no kernel call."""
     if not os_shadow.lists_on():
         return _OFF
     decision, reason, ask, stamps = await os_shadow.ask_list(
         verb, "" if _is_panel(user_id) else str(user_id), panel=_is_panel(user_id), list_id=list_id,
-        item_ids=(item_id,) if item_id else (), owner=list_owner, household=str(visibility or "") == "family", turn_id=turn_id)
+        item_ids=(item_id,) if item_id else (), owner=list_owner, household=str(visibility or "") == "family", turn_id=turn_id,
+        stamps_at=stamps_at)
     return Decision(decision, reason, ask, stamps=stamps)
 
 
@@ -118,6 +120,7 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
     if user_id is None:
         os_shadow.door_unchecked(verb, "no_actor")
         return None
+    stamps_at = os_shadow.stamp_snapshot()     # BEFORE the lookup below: an owner forgotten while it is awaited keeps their old stamp
     if owner is None or visibility is None:
         # a read that FAILS raises: the write that follows is on the same connection, and a database fault is never a reason
         # to skip the kernel's answer (only the kernel being down or slow is)
@@ -131,7 +134,8 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
             return None
         row = dict(rows[0])
         list_id, owner, visibility = str(row.get("id") or ""), str(row.get("user_id") or ""), str(row.get("visibility") or "")
-    decision = await ask_kernel(verb, user_id=user_id, list_id=list_id, item_id=item_id, list_owner=owner, visibility=visibility)
+    decision = await ask_kernel(verb, user_id=user_id, list_id=list_id, item_id=item_id, list_owner=owner, visibility=visibility,
+                                stamps_at=stamps_at)
     if decision.decision == "refuse":
         raise ListRefused(decision.reason)
     return decision

@@ -391,8 +391,8 @@ async def test_every_ask_and_its_report_carry_an_erase_stamp_for_the_actor_and_t
         await DOORS["remove_item_record"][1](held, KID)
         assert await os_shadow.forget_for_erase(OWNER) == 3        # a confirmed kernel forget: the only thing that moves a stamp
     door.reports(2)
-    assert door.ops("list_report")[1]["stamps"] == door.ops("list_ask")[1]["stamps"] != os_shadow.erase_stamp(OWNER) and \
-        door.ops("list_report")[1]["stamps"][OWNER] < os_shadow.erase_stamp(OWNER)
+    assert door.ops("list_report")[1]["stamps"] == door.ops("list_ask")[1]["stamps"]
+    assert door.ops("list_report")[1]["stamps"][OWNER] < os_shadow.erase_stamp(OWNER)      # the ask's, not one read at the report
     await DOORS["create_item_record"][1](DB(), "guest-kiosk-7")   # the panel: nobody identified, only the owner is named
     assert set(door.ops("list_ask")[-1]["stamps"]) == {OWNER}
 
@@ -507,6 +507,24 @@ async def test_with_lists_off_a_forget_carries_no_stamp_and_moves_nothing(door, 
     assert await os_shadow.forget_for_erase(OWNER) == 3
     (forget,) = door.ops("forget")
     assert set(forget) == {"subject", "actor"} and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
+async def test_an_owner_forgotten_while_the_door_looks_the_list_up_keeps_their_old_stamp(door):
+    """The door reads the list's owner from the database before it asks. If the owner's forget is confirmed while that read is
+    awaited, the ask must still carry the stamp from BEFORE the read (the kernel then refuses it: not strictly newer than the
+    mark). Control run: with the stamp read after the lookup the ask carries the moved-on stamp and this fails."""
+    class SlowLookup(TxDB):
+        async def fetch(self, sql, *args):
+            rows = await super().fetch(sql, *args)
+            assert await os_shadow.forget_for_erase(OWNER) == 3   # the owner is forgotten, and confirmed, mid-lookup
+            return rows
+
+    before = os_shadow.erase_stamp(OWNER)
+    await DOORS["remove_item_record"][1](SlowLookup(items=[{"id": "I1", "text": "wombel", "completed": 0}]), KID)
+    (forget,) = door.ops("forget")
+    asked = door.ops("list_ask")[-1]["stamps"]
+    assert asked[OWNER] == before == forget["stamp"] and os_shadow.erase_stamp(OWNER) > before
 
 
 @pytest.mark.asyncio
