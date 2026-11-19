@@ -6,7 +6,11 @@ are compared and logged as one codes-only line. The existing write path stays th
 Flag ``ZOE_OS_LIST_SHADOW`` = ``off`` (default) | ``shadow`` is the ONE switch (it keeps its name: every verb rides it, and the
 forget fail-closed rule hangs off it); ``ZOE_OS_SHADOW_VERBS`` (default ``list_add``) names which verbs are shadowed while it is
 on, so flipping the switch alone still shadows list add only, exactly as before. There is no ``on``: the kernel is never
-authoritative here.
+authoritative for a SHADOWED verb.
+
+The LISTS DOOR is the other half (``ZOE_OS_LISTS=kernel``, default off; ``ask_list`` / ``report_list`` below, called only by
+``list_service``): there the kernel DECIDES a list change before it is made and records it by ids; a refusal is final, an
+unreachable or slow kernel lets the change proceed. While it is on, the watch-only hooks for list verbs are silent (``wants``).
 
 Boundaries (each pinned by ``tests/test_os_shadow.py``):
 
@@ -160,8 +164,27 @@ def verbs() -> frozenset:
 
 
 def wants(verb: str) -> bool:
-    """The switch is ``shadow`` AND the verb is listed: what a call site checks before any extra read it does only for the shadow."""
-    return mode() == "shadow" and verb in verbs()
+    """The switch is ``shadow`` AND the verb is listed: what a call site checks before any extra read it does only for the shadow.
+    A LIST verb is never wanted while ``ZOE_OS_LISTS=kernel``: the lists door (``ask_list``) is then the kernel's one record of a list
+    change, and the watch-only hook would record it a second time."""
+    if mode() != "shadow" or verb not in verbs():
+        return False
+    return not (verb in LIST_SHADOW_VERBS and lists_on())
+
+
+LISTS_FLAG = "ZOE_OS_LISTS"
+LISTS_ASK_MS_FLAG = "ZOE_OS_LISTS_ASK_MS"
+LIST_SHADOW_VERBS = frozenset({"list_add", "list_remove"})
+
+
+def lists_on() -> bool:
+    """``ZOE_OS_LISTS=kernel``: every list change ASKS the kernel first (``ask_list``). Anything else is off: no kernel call."""
+    try:
+        import typed_env
+
+        return str(typed_env.flag(LISTS_FLAG)).strip().lower() == "kernel"
+    except Exception:  # noqa: BLE001 - a flag read must never break a turn
+        return False
 
 
 def state_dir() -> Path:
@@ -1098,6 +1121,219 @@ def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optiona
                                                            "dated": bool(dated() if callable(dated) else dated)}))
 
 
+# ---- the lists door: the kernel DECIDES a list change (ZOE_OS_LISTS=kernel) ----------------------------------------------------------
+#: The wire verbs of ``labs/zoe-os/zoe_os/lists.py``. Ids only cross the socket: never an item's text or a list's name.
+DOOR_VERBS = ("list.create", "list.rename", "list.delete", "list.share", "item.add", "item.remove", "item.tick", "item.edit")
+ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
+#                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
+DOOR_QUEUE_MAX = 256
+ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
+#: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
+DOOR_REFUSALS = ("unknown_person", "not_owner", "adults_only", "not_in_manifest", "forgotten")
+DOOR_REASONS = ("-", *DOOR_REFUSALS, "other", "timeout", "unavailable", "circuit", "not_provisioned", "no_credential", "protocol",
+                "erasing", "queue_full", "worker", "no_actor", "no_list", "bad_verb")
+_door_q: "queue.Queue" = queue.Queue(maxsize=DOOR_QUEUE_MAX)
+_door_worker: Optional[threading.Thread] = None
+_door_guard = threading.Lock()
+
+
+def ask_deadline_s() -> float:
+    try:
+        import typed_env
+
+        ms = int(typed_env.flag(LISTS_ASK_MS_FLAG))
+        return ms / 1000.0 if 1 <= ms <= 5000 else ASK_DEADLINE_S
+    except Exception:  # noqa: BLE001
+        return ASK_DEADLINE_S
+
+
+def _door_log(verb: str, decision: str, reason: str, ask_ms: float) -> None:
+    """ONE line per decided list change; closed codes and a number only."""
+    verb = verb if verb in DOOR_VERBS else "unknown"
+    decision = decision if decision in (ALLOW, REFUSE, NOT_CHECKED) else NOT_CHECKED
+    reason = (reason or "-") if (reason or "-") in DOOR_REASONS else "other"
+    ask_ms = float(ask_ms)
+    logger.info("ZOE_OS_ACT area=lists verb=%s decision=%s reason=%s ask_ms=%.1f", verb, decision, reason, ask_ms)
+    with _lock:
+        _door_counts[decision] += 1
+
+
+_door_counts: Counter = Counter()
+
+
+def door_counters() -> dict:
+    with _lock:
+        return dict(_door_counts)
+
+
+def door_unchecked(verb: str, reason: str) -> tuple:
+    """A list change the door could not put to the kernel at all (no actor, the list row could not be read): one line, and it proceeds."""
+    _door_log(verb, NOT_CHECKED, reason, 0.0)
+    return NOT_CHECKED, reason, None
+
+
+def _refusal_code(reason: str) -> str:
+    text = (reason or "").strip()
+    if text in DOOR_REFUSALS:
+        return text
+    return "forgotten" if "forgotten" in text.lower() else "other"
+
+
+def _door_parked(user_id: str) -> bool:
+    """Is a forget of this member parked (not yet confirmed by the kernel)? Then nothing new may be recorded about them. An
+    unreadable park file is "yes" for everyone (the change still proceeds; it is only not recorded)."""
+    members = _pending_members
+    if members is None:
+        try:
+            if not _pending_path().parent.is_dir():
+                return False
+            members = _pending_read_locked()
+        except Exception:  # noqa: BLE001
+            return True
+    return user_id in members
+
+
+def _door_undo(members) -> None:
+    """An erase of one of these members started or finished WHILE the kernel had their ask (the door has its own thread and
+    connection, so the forget worker's ordering does not cover it): the kernel may have written the ask, or its refusal, AFTER
+    the member's forget. Park a whole-member kernel forget for each, durably, and wake the worker: the replay erases what was
+    written. On the door thread: blocking is fine. Never raises."""
+    try:
+        for member in members:
+            _pending_add(member)
+        _ensure_worker()
+        _q.put_nowait(("replay",))
+    except Exception:  # noqa: BLE001 - a full queue replays before its next job anyway; a failed park is retried by the nightly pass
+        logger.warning("os_shadow: could not park the forget after an ask that raced an erase")
+
+
+def _door_ask(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
+    """On the door thread: ``(decision, reason, ask id)``. Only the kernel's own refusal is a refusal; every fault is not_checked.
+    Whatever the outcome (answer, refusal, timeout, fault: the kernel may have written a record in any of them), every member id
+    the ask named (the actor and the list's owner) is re-checked against the erase gate afterwards (``_door_raced``)."""
+    named = sorted({m for m in (user_id, args.get("owner")) if isinstance(m, str) and m and m != "panel"})
+    if any(user_erase_gate.in_progress(m) or _door_parked(m) for m in named):
+        return NOT_CHECKED, "erasing", None
+    before = {m: user_erase_gate.generation(m) for m in named}
+    out = _door_call(kernel, verb, user_id, args, until)
+    try:
+        raced = [m for m in named if user_erase_gate.generation(m) != before[m] or user_erase_gate.in_progress(m) or _door_parked(m)]
+        if raced:
+            _door_undo(raced)
+            if out[0] == ALLOW:                  # no ask id: nothing more is reported under an erased member's id
+                out = (NOT_CHECKED, "erasing", None)
+    except Exception:  # noqa: BLE001 - the door thread never dies and never raises into a turn
+        pass
+    return out
+
+
+def _door_call(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
+    try:
+        out = kernel.call(SKILL_BRAIN, "list_ask", until, verb=verb, person=user_id, **args)
+        ask = out.get("ask") if isinstance(out, dict) else None
+        if type(ask) is not int:
+            raise KernelProtocol("no ask id")
+        return ALLOW, "", ask
+    except KernelRefused as exc:
+        return REFUSE, _refusal_code(exc.reason), None
+    except (socket.timeout, TimeoutError):
+        return NOT_CHECKED, "timeout", None
+    except KernelUnavailable as exc:
+        reason = str(exc)[:24].replace(" ", "_")
+        return NOT_CHECKED, reason if reason in DOOR_REASONS else "unavailable", None
+    except KernelProtocol:
+        return NOT_CHECKED, "protocol", None
+    except OSError as exc:
+        return NOT_CHECKED, "timeout" if isinstance(exc, socket.timeout) else "unavailable", None
+    except Exception:  # noqa: BLE001 - the door thread never dies and never raises into a turn
+        return NOT_CHECKED, "worker", None
+
+
+def _door_run() -> None:
+    """The door's own thread and its own connection (a ``_Conn`` is one caller's): asks and reports, in order."""
+    kernel = _Kernel()
+    while True:
+        job = _door_q.get()
+        if job[0] == "stop":
+            for skill in list(kernel.conns):
+                kernel.drop(skill)
+            return
+        try:
+            if job[0] == "ask":
+                _, verb, user_id, args, until, fut = job
+                out = _door_ask(kernel, verb, user_id, args, until)
+                if not fut.done():
+                    fut.set_result(out)
+            else:                     # a report: best effort, bounded; an ask left open is "uncertain" at the kernel's next start
+                kernel.call(SKILL_BRAIN, "list_report", time.monotonic() + OP_TIMEOUT_S, ask=job[1], outcome=job[2])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("ZOE_OS door error=%s", type(exc).__name__)
+
+
+def _ensure_door() -> bool:
+    global _door_worker
+    with _door_guard:
+        if _door_worker is None or not _door_worker.is_alive():
+            _door_worker = threading.Thread(target=_door_run, name="os-lists-door", daemon=True)
+            _door_worker.start()
+    return True
+
+
+async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Optional[str] = None, item_ids=(),
+                   owner: Optional[str] = None, household: bool = False, turn_id: Optional[str] = None) -> tuple:
+    """Ask the kernel whether ``user_id`` may do ``verb`` to a list: ``(allow | refuse | not_checked, reason code, ask id | None)``.
+
+    The caller awaits this BEFORE the change, so it has a hard deadline (``ask_deadline_s``, queue wait included) and all socket
+    work is on the door thread, never the event loop. A refusal is the kernel's own and is final. Anything else that goes wrong
+    (kernel down, circuit open, slow, a reply that is not v1) is ``not_checked``: the caller makes the change as before. Never
+    raises. Writes the change's one ``ZOE_OS_ACT`` line. Call only when ``lists_on()``."""
+    started = time.perf_counter()
+    out: tuple = (NOT_CHECKED, "worker", None)
+    try:
+        uid = (user_id or "").strip()
+        if verb not in DOOR_VERBS:
+            out = (NOT_CHECKED, "bad_verb", None)
+        elif not uid and not panel:
+            out = (NOT_CHECKED, "no_actor", None)
+        else:
+            args: dict = {"visibility": "household" if household else "private"}
+            if panel:
+                args["via"] = "panel"
+            for key, value in (("list", list_id), ("owner", owner), ("turn", turn_id)):
+                if value:
+                    args[key] = str(value)
+            items = [str(i) for i in item_ids if i][:16]
+            if items:
+                args["items"] = items
+            deadline = ask_deadline_s()                           # ONE budget: the door's start-up draws on it too
+            until = time.monotonic() + deadline
+            fut: "concurrent.futures.Future" = concurrent.futures.Future()
+            try:
+                if _door_worker is None or not _door_worker.is_alive():
+                    await asyncio.wait_for(asyncio.to_thread(_ensure_door), timeout=deadline)   # never a thread start on the loop
+                _door_q.put_nowait(("ask", verb, uid or "panel", args, until, fut))
+                out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=max(0.001, until - time.monotonic()))
+            except queue.Full:
+                out = (NOT_CHECKED, "queue_full", None)
+            except (asyncio.TimeoutError, TimeoutError):
+                out = (NOT_CHECKED, "timeout", None)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - never an exception to the list change
+        out = (NOT_CHECKED, "worker", None)
+    _door_log(verb, out[0], out[1], (time.perf_counter() - started) * 1000)
+    return out
+
+
+def report_list(ask: Optional[int], outcome: str) -> None:
+    """Tell the kernel how an allowed change ended (``done`` | ``failed``). After the commit; never blocks, never raises."""
+    try:
+        if type(ask) is int and outcome in ("done", "failed"):
+            _door_q.put_nowait(("report", ask, outcome))
+    except Exception:  # noqa: BLE001 - dropped: the kernel closes the ask as "uncertain" at its next start
+        pass
+
+
 # ---- forget -------------------------------------------------------------------------------------------------------------------------
 def _pending_path() -> Path:
     return state_dir() / "pending-forgets.json"
@@ -1690,6 +1926,63 @@ def write_roster(ids, dest: Optional[Path] = None) -> list:
     return clean
 
 
+ROSTER_ROLES = ("adult", "child", "guest")       # the kernel's own three (labs/zoe-os/zoe_os/capability.py ``ROLES``)
+
+
+async def _roster_from_accounts(demo: Optional[dict] = None) -> list:
+    """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states; never logs an id. The
+    ``users`` mirror only says admin / member, so it is never read for a role. No account, an unknown role or a failed lookup =
+    a plain id (the kernel's least access). ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
+    from db_compat import get_compat_db
+    from enrollment_state import _account_facts
+    from manner_block import ADULT_ROLES, CHILD_ROLES
+
+    demo = demo or {}
+    async with get_compat_db() as db:
+        accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
+        known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
+        entries = []
+        for uid in sorted(accounts | known | frozenset(demo)):
+            role = demo[uid] if uid in demo else None
+            if role is None and uid in accounts:
+                try:
+                    minor, stated = await _account_facts(uid, db=db)
+                    role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
+                except Exception:  # noqa: BLE001 - a role that cannot be read is least access
+                    role = None
+            entries.append({"id": uid, "role": role} if role else uid)
+    return entries
+
+
+def _demo_roles(pairs) -> dict:
+    """``ID=role`` arguments. A role can be stated by hand only for a synthetic (demo / test) id: a person's comes from their
+    account. Raises ``ValueError`` on anything else."""
+    from user_filters import GUEST_USERS, is_synthetic_user
+
+    out = {}
+    for pair in pairs:
+        uid, sep, role = str(pair).partition("=")
+        uid = uid.strip()
+        if not sep or role not in ROSTER_ROLES or not uid or uid in GUEST_USERS or not is_synthetic_user(uid):
+            raise ValueError("a hand-stated role needs DEMO_ID=adult|child|guest, and the id must be a demo id")
+        out[uid] = role
+    return out
+
+
+def write_roster_from_accounts(dest: Optional[Path] = None, demo: Optional[dict] = None) -> list:
+    """Write the kernel roster with roles (see ``_roster_from_accounts``); 0600, replaced in one step."""
+    entries = asyncio.run(_roster_from_accounts(demo))
+    path = ensure_state_dir() / "people.json" if dest is None else Path(dest)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        os.fchmod(fh.fileno(), 0o600)
+        json.dump({"people": entries}, fh)
+    os.replace(tmp, path)
+    return entries
+
+
 def restore(src: Path) -> dict:
     """Zoe's restore of a shadow state directory from a backup copy src: the ONLY supported way (never copy the directory by
     hand: the kernel refuses a directory that was not made here, and a hand copy can appear before a process has seen it).
@@ -1725,6 +2018,7 @@ def main(argv: Optional[list] = None) -> int:
 
         os_shadow.py --init                         make the state directory (empty, marker, the settle wait)
         os_shadow.py --write-roster ID [ID ...]     the roster export
+        os_shadow.py --write-roster-from-accounts [DEMO_ID=ROLE ...]   the roster WITH roles (from the account records)
         os_shadow.py --restore BACKUP_DIR           bring back parked forgets / erases and the roster from a backup copy"""
     import sys
 
@@ -1733,6 +2027,17 @@ def main(argv: Optional[list] = None) -> int:
         ensure_state_dir()
         print("state directory ready")
         return 0
+    if args[:1] == ["--write-roster-from-accounts"]:
+        try:
+            demo = _demo_roles(args[1:])
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        entries = write_roster_from_accounts(demo=demo)
+        roles = [entry["role"] for entry in entries if isinstance(entry, dict)]
+        print(f"roster: {len(entries)} members written ({roles.count('adult')} adults, {roles.count('child')} children, "
+              f"{len(entries) - roles.count('adult') - roles.count('child')} least access)")
+        return 0
     if args[:1] == ["--write-roster"] and len(args) > 1:
         print(f"roster: {len(write_roster(args[1:]))} members written")
         return 0
@@ -1740,13 +2045,25 @@ def main(argv: Optional[list] = None) -> int:
         got = restore(Path(args[1]))
         print(f"restored: {got['forgets']} parked forgets, {got['erases']} parked erases, roster {got['roster']} members")
         return 0
-    print("usage: os_shadow.py --init | --write-roster ID [ID ...] | --restore BACKUP_DIR", file=sys.stderr)
+    print("usage: os_shadow.py --init | --write-roster ID [ID ...] | --write-roster-from-accounts [DEMO_ID=ROLE ...] | --restore BACKUP_DIR", file=sys.stderr)
     return 2
 
 
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
     global _roster_cache, _worker, _down_logged, _pending_members, _erase_members, _loop, _finishing, _state_known, _state_poller
+    global _door_worker
+    if _door_worker is not None and _door_worker.is_alive():
+        _door_q.put(("stop",))
+        _door_worker.join(timeout=5)
+    _door_worker = None
+    while True:
+        try:
+            _door_q.get_nowait()
+        except queue.Empty:
+            break
+    with _lock:
+        _door_counts.clear()
     _down_logged = False
     _pending_members = None           # a restart: the next worker reads the park file before its first job
     _erase_members, _loop, _finishing = None, None, False

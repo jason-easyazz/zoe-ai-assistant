@@ -19,8 +19,10 @@ their list creation, access checks and side effects remain caller-owned.
 
 from __future__ import annotations
 
+import contextvars
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 import uuid
 from typing import Optional
 
@@ -39,6 +41,143 @@ PERSONAL_LIST_TYPES = frozenset({"personal", "tasks"})
 HOUSEHOLD_LIST_TYPES = frozenset({"shopping", "work", "bucket"})
 # The only list a panel guest may bring into existence; every other household list must already exist.
 GUEST_CREATABLE_LIST_TYPES = frozenset({"shopping"})
+
+
+# ── The Zoe OS lists door (ZOE_OS_LISTS=kernel; docs/architecture/zoe-os-cutover-plan.md, "Changed 2026-11-18") ──────────────────
+# Every function below that writes ``lists`` / ``list_items`` ASKS the kernel first (``_gate``) and REPORTS after its write. The
+# kernel decides and records (ids only); the rows stay here. With the flag at any other value ``_gate`` is one flag read and
+# returns None: no kernel call, no extra query, and every write is exactly what it was.
+class ListRefused(Exception):
+    """The kernel refused this list change. FINAL: nothing was written. ``reason`` is a closed code (``os_shadow.DOOR_REFUSALS``);
+    each caller turns it into its own refusal (``refusal_line`` is the plain sentence they share)."""
+
+    def __init__(self, reason: str = "other") -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+_REFUSAL_LINES = {
+    "not_owner": "That list is private to someone else, so I can't change it.",
+    "adults_only": "Only the list's owner or a grown-up can rename, share or delete a household list.",
+    "unknown_person": "I don't know who is asking, so I can't change that list.",
+}
+
+
+def refusal_line(reason: str) -> str:
+    """One plain sentence for a refused list change: no names, no list name, no item."""
+    return _REFUSAL_LINES.get(reason, "I'm not allowed to change that list.")
+
+
+@dataclass
+class Decision:
+    """What the kernel said about one list change: ``allow`` | ``refuse`` | ``not_checked`` (the change proceeds) | ``off``."""
+    decision: str
+    reason: str = ""
+    ask: Optional[int] = None
+    reported: bool = False
+
+
+_OFF = Decision("off")
+#: allowed asks whose write sits inside a list_service transaction: reported once that transaction has committed (or failed)
+_HELD: contextvars.ContextVar = contextvars.ContextVar("zoe_list_kernel_held", default=None)
+
+
+def _is_panel(user_id: Optional[str]) -> bool:
+    """Nobody identified: the shared panel acting for the house (a guest id, or the household's own owner / viewer id)."""
+    return panel_principal.is_guest_id(user_id) or user_id in (panel_principal.HOUSEHOLD_OWNER_ID, panel_principal.HOUSEHOLD_VIEWER)
+
+
+async def ask_kernel(verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,
+                     list_owner: Optional[str] = None, visibility: Optional[str] = None, turn_id: Optional[str] = None) -> Decision:
+    """May ``user_id`` do ``verb`` to this list? Never raises. Flag off: ``off``, with no kernel call."""
+    if not os_shadow.lists_on():
+        return _OFF
+    decision, reason, ask = await os_shadow.ask_list(
+        verb, "" if _is_panel(user_id) else str(user_id), panel=_is_panel(user_id), list_id=list_id,
+        item_ids=(item_id,) if item_id else (), owner=list_owner, household=str(visibility or "") == "family", turn_id=turn_id)
+    return Decision(decision, reason, ask)
+
+
+def report_kernel(decision: Optional[Decision], outcome: str) -> None:
+    """Close an allowed ask with ``done`` | ``failed`` (once). A no-op for anything that was not an allowed ask."""
+    if decision is not None and decision.decision == "allow" and not decision.reported:
+        decision.reported = True
+        os_shadow.report_list(decision.ask, outcome)
+
+
+async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,
+                owner: Optional[str] = None, visibility: Optional[str] = None) -> Optional[Decision]:
+    """The ask at a door. None with the flag off (ONE flag read, nothing else). Raises ``ListRefused`` on a kernel refusal.
+    The list's owner and visibility are read here when the door was not told them (one small read, flag on only); a list row
+    that is not there is ``not_checked`` (the write then does what it always did). The ask budget
+    (``ZOE_OS_LISTS_ASK_MS``) covers the kernel only: this read is on the same database connection as the write that follows it,
+    so a database that stalls here would stall that write too."""
+    if not os_shadow.lists_on():
+        return None
+    if user_id is None:
+        os_shadow.door_unchecked(verb, "no_actor")
+        return None
+    if owner is None or visibility is None:
+        # a read that FAILS raises: the write that follows is on the same connection, and a database fault is never a reason
+        # to skip the kernel's answer (only the kernel being down or slow is)
+        if list_id is not None:
+            rows = await db.fetch("SELECT id, user_id, visibility FROM lists WHERE id = $1", list_id)
+        else:
+            rows = await db.fetch("SELECT l.id, l.user_id, l.visibility FROM list_items li JOIN lists l ON l.id = li.list_id "
+                                  "WHERE li.id = $1", item_id)
+        if not rows:
+            os_shadow.door_unchecked(verb, "no_list")
+            return None
+        row = dict(rows[0])
+        list_id, owner, visibility = str(row.get("id") or ""), str(row.get("user_id") or ""), str(row.get("visibility") or "")
+    decision = await ask_kernel(verb, user_id=user_id, list_id=list_id, item_id=item_id, list_owner=owner, visibility=visibility)
+    if decision.decision == "refuse":
+        raise ListRefused(decision.reason)
+    return decision
+
+
+def _wrote(decision: Optional[Decision], outcome: str = "done") -> None:
+    """A door's write returned. Inside a list_service transaction the report waits for the commit; otherwise it goes now (a
+    statement on its own has committed)."""
+    if decision is None:
+        return
+    held = _HELD.get()
+    if outcome == "done" and held is not None:
+        held.append(decision)
+    else:
+        report_kernel(decision, outcome)
+
+
+async def _write(decision: Optional[Decision], pending):
+    """Run one door's write and tell the kernel how it ended."""
+    try:
+        result = await pending
+    except BaseException:
+        _wrote(decision, "failed")
+        raise
+    _wrote(decision)
+    return result
+
+
+@asynccontextmanager
+async def kernel_reports_after():
+    """Around a transaction that holds door writes: their reports go out when the block exits (``done``), or ``failed`` if it
+    raised (rolled back). Nested use joins the outer block. With the flag off: one flag read."""
+    if _HELD.get() is not None or not os_shadow.lists_on():
+        yield
+        return
+    held: list = []
+    token = _HELD.set(held)
+    try:
+        yield
+    except BaseException:
+        _HELD.reset(token)
+        for decision in held:
+            report_kernel(decision, "failed")
+        raise
+    _HELD.reset(token)
+    for decision in held:
+        report_kernel(decision, "done")
 
 
 class HouseholdListUnavailable(Exception):
@@ -355,6 +494,7 @@ async def create_list_record(
     raw_asyncpg: bool = False,
     on_conflict: bool = False,
     defaults_only: bool = False,
+    actor: Optional[str] = None,
 ) -> dict:
     """Insert one row into ``lists`` and return a record dict.
 
@@ -365,6 +505,8 @@ async def create_list_record(
     their response may ignore the returned dict.
     """
     list_id = list_id or str(uuid.uuid4())
+    # ``actor``: who is making it, when that is not the owner (a panel guest's list is owned by the household)
+    asked = await _gate(db, "list.create", user_id=actor or user_id, list_id=list_id, owner=user_id, visibility=visibility)
     columns = "id, user_id, name, list_type"
     values = (list_id, user_id, name, list_type)
     if not defaults_only:
@@ -376,7 +518,7 @@ async def create_list_record(
     sql = f"INSERT INTO lists ({columns}) VALUES ({placeholders})"
     if on_conflict:
         sql += " ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING"
-    status = await db.execute(sql, *values) if raw_asyncpg else await db.execute(sql, values)
+    status = await _write(asked, db.execute(sql, *values) if raw_asyncpg else db.execute(sql, values))
     return {
         "id": list_id,
         **({"status": status} if on_conflict else {}),
@@ -389,9 +531,10 @@ async def create_list_record(
 
 
 async def remove_item_record(db, *, user_id, item_id, list_id, raw_asyncpg=False):
+    asked = await _gate(db, "item.remove", user_id=user_id, list_id=list_id, item_id=item_id)
     if raw_asyncpg:
-        return await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0", item_id, list_id)
-    return await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?", (item_id, list_id))
+        return await _write(asked, db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0", item_id, list_id))
+    return await _write(asked, db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?", (item_id, list_id)))
 
 
 async def note_item_left(db, user_id, *, source: str, list_id, item_id, item: Optional[str] = None,
@@ -417,35 +560,42 @@ async def note_item_left(db, user_id, *, source: str, list_id, item_id, item: Op
 
 
 async def set_item_checked(db, *, user_id, item_id, completed, list_id=None, raw_asyncpg=False):
+    asked = await _gate(db, "item.tick", user_id=user_id, list_id=list_id, item_id=item_id)
     if list_id is not None:
         if raw_asyncpg:
-            return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0", completed, item_id, list_id)
-        return await db.execute("UPDATE list_items SET completed = ?, updated_at = NOW() WHERE id = ? AND list_id = ? AND deleted = 0", (completed, item_id, list_id))
+            return await _write(asked, db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0", completed, item_id, list_id))
+        return await _write(asked, db.execute("UPDATE list_items SET completed = ?, updated_at = NOW() WHERE id = ? AND list_id = ? AND deleted = 0", (completed, item_id, list_id)))
     if raw_asyncpg:
-        return await db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2", completed, item_id)
+        return await _write(asked, db.execute("UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2", completed, item_id))
     if completed:
-        return await db.execute("UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,))
-    return await db.execute("UPDATE list_items SET completed=0, updated_at=NOW() WHERE id=?", (item_id,))
+        return await _write(asked, db.execute("UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)))
+    return await _write(asked, db.execute("UPDATE list_items SET completed=0, updated_at=NOW() WHERE id=?", (item_id,)))
 
 
 async def update_item_record(db, *, user_id, item_id, list_id, updates, params):
-    return await db.execute(f"UPDATE list_items SET {', '.join(updates)} WHERE id = ? AND list_id = ?", params)
+    asked = await _gate(db, "item.edit", user_id=user_id, list_id=list_id, item_id=item_id)
+    return await _write(asked, db.execute(f"UPDATE list_items SET {', '.join(updates)} WHERE id = ? AND list_id = ?", params))
 
 
 async def update_list_record(db, *, user_id, list_id, updates, params):
-    return await db.execute(f"UPDATE lists SET {', '.join(updates)} WHERE id = ?", params)
+    # a change of visibility is a share (or an un-share); anything else is a rename / edit of the list itself
+    verb = "list.share" if any(str(u).strip().lower().startswith("visibility") for u in updates) else "list.rename"
+    asked = await _gate(db, verb, user_id=user_id, list_id=list_id)
+    return await _write(asked, db.execute(f"UPDATE lists SET {', '.join(updates)} WHERE id = ?", params))
 
 
 async def delete_list_record(db, *, user_id, list_id):
-    return await db.execute("UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?", (list_id,))
+    asked = await _gate(db, "list.delete", user_id=user_id, list_id=list_id)
+    return await _write(asked, db.execute("UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?", (list_id,)))
 
 
 async def set_list_visibility_record(db, *, user_id, list_id, share):
+    asked = await _gate(db, "list.share", user_id=user_id, list_id=list_id)
     if share:
-        return await db.execute("UPDATE lists SET visibility = 'family', updated_at = NOW() "
-                                "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility <> 'family'", list_id, user_id)
-    return await db.execute("UPDATE lists SET visibility = 'personal', updated_at = NOW() "
-                            "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility = 'family'", list_id, user_id)
+        return await _write(asked, db.execute("UPDATE lists SET visibility = 'family', updated_at = NOW() "
+                                              "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility <> 'family'", list_id, user_id))
+    return await _write(asked, db.execute("UPDATE lists SET visibility = 'personal', updated_at = NOW() "
+                                          "WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility = 'family'", list_id, user_id))
 
 
 async def create_item_record(
@@ -462,6 +612,7 @@ async def create_item_record(
     raw_asyncpg: bool = False,
     normalize_text: bool = True,
     defaults_only: bool = False,
+    user_id: Optional[str] = None,
 ) -> dict:
     """Insert one row into ``list_items`` and return a record dict.
 
@@ -472,8 +623,10 @@ async def create_item_record(
     preserves caller-owned id generation. Suggestions pass ``normalize_text=False``
     and ``defaults_only=True`` to retain verbatim text and database defaults for
     omitted columns. These options do not change transaction ownership.
+    ``user_id`` is WHO is adding (the kernel is asked about them when ``ZOE_OS_LISTS=kernel``); every caller passes it.
     """
     item_id = item_id if item_id is not None else str(uuid.uuid4())
+    asked = await _gate(db, "item.add", user_id=user_id, list_id=list_id, item_id=item_id)
     if normalize_text:
         text = normalize_item_text(text) or text
     columns = "id, list_id, text"
@@ -484,10 +637,7 @@ async def create_item_record(
     placeholders = ", ".join(f"${i + 1}" if raw_asyncpg else "?" for i in range(len(values)))
     # WP-22 seam: every list-item row write passes here, inside the caller's transaction.
     sql = f"INSERT INTO list_items ({columns}) VALUES ({placeholders})"
-    if raw_asyncpg:
-        await db.execute(sql, *values)
-    else:
-        await db.execute(sql, values)
+    await _write(asked, db.execute(sql, *values) if raw_asyncpg else db.execute(sql, values))
     return {
         "id": item_id,
         "list_id": list_id,
@@ -626,7 +776,7 @@ async def list_write_txn(db, list_id):
     if not callable(txn):
         yield
         return
-    async with txn():
+    async with kernel_reports_after(), txn():      # the Zoe OS door's reports go out once this transaction has committed
         await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"list_add|{list_id}",))
         yield
 
@@ -702,7 +852,7 @@ async def add_item_to_list(
                                "text": normalize_item_text(have["text"])}
                 else:
                     item = await create_item_record(
-                        db, list_id=list_id, text=text, quantity=quantity, category=category
+                        db, list_id=list_id, text=text, quantity=quantity, category=category, user_id=user_id
                     )
                     pending.append((item["id"], "add_item_to_list"))
                     outcome = {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False,
@@ -734,9 +884,10 @@ async def add_item_to_list(
             name=list_name,
             list_type=list_type,
             visibility="family" if guest else new_list_visibility,
+            actor=user_id,
         )
         item = await create_item_record(
-            db, list_id=new_list["id"], text=text, quantity=quantity, category=category
+            db, list_id=new_list["id"], text=text, quantity=quantity, category=category, user_id=user_id
         )
         return {
             "list_id": new_list["id"],
@@ -748,7 +899,7 @@ async def add_item_to_list(
 
     txn = getattr(db, "transaction", None)
     if callable(txn):
-        async with txn():
+        async with kernel_reports_after(), txn():
             outcome = await _write_new_list_and_item()
     else:
         # Fallback (e.g. a DB shim without transaction support).
@@ -785,7 +936,7 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
              else [normalize_item_text(text)]) or [text]
     receipts: list[tuple] = []
     # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits.
-    async with _outer_add_txn(db):
+    async with kernel_reports_after(), _outer_add_txn(db):
         for part in parts:
             out = await add_item_to_list(db, text=part, receipts=receipts, **kwargs)
             outcomes.append(out)
@@ -981,9 +1132,13 @@ async def rename_item_on_list(
         out.update(item_id=str(target["id"]), old=before)
         clash = next((r for r in rows if str(r["id"]) != str(target["id"]) and not r.get("completed")
                       and item_key(str(r.get("text") or "")) == item_key(new)), None)
+        if clash is not None or before != new:
+            # the kernel is asked once the row is known and before either write (a refusal rolls this transaction back)
+            asked = await _gate(db, "item.edit", user_id=user_id, list_id=list_id, item_id=str(target["id"]))
         if clash is not None:
-            gone = await db.execute("UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
-                                    str(target["id"]), list_id)
+            gone = await _write(asked, db.execute(
+                "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
+                str(target["id"]), list_id))
             if _rows_changed(gone) == 0:      # deleted under us (the REST delete takes no list lock): nothing was merged
                 return {**out, "status": "not_found"}
             out.update(status="merged", text=normalize_item_text(str(clash.get("text") or new)), item_id=str(clash["id"]), removed_id=str(target["id"]))
@@ -991,8 +1146,9 @@ async def rename_item_on_list(
         elif before == new:
             out["status"] = "unchanged"
         else:
-            done = await db.execute("UPDATE list_items SET text = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
-                                    new, str(target["id"]), list_id)
+            done = await _write(asked, db.execute(
+                "UPDATE list_items SET text = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
+                new, str(target["id"]), list_id))
             if _rows_changed(done) == 0:      # deleted under us (the REST delete takes no list lock): never claim a rename
                 return {**out, "status": "not_found"}
             out["status"] = "renamed"

@@ -2307,6 +2307,9 @@ app.add_middleware(relay_ingress.RelayIngressMiddleware)
 
 app.include_router(calendar_router)
 app.include_router(lists_router)
+# a list change the Zoe OS kernel refused (ZOE_OS_LISTS=kernel; list_service.ListRefused) is a 403 with a plain sentence
+from routers.lists import ListRefused as _ListRefused, list_refused_response as _list_refused_response  # noqa: E402
+app.add_exception_handler(_ListRefused, _list_refused_response)
 app.include_router(people_router)
 app.include_router(memories_router)
 app.include_router(reminders_router)

@@ -710,6 +710,8 @@ _ENTRIES = (
     _f('ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S', 'int', 1800),
     _f('ZOE_OMNIGENT_URL', 'str', 'http://127.0.0.1:6767', doc='docs/guides/MODULE_SYSTEM.md'),
     _f('ZOE_ORT_CPU_ARENA', 'bool', False, doc='docs/knowledge/ram-audit-nonvoice-2026-11.md'),
+    _f('ZOE_OS_LISTS', 'str', 'off', allowed=('off', 'kernel'), doc='docs/architecture/zoe-os-cutover-plan.md', note='kernel = every list change asks the Zoe OS kernel first (list_service.ask_kernel): a kernel refusal is final, an unreachable or slow kernel lets the change proceed (not_checked); any other value = no kernel call. While it is kernel the watch-only list hooks of ZOE_OS_LIST_SHADOW are silent'),
+    _f('ZOE_OS_LISTS_ASK_MS', 'int', 150, doc='docs/architecture/zoe-os-cutover-plan.md', note='hard deadline of one lists-door ask in milliseconds (1..5000), queue wait included; past it the change proceeds not_checked'),
     _f('ZOE_OS_LIST_SHADOW', 'str', 'off', allowed=('off', 'shadow'), doc='docs/knowledge/zoe-os-list-shadow.md', note='the ONE Zoe OS shadow switch: every real write of a verb in ZOE_OS_SHADOW_VERBS (default list add) is ALSO proposed to a Zoe OS kernel over its socket; the live write stays authoritative; there is no on'),
     _f('ZOE_OS_SHADOW_VERBS', 'list', ('list_add',), doc='docs/knowledge/zoe-os-integration.md', note='comma list of the verbs ZOE_OS_LIST_SHADOW=shadow proposes to the kernel: list_add, list_remove, reminder_create, alarm_create; unknown names ignored'),
     _f('ZOE_OS_SHADOW_DIR', 'str', '', doc='docs/knowledge/zoe-os-list-shadow.md', note='blank = ~/.zoe/os-shadow (kernel credentials, roster, pending forgets)'),

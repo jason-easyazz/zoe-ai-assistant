@@ -552,7 +552,7 @@ async def load_member_mode(user_id: str, db=None) -> MemberMode:
     try:
         return validate_member_mode(row[0], bool(row[1]))
     except PersonaValidationError:
-        logger.warning("persona_layer: member_modes row for %s is invalid; treating as kid", user_id)
+        logger.warning("persona_layer: member_modes row is invalid; treating as kid")
         return MemberMode(mode="kid", minor=True)
 
 

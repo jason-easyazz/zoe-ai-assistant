@@ -29,7 +29,7 @@ import contacts_conversation as _cc
 import panel_principal
 import traffic_class
 from log_redaction import utterance_tag as _utt_tag
-from list_service import HouseholdListUnavailable, note_item_left, set_item_checked
+from list_service import HouseholdListUnavailable, ListRefused, note_item_left, refusal_line, set_item_checked
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
@@ -3121,6 +3121,8 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
         )
     except HouseholdListUnavailable:
         return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
+    except ListRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_LISTS=kernel): final, nothing was written, said plainly
+        return refusal_line(exc.reason)
     except Exception as exc:
         logger.warning("list_add direct execution unavailable: %s", exc)
         return None
@@ -3212,6 +3214,8 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
         return _format_response(
             intent, json.dumps({"item_id": item_id, "text": item, "status": "completed"})
         )
+    except ListRefused as exc:
+        return refusal_line(exc.reason)
     except Exception as exc:
         logger.warning("list_remove direct execution unavailable: %s", exc)
         return None
@@ -3252,6 +3256,8 @@ async def _execute_list_rename_direct(intent: Intent, user_id: str) -> Optional[
                 {"action": "item_updated", "list_id": list_id, "item": {"id": result["item_id"], "text": result["text"]}, "actor": actor},
             )
         return rename_reply(result, f"your {friendly}")
+    except ListRefused as exc:
+        return refusal_line(exc.reason)
     except Exception as exc:
         logger.warning("list_rename direct execution unavailable: %s", exc)
         return None

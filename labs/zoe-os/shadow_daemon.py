@@ -22,6 +22,9 @@ The verbs it serves: ``list.add``, ``list.remove`` (registered HERE, over the sa
 ``remind.set`` and ``alarm.set`` (the lab drivers, ``zoe_os/brain/drivers.py``). Which of them zoe-data proposes is its own
 ``ZOE_OS_SHADOW_VERBS``; the kernel serves all four.
 
+It ALSO serves the lists door (``list_ask`` / ``list_report``, ``zoe_os/lists.py``): there the kernel DECIDES a list change by the
+roster's roles and records ids only; the list stays in production's store. Same socket, same credentials (the ``brain`` one).
+
 What it grants itself, and why that is honest only in shadow: every roster member gets a RECORD-ONLY grant of the ``brain``
 skill's four acts at start (``GrantStore.grant(record_only=True)``, refused anywhere but a store marked ``shadow``), with no consent
 ceremony, because a shadow records what the household already did, whatever the member's role: a least-access member's adds are
@@ -51,6 +54,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)]
 from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders  # noqa: E402
 from zoe_os.capability import Person, person_from_entry  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
+from zoe_os.lists import VERBS as LIST_DOOR_VERBS  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os import shadow_state  # noqa: E402
 
@@ -60,8 +64,9 @@ ADAPTERS = ({"skill": "voice", "emits": ["utterance"], "origin": True},
             {"skill": "panel", "emits": ["offer_response"], "origin": True})
 PUMP_S = 0.5
 #: the brain manifest's ceiling plus the shadow-only ``list.remove``
-SHADOW_BRAIN = {**BRAIN, "acts": [*BRAIN["acts"], "list.remove"]}
-ACTS = tuple(SHADOW_BRAIN["acts"])
+ACTS = (*BRAIN["acts"], "list.remove")       # the acts every roster member is given record-only, and the brain may propose
+#: the manifest also names the lists door's verbs (``zoe_os/lists.py``): a ceiling for ``list_ask``, decided by role, granted to nobody
+SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS]}
 
 
 def register_list_remove(kernel, lists: Lists) -> None:
