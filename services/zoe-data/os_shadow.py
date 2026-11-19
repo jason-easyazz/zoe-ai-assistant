@@ -1994,20 +1994,26 @@ async def _roster_from_accounts(demo: Optional[dict] = None) -> list:
     from enrollment_state import _account_facts
     from manner_block import ADULT_ROLES, CHILD_ROLES
 
+    import db_pool
+
     demo = demo or {}
-    async with get_compat_db() as db:
-        accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
-        known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
-        entries = []
-        for uid in sorted(accounts | known | frozenset(demo)):
-            role = demo[uid] if uid in demo else None
-            if role is None and uid in accounts:
-                try:
-                    minor, stated = await _account_facts(uid, db=db)
-                    role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
-                except Exception:  # noqa: BLE001 - a role that cannot be read is least access
-                    role = None
-            entries.append({"id": uid, "role": role} if role else uid)
+    await db_pool.init_pool()             # a command, not the service: it opens the database itself and closes it after
+    try:
+        async with get_compat_db() as db:
+            accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
+            known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
+            entries = []
+            for uid in sorted(accounts | known | frozenset(demo)):
+                role = demo[uid] if uid in demo else None
+                if role is None and uid in accounts:
+                    try:
+                        minor, stated = await _account_facts(uid, db=db)
+                        role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
+                    except Exception:  # noqa: BLE001 - a role that cannot be read is least access
+                        role = None
+                entries.append({"id": uid, "role": role} if role else uid)
+    finally:
+        await db_pool.close_pool()
     return entries
 
 

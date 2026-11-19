@@ -54,8 +54,22 @@ class _DB:
         raise AssertionError("unexpected database query")
 
 
+POOL: list = []
+
+
 @pytest.fixture
 def state(tmp_path, monkeypatch):
+    import db_pool
+
+    async def opened():
+        POOL.append("open")
+
+    async def closed():
+        POOL.append("close")
+
+    POOL.clear()
+    monkeypatch.setattr(db_pool, "init_pool", opened)
+    monkeypatch.setattr(db_pool, "close_pool", closed)
     monkeypatch.setattr(db_compat, "get_compat_db", _DB)
     monkeypatch.setattr(os_shadow, "ensure_state_dir", lambda: tmp_path)
     return tmp_path / "people.json"
@@ -106,3 +120,20 @@ def test_the_roles_written_are_exactly_the_kernels():
     roles = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
                  and any(isinstance(t, ast.Tuple) and [e.id for e in t.elts] == ["ADULT", "CHILD", "GUEST"] for t in n.targets))
     assert set(os_shadow.ROSTER_ROLES) == set(roles)
+
+
+def test_the_command_opens_the_database_itself_and_closes_it_even_when_the_read_fails(state, monkeypatch):
+    """Run as a command there is no service to have opened the pool (found on the first live run: "db_pool not initialised").
+    Control: without the ``init_pool`` call the first assert fails."""
+    os_shadow.write_roster_from_accounts()
+    assert POOL == ["open", "close"]
+
+    class Broken(_DB):
+        async def execute(self, query, params=()):
+            raise RuntimeError("database fault")
+
+    POOL.clear()
+    monkeypatch.setattr(db_compat, "get_compat_db", Broken)
+    with pytest.raises(RuntimeError):
+        os_shadow.write_roster_from_accounts()
+    assert POOL == ["open", "close"]
