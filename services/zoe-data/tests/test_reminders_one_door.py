@@ -3,7 +3,8 @@ suggestion) changes a reminder through ``reminder_service`` under one ownership 
 
 * an accepted reminder suggestion was a raw INSERT with no day or time (it could never fire): it now goes through the door with
   its day and time, in the suggestion's own transaction, and an offer with no readable day or time stays open;
-* the spoken "cancel that" (``reminder_cancel``) had no handler: it cancels the speaker's own newest reminder of that title;
+* the spoken "cancel that" (``reminder_cancel``) had no handler: it cancels the reminder the speaker's create just made, by its
+  id (never one found by its title), and nothing at all if that create was refused or failed;
 * a one-off for a clock time already gone today was stored and never fired: refused on create and on an edit that moves it there
   (a spoken turn is told so in words).
 
@@ -13,7 +14,7 @@ captured from ``main``.
 Negative controls run for this file (each broke the code, saw the named test fail, restored): ``refuse_past_due`` made a no-op ->
 ``test_a_time_already_gone_today_is_refused`` fails; the "moved" condition dropped from the edit's past-time check ->
 ``test_an_edit_that_does_not_move_the_time_is_as_it_always_was`` fails; the ``reminder_cancel`` branch removed from
-``execute_intent`` -> ``test_spoken_cancel_removes_only_the_speakers_own_reminder`` fails; the suggestion's reminder created with
+``execute_intent`` -> ``test_cancel_that_cancels_exactly_the_reminder_just_set_and_a_second_one_does_nothing`` fails; the suggestion's reminder created with
 no ``after_commit`` list (job and broadcast inside the transaction) ->
 ``test_accepted_suggestion_is_one_transaction_on_one_connection`` fails.
 Invented people and words only."""
@@ -105,7 +106,10 @@ def quiet(monkeypatch):
                        ("_cancel_reminder_jobs_safe", allow), ("_reschedule_reminder_due_safe", resched)):
         monkeypatch.setattr(f"reminder_service.{name}", fake)
     monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", schedule)
-    return {"jobs": jobs}
+    async def schedule_due(_db, row, **_k):
+        jobs.append({"due": dict(row).get("id")})
+
+    return {"jobs": jobs, "schedule_due": schedule_due}
 
 
 # ── the one rule ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -393,18 +397,181 @@ async def test_mcp_another_member_cannot_change_a_reminder(monkeypatch, visibili
     assert db.updates() == [] and db.row["deleted"] == 0
 
 
-# ── fault 2: the spoken "cancel that" ───────────────────────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_spoken_cancel_removes_only_the_speakers_own_reminder(monkeypatch, quiet):
-    store = _Store(visibility="family")
+# ── fault 2: the spoken "cancel that" is bound to the reminder the create just made, by id ─────────────────────────────────
+class _Rows:
+    """Several reminder rows. An INSERT adds one; a read is by id (with the visibility filter) only: a read by TITLE fails the test."""
+
+    def __init__(self, *rows):
+        self.rows = {r["id"]: {"user_id": A, "title": "take pills", "visibility": "personal", "due_date": "2099-06-15",
+                               "due_time": "08:00", "recurring_pattern": None, "is_active": 1, "acknowledged": 0, "deleted": 0,
+                               "snoozed_until": None, **r} for r in rows}
+        self.fail_insert = False
+
+    async def execute(self, sql, params=()):
+        norm, p = " ".join(sql.split()), list(params)
+        assert "title" not in norm.split("WHERE", 1)[-1].lower() or not norm.startswith("SELECT"), "a reminder was looked up by its title"
+        if norm.startswith("SELECT"):
+            if "FROM users" in norm:
+                return _Cursor({"id": p[0], "role": "user", "name": "Member"})
+            row = self.rows.get(p[-1])
+            seen = row is not None and not ("deleted = 0" in norm and row["deleted"]) and (
+                "visibility = 'family'" not in norm or row["visibility"] == "family" or row["user_id"] == p[0])
+            return _Cursor(dict(row) if seen else None)
+        if norm.startswith("INSERT INTO reminders"):
+            if self.fail_insert:
+                raise RuntimeError("connection lost")
+            self.rows[p[0]] = {"id": p[0], "user_id": p[1], "title": p[2], "due_date": p[7], "due_time": p[8], "visibility": p[10],
+                               "recurring_pattern": None, "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
+        elif norm.startswith("UPDATE reminders SET deleted = 1"):
+            self.rows[p[-1]]["deleted"] = 1
+        return _Cursor()
+
+    async def commit(self):
+        pass
+
+    def live(self):
+        return sorted(rid for rid, r in self.rows.items() if not r["deleted"])
+
+
+@pytest.fixture
+def said(monkeypatch, quiet):
+    """A spoken conversation: ``say(text-free intent)`` runs an intent for A; ``follow_up()`` resolves "cancel that" through the
+    real conversation context, activated (as on the voice and chat paths) BEFORE the create runs."""
+    import intent_router
+    from conversation_context import ConversationContext
+
+    store = _Rows({"id": "older", "created_at": "2026-01-01"}, {"id": "newer-done", "created_at": "2099-01-01", "acknowledged": 1})
+    ctx = ConversationContext()
     monkeypatch.setattr("database.get_db_ctx", _ctx(store))
-    assert await execute_intent(Intent("reminder_cancel", {"title": "take pills"}), B) == rs.SPOKEN["cancel_not_found"]
-    guest = await execute_intent(Intent("reminder_cancel", {"title": "take pills"}), "guest")
-    assert guest.startswith("I need to know who you are")
-    assert await execute_intent(Intent("reminder_cancel", {"title": ""}), A) == rs.SPOKEN["cancel_not_found"]
-    assert store.row["deleted"] == 0
-    assert await execute_intent(Intent("reminder_cancel", {"title": "Take pills"}), A) == "Reminder cancelled: Take pills."
-    assert store.row["deleted"] == 1
+    monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", quiet["schedule_due"])
+    intent_router._JUST_SET_REMINDER.clear()
+
+    async def create(who=A, **slots):
+        intent = Intent("reminder_create", {"title": "take pills", "date": "2099-06-16", "time": "15:00", **slots})
+        ctx.activate(intent.name, intent.slots, "remind me to take pills")          # the context is set at detection
+        return await execute_intent(intent, who)
+
+    async def cancel_that(who=A):
+        name, slots = ctx.resolve_coreference("cancel that")
+        assert name == "reminder_cancel"
+        return await execute_intent(Intent(name, slots), who)
+
+    return store, create, cancel_that
+
+
+@pytest.mark.asyncio
+async def test_cancel_that_cancels_exactly_the_reminder_just_set_and_a_second_one_does_nothing(said):
+    """An older live reminder and a newer one already marked done share the title: neither is touched (the fake fails the test
+    on any read of a reminder by its title). Control run: with the note not dropped after a cancel, the second "cancel that"
+    reaches the store again instead of saying there is nothing to cancel, and this fails."""
+    store, create, cancel_that = said
+    assert (await create()).startswith("Reminder set")
+    (made,) = [rid for rid in store.rows if rid not in ("older", "newer-done")]
+    assert await cancel_that() == "Reminder cancelled: take pills."
+    assert store.rows[made]["deleted"] == 1 and store.live() == ["newer-done", "older"]
+    assert await cancel_that() == rs.SPOKEN["cancel_nothing"]                        # a second "cancel that": nothing left to cancel
+    assert store.live() == ["newer-done", "older"]
+
+
+@pytest.mark.parametrize("how", ["past_time", "write_failed", "role_refused"])
+@pytest.mark.asyncio
+async def test_cancel_that_after_a_create_that_did_not_happen_cancels_nothing_and_says_so(said, monkeypatch, how):
+    """A refused or failed create leaves nothing to cancel, however many older reminders share its title, and even when an
+    EARLIER create of the same title succeeded a moment ago. Controls run: with the earlier note NOT dropped when a new create is
+    attempted (so "that" stays bound across a create that did not happen) the earlier reminder is cancelled here; with a lookup
+    by title put back for the no-id case, the fake's title guard trips and the reply is not "nothing to cancel"."""
+    store, create, cancel_that = said
+    assert (await create()).startswith("Reminder set")                              # an earlier, good create of the same title
+    before = store.live()
+    if how == "past_time":
+        monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
+        monkeypatch.setattr("reminder_service.normalize_due_date", lambda raw, **k: "2026-06-10")
+
+        def gone(*_a, **_k):
+            raise rs.ReminderPastError("already past", rs.SPOKEN["past_time"])
+
+        monkeypatch.setattr("reminder_service.refuse_past_due", gone)
+        assert await create() == rs.SPOKEN["past_time"]
+    elif how == "write_failed":
+        store.fail_insert = True
+        assert not (await create() or "").startswith("Reminder set")
+        store.fail_insert = False
+    else:
+        async def refuse(*_a, **_k):
+            raise HTTPException(status_code=403, detail="not allowed")
+
+        monkeypatch.setattr("reminder_service.require_feature_access", refuse)
+        with pytest.raises(HTTPException):
+            await create()
+    reply = await cancel_that()
+    assert reply == rs.SPOKEN["cancel_nothing"] and "cancelled" not in reply.lower()
+    assert store.live() == before
+
+
+@pytest.mark.asyncio
+async def test_cancel_that_is_per_member_and_never_reaches_a_guest_or_a_timer(said):
+    """Another member's "cancel that" has no reminder of THEIR making to cancel; a guest is asked who they are; and after a TIMER
+    the turn goes where it always went (this executor does not answer it). Control run: with the ``after=reminder_create``
+    condition dropped from ``execute_intent`` the timer's follow-up is answered here and this fails."""
+    import intent_router
+    from conversation_context import ConversationContext
+
+    store, create, cancel_that = said
+    assert (await create()).startswith("Reminder set")
+    before = store.live()
+    assert await cancel_that(B) == rs.SPOKEN["cancel_nothing"] and store.live() == before
+    assert (await cancel_that("guest")).startswith("I need to know who you are") and store.live() == before
+    ctx = ConversationContext()
+    ctx.activate("timer_set", {"title": "take pills"}, "set a timer")
+    name, slots = ctx.resolve_coreference("cancel that")
+    assert (name, slots) == ("reminder_cancel", {"title": "take pills"})
+
+    async def never(*_a, **_k):
+        raise AssertionError("the reminder cancel answered a timer's follow-up")
+
+    saved, intent_router._execute_reminder_cancel_direct = intent_router._execute_reminder_cancel_direct, never
+    try:
+        await execute_intent(Intent(name, slots), A)
+    except AssertionError:
+        raise
+    except Exception:  # noqa: BLE001 - whatever the old fall-through does with it is not this test's subject
+        pass
+    finally:
+        intent_router._execute_reminder_cancel_direct = saved
+    assert store.live() == before
+
+
+# ── fault 1, the WHEN of an accepted suggestion: its slots and its hint are merged ────────────────────────────────────────────
+@pytest.mark.parametrize("slots,expected", [
+    ({"date": "friday", "when_hint": "3pm"}, ("friday", "15:00")),                 # a day slot, the time only in the hint
+    ({"time": "3pm", "when_hint": "friday"}, ("friday", "3pm")),                   # a time slot, the day only in the hint
+    ({"due_date": "2099-06-16", "when_hint": "at 7:30am"}, ("2099-06-16", "07:30")),
+    ({"date": "friday", "time": "9am", "when_hint": "saturday at 3pm"}, ("friday", "9am")),   # both slots: they win, whatever the hint
+    ({"date": "friday", "when_hint": "saturday at 3pm"}, ("friday", "15:00")),     # a slot wins for ITS field; the hint fills the other
+    ({"when_hint": "friday at 3pm"}, ("friday", "15:00")),                         # the hint alone
+    ({"date": "friday"}, ("friday", None)),                                        # a day and nothing else: a day
+    ({"date": "friday", "when_hint": "in the morning"}, (None, None)),             # a hint nobody can read: the offer stays open
+    ({}, (None, None)),
+])
+def test_an_offers_slots_and_its_hint_are_merged(slots, expected):
+    """The producer keeps the model's slots and adds ``when_hint`` beside them. Control run: with the old either/or rule (the hint
+    read only when there is NO slot) the first, second, third and fifth cases lose the hint's half."""
+    assert pending_suggestions._suggested_when("book the vet", slots) == expected
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_offer_with_a_day_slot_and_a_time_hint_fires_at_that_time(monkeypatch):
+    from datetime import date
+
+    state = _PgState(slots='{"title": "book the vet", "date": "friday", "when_hint": "3pm"}')
+    _accept_world(monkeypatch, state)
+    assert (await pending_suggestions.execute_suggestion("sug-1", A))["ok"] is True
+    (row,) = state.reminders.values()
+    assert row["due_time"] == "15:00" and date.fromisoformat(row["due_date"]).weekday() == 4       # a Friday, at 15:00
+    state = _PgState(slots='{"title": "book the vet", "date": "friday", "when_hint": "in the morning"}')
+    _accept_world(monkeypatch, state)
+    assert await pending_suggestions.execute_suggestion("sug-1", A) == {"ok": False, "error": "reminder_needs_time"}
+    assert state.reminders == {} and state.resolved == 0
 
 
 # ── a weekday hint keeps its clock time, or the offer stays open ─────────────────────────────────────────────────────────────

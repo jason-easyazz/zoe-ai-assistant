@@ -31,6 +31,7 @@ SPOKEN = {
     "past_day": "That day has already passed, so I haven't set the reminder.",
     "past_time": "That time has already passed today, so I haven't set the reminder.",
     "cancelled": "Reminder cancelled: {title}.",
+    "cancel_nothing": "I haven't just set a reminder, so there's nothing to cancel.",
     "cancel_not_found": "I couldn't find that reminder, so nothing has changed.",
     "cancel_failed": "I couldn't cancel that reminder just now, so nothing has changed.",
 }

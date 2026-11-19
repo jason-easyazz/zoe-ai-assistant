@@ -110,7 +110,13 @@ class ConversationContext:
                 new_slots["time"] = time_m.group(0)
                 return self.last_intent, new_slots
             if _CANCEL_RE.search(t):
-                return "reminder_cancel", {"title": self.last_slots.get("title", "")}
+                slots = {"title": self.last_slots.get("title", "")}
+                if self.last_intent == "reminder_create":
+                    # "cancel that" right after a reminder was asked for: the executor cancels the reminder THAT create made,
+                    # by its id (``intent_router._execute_reminder_cancel_direct``), never one found by its title. After a
+                    # timer the slots are as they always were, and the turn goes where it always went.
+                    slots["after"] = "reminder_create"
+                return "reminder_cancel", slots
             if _SHOW_RE.search(t):
                 return "reminder_list", {}
 
