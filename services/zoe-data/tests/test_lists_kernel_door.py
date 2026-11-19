@@ -4,6 +4,8 @@
 * the kernel allows: the change is made and its outcome reported after the commit; only ids cross the socket;
 * the kernel refuses: nothing is written, ``ListRefused``, and each caller says so in its own shape;
 * the kernel cannot be reached or is slow: the change is made, one ``not_checked`` line, never an exception;
+* a forget is ordered against an ask by the KERNEL: every ask and report carries an erase stamp for each member it names, every
+  whole-member forget carries that member's stamp, and the kernel's ``erased`` answer lets the change proceed ``not_checked``;
 * every function that writes a list table asks (a structural scan with a planted negative control);
 * the watch-only list hooks are silent while the door is on.
 
@@ -208,7 +210,7 @@ async def test_an_allowed_change_is_made_asked_by_ids_only_and_reported_done(doo
     assert db.writes and {a["verb"] for a in asks} == {DOORS[name][0]} and len(asks) == (2 if name == "add_items_to_list" else 1)
     assert all(a["person"] == OWNER and a["owner"] == OWNER and "via" not in a for a in asks)
     assert asks[0]["visibility"] == ("private" if name == "create_list_record" else "household")
-    assert all(set(a) <= {"verb", "person", "list", "items", "owner", "visibility", "turn"} for a in asks)
+    assert all(set(a) <= {"verb", "person", "list", "items", "owner", "visibility", "turn", "stamps"} for a in asks)
     sent = json.dumps(door.calls)
     assert WORD not in sent and NAME not in sent and "quince" not in sent and "Shopping" not in sent      # ids only
     assert [o for _, o in door.reports(len(asks))] == ["done"] * len(asks)
@@ -230,7 +232,7 @@ async def test_a_spoken_add_is_reported_only_after_its_transaction_committed_and
     seen = []
     real = os_shadow.report_list
     db = _db()
-    monkeypatch.setattr(os_shadow, "report_list", lambda ask, outcome: (seen.append((db.depth, db.committed, outcome)), real(ask, outcome)))
+    monkeypatch.setattr(os_shadow, "report_list", lambda ask, outcome, stamps=None: (seen.append((db.depth, db.committed, outcome)), real(ask, outcome, stamps)))
     await DOORS["add_items_to_list"][1](db, OWNER)
     assert seen == [(0, 1, "done")] * 2                         # outside the transaction, after the one commit
     del seen[:]
@@ -367,35 +369,248 @@ async def test_a_member_being_erased_is_not_put_to_the_kernel_and_the_change_pro
     assert door.ops("list_ask") == []
 
 
-@pytest.mark.parametrize("who, erased", [(OWNER, OWNER), (KID, OWNER), (KID, KID)])
-@pytest.mark.parametrize("mode", ["allow", "refuse:not_owner", "close"])
-@pytest.mark.asyncio
-async def test_an_erase_that_lands_while_the_kernel_has_the_ask_parks_a_forget_whatever_the_outcome(door, monkeypatch, mode, who, erased):
-    """The door has its own thread and connection: the kernel may write the ask (or its refusal) AFTER a member's forget, and it
-    may have written it even when the reply never arrives. So every outcome (answer, refusal, fault) re-checks every member the
-    ask named: the actor AND the list's owner. Control: with the re-check only after an answer, or over the actor only, cases fail."""
-    answer = DoorKernel._answer
+# ---- ordered against a forget by the kernel: stamps on every ask, report and whole-member forget -----------------------------------
+def _is_stamp(value) -> bool:
+    return isinstance(value, list) and len(value) == 2 and all(type(n) is int and n >= 0 for n in value)
 
-    def erased_meanwhile(self, conn, skill, req):
-        if req["op"] == "list_ask":
-            user_erase_gate._generation[erased] = user_erase_gate.generation(erased) + 1      # a whole-member erase finished
+
+@pytest.mark.asyncio
+async def test_every_ask_and_its_report_carry_an_erase_stamp_for_the_actor_and_the_lists_owner(door):
+    """The kernel can only order what it is told: a stamp for EVERY member the ask names, and the report carries the ASK's stamps
+    (read at the ask, never again). Controls run: with the owner left out of ``ask_list``'s stamps the first assert fails; with
+    ``report_list`` dropping its stamps the report assert fails; with the report's stamps read again at the report (after the
+    erase below) the equality with the ask's fails."""
+    await DOORS["remove_item_record"][1](_db(), KID)             # L1 is OWNER's household list: two members named
+    (asked,) = door.ops("list_ask")
+    assert set(asked["stamps"]) == {KID, OWNER} and all(_is_stamp(v) for v in asked["stamps"].values())
+    assert asked["stamps"][KID][0] == asked["stamps"][OWNER][0] == os_shadow._BOOT      # one boot stamp per process
+    door.reports(1)
+    assert door.ops("list_report")[0]["stamps"] == asked["stamps"]
+    held = _db()
+    async with list_service.kernel_reports_after():                # the report waits for the commit; a forget lands meanwhile
+        await DOORS["remove_item_record"][1](held, KID)
+        assert await os_shadow.forget_for_erase(OWNER) == 3        # a confirmed kernel forget: the only thing that moves a stamp
+    door.reports(2)
+    assert door.ops("list_report")[1]["stamps"] == door.ops("list_ask")[1]["stamps"] != os_shadow.erase_stamp(OWNER) and \
+        door.ops("list_report")[1]["stamps"][OWNER] < os_shadow.erase_stamp(OWNER)
+    await DOORS["create_item_record"][1](DB(), "guest-kiosk-7")   # the panel: nobody identified, only the owner is named
+    assert set(door.ops("list_ask")[-1]["stamps"]) == {OWNER}
+
+
+@pytest.mark.parametrize("erase", ["member", "rows"])
+@pytest.mark.asyncio
+async def test_a_forget_reads_its_stamp_then_moves_on_so_every_earlier_ask_is_at_or_before_it(door, erase, monkeypatch):
+    """What makes the kernel's ordering sound (it refuses a stamp that is not STRICTLY newer than the forget's): every ask stamped
+    before the forget was SENT, including one made while a row- or turn-scoped forget was outstanding (no erase span holds the
+    door then), is at or before the forget's stamp; every ask stamped after the send is strictly newer. Controls run: with the
+    move-on removed from ``_forget_call`` the "rows" case fails (the member acting again would read as erased); with
+    ``stamp`` left off the forget call both cases fail on the missing key."""
+    await DOORS["remove_item_record"][1](_db(), OWNER)
+    before = door.ops("list_ask")[0]["stamps"][OWNER]
+    outstanding = []
+    call = os_shadow._forget_call
+
+    def spying(kernel, member, scoped):
+        outstanding.append(os_shadow.erase_stamp(member))          # an ask made now: the forget is asked for, not yet sent
+        return call(kernel, member, scoped)
+
+    monkeypatch.setattr(os_shadow, "_forget_call", spying)
+    if erase == "member":
+        with user_erase_gate.erase_span(OWNER):
+            assert await os_shadow.forget_user(OWNER) == 3
+    else:
+        assert await os_shadow.forget_for_erase(OWNER) == 3
+    (forget,) = door.ops("forget")
+    assert forget["subject"] == OWNER and _is_stamp(forget["stamp"])
+    assert before <= forget["stamp"] and outstanding == [forget["stamp"]]
+    assert os_shadow.erase_stamp(OWNER) > forget["stamp"]                          # moved on by the send
+    await DOORS["remove_item_record"][1](_db(), OWNER)
+    assert door.ops("list_ask")[1]["stamps"][OWNER] > forget["stamp"]              # the member acting again: strictly newer
+
+
+@pytest.mark.asyncio
+async def test_an_ask_stamped_while_the_forget_call_is_outstanding_is_not_newer_than_the_forget(door, monkeypatch):
+    """The interval the kernel cannot see: the forget has been SENT and not yet confirmed (a row- or turn-scoped forget holds no
+    erase span, so the door can ask meanwhile). A stamp read then must be at most the forget's own, because the kernel refuses
+    only what is not strictly newer than its mark; delivered after the forget commits, such an ask writes nothing (the kernel's
+    half: ``labs/zoe-os/tests/test_lists_erase_order.py``, the equal-stamp test). The count moves on only at the kernel's
+    confirmation. Control run: with the count moved BEFORE the kernel call the stamp read during it is newer and this fails."""
+    answer = DoorKernel._answer
+    during = []
+
+    def held(self, conn, skill, req):
+        if req["op"] == "forget":
+            during.append((os_shadow.erase_stamp(OWNER), req["args"]["stamp"]))     # the call is outstanding right now
         return answer(self, conn, skill, req)
 
-    monkeypatch.setattr(DoorKernel, "_answer", erased_meanwhile)
-    woken = []
-    monkeypatch.setattr(os_shadow, "_ensure_worker", lambda: woken.append(1))
-    door.door = mode
-    db = _db()                                                    # L1 is OWNER's household list
-    if mode.startswith("refuse"):
-        with pytest.raises(list_service.ListRefused):
-            await DOORS["remove_item_record"][1](db, who)
-        assert not db.writes                                      # a refusal stays final
+    monkeypatch.setattr(DoorKernel, "_answer", held)
+    assert await os_shadow.forget_for_erase(OWNER) == 3
+    (read, sent), = during
+    assert read == sent
+    assert os_shadow.erase_stamp(OWNER) > sent                    # confirmed: the member acting again is strictly newer
+
+
+@pytest.mark.asyncio
+async def test_a_forget_the_kernel_did_not_confirm_moves_nothing(door, monkeypatch):
+    """A forget whose reply never arrives leaves the count where it was: later asks keep the stamp that (possibly committed)
+    forget carried, so they read as erased until a replay is confirmed, never as newer. Control run: with the count moved in a
+    ``finally`` this fails."""
+    answer = DoorKernel._answer
+    sent = []
+
+    def lost(self, conn, skill, req):
+        if req["op"] == "forget":
+            sent.append(req["args"].get("stamp"))
+            raise ConnectionError
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", lost)
+    before = os_shadow.erase_stamp(OWNER)
+    with pytest.raises(Exception):
+        await os_shadow.forget_for_erase(OWNER)
+    assert sent and sent[0] == before and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
+async def test_nothing_but_a_confirmed_kernel_forget_moves_the_stamp(door, monkeypatch):
+    """Other erasers advance the erase gate's generation at their own times. If that moved the stamp, an ask made while a forget
+    call was held open could look strictly newer than that forget and be recorded after it. So: the gate's generation is not in
+    the stamp. Control run: with the generation added back into ``erase_stamp`` the stamp read during the call is newer than
+    the forget's and this fails."""
+    answer = DoorKernel._answer
+    during = []
+
+    def held(self, conn, skill, req):
+        if req["op"] == "forget":
+            user_erase_gate._generation[OWNER] = user_erase_gate.generation(OWNER) + 1     # another eraser, mid-call
+            during.append((os_shadow.erase_stamp(OWNER), req["args"]["stamp"]))
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", held)
+    assert await os_shadow.forget_for_erase(OWNER) == 3
+    (read, sent), = during
+    assert read == sent                                           # an ask made then is refused wherever it lands (equal)
+    assert os_shadow.erase_stamp(OWNER) == [sent[0], sent[1] + 1]
+
+
+@pytest.mark.parametrize("value", [None, "off", "shadow"])
+@pytest.mark.asyncio
+async def test_with_lists_off_a_forget_carries_no_stamp_and_moves_nothing(door, monkeypatch, value):
+    """With lists off no ask exists to order: the forget goes exactly as before (no ``stamp``, so the kernel writes no erase
+    mark; the kernel's half: a stampless forget sets no mark, ``labs/zoe-os/tests/test_lists_erase_order.py``). Control run:
+    with the stamp sent unconditionally this fails."""
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_LISTS")
     else:
-        await DOORS["remove_item_record"][1](db, who)
-        assert db.writes
-    assert door.ops("list_report") == []                          # nothing more under an erased member's id
-    assert json.loads((door.state / "pending-forgets.json").read_text()) == [erased] and woken
-    assert os_shadow._q.get_nowait() == ("replay",)
+        monkeypatch.setenv("ZOE_OS_LISTS", value)
+    before = os_shadow.erase_stamp(OWNER)
+    assert await os_shadow.forget_for_erase(OWNER) == 3
+    (forget,) = door.ops("forget")
+    assert set(forget) == {"subject", "actor"} and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_forget_reply_is_not_a_confirmation_and_moves_nothing(door, monkeypatch):
+    """The count moves on only once the reply is the documented one (``forget_ack``): a "success" that is not is unconfirmed to
+    the caller, so it must be unconfirmed to the stamp too. Control run: with the count moved when the call returns this fails."""
+    from test_os_shadow import _send
+
+    answer = DoorKernel._answer
+
+    def malformed(self, conn, skill, req):
+        if req["op"] == "forget":
+            self.calls.append((skill, req["op"], req["args"]))
+            return _send(conn, {"v": 1, "id": req["id"], "ok": True, "result": {"count": "three"}})
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", malformed)
+    before = os_shadow.erase_stamp(OWNER)
+    with pytest.raises(Exception):
+        await os_shadow.forget_for_erase(OWNER)
+    assert door.ops("forget") and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
+async def test_an_ask_made_while_a_member_erase_runs_is_never_queued(door, caplog):
+    """Read with the stamps, on the loop: the door thread's own look could come after the erase has ended. Control run: without
+    the loop-side check the ask is queued (it reaches the door thread, which may or may not still see the erase)."""
+    def never(*a, **k):
+        raise AssertionError("queued while the member was being erased")
+
+    with user_erase_gate.erase_span(OWNER):
+        real = os_shadow._door_q.put_nowait
+        os_shadow._door_q.put_nowait = never
+        try:
+            await _proceeds(door, caplog, "remove_item_record", "erasing")
+        finally:
+            os_shadow._door_q.put_nowait = real
+    assert door.ops("list_ask") == []
+
+
+@pytest.mark.asyncio
+async def test_an_entity_or_topic_forget_carries_no_stamp_and_its_whole_member_fallback_does(door):
+    """A scoped forget sets no erase mark in the kernel, so it sends none; the over-forget it falls back to is whole-member and is
+    stamped. Control run: with ``_forget_call`` stamping scoped forgets too the first assert fails."""
+    assert await os_shadow.erase_entity(OWNER, NAME) == 3 and await os_shadow.erase_topic(OWNER, WORD) == 3
+    assert [set(a) for a in door.ops("forget")] == [{"subject", "actor", "entity"}, {"subject", "actor", "topic"}]
+    door.forget_mode = "refuse_scoped"
+    assert await os_shadow.erase_entity(OWNER, NAME) == 3
+    assert _is_stamp(door.ops("forget")[-1]["stamp"]) and "entity" not in door.ops("forget")[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_kernel_from_before_the_stamp_still_forgets(door, monkeypatch):
+    """A forget never waits for a kernel restart: a kernel that answers ``bad_request`` to the stamped forget (it does not know
+    the argument) is sent the forget as before. Control run: without the fallback in ``_forget_call`` the forget raises
+    ``ShadowForgetUnavailable`` and is parked."""
+    answer = DoorKernel._answer
+
+    def old_kernel(self, conn, skill, req):
+        if req["op"] == "forget" and "stamp" in req["args"]:
+            from test_os_shadow import _send
+            return _send(conn, {"v": 1, "id": req["id"], "ok": False, "error": {"code": "bad_request", "reason": "unknown argument"}})
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", old_kernel)
+    assert await os_shadow.forget_user(OWNER) == 3
+    assert ["stamp" in a for a in door.ops("forget")] == [True, False]
+    assert not (door.state / "pending-forgets.json").exists()
+
+
+@pytest.mark.parametrize("name", ["remove_item_record", "add_items_to_list", "delete_list_record"])
+@pytest.mark.asyncio
+async def test_the_kernels_erased_answer_is_not_a_refusal_the_change_proceeds_not_checked(door, caplog, name):
+    """The kernel found the ask older than a forget of a member it names and recorded nothing. That is not "no": the change is
+    made, one ``not_checked reason=erased`` line, nothing is reported, and NOTHING compensates on this side (no parked forget: the
+    kernel's ordering is the one mechanism). Control run: with the ``erased`` branch removed from ``_door_call`` this raises
+    ``ListRefused`` and writes nothing."""
+    door.door = "refuse:erased"
+    lines = await _proceeds(door, caplog, name, "erased")
+    time.sleep(0.05)
+    assert door.ops("list_report") == [] and door.ops("forget") == []
+    assert not (door.state / "pending-forgets.json").exists() and os_shadow._q.empty()
+    assert not any(w in " ".join(lines) for w in (OWNER, "L1", WORD))
+
+
+@pytest.mark.asyncio
+async def test_a_stale_report_is_dropped_quietly_and_the_door_keeps_working(door, caplog, monkeypatch):
+    """The kernel refuses a report whose stamps are older than a forget; the door thread swallows it (no line names anyone) and
+    serves the next ask on the same connection. Control run: with the door loop's ``except`` narrowed to ``OSError`` the door
+    thread dies on the refusal and the second ask is ``not_checked``."""
+    answer = DoorKernel._answer
+
+    def stale_reports(self, conn, skill, req):
+        if req["op"] == "list_report":
+            return self._refuse(conn, req, "erased")
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", stale_reports)
+    caplog.set_level("DEBUG", logger="os_shadow")
+    await DOORS["remove_item_record"][1](_db(), OWNER)
+    door.reports(1)
+    await DOORS["remove_item_record"][1](_db(), OWNER)
+    assert len(door.ops("list_ask")) == 2 and door.connections == 1
+    assert caplog.text.count("decision=allow") == 2 and OWNER not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -628,3 +843,50 @@ async def test_a_slow_door_start_is_inside_the_ask_deadline(door, monkeypatch):
     started = time.monotonic()
     out = await os_shadow.ask_list("item.add", OWNER, list_id="L1", household=True)
     assert out[:2] == (os_shadow.NOT_CHECKED, "timeout") and time.monotonic() - started < 0.4
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_suggestion_reports_only_after_its_own_transaction_ends(door, monkeypatch):
+    """``pending_suggestions.execute_suggestion`` holds its own transaction around the list write: the kernel hears ``done`` after
+    that commit, and ``failed`` (never ``done``) when the commit fails. Control: without ``kernel_reports_after`` around that
+    transaction the failed commit is reported ``done``."""
+    import pending_suggestions
+    from test_os_shadow_hook import MEMBER, _Pool
+    from test_os_shadow_hook import _Conn as _Base
+
+    class _Conn(_Base):
+        async def fetch(self, sql, *args):                         # the door's own read of the list row
+            return [{"id": "L1", "user_id": MEMBER, "visibility": "family"}]
+
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(_Conn(fail_commit=True)))
+    assert not (await pending_suggestions.execute_suggestion("s2", MEMBER))["ok"]
+    door.reports(1)
+    assert [r["outcome"] for r in door.ops("list_report")] == ["failed"] * len(door.ops("list_report")) and door.ops("list_report")
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(_Conn()))
+    assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"]
+    door.reports(len(door.ops("list_ask")))
+    assert [r["outcome"] for r in door.ops("list_report")].count("done") >= 1
+
+
+@pytest.mark.parametrize("value", [None, "off", "shadow"])
+@pytest.mark.asyncio
+async def test_with_lists_off_an_accepted_suggestion_enters_nothing_of_the_door(monkeypatch, value):
+    """Flag off: the suggestion path reads the flag once and never enters ``kernel_reports_after`` or asks. Control: with the
+    hold entered unconditionally this fails."""
+    import pending_suggestions
+    from test_os_shadow_hook import MEMBER, _Conn, _Pool
+
+    def never(*a, **k):
+        raise AssertionError("the door was entered with the flag off")
+
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_LISTS", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_OS_LISTS", value)
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    monkeypatch.setattr(list_service, "kernel_reports_after", never)
+    monkeypatch.setattr(os_shadow, "ask_list", never)
+    conn = _Conn()
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"] and "INSERT INTO list_items" in conn.writes

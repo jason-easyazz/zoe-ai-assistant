@@ -43,7 +43,9 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "poll": {"sub": ((int,), True), "max": ((int,), False), "wait_ms": ((int,), False),
              "ack": ((int,), False)},
     "forget": {"subject": ((str,), True), "actor": ((str,), True), "seqs": ((list,), False),
-               "entity": ((str,), False), "topic": ((str,), False)},
+               "entity": ((str,), False), "topic": ((str,), False),
+               # the caller's erase stamp [boot, generation] for the subject, read when it sent this forget (``spine.erase_stamp``)
+               "stamp": ((list,), False)},
     "grant": {"person": ((str,), True), "skill": ((str,), True), "reads": ((dict,), False),
               "acts": ((list,), False), "guardian": (_OPT_STR, False)},
     "revoke": {"person": ((str,), True), "skill": ((str,), True)},
@@ -55,8 +57,10 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     # the lists door (``lists.py``): ids only, never an item's text or a list's name
     "list_ask": {"verb": ((str,), True), "person": ((str,), True), "via": (_OPT_STR, False), "list": (_OPT_STR, False),
                  "items": ((list,), False), "owner": (_OPT_STR, False), "visibility": (_OPT_STR, False),
-                 "turn": (_OPT_STR, False)},
-    "list_report": {"ask": ((int,), True), "outcome": ((str,), True)},
+                 "turn": (_OPT_STR, False),
+                 # {member id: [boot, generation]}: the caller's erase stamp for each member this ask names, read when it asked
+                 "stamps": ((dict,), False)},
+    "list_report": {"ask": ((int,), True), "outcome": ((str,), True), "stamps": ((dict,), False)},
 }
 
 # error codes (closed)

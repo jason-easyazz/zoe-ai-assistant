@@ -24,7 +24,14 @@ SVC = Path(__file__).resolve().parents[1]
 
 
 def forgets(k):
-    return [(s, a) for s, op, a in k.calls if op == "forget"]
+    """The forgets the kernel was sent. Lists are off in this file, so NO forget carries an erase stamp (checked on every call):
+    the forget goes exactly as it did before the lists door existed. The stamp itself is pinned in ``test_lists_kernel_door.py``."""
+    out = []
+    for s, op, a in k.calls:
+        if op == "forget":
+            assert "stamp" not in a, a.keys()
+            out.append((s, dict(a)))
+    return out
 
 
 @pytest.mark.asyncio

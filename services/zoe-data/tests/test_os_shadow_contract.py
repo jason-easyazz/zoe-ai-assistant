@@ -167,11 +167,12 @@ def test_the_client_constants_and_ops_agree_with_the_kernels_wire_module():
     assert os_shadow.WIRE_VERSION == wire.VERSION
     assert os_shadow.MAX_REPLY <= wire.MAX_REPLY
     sent = {"publish": {"kind", "subject", "payload"}, "act": {"action", "on_behalf_of", "args", "caused_by"},
-            "forget": {"subject", "actor", "entity", "topic"}}
+            "forget": {"subject", "actor", "entity", "topic", "stamp"}}
     for op, names in sent.items():
         assert op in wire.OPS and names <= set(wire.OPS[op]), op
         assert wire.check_args(op, {k: v for k, v in {"kind": "utterance", "subject": "s", "payload": {}, "action": "a", "on_behalf_of": "p",
-                                                      "args": {}, "caused_by": [1], "actor": "p"}.items() if k in wire.OPS[op]}) == ""
+                                                      "args": {}, "caused_by": [1], "actor": "p", "stamp": os_shadow.erase_stamp("p")}.items()
+                                         if k in wire.OPS[op]}) == ""
 
 
 @needs_forget
@@ -349,8 +350,9 @@ def test_the_lists_door_client_and_the_real_kernel_agree_on_verbs_codes_and_the_
     assert tuple(os_shadow.DOOR_VERBS) == tuple(kernel_lists.VERBS)
     assert {kernel_lists.UNKNOWN_PERSON, kernel_lists.NOT_OWNER, kernel_lists.ADULTS_ONLY, kernel_lists.NOT_IN_MANIFEST} \
         <= set(os_shadow.DOOR_REFUSALS)
-    assert {"verb", "person", "via", "list", "items", "owner", "visibility", "turn"} == set(wire.OPS["list_ask"])
-    assert {"ask", "outcome"} == set(wire.OPS["list_report"])
+    assert {"verb", "person", "via", "list", "items", "owner", "visibility", "turn", "stamps"} == set(wire.OPS["list_ask"])
+    assert {"ask", "outcome", "stamps"} == set(wire.OPS["list_report"])
+    assert os_shadow.KERNEL_ERASED == kernel_lists.ERASED and kernel_lists.ERASED not in os_shadow.DOOR_REFUSALS
 
     class DB:
         def __init__(self):
@@ -393,5 +395,44 @@ def test_the_lists_door_client_and_the_real_kernel_agree_on_verbs_codes_and_the_
             assert con.execute("SELECT COUNT(*) FROM intents WHERE receipt_seq IS NULL").fetchone()[0] == 0
             assert con.execute("SELECT COUNT(*) FROM snapshot_dependencies").fetchone()[0] == 0
         assert holds(state, ITEM) == [] and holds(state, "guest-kiosk") == [] and holds(state, "member-nobody") == []
+    finally:
+        stop(proc)
+
+
+@needs_forget
+def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
+    """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:
+    (1) an ask stamped before the member's forget reaches the kernel after it; (2) the report of an ask allowed before the forget
+    arrives after it; (3) nothing on this side has to compensate (no parked forget exists to fail). Each ends with NOTHING in the
+    kernel's record naming the member, and the member acting again is recorded afresh. Control run: with ``stamp`` left off the
+    client's forget (``_forget_call``) the late ask is allowed and recorded and this fails at "erased"."""
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": OTHER, "role": "adult"}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_LISTS", "kernel")
+        monkeypatch.setenv("ZOE_OS_LISTS_ASK_MS", "2000")
+
+        async def ask(who):
+            return await os_shadow.ask_list("item.add", who, list_id="list-zqx", item_ids=("item-zq1",), owner=MEMBER, household=True)
+
+        def late(stamps):               # the same ask as the door thread sends it, stamped earlier, arriving now
+            return os_shadow._door_call(os_shadow._Kernel(), "item.add", OTHER, {"list": "list-zqx", "owner": MEMBER,
+                                        "visibility": "household", "stamps": stamps}, time.monotonic() + 2)
+
+        decision, _, first, stamps = asyncio.run(ask(OTHER))        # another adult, on MEMBER's household list
+        assert decision == "allow" and set(stamps) == {MEMBER, OTHER}
+        assert "action_receipt" in what_still_names(state, MEMBER)["event_payload_kinds"]       # the control: the owner is named
+        assert forget(MEMBER) >= 1                                  # the owner is forgotten, on the forget worker's connection
+        assert what_still_names(state, MEMBER) == NOTHING_NAMES
+        assert late(stamps) == ("not_checked", "erased", None)      # race 1
+        os_shadow.report_list(first, "done", stamps)                # race 2: the queued report of the earlier ask
+        again = asyncio.run(ask(OTHER))                             # same door thread, after the report: it has been answered
+        assert what_still_names(state, MEMBER)["intents"] == 0
+        with closing(kernel_db(state)) as con:
+            assert con.execute("SELECT COUNT(*) FROM events WHERE kind = 'action_receipt' AND payload LIKE '%\"done\"%'").fetchone()[0] == 0
+            assert con.execute("SELECT COUNT(*) FROM intents WHERE receipt_seq IS NULL").fetchone()[0] == 1      # only the new ask
+        assert again[0] == "allow" and again[3][MEMBER] > stamps[MEMBER]            # acting again: recorded afresh
+        assert what_still_names(state, MEMBER)["event_payload_kinds"] == ["action_receipt"]     # the new ask's, and only that
+        assert not (state / "pending-forgets.json").exists()        # race 3: nothing was parked, nothing had to be
     finally:
         stop(proc)

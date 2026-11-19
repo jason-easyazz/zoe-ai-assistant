@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS forget_ledger (
   count INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS forget_subject ON forget_ledger(subject);
+CREATE TABLE IF NOT EXISTS erase_stamps (
+  owner BLOB PRIMARY KEY, boot INTEGER NOT NULL, gen INTEGER NOT NULL
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS scoped_shield (
   owner BLOB NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (fp, owner)
@@ -178,6 +181,16 @@ class EventCache:
 
     def __iter__(self):
         return (event for event in self._history() if event.seq in self._seqs)
+
+
+def erase_stamp(value) -> tuple[int, int] | None:
+    """A caller's erase stamp ``[boot, generation]`` as a tuple, or None when none was given. It orders a caller's writes against
+    its whole-person forgets, across the caller's restarts: compared as a pair, the first number first. Anything else: ValueError."""
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 2 or any(type(n) is not int or not 0 <= n < 2 ** 63 for n in value):
+        raise ValueError("not an erase stamp")
+    return value[0], value[1]
 
 
 MAX_TOPIC_EVENTS = 12   # a topic forget matching more first-hand events than this is refused
@@ -482,14 +495,19 @@ class Spine:
 
     # ---- forget -------------------------------------------------------------------
     def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None,
-               entity: str | None = None, topic: str | None = None) -> ForgetResult:
+               entity: str | None = None, topic: str | None = None, stamp=None) -> ForgetResult:
         """Erase a person's events and all that derives from them.
 
         With nothing else: every event about them. ``seqs``: only the named ones. ``entity``:
         only their events that name it, and the name is shielded for them from then on.
         ``topic``: only their events that hold every topic word. An entity or topic with no
         words is REFUSED: a scope that matches nothing never widens to "everything".
+
+        ``stamp`` (``erase_stamp``): the caller's erase stamp for ``subject`` when it sent this
+        forget. A WHOLE-person forget keeps it as the person's erase mark, in the same
+        transaction as the erase (``erased_after``); a scoped forget ignores it.
         """
+        stamp = erase_stamp(stamp)
         with self._lock:
             verdict = self.authorizer.may_forget(actor, subject)
             if not verdict.allowed:
@@ -569,6 +587,8 @@ class Spine:
                     self._db.execute('DELETE FROM cursors WHERE reader=?', (subject,))
                     self._db.execute('DELETE FROM forget_ledger WHERE subject=?', (subject,))
                     self._anonymize_legacy_entities(subject)
+                    if stamp is not None and (self._erase_mark(owner) or stamp) <= stamp:
+                        self._db.execute("INSERT OR REPLACE INTO erase_stamps VALUES (?,?,?)", (owner, *stamp))
                 self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
                                  (owner.hex(), upto, self._clock(), len(dead)))
             try:
@@ -586,6 +606,21 @@ class Spine:
             self._epoch += 1
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             return ForgetResult(len(dead), upto)
+
+    # ---- the erase mark: a late write of a caller must never land after that person's forget -----
+    def _erase_mark(self, owner: bytes) -> tuple[int, int] | None:
+        row = self._db.execute("SELECT boot, gen FROM erase_stamps WHERE owner = ?", (owner,)).fetchone()
+        return (row[0], row[1]) if row else None
+
+    def erased_after(self, person: str, stamp) -> bool:
+        """Was ``stamp`` read AT OR BEFORE a whole forget of ``person``? True when it is not strictly newer than their erase mark
+        (the newest stamp a whole-person forget of theirs carried). Equal counts as before: a caller sends its current stamp with
+        a forget and moves its count on only once the forget is confirmed, so a write stamped while that forget was still
+        outstanding carries the forget's own stamp, and must not land after it. A write that gives NO stamp for a person who has a mark is treated the
+        same (an older caller cannot be ordered, so it is not recorded). No mark: False. The mark is keyed by the person's
+        keyed hash (``_owner``, as the forget ledger is): nothing in it names them. Call under the lock."""
+        mark = self._erase_mark(self._owner(person))
+        return mark is not None and (stamp is None or erase_stamp(stamp) <= mark)
 
     def _carried(self, dead: list[int]) -> set[int]:
         """The ids listed by the forget notices among ``dead`` (primary-key reads of those rows)."""

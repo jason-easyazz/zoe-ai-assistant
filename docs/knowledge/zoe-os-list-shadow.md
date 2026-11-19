@@ -117,6 +117,52 @@ The kernel record holds list items (household words) in the spine, in receipts (
 * `forget_reach.py` lists the kernel store (`zoe_os_shadow_kernel`: reached, member + entity erasers); `docs/knowledge/forget-reach.md` is regenerated.
 * Not covered: **backups** of `~/.zoe/os-shadow/` (the existing backup policy ages them out; the directory is not in the nightly jobs, [inferred] verify before the owner turns this on), and the live `list_items` table, which is itself a ledgered GAP (member-owned data, `forget_reach.py` `list_items`).
 
+## 4a. The lists door and a forget: ordered by the kernel [code; lab against the real kernel]
+
+The lists door (`ZOE_OS_LISTS=kernel`, `os_shadow.ask_list` / `report_list`) has its own thread and connection, so the forget
+worker's FIFO does not cover it: an ask, or the report of an allowed ask, can reach the kernel AFTER a later forget of a member it
+names. A check made in zoe-data cannot close that (the kernel answers when it answers), so the order is the kernel's own:
+
+| on the wire | what it carries | who reads it |
+|---|---|---|
+| `list_ask` `stamps` | `{member id: [boot, count]}` for the acting member and the list's owner, read when the ask is made | `lists.ListDoor.ask`, under the kernel lock |
+| `list_report` `stamps` | the same stamps the ask carried (never read again at the report) | `lists.ListDoor.report` |
+| `forget` `stamp` | `[boot, count]` for the subject, read when the forget is sent; whole-member forgets only | `spine.forget`: kept as the member's erase mark, in the forget's transaction |
+
+* **The stamp** (`os_shadow.erase_stamp`): `boot` is the wall-clock nanosecond this zoe-data process started, `count` is
+  the number of whole-member kernel forgets of that member the kernel has confirmed to this process, and nothing else moves it
+  (not `user_erase_gate`'s generation: other erasers advance that at their own times). Stamps are sent, and the kernel keeps
+  marks, only with `ZOE_OS_LISTS=kernel`; with lists off a forget is sent exactly as before. Compared as a pair, so a later
+  process is always newer although every count restarts at 0. A forget sends the CURRENT stamp and the count moves on only once
+  the kernel has confirmed it (`_forget_call`): an ask stamped at any time before that confirmation, including while a row- or
+  turn-scoped forget is outstanding, is at or before the forget's stamp, and one stamped after it is strictly newer. An ask
+  stamped between the kernel's commit and the confirmation reads `erased` (the safe side); a forget that is not confirmed moves
+  nothing. An ask made while a member erase runs is never queued (`ask_list` reads the erase gate with the stamps).
+* **The mark** (`erase_stamps` in the kernel's database): one row per forgotten member, keyed by the keyed hash the forget ledger
+  already uses (`Spine._owner`; the key is in the same database), holding the newest stamp. It names nobody, survives a kernel
+  restart and never moves back.
+* **The rule**: an ask whose stamp for the actor or the owner is not STRICTLY newer than that member's mark writes nothing that
+  names anyone (equal counts as before the forget).
+  If the kernel would have allowed it the answer is `erased`, which zoe-data reads as `not_checked reason=erased` (the list change
+  proceeds: a member being erased is not "refused"); if the permission table refuses it, the refusal stands, recorded unnamed. A
+  strictly newer stamp is recorded as usual. A report whose stamps are stale is refused; one with no stamps finds no open ask (a
+  whole-member forget removes every open ask that names the member, as actor or owner).
+* **Entity and topic forgets** carry no stamp and set no mark: a list ask holds ids only, so it cannot write back what they
+  erased. Their whole-member fallback (a scope the kernel cannot match) is stamped like any other whole-member forget.
+* **Older software on either side**: a kernel from before the stamp answers `bad_request`; the client re-sends the FORGET without
+  it (a forget never waits for a kernel restart), and stamped asks end `not_checked reason=protocol`. A caller that sends no
+  stamps sets no mark and is recorded exactly as before; an ask with no stamp for a member who has a mark is not recorded.
+* **Limits.** (1) If the wall clock was ahead when an earlier zoe-data process started, a member forgotten by that process reads as
+  `erased` (not recorded, never refused) until the clock passes that start; visible as `reason=erased` lines with no erase in
+  progress. (2) The mark orders list asks and reports only; the watch-only shadow acts keep their own ordering (section 4).
+  (3) An ask naming a list owner who is not on the kernel's roster is REFUSED `unknown_person` and the owner's id is never
+  written (the kernel can only forget, and order asks against, a person it knows). So the roster must be kept current:
+  a member added after the roster was written cannot change lists until it is written again and the kernel restarted.
+
+Tests: `labs/zoe-os/tests/test_lists_erase_order.py` (the kernel, including the daemon's wire and a restart),
+`services/zoe-data/tests/test_lists_kernel_door.py` (what the client sends), `tests/test_os_shadow_contract.py`
+(`test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget`: this client against the real daemon).
+
 ## 5. What "the same" means [code]
 
 The comparison is made for each list add that really landed (`os_shadow.compare`):
