@@ -228,8 +228,9 @@ class ShadowServer(KernelServer):
           their next act (``record_again``)."""
         k, people = self.kernel, self.kernel.grants.people
         ids, members = set(roster_ids(entries)), {p.id: p for p in roster_people(entries)}
-        for gone in self.roster - ids:
-            k.grants.revoke(gone, "brain")
+        for gone in sorted(self.roster - ids):
+            if k.grants.of("brain", gone) is not None:   # only a grant that exists: a forgotten member has none, and a revoke
+                k.grants.revoke(gone, "brain")           # written for them would name them again
         known = write_known(self.state, ids | recorded_people(self.state / "kernel" / "zoe-os.db"))
         want = {**{p: Person(p) for p in known if p not in members}, **members}
         added = set(want) - set(people)
@@ -239,7 +240,8 @@ class ShadowServer(KernelServer):
             k.spine._members = frozenset(people)
             k.spine._backfill_nested()
         self.roster = frozenset(ids)
-        self.forgotten &= self.roster
+        # ``forgotten`` is NOT trimmed to the roster: a forgotten member taken off the file and put back must still not be
+        # granted (nothing names them until they act again; only ``record_again`` clears the mark)
         for person in sorted(ids - self.forgotten):
             if k.grants.of("brain", person) is None:
                 k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)

@@ -23,6 +23,9 @@ ACCOUNTS = {"fixture-admin": ("admin", None), "fixture-adult": ("user", None), "
 MIRROR = ["fixture-child", "fixture-no-account", "demo_bar_0001", "demo_bar_0002"]
 
 
+ID_READS: list = []
+
+
 class _Cursor:
     def __init__(self, rows):
         self.rows = rows
@@ -42,10 +45,9 @@ class _DB:
         return False
 
     async def execute(self, query, params=()):
-        if query == "SELECT user_id FROM auth_users":
-            return _Cursor([(uid,) for uid in ACCOUNTS])
-        if query == "SELECT id FROM users":
-            return _Cursor([(uid,) for uid in MIRROR])
+        if query == os_shadow.ROSTER_IDS_SQL:              # ONE statement for both tables (one snapshot)
+            ID_READS.append(query)
+            return _Cursor([(uid, 1 if uid in ACCOUNTS else 0) for uid in MIRROR] + [(uid, 1) for uid in ACCOUNTS])
         if "FROM member_modes" in query:
             row = ACCOUNTS.get(params[0], (None, None))[1]
             return _Cursor([row] if row else [])
@@ -145,3 +147,14 @@ def test_the_command_opens_the_database_itself_and_closes_it_even_when_the_read_
     with pytest.raises(RuntimeError):
         os_shadow.write_roster_from_accounts()
     assert POOL == ["open", "close"]
+
+
+def test_everyone_and_their_accounts_are_read_in_one_statement(state):
+    """Two queries have no shared snapshot: an account created between them would be seen as a member with no account and
+    written with least access. So the ids of both tables come from ONE statement. Control: reading the two tables with two
+    statements fails this (the stand-in database refuses any other id query)."""
+    ID_READS.clear()
+    os_shadow.write_roster_from_accounts()
+    assert ID_READS == [os_shadow.ROSTER_IDS_SQL]
+    assert os_shadow.ROSTER_IDS_SQL.count("SELECT") == 3 and ";" not in os_shadow.ROSTER_IDS_SQL      # one statement, both tables
+    assert _by_id(state)["fixture-adult"] == "adult" and _by_id(state)["fixture-no-account"] is None

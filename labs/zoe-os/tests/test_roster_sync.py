@@ -261,6 +261,28 @@ def test_a_re_read_names_only_who_changed_and_never_a_forgotten_member(built):
     assert k.grants.of("brain", KID) is not None
 
 
+def test_a_forgotten_member_taken_off_the_file_and_put_back_is_still_not_granted(built):
+    """The forgotten mark outlives roster membership. Forgotten, then removed from the file, then added again: no re-read may
+    write a grant that names them; only their own next act does (``record_again``).
+
+    Negative control: ``self.forgotten &= self.roster`` back in ``apply_roster`` -> the removal drops the mark, the re-add
+    grants them, and the ``is None`` line fails. A second control: the revoke on removal written whether or not a grant
+    exists -> the removal itself writes a record naming the forgotten member, and the database scan fails."""
+    daemon, k, srv, state = built
+    assert k.spine.forget(KID, actor=KID)
+    srv.forgot(KID)
+    write(state, [{"id": OWNER, "role": "adult"}])                           # KID taken off the file
+    assert _ask(srv, OWNER)["ask"]
+    assert KID in srv.forgotten
+    write(state, [{"id": OWNER, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])     # ... and put back
+    assert _ask(srv, OWNER)["ask"]
+    assert k.grants.of("brain", KID) is None and KID in srv.forgotten
+    k.spine._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    assert KID.encode() not in (state / "kernel" / "zoe-os.db").read_bytes()
+    srv.record_again(KID)                                                   # their next act: granted again, as designed
+    assert k.grants.of("brain", KID) is not None
+
+
 def test_a_new_member_named_inside_an_older_record_is_reached_by_their_forget(built):
     """The spine indexes member ids named INSIDE a payload only for people it knows. A member who joins by a re-read is one of
     them from then on, older rows included, so their forget reaches a record that named them before they joined.

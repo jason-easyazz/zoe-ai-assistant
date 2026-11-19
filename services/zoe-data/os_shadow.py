@@ -2039,6 +2039,11 @@ def write_roster(ids, dest: Optional[Path] = None) -> list:
     return clean
 
 
+#: everyone Zoe knows, each with whether an ACCOUNT exists for them, in one statement (one snapshot of both tables)
+ROSTER_IDS_SQL = ("SELECT u.id, (SELECT COUNT(*) FROM auth_users a WHERE a.user_id = u.id) FROM users u "
+                  "UNION ALL SELECT a.user_id, 1 FROM auth_users a")
+
+
 async def _roster_entries(db, demo: Optional[dict] = None) -> list:
     """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states, read through ``db`` (an
     OPEN handle: this never opens or closes the pool, so the running service can call it). Never logs an id. The ``users``
@@ -2048,8 +2053,11 @@ async def _roster_entries(db, demo: Optional[dict] = None) -> list:
     from manner_block import ADULT_ROLES, CHILD_ROLES
 
     demo = demo or {}
-    accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
-    known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
+    # ONE statement, so one snapshot of both tables: read as two queries, an account created between them would be seen as a
+    # member with no account and written with least access.
+    rows = await (await db.execute(ROSTER_IDS_SQL)).fetchall()
+    known = _roster_ids(row[0] for row in rows)
+    accounts = _roster_ids(row[0] for row in rows if row[1])
     entries = []
     for uid in sorted(accounts | known | frozenset(demo)):
         role = demo[uid] if uid in demo else None
@@ -2157,15 +2165,18 @@ def _roster_wanted(members: tuple) -> Optional["asyncio.Task"]:
     if running:
         return task if missing else None
     fresh = [m for m in missing if now - _roster_asked.get(m, float("-inf")) >= ROSTER_MISS_S]
-    if not fresh and (missing or now - max(_roster_synced, _roster_started) < ROSTER_REFRESH_S):
-        return None
-    if now - _roster_started < ROSTER_SYNC_MIN_S:
-        return None
-    if len(_roster_asked) + len(fresh) > ROSTER_MISS_MAX:
+    # the periodic refresh is due on its OWN clock: an id that keeps being unknown, or a full miss memory, gates only the
+    # extra on-demand rewrite, never the refresh that carries role changes and removals
+    overdue = now - max(_roster_synced, _roster_started) >= ROSTER_REFRESH_S
+    if fresh and len(_roster_asked) + len(fresh) > ROSTER_MISS_MAX:
         for member in [m for m, at in _roster_asked.items() if now - at >= ROSTER_MISS_S]:
             del _roster_asked[member]
         if len(_roster_asked) + len(fresh) > ROSTER_MISS_MAX:
-            return None
+            fresh = []
+    if not fresh and not overdue:
+        return None
+    if now - _roster_started < ROSTER_SYNC_MIN_S:
+        return None
     for member in fresh:
         _roster_asked[member] = now
     _roster_started = now

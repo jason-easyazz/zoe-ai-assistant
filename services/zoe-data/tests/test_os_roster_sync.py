@@ -350,6 +350,29 @@ async def test_a_role_stated_since_arrives_with_the_periodic_rewrite_which_no_ch
     assert len(house.reads) == 1                                            # and not again until the next one is due
 
 
+@pytest.mark.parametrize("held_back_by", ["a stale unknown id", "a full miss memory"])
+@pytest.mark.asyncio
+async def test_an_overdue_refresh_runs_whatever_the_miss_rules_say(house, held_back_by):
+    """The periodic refresh carries role changes and removals, on its own clock. An id that keeps being unknown (already
+    asked for, so not fresh) or a full miss memory gates only the EXTRA on-demand rewrite; neither may hold the refresh back.
+
+    Negative control: the old rule (return None whenever someone is missing and nobody is fresh) -> with a stale unknown id
+    in the ask the overdue refresh never begins and KID stays a plain id; with the cap returning None when the memory is
+    full the second case fails the same way."""
+    stranger = "member-nobody"
+    await remove(OWNER)
+    assert house.reads == [] and people(house)[KID] is None
+    house.clock.at += os_shadow.ROSTER_REFRESH_S + 1
+    if held_back_by == "a stale unknown id":
+        os_shadow._roster_asked[stranger] = house.clock.at                  # asked for a moment ago: not fresh
+    else:
+        for n in range(os_shadow.ROSTER_MISS_MAX):
+            os_shadow._roster_asked[f"member-x{n}"] = house.clock.at        # the memory is full of recent misses
+    assert os_shadow._roster_wanted((OWNER, stranger)) is None              # begun in the background; nothing to wait for
+    await settle()
+    assert len(house.reads) == 1 and people(house)[KID] == "child"
+
+
 @pytest.mark.asyncio
 async def test_a_rewrite_that_fails_changes_nothing_and_whoever_asked_may_ask_again(house, monkeypatch):
     """The accounts cannot be read: the roster file is untouched, the change gets the kernel's answer, one closed code is
