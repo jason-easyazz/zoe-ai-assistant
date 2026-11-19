@@ -499,10 +499,16 @@ def said(monkeypatch, quiet):
         ctx.activate(intent.name, intent.slots, "remind me to take pills")          # the context is set at detection
         return await execute_intent(intent, who)
 
-    async def cancel_that(who=A):
-        name, slots = ctx.resolve_coreference("cancel that")
-        assert name == "reminder_cancel"
-        return await execute_intent(Intent(name, slots), who)
+    async def cancel_that(who=A, text="cancel that"):
+        name, slots = ctx.resolve_coreference(text)
+        if text == "cancel that":
+            assert name == "reminder_cancel"
+        if name is None:
+            return None                                  # not a follow-up at all: normal interpretation
+        try:
+            return await execute_intent(Intent(name, slots), who)
+        except Exception:  # noqa: BLE001 - whatever the old fall-through does with an unbound turn is not these tests' subject
+            return None
 
     return store, create, cancel_that
 
@@ -554,6 +560,48 @@ async def test_cancel_that_after_a_create_that_did_not_happen_cancels_nothing_an
     reply = await cancel_that()
     assert reply == rs.SPOKEN["cancel_nothing"] and "cancelled" not in reply.lower()
     assert store.live() == before
+
+
+#: utterance -> is it an affirmative "cancel the thing you just made"? Only those may delete the reminder just set.
+SAID_AFTER_A_REMINDER = {
+    # the whole utterance is the command, a little politeness allowed
+    "cancel that": True, "Cancel that.": True, "cancel it": True, "delete that reminder": True, "never mind that one": True,
+    "oh, please cancel that": True, "actually cancel it please": True, "remove the reminder": True, "scrap that": True,
+    # negations
+    "don't cancel that": False, "do not delete it": False, "no need to cancel that": False, "never mind, don't cancel it": False,
+    "never cancel that": False, "please don't remove that reminder": False,
+    # questions
+    "how do I delete an old reminder?": False, "can I cancel that later?": False, "did you cancel that?": False, "cancel that?": False,
+    "can you tell me how to delete it": False,
+    # other sentences that merely contain a cancel word
+    "cancel my subscription reminder for friday": False, "remind me to cancel the gym": False, "clear the table after dinner": False,
+    "cancel that one for me tomorrow": False, "delete it and the one before it": False,
+}
+
+
+@pytest.mark.parametrize("text", sorted(SAID_AFTER_A_REMINDER))
+@pytest.mark.asyncio
+async def test_only_an_affirmative_cancel_of_that_deletes_the_reminder_just_set(said, text):
+    """Within two minutes of a spoken create, ONLY a whole-utterance, affirmative "cancel that / it / the reminder" is bound to
+    the reminder just made. A negation, a question, or a sentence that merely contains a cancel word leaves the row untouched
+    and is never answered "Reminder cancelled" (it goes to normal interpretation, as on main). Control run: with the binding
+    back on any cancel word anywhere (``_CANCEL_RE.search``), "don't cancel that" and every other negative here delete the
+    reminder and this fails for them."""
+    from conversation_context import ConversationContext
+
+    store, create, cancel_that = said
+    assert (await create()).startswith("Reminder set")
+    (made,) = [rid for rid in store.rows if rid not in ("older", "newer-done")]
+    ctx = ConversationContext()
+    ctx.activate("reminder_create", {"title": "take pills"}, "remind me to take pills")
+    bound = (ctx.resolve_coreference(text)[1] or {}).get("after") == "reminder_create"
+    assert bound is SAID_AFTER_A_REMINDER[text]
+    reply = await cancel_that(text=text)
+    if SAID_AFTER_A_REMINDER[text]:
+        assert reply == "Reminder cancelled: take pills." and store.rows[made]["deleted"] == 1
+    else:
+        assert store.rows[made]["deleted"] == 0 and "cancelled" not in str(reply or "").lower()
+    assert store.rows["older"]["deleted"] == 0 and store.rows["newer-done"]["deleted"] == 0
 
 
 @pytest.mark.asyncio
@@ -656,10 +704,16 @@ async def test_cancel_that_is_per_member_and_never_reaches_a_guest_or_a_timer(sa
     ({"date": "friday"}, ("friday", None)),                                        # a day and nothing else: a day
     ({"date": "friday", "when_hint": "in the morning"}, (None, None)),             # a hint nobody can read: the offer stays open
     ({}, (None, None)),
+    # a hint counts only when ALL of it was read: "next week at 3pm" is not "3 pm today"
+    ({"when_hint": "next week at 3pm"}, (None, None)),
+    ({"when_hint": "friday afternoon"}, (None, None)),
+    ({"date": "friday", "when_hint": "next week at 3pm"}, (None, None)),           # ... whatever the slots say
+    ({"when_hint": "sometime soonish"}, (None, None)),
 ])
 def test_an_offers_slots_and_its_hint_are_merged(slots, expected):
     """The producer keeps the model's slots and adds ``when_hint`` beside them. Control run: with the old either/or rule (the hint
-    read only when there is NO slot) the first, second, third and fifth cases lose the hint's half."""
+    read only when there is NO slot) the first, second, third and fifth cases lose the hint's half; with a PARTLY read hint
+    accepted (the grammar's own result taken whenever it read anything), "next week at 3pm" comes back as today at 15:00."""
     assert pending_suggestions._suggested_when("book the vet", slots) == expected
 
 
