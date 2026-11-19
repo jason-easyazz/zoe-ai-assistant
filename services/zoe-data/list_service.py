@@ -109,7 +109,9 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
                 owner: Optional[str] = None, visibility: Optional[str] = None) -> Optional[Decision]:
     """The ask at a door. None with the flag off (ONE flag read, nothing else). Raises ``ListRefused`` on a kernel refusal.
     The list's owner and visibility are read here when the door was not told them (one small read, flag on only); a list row
-    that cannot be read or is not there is ``not_checked`` (the write then does what it always did)."""
+    that cannot be read or is not there is ``not_checked`` (the write then does what it always did). The ask budget
+    (``ZOE_OS_LISTS_ASK_MS``) covers the kernel only: this read is on the same database connection as the write that follows it,
+    so a database that stalls here would stall that write too."""
     if not os_shadow.lists_on():
         return None
     if user_id is None:

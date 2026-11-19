@@ -368,6 +368,26 @@ async def test_a_member_being_erased_is_not_put_to_the_kernel_and_the_change_pro
 
 
 @pytest.mark.asyncio
+async def test_an_erase_that_lands_while_the_kernel_answers_parks_a_forget_and_reports_nothing(door, caplog, monkeypatch):
+    """The door has its own thread and connection: the kernel may write the ask AFTER the member's forget. The door then parks a
+    whole-member kernel forget and wakes the worker. Control: without the re-check after the answer, nothing is parked."""
+    answer = DoorKernel._answer
+
+    def erased_meanwhile(self, conn, skill, req):
+        if req["op"] == "list_ask":
+            user_erase_gate._generation[OWNER] = user_erase_gate.generation(OWNER) + 1      # a whole-member erase finished
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", erased_meanwhile)
+    woken = []
+    monkeypatch.setattr(os_shadow, "_ensure_worker", lambda: woken.append(1))
+    await _proceeds(door, caplog, "remove_item_record", "erasing")
+    assert len(door.ops("list_ask")) == 1 and door.ops("list_report") == []
+    assert json.loads((door.state / "pending-forgets.json").read_text()) == [OWNER] and woken
+    assert os_shadow._q.get_nowait() == ("replay",)
+
+
+@pytest.mark.asyncio
 async def test_a_list_that_cannot_be_looked_up_or_is_not_there_is_not_checked(door, caplog):
     class NoList(DB):
         async def fetch(self, sql, *args):

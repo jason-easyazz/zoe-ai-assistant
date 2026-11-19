@@ -1124,7 +1124,8 @@ def note_alarm_create(user_id: Optional[str], *, source: str, time_hhmm: Optiona
 # ---- the lists door: the kernel DECIDES a list change (ZOE_OS_LISTS=kernel) ----------------------------------------------------------
 #: The wire verbs of ``labs/zoe-os/zoe_os/lists.py``. Ids only cross the socket: never an item's text or a list's name.
 DOOR_VERBS = ("list.create", "list.rename", "list.delete", "list.share", "item.add", "item.remove", "item.tick", "item.edit")
-ASK_DEADLINE_S = 0.150            # the whole ask, queue wait included; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
+ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
+#                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256
 ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
 #: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
@@ -1192,15 +1193,32 @@ def _door_parked(user_id: str) -> bool:
     return user_id in members
 
 
+def _door_undo(user_id: str) -> tuple:
+    """An erase of this member started or finished WHILE the kernel answered their ask (the door has its own thread and
+    connection, so the forget worker's ordering does not cover it): the kernel may have written the ask AFTER the member's forget.
+    Park a whole-member kernel forget, durably, and wake the worker: the replay erases what the ask wrote. The change itself
+    proceeds ``not_checked`` (no ask id, so nothing more is reported under the member's name). On the door thread: blocking is fine."""
+    try:
+        _pending_add(user_id)
+        _ensure_worker()
+        _q.put_nowait(("replay",))
+    except Exception:  # noqa: BLE001 - a full queue replays before its next job anyway; a failed park is retried by the nightly pass
+        logger.warning("os_shadow: could not park the forget after an ask that raced an erase")
+    return NOT_CHECKED, "erasing", None
+
+
 def _door_ask(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
     """On the door thread: ``(decision, reason, ask id)``. Only the kernel's own refusal is a refusal; every fault is not_checked."""
     try:
         if user_erase_gate.in_progress(user_id) or _door_parked(user_id):
             return NOT_CHECKED, "erasing", None
+        erased = user_erase_gate.generation(user_id)
         out = kernel.call(SKILL_BRAIN, "list_ask", until, verb=verb, person=user_id, **args)
         ask = out.get("ask") if isinstance(out, dict) else None
         if type(ask) is not int:
             raise KernelProtocol("no ask id")
+        if user_erase_gate.generation(user_id) != erased or user_erase_gate.in_progress(user_id) or _door_parked(user_id):
+            return _door_undo(user_id)
         return ALLOW, "", ask
     except KernelRefused as exc:
         return REFUSE, _refusal_code(exc.reason), None
