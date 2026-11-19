@@ -367,28 +367,53 @@ async def test_a_member_being_erased_is_not_put_to_the_kernel_and_the_change_pro
     assert door.ops("list_ask") == []
 
 
+@pytest.mark.parametrize("who, erased", [(OWNER, OWNER), (KID, OWNER), (KID, KID)])
+@pytest.mark.parametrize("mode", ["allow", "refuse:not_owner", "close"])
 @pytest.mark.asyncio
-async def test_an_erase_that_lands_while_the_kernel_answers_parks_a_forget_and_reports_nothing(door, caplog, monkeypatch):
-    """The door has its own thread and connection: the kernel may write the ask AFTER the member's forget. The door then parks a
-    whole-member kernel forget and wakes the worker. Control: without the re-check after the answer, nothing is parked."""
+async def test_an_erase_that_lands_while_the_kernel_has_the_ask_parks_a_forget_whatever_the_outcome(door, monkeypatch, mode, who, erased):
+    """The door has its own thread and connection: the kernel may write the ask (or its refusal) AFTER a member's forget, and it
+    may have written it even when the reply never arrives. So every outcome (answer, refusal, fault) re-checks every member the
+    ask named: the actor AND the list's owner. Control: with the re-check only after an answer, or over the actor only, cases fail."""
     answer = DoorKernel._answer
 
     def erased_meanwhile(self, conn, skill, req):
         if req["op"] == "list_ask":
-            user_erase_gate._generation[OWNER] = user_erase_gate.generation(OWNER) + 1      # a whole-member erase finished
+            user_erase_gate._generation[erased] = user_erase_gate.generation(erased) + 1      # a whole-member erase finished
         return answer(self, conn, skill, req)
 
     monkeypatch.setattr(DoorKernel, "_answer", erased_meanwhile)
     woken = []
     monkeypatch.setattr(os_shadow, "_ensure_worker", lambda: woken.append(1))
-    await _proceeds(door, caplog, "remove_item_record", "erasing")
-    assert len(door.ops("list_ask")) == 1 and door.ops("list_report") == []
-    assert json.loads((door.state / "pending-forgets.json").read_text()) == [OWNER] and woken
+    door.door = mode
+    db = _db()                                                    # L1 is OWNER's household list
+    if mode.startswith("refuse"):
+        with pytest.raises(list_service.ListRefused):
+            await DOORS["remove_item_record"][1](db, who)
+        assert not db.writes                                      # a refusal stays final
+    else:
+        await DOORS["remove_item_record"][1](db, who)
+        assert db.writes
+    assert door.ops("list_report") == []                          # nothing more under an erased member's id
+    assert json.loads((door.state / "pending-forgets.json").read_text()) == [erased] and woken
     assert os_shadow._q.get_nowait() == ("replay",)
 
 
 @pytest.mark.asyncio
-async def test_a_list_that_cannot_be_looked_up_or_is_not_there_is_not_checked(door, caplog):
+async def test_a_list_lookup_that_fails_raises_and_never_skips_the_kernel(door):
+    """Only the kernel being down or slow lets a change proceed unasked; a database fault at the door's own read is the caller's
+    error (the write shares that connection), never a quiet skip of a refusal."""
+    class Broken(DB):
+        async def fetch(self, sql, *args):
+            raise RuntimeError("database fault")
+
+    db = Broken()
+    with pytest.raises(RuntimeError):
+        await DOORS["remove_item_record"][1](db, OWNER)
+    assert not db.writes and door.ops("list_ask") == []
+
+
+@pytest.mark.asyncio
+async def test_a_list_that_is_not_there_or_a_caller_who_did_not_say_who_is_not_checked(door, caplog):
     class NoList(DB):
         async def fetch(self, sql, *args):
             return []

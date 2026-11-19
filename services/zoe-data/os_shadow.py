@@ -1131,7 +1131,7 @@ ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
 #: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
 DOOR_REFUSALS = ("unknown_person", "not_owner", "adults_only", "not_in_manifest", "forgotten")
 DOOR_REASONS = ("-", *DOOR_REFUSALS, "other", "timeout", "unavailable", "circuit", "not_provisioned", "no_credential", "protocol",
-                "erasing", "queue_full", "worker", "no_actor", "no_list", "lookup", "bad_verb")
+                "erasing", "queue_full", "worker", "no_actor", "no_list", "bad_verb")
 _door_q: "queue.Queue" = queue.Queue(maxsize=DOOR_QUEUE_MAX)
 _door_worker: Optional[threading.Thread] = None
 _door_guard = threading.Lock()
@@ -1193,32 +1193,46 @@ def _door_parked(user_id: str) -> bool:
     return user_id in members
 
 
-def _door_undo(user_id: str) -> tuple:
-    """An erase of this member started or finished WHILE the kernel answered their ask (the door has its own thread and
-    connection, so the forget worker's ordering does not cover it): the kernel may have written the ask AFTER the member's forget.
-    Park a whole-member kernel forget, durably, and wake the worker: the replay erases what the ask wrote. The change itself
-    proceeds ``not_checked`` (no ask id, so nothing more is reported under the member's name). On the door thread: blocking is fine."""
+def _door_undo(members) -> None:
+    """An erase of one of these members started or finished WHILE the kernel had their ask (the door has its own thread and
+    connection, so the forget worker's ordering does not cover it): the kernel may have written the ask, or its refusal, AFTER
+    the member's forget. Park a whole-member kernel forget for each, durably, and wake the worker: the replay erases what was
+    written. On the door thread: blocking is fine. Never raises."""
     try:
-        _pending_add(user_id)
+        for member in members:
+            _pending_add(member)
         _ensure_worker()
         _q.put_nowait(("replay",))
     except Exception:  # noqa: BLE001 - a full queue replays before its next job anyway; a failed park is retried by the nightly pass
         logger.warning("os_shadow: could not park the forget after an ask that raced an erase")
-    return NOT_CHECKED, "erasing", None
 
 
 def _door_ask(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
-    """On the door thread: ``(decision, reason, ask id)``. Only the kernel's own refusal is a refusal; every fault is not_checked."""
+    """On the door thread: ``(decision, reason, ask id)``. Only the kernel's own refusal is a refusal; every fault is not_checked.
+    Whatever the outcome (answer, refusal, timeout, fault: the kernel may have written a record in any of them), every member id
+    the ask named (the actor and the list's owner) is re-checked against the erase gate afterwards (``_door_raced``)."""
+    named = sorted({m for m in (user_id, args.get("owner")) if isinstance(m, str) and m and m != "panel"})
+    if any(user_erase_gate.in_progress(m) or _door_parked(m) for m in named):
+        return NOT_CHECKED, "erasing", None
+    before = {m: user_erase_gate.generation(m) for m in named}
+    out = _door_call(kernel, verb, user_id, args, until)
     try:
-        if user_erase_gate.in_progress(user_id) or _door_parked(user_id):
-            return NOT_CHECKED, "erasing", None
-        erased = user_erase_gate.generation(user_id)
+        raced = [m for m in named if user_erase_gate.generation(m) != before[m] or user_erase_gate.in_progress(m) or _door_parked(m)]
+        if raced:
+            _door_undo(raced)
+            if out[0] == ALLOW:                  # no ask id: nothing more is reported under an erased member's id
+                out = (NOT_CHECKED, "erasing", None)
+    except Exception:  # noqa: BLE001 - the door thread never dies and never raises into a turn
+        pass
+    return out
+
+
+def _door_call(kernel: "_Kernel", verb: str, user_id: str, args: dict, until: float) -> tuple:
+    try:
         out = kernel.call(SKILL_BRAIN, "list_ask", until, verb=verb, person=user_id, **args)
         ask = out.get("ask") if isinstance(out, dict) else None
         if type(ask) is not int:
             raise KernelProtocol("no ask id")
-        if user_erase_gate.generation(user_id) != erased or user_erase_gate.in_progress(user_id) or _door_parked(user_id):
-            return _door_undo(user_id)
         return ALLOW, "", ask
     except KernelRefused as exc:
         return REFUSE, _refusal_code(exc.reason), None

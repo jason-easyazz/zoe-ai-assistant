@@ -109,7 +109,7 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
                 owner: Optional[str] = None, visibility: Optional[str] = None) -> Optional[Decision]:
     """The ask at a door. None with the flag off (ONE flag read, nothing else). Raises ``ListRefused`` on a kernel refusal.
     The list's owner and visibility are read here when the door was not told them (one small read, flag on only); a list row
-    that cannot be read or is not there is ``not_checked`` (the write then does what it always did). The ask budget
+    that is not there is ``not_checked`` (the write then does what it always did). The ask budget
     (``ZOE_OS_LISTS_ASK_MS``) covers the kernel only: this read is on the same database connection as the write that follows it,
     so a database that stalls here would stall that write too."""
     if not os_shadow.lists_on():
@@ -118,15 +118,13 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
         os_shadow.door_unchecked(verb, "no_actor")
         return None
     if owner is None or visibility is None:
-        try:
-            if list_id is not None:
-                rows = await db.fetch("SELECT id, user_id, visibility FROM lists WHERE id = $1", list_id)
-            else:
-                rows = await db.fetch("SELECT l.id, l.user_id, l.visibility FROM list_items li JOIN lists l ON l.id = li.list_id "
-                                      "WHERE li.id = $1", item_id)
-        except Exception:  # noqa: BLE001 - the door must not fail a change it could not look up
-            os_shadow.door_unchecked(verb, "lookup")
-            return None
+        # a read that FAILS raises: the write that follows is on the same connection, and a database fault is never a reason
+        # to skip the kernel's answer (only the kernel being down or slow is)
+        if list_id is not None:
+            rows = await db.fetch("SELECT id, user_id, visibility FROM lists WHERE id = $1", list_id)
+        else:
+            rows = await db.fetch("SELECT l.id, l.user_id, l.visibility FROM list_items li JOIN lists l ON l.id = li.list_id "
+                                  "WHERE li.id = $1", item_id)
         if not rows:
             os_shadow.door_unchecked(verb, "no_list")
             return None
