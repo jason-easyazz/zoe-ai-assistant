@@ -333,3 +333,65 @@ def test_after_a_removed_member_is_forgotten_no_kernel_file_holds_their_id(state
         assert holds(state, MEMBER, kernel=True) == []
     finally:
         stop(proc)
+
+
+# ---- the lists door (ZOE_OS_LISTS=kernel) against the real kernel -------------------------------------------------------------------------
+def test_the_lists_door_client_and_the_real_kernel_agree_on_verbs_codes_and_the_decision(state, monkeypatch):
+    """``list_service`` asks the REAL daemon: an adult's household delete is allowed and closed ``done``; a child's is refused with the
+    kernel's own code and nothing is written; a stranger is refused; the panel may add. The kernel's file holds ids only."""
+    import list_service
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import lists as kernel_lists, wire
+    finally:
+        sys.path.remove(str(LAB))
+    assert tuple(os_shadow.DOOR_VERBS) == tuple(kernel_lists.VERBS)
+    assert {kernel_lists.UNKNOWN_PERSON, kernel_lists.NOT_OWNER, kernel_lists.ADULTS_ONLY, kernel_lists.NOT_IN_MANIFEST} \
+        <= set(os_shadow.DOOR_REFUSALS)
+    assert {"verb", "person", "via", "list", "items", "owner", "visibility", "turn"} == set(wire.OPS["list_ask"])
+    assert {"ask", "outcome"} == set(wire.OPS["list_report"])
+
+    class DB:
+        def __init__(self):
+            self.writes = []
+
+        async def fetch(self, sql, *args):
+            return [{"id": "list-zqx", "user_id": MEMBER, "visibility": "family"}]
+
+        async def execute(self, sql, *params):
+            self.writes.append(sql.split()[0])
+
+    kid = "member-kid"
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": OTHER, "role": "adult"},
+                         {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_LISTS", "kernel")
+        monkeypatch.setenv("ZOE_OS_LISTS_ASK_MS", "2000")       # a cold subprocess on a busy box; the deadline has its own test
+
+        async def run():
+            ok, panel, refused = DB(), DB(), DB()
+            await list_service.delete_list_record(ok, user_id=OTHER, list_id="list-zqx")
+            await list_service.create_item_record(panel, list_id="list-zqx", text=ITEM, user_id="guest-kiosk")
+            out = []
+            for who in (kid, "member-nobody"):
+                with pytest.raises(list_service.ListRefused) as exc:
+                    await list_service.delete_list_record(refused, user_id=who, list_id="list-zqx")
+                out.append(exc.value.reason)
+            return ok.writes, panel.writes, refused.writes, out
+
+        assert asyncio.run(run()) == (["UPDATE"], ["INSERT"], [], ["adults_only", "unknown_person"])
+        end = time.monotonic() + 10
+        rows: list = []
+        while time.monotonic() < end and len(rows) < 2:
+            with closing(kernel_db(state)) as con:
+                rows = con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%\"done\"%'").fetchall()
+            time.sleep(0.05)
+        assert len(rows) == 2                                    # both allowed changes were reported and closed
+        with closing(kernel_db(state)) as con:
+            assert con.execute("SELECT COUNT(*) FROM intents WHERE receipt_seq IS NULL").fetchone()[0] == 0
+            assert con.execute("SELECT COUNT(*) FROM snapshot_dependencies").fetchone()[0] == 0
+        assert holds(state, ITEM) == [] and holds(state, "guest-kiosk") == [] and holds(state, "member-nobody") == []
+    finally:
+        stop(proc)

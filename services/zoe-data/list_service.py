@@ -113,7 +113,7 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
     if not os_shadow.lists_on():
         return None
     if user_id is None:
-        os_shadow.note_unchecked(verb, "no_actor")
+        os_shadow.door_unchecked(verb, "no_actor")
         return None
     if owner is None or visibility is None:
         try:
@@ -123,10 +123,10 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
                 rows = await db.fetch("SELECT l.id, l.user_id, l.visibility FROM list_items li JOIN lists l ON l.id = li.list_id "
                                       "WHERE li.id = $1", item_id)
         except Exception:  # noqa: BLE001 - the door must not fail a change it could not look up
-            os_shadow.note_unchecked(verb, "lookup")
+            os_shadow.door_unchecked(verb, "lookup")
             return None
         if not rows:
-            os_shadow.note_unchecked(verb, "no_list")
+            os_shadow.door_unchecked(verb, "no_list")
             return None
         row = dict(rows[0])
         list_id, owner, visibility = str(row.get("id") or ""), str(row.get("user_id") or ""), str(row.get("visibility") or "")

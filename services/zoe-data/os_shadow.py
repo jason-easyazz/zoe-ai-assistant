@@ -1163,7 +1163,7 @@ def door_counters() -> dict:
         return dict(_door_counts)
 
 
-def note_unchecked(verb: str, reason: str) -> tuple:
+def door_unchecked(verb: str, reason: str) -> tuple:
     """A list change the door could not put to the kernel at all (no actor, the list row could not be read): one line, and it proceeds."""
     _door_log(verb, NOT_CHECKED, reason, 0.0)
     return NOT_CHECKED, reason, None

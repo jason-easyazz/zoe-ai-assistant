@@ -175,7 +175,7 @@ async def test_any_other_flag_value_makes_no_kernel_call_no_extra_query_and_the_
     assert asked >= 1
     monkeypatch.setattr(os_shadow, "ask_list", never)
     monkeypatch.setattr(os_shadow, "report_list", never)
-    monkeypatch.setattr(os_shadow, "note_unchecked", never)
+    monkeypatch.setattr(os_shadow, "door_unchecked", never)
     if value is None:
         monkeypatch.delenv("ZOE_OS_LISTS")
     else:
@@ -335,7 +335,8 @@ async def test_a_slow_kernel_is_cut_off_at_the_deadline_and_the_change_proceeds(
 
 
 @pytest.mark.asyncio
-async def test_the_ask_runs_off_the_event_loop(door):
+async def test_the_ask_runs_off_the_event_loop(door, monkeypatch):
+    monkeypatch.setenv("ZOE_OS_LISTS_ASK_MS", "2000")
     door.delay = 0.1
     ticks = 0
 
@@ -450,9 +451,10 @@ def test_the_refusal_sentence_is_plain_and_carries_no_code():
         assert line and "_" not in line and reason not in line.split()
 
 
-@pytest.mark.asyncio
-async def test_rest_answers_a_refusal_with_403_and_the_plain_sentence(monkeypatch):
-    from fastapi import HTTPException
+def test_rest_answers_a_refusal_with_403_and_the_plain_sentence(door, monkeypatch):
+    """Through the real route and the real app machinery: the handler ``main.py`` registers turns the door's refusal into a 403."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
     from routers import lists
 
     async def actor(*a, **k):
@@ -463,27 +465,30 @@ async def test_rest_answers_a_refusal_with_403_and_the_plain_sentence(monkeypatc
             await super().execute(sql, *params)
             return _Cur([{"id": "I1", "user_id": KID}])
 
+    door.door = "refuse:not_owner"
     monkeypatch.setattr(lists, "_item_actor", actor)
     for name in ("_require_item_feature", "_require_list_item_mutation_access", "require_feature_access"):
         monkeypatch.setattr(lists, name, _noop)
     monkeypatch.setattr(lists.broadcaster, "broadcast", _noop)
-    for door_name, call in (("remove_item_record", lambda db: lists.delete_item("shopping", "L1", "I1", user={"user_id": KID}, db=db)),
-                            ("delete_list_record", lambda db: lists.delete_list("shopping", "L1", user={"user_id": KID}, db=db))):
-        monkeypatch.setattr(lists, door_name, _refuse)
-        with pytest.raises(HTTPException) as exc:
-            await call(Row())
-        assert exc.value.status_code == 403 and exc.value.detail == LINE
+    db = Row()
+    app = FastAPI()
+    app.include_router(lists.router)
+    app.add_exception_handler(lists.ListRefused, lists.list_refused_response)
+    app.dependency_overrides[lists.get_current_user] = lambda: {"user_id": KID, "role": "member"}
+    app.dependency_overrides[lists.get_db] = lambda: db
+    with TestClient(app) as client:
+        for path in ("/api/lists/shopping/L1/items/I1", "/api/lists/shopping/L1"):
+            out = client.delete(path)
+            assert out.status_code == 403 and out.json() == {"detail": LINE}, path
+    assert db.writes == []
 
 
-def test_every_rest_door_call_sits_inside_the_403_translation():
-    tree = ast.parse((SVC / "routers/lists.py").read_text("utf-8"))
-    doors = {"create_list_record", "update_list_record", "delete_list_record", "create_item_record", "update_item_record",
-             "remove_item_record"}
-    guarded = {c.func.id for w in ast.walk(tree) if isinstance(w, ast.With)
-               and any(getattr(getattr(i.context_expr, "func", None), "id", "") == "_kernel_refusal_is_403" for i in w.items)
-               for c in ast.walk(w) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
-    called = {c.func.id for c in ast.walk(tree) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)} & doors
-    assert called == doors and doors <= guarded
+def test_main_registers_the_refusal_handler_for_the_whole_app():
+    tree = ast.parse((SVC / "main.py").read_text("utf-8"))
+    calls = [c for c in ast.walk(tree) if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "add_exception_handler"]
+    assert [[getattr(a, "id", "") for a in c.args] for c in calls] == [["_ListRefused", "_list_refused_response"]]
+    imported = {a.asname: a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "routers.lists" for a in n.names}
+    assert imported == {"_ListRefused": "ListRefused", "_list_refused_response": "list_refused_response"}
 
 
 @pytest.mark.asyncio
@@ -495,7 +500,7 @@ async def test_the_spoken_add_remove_and_rename_say_the_refusal_instead_of_falli
         async def fetch(self, sql, *args):
             if "FROM list_items" in sql and "list_id = $1" in sql:
                 return [{"id": "I1", "text": "wombel", "completed": 0}]
-            return [{"id": "L1", "user_id": OWNER, "visibility": "personal"}]
+            return [{"id": "L1", "user_id": OWNER, "visibility": "family"}]
 
     door.door = "refuse:not_owner"
     monkeypatch.setattr(intent_router, "_notify_lists_ui", _noop)
