@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import hashlib
 import hmac
 import json
@@ -41,6 +42,7 @@ import math
 import os
 import queue
 import socket
+import stat
 import struct
 import threading
 import time
@@ -496,8 +498,9 @@ def _roster_ids(entries) -> frozenset:
 
 
 def roster() -> frozenset:
-    """Member ids the kernel was started with (``people.json`` beside the credentials). A member not in it is never proposed: the
-    kernel could not forget what it recorded about them, and it would refuse them anyway."""
+    """Member ids on the kernel's roster (``people.json`` beside the credentials; the kernel reads it again whenever it changes).
+    A member not in it is never proposed: the kernel could not forget what it recorded about them, and it would refuse them
+    anyway. Reads the file (at most every 30 s): never call it on the event loop (``_roster_seen`` is the memory-only reader)."""
     global _roster_cache
     now = time.monotonic()
     checked, mtime, ids = _roster_cache
@@ -1286,7 +1289,10 @@ def _door_run() -> None:
 
 
 def _ensure_door() -> bool:
+    """In a thread (never on the loop): start the door's worker, and read the roster once so the loop's own look at it
+    (``_roster_seen``) has something to read."""
     global _door_worker
+    roster()
     with _door_guard:
         if _door_worker is None or not _door_worker.is_alive():
             _door_worker = threading.Thread(target=_door_run, name="os-lists-door", daemon=True)
@@ -1333,12 +1339,20 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
             if any(user_erase_gate.in_progress(m) for m in stamps):
                 out = (NOT_CHECKED, "erasing", None)
             else:
-                deadline = ask_deadline_s()                           # ONE budget: the door's start-up draws on it too
+                deadline = ask_deadline_s()                           # ONE budget: the door's start-up and a roster wait draw on it too
                 until = time.monotonic() + deadline
                 fut: "concurrent.futures.Future" = concurrent.futures.Future()
                 try:
                     if _door_worker is None or not _door_worker.is_alive():
                         await asyncio.wait_for(asyncio.to_thread(_ensure_door), timeout=deadline)   # never a thread start on the loop
+                    # a member the roster does not name yet (added to Zoe since it was written): the roster is rewritten from
+                    # the accounts in a task of its own, and THIS ask waits for it only inside its own budget, so the kernel
+                    # (which reads the file again when it changes) can decide this very ask. The stamps were read before it.
+                    syncing = _roster_wanted(tuple(stamps))
+                    if syncing is not None:
+                        with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+                            await asyncio.wait_for(asyncio.shield(syncing), timeout=min(
+                                deadline * ROSTER_WAIT_SHARE, max(0.001, until - time.monotonic())))
                     _door_q.put_nowait(("ask", verb, uid or "panel", args, until, fut))
                     out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=max(0.001, until - time.monotonic()))
                 except queue.Full:
@@ -1966,55 +1980,127 @@ async def erase_topic(user_id: str, topic: str) -> int:
     return await _forget(user_id, None, topic)
 
 
-# ---- the roster, for the owner's one-off export ----------------------------------------------------------------------------------------
+# ---- the roster: who the kernel knows, and with which role -----------------------------------------------------------------------------
+# people.json is written from the ACCOUNTS: by the owner's command (``--write-roster-from-accounts``), and by the running service
+# whenever the lists door meets a member the roster does not name yet (``_roster_wanted``). The kernel reads the file again when it
+# changes (``labs/zoe-os/shadow_daemon.py`` ``sync_roster``), so neither needs a kernel restart.
+DEMO_ROLES_FILE = "demo-roles.json"    # hand-stated roles for SYNTHETIC ids only, beside people.json (0600); read by every rewrite
+ROSTER_ROLES = ("adult", "child", "guest")       # the kernel's own three (labs/zoe-os/zoe_os/capability.py ``ROLES``)
+ROSTER_SYNC_MIN_S = 10.0       # the service never rewrites the roster more often than this, whoever asks
+ROSTER_MISS_S = 600.0          # ONE id asks for a rewrite at most this often: an id that is not a member (a typo, a deleted
+#                                member, a sentinel) cannot cause a rewrite per request
+ROSTER_REFRESH_S = 900.0       # while list changes are being made the roster is rewritten at least this often, so a role stated
+#                                since (an account made for someone known only as a plain id) and a member removed arrive too
+ROSTER_WAIT_SHARE = 0.6        # how much of ONE ask's budget may be spent waiting for a rewrite that ask needs
+ROSTER_MISS_MAX = 256
+ROSTER_RESULTS = ("written", "same", "no_roster", "empty", "failed")
+_roster_task: Optional["asyncio.Task"] = None
+_roster_started = float("-inf")                      # monotonic: when the service last began a rewrite
+_roster_synced = time.monotonic()                    # ... and when one last ended well (the start counts: the first refresh is
+#                                                      ROSTER_REFRESH_S after it; a member the roster lacks does not wait for that)
+_roster_asked: dict = {}                             # member id -> when a rewrite was last begun because of them (memory only)
+_roster_counts: Counter = Counter()
+
+
+def roster_counters() -> dict:
+    with _lock:
+        return dict(_roster_counts)
+
+
+def _roster_seen() -> Optional[frozenset]:
+    """The roster ids this process last read or wrote, from memory (no I/O: safe on the event loop). None = never read."""
+    _, mtime, ids = _roster_cache
+    return None if mtime is None else ids
+
+
+def _roster_put(path: Path, entries: list) -> None:
+    """people.json in ONE step, 0600: a unique temp file beside it, then a rename. The kernel never sees half a file, and a
+    rewrite is always a different file (its inode moves), which is how the kernel notices."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            json.dump({"people": entries}, fh)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
 def write_roster(ids, dest: Optional[Path] = None) -> list:
-    """Write people.json (the member ids) beside the kernel's credentials, 0600. The owner runs it once, and again when a member is
-    added (the kernel reads it at start). Ids only; never printed. With no dest it goes into the state directory, which is made
-    and SETTLED first (ensure_state_dir: blocks up to the settle time when the directory is new)."""
+    """Write people.json (the member ids, no roles) beside the kernel's credentials, 0600, in one step. Ids only; never printed.
+    With no dest it goes into the state directory, which is made and SETTLED first (ensure_state_dir: blocks up to the settle
+    time when the directory is new)."""
     clean = sorted(_roster_ids(ids))
-    if dest is None:
-        path = ensure_state_dir() / "people.json"
-    else:
-        path = dest
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump({"people": clean}, fh)
+    _roster_put(ensure_state_dir() / "people.json" if dest is None else Path(dest), clean)
     return clean
 
 
-ROSTER_ROLES = ("adult", "child", "guest")       # the kernel's own three (labs/zoe-os/zoe_os/capability.py ``ROLES``)
+#: everyone Zoe knows with everything a role is decided from (whether an ACCOUNT exists, the role it states, the member's stored
+#: mode), in ONE statement: one snapshot of all three tables, and no per-member lookup after it that could see a later state
+ROSTER_SQL = (
+    "SELECT u.id, CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END, a.role, CASE WHEN m.user_id IS NULL THEN 0 ELSE 1 END, m.mode, m.minor "
+    "FROM users u LEFT JOIN auth_users a ON a.user_id = u.id LEFT JOIN member_modes m ON m.user_id = u.id "
+    "UNION ALL SELECT a.user_id, 1, a.role, CASE WHEN m.user_id IS NULL THEN 0 ELSE 1 END, m.mode, m.minor "
+    "FROM auth_users a LEFT JOIN member_modes m ON m.user_id = a.user_id")
+
+
+def _roster_role(stated, has_mode, mode, minor) -> Optional[str]:
+    """The kernel role an ACCOUNT's facts state: the rule of ``enrollment_state._account_facts`` (a stored mode that says minor,
+    or breaks the minor rule, is a child; else the account's role decides), from one row. None = least access."""
+    import persona_layer
+    from manner_block import ADULT_ROLES, CHILD_ROLES, MINOR_MODES
+
+    is_minor = False
+    if has_mode:
+        try:
+            member = persona_layer.validate_member_mode(mode, bool(minor))
+            is_minor = bool(member.minor or member.mode in MINOR_MODES)
+        except persona_layer.PersonaValidationError:
+            is_minor = True                   # the safest valid state, as ``load_member_mode`` reads such a row
+    stated = str(stated or "").strip().lower()
+    return "child" if is_minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
+
+
+async def _roster_entries(db, demo: Optional[dict] = None) -> list:
+    """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states, read through ``db`` (an
+    OPEN handle: this never opens or closes the pool, so the running service can call it). Never logs an id. The ``users``
+    mirror only says admin / member, so it is never read for a role. No account or an unknown role = a plain id (the kernel's
+    least access). ONE statement (``ROSTER_SQL``): if it fails, nothing is written and the roster in force stays; nothing is
+    looked up per member afterwards. ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
+    demo = demo or {}
+    stated: dict = {}
+    known: set = set()
+    for row in await (await db.execute(ROSTER_SQL)).fetchall():
+        uid = row[0].strip() if isinstance(row[0], str) else ""
+        if not uid:
+            continue
+        known.add(uid)
+        if row[1]:                            # an account exists (the second half of the union repeats such a member: same facts)
+            stated[uid] = _roster_role(row[2], row[3], row[4], row[5])
+    entries = []
+    for uid in sorted(known | frozenset(demo)):
+        role = demo[uid] if uid in demo else stated[uid] if uid in stated else None
+        entries.append({"id": uid, "role": role} if role else uid)
+    return entries
 
 
 async def _roster_from_accounts(demo: Optional[dict] = None) -> list:
-    """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states; never logs an id. The
-    ``users`` mirror only says admin / member, so it is never read for a role. No account, an unknown role or a failed lookup =
-    a plain id (the kernel's least access). ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
+    """The COMMAND's read (``_roster_entries``): there is no service to have opened the database, so it opens the pool itself
+    and closes it after. Never call it inside the running service: it would close the service's pool."""
     from db_compat import get_compat_db
-    from enrollment_state import _account_facts
-    from manner_block import ADULT_ROLES, CHILD_ROLES
 
     import db_pool
 
-    demo = demo or {}
-    await db_pool.init_pool()             # a command, not the service: it opens the database itself and closes it after
+    await db_pool.init_pool()
     try:
         async with get_compat_db() as db:
-            accounts = _roster_ids(row[0] for row in await (await db.execute("SELECT user_id FROM auth_users")).fetchall())
-            known = _roster_ids(row[0] for row in await (await db.execute("SELECT id FROM users")).fetchall())
-            entries = []
-            for uid in sorted(accounts | known | frozenset(demo)):
-                role = demo[uid] if uid in demo else None
-                if role is None and uid in accounts:
-                    try:
-                        minor, stated = await _account_facts(uid, db=db)
-                        role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
-                    except Exception:  # noqa: BLE001 - a role that cannot be read is least access
-                        role = None
-                entries.append({"id": uid, "role": role} if role else uid)
+            return await _roster_entries(db, demo)
     finally:
         await db_pool.close_pool()
-    return entries
 
 
 def _demo_roles(pairs) -> dict:
@@ -2032,18 +2118,147 @@ def _demo_roles(pairs) -> dict:
     return out
 
 
-def write_roster_from_accounts(dest: Optional[Path] = None, demo: Optional[dict] = None) -> list:
-    """Write the kernel roster with roles (see ``_roster_from_accounts``); 0600, replaced in one step."""
-    entries = asyncio.run(_roster_from_accounts(demo))
-    path = ensure_state_dir() / "people.json" if dest is None else Path(dest)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_name(path.name + ".tmp")
+def _demo_roles_read(directory: Path) -> dict:
+    """The hand-stated demo roles kept beside people.json. Each pair passes the SAME rule as the command line (``_demo_roles``:
+    a synthetic id, one of the three roles) or it is dropped: the file can never state a role for a person."""
+    try:
+        with open(Path(directory) / DEMO_ROLES_FILE, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077 or not stat.S_ISREG(st.st_mode):
+                logger.warning("ZOE_OS_ROSTER demo_roles=ignored_mode")     # a file others can write states no role
+                return {}
+            raw = json.loads(fh.read().decode("utf-8"))["roles"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    out: dict = {}
+    for uid, role in (raw.items() if isinstance(raw, dict) else ()):
+        try:
+            out.update(_demo_roles([f"{uid}={role}"]))
+        except ValueError:
+            continue
+    return out
+
+
+def _demo_roles_write(directory: Path, demo: dict) -> None:
+    path = Path(directory) / DEMO_ROLES_FILE
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         os.fchmod(fh.fileno(), 0o600)
-        json.dump({"people": entries}, fh)
+        json.dump({"roles": dict(sorted(demo.items()))}, fh)
     os.replace(tmp, path)
+
+
+def write_roster_from_accounts(dest: Optional[Path] = None, demo: Optional[dict] = None) -> list:
+    """The command: write the kernel roster with roles (see ``_roster_entries``); 0600, replaced in one step. Demo roles given
+    here REPLACE the kept ones (``demo-roles.json`` beside the roster); given none, the kept ones are used, so the roles stated
+    once survive this and every later rewrite (the service's own included). Delete that file to state none."""
+    path = ensure_state_dir() / "people.json" if dest is None else Path(dest)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if demo:
+        _demo_roles_write(path.parent, demo)
+    else:
+        demo = _demo_roles_read(path.parent)
+    entries = asyncio.run(_roster_from_accounts(demo))
+    _roster_put(path, entries)
     return entries
+
+
+# ---- the roster kept current by the running service (ZOE_OS_LISTS=kernel only: reached from ``ask_list`` alone) ----------------------
+def _roster_wanted(members: tuple) -> Optional["asyncio.Task"]:
+    """On the event loop, memory only (no I/O, no query). Begin a rewrite of the roster from the accounts when one is due, as a
+    task of its own, and return it ONLY when ``members`` names someone the roster does not (that ask may wait for it, inside its
+    own budget). Due means: a member the roster this process last read or wrote does not name, who has not already asked in the
+    last ``ROSTER_MISS_S``; or nothing has refreshed it for ``ROSTER_REFRESH_S``. Never more than one at a time, and never
+    sooner than ``ROSTER_SYNC_MIN_S`` after the last one began."""
+    global _roster_task, _roster_started
+    now = _mono()
+    seen = _roster_seen()
+    missing = [m for m in members if seen is None or m not in seen]
+    task = _roster_task
+    try:
+        running = task is not None and not task.done() and task.get_loop() is asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if running:
+        return task if missing else None
+    fresh = [m for m in missing if now - _roster_asked.get(m, float("-inf")) >= ROSTER_MISS_S]
+    # the periodic refresh is due on its OWN clock: an id that keeps being unknown, or a full miss memory, gates only the
+    # extra on-demand rewrite, never the refresh that carries role changes and removals
+    overdue = now - max(_roster_synced, _roster_started) >= ROSTER_REFRESH_S
+    if fresh and len(_roster_asked) + len(fresh) > ROSTER_MISS_MAX:
+        for member in [m for m, at in _roster_asked.items() if now - at >= ROSTER_MISS_S]:
+            del _roster_asked[member]
+        if len(_roster_asked) + len(fresh) > ROSTER_MISS_MAX:
+            fresh = []
+    if not fresh and not overdue:
+        return None
+    if now - _roster_started < ROSTER_SYNC_MIN_S:
+        return None
+    for member in fresh:
+        _roster_asked[member] = now
+    _roster_started = now
+    _roster_task = asyncio.get_running_loop().create_task(_roster_sync())
+    return _roster_task if fresh else None
+
+
+def _roster_home() -> Optional[Path]:
+    """The state directory, only when a roster is ALREADY there (the owner installed the kernel). The service never makes the
+    directory or the first roster: with neither there is no kernel to keep current."""
+    path = state_dir() / "people.json"
+    return path.parent if path.is_file() else None
+
+
+def _roster_store(directory: Path, entries: list) -> str:
+    """In a thread: write the roster when it differs from the file, and remember what is on it now."""
+    global _roster_cache
+    path = Path(directory) / "people.json"
+    if not entries:
+        return "empty"            # a household with nobody is the owner's to state (the command), never a query's
+    try:
+        same = json.loads(path.read_text("utf-8")) == {"people": entries}
+    except (OSError, ValueError):
+        same = False
+    if not same:
+        _roster_put(path, entries)
+    _roster_cache = (time.monotonic(), path.stat().st_mtime, _roster_ids(entries))
+    return "same" if same else "written"
+
+
+async def _roster_sync() -> str:
+    """The service's rewrite, a task of its own: never awaited by a list change beyond that change's ask budget. The database
+    is read through the service's OPEN pool (one borrowed connection, returned); every file touch is in a thread."""
+    global _roster_synced
+    ended = "failed"
+    try:
+        from db_compat import get_compat_db
+
+        directory = await asyncio.to_thread(_roster_home)
+        if directory is None:
+            ended = "no_roster"
+        else:
+            demo = await asyncio.to_thread(_demo_roles_read, directory)
+            async with get_compat_db() as db:
+                entries = await _roster_entries(db, demo)
+            ended = await asyncio.to_thread(_roster_store, directory, entries)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a rewrite that fails changes nothing; the next one due tries again
+        logger.debug("ZOE_OS_ROSTER error=%s", type(exc).__name__)
+    if ended in ("written", "same"):
+        _roster_synced = _mono()
+    elif ended == "failed":
+        _roster_asked.clear()         # whoever asked may ask again (still never sooner than ROSTER_SYNC_MIN_S)
+    _roster_log(ended)
+    return ended
+
+
+def _roster_log(result: str) -> None:
+    """ONE line per rewrite the service attempted: a closed code, never an id, a name or a count of anyone."""
+    if result in ROSTER_RESULTS:
+        logger.info("ZOE_OS_ROSTER result=%s", result)
+        with _lock:
+            _roster_counts[result] += 1
 
 
 def restore(src: Path) -> dict:
@@ -2081,7 +2296,8 @@ def main(argv: Optional[list] = None) -> int:
 
         os_shadow.py --init                         make the state directory (empty, marker, the settle wait)
         os_shadow.py --write-roster ID [ID ...]     the roster export
-        os_shadow.py --write-roster-from-accounts [DEMO_ID=ROLE ...]   the roster WITH roles (from the account records)
+        os_shadow.py --write-roster-from-accounts [DEMO_ID=ROLE ...]   the roster WITH roles (from the account records); the
+                                                    demo roles are kept (demo-roles.json) for every later rewrite
         os_shadow.py --restore BACKUP_DIR           bring back parked forgets / erases and the roster from a backup copy"""
     import sys
 
@@ -2096,7 +2312,11 @@ def main(argv: Optional[list] = None) -> int:
         except ValueError as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
-        entries = write_roster_from_accounts(demo=demo)
+        try:
+            entries = write_roster_from_accounts(demo=demo)
+        except Exception as exc:  # noqa: BLE001 - nothing was written: the roster in force stays
+            print(f"failed: the accounts could not be read ({type(exc).__name__}); the roster was not changed", file=sys.stderr)
+            return 1
         roles = [entry["role"] for entry in entries if isinstance(entry, dict)]
         print(f"roster: {len(entries)} members written ({roles.count('adult')} adults, {roles.count('child')} children, "
               f"{len(entries) - roles.count('adult') - roles.count('child')} least access)")
@@ -2115,7 +2335,11 @@ def main(argv: Optional[list] = None) -> int:
 def _reset_for_tests() -> None:
     """Stop the worker (it drops its connections) and clear every counter, the roster cache and the queue."""
     global _roster_cache, _worker, _down_logged, _pending_members, _erase_members, _loop, _finishing, _state_known, _state_poller
-    global _door_worker
+    global _door_worker, _roster_task, _roster_started, _roster_synced
+    _roster_task, _roster_started, _roster_synced = None, float("-inf"), time.monotonic()
+    _roster_asked.clear()
+    with _lock:
+        _roster_counts.clear()
     if _door_worker is not None and _door_worker.is_alive():
         _door_q.put(("stop",))
         _door_worker.join(timeout=5)

@@ -13,7 +13,7 @@ from guest_policy import require_feature_access, role_from_user
 from fastapi.responses import JSONResponse
 
 from list_service import (ListRefused, create_item_record, create_list_record, delete_list_record, note_item_left, refusal_line,
-                          remove_item_record, update_item_record, update_list_record)
+                          remove_item_record, stamps_now, update_item_record, update_list_record)
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -174,6 +174,7 @@ async def create_list(
     db=Depends(get_db),
 ):
     """Create a new list."""
+    stamps_at = stamps_now()
     await require_feature_access(db, user, feature="lists", action="create")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
@@ -188,6 +189,7 @@ async def create_list(
         list_type=list_type,
         description=body.description or "",
         visibility=body.visibility,
+        stamps_at=stamps_at,
     )
     list_id = record["id"]
     await db.commit()

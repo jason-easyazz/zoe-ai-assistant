@@ -23,6 +23,9 @@ ACCOUNTS = {"fixture-admin": ("admin", None), "fixture-adult": ("user", None), "
 MIRROR = ["fixture-child", "fixture-no-account", "demo_bar_0001", "demo_bar_0002"]
 
 
+READS: list = []
+
+
 class _Cursor:
     def __init__(self, rows):
         self.rows = rows
@@ -42,15 +45,12 @@ class _DB:
         return False
 
     async def execute(self, query, params=()):
-        if query == "SELECT user_id FROM auth_users":
-            return _Cursor([(uid,) for uid in ACCOUNTS])
-        if query == "SELECT id FROM users":
-            return _Cursor([(uid,) for uid in MIRROR])
-        if "FROM member_modes" in query:
-            row = ACCOUNTS.get(params[0], (None, None))[1]
-            return _Cursor([row] if row else [])
-        if "FROM auth_users" in query:
-            return _Cursor([(ACCOUNTS[params[0]][0],)] if params[0] in ACCOUNTS else [])
+        if query == os_shadow.ROSTER_SQL:                  # ONE statement for everything (one snapshot); nothing per member
+            READS.append(query)
+            def row(uid):
+                role, mode = ACCOUNTS.get(uid, (None, None))
+                return (uid, 1 if uid in ACCOUNTS else 0, role, 1 if mode else 0, mode[0] if mode else None, mode[1] if mode else None)
+            return _Cursor([row(uid) for uid in MIRROR] + [row(uid) for uid in ACCOUNTS])
         raise AssertionError("unexpected database query")
 
 
@@ -104,15 +104,21 @@ def test_a_hand_stated_role_is_refused_for_a_real_id(state, capsys, arg):
     assert not state.exists() and "refused" in capsys.readouterr().err
 
 
-def test_a_failed_account_lookup_is_least_access(state, monkeypatch):
-    import enrollment_state
+def test_a_read_that_fails_writes_nothing_and_the_roster_in_force_stays(state, monkeypatch, capsys):
+    """A rewrite must never DOWNGRADE: everything a role is decided from comes from one statement, and if that fails nothing is
+    written. Control: with a failed read answered as "nobody has an account" the file is rewritten with plain ids and this fails."""
+    state.write_text(json.dumps({"people": [{"id": "fixture-admin", "role": "adult"}]}))
+    before = state.read_text()
 
-    async def boom(uid, db=None):
-        raise RuntimeError("lookup failed")
+    class Broken(_DB):
+        async def execute(self, query, params=()):
+            raise RuntimeError("database fault")
 
-    monkeypatch.setattr(enrollment_state, "_account_facts", boom)
-    os_shadow.write_roster_from_accounts()
-    assert set(_by_id(state).values()) == {None}
+    monkeypatch.setattr(db_compat, "get_compat_db", Broken)
+    assert os_shadow.main(["--write-roster-from-accounts"]) == 1
+    out = capsys.readouterr()
+    assert state.read_text() == before and "not changed" in out.err and out.out == ""
+    assert not any(uid in out.err for uid in ACCOUNTS)
 
 
 def test_the_roles_written_are_exactly_the_kernels():
@@ -137,3 +143,26 @@ def test_the_command_opens_the_database_itself_and_closes_it_even_when_the_read_
     with pytest.raises(RuntimeError):
         os_shadow.write_roster_from_accounts()
     assert POOL == ["open", "close"]
+
+
+def test_everything_a_role_is_decided_from_is_read_in_one_statement(state):
+    """Separate queries have no shared snapshot: an account created, removed or replaced between them would be written with the
+    wrong role. So ids, account roles and stored modes come from ONE statement and nothing is looked up per member after it.
+    Control: any second query (the stand-in database refuses every other statement) fails this."""
+    READS.clear()
+    os_shadow.write_roster_from_accounts()
+    assert READS == [os_shadow.ROSTER_SQL] and ";" not in os_shadow.ROSTER_SQL
+    for table in ("users", "auth_users", "member_modes"):
+        assert table in os_shadow.ROSTER_SQL
+    got = _by_id(state)
+    assert got["fixture-adult"] == "adult" and got["fixture-minor"] == "child" and got["fixture-no-account"] is None
+
+
+@pytest.mark.parametrize("stated, has_mode, mode, minor, role", [
+    ("admin", 0, None, None, "adult"), ("USER ", 0, None, None, "adult"), ("child", 0, None, None, "child"),
+    ("user", 1, "kid", 1, "child"), ("user", 1, "kid", 0, "child"), ("user", 1, "not-a-mode", 0, "child"),
+    ("mystery", 0, None, None, None), (None, 0, None, None, None)])
+def test_the_role_rule_is_the_account_facts_rule(stated, has_mode, mode, minor, role):
+    """One row decides as ``enrollment_state._account_facts`` + the roster rule did: a stored mode that says minor, or is not a
+    valid mode, is a child; else the account's role; an unknown role is least access."""
+    assert os_shadow._roster_role(stated, has_mode, mode, minor) == role

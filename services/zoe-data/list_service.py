@@ -108,11 +108,23 @@ def report_kernel(decision: Optional[Decision], outcome: str) -> None:
         os_shadow.report_list(decision.ask, outcome, decision.stamps)
 
 
+def stamps_now() -> Optional[dict]:
+    """The erase stamps as they are NOW (``os_shadow.stamp_snapshot``: a small copy from memory, no I/O), or None with the
+    lists flag off (one flag read, nothing copied). A caller that TELLS a door who a list's owner is (the only one: starting a
+    list, ``create_list_record``) takes this as the first thing it does, before anything it awaits, and hands it to the door as
+    ``stamps_at``: an owner whose forget is confirmed while the caller is still on its way to the door keeps the stamp from
+    before it."""
+    return os_shadow.stamp_snapshot() if os_shadow.lists_on() else None
+
+
 async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,
-                owner: Optional[str] = None, visibility: Optional[str] = None) -> Optional[Decision]:
+                owner: Optional[str] = None, visibility: Optional[str] = None,
+                stamps_at: Optional[dict] = None) -> Optional[Decision]:
     """The ask at a door. None with the flag off (ONE flag read, nothing else). Raises ``ListRefused`` on a kernel refusal.
-    The list's owner and visibility are read here when the door was not told them (one small read, flag on only); a list row
-    that is not there is ``not_checked`` (the write then does what it always did). The ask budget
+    The list's owner and visibility are read here, after the door's own stamp snapshot, for every list that exists (one small
+    read, flag on only); a list row that is not there is ``not_checked`` (the write then does what it always did). Only a list
+    that does not exist yet has a TOLD owner (``list.create``), and then the caller's own snapshot comes with it (``stamps_at``,
+    ``stamps_now``): the door never stamps a told owner later than the caller learned of them. The ask budget
     (``ZOE_OS_LISTS_ASK_MS``) covers the kernel only: this read is on the same database connection as the write that follows it,
     so a database that stalls here would stall that write too."""
     if not os_shadow.lists_on():
@@ -120,7 +132,8 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
     if user_id is None:
         os_shadow.door_unchecked(verb, "no_actor")
         return None
-    stamps_at = os_shadow.stamp_snapshot()     # BEFORE the lookup below: an owner forgotten while it is awaited keeps their old stamp
+    if stamps_at is None:
+        stamps_at = os_shadow.stamp_snapshot()     # BEFORE the lookup below: an owner forgotten while it is awaited keeps their old stamp
     if owner is None or visibility is None:
         # a read that FAILS raises: the write that follows is on the same connection, and a database fault is never a reason
         # to skip the kernel's answer (only the kernel being down or slow is)
@@ -500,8 +513,12 @@ async def create_list_record(
     on_conflict: bool = False,
     defaults_only: bool = False,
     actor: Optional[str] = None,
+    stamps_at: dict,
 ) -> dict:
     """Insert one row into ``lists`` and return a record dict.
+
+    ``stamps_at`` (REQUIRED): the caller's ``stamps_now()``, taken as the first thing the caller did. This is the one door
+    whose list has no row to read the owner from, so the caller tells it the owner, and with it when it learned of them.
 
     Takes an already-open ``db`` handle (AsyncpgCompat / aiosqlite style) and
     issues the single canonical INSERT with ``?`` placeholders. Does NOT gate
@@ -511,7 +528,8 @@ async def create_list_record(
     """
     list_id = list_id or str(uuid.uuid4())
     # ``actor``: who is making it, when that is not the owner (a panel guest's list is owned by the household)
-    asked = await _gate(db, "list.create", user_id=actor or user_id, list_id=list_id, owner=user_id, visibility=visibility)
+    asked = await _gate(db, "list.create", user_id=actor or user_id, list_id=list_id, owner=user_id, visibility=visibility,
+                        stamps_at=stamps_at)
     columns = "id, user_id, name, list_type"
     values = (list_id, user_id, name, list_type)
     if not defaults_only:
@@ -799,6 +817,7 @@ async def add_item_to_list(
     dedup_window_s: int = 0,
     receipts: Optional[list] = None,
     list_id: Optional[str] = None,
+    stamps_at: Optional[dict] = None,
 ) -> dict:
     """Resolve-or-create a list and add one item — the shared voice/MCP add.
 
@@ -820,6 +839,8 @@ async def add_item_to_list(
     was already open on the list - nothing is written then); on a dedup
     hit ``item_id`` is the existing duplicate row's id and nothing is written.
     """
+    if stamps_at is None:             # a caller that took its own snapshot earlier hands it in; otherwise take it HERE,
+        stamps_at = stamps_now()      # before anything is awaited: a list started below is told its owner
     text = normalize_item_text(text) or text
     guest = panel_principal.is_guest_id(user_id)
     # the name of the list the row REALLY lands on (the shadow is told that one, not the words): from the row the resolve already
@@ -890,6 +911,7 @@ async def add_item_to_list(
             list_type=list_type,
             visibility="family" if guest else new_list_visibility,
             actor=user_id,
+            stamps_at=stamps_at,
         )
         item = await create_item_record(
             db, list_id=new_list["id"], text=text, quantity=quantity, category=category, user_id=user_id
@@ -912,7 +934,8 @@ async def add_item_to_list(
     if outcome.get("_raced"):
         return await add_item_to_list(
             db, user_id=user_id, list_type=list_type, list_name=list_name, text=text, quantity=quantity,
-            category=category, new_list_visibility=new_list_visibility, dedup_window_s=dedup_window_s, receipts=receipts)
+            category=category, new_list_visibility=new_list_visibility, dedup_window_s=dedup_window_s, receipts=receipts,
+            stamps_at=stamps_at)
     if receipts is not None:
         receipts.append((user_id, outcome["item_id"], "add_item_to_list:new_list"))
     else:

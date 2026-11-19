@@ -9,9 +9,10 @@ receipt beside it, in its OWN store. Read ``docs/knowledge/zoe-os-list-shadow.md
 State directory (``--dir``, else ``$OSLAB_SHADOW_DIR`` (a lab process reads no ``ZOE_`` name), else ``~/.zoe/os-shadow``; mode 0700, never inside a repo checkout):
 
     people.json   {"people": [entries]}   REQUIRED (an entry: {"id", "role": "adult"|"child"|"guest", "guardians": [ids]}; a
-                  plain id, a missing or unknown role, or anything the loader cannot fully read is LEAST access: say "adult"), written by the owner (``os_shadow.export_roster``); read at start. Missing:
+                  plain id, a missing or unknown role, or anything the loader cannot fully read is LEAST access: say "adult"), written by zoe-data (``os_shadow.py``); read at start. Missing:
                   the start is refused. EMPTY (the last member removed) or unreadable: the daemon starts, nobody is granted
-                  anything, and the recorded people can still be forgotten (``read_roster``)
+                  anything, and the recorded people can still be forgotten (``read_roster``). Read AGAIN, with no restart,
+                  whenever the file itself changes (``ShadowServer.sync_roster``, looked at before each ``list_ask``, ``publish`` and ``act``)
     known-people.json  the roster plus every id the kernel still holds a record for: who it can still FORGET. Derived from the
                   kernel's own record at each start, and rewritten (atomic, mode kept) after a whole-person forget succeeds
     creds.json    {"socket": path, "creds": {"voice": hex, "brain": hex, "panel": hex}}   written here, 0600, on every start
@@ -175,14 +176,85 @@ class ShadowServer(KernelServer):
     fails after the kernel forgot, the forget answers ``internal_error`` and the client retries it (a no-op in the kernel, the
     rewrite again); a crash in between is repaired at the next start, which derives the file from the kernel's record."""
 
-    def __init__(self, kernel: Kernel, path: str, *, state: Path, roster) -> None:
+    def __init__(self, kernel: Kernel, path: str, *, state: Path, roster, seen=None) -> None:
         super().__init__(kernel, path)
         self.state, self.roster = state, frozenset(roster)
         self.forgotten: set = set()      # roster members whose whole record (their record-only grant with it) was forgotten since the start
+        self.roster_seen = seen          # which people.json the roster was read from (``roster_identity``)
 
     def _op_act(self, conn, a: dict) -> dict:
         self.record_again(a.get("on_behalf_of"))
         return super()._op_act(conn, a)
+
+    # The roster is re-read ONLY where the kernel DECIDES (the lists door). The watch-only ops (publish, act) keep the roster
+    # as loaded, exactly as before the door existed: with lists off nothing here costs a stat or follows a file edit.
+    def _op_list_ask(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_list_ask(conn, a)
+
+    def _op_list_report(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_list_report(conn, a)
+
+    def sync_roster(self) -> str:
+        """The roster follows ``people.json`` with no restart. Called under the kernel lock (``KernelServer._answer``) before an
+        ask, a publish or an act is decided: one ``stat``; the file is read only when it is a different file than the one last read
+        (``roster_identity``). Answers ``same`` | ``kept`` | ``changed``.
+
+        A file that is missing or cannot be read changes NOTHING (``kept``): the roster in force was stated by a file that could
+        be read, a damaged one states nothing, and it is looked at again only once it changes. A readable one is applied
+        exactly as a start would apply it (``apply_roster``), so a restart and a re-read never disagree."""
+        seen = roster_identity(self.state)
+        if seen == self.roster_seen:
+            return "same"
+        entries = load_roster(self.state)
+        if entries is None:
+            self.roster_seen = seen
+            return "kept"
+        self.apply_roster(entries)
+        self.roster_seen = seen          # last: a re-read that failed half way is tried again at the next ask
+        return "changed"
+
+    def apply_roster(self, entries: list) -> None:
+        """Make the kernel's people what ``build`` would make them from these entries, in place (the kernel's parts share the
+        one ``people`` dict).
+
+        * a NEW member is a person with the role STATED, and gets the record-only grant every member has from the start;
+        * a role that changed is the role now stated. ``person_from_entry`` is the only reader, here as at the start: an entry
+          that does not fully say otherwise is least access, whatever it claims;
+        * a member taken OFF the file loses their record-only grant (revoked: a grant change in the record, which a forget of
+          theirs reaches) and their role (least access). They stay a person the kernel knows while it holds a record for them, so
+          they can still be forgotten, and no longer; one it holds nothing for is no person here at all (``unknown_person``);
+        * a member whose whole record was forgotten and who has not acted since is NOT granted here: nothing names them until
+          their next act (``record_again``)."""
+        k, people = self.kernel, self.kernel.grants.people
+        ids, members = set(roster_ids(entries)), {p.id: p for p in roster_people(entries)}
+        for gone in sorted(self.roster - ids):
+            if k.grants.of("brain", gone) is not None:   # only a grant that exists: a forgotten member has none, and a revoke
+                k.grants.revoke(gone, "brain")           # written for them would name them again
+        known = write_known(self.state, ids | recorded_people(self.state / "kernel" / "zoe-os.db"))
+        want = {**{p: Person(p) for p in known if p not in members}, **members}
+        added = set(want) - set(people)
+        was, was_members = dict(people), k.spine._members
+        people.clear()
+        people.update(want)
+        if added:                        # ids a payload can name: the spine indexes the new members' (rows already written too)
+            try:
+                k.spine._members = frozenset(people)
+                k.spine._backfill_nested()
+            except BaseException:
+                # the backfill's transaction rolled back: put memory back too, or the next re-read would find nobody "added",
+                # skip the backfill for good, and leave the new member's older records outside their forget
+                people.clear()
+                people.update(was)
+                k.spine._members = was_members
+                raise
+        self.roster = frozenset(ids)
+        # ``forgotten`` is NOT trimmed to the roster: a forgotten member taken off the file and put back must still not be
+        # granted (nothing names them until they act again; only ``record_again`` clears the mark)
+        for person in sorted(ids - self.forgotten):
+            if k.grants.of("brain", person) is None:
+                k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)
 
     def record_again(self, person) -> None:
         """A roster member whose whole record was forgotten acts again: forgetting a member's data must not lock them out. The
@@ -234,6 +306,26 @@ def roster_people(entries: list) -> list:
     return [person_from_entry(p) for p in entries]
 
 
+def roster_identity(state: Path):
+    """WHICH file people.json is now: its inode, size and modification time (a rewrite replaces the file, so the inode moves
+    even inside one clock tick). None when it is not there. Never its contents."""
+    try:
+        st = os.stat(state / "people.json")
+    except OSError:
+        return None
+    return st.st_ino, st.st_size, st.st_mtime_ns
+
+
+def load_roster(state: Path):
+    """The roster entries as written, or None when the file is missing or unreadable (not JSON, wrong shape, an entry with no
+    id). The one reader of the file: the start and every later re-read."""
+    try:
+        people = json.loads((state / "people.json").read_text("utf-8"))["people"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return people if isinstance(people, list) and all(entry_id(p) for p in people) else None
+
+
 def read_roster(state: Path) -> tuple[list, str]:
     """The CURRENT roster and how it read: ``ok``, ``empty`` or ``unreadable``. Forget never depends on it: the kernel loads every
     id its record names whatever this says, and only roster members are granted anything.
@@ -244,14 +336,10 @@ def read_roster(state: Path) -> tuple[list, str]:
     * UNREADABLE (not JSON, wrong shape, a non-string id): treated as EMPTY for grants (nothing is granted on a roster nobody can
       read), and forget of the recorded people is still served. The daemon says so on stderr (a fixed line).
     The same rule as ``authority.read_roster`` (kept textually close; neither imports the other)."""
-    path = state / "people.json"
-    if not path.exists():
+    if not (state / "people.json").exists():
         raise SystemExit("people.json is missing: export the household roster first (see README)")
-    try:
-        people = json.loads(path.read_text("utf-8"))["people"]
-    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
-        people = None
-    if not isinstance(people, list) or not all(entry_id(p) for p in people):
+    people = load_roster(state)
+    if people is None:
         print("zoe-os shadow kernel: people.json is unreadable: nobody is granted anything; forget of recorded people is served",
               file=sys.stderr, flush=True)
         return [], "unreadable"
@@ -260,6 +348,7 @@ def read_roster(state: Path) -> tuple[list, str]:
 
 def build(state: Path):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
+    seen = roster_identity(state)        # BEFORE the read: a file replaced in between is simply read again at the first ask
     entries, roster_status = read_roster(state)
     people = roster_ids(entries)
     known = remember_people(state, people)
@@ -278,7 +367,7 @@ def build(state: Path):
     k.grants.shadow = True                                     # this store records; it decides nothing (see the module docstring)
     for person in people:
         k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)    # recorded whatever their role, never consent
-    srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people)
+    srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people, seen=seen)
     srv.roster_status = roster_status
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
