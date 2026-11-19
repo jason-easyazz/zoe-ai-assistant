@@ -131,15 +131,17 @@ names. A check made in zoe-data cannot close that (the kernel answers when it an
 
 * **The stamp** (`os_shadow.erase_stamp`): `boot` is the wall-clock nanosecond this zoe-data process started, `count` is
   `user_erase_gate`'s generation for the member plus the kernel forgets asked for in this process. Compared as a pair, so a later
-  process is always newer although every count restarts at 0. `_forget` moves the count on the event loop before its forget can be
-  sent, so an ask stamped before a forget was asked for is strictly older than the stamp that forget carries.
+  process is always newer although every count restarts at 0. A forget reads its stamp and only THEN moves the count on, in one
+  step at the send (`_forget_call`): an ask stamped before the send, including one made while a row- or turn-scoped forget was
+  outstanding, is at or before the forget's stamp, and one stamped after it is strictly newer.
 * **The mark** (`erase_stamps` in the kernel's database): one row per forgotten member, keyed by the keyed hash the forget ledger
   already uses (`Spine._owner`; the key is in the same database), holding the newest stamp. It names nobody, survives a kernel
   restart and never moves back.
-* **The rule**: an ask whose stamp for the actor or the owner is older than that member's mark writes nothing that names anyone.
+* **The rule**: an ask whose stamp for the actor or the owner is not STRICTLY newer than that member's mark writes nothing that
+  names anyone (equal counts as before the forget).
   If the kernel would have allowed it the answer is `erased`, which zoe-data reads as `not_checked reason=erased` (the list change
-  proceeds: a member being erased is not "refused"); if the permission table refuses it, the refusal stands, recorded unnamed. An
-  equal or newer stamp is recorded as usual. A report whose stamps are stale is refused; one with no stamps finds no open ask (a
+  proceeds: a member being erased is not "refused"); if the permission table refuses it, the refusal stands, recorded unnamed. A
+  strictly newer stamp is recorded as usual. A report whose stamps are stale is refused; one with no stamps finds no open ask (a
   whole-member forget removes every open ask that names the member, as actor or owner).
 * **Entity and topic forgets** carry no stamp and set no mark: a list ask holds ids only, so it cannot write back what they
   erased. Their whole-member fallback (a scope the kernel cannot match) is stamped like any other whole-member forget.

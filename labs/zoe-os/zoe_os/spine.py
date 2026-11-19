@@ -613,12 +613,14 @@ class Spine:
         return (row[0], row[1]) if row else None
 
     def erased_after(self, person: str, stamp) -> bool:
-        """Was ``person`` wholly forgotten AFTER the caller read ``stamp`` for them? True when their erase mark (the newest stamp a
-        whole-person forget of theirs carried) is newer than ``stamp``; a write that gives NO stamp for a person who has a mark is
-        treated as older than it (an older caller cannot be ordered, so it is not recorded). No mark: False. The mark is keyed by
-        the person's keyed hash (``_owner``, as the forget ledger is): nothing in it names them. Call under the lock."""
+        """Was ``stamp`` read AT OR BEFORE a whole forget of ``person``? True when it is not strictly newer than their erase mark
+        (the newest stamp a whole-person forget of theirs carried). Equal counts as before: a caller reads the stamp it sends
+        with a forget and only THEN moves its count on, so a write stamped while that forget was still outstanding carries the
+        forget's own stamp, and must not land after it. A write that gives NO stamp for a person who has a mark is treated the
+        same (an older caller cannot be ordered, so it is not recorded). No mark: False. The mark is keyed by the person's
+        keyed hash (``_owner``, as the forget ledger is): nothing in it names them. Call under the lock."""
         mark = self._erase_mark(self._owner(person))
-        return mark is not None and (stamp is None or erase_stamp(stamp) < mark)
+        return mark is not None and (stamp is None or erase_stamp(stamp) <= mark)
 
     def _carried(self, dead: list[int]) -> set[int]:
         """The ids listed by the forget notices among ``dead`` (primary-key reads of those rows)."""

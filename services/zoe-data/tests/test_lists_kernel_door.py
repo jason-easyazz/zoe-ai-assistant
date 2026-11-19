@@ -400,25 +400,33 @@ async def test_every_ask_and_its_report_carry_an_erase_stamp_for_the_actor_and_t
 
 @pytest.mark.parametrize("erase", ["member", "rows"])
 @pytest.mark.asyncio
-async def test_a_whole_member_forget_carries_a_stamp_newer_than_every_ask_made_before_it(door, erase):
-    """What makes the kernel's ordering sound: an ask stamped BEFORE the forget was asked for is strictly older than the stamp the
-    forget carries, an ask made after it is not, for a member erase (the erase gate's generation moves) AND for a row- or
-    turn-scoped forget (it does not: ``_forget`` moves the stamp itself). Controls run: with the bump removed from ``_forget``
-    the "rows" case fails (the earlier ask's stamp equals the forget's); with ``stamp`` left off the forget call both cases fail
-    on the missing key; with the generation left out of ``erase_stamp`` the "member" case fails on the ask made inside the erase."""
+async def test_a_forget_reads_its_stamp_then_moves_on_so_every_earlier_ask_is_at_or_before_it(door, erase, monkeypatch):
+    """What makes the kernel's ordering sound (it refuses a stamp that is not STRICTLY newer than the forget's): every ask stamped
+    before the forget was SENT, including one made while a row- or turn-scoped forget was outstanding (no erase span holds the
+    door then), is at or before the forget's stamp; every ask stamped after the send is strictly newer. Controls run: with the
+    move-on removed from ``_forget_call`` the "rows" case fails (the member acting again would read as erased); with
+    ``stamp`` left off the forget call both cases fail on the missing key."""
     await DOORS["remove_item_record"][1](_db(), OWNER)
     before = door.ops("list_ask")[0]["stamps"][OWNER]
+    outstanding = []
+    call = os_shadow._forget_call
+
+    def spying(kernel, member, scoped):
+        outstanding.append(os_shadow.erase_stamp(member))          # an ask made now: the forget is asked for, not yet sent
+        return call(kernel, member, scoped)
+
+    monkeypatch.setattr(os_shadow, "_forget_call", spying)
     if erase == "member":
         with user_erase_gate.erase_span(OWNER):
-            inside = os_shadow.erase_stamp(OWNER)
             assert await os_shadow.forget_user(OWNER) == 3
-        assert before < inside
     else:
         assert await os_shadow.forget_for_erase(OWNER) == 3
     (forget,) = door.ops("forget")
-    assert forget["subject"] == OWNER and _is_stamp(forget["stamp"]) and before < forget["stamp"]
+    assert forget["subject"] == OWNER and _is_stamp(forget["stamp"])
+    assert before <= forget["stamp"] and outstanding == [forget["stamp"]]
+    assert os_shadow.erase_stamp(OWNER) > forget["stamp"]                          # moved on by the send
     await DOORS["remove_item_record"][1](_db(), OWNER)
-    assert door.ops("list_ask")[1]["stamps"][OWNER] >= forget["stamp"]             # the member acting again: recorded afresh
+    assert door.ops("list_ask")[1]["stamps"][OWNER] > forget["stamp"]              # the member acting again: strictly newer
 
 
 @pytest.mark.asyncio
@@ -741,3 +749,26 @@ async def test_an_accepted_suggestion_reports_only_after_its_own_transaction_end
     assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"]
     door.reports(len(door.ops("list_ask")))
     assert [r["outcome"] for r in door.ops("list_report")].count("done") >= 1
+
+
+@pytest.mark.parametrize("value", [None, "off", "shadow"])
+@pytest.mark.asyncio
+async def test_with_lists_off_an_accepted_suggestion_enters_nothing_of_the_door(monkeypatch, value):
+    """Flag off: the suggestion path reads the flag once and never enters ``kernel_reports_after`` or asks. Control: with the
+    hold entered unconditionally this fails."""
+    import pending_suggestions
+    from test_os_shadow_hook import MEMBER, _Conn, _Pool
+
+    def never(*a, **k):
+        raise AssertionError("the door was entered with the flag off")
+
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_LISTS", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_OS_LISTS", value)
+    monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    monkeypatch.setattr(list_service, "kernel_reports_after", never)
+    monkeypatch.setattr(os_shadow, "ask_list", never)
+    conn = _Conn()
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))
+    assert (await pending_suggestions.execute_suggestion("s1", MEMBER))["ok"] and "INSERT INTO list_items" in conn.writes

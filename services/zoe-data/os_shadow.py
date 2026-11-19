@@ -1140,7 +1140,9 @@ KERNEL_ERASED = "erased"
 # The door has its own thread and connection, so an ask (or its report) can reach the kernel AFTER a later forget of a member it
 # names; nothing this process checks can close that, the kernel answers when it answers. So every ask and report carries a stamp
 # for each member it names, every whole-member forget carries that member's stamp, and the kernel, under its own lock, records
-# nothing for an ask whose stamp is older than the member's newest forget (it keeps that stamp as the member's erase mark).
+# nothing for an ask whose stamp is not strictly newer than the member's newest forget (it keeps that stamp as the member's erase
+# mark). A forget reads its stamp and only then moves the count on (``_forget_call``), so an ask stamped while a forget was
+# outstanding is at most equal to it, and one stamped after the send is strictly newer.
 # The stamp is ``[boot, count]``, compared as a pair: ``boot`` is when this process started (wall clock, so a later process is newer;
 # a restart resets every count to 0), ``count`` only grows in this process: ``user_erase_gate``'s generation (a whole-member erase)
 # plus the kernel forgets asked for here (``_forget``; a row-, turn-, entity- or topic-scoped forget never moves the generation).
@@ -1148,6 +1150,7 @@ KERNEL_ERASED = "erased"
 # the clock passes that start: the safe direction, visible as ``reason=erased`` lines.
 _BOOT = time.time_ns()
 _forget_marks: Counter = Counter()          # member -> kernel forgets asked for in this process
+_stamp_guard = threading.Lock()             # the forget's read-then-move is one step (the worker thread; asks read on the loop)
 
 
 def erase_stamp(member: str) -> list:
@@ -1805,8 +1808,11 @@ def _forget_call(kernel: _Kernel, member: str, scoped: dict) -> Any:
     kernel sets no mark for a scoped forget: a list ask holds ids only, so it cannot write back what one erased)."""
     if scoped:
         return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
+    with _stamp_guard:                       # read, THEN move on: a stamp read from here on is strictly newer than this forget's,
+        stamp = erase_stamp(member)          # and one read while this forget was outstanding is at most equal to it (the kernel
+        _forget_marks[member] += 1           # treats equal as before the forget)
     try:
-        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, stamp=erase_stamp(member))
+        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, stamp=stamp)
     except KernelProtocol as exc:
         if exc.args[:1] != ("bad_request",):
             raise
@@ -1865,8 +1871,6 @@ async def _forget(user_id: str, entity: Optional[str], topic: Optional[str]) -> 
             return 0                  # certain nothing was ever recorded here (no state at all) and the shadow is off: nothing to forget
     # anything else goes to the kernel, and is PARKED if it cannot be confirmed there (a missing creds.json included: the kernel's
     # store may still hold the member): "cannot reach" is never "done"
-    # on the loop, before the forget can be sent: every list ask stamped before this moment is older than this forget's stamp
-    _forget_marks[user_id] += 1
     fut: concurrent.futures.Future = concurrent.futures.Future()
     code = ""
     try:

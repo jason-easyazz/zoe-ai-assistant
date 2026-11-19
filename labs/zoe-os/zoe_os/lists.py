@@ -20,9 +20,10 @@ the told owner are ordinary event fields and member links, so a person's forget 
 ORDER AGAINST A FORGET (the caller's asks run on their own connection, so one can reach the kernel AFTER a later forget of a
 member it names). The caller sends its erase stamp for every member an ask names (``stamps``), and its whole-person forgets carry
 the same stamp (``spine.forget(stamp=...)``, kept as that person's erase mark). Under the kernel lock, an ask whose stamp for the
-acting person or the list's owner is OLDER than that person's mark was made before their forget: it writes nothing that names
-anyone (an allowed one is refused ``erased``, with a bare refusal event; a refused one keeps its reason code, unnamed). An equal or
-newer stamp is recorded as usual: a forgotten member who acts again is recorded afresh. A named member with a mark and NO stamp
+acting person or the list's owner is NOT STRICTLY NEWER than that person's mark was made before their forget was sent: it writes nothing that names
+anyone (an allowed one is refused ``erased``, with a bare refusal event; a refused one keeps its reason code, unnamed). A strictly
+newer stamp is recorded as usual: a forgotten member who acts again is recorded afresh (the caller moves its count on right after
+it reads the stamp a forget carries, so equal means "read while that forget was outstanding"). A named member with a mark and NO stamp
 (an older caller) is treated as older. A report needs no stamp to be safe (a whole-person forget removes every open ask that names
 the person, as actor or owner, so there is nothing left to close), and one that carries a stale stamp is refused the same way.
 Scoped forgets (entity, topic, seqs) set no mark: an ask holds ids only, so it cannot write back what they erased.

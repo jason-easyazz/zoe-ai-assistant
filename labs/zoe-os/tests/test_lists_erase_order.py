@@ -6,7 +6,7 @@ names, and a whole-person forget carries the same stamp, kept as that person's e
 
 * an ask made before the forget (an older stamp) that arrives after it writes nothing that names anyone;
 * a report after a forget writes no receipt that names the forgotten person, whether or not it carries stamps;
-* an equal or newer stamp is recorded as before (a forgotten member who acts again is recorded afresh);
+* a strictly newer stamp is recorded as before (a forgotten member who acts again is recorded afresh); an equal one is not;
 * the mark survives a kernel restart, is kept at the newest stamp, and never holds the member's id in clear;
 * no stamp (an older caller): an ask for a member who has a mark is not recorded; a forget without one sets no mark.
 
@@ -98,17 +98,30 @@ def test_a_late_ask_the_kernel_would_refuse_keeps_its_reason_and_names_nobody(tm
     assert naming(tmp_path, OWNER) == {}
 
 
-# ---- an equal or newer stamp is the member acting again ---------------------------------------------------------------------------
-@pytest.mark.parametrize("stamp", [AT, NEW, LATER_BOOT])
-def test_an_ask_stamped_at_or_after_the_forget_is_recorded_afresh(tmp_path, stamp):
-    """Control run: with ``<`` turned into ``<=`` in ``Spine.erased_after`` the equal-stamp case fails (refused ``erased``); with
-    the pair compared generation-first the later-boot case fails."""
+# ---- a strictly newer stamp is the member acting again; an equal one was read while the forget was outstanding ----------------------
+@pytest.mark.parametrize("stamp", [NEW, LATER_BOOT])
+def test_an_ask_stamped_after_the_forget_is_recorded_afresh(tmp_path, stamp):
+    """Control run: with the pair compared generation-first the later-boot case fails; with every stamp treated as stale both fail."""
     k = kernel(tmp_path)
     k.spine.forget(OWNER, actor=OWNER, stamp=AT)
     out = ask(k, OWNER, stamps={OWNER: stamp})
     assert k.spine._get(out["seq"]).subject == OWNER
     assert k.lists.report("door", out["ask"], "done", stamps={OWNER: stamp})["outcome"] == "done"
     k.close()
+
+
+def test_an_ask_stamped_while_the_forget_was_outstanding_and_delivered_after_it_writes_nothing(tmp_path):
+    """The caller reads the stamp it sends with a forget and only then moves its count on, so an ask made while that forget was
+    still outstanding (a row- or turn-scoped forget holds no erase span: the door can ask meanwhile) carries the forget's OWN
+    stamp. Delivered after the forget, it must not write the member back. Control run: with ``<=`` turned into ``<`` in
+    ``Spine.erased_after`` the equal stamp is recorded and this fails."""
+    k = kernel(tmp_path)
+    k.spine.forget(OWNER, actor=OWNER, stamp=AT)
+    with pytest.raises(Refused) as refused:
+        ask(k, OWNER, stamps={OWNER: AT})
+    assert refused.value.wire == lists.ERASED
+    k.close()
+    assert naming(tmp_path, OWNER) == {}
 
 
 # ---- race 2: the report arrives after the forget ----------------------------------------------------------------------------------
