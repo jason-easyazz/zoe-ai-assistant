@@ -42,6 +42,7 @@ import math
 import os
 import queue
 import socket
+import stat
 import struct
 import threading
 import time
@@ -2041,8 +2042,8 @@ def write_roster(ids, dest: Optional[Path] = None) -> list:
 async def _roster_entries(db, demo: Optional[dict] = None) -> list:
     """Everyone Zoe knows (``users`` and ``auth_users``), each with the role the ACCOUNT record states, read through ``db`` (an
     OPEN handle: this never opens or closes the pool, so the running service can call it). Never logs an id. The ``users``
-    mirror only says admin / member, so it is never read for a role. No account, an unknown role or a failed lookup = a plain
-    id (the kernel's least access). ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
+    mirror only says admin / member, so it is never read for a role. No account or an unknown role = a plain id (the kernel's
+    least access). A lookup that FAILS raises: no roster is written from a read that could not be finished. ``demo`` states a role for a SYNTHETIC id only (the live checks' demo adult / child)."""
     from enrollment_state import _account_facts
     from manner_block import ADULT_ROLES, CHILD_ROLES
 
@@ -2053,11 +2054,10 @@ async def _roster_entries(db, demo: Optional[dict] = None) -> list:
     for uid in sorted(accounts | known | frozenset(demo)):
         role = demo[uid] if uid in demo else None
         if role is None and uid in accounts:
-            try:
-                minor, stated = await _account_facts(uid, db=db)
-                role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
-            except Exception:  # noqa: BLE001 - a role that cannot be read is least access
-                role = None
+            # a lookup that FAILS raises: the whole rewrite is abandoned and the roster in force stays. Writing the member as a
+            # plain id instead would DOWNGRADE an adult to least access until a later good rewrite.
+            minor, stated = await _account_facts(uid, db=db)
+            role = "child" if minor or stated in CHILD_ROLES else "adult" if stated in ADULT_ROLES else None
         entries.append({"id": uid, "role": role} if role else uid)
     return entries
 
@@ -2096,7 +2096,12 @@ def _demo_roles_read(directory: Path) -> dict:
     """The hand-stated demo roles kept beside people.json. Each pair passes the SAME rule as the command line (``_demo_roles``:
     a synthetic id, one of the three roles) or it is dropped: the file can never state a role for a person."""
     try:
-        raw = json.loads((Path(directory) / DEMO_ROLES_FILE).read_text("utf-8"))["roles"]
+        with open(Path(directory) / DEMO_ROLES_FILE, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077 or not stat.S_ISREG(st.st_mode):
+                logger.warning("ZOE_OS_ROSTER demo_roles=ignored_mode")     # a file others can write states no role
+                return {}
+            raw = json.loads(fh.read().decode("utf-8"))["roles"]
     except (OSError, ValueError, KeyError, TypeError):
         return {}
     out: dict = {}
@@ -2278,7 +2283,11 @@ def main(argv: Optional[list] = None) -> int:
         except ValueError as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
-        entries = write_roster_from_accounts(demo=demo)
+        try:
+            entries = write_roster_from_accounts(demo=demo)
+        except Exception as exc:  # noqa: BLE001 - nothing was written: the roster in force stays
+            print(f"failed: the accounts could not be read ({type(exc).__name__}); the roster was not changed", file=sys.stderr)
+            return 1
         roles = [entry["role"] for entry in entries if isinstance(entry, dict)]
         print(f"roster: {len(entries)} members written ({roles.count('adult')} adults, {roles.count('child')} children, "
               f"{len(entries) - roles.count('adult') - roles.count('child')} least access)")

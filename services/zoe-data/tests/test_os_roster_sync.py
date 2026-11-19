@@ -252,6 +252,65 @@ async def test_hand_stated_demo_roles_survive_the_services_rewrite_and_never_sta
 
 
 @pytest.mark.asyncio
+async def test_one_failed_account_lookup_abandons_the_rewrite_so_nobody_is_downgraded(house, monkeypatch, caplog):
+    """An adult whose lookup fails during the service's rewrite must stay an adult: the rewrite is abandoned (``failed``) and
+    the roster in force stays, never a plain id for them (least access until a later good rewrite).
+
+    Negative control: the plain-id fallback back in ``_roster_entries`` -> the roster is rewritten with OWNER as a plain id
+    and the first assert fails."""
+    import enrollment_state
+
+    real = enrollment_state._account_facts
+
+    async def flaky(uid, db=None):
+        if uid == OWNER:
+            raise RuntimeError("lookup failed")
+        return await real(uid, db=db)
+
+    monkeypatch.setattr(enrollment_state, "_account_facts", flaky)
+    caplog.set_level("INFO", logger="os_shadow")
+    with pytest.raises(list_service.ListRefused):                           # NEW is still unknown: refused, as before the rewrite
+        await remove(NEW)
+    await settle()
+    assert people(house) == {OWNER: "adult", KID: None}                     # exactly the roster that was in force
+    assert any("ZOE_OS_ROSTER result=failed" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o660, 0o606])
+@pytest.mark.asyncio
+async def test_a_demo_roles_file_others_could_write_or_read_states_no_role(house, mode, caplog):
+    """The kept demo roles are read only from a file that is this user's and 0600; anything looser is ignored (a closed code is
+    logged), so a file another account could write never supplies a role.
+
+    Negative control: ``_demo_roles_read`` without the mode check -> the demo id is written as an adult."""
+    kept = house.state / os_shadow.DEMO_ROLES_FILE
+    kept.write_text(json.dumps({"roles": {DEMO: "adult"}}))
+    kept.chmod(mode)
+    caplog.set_level("WARNING", logger="os_shadow")
+    await remove(NEW)
+    await settle()
+    assert people(house)[DEMO] is None and people(house)[NEW] == "adult"
+    assert any("demo_roles=ignored_mode" in rec.getMessage() for rec in caplog.records)
+    kept.chmod(0o600)
+    assert os_shadow._demo_roles_read(house.state) == {DEMO: "adult"}       # the same file, tightened: read
+
+
+@pytest.mark.parametrize("value", [None, "off", "shadow"])
+def test_with_lists_off_a_caller_that_starts_a_list_copies_nothing(monkeypatch, value):
+    """``stamps_now`` is one flag read with lists off: no copy of the stamp map. Control: the unconditional copy fails this."""
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_LISTS", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_OS_LISTS", value)
+
+    def never():
+        raise AssertionError("the stamp map was copied with lists off")
+
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", never)
+    assert list_service.stamps_now() is None
+
+
+@pytest.mark.asyncio
 async def test_the_service_never_makes_a_roster_or_a_state_directory_and_never_writes_an_empty_one(house, monkeypatch):
     """No roster installed = no kernel to keep current: nothing is created. And a read of the accounts that comes back with
     nobody never empties the roster (that is the owner's to state, with the command).
@@ -420,10 +479,13 @@ _PARENTS: dict = {}
 
 
 def _takes_first(fn) -> bool:
-    """``stamps_at`` is assigned from ``stamps_now()`` before the function's first ``await``."""
+    """``stamps_at`` is assigned EXACTLY ONCE in the function, from ``stamps_now()``, before its first ``await`` (a second
+    assignment after an await would hand the door a later snapshot under the same name)."""
     first_await = min([n.lineno for n in ast.walk(fn) if isinstance(n, ast.Await)] or [10 ** 9])
-    return any(isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "stamps_at" for t in node.targets)
-               and "stamps_now" in ast.dump(node.value) and node.lineno < first_await for node in ast.walk(fn))
+    binds = [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == "stamps_at" and isinstance(n.ctx, ast.Store)]
+    assigns = [n for n in ast.walk(fn) if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "stamps_at" for t in n.targets)]
+    return (len(binds) == 1 and len(assigns) == 1 and "stamps_now" in ast.dump(assigns[0].value)
+            and assigns[0].lineno < first_await)
 
 
 def _scan(src: str) -> list:
@@ -452,8 +514,10 @@ def _scan(src: str) -> list:
     return out
 
 
-CALLERS = ("list_service.py", "skybridge_service.py", "pending_suggestions.py", "anticipation.py", "routers/lists.py",
-           "intent_router.py", "mcp_server.py", "omi_review_apply.py")
+def _modules() -> list:
+    """Every module of the service (tests, migrations and caches aside): a caller in a NEW file is scanned too."""
+    skip = {"tests", "alembic", "node_modules", "__pycache__"}
+    return sorted(p for p in ROOT.rglob("*.py") if not skip.intersection(p.relative_to(ROOT).parts))
 
 
 def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awaits():
@@ -461,20 +525,27 @@ def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awa
     ``stamps_at=stamps_at``, where ``stamps_at`` was taken from ``stamps_now()`` before that function's first ``await`` (for a
     nested helper: its enclosing function's). And no door but ``list.create`` is ever told an owner.
 
-    Negative control (planted below): a caller that awaits first, and one that passes nothing, are both reported."""
-    for name in CALLERS:
-        assert _scan((ROOT / name).read_text("utf-8")) == [], name
+    Every module of the service is scanned, so a caller in a new file is held to it too.
+
+    Negative control (planted below): a caller that awaits first, one that passes nothing, one that passes a fresh snapshot
+    and one that reassigns ``stamps_at`` after an await are all reported."""
+    modules = _modules()
+    assert len(modules) > 100 and ROOT / "routers" / "lists.py" in modules
+    for path in modules:
+        assert _scan(path.read_text("utf-8")) == [], path.name
     planted = ("async def late(db):\n    await db.fetch('x')\n    stamps_at = stamps_now()\n"
                "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n"
                "async def silent(db):\n    stamps_at = stamps_now()\n    await create_list_record(db, user_id='u')\n"
                "async def fresh(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n"
                "    await create_list_record(db, user_id='u', stamps_at=stamps_now())\n"
+               "async def again(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n    stamps_at = stamps_now()\n"
+               "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n"
                "async def good(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n"
                "    await create_list_record(db, user_id='u', stamps_at=stamps_at)\n")
-    assert _scan(planted) == ["late", "silent", "fresh"]
+    assert _scan(planted) == ["late", "silent", "fresh", "again"]
     gates = [n for n in ast.walk(ast.parse((ROOT / "list_service.py").read_text("utf-8"))) if isinstance(n, ast.Call)
              and getattr(n.func, "id", "") == "_gate" and any(k.arg in ("owner", "visibility") for k in n.keywords)]
     assert len(gates) == 1 and gates[0].args[1].value == "list.create"
-    others = [name for name in CALLERS if name != "list_service.py" and
-              ("ask_kernel(" in (ROOT / name).read_text("utf-8") or "ask_list(" in (ROOT / name).read_text("utf-8"))]
+    others = [p.name for p in modules if p.name not in ("list_service.py", "os_shadow.py") and
+              ("ask_kernel(" in p.read_text("utf-8") or "ask_list(" in p.read_text("utf-8"))]
     assert others == []                                  # nobody outside list_service puts an ask to the kernel itself

@@ -104,15 +104,23 @@ def test_a_hand_stated_role_is_refused_for_a_real_id(state, capsys, arg):
     assert not state.exists() and "refused" in capsys.readouterr().err
 
 
-def test_a_failed_account_lookup_is_least_access(state, monkeypatch):
+def test_a_failed_account_lookup_writes_nothing_and_the_roster_in_force_stays(state, monkeypatch, capsys):
+    """A rewrite must never DOWNGRADE: a member whose lookup failed, written as a plain id, would be least access until a later
+    good rewrite. So the whole write is abandoned. Control: with the plain-id fallback back in ``_roster_entries`` the file is
+    rewritten and this fails."""
     import enrollment_state
+
+    state.write_text(json.dumps({"people": [{"id": "fixture-admin", "role": "adult"}]}))
+    before = state.read_text()
 
     async def boom(uid, db=None):
         raise RuntimeError("lookup failed")
 
     monkeypatch.setattr(enrollment_state, "_account_facts", boom)
-    os_shadow.write_roster_from_accounts()
-    assert set(_by_id(state).values()) == {None}
+    assert os_shadow.main(["--write-roster-from-accounts"]) == 1
+    out = capsys.readouterr()
+    assert state.read_text() == before and "not changed" in out.err and out.out == ""
+    assert not any(uid in out.err for uid in ACCOUNTS)
 
 
 def test_the_roles_written_are_exactly_the_kernels():
