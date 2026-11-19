@@ -1173,7 +1173,7 @@ ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
 #: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
 DOOR_REFUSALS = ("unknown_person", "not_owner", "adults_only", "not_in_manifest", "forgotten")
 DOOR_REASONS = ("-", *DOOR_REFUSALS, "other", "timeout", "unavailable", "circuit", "not_provisioned", "no_credential", "protocol",
-                "erasing", "erased", "queue_full", "worker", "no_actor", "no_list", "bad_verb")
+                "erasing", "erased", "queue_full", "worker", "no_actor", "no_list", "no_row", "bad_verb")
 #: the kernel's own word (``labs/zoe-os/zoe_os/lists.py`` ``ERASED``) for an ask or report made before a forget of a member it names.
 #: Not a refusal of the change: the kernel recorded nothing and the change proceeds ``not_checked reason=erased``.
 KERNEL_ERASED = "erased"

@@ -12,11 +12,19 @@ ERASERS = {}
 WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[\"`\[]?[a-z_]+[\"`\]]?\.)?[\"`\[]?(?:lists|list_items)\b", re.I)
 
 
+def _texts(tree):
+    """Every SQL-bearing string of a module: plain constants, and each f-string put back together with ``x`` standing where a
+    value is interpolated (so ``f"UPDATE {schema}.lists SET ..."`` reads ``UPDATE x.lists SET ...``; its pieces alone would each
+    look harmless). Control run: with f-strings left in pieces the interpolated-schema forms planted below are not caught."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+
+
 def writes(source):
-    tree = ast.parse(source)
-    return [node.value for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-            and WRITE.search(node.value)]
+    return [text for text in _texts(ast.parse(source)) if WRITE.search(text)]
 
 
 def test_one_door():
@@ -42,6 +50,11 @@ def test_planted_write_is_caught():
     # a schema-qualified table, quoted or not, is still a list write
     for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?'):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
+    # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not
+    for sql in ('f"UPDATE {schema}.lists SET name = ?"', 'f"DELETE FROM {schema}.list_items WHERE id = ?"',
+                "f'INSERT INTO \"{schema}\".list_items (id) VALUES (?)'", 'f"UPDATE {schema}.list_items SET {col} = ?"'):
+        assert writes(f"async def f(db, schema, col):\n    await db.execute({sql})\n"), sql
+    assert not writes('async def f(db, t):\n    await db.execute(f"SELECT * FROM {t}.lists WHERE id = ?")\n')
     assert not writes("async def f(db):\n    await db.execute('UPDATE listings SET x = ?')\n")
 
 

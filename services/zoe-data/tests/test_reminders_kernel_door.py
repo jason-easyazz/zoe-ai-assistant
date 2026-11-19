@@ -61,7 +61,7 @@ BEFORE_THE_DOOR = {
         "COMMIT"],
     "snooze_reminder_record": [
         "SELECT * FROM reminders WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0 AND id = ?",
-        "UPDATE reminders SET snoozed_until = ?, acknowledged = 0, updated_at = NOW(), "
+        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
         "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
         "INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW())",
         "COMMIT",
@@ -72,7 +72,13 @@ BEFORE_THE_DOOR = {
         "INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW())",
         "COMMIT",
         "SELECT * FROM reminders WHERE id = ?"],
+    # the brain tools' rows (``tests/fixtures/reminders_as_on_main.json``: the same statements, there with their values)
+    "tool_update_reminder_record": ["UPDATE reminders SET title=?,updated_at=NOW() WHERE id=? AND user_id=?"],
+    "tool_delete_reminder_record": ["UPDATE reminders SET deleted=1, is_active=0, updated_at=NOW() WHERE id=? AND user_id=?"],
+    "tool_snooze_reminder_record": ["UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?"],
 }
+#: the ONE read a door makes of its own, and only with the flag on: the snooze tool's statement names no owner
+DOOR_READ = "SELECT user_id, visibility FROM reminders WHERE id = ?"
 
 
 class _Cur:
@@ -98,7 +104,7 @@ class DB:
         norm = " ".join(sql.split())
         self.sql.append(norm)
         if norm.startswith("SELECT"):
-            if self.on_read and "visibility = 'family' OR" in norm:
+            if self.on_read and "FROM reminders" in norm:
                 self.on_read()
             return _Cur([dict(self.row)])
         if self.fail_write and "reminders" in norm:
@@ -124,8 +130,14 @@ DOORS = {
         schedule=False, **kw)),
     "update_reminder_record": ("reminder.edit", lambda db, who: rs.update_reminder_record(db, _actor(who), RID, {"title": WORD + " two"})),
     "delete_reminder_record": ("reminder.delete", lambda db, who: rs.delete_reminder_record(db, _actor(who), RID)),
-    "snooze_reminder_record": ("reminder.snooze", lambda db, who: rs.snooze_reminder_record(db, _actor(who), RID, 10, now_utc=FROZEN)),
+    "snooze_reminder_record": ("reminder.snooze", lambda db, who: rs.snooze_reminder_record(db, _actor(who), RID, 10)),
     "acknowledge_reminder_record": ("reminder.done", lambda db, who: rs.acknowledge_reminder_record(db, _actor(who), RID)),
+    # the brain's MCP tools: their own rows (kept as on main), behind the same door
+    "tool_update_reminder_record": ("reminder.edit", lambda db, who: rs.tool_update_reminder_record(
+        db, user_id=who, reminder_id=RID, fields={"title": WORD + " two"})),
+    "tool_delete_reminder_record": ("reminder.delete", lambda db, who: rs.tool_delete_reminder_record(db, user_id=who, reminder_id=RID)),
+    "tool_snooze_reminder_record": ("reminder.snooze", lambda db, who: rs.tool_snooze_reminder_record(
+        db, reminder_id=RID, due_date="2099-06-15", due_time="08:30", snoozed_until="2099-06-15T00:30:00Z", user_id=who)),
 }
 
 
@@ -209,7 +221,9 @@ async def test_any_other_flag_value_makes_no_kernel_call_no_thread_and_the_same_
     off = DB()
     await DOORS[name][1](off, OWNER)
     assert off.sql == BEFORE_THE_DOOR[name] and off.writes     # the statements of the code before the door, exactly
-    assert allowed.sql == BEFORE_THE_DOOR[name]                # ... and the door itself reads nothing, even when it is on
+    # ... and a door reads nothing of its own even when it is on (the snooze tool aside: its statement names no owner)
+    assert [q for q in allowed.sql if q != DOOR_READ] == BEFORE_THE_DOOR[name]
+    assert (DOOR_READ in allowed.sql) is (name == "tool_snooze_reminder_record") and DOOR_READ not in off.sql
     assert len(door.ops("door_ask")) == asked and door.connections == connections      # no kernel call, no socket
     assert os_shadow._door_worker is None                      # no thread
 
@@ -225,7 +239,9 @@ async def test_every_door_asks_once_with_ids_only_and_reports_done(door, caplog,
         await DOORS[name][1](db, KID)
     (ask,) = door.ops("door_ask")
     assert set(ask) == {"area", "verb", "person", "target", "owner", "visibility", "stamps"}
-    assert (ask["area"], ask["verb"], ask["person"], ask["owner"], ask["visibility"]) == ("reminders", verb, KID, KID, "household")
+    # the edit and delete tools touch only the member's OWN row and never read it: its visibility is not told (the owner may anyway)
+    told = "private" if name in ("tool_update_reminder_record", "tool_delete_reminder_record") else "household"
+    assert (ask["area"], ask["verb"], ask["person"], ask["owner"], ask["visibility"]) == ("reminders", verb, KID, KID, told)
     assert ask["stamps"] == {KID: os_shadow.erase_stamp(KID)}
     assert (ask["target"] == RID) is (name != "create_reminder_record") and len(ask["target"]) <= 80
     assert _reports(door, 1) == [(1, "done")] and door.ops("door_report")[0]["stamps"] == ask["stamps"]
@@ -281,6 +297,10 @@ async def test_the_refuse_test_has_teeth_a_door_whose_ask_always_allows_writes_t
     db = DB(owner=KID)
     await DOORS["delete_reminder_record"][1](db, KID)
     assert db.writes and door.jobs == [("cancel", RID)]
+    for name in sorted(n for n in DOORS if n.startswith("tool_")):
+        db = DB(owner=KID)
+        await DOORS[name][1](db, KID)
+        assert db.writes, name
 
 
 # ---- the kernel is down, slow or erased: the change proceeds ----------------------------------------------------------------------
@@ -314,7 +334,11 @@ async def test_a_write_that_fails_is_reported_failed_never_done(door):
 
 
 # ---- ordered against a forget: the stamps are taken before anything that names the owner is read ----------------------------------
-@pytest.mark.parametrize("name", sorted(n for n in DOORS if n != "create_reminder_record"))
+#: the doors that READ who the reminder is for (the others are told: create, and the edit and delete tools' own-row statements)
+READS_THE_OWNER = sorted(n for n in DOORS if n not in ("create_reminder_record", "tool_update_reminder_record", "tool_delete_reminder_record"))
+
+
+@pytest.mark.parametrize("name", READS_THE_OWNER)
 @pytest.mark.asyncio
 async def test_an_owner_forgotten_while_the_reminder_row_is_read_keeps_the_stamp_from_before(door, name):
     """The door reads who the reminder is for from the row; a forget of that member confirmed while the read is awaited must not
@@ -350,6 +374,33 @@ async def test_an_ask_is_never_queued_while_a_member_it_names_is_being_erased(do
             await DOORS["update_reminder_record"][1](DB(owner=KID), OWNER)      # KID is the person it is for, not the actor
     assert door.ops("door_ask") == []
     assert "decision=not_checked reason=erasing" in [r.getMessage() for r in caplog.records if "ZOE_OS_ACT" in r.getMessage()][0]
+
+
+@pytest.mark.asyncio
+async def test_the_snooze_tools_own_read_raises_on_a_database_fault_and_a_missing_row_proceeds_unasked(door, caplog):
+    """A database fault in the one lookup a door makes of its own raises: it never skips the kernel and never writes. A row that
+    is not there is ``not_checked reason=no_row`` and the statement runs as it always did (it changes nothing). Control run:
+    with the read wrapped in ``try / except: return None`` the fault case writes."""
+    class Faulty(DB):
+        async def execute(self, sql, params=()):
+            if " ".join(sql.split()) == DOOR_READ:
+                raise RuntimeError("connection lost")
+            return await super().execute(sql, params)
+
+    class Empty(DB):
+        async def execute(self, sql, params=()):
+            cur = await super().execute(sql, params)
+            return _Cur([]) if " ".join(sql.split()) == DOOR_READ else cur
+
+    db = Faulty()
+    with pytest.raises(RuntimeError):
+        await DOORS["tool_snooze_reminder_record"][1](db, OWNER)
+    assert db.writes == [] and door.ops("door_ask") == []
+    db = Empty()
+    with caplog.at_level(logging.INFO, logger="os_shadow"):
+        await DOORS["tool_snooze_reminder_record"][1](db, OWNER)
+    assert db.writes and door.ops("door_ask") == []
+    assert "verb=reminder.snooze decision=not_checked reason=no_row" in [r.getMessage() for r in caplog.records if "ZOE_OS_ACT" in r.getMessage()][0]
 
 
 @pytest.mark.asyncio
@@ -416,12 +467,14 @@ async def test_the_brain_tools_return_an_error_result_and_change_nothing(door, m
     door.door = "refuse:not_owner"
     line = rs.ReminderRefused("not_owner").line()
     db = DB(owner=KID)
-    for tool, args in (("reminder_update", {"title": WORD}), ("reminder_delete", {}), ("reminder_snooze", {"minutes": 5})):
+    for tool, args in (("reminder_update", {"title": WORD}), ("reminder_delete", {})):
         out = await mcp_server._execute_tool(db, tool, {"reminder_id": RID, **args})
         assert out == {"error": line + " Nothing was changed.", "status": "refused"}, tool
     out = await mcp_server._execute_tool(db, "reminder_create", {"title": WORD, "due_date": "2099-06-16"})
     assert out == {"error": line + " Nothing was made.", "status": "refused"}
-    assert db.writes == [] and len(door.ops("door_ask")) == 4
+    assert db.writes == [] and len(door.ops("door_ask")) == 3
+    # (the snooze tool is not reachable through ``_execute_tool`` on main: it raises before its write. Its door is exercised
+    # directly above, like every other door.)
 
 
 @pytest.mark.asyncio
@@ -494,7 +547,7 @@ def _ungated(src: str) -> list:
         writes = [n for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, str) and WRITE.search(n.value)]
         if not writes:
             continue
-        gates = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_gate"]
+        gates = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") in ("_gate", "_tool_snooze_gate")]
         blocks = [n for n in ast.walk(fn) if isinstance(n, ast.AsyncWith) and any(
             isinstance(i.context_expr, ast.Call) and getattr(i.context_expr.func, "id", "") == "_reported" for i in n.items)]
         inside = all(any(any(c is w for c in ast.walk(b)) for b in blocks) for w in writes)

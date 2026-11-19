@@ -929,8 +929,8 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
 
     try:
         due_date, due_time = normalize_due_date(due_date), normalize_due_time(due_time)
-    except ReminderPastError:
-        raise
+    except ReminderPastError as exc:
+        raise ValueError(exc.spoken) from None
     except HTTPException:
         raise ValueError("reminder_needs_time") from None
     if not (due_date or due_time):
@@ -939,9 +939,12 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
     user = await _load_direct_execution_user(db, user_id)
     if not user:
         raise ValueError("unknown_user")
-    reminder = await create_reminder_record(
-        ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db,
-        after_commit=after_commit if after_commit is not None else [], stamps_at=stamps_at)
+    try:
+        reminder = await create_reminder_record(
+            ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db,
+            after_commit=after_commit if after_commit is not None else [], shadow_source="suggestion", stamps_at=stamps_at)
+    except HTTPException as exc:      # the door refused (a time already gone, a role): the offer stays open, said by a fixed code
+        raise ValueError(getattr(exc, "spoken", None) or "reminder_not_valid") from None
     return {"reminder_id": reminder.get("id"), "title": title,
             "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time")}
 
@@ -1189,8 +1192,6 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
-    except HTTPException as exc:  # the reminder door refused (a day or time already gone, a role): the offer stays open
-        return {"ok": False, "error": getattr(exc, "spoken", None) or "reminder_not_valid"}
     except Exception as exc:
         logger.warning("pending_suggestions.execute failed: %s", exc)
         return {"ok": False, "error": str(exc)}
