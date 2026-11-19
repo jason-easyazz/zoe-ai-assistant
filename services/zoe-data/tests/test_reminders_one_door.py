@@ -397,6 +397,53 @@ async def test_mcp_another_member_cannot_change_a_reminder(monkeypatch, visibili
     assert db.updates() == [] and db.row["deleted"] == 0
 
 
+class _OnePool:
+    """A pool of ONE connection: a second ``acquire`` waits until the first is released."""
+
+    def __init__(self, state):
+        self.state, self.gate, self.conns = state, asyncio.Semaphore(1), []
+
+    def acquire(self):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                await pool.gate.acquire()
+                pool.conns.append(_PgConn(pool.state))
+                return pool.conns[-1]
+
+            async def __aexit__(self, *_):
+                pool.gate.release()
+        return _Ctx()
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_suggestion_never_holds_its_connection_while_the_job_borrows_another(monkeypatch):
+    """Scheduling a due reminder borrows a pool connection of its own (``schedule_reminder``). The accept runs its after-commit
+    steps only once its own connection is back in the pool, and the job check reads through a handle that borrows a connection
+    per statement, so even a pool of ONE completes (with ten accepts at once and a pool of ten, each would otherwise hold one and
+    wait for another). The real ``schedule_due_reminder`` runs. Control run: with the steps run inside the ``pool.acquire()``
+    block again, or the job check handed the suggestion's own connection, this times out."""
+    state = _PgState(slots='{"title": "book the vet", "time": "15:00"}')       # a time and no day: due within a day, so it IS scheduled
+    pool, scheduled = _OnePool(state), []
+
+    async def allow(*_a, **_k):
+        return None
+
+    async def schedule_reminder(**kw):                         # the scheduler's own borrow, as ``proactive.triggers.reminders`` makes it
+        async with pool.acquire():
+            scheduled.append(kw["item_id"])
+
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: pool)
+    monkeypatch.setattr("reminder_service.require_feature_access", allow)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", allow)
+    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", schedule_reminder)
+    monkeypatch.setattr("anticipation.mode", lambda: "off")
+    out = await asyncio.wait_for(pending_suggestions.execute_suggestion("sug-1", A), timeout=3)
+    assert out["ok"] is True and scheduled == list(state.reminders) and len(scheduled) == 1
+    assert pool.gate._value == 1                               # every borrowed connection was given back
+
+
 # ── fault 2: the spoken "cancel that" is bound to the reminder the create just made, by id ─────────────────────────────────
 class _Rows:
     """Several reminder rows. An INSERT adds one; a read is by id (with the visibility filter) only: a read by TITLE fails the test."""
@@ -415,7 +462,8 @@ class _Rows:
                 return _Cursor({"id": p[0], "role": "user", "name": "Member"})
             row = self.rows.get(p[-1])
             seen = row is not None and not ("deleted = 0" in norm and row["deleted"]) and (
-                "visibility = 'family'" not in norm or row["visibility"] == "family" or row["user_id"] == p[0])
+                row["visibility"] == "family" or row["user_id"] == p[0] if "visibility = 'family'" in norm
+                else row["user_id"] == p[0] if "user_id = ?" in norm else True)
             return _Cursor(dict(row) if seen else None)
         if norm.startswith("INSERT INTO reminders"):
             if self.fail_insert:
@@ -462,8 +510,8 @@ def said(monkeypatch, quiet):
 @pytest.mark.asyncio
 async def test_cancel_that_cancels_exactly_the_reminder_just_set_and_a_second_one_does_nothing(said):
     """An older live reminder and a newer one already marked done share the title: neither is touched (the fake fails the test
-    on any read of a reminder by its title). Control run: with the note not dropped after a cancel, the second "cancel that"
-    reaches the store again instead of saying there is nothing to cancel, and this fails."""
+    on any read of a reminder by its title). Control run: with the cancel handed the older same-title row's id instead of the
+    noted one, the wrong reminder goes and this fails. (A second "cancel that" finds the row gone, or no note, either way.)"""
     store, create, cancel_that = said
     assert (await create()).startswith("Reminder set")
     (made,) = [rid for rid in store.rows if rid not in ("older", "newer-done")]
@@ -506,6 +554,62 @@ async def test_cancel_that_after_a_create_that_did_not_happen_cancels_nothing_an
     reply = await cancel_that()
     assert reply == rs.SPOKEN["cancel_nothing"] and "cancelled" not in reply.lower()
     assert store.live() == before
+
+
+@pytest.mark.asyncio
+async def test_the_note_of_the_reminder_just_set_holds_ids_and_a_number_never_a_word(said):
+    """The reply's title is read from the row when the cancel runs, so the note needs no words. Control run: with the title put
+    back into the note's tuple this fails (a string that is not the id is in the cache)."""
+    import intent_router
+
+    store, create, cancel_that = said
+    assert (await create(title="womble the quince")).startswith("Reminder set")
+    (made,) = [rid for rid in store.rows if rid not in ("older", "newer-done")]
+    assert list(intent_router._JUST_SET_REMINDER) == [A]
+    entry = intent_router._JUST_SET_REMINDER[A]
+    assert entry[0] == made and len(entry) == 2 and isinstance(entry[1], float)
+    assert "womble" not in repr(intent_router._JUST_SET_REMINDER) and "quince" not in repr(intent_router._JUST_SET_REMINDER)
+    assert await cancel_that() == "Reminder cancelled: womble the quince."        # the words come from the row, at that moment
+    assert store.rows[made]["deleted"] == 1 and intent_router._JUST_SET_REMINDER == {}
+
+
+@pytest.mark.asyncio
+async def test_an_expired_note_is_removed_on_any_access_not_only_its_own_lookup(said, monkeypatch):
+    """Control run: with the prune dropped from ``_note_reminder_just_set`` the other member's stale note outlives a new note."""
+    import intent_router
+
+    store, create, cancel_that = said
+    assert (await create()).startswith("Reminder set")
+    clock = [intent_router.time.monotonic()]
+    monkeypatch.setattr(intent_router.time, "monotonic", lambda: clock[0])
+    clock[0] += intent_router._JUST_SET_WINDOW_S + 1
+    intent_router._note_reminder_just_set(B, "rem-b")                                # ANOTHER member's access: A's stale note goes
+    assert list(intent_router._JUST_SET_REMINDER) == [B]
+    clock[0] += intent_router._JUST_SET_WINDOW_S + 1
+    before = store.live()
+    assert await cancel_that() == rs.SPOKEN["cancel_nothing"] and store.live() == before      # a lookup prunes too
+    assert intent_router._JUST_SET_REMINDER == {}
+
+
+@pytest.mark.asyncio
+async def test_a_member_forget_drops_the_note_and_a_row_that_has_gone_is_nothing_to_cancel(said):
+    """``forget_redact.clear_turn_caches`` is what ``MemoryService.delete_user`` and the entity forget run for the in-process
+    per-member caches. Controls run: with ``intent_router`` taken out of its list the note survives the forget; with the row read
+    dropped from the cancel, a reminder deleted since it was set is answered "couldn't find" instead of "nothing to cancel"."""
+    import forget_redact
+    import intent_router
+
+    store, create, cancel_that = said
+    assert (await create()).startswith("Reminder set")
+    intent_router._note_reminder_just_set(B, "rem-b")
+    assert forget_redact.clear_turn_caches(A) >= 1
+    assert list(intent_router._JUST_SET_REMINDER) == [B]                             # only the forgotten member's note went
+    before = store.live()
+    assert await cancel_that() == rs.SPOKEN["cancel_nothing"] and store.live() == before
+    assert (await create()).startswith("Reminder set")
+    (made,) = [rid for rid in store.live() if rid not in before]
+    store.rows[made]["deleted"] = 1                                                  # deleted elsewhere (the screen, a forget) since
+    assert await cancel_that() == rs.SPOKEN["cancel_nothing"] and A not in intent_router._JUST_SET_REMINDER
 
 
 @pytest.mark.asyncio

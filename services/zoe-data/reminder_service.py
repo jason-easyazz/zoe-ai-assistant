@@ -266,8 +266,11 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock. ``schedule=False`` is for a caller that registers its OWN job for the row (commitments, +45 s): one scheduling path per reminder, never two.
 
     ``after_commit``: a caller that owns an OUTER transaction passes a list; the receipt, the scheduled job and the broadcast are
-    then NOT run here but appended to it as zero-argument coroutine functions, for the caller to run once its transaction has
-    committed (a rolled-back reminder is never scheduled, announced or vouched for). ``db.commit()`` here is a no-op on Postgres,
+    then NOT run here but appended to it as coroutine functions of ONE argument, for the caller to run once its transaction has
+    committed (a rolled-back reminder is never scheduled, announced or vouched for). The argument is the db handle the job
+    check reads through: the caller runs these AFTER its transaction's connection is back in the pool (scheduling borrows a
+    connection of its own, and a caller still holding one while it waits for another is how a full pool deadlocks), so it
+    cannot be ``db``. ``db.commit()`` here is a no-op on Postgres,
     so only the caller's real transaction makes the row durable."""
     await require_feature_access(db, user, feature="reminders", action="create")
     user_id = str(user["user_id"])
@@ -319,7 +322,7 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         os_shadow.note_reminder_create(user_id, source=shadow_source, note=payload.title, due_date=due_date, due_time=due_time,
                                        recurring=bool(recurring_pattern))
 
-    async def _announce(reminder: dict) -> None:
+    async def _announce(reminder: dict, jobs_db=db) -> None:
         # Schedule NOW rather than waiting for the slow-loop scan: that loop does nothing in quiet
         # hours (22:00-07:00) and at 07:00 treats an explicit time earlier that night as past-due, so
         # "remind me at 22:30" said at 22:15 was never scheduled. schedule_due_reminder is the same
@@ -329,7 +332,7 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         if schedule and reminder.get("id"):
             try:
                 from proactive.triggers.reminder_scan import schedule_due_reminder
-                await schedule_due_reminder(db, reminder, now_utc=now_utc)
+                await schedule_due_reminder(jobs_db, reminder, now_utc=now_utc)
             except Exception:
                 logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
         await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
@@ -342,9 +345,9 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     if after_commit is None:
         await _announce(reminder)
     else:                             # read back inside the caller's transaction; everything else waits for its commit
-        async def _after() -> None:
+        async def _after(jobs_db) -> None:
             _vouch()
-            await _announce(reminder)
+            await _announce(reminder, jobs_db)
 
         after_commit.append(_after)
     return reminder

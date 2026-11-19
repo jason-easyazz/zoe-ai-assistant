@@ -5,7 +5,9 @@ Structural, over EVERY module of the service (tests and migrations aside), so a 
 
 Negative control (run, then restored): ``UPDATE reminders SET deleted = 1`` planted in ``routers/reminders.py`` -> ``test_one_door``
 fails naming that file. The planted cases below keep the scan itself honest; control run for the f-string case: with
-``_texts`` reading constants only, the interpolated-schema forms are not caught and ``test_planted_write_is_caught`` fails."""
+``_texts`` reading constants only, the interpolated-schema forms are not caught and ``test_planted_write_is_caught`` fails;
+control run for the schema: with the unquoted schema pattern back to letters and underscores, ``public1.reminders`` escapes and
+the same test fails."""
 import ast
 import re
 from pathlib import Path
@@ -15,7 +17,9 @@ import pytest
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 DOOR = "reminder_service.py"
-WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:[\"`\[]?[a-z_]+[\"`\]]?\.)?[\"`\[]?reminders\b", re.I)
+#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
+_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
+WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+" + _SCHEMA + r"[\"`\[]?reminders\b", re.I)
 
 
 def _texts(tree):
@@ -46,7 +50,8 @@ def test_one_door():
 def test_planted_write_is_caught():
     for sql in ("UPDATE reminders SET title = ?", "INSERT INTO reminders (id) VALUES (?)", "DELETE FROM reminders WHERE id = ?",
                 'UPDATE "public"."reminders" SET x = ?', "insert or replace into reminders (id) values (1)",
-                "UPDATE public.reminders SET x = ?"):
+                "UPDATE public.reminders SET x = ?", "UPDATE public1.reminders SET x = ?", "DELETE FROM app_2$x.reminders WHERE id = ?",
+                'INSERT INTO "My Schema 1".reminders (id) VALUES (?)', "UPDATE public . reminders SET x = ?"):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
     assert writes("async def f(db, sets):\n    await db.execute(f\"UPDATE reminders SET {', '.join(sets)} WHERE id = ?\")\n")
     # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not, and a split keyword

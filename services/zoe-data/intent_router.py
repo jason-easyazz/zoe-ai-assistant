@@ -2857,28 +2857,32 @@ async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
 # "Cancel that" after a spoken reminder is bound to the reminder that create MADE: its id, noted here only once the create has
 # succeeded, and dropped the moment the next create is ATTEMPTED (so after a refused or failed create there is nothing to
 # cancel, whatever older reminders share its title). Memory only, per member, the conversation context's own two minutes.
-_JUST_SET_REMINDER: dict = {}          # user id -> (reminder id, the title as asked, monotonic time)
+# It holds IDS AND A NUMBER, never a word: what the reminder says is read from its row at the moment it is cancelled. Expired
+# notes are removed on every access, and a member's note goes with their forget (``forget_redact.clear_turn_caches``, run by
+# ``MemoryService.delete_user`` and the entity forget; ``forget_reach.py`` lists it).
+_JUST_SET_REMINDER: dict = {}          # user id -> (reminder id, monotonic time)
 _JUST_SET_WINDOW_S = 120.0
 _JUST_SET_MAX = 256
 
 
-def _note_reminder_just_set(user_id: str, reminder_id: str, title: str) -> None:
+def _prune_just_set() -> None:
     now = time.monotonic()
+    for uid in [u for u, entry in _JUST_SET_REMINDER.items() if now - entry[1] > _JUST_SET_WINDOW_S]:
+        del _JUST_SET_REMINDER[uid]
+
+
+def _note_reminder_just_set(user_id: str, reminder_id: str) -> None:
+    _prune_just_set()
     if len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
-        for uid in [u for u, entry in _JUST_SET_REMINDER.items() if now - entry[2] > _JUST_SET_WINDOW_S]:
-            del _JUST_SET_REMINDER[uid]
-        if len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
-            _JUST_SET_REMINDER.clear()
-    _JUST_SET_REMINDER[user_id] = (reminder_id, title.strip().lower(), now)
+        _JUST_SET_REMINDER.clear()
+    _JUST_SET_REMINDER[user_id] = (reminder_id, time.monotonic())
 
 
-def _reminder_just_set(user_id: str, title: str) -> Optional[str]:
-    """The id of the reminder this member's last spoken create made, if it is the one this "cancel that" follows (same request,
-    inside the window); else None. The title is only compared with what that create was asked: no reminder is looked up by it."""
+def _reminder_just_set(user_id: str) -> Optional[str]:
+    """The id of the reminder this member's last spoken create made, while it is still inside the window; else None."""
+    _prune_just_set()
     entry = _JUST_SET_REMINDER.get(user_id)
-    if not entry or time.monotonic() - entry[2] > _JUST_SET_WINDOW_S or entry[1] != title.strip().lower():
-        return None
-    return entry[0]
+    return entry[0] if entry else None
 
 
 async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
@@ -2911,7 +2915,7 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
             reminder = await create_reminder_record(payload, user=user, db=db)
         reply = _format_response(intent, json.dumps(reminder, default=str))
         if reminder.get("id"):
-            _note_reminder_just_set(user_id, str(reminder["id"]), title)       # only now: the reminder exists
+            _note_reminder_just_set(user_id, str(reminder["id"]))       # only now: the reminder exists
         return reply
     except HTTPException as exc:
         # reminder_service.ReminderPastError: a day or time already gone, nothing stored. A spoken turn is told so; the
@@ -2928,12 +2932,12 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
 async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
     """"cancel that" right after a spoken reminder (``reminder_cancel`` with ``after=reminder_create``): the reminder THAT create
     made is cancelled, by its id, via ``reminder_service.delete_reminder_record``. No reminder is ever found by its title: if
-    the create was refused or failed, or this is a second "cancel that", nothing is cancelled and the reply says so. Always
-    answers; never falls through to the brain."""
+    the create was refused or failed, this is a second "cancel that", or the row has gone since (deleted, forgotten), nothing is
+    cancelled and the reply says so. What the reminder says is read from its row, here, for the reply. Always answers; never
+    falls through to the brain."""
     from reminder_service import SPOKEN, delete_reminder_record
 
-    title = str((intent.slots or {}).get("title") or "").strip()
-    reminder_id = _reminder_just_set(user_id, title)
+    reminder_id = _reminder_just_set(user_id)
     if reminder_id is None:
         return SPOKEN["cancel_nothing"]
     try:
@@ -2943,6 +2947,12 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
             user = await _load_direct_execution_user(db, user_id)
             if not user:
                 return SPOKEN["cancel_failed"]
+            cursor = await db.execute("SELECT title FROM reminders WHERE user_id = ? AND id = ? AND deleted = 0", (user_id, reminder_id))
+            row = await cursor.fetchone()
+            if row is None:                                # gone since it was set: nothing to cancel
+                _JUST_SET_REMINDER.pop(user_id, None)
+                return SPOKEN["cancel_nothing"]
+            title = str(dict(row).get("title") or "").strip()
             await delete_reminder_record(db, user, reminder_id, own_only=True)
         _JUST_SET_REMINDER.pop(user_id, None)          # cancelled: a second "cancel that" has nothing to cancel
         return SPOKEN["cancelled"].format(title=title)
