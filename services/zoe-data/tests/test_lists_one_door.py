@@ -9,7 +9,9 @@ pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 # Erasure uses dynamically named tables, so has no literal SQL exemption.
 ERASERS = {}
-WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[\"`\[]?[a-z_]+[\"`\]]?\.)?[\"`\[]?(?:lists|list_items)\b", re.I)
+#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
+_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
+WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+" + _SCHEMA + r"[\"`\[]?(?:lists|list_items)\b", re.I)
 
 
 def _texts(tree):
@@ -48,7 +50,10 @@ def test_one_door():
 def test_planted_write_is_caught():
     assert writes("async def f(db):\n    await db.execute('UPDATE list_items SET text = ?')\n")
     # a schema-qualified table, quoted or not, is still a list write
-    for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?'):
+    # (a schema name with a digit or a ``$`` in it is a schema too: ``public1.lists`` escaped the letters-only pattern; control
+    # run: with the unquoted schema pattern back to letters and underscores this fails for it)
+    for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?',
+                'UPDATE public1.lists SET name = ?', 'DELETE FROM app_2$x.list_items WHERE id = ?', 'UPDATE public . lists SET name = ?'):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
     # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not
     for sql in ('f"UPDATE {schema}.lists SET name = ?"', 'f"DELETE FROM {schema}.list_items WHERE id = ?"',

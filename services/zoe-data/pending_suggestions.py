@@ -865,6 +865,38 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
         return 0
 
 
+class _BriefDb:
+    """A db handle for work AFTER a transaction, once its connection is back in the pool: each statement borrows a connection for
+    that statement alone and gives it back before the caller goes on (the rows are already read), so nothing done through it holds
+    a connection while something else (the scheduler) borrows its own."""
+
+    def execute(self, sql, params=()):
+        return _BriefStatement(sql, params)
+
+    async def commit(self) -> None:
+        return None
+
+
+class _BriefStatement:
+    def __init__(self, sql, params) -> None:
+        self.sql, self.params = sql, params
+
+    async def _run(self):
+        from db_pool import AsyncpgCompat
+
+        async with get_pool().acquire() as conn:
+            return await AsyncpgCompat(conn).execute(self.sql, self.params)
+
+    def __await__(self):
+        return self._run().__await__()
+
+    async def __aenter__(self):
+        return await self._run()
+
+    async def __aexit__(self, *_exc) -> bool:
+        return False
+
+
 def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
     """(due_date, due_time) of a reminder offer. The offer's own day and time slots and its ``when_hint`` are MERGED (the producer
     keeps the model's slots and adds the hint beside them): a slot wins for its own field, and the hint fills whichever field has
@@ -1183,11 +1215,14 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                 )
                 if action == "forget_alias":
                     await _scrub_forget_alias(suggestion_id, conn)
-            for later in after_commit:  # committed: the reminder is real now (the store's receipt, shadow note, job and broadcast)
-                try:
-                    await later()
-                except Exception as exc:  # noqa: BLE001 - best-effort: the row is committed and the scan retries a job
-                    logger.warning("pending_suggestions: a reminder's after-commit step failed (%s)", type(exc).__name__)
+        # Committed, and the transaction's connection is BACK IN THE POOL: only now the reminder's receipt, shadow note, job and
+        # broadcast. Scheduling borrows a connection of its own; run while this one was still held, enough accepts at once would
+        # each hold a connection and wait for another (a full pool, nobody able to finish).
+        for later in after_commit:
+            try:
+                await later(_BriefDb())
+            except Exception as exc:  # noqa: BLE001 - best-effort: the row is committed and the scan retries a job
+                logger.warning("pending_suggestions: a reminder's after-commit step failed (%s)", type(exc).__name__)
         if action == "list_add" and isinstance(result, dict):
             # The member said yes: a real list add, so the Zoe OS shadow (os_shadow.py) hears it, AFTER the transaction committed (the row
             # is written inside it, by _execute_action). Never raises; a flag read with the shadow off.
