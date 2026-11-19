@@ -273,3 +273,19 @@ def test_the_daemon_orders_asks_and_reports_against_a_forget_on_separate_connect
         assert d.brain.call("list_report", ask=again["ask"], outcome="done", stamps={KID: NEW, OWNER: OLD})["outcome"] == "done"
     finally:
         d.stop()
+
+
+# ---- an owner the kernel does not know is never written ---------------------------------------------------------------------------
+@pytest.mark.parametrize("actor, via", [(ADULT2, None), (KID, None), ("anyone", "panel")])
+def test_an_ask_naming_an_owner_who_is_not_on_the_roster_is_refused_and_their_id_is_never_written(tmp_path, actor, via):
+    """The kernel can only forget a person it knows, and only a known person gets an erase mark. So an ask on the list of an
+    owner who is not on the roster is refused (not on the roster = refused, as for an actor) and the owner's id reaches no table
+    and no file. Control run: without the owner check in ``ListDoor.ask`` the household ask is allowed and the receipt holds the
+    owner's id in clear (``naming`` is not empty)."""
+    stranger = "member-zzz"
+    k = kernel(tmp_path)
+    with pytest.raises(Refused) as refused:
+        k.lists.ask("door", "item.add", actor, via=via, list_id="list-qov", items=["item-1"], owner=stranger, visibility="household")
+    assert refused.value.wire == lists.UNKNOWN_PERSON
+    k.close()
+    assert naming(tmp_path, stranger) == {} and in_file(tmp_path, stranger) == []

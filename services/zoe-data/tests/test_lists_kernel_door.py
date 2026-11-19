@@ -473,6 +473,27 @@ async def test_a_forget_the_kernel_did_not_confirm_moves_nothing(door, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_a_malformed_forget_reply_is_not_a_confirmation_and_moves_nothing(door, monkeypatch):
+    """The count moves on only once the reply is the documented one (``forget_ack``): a "success" that is not is unconfirmed to
+    the caller, so it must be unconfirmed to the stamp too. Control run: with the count moved when the call returns this fails."""
+    from test_os_shadow import _send
+
+    answer = DoorKernel._answer
+
+    def malformed(self, conn, skill, req):
+        if req["op"] == "forget":
+            self.calls.append((skill, req["op"], req["args"]))
+            return _send(conn, {"v": 1, "id": req["id"], "ok": True, "result": {"count": "three"}})
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", malformed)
+    before = os_shadow.erase_stamp(OWNER)
+    with pytest.raises(Exception):
+        await os_shadow.forget_for_erase(OWNER)
+    assert door.ops("forget") and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
 async def test_an_ask_made_while_a_member_erase_runs_is_never_queued(door, caplog):
     """Read with the stamps, on the loop: the door thread's own look could come after the erase has ended. Control run: without
     the loop-side check the ask is queued (it reaches the door thread, which may or may not still see the erase)."""

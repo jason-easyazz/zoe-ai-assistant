@@ -1821,6 +1821,7 @@ def _forget_call(kernel: _Kernel, member: str, scoped: dict) -> Any:
     stamp = erase_stamp(member)
     try:
         out = kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, stamp=stamp)
+        forget_ack(out)                       # CONFIRMED means the documented reply: a malformed "success" raises here, unmoved
         with _stamp_guard:
             _forget_marks[member] += 1
         return out

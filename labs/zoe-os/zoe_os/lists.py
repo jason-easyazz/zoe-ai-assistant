@@ -40,6 +40,7 @@ Not on the roster = unknown = refused (least access).
     household            a child, a guest           allow                       refuse adults_only         allow
     household            the shared panel           allow                       refuse adults_only         allow
     any                  not on the roster          refuse unknown_person (all verbs)
+    of an owner who is not on the roster: refuse unknown_person (all verbs, whoever asks; the owner's id is never written)
 """
 from __future__ import annotations
 
@@ -123,6 +124,10 @@ class ListDoor:
             manifest = self.enforcer.store.manifests.get(skill)
             verdict = Decision(False, NOT_IN_MANIFEST) if manifest is None or verb not in manifest.acts else \
                 decide(people, verb, person, via=via, owner=owner, visibility=visibility)
+            if verdict.allowed and owner is not None and owner not in people:
+                # an owner the kernel does not know is not a person it could later FORGET (and no erase mark could order a late
+                # ask against them): their id is never written. Not on the roster = refused, for an owner as for an actor.
+                verdict = Decision(False, UNKNOWN_PERSON)
             if not verdict.allowed:
                 self._refuse(skill, verb, verdict.reason, person if known else None, list_id)
             if stale:
