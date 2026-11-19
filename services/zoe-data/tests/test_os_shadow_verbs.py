@@ -980,6 +980,16 @@ def test_the_remove_hook_never_raises_and_never_queries_when_off(monkeypatch):
     monkeypatch.setattr(os_shadow, "wants", lambda verb: True)
     monkeypatch.setattr(os_shadow, "note_list_remove", lambda *a, **k: (_ for _ in ()).throw(AssertionError("not reached")))
     asyncio.run(list_service.note_item_left(_LeftDB(fail=True), "member-left", source="rest", list_id="l-1", item_id="i-1"))   # read fails: swallowed
+    # the read succeeds and the hook itself raises: the hook IS reached, and its failure is swallowed too
+    calls = []
+
+    def _boom(*a, **k):
+        calls.append(a)
+        raise RuntimeError("kernel hiccup")
+    monkeypatch.setattr(os_shadow, "note_list_remove", _boom)
+    asyncio.run(list_service.note_item_left(_LeftDB({"text": "x", "list_type": "shopping", "name": "y"}), "member-left",
+                                            source="rest", list_id="l-1", item_id="i-1"))
+    assert calls == [("member-left",)]
     off = _LeftDB({"text": "x", "list_type": "shopping", "name": "y"})
     monkeypatch.setattr(os_shadow, "wants", lambda verb: False)
     asyncio.run(list_service.note_item_left(off, "member-left", source="rest", list_id="l-1", item_id="i-1"))
