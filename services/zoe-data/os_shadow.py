@@ -1144,8 +1144,11 @@ KERNEL_ERASED = "erased"
 # mark). A forget sends the current stamp and moves the count on only once the kernel confirmed it (``_forget_call``), so an ask
 # stamped before that confirmation is at most equal to the mark, and one stamped after it is strictly newer.
 # The stamp is ``[boot, count]``, compared as a pair: ``boot`` is when this process started (wall clock, so a later process is newer;
-# a restart resets every count to 0), ``count`` only grows in this process: ``user_erase_gate``'s generation (a whole-member erase)
-# plus the kernel forgets asked for here (``_forget``; a row-, turn-, entity- or topic-scoped forget never moves the generation).
+# a restart resets every count to 0), ``count`` is the number of whole-member kernel forgets of that member the kernel has
+# CONFIRMED to this process, and nothing else moves it (not the erase gate's generation: other erasers advance that at their own
+# times, which would let an ask look newer than a forget still on its way). A member erase is covered by the gate read on the
+# loop in ``ask_list``. Stamps are sent, and the kernel keeps marks, only with ``ZOE_OS_LISTS=kernel``: with lists off no ask
+# exists to order, so a forget is sent exactly as before.
 # If the wall clock was AHEAD at an earlier start, a member forgotten then reads as "erased" (unrecorded, never refused) until
 # the clock passes that start: the safe direction, visible as ``reason=erased`` lines.
 _BOOT = time.time_ns()
@@ -1155,7 +1158,7 @@ _stamp_guard = threading.Lock()             # the forget's read-then-move is one
 
 def erase_stamp(member: str) -> list:
     """The member's erase stamp NOW. Read it when the ask is made (on the caller's loop) and when a forget is sent."""
-    return [_BOOT, user_erase_gate.generation(member) + _forget_marks[member]]
+    return [_BOOT, _forget_marks[member]]
 _door_q: "queue.Queue" = queue.Queue(maxsize=DOOR_QUEUE_MAX)
 _door_worker: Optional[threading.Thread] = None
 _door_guard = threading.Lock()
@@ -1808,11 +1811,13 @@ def _kernel_forget(kernel: _Kernel, member: str, entity: Optional[str], topic: O
 
 
 def _forget_call(kernel: _Kernel, member: str, scoped: dict) -> Any:
-    """One kernel forget. A WHOLE-member one carries the member's erase stamp, read now, at the send (``erase_stamp``): the kernel
-    keeps it as their erase mark and records nothing for a list ask stamped before it. An entity or topic forget carries none (the
+    """One kernel forget. With ``ZOE_OS_LISTS=kernel`` a WHOLE-member one carries the member's erase stamp, read now, at the send
+    (``erase_stamp``): the kernel keeps it as their erase mark and records nothing for a list ask stamped before it. An entity or topic forget carries none (the
     kernel sets no mark for a scoped forget: a list ask holds ids only, so it cannot write back what one erased)."""
     if scoped:
         return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member, **scoped)
+    if not lists_on():                        # no list ask exists to order: the forget goes exactly as it always did (no stamp, so
+        return kernel.call(SKILL_PANEL, "forget", subject=member, actor=member)    # the kernel writes no erase mark either)
     # The forget carries the CURRENT stamp; the count moves on only once the kernel has CONFIRMED it. So a stamp read at any time
     # before that (before the send, or while the call is outstanding: a row- or turn-scoped forget holds no erase span, the door
     # can ask meanwhile) is at most equal to the kernel's mark and is refused wherever it lands; one read after is strictly newer.

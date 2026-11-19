@@ -387,10 +387,9 @@ async def test_every_ask_and_its_report_carry_an_erase_stamp_for_the_actor_and_t
     door.reports(1)
     assert door.ops("list_report")[0]["stamps"] == asked["stamps"]
     held = _db()
-    async with list_service.kernel_reports_after():                # the report waits for the commit; an erase runs meanwhile
+    async with list_service.kernel_reports_after():                # the report waits for the commit; a forget lands meanwhile
         await DOORS["remove_item_record"][1](held, KID)
-        with user_erase_gate.erase_span(OWNER):
-            pass
+        assert await os_shadow.forget_for_erase(OWNER) == 3        # a confirmed kernel forget: the only thing that moves a stamp
     door.reports(2)
     assert door.ops("list_report")[1]["stamps"] == door.ops("list_ask")[1]["stamps"] != os_shadow.erase_stamp(OWNER) and \
         door.ops("list_report")[1]["stamps"][OWNER] < os_shadow.erase_stamp(OWNER)
@@ -470,6 +469,44 @@ async def test_a_forget_the_kernel_did_not_confirm_moves_nothing(door, monkeypat
     with pytest.raises(Exception):
         await os_shadow.forget_for_erase(OWNER)
     assert sent and sent[0] == before and os_shadow.erase_stamp(OWNER) == before
+
+
+@pytest.mark.asyncio
+async def test_nothing_but_a_confirmed_kernel_forget_moves_the_stamp(door, monkeypatch):
+    """Other erasers advance the erase gate's generation at their own times. If that moved the stamp, an ask made while a forget
+    call was held open could look strictly newer than that forget and be recorded after it. So: the gate's generation is not in
+    the stamp. Control run: with the generation added back into ``erase_stamp`` the stamp read during the call is newer than
+    the forget's and this fails."""
+    answer = DoorKernel._answer
+    during = []
+
+    def held(self, conn, skill, req):
+        if req["op"] == "forget":
+            user_erase_gate._generation[OWNER] = user_erase_gate.generation(OWNER) + 1     # another eraser, mid-call
+            during.append((os_shadow.erase_stamp(OWNER), req["args"]["stamp"]))
+        return answer(self, conn, skill, req)
+
+    monkeypatch.setattr(DoorKernel, "_answer", held)
+    assert await os_shadow.forget_for_erase(OWNER) == 3
+    (read, sent), = during
+    assert read == sent                                           # an ask made then is refused wherever it lands (equal)
+    assert os_shadow.erase_stamp(OWNER) == [sent[0], sent[1] + 1]
+
+
+@pytest.mark.parametrize("value", [None, "off", "shadow"])
+@pytest.mark.asyncio
+async def test_with_lists_off_a_forget_carries_no_stamp_and_moves_nothing(door, monkeypatch, value):
+    """With lists off no ask exists to order: the forget goes exactly as before (no ``stamp``, so the kernel writes no erase
+    mark; the kernel's half: a stampless forget sets no mark, ``labs/zoe-os/tests/test_lists_erase_order.py``). Control run:
+    with the stamp sent unconditionally this fails."""
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_LISTS")
+    else:
+        monkeypatch.setenv("ZOE_OS_LISTS", value)
+    before = os_shadow.erase_stamp(OWNER)
+    assert await os_shadow.forget_for_erase(OWNER) == 3
+    (forget,) = door.ops("forget")
+    assert set(forget) == {"subject", "actor"} and os_shadow.erase_stamp(OWNER) == before
 
 
 @pytest.mark.asyncio

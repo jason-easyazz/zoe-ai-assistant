@@ -130,7 +130,9 @@ names. A check made in zoe-data cannot close that (the kernel answers when it an
 | `forget` `stamp` | `[boot, count]` for the subject, read when the forget is sent; whole-member forgets only | `spine.forget`: kept as the member's erase mark, in the forget's transaction |
 
 * **The stamp** (`os_shadow.erase_stamp`): `boot` is the wall-clock nanosecond this zoe-data process started, `count` is
-  `user_erase_gate`'s generation for the member plus the kernel forgets asked for in this process. Compared as a pair, so a later
+  the number of whole-member kernel forgets of that member the kernel has confirmed to this process, and nothing else moves it
+  (not `user_erase_gate`'s generation: other erasers advance that at their own times). Stamps are sent, and the kernel keeps
+  marks, only with `ZOE_OS_LISTS=kernel`; with lists off a forget is sent exactly as before. Compared as a pair, so a later
   process is always newer although every count restarts at 0. A forget sends the CURRENT stamp and the count moves on only once
   the kernel has confirmed it (`_forget_call`): an ask stamped at any time before that confirmation, including while a row- or
   turn-scoped forget is outstanding, is at or before the forget's stamp, and one stamped after it is strictly newer. An ask
