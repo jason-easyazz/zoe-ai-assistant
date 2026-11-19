@@ -7,12 +7,15 @@ suggestion) changes a reminder through ``reminder_service`` under one ownership 
 * a one-off for a clock time already gone today was stored and never fired: refused on create and on an edit that moves it there
   (a spoken turn is told so in words).
 
+Nothing else changes at any entry point: ``test_reminders_same_as_main.py`` compares every moved entry point with a record
+captured from ``main``.
+
 Negative controls run for this file (each broke the code, saw the named test fail, restored): ``refuse_past_due`` made a no-op ->
-``test_a_time_already_gone_today_is_refused`` fails; ``acknowledged = 0`` dropped from the snooze UPDATE ->
-``test_snoozing_a_done_reminder_still_fires_through_the_trigger`` fails; the ``reminder_cancel`` branch removed from
-``execute_intent`` -> ``test_spoken_cancel_removes_only_the_speakers_own_reminder`` fails; ``own_only=True`` dropped from the MCP
-delete -> ``test_mcp_another_member_cannot_change_a_reminder`` fails; the suggestion's reminder created with no ``after_commit``
-list (job and broadcast inside the transaction) -> ``test_accepted_suggestion_is_one_transaction_on_one_connection`` fails.
+``test_a_time_already_gone_today_is_refused`` fails; the "moved" condition dropped from the edit's past-time check ->
+``test_an_edit_that_does_not_move_the_time_is_as_it_always_was`` fails; the ``reminder_cancel`` branch removed from
+``execute_intent`` -> ``test_spoken_cancel_removes_only_the_speakers_own_reminder`` fails; the suggestion's reminder created with
+no ``after_commit`` list (job and broadcast inside the transaction) ->
+``test_accepted_suggestion_is_one_transaction_on_one_connection`` fails.
 Invented people and words only."""
 
 import asyncio
@@ -135,15 +138,15 @@ async def test_only_the_owner_changes_visibility(quiet):
 
 # ── the store verbs: snooze is owner-only and a UTC instant; cancel honours own_only ───────────────────────────────────────
 @pytest.mark.asyncio
-async def test_snooze_is_owner_only_and_keeps_the_due_fields(quiet):
+async def test_snooze_is_owner_only_and_touches_only_the_snooze(quiet):
     db = _Store(visibility="family")                       # B can SEE it, but it is A's
     with pytest.raises(HTTPException) as exc:
         await rs.snooze_reminder_record(db, _actor(B), "rem-1", 10)
     assert exc.value.status_code == 403 and db.updates() == []
-    db = _Store(recurring_pattern="FREQ=DAILY")
-    await rs.snooze_reminder_record(db, _actor(A), "rem-1", 10, now_utc=FROZEN)
-    (sql, params), = db.updates()
-    assert "due_date" not in sql and "due_time" not in sql and params[0] == "2026-06-10T04:10:00Z"  # no clock offset
+    db = _Store(recurring_pattern="FREQ=DAILY", acknowledged=1)
+    await rs.snooze_reminder_record(db, _actor(A), "rem-1", 10)
+    (sql, _), = db.updates()
+    assert all(word not in sql for word in ("due_date", "due_time", "acknowledged", "is_active")) and "snoozed_until = ?" in sql
     assert quiet["jobs"][0]["item_id"] == "rem-1"
 
 
@@ -322,15 +325,21 @@ async def test_an_edit_that_moves_a_one_off_into_the_past_is_refused(quiet, monk
 
 
 @pytest.mark.asyncio
-async def test_an_edit_that_leaves_the_time_alone_on_a_past_reminder_is_allowed(quiet, monkeypatch):
+async def test_an_edit_that_does_not_move_the_time_is_as_it_always_was(quiet, monkeypatch):
+    """A reminder for earlier today can still be renamed, switched off, or re-saved with its own day and time (an edit form sends
+    the whole row; "9am" for a stored 09:00 is the same time): the new rule refuses a MOVE, nothing else. A day already gone
+    that is re-sent is the 422 it has always been."""
     monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
-    for day in ("2026-06-10", "2026-06-09"):                         # earlier today, and yesterday
-        db = _Store(due_date=day, due_time="09:00")
-        await _edit(db, title="take pills with food")                # rename
-        await _edit(db, title="take pills with food", due_date=day, due_time="9am")  # an edit form re-sends the row
-        await _edit(db, is_active=False)                             # switch it off
-        sets = [w[0] for w in db.updates()]
-        assert len(sets) == 3 and not any("due_date = ?" in s or "due_time = ?" in s for s in sets)
+    db = _Store(due_date="2026-06-10", due_time="09:00")             # earlier today
+    await _edit(db, title="take pills with food")                    # rename
+    await _edit(db, title="take pills with food", due_date="2026-06-10", due_time="9am")
+    await _edit(db, is_active=False)                                 # switch it off
+    assert len(db.updates()) == 3
+    db = _Store(due_date="2026-06-09", due_time="09:00")             # yesterday
+    await _edit(db, title="take pills with food")
+    with pytest.raises(HTTPException) as exc:
+        await _edit(db, title="take pills with food", due_date="2026-06-09")
+    assert exc.value.status_code == 422 and len(db.updates()) == 1
 
 
 @pytest.mark.asyncio
@@ -355,87 +364,33 @@ async def test_the_keyword_path_says_the_refusal(monkeypatch):
     assert reply == rs.SPOKEN["past_day"]
 
 
-# ── the MCP tools go through the store (they used to write the table with their own SQL) ───────────────────────────────────
+# ── the brain's MCP tools: their rows are written by the store, and are EXACTLY what they were (test_reminders_same_as_main.py) ──
 async def _tool(db, name, uid=A, **args):
     import mcp_server
 
     return await mcp_server._execute_tool(db, name, {"reminder_id": "rem-1", **args}, {"user_id": uid, "source": "transport"})
 
 
-def _fixed_clock(monkeypatch, moment=datetime(2026, 6, 10, 23, 50, tzinfo=timezone.utc)):
-    class _Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
-
-    monkeypatch.setattr(rs, "datetime", _Clock)
-    monkeypatch.setattr("proactive.triggers.reminder_scan.datetime", _Clock)   # the household clock the date check reads
-    return moment
-
-
-@pytest.mark.asyncio
-async def test_mcp_update_to_a_past_time_is_refused_and_writes_nothing(quiet, monkeypatch):
-    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
-    _fixed_clock(monkeypatch, FROZEN)
-    db = _Store()
-    out = await _tool(db, "reminder_update", due_date="2026-06-10", due_time="09:00")
-    assert out == {"error": rs.SPOKEN["past_time"], "status": "refused"} and db.updates() == [] and quiet["jobs"] == []
-
-
-@pytest.mark.asyncio
-async def test_mcp_update_that_leaves_the_time_alone_works_on_a_past_reminder(quiet, monkeypatch):
-    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
-    _fixed_clock(monkeypatch, FROZEN)
-    db = _Store(due_date="2026-06-10", due_time="09:00")
-    out = await _tool(db, "reminder_update", title="take pills with food", due_time="9am")  # the time re-sent is no move
-    assert out == {"id": "rem-1", "status": "updated"}
-    (sql, _), = db.updates()
-    assert "title = ?" in sql and "due_time" not in sql
-
-
-@pytest.mark.asyncio
-async def test_mcp_update_that_moves_the_time_goes_the_rest_route_and_reschedules(quiet, monkeypatch):
-    monkeypatch.setattr("proactive.triggers.reminder_scan._ZOE_TZ", timezone(timedelta(hours=8)))
-    _fixed_clock(monkeypatch, FROZEN)
-    db = _Store(due_date="2026-06-10", due_time="13:00")
-    out = await _tool(db, "reminder_update", due_time="14:30")
-    assert out == {"id": "rem-1", "status": "updated"}
-    (sql, params), = db.updates()
-    assert "schedule_generation" in sql and "14:30" in params           # normalised, generation bumped (voids a claimed job)
-    assert quiet["jobs"] == [{"rescheduled": "rem-1"}]   # as the REST edit asserts above
-    assert await _tool(db, "reminder_update") == {"error": "No fields to update"}
-
-
-@pytest.mark.asyncio
-async def test_mcp_snooze_uses_the_store_and_keeps_the_due_fields(quiet, monkeypatch):
-    _fixed_clock(monkeypatch)                      # 23:50 UTC: already tomorrow in a +08:00 household, still today in UTC
-    db = _Store()
-    out = await _tool(db, "reminder_snooze", minutes=30)
-    assert set(out) == {"id", "snoozed_until", "status"} and out["id"] == "rem-1" and out["status"] == "snoozed"
-    (sql, params), = db.updates()
-    assert "due_date" not in sql and "due_time" not in sql and params[0] == "2026-06-11T00:20:00Z"   # a UTC instant, no offset
-    assert quiet["jobs"][0]["item_id"] == "rem-1"
-    assert quiet["jobs"][0]["send_at"] == datetime(2026, 6, 11, 0, 20, tzinfo=timezone.utc)
-
-
-@pytest.mark.asyncio
-async def test_mcp_delete_goes_through_the_store(quiet):
-    db = _Store()
-    assert await _tool(db, "reminder_delete") == {"id": "rem-1", "status": "deleted"}
-    assert db.row["deleted"] == 1
-
-
 @pytest.mark.parametrize("visibility", ["personal", "family"])
-@pytest.mark.parametrize("tool,args", [("reminder_update", {"title": "x"}), ("reminder_snooze", {"minutes": 5}),
-                                       ("reminder_delete", {})])
+@pytest.mark.parametrize("tool,args", [("reminder_update", {"title": "x"}), ("reminder_delete", {})])
 @pytest.mark.asyncio
-async def test_mcp_another_member_cannot_change_a_reminder(quiet, visibility, tool, args):
-    db = _Store(visibility=visibility)             # A's reminder; B asks
-    out = await _tool(db, tool, uid=B, **args)
-    assert "error" in out and out.get("status") in (None, "refused")
+async def test_mcp_another_member_cannot_change_a_reminder(monkeypatch, visibility, tool, args):
+    import mcp_server
+
+    async def quiet_ui(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(mcp_server, "_notify_ui", quiet_ui)
+
+    class _Own(_Store):                                   # the tools look the row up by id AND owner
+        async def execute(self, sql, params=()):
+            if " ".join(sql.split()).startswith("SELECT id FROM reminders WHERE id=? AND user_id=?"):
+                return _Cursor({"id": "rem-1"} if list(params)[1] == self.row["user_id"] else None)
+            return await super().execute(sql, params)
+
+    db = _Own(visibility=visibility)                      # A's reminder; B asks
+    assert await _tool(db, tool, uid=B, **args) == {"error": "Reminder rem-1 not found"}
     assert db.updates() == [] and db.row["deleted"] == 0
-    if visibility == "personal":
-        assert out == {"error": "Reminder rem-1 not found"}         # not even a hint that it exists
 
 
 # ── fault 2: the spoken "cancel that" ───────────────────────────────────────────────────────────────────────────────────────
@@ -450,82 +405,6 @@ async def test_spoken_cancel_removes_only_the_speakers_own_reminder(monkeypatch,
     assert store.row["deleted"] == 0
     assert await execute_intent(Intent("reminder_cancel", {"title": "Take pills"}), A) == "Reminder cancelled: Take pills."
     assert store.row["deleted"] == 1
-
-
-# ── a snooze re-arms a reminder that was marked done (the one door keeps what the old brain tool did) ───────────────────────
-class _E2EDb:
-    """One reminder row that APPLIES the store's snooze UPDATE, the scheduled row's claim, and the trigger's supersede read."""
-
-    def __init__(self, **row):
-        self.row = {"id": "rem-1", "user_id": A, "title": "take pills", "visibility": "personal", "due_date": "2099-06-15",
-                    "due_time": "08:00", "recurring_pattern": None, "is_active": 1, "acknowledged": 1, "deleted": 0,
-                    "snoozed_until": None, "schedule_generation": 3, **row}
-        self.job_generation = None
-
-    def execute(self, sql, params=()):
-        db, norm, p = self, " ".join(sql.split()), list(params)
-
-        class _R:
-            async def _run(self):
-                r = db.row
-                if norm.startswith("SELECT") and "FROM users" in norm:
-                    return _Cursor({"id": p[0], "role": "user", "name": "Member"})
-                if norm.startswith("SELECT is_active, acknowledged, deleted, schedule_generation"):
-                    return _Cursor(dict(r))
-                if norm.startswith("SELECT schedule_generation FROM reminders"):
-                    return _Cursor({"schedule_generation": r["schedule_generation"]})
-                if norm.startswith("SELECT"):
-                    return _Cursor(dict(r))
-                if norm.startswith("UPDATE reminders SET snoozed_until"):
-                    r["snoozed_until"] = p[0]
-                    if "acknowledged = 0" in norm:
-                        r["acknowledged"] = 0
-                    r["schedule_generation"] += 1
-                if norm.startswith("UPDATE proactive_scheduled SET claimed_at"):
-                    return _Cursor({"id": "sched-1", "item_id": "rem-1", "schedule_generation": db.job_generation})
-                return _Cursor()
-
-            def __await__(self):
-                return self._run().__await__()
-
-            async def __aenter__(self):
-                return await self._run()
-
-            async def __aexit__(self, *_):
-                return False
-        return _R()
-
-    async def commit(self):
-        pass
-
-
-@pytest.mark.asyncio
-async def test_snoozing_a_done_reminder_still_fires_through_the_trigger(quiet, monkeypatch):
-    import contextlib
-
-    from proactive.triggers import reminders as trig
-
-    db = _E2EDb()                                              # acknowledged = 1: it was marked done
-    delivered = []
-
-    @contextlib.asynccontextmanager
-    async def compat():
-        yield db
-
-    async def schedule(**kw):                                  # the store's one-shot: record the generation the job carries
-        db.job_generation = await trig._reminder_generation(kw["item_id"])
-
-    async def fire(**kw):
-        delivered.append(kw["item_id"])
-
-    monkeypatch.setattr(trig, "_get_compat_db", compat)
-    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", schedule)
-    monkeypatch.setattr("proactive.engine.fire_notification", fire)
-    await rs.snooze_reminder_record(db, _actor(A), "rem-1", 10, now_utc=FROZEN)
-    assert db.row["acknowledged"] == 0 and db.row["snoozed_until"] == "2026-06-10T04:10:00Z"
-    await trig._fire_reminder("sched-1", A, "take pills")      # the job comes due: the real claim, supersede check and delivery
-    assert delivered == ["rem-1"]
-
 
 
 # ── a weekday hint keeps its clock time, or the offer stays open ─────────────────────────────────────────────────────────────

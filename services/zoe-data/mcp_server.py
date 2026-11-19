@@ -9,7 +9,6 @@ import random
 import sys
 import uuid
 import httpx
-from fastapi import HTTPException
 from datetime import date, datetime, timedelta
 import os
 
@@ -1428,19 +1427,6 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
     return row, None
 
 
-async def _own_reminder_exists(db, reminder_id: str, user_id: str) -> bool:
-    cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (reminder_id, user_id))
-    return await cursor.fetchone() is not None
-
-
-def _reminder_refusal(exc: HTTPException, reminder_id: str) -> dict:
-    """A store refusal as the tool's normal error shape: not-found keeps its old line; a past time carries the spoken
-    sentence; anything else (owner-only, role) carries the store's plain message. Never a traceback."""
-    if exc.status_code == 404:
-        return {"error": f"Reminder {reminder_id} not found"}
-    return {"error": getattr(exc, "spoken", None) or str(exc.detail), "status": "refused"}
-
-
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
@@ -2376,51 +2362,78 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         await _notify_ui("calendar", "event_deleted", {"id": eid})
         return {"id": eid, "status": "deleted"}
 
-    # === REMINDER CRUD === (every change goes through the one reminder door, reminder_service)
+    # === REMINDER CRUD ===
     elif name == "reminder_update":
-        import reminder_service as _rs
-
         rid = args["reminder_id"]
-        changes = {f: args[f] for f in ("title", "due_date", "due_time", "priority") if f in args}
-        if not changes:
-            return {"error": "No fields to update"} if await _own_reminder_exists(db, rid, user_id) \
-                else {"error": f"Reminder {rid} not found"}
-        # The store's edit: dates and times normalised, a past move refused, the scheduled job cancelled and re-made.
-        # own_only: the MCP edit tool has only ever changed the member's OWN reminders (a family row is not theirs to edit).
-        try:
-            await _rs.update_reminder_record(db, actor, rid, changes, own_only=True)
-        except HTTPException as exc:
-            return _reminder_refusal(exc, rid)
-        if _STDIO_WORKER:  # the store broadcast reaches panels only in the zoe-data process
-            await _notify_ui("reminders", "reminder_updated", {"id": rid})
+        cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
+        if not await cursor.fetchone():
+            return {"error": f"Reminder {rid} not found"}
+        from reminder_service import tool_update_reminder_record      # the one writer of the reminders table
+
+        if not await tool_update_reminder_record(db, user_id=user_id, reminder_id=rid, fields=args):
+            return {"error": "No fields to update"}
+        await _notify_ui("reminders", "reminder_updated", {"id": rid})
         return {"id": rid, "status": "updated"}
 
     elif name == "reminder_delete":
-        import reminder_service as _rs
-
         rid = args["reminder_id"]
+        cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
+        if not await cursor.fetchone():
+            return {"error": f"Reminder {rid} not found"}
+        from reminder_service import tool_delete_reminder_record
+
+        await tool_delete_reminder_record(db, user_id=user_id, reminder_id=rid)
+        await _notify_ui("reminders", "reminder_deleted", {"id": rid})
+        # Cancel any unfired proactive_scheduled job linked to this reminder.
         try:
-            await _rs.delete_reminder_record(db, actor, rid, own_only=True)
-        except HTTPException as exc:
-            return _reminder_refusal(exc, rid)
-        if _STDIO_WORKER:
-            await _notify_ui("reminders", "reminder_deleted", {"id": rid})
+            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
+            async with _pg_get_db() as _pdb:
+                _cur = await _pdb.execute(
+                    "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
+                )
+                _sched_rows = await _cur.fetchall()
+            for _sr in _sched_rows:
+                await _cancel_reminder(_sr["id"])
+        except Exception:
+            pass
         return {"id": rid, "status": "deleted"}
 
     elif name == "reminder_snooze":
-        import reminder_service as _rs
-
         rid = args["reminder_id"]
         minutes = args.get("minutes", 30)
-        # The store's snooze: ``snoozed_until`` is a UTC instant and the due date and time are left alone, so no clock offset
-        # is involved; the old job is cancelled and one is scheduled at the new time. Owner only.
+        cursor = await db.execute("SELECT id, due_date, due_time FROM reminders WHERE id=? AND deleted=0", (rid,))
+        row = await cursor.fetchone()
+        if not row:
+            return {"error": f"Reminder {rid} not found"}
+        from datetime import timezone as _tz
+        now_utc = datetime.now(_tz.utc)
+        new_time_utc = now_utc + timedelta(minutes=minutes)
+        # Store the snooze time as a local (AWST = UTC+8) wall-clock string so the
+        # reminder scanner and UI show the expected local time.
+        _awst_offset = timedelta(hours=8)
+        new_time_local = new_time_utc + _awst_offset
+        new_date = new_time_local.strftime("%Y-%m-%d")
+        new_time_str = new_time_local.strftime("%H:%M")
+        snoozed_until_iso = new_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        from reminder_service import tool_snooze_reminder_record
+
+        await tool_snooze_reminder_record(db, reminder_id=rid, due_date=new_date, due_time=new_time_str,
+                                          snoozed_until=snoozed_until_iso)
+        result = {"id": rid, "snoozed_until": snoozed_until_iso}
+        await _notify_ui("reminders", "reminder_snoozed", result)
+        # Cancel existing scheduled job(s) for this reminder; ReminderScanTrigger
+        # will pick it up again after snoozed_until passes.
         try:
-            reminder = await _rs.snooze_reminder_record(db, actor, rid, minutes)
-        except HTTPException as exc:
-            return _reminder_refusal(exc, rid)
-        result = {"id": rid, "snoozed_until": reminder.get("snoozed_until")}
-        if _STDIO_WORKER:
-            await _notify_ui("reminders", "reminder_snoozed", result)
+            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
+            async with _pg_get_db() as _pdb:
+                _cur = await _pdb.execute(
+                    "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
+                )
+                _sched_rows = await _cur.fetchall()
+            for _sr in _sched_rows:
+                await _cancel_reminder(_sr["id"])
+        except Exception:
+            pass
         return {**result, "status": "snoozed"}
 
     # === NOTE CRUD ===

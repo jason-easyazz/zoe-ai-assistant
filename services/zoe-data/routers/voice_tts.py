@@ -5092,7 +5092,7 @@ async def voice_command(
                         "intent": _quick_intent.name,
                     }
                 except Exception as _rem_exc:
-                    logger.warning("voice/command quick %s failed: %s", _quick_intent.name, type(_rem_exc).__name__)
+                    logger.warning("voice/command quick %s failed: %s", _quick_intent.name, _rem_exc)
         if _quick_intent and _quick_intent.name == "people_search" and _scope_identity_user:
             # Contacts READS ("list my contacts", "who is Percival", "how many contacts do I have") are answered from the contacts by
             # the SAME executor chat uses, not guessed by the 4B: the lookup is a deterministic read of the speaker's own rows. Only
