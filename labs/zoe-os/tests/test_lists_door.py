@@ -248,3 +248,16 @@ def test_the_daemon_serves_ask_and_report_on_its_existing_socket_and_recovers_an
     con = sqlite3.connect(str(state / "kernel" / "zoe-os.db"))
     assert con.execute("SELECT COUNT(*) FROM events WHERE kind = 'action_receipt' AND payload LIKE '%uncertain%'").fetchone()[0] == 2
     assert b"kiosk-1" not in (state / "kernel" / "zoe-os.db").read_bytes()      # the panel's device id is not kept
+
+
+@pytest.mark.parametrize("value", ["member_ova", "demo_bar_0001", "3f2a9c1e-7b4d-4e2a-9c1e-7b4d4e2a9c1e", "a.b:c@d-e_f"])
+def test_the_id_shapes_zoe_uses_are_ids(value):
+    """Zoe's member ids carry underscores and its list ids are uuids: an id rule that leaves one out makes every ask naming such an
+    owner malformed (the door then proceeds unasked). Control: without the underscore in ``_ID`` the first two fail."""
+    assert lists._id(value) == value
+
+
+@pytest.mark.parametrize("value", ["", "has space", "semi;colon", "x" * 81, "new\nline", 7])
+def test_text_that_is_not_an_id_is_refused(value):
+    with pytest.raises(ValueError):
+        lists._id(value, optional=False)

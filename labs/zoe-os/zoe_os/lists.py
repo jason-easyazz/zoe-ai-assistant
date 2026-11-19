@@ -60,7 +60,7 @@ MAX_ITEMS = 16
 UNKNOWN_PERSON, NOT_OWNER, ADULTS_ONLY, NOT_IN_MANIFEST = "unknown_person", "not_owner", "adults_only", "not_in_manifest"
 ERASED = "erased"                       # the ask or report was made before a forget of a member it names: nothing is recorded
 MAX_STAMPS = 4
-_ID = re.compile(r"[A-Za-z0-9._:@-]{1,80}\Z")
+_ID = re.compile(r"[A-Za-z0-9._:@_-]{1,80}\Z")   # the id shapes Zoe uses: uuids, and member ids such as ``member_ova``
 
 
 def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner: str | None = None,
