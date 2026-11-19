@@ -1273,13 +1273,14 @@ async def ask_list(verb: str, user_id: str, *, panel: bool = False, list_id: Opt
             items = [str(i) for i in item_ids if i][:16]
             if items:
                 args["items"] = items
-            if _door_worker is None or not _door_worker.is_alive():
-                await asyncio.to_thread(_ensure_door)             # a thread start is never on the loop
-            deadline = ask_deadline_s()
+            deadline = ask_deadline_s()                           # ONE budget: the door's start-up draws on it too
+            until = time.monotonic() + deadline
             fut: "concurrent.futures.Future" = concurrent.futures.Future()
             try:
-                _door_q.put_nowait(("ask", verb, uid or "panel", args, time.monotonic() + deadline, fut))
-                out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=deadline)
+                if _door_worker is None or not _door_worker.is_alive():
+                    await asyncio.wait_for(asyncio.to_thread(_ensure_door), timeout=deadline)   # never a thread start on the loop
+                _door_q.put_nowait(("ask", verb, uid or "panel", args, until, fut))
+                out = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=max(0.001, until - time.monotonic()))
             except queue.Full:
                 out = (NOT_CHECKED, "queue_full", None)
             except (asyncio.TimeoutError, TimeoutError):

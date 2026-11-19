@@ -157,6 +157,11 @@ DOORS = {
 }
 
 
+#: the statements each door function issued BEFORE it could ask the kernel (generated once from the one-door branch's
+#: ``list_service`` with these same calls; SQL text only). Regenerate only for a deliberate change to a list write.
+BEFORE_THE_DOOR = json.loads((Path(__file__).parent / "fixtures" / "lists_door_flag_off_statements.json").read_text())
+
+
 def _db():
     return TxDB(items=[{"id": "I1", "text": "wombel", "completed": 0}])
 
@@ -184,6 +189,9 @@ async def test_any_other_flag_value_makes_no_kernel_call_no_extra_query_and_the_
     await DOORS[name][1](off, OWNER)
     door_lookups = [s for s in allowed.fetched if s not in off.fetched]
     assert len(door.ops("list_ask")) == asked and off.sql == allowed.sql and off.writes
+    # ... and against an INDEPENDENT record: what the code before the door issued for the same call (captured from the one-door
+    # branch, where no kernel ask exists; a change that alters flag-on and flag-off alike still fails here)
+    assert {"sql": off.sql, "fetched": off.fetched} == BEFORE_THE_DOOR[name]
     assert [s for s in off.fetched if "SELECT id, user_id, visibility FROM lists WHERE id = $1" == s
             or s.startswith("SELECT l.id, l.user_id")] == []   # the door's own read never runs with the flag off
     assert name == "create_list_record" or door_lookups         # ... and it did run with the flag on (the control)
@@ -564,3 +572,14 @@ async def test_skybridge_answers_a_refusal_in_its_own_shape_and_a_refused_seed_n
     assert out["cards"][0]["component"] == "status" and out["cards"][0]["props"]["body"] == LINE
     monkeypatch.setattr(sky, "create_list_record", _refuse)
     await sky._ensure_default_lists(KID, Card())                 # seeding is refused: the read path carries on
+
+
+@pytest.mark.asyncio
+async def test_a_slow_door_start_is_inside_the_ask_deadline(door, monkeypatch):
+    """The first ask (or one after the worker died) waits for the door to start; that wait draws on the same budget."""
+    monkeypatch.setenv("ZOE_OS_LISTS_ASK_MS", "100")
+    monkeypatch.setattr(os_shadow, "_door_worker", None)
+    monkeypatch.setattr(os_shadow, "_ensure_door", lambda: time.sleep(0.6))
+    started = time.monotonic()
+    out = await os_shadow.ask_list("item.add", OWNER, list_id="L1", household=True)
+    assert out[:2] == (os_shadow.NOT_CHECKED, "timeout") and time.monotonic() - started < 0.4
