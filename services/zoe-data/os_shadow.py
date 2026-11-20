@@ -1169,11 +1169,16 @@ ALARMS_FLAG = "ZOE_OS_ALARMS"
 ALARM_DOOR_VERBS = ("alarm.create", "alarm.edit", "alarm.delete", "alarm.snooze", "alarm.stop")
 TIMER_DOOR_VERBS = ("timer.create", "timer.edit", "timer.cancel", "timer.stop")
 ALARM_SHADOW_VERBS = frozenset({"alarm_create"})
+#: The calendar area (``labs/zoe-os/zoe_os/calendar_door.py``; the service door is ``calendar_service._gate``). Ids only: never an
+#: event's title, day, time, place or guests. Reading the calendar is not asked.
+CALENDAR_FLAG = "ZOE_OS_CALENDAR"
+CALENDAR_DOOR_VERBS = ("event.create", "event.edit", "event.delete")
 AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_VERBS, "list_ask", "list_report", "list", "items", False),
          "reminders": _Area(REMINDERS_FLAG, None, REMINDER_DOOR_VERBS, REMINDER_SHADOW_VERBS, "door_ask", "door_report", "target",
                             None, True),
          "alarms": _Area(ALARMS_FLAG, None, ALARM_DOOR_VERBS, ALARM_SHADOW_VERBS, "door_ask", "door_report", "target", None, True),
-         "timers": _Area(ALARMS_FLAG, None, TIMER_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
+         "timers": _Area(ALARMS_FLAG, None, TIMER_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
+         "calendar": _Area(CALENDAR_FLAG, None, CALENDAR_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256

@@ -1429,7 +1429,7 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
-    stamps_at = kernel_door.stamps_now()      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
+    stamps_at = kernel_door.stamps_now("reminders", "calendar")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
 
@@ -1448,18 +1448,23 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
     elif name == "calendar_create_event":
         from calendar_service import conversational_visibility, create_event_record
 
-        record = await create_event_record(
-            db,
-            user_id=user_id,
-            title=args["title"],
-            start_date=args["start_date"],
-            start_time=args.get("start_time"),
-            end_time=args.get("end_time"),
-            category=args.get("category", "general"),
-            location=args.get("location"),
-            all_day=bool(args.get("all_day")),
-            visibility=conversational_visibility(args["title"], args.get("category", "general")),
-        )
+        try:
+            record = await create_event_record(
+                db,
+                user_id=user_id,
+                title=args["title"],
+                start_date=args["start_date"],
+                start_time=args.get("start_time"),
+                end_time=args.get("end_time"),
+                category=args.get("category", "general"),
+                location=args.get("location"),
+                all_day=bool(args.get("all_day")),
+                visibility=conversational_visibility(args["title"], args.get("category", "general")),
+                actor=user_id,
+                stamps_at=stamps_at,
+            )
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_CALENDAR=kernel): nothing was added
+            return {"error": exc.line() + " Nothing was added.", "status": "refused"}
         result = {"id": record["id"], "title": args["title"], "start_date": args["start_date"],
                   "start_time": args.get("start_time"), "category": args.get("category", "general")}
         await _notify_ui("calendar", "event_created", result)
@@ -2349,7 +2354,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         params.extend([eid, user_id])
         from calendar_service import tool_update_event_record
 
-        await tool_update_event_record(db, event_id=eid, user_id=user_id, updates=updates, params=params)
+        try:
+            await tool_update_event_record(db, event_id=eid, user_id=user_id, updates=updates, params=params,
+                                           visibility=current.get("visibility"), stamps_at=stamps_at)
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no: nothing was changed
+            return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         await _notify_ui("calendar", "event_updated", {"id": eid})
         return {"id": eid, "status": "updated"}
 
@@ -2364,7 +2373,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": REPEATING_DELETE_LINE, "status": "repeating"}    # never the whole series from one occurrence
         from calendar_service import now_text, tool_delete_event_record
 
-        await tool_delete_event_record(db, event_id=eid, user_id=user_id, deleted_at=now_text())
+        try:
+            await tool_delete_event_record(db, event_id=eid, user_id=user_id, deleted_at=now_text(),
+                                           visibility=row.get("visibility"), stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was deleted.", "status": "refused"}
         await _notify_ui("calendar", "event_deleted", {"id": eid})
         return {"id": eid, "status": "deleted"}
 

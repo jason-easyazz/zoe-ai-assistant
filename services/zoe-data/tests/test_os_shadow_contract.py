@@ -491,6 +491,84 @@ def test_the_reminders_door_client_and_the_real_kernel_agree_on_verbs_codes_and_
         stop(proc)
 
 
+# ---- the calendar door (ZOE_OS_CALENDAR=kernel) against the real kernel -------------------------------------------------------------------
+def test_the_calendar_door_client_and_the_real_kernel_agree_on_verbs_codes_and_the_decision(state, monkeypatch):
+    """``calendar_service`` asks the REAL daemon: an adult's change to a child's household event and the panel's delete of the
+    house's own are allowed and closed ``done``; a child's delete of an adult's household event, the panel's of a member's, and
+    anything by or for someone the roster does not name are refused with the kernel's own code and nothing is written. The
+    kernel's file holds ids only: never the title. Control run: with ``calendar_door.AREA`` left out of the kernel's areas
+    (``Kernel.__init__``) every ask is ``not_checked reason=protocol``, nothing is refused and this fails at the first
+    ``EventRefused``."""
+    import calendar_service as cal
+    import panel_principal
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import calendar_door, door as kernel_door_mod
+    finally:
+        sys.path.remove(str(LAB))
+    area = os_shadow.AREAS["calendar"]
+    assert tuple(area.verbs) == tuple(calendar_door.VERBS) and calendar_door.AREA.name == "calendar"
+    assert (area.ask_op, area.report_op, area.target, area.parts, area.named) == ("door_ask", "door_report", "target", None, True)
+    assert set(cal.EventRefused.lines) <= {kernel_door_mod.UNKNOWN_PERSON, kernel_door_mod.NOT_OWNER, kernel_door_mod.ADULTS_ONLY}
+
+    kid, eid, word = "member-kid", "ev_bar_0001", "womble"
+
+    class DB:
+        def __init__(self):
+            self.writes = []
+
+        async def execute(self, sql, params=()):
+            self.writes.append(sql.split()[0])
+
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": OTHER, "role": "adult"},
+                         {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_CALENDAR", "kernel")
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 2.0)      # a cold subprocess on a busy box; the deadline has its own test
+        house, panel = panel_principal.HOUSEHOLD_OWNER_ID, panel_principal.HOUSEHOLD_VIEWER
+
+        async def change(db, verb, who, owner, visibility):
+            kw = {"event_id": eid, "actor": who, "owner": owner, "visibility": visibility, "stamps_at": cal.stamps_now()}
+            if verb == "edit":
+                await cal.update_event_record(db, updates=["title = ?"], params=[word, eid], **kw)
+            else:
+                await cal.delete_event_record(db, deleted_at="2099-06-01T00:00:00Z", **kw)
+
+        async def run():
+            ok, own = DB(), DB()
+            await change(ok, "edit", OTHER, kid, "family")                 # an adult, a child's household event
+            await change(own, "delete", panel, house, "family")            # the panel, the house's own
+            out = []
+            for verb, who, owner, visibility in (("delete", kid, MEMBER, "family"), ("delete", panel, MEMBER, "family"),
+                                                 ("edit", OTHER, MEMBER, "personal"), ("edit", "member-nobody", MEMBER, "family"),
+                                                 ("edit", OTHER, "member-nobody", "family")):
+                db = DB()
+                with pytest.raises(cal.EventRefused) as exc:
+                    await change(db, verb, who, owner, visibility)
+                out.append((exc.value.reason, db.writes))
+            return ok.writes, own.writes, out
+
+        assert asyncio.run(run()) == (["UPDATE"], ["UPDATE"], [("adults_only", []), ("adults_only", []), ("not_owner", []),
+                                                               ("unknown_person", []), ("unknown_person", [])])
+        end = time.monotonic() + 10
+        rows: list = []
+        while time.monotonic() < end and len(rows) < 2:
+            with closing(kernel_db(state)) as con:
+                rows = con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%\"done\"%'").fetchall()
+            time.sleep(0.05)
+        assert len(rows) == 2                                    # both allowed changes were reported and closed
+        with closing(kernel_db(state)) as con:
+            assert con.execute("SELECT COUNT(*) FROM intents WHERE receipt_seq IS NULL").fetchone()[0] == 0
+            kept = [json.loads(p) for (p,) in con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%allowed%'")]
+        assert sorted(p["action"] for p in kept) == ["event.delete", "event.edit"] and all(p["event"] == eid for p in kept)
+        assert [p.get("owner") for p in sorted(kept, key=lambda p: p["action"])] == [None, kid]      # the house's own names nobody
+        assert holds(state, word) == [] and holds(state, "member-nobody") == [] and holds(state, house) == [] and holds(state, panel) == []
+    finally:
+        stop(proc)
+
+
 @needs_forget
 def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
     """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:

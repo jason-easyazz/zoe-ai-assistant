@@ -629,7 +629,8 @@ def test_nobody_but_a_door_puts_an_ask_to_the_kernel_and_the_service_never_impor
         return out
 
     # the doors, by their path from the service root (``routers/alarms.py`` shares a file name with a door and is NOT one)
-    doors = {"list_service.py", "reminder_service.py", "alarms.py", "skybridge_service.py", "os_shadow.py", "kernel_door.py"}
+    doors = {"list_service.py", "reminder_service.py", "alarms.py", "skybridge_service.py", "calendar_service.py", "os_shadow.py",
+             "kernel_door.py"}
     for path in _modules():
         if path.relative_to(SVC).as_posix() not in doors:
             assert offends(path.read_text("utf-8")) == [], path.name

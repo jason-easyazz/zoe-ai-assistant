@@ -1009,9 +1009,10 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
 
 
 async def _execute_action(conn, action: str, slots: dict, user_id: str, after_commit: list | None = None) -> dict:
+    import kernel_door
     import list_service
 
-    stamps_at = list_service.stamps_now()
+    stamps_at = kernel_door.stamps_now("lists", "calendar")      # one snapshot for the two doors an accepted suggestion can reach here
     if action == "list_add":
         lt = slots.get("list_type", "shopping")
         text = slots.get("item") or slots.get("description", "")
@@ -1050,7 +1051,8 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         start_date = slots.get("start_date") or date.today().isoformat()
         from calendar_service import suggested_create_event_record
 
-        await suggested_create_event_record(conn, event_id=eid, user_id=user_id, title=title, start_date=start_date)
+        await suggested_create_event_record(conn, event_id=eid, user_id=user_id, title=title, start_date=start_date,
+                                            stamps_at=stamps_at)
         return {"event_id": eid, "title": title, "start_date": start_date}
 
     if action == "note_create":
