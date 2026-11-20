@@ -501,9 +501,10 @@ async def test_a_spoken_turn_is_told_plainly(door, monkeypatch):
     line = rs.ReminderRefused("unknown_person").line()
     assert await execute_intent(Intent("reminder_create", {"title": WORD, "date": "2099-06-16"}), KID) == line
     # "cancel that" is bound to the reminder a spoken create just made: note one (the refused create above made none)
-    monkeypatch.setitem(intent_router._JUST_SET_REMINDER, KID, (RID, time.monotonic()))
+    intent_router._note_reminder_just_set(KID, RID, WORD)
     assert await execute_intent(Intent("reminder_cancel", {"title": WORD, "after": "reminder_create"}), KID) == line
-    assert intent_router._JUST_SET_REMINDER[KID][0] == RID       # refused: nothing was cancelled, so "that" is still that
+    assert intent_router._reminder_just_set(KID, WORD) == RID    # refused: nothing was cancelled, so "that" is still that
+    intent_router._JUST_SET_REMINDER.clear()
     assert db.writes == []
 
 

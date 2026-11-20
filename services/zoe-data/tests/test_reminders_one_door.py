@@ -606,19 +606,81 @@ async def test_only_an_affirmative_cancel_of_that_deletes_the_reminder_just_set(
 
 @pytest.mark.asyncio
 async def test_the_note_of_the_reminder_just_set_holds_ids_and_a_number_never_a_word(said):
-    """The reply's title is read from the row when the cancel runs, so the note needs no words. Control run: with the title put
-    back into the note's tuple this fails (a string that is not the id is in the cache)."""
+    """The reply's title is read from the row when the cancel runs, so the note needs no words: it is filed under a keyed digest
+    of the title as asked. Control run: with the title itself used as the key (no digest) this fails."""
     import intent_router
 
     store, create, cancel_that = said
     assert (await create(title="womble the quince")).startswith("Reminder set")
     (made,) = [rid for rid in store.rows if rid not in ("older", "newer-done")]
+    import hashlib
+
     assert list(intent_router._JUST_SET_REMINDER) == [A]
-    entry = intent_router._JUST_SET_REMINDER[A]
+    ((digest, entry),) = intent_router._JUST_SET_REMINDER[A].items()
     assert entry[0] == made and len(entry) == 2 and isinstance(entry[1], float)
-    assert "womble" not in repr(intent_router._JUST_SET_REMINDER) and "quince" not in repr(intent_router._JUST_SET_REMINDER)
+    assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)          # a digest, and a KEYED one:
+    assert digest not in (hashlib.sha256(b"womble the quince").hexdigest(), "womble the quince")
+    held = repr(intent_router._JUST_SET_REMINDER).lower()
+    assert all(word not in held for word in ("womble", "quince", "the "))               # no byte of the title
     assert await cancel_that() == "Reminder cancelled: womble the quince."        # the words come from the row, at that moment
     assert store.rows[made]["deleted"] == 1 and intent_router._JUST_SET_REMINDER == {}
+
+
+@pytest.mark.asyncio
+async def test_cancel_that_reaches_only_the_reminder_its_own_conversation_made(said):
+    """One member, several conversations at once (chat keeps a context per session). A's "cancel that" cancels the reminder A's
+    create made even though B's create came later; then B's cancels B's; a third conversation that made nothing cancels
+    nothing. Control run: with ONE id kept per member (the note keyed by the member alone), session A's "cancel that" deletes
+    B's reminder and this fails.
+
+    The same title asked in two conversations inside the window is ONE note: the latest create wins, and either conversation's
+    "cancel that" cancels that latest reminder (the earlier one is left alone and a second cancel finds nothing)."""
+    from conversation_context import ConversationContext
+
+    store, _create, _cancel = said
+
+    async def create(ctx, title):
+        intent = Intent("reminder_create", {"title": title, "date": "2099-06-16", "time": "15:00"})
+        ctx.activate(intent.name, intent.slots, "remind me")
+        before = set(store.rows)
+        assert (await execute_intent(intent, A)).startswith("Reminder set")
+        (made,) = set(store.rows) - before
+        return made
+
+    async def cancel(ctx):
+        name, slots = ctx.resolve_coreference("cancel that")
+        return await execute_intent(Intent(name, slots), A)
+
+    session_a, session_b, session_c = ConversationContext(), ConversationContext(), ConversationContext()
+    made_a = await create(session_a, "water the fern")
+    made_b = await create(session_b, "feed the newt")                                # later, elsewhere, inside the window
+    session_c.activate("reminder_create", {"title": "wind the clock"}, "remind me")   # a conversation whose create never ran
+    assert await cancel(session_c) == rs.SPOKEN["cancel_nothing"]
+    assert store.rows[made_a]["deleted"] == 0 and store.rows[made_b]["deleted"] == 0
+    assert await cancel(session_a) == "Reminder cancelled: water the fern."
+    assert store.rows[made_a]["deleted"] == 1 and store.rows[made_b]["deleted"] == 0     # A's only
+    assert await cancel(session_b) == "Reminder cancelled: feed the newt."
+    assert store.rows[made_b]["deleted"] == 1
+    assert await cancel(session_a) == rs.SPOKEN["cancel_nothing"] and await cancel(session_b) == rs.SPOKEN["cancel_nothing"]
+    # the same title in two conversations: the latest wins
+    first = await create(session_a, "take pills")
+    second = await create(session_b, "Take  Pills")
+    assert await cancel(session_a) == "Reminder cancelled: Take  Pills."
+    assert store.rows[second]["deleted"] == 1 and store.rows[first]["deleted"] == 0
+    assert await cancel(session_b) == rs.SPOKEN["cancel_nothing"] and store.rows[first]["deleted"] == 0
+
+
+def test_the_note_is_bounded_per_member_and_overall():
+    """Control run: with the per-member cap removed, the map grows past it."""
+    import intent_router
+
+    intent_router._JUST_SET_REMINDER.clear()
+    for i in range(intent_router._JUST_SET_PER_MEMBER + 5):
+        intent_router._note_reminder_just_set(A, f"rem-{i}", f"womble {i}")
+    assert len(intent_router._JUST_SET_REMINDER[A]) == intent_router._JUST_SET_PER_MEMBER
+    assert intent_router._reminder_just_set(A, "womble 0") is None                    # the oldest went first
+    assert intent_router._reminder_just_set(A, f"womble {intent_router._JUST_SET_PER_MEMBER + 4}") is not None
+    intent_router._JUST_SET_REMINDER.clear()
 
 
 @pytest.mark.asyncio
@@ -631,7 +693,7 @@ async def test_an_expired_note_is_removed_on_any_access_not_only_its_own_lookup(
     clock = [intent_router.time.monotonic()]
     monkeypatch.setattr(intent_router.time, "monotonic", lambda: clock[0])
     clock[0] += intent_router._JUST_SET_WINDOW_S + 1
-    intent_router._note_reminder_just_set(B, "rem-b")                                # ANOTHER member's access: A's stale note goes
+    intent_router._note_reminder_just_set(B, "rem-b", "feed the newt")               # ANOTHER member's access: A's stale note goes
     assert list(intent_router._JUST_SET_REMINDER) == [B]
     clock[0] += intent_router._JUST_SET_WINDOW_S + 1
     before = store.live()
@@ -649,7 +711,8 @@ async def test_a_member_forget_drops_the_note_and_a_row_that_has_gone_is_nothing
 
     store, create, cancel_that = said
     assert (await create()).startswith("Reminder set")
-    intent_router._note_reminder_just_set(B, "rem-b")
+    intent_router._note_reminder_just_set(B, "rem-b", "feed the newt")
+    intent_router._note_reminder_just_set(A, "rem-a2", "water the fern")            # a second conversation of A's: the WHOLE map goes
     assert forget_redact.clear_turn_caches(A) >= 1
     assert list(intent_router._JUST_SET_REMINDER) == [B]                             # only the forgotten member's note went
     before = store.live()
