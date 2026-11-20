@@ -176,8 +176,9 @@ async def write_follow_up(user_id: str, c: dict, via: str) -> str:
 async def write_reminder(user_id: str, c: dict, via: str) -> str:
     from db_compat import get_compat_db
     from models import ReminderCreate
-    from reminder_service import create_reminder_record
+    from reminder_service import create_reminder_record, stamps_now
 
+    stamps_at = stamps_now()      # the Zoe OS reminders door is told who the reminder is for: stamped before anything is awaited
     p = c["payload"]
     async with get_compat_db() as db:
         cur = await db.execute("SELECT id FROM reminders WHERE user_id = ? AND deleted = 0 AND title = ? AND description LIKE ?",
@@ -188,7 +189,7 @@ async def write_reminder(user_id: str, c: dict, via: str) -> str:
         made = await create_reminder_record(
             ReminderCreate(title=p["title"], description=f"From your pendant on {c['day_local']} (you approved it; ref {c['id'][:8]}).",
                            due_date=p.get("date") or None, due_time=p.get("time") or None),
-            user={"user_id": user_id, "role": await _role(db, user_id)}, db=db)
+            user={"user_id": user_id, "role": await _role(db, user_id)}, db=db, stamps_at=stamps_at)
         await db.commit()
     rid = str(made.get("id") or "")
     if not rid:

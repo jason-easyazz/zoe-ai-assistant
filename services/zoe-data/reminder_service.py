@@ -1,10 +1,14 @@
 """The reminder store: every entry point creates, edits, snoozes, completes and cancels through the ``*_reminder_record``
-functions here, under ONE ownership rule (``load_for_actor``) and the household clock (``reminder_scan.zoe_now``)."""
+functions here, under ONE ownership rule (``load_for_actor``) and the household clock (``reminder_scan.zoe_now``).
+
+It is also the reminders DOOR of the Zoe OS kernel (``ZOE_OS_REMINDERS=kernel``; ``_gate`` below): each of those functions asks
+the kernel before its write and reports after it. The kernel decides and records ids only; the rows stay here."""
 
 from __future__ import annotations
 
 import contextvars
 import json
+from contextlib import asynccontextmanager
 import logging
 import re
 import uuid
@@ -13,6 +17,7 @@ from typing import Mapping
 
 from fastapi import HTTPException
 
+import kernel_door
 import os_shadow
 import write_receipts
 from guest_policy import require_feature_access
@@ -43,6 +48,68 @@ class ReminderPastError(HTTPException):
     def __init__(self, detail: str, spoken: str):
         super().__init__(status_code=422, detail=detail)
         self.spoken = spoken
+
+
+# ── The Zoe OS reminders door (ZOE_OS_REMINDERS=kernel; docs/architecture/zoe-os-cutover-plan.md, "Changed 2026-11-18") ──────────────
+# Every ``*_reminder_record`` function (the screen's five and the brain tools' three) ASKS the kernel before its write (``_gate``) and REPORTS after it (``_reported``). The
+# mechanism is the one every area shares (``kernel_door`` + the door section of ``os_shadow``); what is here is the reminders'
+# own: the verbs, who a reminder belongs to (``reminders.user_id``: the person it is FOR; ``visibility = 'family'`` = addressed
+# to the household), and the refusal sentences. With the flag at any other value: a flag read, no kernel call, no extra
+# statement, and every write is exactly what it was. The door reads nothing of its own from the database: the row every edit
+# already loads (``load_for_actor``) names the owner, and that load raises on a database fault like any other read.
+# The edit and delete TOOLS only ever touch the member's own row (their statement says so), so the owner is the actor; the
+# snooze tool's statement names no owner, so its door reads it (flag on only; that read raises on a database fault too).
+class ReminderRefused(kernel_door.Refused):
+    """The kernel refused this reminder change. FINAL: nothing was written and no job was touched. ``reason`` is a closed code
+    (``os_shadow.DOOR_REFUSALS``); each caller turns it into its own refusal (``line()`` is the plain sentence they share)."""
+
+    area = "reminders"
+    lines = {
+        "not_owner": "That reminder is someone else's, so I can't change it.",
+        "adults_only": "Only the person that reminder is for, or a grown-up, can change or delete it.",
+        "unknown_person": "I don't know who is asking, so I can't change that reminder.",
+    }
+    fallback = "I'm not allowed to change that reminder."
+
+
+def stamps_now() -> dict | None:
+    """The erase stamps as they are NOW, or None with every door off (``kernel_door.stamps_now``). Every ``*_reminder_record``
+    function takes this as its FIRST statement, before anything it awaits (the row read that names the reminder's owner
+    included). A caller of ``create_reminder_record`` TELLS the door who the reminder is for, so it takes its own as ITS first
+    statement and passes it as ``stamps_at`` (``tests/test_reminders_kernel_door.py`` scans every caller)."""
+    return kernel_door.stamps_now()
+
+
+async def _gate(verb: str, *, actor: Mapping[str, object], reminder_id: str, owner: object, visibility: object,
+                stamps_at: dict | None) -> "kernel_door.Decision | None":
+    """The ask at the door: may ``actor`` do ``verb`` to this reminder? None with the flag off (``stamps_at`` is None when every
+    door is off; else ONE more flag read). Raises ``ReminderRefused`` on a kernel refusal; a kernel that is down or slow is
+    ``not_checked`` and the change proceeds. Only ids cross: the reminder's id, the acting member, the member it is for."""
+    if stamps_at is None or not os_shadow.area_on("reminders"):
+        return None
+    user_id = str(actor.get("user_id") or "")
+    if not user_id:
+        os_shadow.door_unchecked(verb, "no_actor", "reminders")
+        return None
+    panel = kernel_door.is_panel(user_id)
+    decision, reason, ask, stamps = await os_shadow.ask_door(
+        "reminders", verb, "" if panel else user_id, panel=panel, target=str(reminder_id), owner=str(owner or "") or None,
+        household=str(visibility or "") == "family", stamps_at=stamps_at)
+    if decision == "refuse":
+        raise ReminderRefused(reason)
+    return kernel_door.Decision(decision, reason, ask, stamps=stamps, area="reminders")
+
+
+@asynccontextmanager
+async def _reported(decision: "kernel_door.Decision | None"):
+    """Around a door's own writes: the kernel hears ``done`` once they have returned (inside a caller's held transaction: once
+    THAT has committed, ``kernel_door.reports_after``), or ``failed`` if any of them raised."""
+    try:
+        yield
+    except BaseException:
+        kernel_door.wrote(decision, "failed")
+        raise
+    kernel_door.wrote(decision)
 
 
 def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str | None:
@@ -261,7 +328,8 @@ async def _create_notification(db, *, user_id: str, notif_type: str, title: str,
 
 async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, object], db,
                                  now_utc: datetime | None = None, schedule: bool = True,
-                                 after_commit: "list | None" = None, shadow_source: str = "service") -> dict:
+                                 after_commit: "list | None" = None, shadow_source: str = "service",
+                                 stamps_at: dict | None = None) -> dict:
     """Create a reminder with the same policy, notification, and broadcast behavior as the API route. ``now_utc`` (a background caller
     that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock. ``schedule=False`` is for a caller that registers its OWN job for the row (commitments, +45 s): one scheduling path per reminder, never two.
 
@@ -271,7 +339,12 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     check reads through: the caller runs these AFTER its transaction's connection is back in the pool (scheduling borrows a
     connection of its own, and a caller still holding one while it waits for another is how a full pool deadlocks), so it
     cannot be ``db``. ``db.commit()`` here is a no-op on Postgres,
-    so only the caller's real transaction makes the row durable."""
+    so only the caller's real transaction makes the row durable.
+
+    ``stamps_at``: the caller's ``stamps_now()``, taken as the first thing the caller did. This is the one door whose reminder
+    has no row to read the owner from, so the caller tells it who the reminder is for (``user``), and with it when it learned of them."""
+    if stamps_at is None:
+        stamps_at = stamps_now()
     await require_feature_access(db, user, feature="reminders", action="create")
     user_id = str(user["user_id"])
     reminder_id = str(uuid.uuid4())
@@ -284,36 +357,39 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     if recurring_pattern and reminder_type == "one-time":
         reminder_type = "recurring"
 
-    await db.execute(
-        """INSERT INTO reminders (
-            id, user_id, title, description, reminder_type, category, priority,
-            due_date, due_time, recurring_pattern, is_active, acknowledged,
-            snoozed_until, visibility, deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, ?, 0)""",
-        (
-            reminder_id,
-            user_id,
-            payload.title,
-            payload.description,
-            reminder_type,
-            payload.category,
-            payload.priority,
-            due_date,
-            due_time,
-            recurring_pattern,
-            payload.visibility,
-        ),
-    )
-    await _create_notification(
-        db,
-        user_id=user_id,
-        notif_type="reminder_created",
-        title="Reminder Created",
-        message=f"Reminder added: {payload.title}",
-        data={"reminder_id": reminder_id, "due_date": due_date, "due_time": due_time,
-              **({"recurring_pattern": recurring_pattern} if recurring_pattern else {})},
-    )
-    await db.commit()
+    asked = await _gate("reminder.create", actor=user, reminder_id=reminder_id, owner=user_id, visibility=payload.visibility,
+                        stamps_at=stamps_at)
+    async with _reported(asked):
+        await db.execute(
+            """INSERT INTO reminders (
+                id, user_id, title, description, reminder_type, category, priority,
+                due_date, due_time, recurring_pattern, is_active, acknowledged,
+                snoozed_until, visibility, deleted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, ?, 0)""",
+            (
+                reminder_id,
+                user_id,
+                payload.title,
+                payload.description,
+                reminder_type,
+                payload.category,
+                payload.priority,
+                due_date,
+                due_time,
+                recurring_pattern,
+                payload.visibility,
+            ),
+        )
+        await _create_notification(
+            db,
+            user_id=user_id,
+            notif_type="reminder_created",
+            title="Reminder Created",
+            message=f"Reminder added: {payload.title}",
+            data={"reminder_id": reminder_id, "due_date": due_date, "due_time": due_time,
+                  **({"recurring_pattern": recurring_pattern} if recurring_pattern else {})},
+        )
+        await db.commit()
 
     def _vouch() -> None:
         # The receipt the write-claim guard checks a reply against (write_receipts.py): the row is committed.
@@ -446,6 +522,7 @@ async def update_reminder_record(db, actor: Mapping[str, object], reminder_id: s
     (``ReminderPastError``, nothing written), because the scan never fires it. A day or time re-sent unchanged is not a move (an
     edit form sends the whole row), so renaming or switching off a reminder whose time has passed is as it always was. A
     recurring row is never refused for its time: its date is re-anchored to the next occurrence."""
+    stamps_at = stamps_now()
     await require_feature_access(db, actor, feature="reminders", action="update")
     user_id = str(actor["user_id"])
     existing = await load_for_actor(db, actor, reminder_id, verb="edit", own_only=own_only)
@@ -491,13 +568,16 @@ async def update_reminder_record(db, actor: Mapping[str, object], reminder_id: s
         refuse_past_due(stored.get("due_date", existing.get("due_date")), stored.get("due_time", existing.get("due_time")),
                         now_utc=now_utc)
 
+    asked = await _gate("reminder.edit", actor=actor, reminder_id=reminder_id, owner=existing.get("user_id"),
+                        visibility=existing.get("visibility"), stamps_at=stamps_at)
     updates.append("updated_at = NOW()")
     # Bump the schedule generation so any old-time job that already won its claim self-voids at fire time.
     updates.append("schedule_generation = COALESCE(schedule_generation, 0) + 1")
     params.append(reminder_id)
     await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
-    await db.execute(f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?", params)
-    await db.commit()
+    async with _reported(asked):
+        await db.execute(f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?", params)
+        await db.commit()
     await _reschedule_reminder_due_safe(db, reminder_id)
     reminder = await _reread(db, reminder_id)
     await broadcaster.broadcast("reminders", "reminder_updated", reminder, user_id=user_id)
@@ -506,11 +586,15 @@ async def update_reminder_record(db, actor: Mapping[str, object], reminder_id: s
 
 async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: str, *, own_only: bool = False) -> dict:
     """Cancel a reminder (soft delete): the pending job is cancelled BEFORE the row is marked deleted."""
+    stamps_at = stamps_now()
     await require_feature_access(db, actor, feature="reminders", action="delete")
-    await load_for_actor(db, actor, reminder_id, verb="cancel", own_only=own_only)
+    row = await load_for_actor(db, actor, reminder_id, verb="cancel", own_only=own_only)
+    asked = await _gate("reminder.delete", actor=actor, reminder_id=reminder_id, owner=row.get("user_id"),
+                        visibility=row.get("visibility"), stamps_at=stamps_at)
     await _cancel_reminder_jobs_safe(reminder_id)
-    await db.execute("UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
-    await db.commit()
+    async with _reported(asked):
+        await db.execute("UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
+        await db.commit()
     await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id}, user_id=str(actor["user_id"]))
     return {"ok": True, "id": reminder_id}
 
@@ -518,23 +602,27 @@ async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: s
 async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: str, minutes: int) -> dict:
     """Snooze (the screen's, owner only): ``snoozed_until`` is a UTC instant it re-fires at; the due date, the time, the rule
     and the done mark are untouched. (The brain's snooze tool writes a different row: ``tool_snooze_reminder_record``.)"""
+    stamps_at = stamps_now()
     await require_feature_access(db, actor, feature="reminders", action="snooze")
     user_id = str(actor["user_id"])
     row = await load_for_actor(db, actor, reminder_id, verb="snooze")
     owner_id = row.get("user_id") or user_id
     title = row.get("title") or "Reminder"
     snoozed_until = (datetime.utcnow() + timedelta(minutes=minutes)).isoformat() + "Z"
+    asked = await _gate("reminder.snooze", actor=actor, reminder_id=reminder_id, owner=row.get("user_id"),
+                        visibility=row.get("visibility"), stamps_at=stamps_at)
     # B2: cancel the OLD-time job before the state change commits; the generation bump voids an already-claimed one.
     await _cancel_reminder_jobs_safe(reminder_id)
-    await db.execute(
-        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
-        "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
-        [snoozed_until, reminder_id],
-    )
-    await _create_notification(db, user_id=user_id, notif_type="reminder_snoozed", title="Reminder Snoozed",
-                               message=f"Reminder snoozed for {minutes} minutes",
-                               data={"reminder_id": reminder_id, "snoozed_until": snoozed_until})
-    await db.commit()
+    async with _reported(asked):
+        await db.execute(
+            "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
+            "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
+            [snoozed_until, reminder_id],
+        )
+        await _create_notification(db, user_id=user_id, notif_type="reminder_snoozed", title="Reminder Snoozed",
+                                   message=f"Reminder snoozed for {minutes} minutes",
+                                   data={"reminder_id": reminder_id, "snoozed_until": snoozed_until})
+        await db.commit()
     try:  # a one-shot at snoozed_until so the reminder re-fires when the snooze ends
         from proactive.triggers.reminders import schedule_reminder
         snooze_at = datetime.fromisoformat(snoozed_until.replace("Z", "+00:00"))
@@ -550,25 +638,29 @@ async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: s
 
 async def acknowledge_reminder_record(db, actor: Mapping[str, object], reminder_id: str) -> dict:
     """Mark a reminder done (owner only). A one-off is done for good; an RRULE row is done for THIS occurrence only."""
+    stamps_at = stamps_now()
     await require_feature_access(db, actor, feature="reminders", action="acknowledge")
     user_id = str(actor["user_id"])
     row = await load_for_actor(db, actor, reminder_id, verb="done")
+    asked = await _gate("reminder.done", actor=actor, reminder_id=reminder_id, owner=row.get("user_id"),
+                        visibility=row.get("visibility"), stamps_at=stamps_at)
     recurring = is_rrule(row.get("recurring_pattern"))
-    if recurring:
-        # The row stays live; clear a snooze and bump the generation BEFORE the cancel (after commit), so a racing scan
-        # never leaves a stale-generation job that would self-void and skip the next occurrence.
-        await db.execute(
-            "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
-            "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
-            [reminder_id],
-        )
-    else:
-        await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
-        await db.execute("UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
-    await _create_notification(db, user_id=user_id, notif_type="reminder_acknowledged", title="Reminder Done",
-                               message=f"Reminder acknowledged: {row.get('title', 'Reminder')}",
-                               data={"reminder_id": reminder_id})
-    await db.commit()
+    async with _reported(asked):
+        if recurring:
+            # The row stays live; clear a snooze and bump the generation BEFORE the cancel (after commit), so a racing scan
+            # never leaves a stale-generation job that would self-void and skip the next occurrence.
+            await db.execute(
+                "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
+                "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
+                [reminder_id],
+            )
+        else:
+            await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
+            await db.execute("UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
+        await _create_notification(db, user_id=user_id, notif_type="reminder_acknowledged", title="Reminder Done",
+                                   message=f"Reminder acknowledged: {row.get('title', 'Reminder')}",
+                                   data={"reminder_id": reminder_id})
+        await db.commit()
     if recurring:
         await _cancel_reminder_jobs_safe(reminder_id)
         await _reschedule_reminder_due_safe(db, reminder_id)
@@ -585,8 +677,11 @@ async def acknowledge_reminder_record(db, actor: Mapping[str, object], reminder_
 TOOL_EDIT_FIELDS = ("title", "due_date", "due_time", "priority")
 
 
-async def tool_update_reminder_record(db, *, user_id: str, reminder_id: str, fields: Mapping[str, object]) -> bool:
+async def tool_update_reminder_record(db, *, user_id: str, reminder_id: str, fields: Mapping[str, object],
+                                      stamps_at: dict | None = None) -> bool:
     """The edit tool's row: the given fields as given, on the member's OWN reminder. False (nothing written) with no field."""
+    if stamps_at is None:
+        stamps_at = stamps_now()
     updates, params = [], []
     for field in TOOL_EDIT_FIELDS:
         if field in fields:
@@ -594,20 +689,47 @@ async def tool_update_reminder_record(db, *, user_id: str, reminder_id: str, fie
             params.append(fields[field])
     if not updates:
         return False
+    # the statement touches only the member's own row (``AND user_id=?``): the reminder is theirs, or nothing is written
+    asked = await _gate("reminder.edit", actor={"user_id": user_id}, reminder_id=reminder_id, owner=user_id, visibility=None,
+                        stamps_at=stamps_at)
     updates.append("updated_at=NOW()")
     params.extend([reminder_id, user_id])
-    await db.execute(f"UPDATE reminders SET {','.join(updates)} WHERE id=? AND user_id=?", params)
+    async with _reported(asked):
+        await db.execute(f"UPDATE reminders SET {','.join(updates)} WHERE id=? AND user_id=?", params)
     return True
 
 
-async def tool_delete_reminder_record(db, *, user_id: str, reminder_id: str) -> None:
+async def tool_delete_reminder_record(db, *, user_id: str, reminder_id: str, stamps_at: dict | None = None) -> None:
     """The delete tool's row: deleted AND switched off, on the member's OWN reminder."""
-    await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=NOW() WHERE id=? AND user_id=?", (reminder_id, user_id))
+    if stamps_at is None:
+        stamps_at = stamps_now()
+    asked = await _gate("reminder.delete", actor={"user_id": user_id}, reminder_id=reminder_id, owner=user_id, visibility=None,
+                        stamps_at=stamps_at)
+    async with _reported(asked):
+        await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=NOW() WHERE id=? AND user_id=?", (reminder_id, user_id))
 
 
-async def tool_snooze_reminder_record(db, *, reminder_id: str, due_date: str, due_time: str, snoozed_until: str) -> None:
+async def _tool_snooze_gate(db, *, user_id: str | None, reminder_id: str, stamps_at: dict | None):
+    """The snooze tool's ask. Its statement names no owner, so with the door on (only then) who the reminder is for is read here."""
+    if stamps_at is None or not os_shadow.area_on("reminders"):
+        return None
+    cursor = await db.execute("SELECT user_id, visibility FROM reminders WHERE id = ?", (reminder_id,))   # a fault here raises
+    row = await cursor.fetchone()
+    if row is None:
+        os_shadow.door_unchecked("reminder.snooze", "no_row", "reminders")
+        return None
+    return await _gate("reminder.snooze", actor={"user_id": user_id or ""}, reminder_id=reminder_id,
+                       owner=dict(row).get("user_id"), visibility=dict(row).get("visibility"), stamps_at=stamps_at)
+
+
+async def tool_snooze_reminder_record(db, *, reminder_id: str, due_date: str, due_time: str, snoozed_until: str,
+                                      user_id: str | None = None, stamps_at: dict | None = None) -> None:
     """The snooze tool's row: the due date and time moved to the snoozed local time, the snooze instant set, the done mark cleared."""
-    await db.execute(
-        "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?",
-        (due_date, due_time, snoozed_until, reminder_id),
-    )
+    if stamps_at is None:
+        stamps_at = stamps_now()
+    asked = await _tool_snooze_gate(db, user_id=user_id, reminder_id=reminder_id, stamps_at=stamps_at)
+    async with _reported(asked):
+        await db.execute(
+            "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?",
+            (due_date, due_time, snoozed_until, reminder_id),
+        )

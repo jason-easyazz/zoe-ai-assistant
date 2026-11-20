@@ -89,12 +89,11 @@ async def ask_kernel(verb: str, *, user_id: Optional[str], list_id: Optional[str
 
 
 def stamps_now() -> Optional[dict]:
-    """The erase stamps as they are NOW (``os_shadow.stamp_snapshot``: a small copy from memory, no I/O), or None with the
-    lists flag off (one flag read, nothing copied). A caller that TELLS a door who a list's owner is (the only one: starting a
-    list, ``create_list_record``) takes this as the first thing it does, before anything it awaits, and hands it to the door as
-    ``stamps_at``: an owner whose forget is confirmed while the caller is still on its way to the door keeps the stamp from
-    before it."""
-    return os_shadow.stamp_snapshot() if os_shadow.lists_on() else None
+    """The erase stamps as they are NOW, or None with every door off (``kernel_door.stamps_now``: the same snapshot serves every
+    area). A caller that TELLS a door who a list's owner is (the only one: starting a list, ``create_list_record``) takes this as
+    the first thing it does, before anything it awaits, and hands it to the door as ``stamps_at``: an owner whose forget is
+    confirmed while the caller is still on its way to the door keeps the stamp from before it."""
+    return kernel_door.stamps_now()
 
 
 async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,

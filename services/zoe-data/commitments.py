@@ -622,9 +622,10 @@ async def _make_reminder(db, user_id: str, title: str, now: datetime) -> str:
     from ``users`` (a tracked member with no row is a plain ``user``); a role that may not create reminders gets none and the promise
     is owned up to instead. '' on any failure."""
     from models import ReminderCreate
-    from reminder_service import create_reminder_record
+    from reminder_service import create_reminder_record, stamps_now
     from time_utils import zoe_timezone
 
+    stamps_at = stamps_now()      # the Zoe OS reminders door is told who the reminder is for: stamped before anything is awaited
     local = (now + timedelta(minutes=1)).astimezone(zoe_timezone())
     try:
         cur = await db.execute("SELECT role FROM users WHERE id = ?", (user_id,))
@@ -636,7 +637,7 @@ async def _make_reminder(db, user_id: str, title: str, now: datetime) -> str:
     try:
         made = await create_reminder_record(
             ReminderCreate(title=title, due_date=local.strftime("%Y-%m-%d"), due_time=local.strftime("%H:%M")), user=user, db=db,
-            now_utc=now, schedule=False)       # this function owns the (+45 s) schedule below: exactly one job per reminder
+            now_utc=now, schedule=False, stamps_at=stamps_at)       # this function owns the (+45 s) schedule below: exactly one job per reminder
         rid = str(made.get("id") or "")
     except Exception as exc:  # noqa: BLE001 - HTTPException (role / date) or a DB failure: she owns it up instead
         logger.warning("commitments: late reminder not created (%s)", type(exc).__name__)
