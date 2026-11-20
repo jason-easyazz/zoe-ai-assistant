@@ -974,8 +974,9 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
     from db_pool import AsyncpgCompat
     from intent_router import _load_direct_execution_user
     from models import ReminderCreate
-    from reminder_service import create_reminder_record
+    from reminder_service import create_reminder_record, stamps_now
 
+    stamps_at = stamps_now()      # the Zoe OS reminders door is told who the reminder is for: stamped before anything is awaited
     title = str(slots.get("title") or slots.get("description") or "Reminder").strip()
     due_date, due_time = _suggested_when(title, slots)
     if not (due_date or due_time):
@@ -1000,7 +1001,7 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
     try:
         reminder = await create_reminder_record(
             ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db,
-            after_commit=after_commit if after_commit is not None else [], shadow_source="suggestion")
+            after_commit=after_commit if after_commit is not None else [], shadow_source="suggestion", stamps_at=stamps_at)
     except HTTPException as exc:      # the door refused (a time already gone, a role): the offer stays open, said by a fixed code
         raise ValueError(getattr(exc, "spoken", None) or "reminder_not_valid") from None
     return {"reminder_id": reminder.get("id"), "title": title,

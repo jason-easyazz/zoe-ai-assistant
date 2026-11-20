@@ -186,15 +186,16 @@ async def loop_to_reminder(member: str, loop: dict, due_date: str, due_time: str
     """A reminder through the existing writer (role check, notification, scheduling), then the loop is closed."""
     from db_compat import get_compat_db
     from models import ReminderCreate
-    from reminder_service import create_reminder_record
+    from reminder_service import create_reminder_record, stamps_now
 
+    stamps_at = stamps_now()      # the Zoe OS reminders door is told who the reminder is for: stamped before anything is awaited
     async with get_compat_db() as db:
         cur = await db.execute("SELECT role FROM users WHERE id = ?", (member,))
         row = await cur.fetchone()
         made = await create_reminder_record(
             ReminderCreate(title=loop["text"][:120], description="From your open loops.", due_date=due_date or None,
                            due_time=due_time or None),
-            user={"user_id": member, "role": (row[0] if row else None) or "user"}, db=db)
+            user={"user_id": member, "role": (row[0] if row else None) or "user"}, db=db, stamps_at=stamps_at)
         await db.commit()
     if not str((made or {}).get("id") or ""):
         return False
