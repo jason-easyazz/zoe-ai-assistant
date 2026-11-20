@@ -22,6 +22,8 @@ the _ZOE_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
 
 from __future__ import annotations
 
+import kernel_door
+import lookup_door
 import memory_actor
 import asyncio
 import hashlib
@@ -2075,6 +2077,10 @@ async def _web_research(query: str, user_id: str = "") -> str:
     6. Return extracted text so the LLM can synthesise the final answer
     """
     try:
+        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+    except kernel_door.Refused as exc:      # a caller the kernel does not know: nothing leaves the box in their name
+        return exc.line()
+    try:
         from cloakbrowser import launch_context_async  # type: ignore[import]
     except ImportError:
         return ""
@@ -2699,6 +2705,10 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
     stops the model being talked into fetching localhost / link-local / RFC1918
     (SSRF into Zoe's own services or the house network).
     """
+    try:
+        lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+    except kernel_door.Refused as exc:      # a caller the kernel does not know: nothing leaves the box in their name
+        return exc.line()
     import importlib.util as _ilu
     import re as _re
     from html import unescape as _unescape
@@ -2775,6 +2785,10 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
     For local business discovery, multi-store price comparison, or any task
     requiring multiple site visits, use _web_research (backing deep_web_research).
     """
+    try:
+        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+    except kernel_door.Refused as exc:      # a caller the kernel does not know: nothing leaves the box in their name
+        return exc.line()
     import asyncio as _asyncio
     import importlib.util as _ilu
 

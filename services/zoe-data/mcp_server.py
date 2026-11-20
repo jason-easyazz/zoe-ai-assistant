@@ -3,6 +3,8 @@ MCP Server for zoe-data.
 Exposes Zoe tools that Hermes skills and local agents can call.
 Runs as a stdio MCP server alongside the REST API.
 """
+import lookup_door
+import message_door
 import memory_actor
 import asyncio
 import json
@@ -1430,10 +1432,12 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
-    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal", "people", "memory")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
+    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal", "people", "memory", "messages")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
     acting = memory_actor.Member(str(user_id or ""), stamps_at)      # the member this tool call is for
+    if kernel_door.acting() is None:      # a tool call that did not come through the service's dispatch: this member is who it is for
+        kernel_door.note_actor(user_id)
 
     if "list_type" in args:
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
@@ -1818,6 +1822,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     # === WEATHER TOOLS (Open-Meteo — free, no API key) ===
     elif name == "weather_current":
+        try:
+            lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+        except kernel_door.Refused as exc:
+            return {"error": exc.line(), "status": "refused"}
         # WMO weather code → human-readable description
         _WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
                 45: "Fog", 48: "Icy fog", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
@@ -1867,6 +1875,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         }
 
     elif name == "weather_forecast":
+        try:
+            lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+        except kernel_door.Refused as exc:
+            return {"error": exc.line(), "status": "refused"}
         _WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
                 45: "Fog", 48: "Icy fog", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
                 61: "Slight rain", 63: "Rain", 65: "Heavy rain", 71: "Slight snow", 73: "Snow",
@@ -2786,13 +2798,22 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         if not message:
             return {"error": "message is required"}
         panel_id = args.get("panel_id") or "all"
-        msg = await _enqueue_panel_tool(
-            db,
-            user_id_fallback=user_id,
-            panel_id=panel_id,
-            action_type="panel_announce",
-            payload={"message": message},
-        )
+        try:      # ZOE_OS_MESSAGES=kernel: a member's words on the house's panels ask first (off: nothing)
+            asked = await message_door.ask(message_door.PANEL, user_id, stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line(), "status": "refused"}
+        try:
+            msg = await _enqueue_panel_tool(
+                db,
+                user_id_fallback=user_id,
+                panel_id=panel_id,
+                action_type="panel_announce",
+                payload={"message": message},
+            )
+        except BaseException:
+            message_door.sent(asked, False)
+            raise
+        message_door.sent(asked, True)
         return {"ok": True, "action": "panel_announce", "panel_id": panel_id, "message": message, "queued": msg}
 
     elif name == "panel_request_auth":

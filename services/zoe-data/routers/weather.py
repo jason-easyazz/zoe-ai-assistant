@@ -10,6 +10,7 @@ Geocoding (location search):
   1. OpenWeatherMap Geocoding — if API key set
   2. Open-Meteo Geocoding API — free fallback
 """
+import lookup_door
 import os
 import json
 import logging
@@ -142,6 +143,7 @@ async def _geocode(name: str) -> Optional[tuple]:
     (lat, lon, city, country) so the user can ask about weather somewhere other
     than their saved home area. Uses Open-Meteo's free, keyless geocoding API
     regardless of the weather provider. Returns None if it can't be resolved."""
+    lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     q = (name or "").strip()
     if not q:
         return None
@@ -252,6 +254,7 @@ async def _get_system_default_location(db) -> dict:
 # ─── Open-Meteo implementation (no API key) ───────────────────────────────────
 
 async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: str) -> dict:
+    lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -325,6 +328,7 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
     # Reuse the fresh current reading's raw hourly/daily — keyed by THESE coords,
     # so a named-location forecast can never ride the home area's data (the old
     # flat slot needed a cache=False bypass to guarantee that).
+    lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     cached = _cache_get("current", lat, lon) or {}
     hourly_raw = cached.get("_hourly_raw") or {}
     daily_raw  = cached.get("_daily_raw") or {}
@@ -412,6 +416,7 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
 # ─── OpenWeatherMap implementation (when API key is set) ──────────────────────
 
 async def _fetch_owm_current(lat: float, lon: float, city: str, country: str) -> dict:
+    lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     params = {"appid": OPENWEATHERMAP_API_KEY, "units": "metric", "lat": lat, "lon": lon}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -447,6 +452,7 @@ async def _fetch_owm_current(lat: float, lon: float, city: str, country: str) ->
 
 
 async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
+    lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     params = {"appid": OPENWEATHERMAP_API_KEY, "units": "metric", "cnt": 40, "lat": lat, "lon": lon}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -667,6 +673,7 @@ async def update_default_location(payload: dict, user: dict = Depends(require_ad
 @router.get("/location/search", response_model=dict)
 async def search_locations(query: str = "", limit: int = 8, user: dict = Depends(get_current_user)):
     """Search locations. Uses OpenWeatherMap geocoding (if key set) or Open-Meteo geocoding."""
+    lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     if not query or len(query) < 2:
         return {"results": []}
 
