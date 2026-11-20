@@ -382,31 +382,6 @@ def _reminder_phone_mode() -> str:
         return "off"
 
 
-async def _fire_trigger_results(pending: list) -> None:
-    """Fire each slow-trigger result. A result's ``on_delivered`` (a trigger's own "sent today" mark) runs only once
-    ``fire_notification`` has RETURNED for it: one that raised (before its pending row existed) is logged and left unmarked, so
-    the trigger offers it again on the next tick."""
-    for r in pending:
-        try:
-            await fire_notification(
-                user_id=r.user_id,
-                message=r.message,
-                trigger_type=r.trigger_type,
-                item_id=r.item_id,
-                context=r.context,
-            )
-        except Exception as exc:
-            log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",
-                      getattr(r, "user_id", "?"), getattr(r, "trigger_type", "?"), exc)
-            continue
-        done = getattr(r, "on_delivered", None)
-        if done is not None:
-            try:
-                done()
-            except Exception as exc:  # noqa: BLE001 - a trigger's bookkeeping never breaks the loop
-                log.warning("on_delivered failed for trigger result (type=%s): %s", getattr(r, "trigger_type", "?"), type(exc).__name__)
-
-
 async def _deliver_to_phone(user_id: str, message: str, item_id: str, dedupe_id: str, url: str, *, dry: bool) -> int:
     """The reminder's phone fan-out; returns the web-push count (the in-app fallback below reads it). Never raises."""
     try:
@@ -469,7 +444,18 @@ async def _slow_loop() -> None:
                         log.error("Trigger %s raised: %s", trigger.trigger_type, exc)
 
             # Step 2: NO pooled connection held across compose_message/push.
-            await _fire_trigger_results(pending)
+            for r in pending:
+                try:
+                    await fire_notification(
+                        user_id=r.user_id,
+                        message=r.message,
+                        trigger_type=r.trigger_type,
+                        item_id=r.item_id,
+                        context=r.context,
+                    )
+                except Exception as exc:
+                    log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",
+                              getattr(r, "user_id", "?"), getattr(r, "trigger_type", "?"), exc)
 
             # Step 3: B2.1 brief-on-arrival response signal. Flag-dark: an
             # immediate no-op (no DB) unless ZOE_PROACTIVE_BRIEF_ON_ARRIVAL is on.
