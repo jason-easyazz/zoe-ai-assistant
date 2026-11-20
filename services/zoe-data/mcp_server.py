@@ -3123,6 +3123,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     expires_at=args.get("expires_at"),
                     acting=acting,
                 )
+            except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_MEMORY=kernel): nothing was changed
+                return {"error": exc.line(), "status": "refused"}
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
             if ref is None:
@@ -3211,6 +3213,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     origin="mcp",
                     acting=acting,
                 )
+            except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_MEMORY=kernel): nothing was changed
+                return {"error": exc.line(), "status": "refused"}
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
             if ref is None:
@@ -3250,6 +3254,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     origin="mcp",  # a model writer acting for the member (memory_authority),
                     acting=acting,
                 )
+            except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_MEMORY=kernel): nothing was changed
+                return {"error": exc.line(), "status": "refused"}
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
             if done is None:

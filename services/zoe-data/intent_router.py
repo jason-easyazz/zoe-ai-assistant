@@ -5027,6 +5027,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 origin=teach_origin,
                 acting=acting,
             )
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_MEMORY=kernel): nothing was stored; say why
+            return exc.line()
         except Exception as exc:
             logger.warning("memory_store ingest failed: %s", exc)
             return "I couldn't reach the memory store right now, so I haven't saved that."
