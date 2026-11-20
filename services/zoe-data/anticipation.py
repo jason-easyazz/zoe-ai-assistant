@@ -637,7 +637,11 @@ async def answer(user_id: str, suggestion_id: str, accept: bool, *, now: Optiona
     if _ASKED.get(uid, {}).get("id") == suggestion_id:
         _ASKED.pop(uid, None)
     try:
-        async with _conn(db) as conn:
+        import kernel_door
+
+        # a Zoe OS door reached from here (the alarm or the reminder a "yes" makes) reports only once this block has ended:
+        # never while the connection, or a transaction a caller holds on it, could still undo the row. Doors off: a flag read.
+        async with kernel_door.reports_after(), _conn(db) as conn:
             r = await _own_row(conn, uid, suggestion_id)
             if r is None or r["resolved"] != OPEN:
                 return STALE
