@@ -1685,10 +1685,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "note_create":
         nid = str(uuid.uuid4())
-        await db.execute(
-            "INSERT INTO notes (id, user_id, title, content, category, visibility) VALUES (?,?,?,?,?,?)",
-            (nid, user_id, args.get("title"), args["content"], args.get("category", "general"), "personal"),
-        )
+        import note_service
+
+        await note_service.said_note_record(db, note_id=nid, user_id=user_id, title=args.get("title"), content=args["content"],
+                                            category=args.get("category", "general"))
         result = {"id": nid, "title": args.get("title"), "category": args.get("category", "general")}
         await _notify_ui("notes", "note_created", result)
         try:
@@ -2131,13 +2131,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         eid = str(uuid.uuid4())
         tags_str = args.get("tags")
         tags_json = json.dumps([t.strip() for t in tags_str.split(",")]) if tags_str else None
-        await db.execute(
-            """INSERT INTO journal_entries (
-                id, user_id, content, title, mood, mood_score, tags, visibility, deleted
-            ) VALUES (?,?,?,?,?,?,?,'personal',0)""",
-            (eid, user_id, args["content"], args.get("title"), args.get("mood"),
-             args.get("mood_score"), tags_json),
-        )
+        import journal_service
+
+        await journal_service.tool_entry_record(db, entry_id=eid, user_id=user_id, content=args["content"], title=args.get("title"),
+                                                mood=args.get("mood"), mood_score=args.get("mood_score"), tags_json=tags_json)
         result = {"id": eid, "title": args.get("title"), "mood": args.get("mood")}
         await _notify_ui("journal", "entry_created", result)
         try:
@@ -2479,7 +2476,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": "No fields to update"}
         updates.append("updated_at=NOW()")
         params.extend([nid, user_id])
-        await db.execute(f"UPDATE notes SET {','.join(updates)} WHERE id=? AND user_id=?", params)
+        import note_service
+
+        await note_service.tool_update_note_record(db, note_id=nid, user_id=user_id, updates=updates, params=params)
         await _notify_ui("notes", "note_updated", {"id": nid})
         return {"id": nid, "status": "updated"}
 
@@ -2488,7 +2487,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         cursor = await db.execute("SELECT id FROM notes WHERE id=? AND user_id=? AND deleted=0", (nid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Note {nid} not found"}
-        await db.execute("UPDATE notes SET deleted=1, updated_at=NOW() WHERE id=? AND user_id=?", (nid, user_id))
+        import note_service
+
+        await note_service.tool_delete_note_record(db, note_id=nid, user_id=user_id)
         await _notify_ui("notes", "note_deleted", {"id": nid})
         return {"id": nid, "status": "deleted"}
 

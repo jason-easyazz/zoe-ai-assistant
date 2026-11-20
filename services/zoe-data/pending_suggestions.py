@@ -1059,15 +1059,9 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         nid = str(uuid.uuid4())
         title = slots.get("title") or "Note"
         content = slots.get("content") or slots.get("description", "")
-        await conn.execute(
-            "INSERT INTO notes (id, user_id, title, content, category, visibility, deleted) VALUES ($1,$2,$3,$4,$5,$6,0)",
-            nid,
-            user_id,
-            title,
-            content,
-            "general",
-            "personal",
-        )
+        from note_service import suggested_note_record
+
+        await suggested_note_record(conn, note_id=nid, user_id=user_id, title=title, content=content)
         return {"note_id": nid, "title": title}
 
     if action == "person_create":

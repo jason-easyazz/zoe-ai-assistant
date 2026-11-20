@@ -10,6 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import journal_service
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
@@ -171,25 +172,10 @@ async def create_entry(
     tags_json = json.dumps(payload.tags) if payload.tags else None
     photos_json = json.dumps(payload.photos) if payload.photos else None
 
-    await db.execute(
-        """INSERT INTO journal_entries (
-            id, user_id, title, content, mood, mood_score, tags, weather,
-            location, photos, privacy_level, visibility, deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'personal', 0)""",
-        (
-            entry_id,
-            user_id,
-            payload.title,
-            payload.content,
-            payload.mood,
-            payload.mood_score,
-            tags_json,
-            payload.weather,
-            payload.location,
-            photos_json,
-            payload.privacy_level,
-        ),
-    )
+    await journal_service.create_entry_record(
+        db, entry_id=entry_id, user_id=user_id, title=payload.title, content=payload.content, mood=payload.mood,
+        mood_score=payload.mood_score, tags_json=tags_json, weather=payload.weather, location=payload.location,
+        photos_json=photos_json, privacy_level=payload.privacy_level)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM journal_entries WHERE id = ?", [entry_id])
@@ -391,10 +377,7 @@ async def update_entry(
 
     updates.append("updated_at = NOW()")
     params.append(entry_id)
-    await db.execute(
-        f"UPDATE journal_entries SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
+    await journal_service.update_entry_record(db, entry_id=entry_id, updates=updates, params=params)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM journal_entries WHERE id = ?", [entry_id])
@@ -424,10 +407,7 @@ async def delete_entry(
     if row is None:
         raise HTTPException(status_code=404, detail="Entry not found")
 
-    await db.execute(
-        "UPDATE journal_entries SET deleted = 1, updated_at = NOW() WHERE id = ?",
-        [entry_id],
-    )
+    await journal_service.delete_entry_record(db, entry_id=entry_id)
     await db.commit()
 
     await broadcaster.broadcast("journal", "entry_deleted", {"id": entry_id}, user_id=user_id)
