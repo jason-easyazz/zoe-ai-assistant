@@ -279,6 +279,7 @@ async def create_event(
     request: Request = None,
 ):
     """Create a new calendar event (a member: any visibility; the panel: a household event only)."""
+    stamps_at = cal.stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
     panel, user_id = await _calendar_writer(request, user, db, "create")
     try:
         visibility = cal.normalize_visibility(payload.visibility)
@@ -318,6 +319,8 @@ async def create_event(
         metadata=metadata_json,
         visibility=visibility,
         extra=extra or None,
+        actor=user_id,
+        stamps_at=stamps_at,
     )
     event_id = record["id"]
     if attendees:
@@ -341,6 +344,7 @@ async def update_event(
     request: Request = None,
 ):
     """Update an existing event (a member: family or their own; the panel: family events only)."""
+    stamps_at = cal.stamps_now()      # the Zoe OS calendar door: stamped before the event (and so whose it is) is read
     _panel, user_id = await _calendar_writer(request, user, db, "update")
     # family-or-own (the write scope), with its calendar's writable flag; an id the caller cannot see is a plain 404
     current = await calendar_read.load_for_write(db, user_id, event_id)
@@ -421,7 +425,8 @@ async def update_event(
 
     updates.append("updated_at = NOW()")
     params.extend([event_id])
-    await cal.update_event_record(db, event_id=event_id, updates=updates, params=params)
+    await cal.update_event_record(db, event_id=event_id, updates=updates, params=params, actor=user_id, owner=owner_id,
+                                  visibility=current.get("visibility"), stamps_at=stamps_at)
     if attendees is not None:
         await cal.replace_attendees(db, event_id, owner_id, attendees)
     await db.commit()
@@ -443,6 +448,7 @@ async def delete_event(
     request: Request = None,
 ):
     """Soft delete an event (set deleted=1; ``deleted_at`` is the sync tombstone's time). The panel: family events only."""
+    stamps_at = cal.stamps_now()      # the Zoe OS calendar door: stamped before the event (and so whose it is) is read
     _panel, user_id = await _calendar_writer(request, user, db, "delete")
     row = await calendar_read.load_for_write(db, user_id, event_id)
     if row is None:
@@ -453,7 +459,8 @@ async def delete_event(
     # household member — same rationale as update_event above (soft delete,
     # reversible; mirrors the people router's family-or-own semantics).
 
-    await cal.delete_event_record(db, event_id=event_id, deleted_at=cal.now_text())
+    await cal.delete_event_record(db, event_id=event_id, deleted_at=cal.now_text(), actor=user_id, owner=row.get("user_id"),
+                                  visibility=row.get("visibility"), stamps_at=stamps_at)
     await db.commit()
 
     event = _row_to_event({k: v for k, v in row.items() if k not in ("calendar_writable", "calendar_name")})

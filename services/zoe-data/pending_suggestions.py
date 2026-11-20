@@ -1050,7 +1050,8 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         start_date = slots.get("start_date") or date.today().isoformat()
         from calendar_service import suggested_create_event_record
 
-        await suggested_create_event_record(conn, event_id=eid, user_id=user_id, title=title, start_date=start_date)
+        await suggested_create_event_record(conn, event_id=eid, user_id=user_id, title=title, start_date=start_date,
+                                            stamps_at=stamps_at)
         return {"event_id": eid, "title": title, "start_date": start_date}
 
     if action == "note_create":

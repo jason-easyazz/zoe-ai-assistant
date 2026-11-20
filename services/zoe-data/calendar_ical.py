@@ -273,9 +273,13 @@ def _parse_vevent(ve, default_visibility: str, home: str) -> dict:
 
 
 async def store_parsed(db, parsed: list, *, user_id: str, calendar_id: Optional[str] = None, source: str = "ics",
-                       read_only: bool = False) -> list:
+                       read_only: bool = False, actor: Optional[str] = None) -> list:
     """Write ``parse_ics`` output as ``user_id``'s events (masters first, then overridden instances linked to their
-    master by ``series_id``). Returns the new event ids in input order. The caller commits."""
+    master by ``series_id``). Returns the new event ids in input order. The caller commits.
+
+    ``actor``: the member importing the file, for the Zoe OS calendar door (each event is asked on its own; none = not
+    checked). Nothing in production calls this yet."""
+    stamps_at = cal.stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
     import json
 
     from calendar_service import create_event_record
@@ -298,7 +302,7 @@ async def store_parsed(db, parsed: list, *, user_id: str, calendar_id: Optional[
             extra["calendar_id"] = calendar_id
         if ev.get("recurrence_id") and ev.get("external_uid") in masters:
             extra["series_id"] = masters[ev["external_uid"]]
-        rec = await create_event_record(db, user_id=user_id, extra=extra,
+        rec = await create_event_record(db, user_id=user_id, extra=extra, actor=actor, stamps_at=stamps_at,
                                         **{k: ev.get(k) for k in base_cols if ev.get(k) is not None})
         ids[i] = rec["id"]
         if not ev.get("recurrence_id") and ev.get("external_uid"):

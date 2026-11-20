@@ -118,16 +118,18 @@ async def write_calendar_event(user_id: str, c: dict, via: str) -> str:
     p = c["payload"]
     if not p.get("date"):
         raise ApplyError("needs_date", 422)
-    from calendar_service import create_event_record
+    from calendar_service import create_event_record, stamps_now
     from db_compat import get_compat_db
 
+    stamps_at = stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
     async with get_compat_db() as db:
         cur = await db.execute("SELECT id FROM events WHERE user_id = ? AND deleted = 0 AND metadata LIKE ?", (user_id, f'%"{c["id"]}"%'))
         row = await cur.fetchone()
         if row:                                   # a retried approval after a crash: the event is already there
             return f"events:{row['id']}"
         rec = await create_event_record(db, user_id=user_id, title=p["title"], start_date=p["date"], start_time=p.get("time") or None,
-                                        all_day=not p.get("time"), visibility="personal", metadata=json.dumps(_prov(c, via)))
+                                        all_day=not p.get("time"), visibility="personal", metadata=json.dumps(_prov(c, via)),
+                                        actor=user_id, stamps_at=stamps_at)
         await db.commit()
     return f"events:{rec['id']}"
 

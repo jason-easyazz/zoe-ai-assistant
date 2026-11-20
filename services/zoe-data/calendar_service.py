@@ -26,6 +26,8 @@ import re
 import uuid
 from typing import Optional
 
+import kernel_door
+import os_shadow
 import write_receipts
 
 # Conversational events: a health event is private.
@@ -73,6 +75,56 @@ def conversational_visibility(title: str, category: str = "") -> str:
     return "family"
 
 
+# ── The Zoe OS calendar door (ZOE_OS_CALENDAR=kernel; docs/knowledge/zoe-os-calendar-door.md) ─────────────────────────────────
+# Every function below that writes ``events`` for a person asks the kernel first: "may ``actor`` do this to an event on
+# ``owner``'s calendar?" (``_gate``), writes, then reports how the write ended (``kernel_door.reported``). A kernel refusal
+# raises ``EventRefused``: FINAL, nothing written. Kernel down or slow: the change proceeds, logged ``not_checked``. With the
+# flag off (or every door off: ``stamps_at`` None) nothing of this runs but a flag read. Only ids cross: the event's id, the
+# acting member, the member whose calendar it is on. READING is never asked. Not a person, so never asked: the feed's reconcile
+# (``calendar_feed``) and the erasers, which do not come through here at all.
+class EventRefused(kernel_door.Refused):
+    """The kernel refused this calendar change. FINAL: nothing was written. ``reason`` is a closed code; ``line()`` the plain sentence."""
+
+    area = "calendar"
+    lines = {
+        "not_owner": "That event is on someone else's calendar, so I can't change it.",
+        "adults_only": "Only the person who added that event, or an adult, can change it.",
+        "unknown_person": "I don't know who is asking, so I can't change the calendar.",
+    }
+    fallback = "I'm not allowed to change that event."
+
+
+stamps_now = kernel_door.stamps_now     # a caller's first statement, before anything it awaits; handed back as ``stamps_at``
+
+
+async def _gate(verb: str, *, actor: Optional[str], event_id: str, owner: object, visibility: object,
+                stamps_at: Optional[dict]) -> "Optional[kernel_door.Decision]":
+    """The ask at the door. None with the flag off. ``owner`` is ``events.user_id`` (whose calendar the event is on; the
+    household's own marker is not a person, so such an event names no owner); ``visibility`` ``family`` is a household event.
+    A caller with nobody identified (the shared panel writes as the household viewer) asks as the panel."""
+    if stamps_at is None or not os_shadow.area_on("calendar"):
+        return None
+    if not actor:
+        os_shadow.door_unchecked(verb, "no_actor", "calendar")
+        return None
+    panel = kernel_door.is_panel(actor)
+    whose = str(owner or "")
+    decision, reason, ask, stamps = await os_shadow.ask_door(
+        "calendar", verb, "" if panel else str(actor), panel=panel, target=str(event_id),
+        owner=None if (not whose or kernel_door.is_panel(whose)) else whose,
+        household=str(visibility or "") == "family", stamps_at=stamps_at)
+    if decision == "refuse":
+        raise EventRefused(reason)
+    return kernel_door.Decision(decision, reason, ask, stamps=stamps, area="calendar")
+
+
+def _changed(result) -> bool:
+    """Did a raw (asyncpg) statement change a row? Its command tag ends in the count (``UPDATE 1``); anything unreadable counts
+    as changed (the caller's own check decides what to say)."""
+    tail = str(result or "").rsplit(" ", 1)[-1]
+    return not tail.isdigit() or int(tail) > 0
+
+
 async def create_event_record(
     db,
     *,
@@ -90,6 +142,8 @@ async def create_event_record(
     metadata: Optional[str] = None,
     visibility: str = "family",
     extra: Optional[dict] = None,
+    actor: Optional[str] = None,
+    stamps_at: Optional[dict] = None,
 ) -> dict:
     """Insert one row into ``events`` and return a record dict.
 
@@ -113,30 +167,33 @@ async def create_event_record(
     extra_cols, extra_vals = _extra_columns(extra)
     cols_sql = "".join(f", {c}" for c in extra_cols)
     ph_sql = "".join(", ?" for _ in extra_cols)
-    await db.execute(
-        f"""INSERT INTO events (
+    asked = await _gate("event.create", actor=actor, event_id=event_id, owner=user_id, visibility=visibility, stamps_at=stamps_at)
+    insert = f"""INSERT INTO events (
             id, user_id, title, start_date, start_time, end_date, end_time,
             duration, category, location, all_day, recurring, metadata,
             visibility, deleted{cols_sql}
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0{ph_sql})""",
-        (
-            event_id,
-            user_id,
-            title,
-            start_date,
-            start_time,
-            end_date,
-            end_time,
-            duration,
-            category,
-            location,
-            all_day_int,
-            recurring,
-            metadata,
-            visibility,
-            *extra_vals,
-        ),
-    )
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0{ph_sql})"""      # (the statement's text is main's, to the byte)
+    async with kernel_door.reported(asked):
+        await db.execute(
+            insert,
+            (
+                event_id,
+                user_id,
+                title,
+                start_date,
+                start_time,
+                end_date,
+                end_time,
+                duration,
+                category,
+                location,
+                all_day_int,
+                recurring,
+                metadata,
+                visibility,
+                *extra_vals,
+            ),
+        )
     # The receipt the write-claim guard checks a reply against (write_receipts.py): a row exists now.
     write_receipts.record(user_id, "calendar", event_id, "create_event_record")
     # A new event must reach the next first-turn brief, not wait out its 300 s context cache.
@@ -166,31 +223,46 @@ async def create_event_record(
 # later decision, so each is kept statement for statement under the name of the entry point it serves. Callers keep their own
 # lookups, refusals, notices and commits. Outside this door on purpose: the read-only feed's reconcile (``calendar_feed``, through
 # ``connected_accounts.upsert_row``: the system's own, nobody acting) and the erasers (``calendar_forget``, ``memory_forget_cascade``).
-async def update_event_record(db, *, event_id: str, updates: list, params: list):
-    """The screen's edit (``PUT /api/calendar/events/{id}``): the SET fragments and values the route built, by id."""
-    return await db.execute(f"UPDATE events SET {', '.join(updates)} WHERE id = ?", params)
+async def update_event_record(db, *, event_id: str, updates: list, params: list, actor: Optional[str] = None, owner: object = None,
+                              visibility: object = None, stamps_at: Optional[dict] = None):
+    """The screen's edit (``PUT /api/calendar/events/{id}``): the SET fragments and values the route built, by id. ``owner`` and
+    ``visibility`` are the stored row's, as the route read them (the door asks about the event as it IS, not as it will be)."""
+    asked = await _gate("event.edit", actor=actor, event_id=event_id, owner=owner, visibility=visibility, stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        return await db.execute(f"UPDATE events SET {', '.join(updates)} WHERE id = ?", params)
 
 
-async def delete_event_record(db, *, event_id: str, deleted_at: str):
-    """The screen's soft delete (``deleted_at`` is the sync tombstone's time)."""
-    return await db.execute("UPDATE events SET deleted = 1, deleted_at = ?, updated_at = NOW() WHERE id = ?", [deleted_at, event_id])
+async def delete_event_record(db, *, event_id: str, deleted_at: str, actor: Optional[str] = None, owner: object = None,
+                              visibility: object = None, stamps_at: Optional[dict] = None):
+    """The screen's soft delete (``deleted_at`` is the sync tombstone's time). ``owner`` / ``visibility``: the stored row's."""
+    asked = await _gate("event.delete", actor=actor, event_id=event_id, owner=owner, visibility=visibility, stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        return await db.execute("UPDATE events SET deleted = 1, deleted_at = ?, updated_at = NOW() WHERE id = ?", [deleted_at, event_id])
 
 
-async def tool_update_event_record(db, *, event_id: str, user_id: str, updates: list, params: list):
-    """The brain's ``calendar_update_event`` tool: the member's OWN event only (the statement says so)."""
-    return await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
+async def tool_update_event_record(db, *, event_id: str, user_id: str, updates: list, params: list, visibility: object = None,
+                                   stamps_at: Optional[dict] = None):
+    """The brain's ``calendar_update_event`` tool: the member's OWN event only (the statement says so, and the tool read the
+    row as theirs first: the member acting is the member whose calendar it is on)."""
+    asked = await _gate("event.edit", actor=user_id, event_id=event_id, owner=user_id, visibility=visibility, stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        return await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
 
 
-async def tool_delete_event_record(db, *, event_id: str, user_id: str, deleted_at: str):
+async def tool_delete_event_record(db, *, event_id: str, user_id: str, deleted_at: str, visibility: object = None,
+                                   stamps_at: Optional[dict] = None):
     """The brain's ``calendar_delete_event`` tool: the member's OWN event only."""
-    return await db.execute("UPDATE events SET deleted=1, deleted_at=?, updated_at=NOW() WHERE id=? AND user_id=?",
-                            (deleted_at, event_id, user_id))
+    asked = await _gate("event.delete", actor=user_id, event_id=event_id, owner=user_id, visibility=visibility, stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        return await db.execute("UPDATE events SET deleted=1, deleted_at=?, updated_at=NOW() WHERE id=? AND user_id=?",
+                                (deleted_at, event_id, user_id))
 
 
 async def spoken_create_event_record(db, *, event_id: str, user_id: str, title: str, start_date: str, start_time, end_date: str,
-                                     end_time, all_day: int):
+                                     end_time, all_day: int, stamps_at: Optional[dict] = None):
     """The spoken "add ... to my calendar" (Skybridge, a raw asyncpg handle): a family event of the speaker's."""
-    return await db.execute(
+    asked = await _gate("event.create", actor=user_id, event_id=event_id, owner=user_id, visibility="family", stamps_at=stamps_at)
+    return await kernel_door.write(asked, db.execute(
         """
         INSERT INTO events (
             id, user_id, title, start_date, start_time, end_date, end_time,
@@ -212,41 +284,60 @@ async def spoken_create_event_record(db, *, event_id: str, user_id: str, title: 
         None,
         None,
         "family",
-    )
+    ))
 
 
-async def spoken_move_event_record(db, *, event_id: str, user_id: str, start_time):
-    """The spoken "move ... to 3pm" (Skybridge): the speaker's OWN event only."""
-    return await db.execute(
+async def _own_row_write(asked, pending):
+    """A spoken change's statement names the speaker in its WHERE: on someone else's event it changes nothing. The kernel hears
+    ``done`` only when a row changed, ``failed`` when none did (or the statement raised)."""
+    try:
+        result = await pending
+    except BaseException:
+        kernel_door.wrote(asked, "failed")
+        raise
+    kernel_door.wrote(asked, "done" if _changed(result) else "failed")
+    return result
+
+
+async def spoken_move_event_record(db, *, event_id: str, user_id: str, start_time, owner: object = None, visibility: object = None,
+                                   stamps_at: Optional[dict] = None):
+    """The spoken "move ... to 3pm" (Skybridge): the speaker's OWN event only. ``owner`` / ``visibility``: the stored row's."""
+    asked = await _gate("event.edit", actor=user_id, event_id=event_id, owner=owner, visibility=visibility, stamps_at=stamps_at)
+    return await _own_row_write(asked, db.execute(
         # Giving an all-day event a time makes it a timed event — clear all_day so
         # the row can't be both (renderers/spoken summaries would disagree).
         "UPDATE events SET start_time = $1, all_day = 0, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
         start_time,
         event_id,
         user_id,
-    )
+    ))
 
 
-async def spoken_delete_event_record(db, *, event_id: str, user_id: str, deleted_at: str):
-    """The spoken "delete ... from my calendar" (Skybridge): the speaker's OWN event only."""
-    return await db.execute(
+async def spoken_delete_event_record(db, *, event_id: str, user_id: str, deleted_at: str, owner: object = None,
+                                     visibility: object = None, stamps_at: Optional[dict] = None):
+    """The spoken "delete ... from my calendar" (Skybridge): the speaker's OWN event only. ``owner`` / ``visibility``: the stored row's."""
+    asked = await _gate("event.delete", actor=user_id, event_id=event_id, owner=owner, visibility=visibility, stamps_at=stamps_at)
+    return await _own_row_write(asked, db.execute(
         "UPDATE events SET deleted = 1, updated_at = NOW(), deleted_at = $3 WHERE id = $1 AND user_id = $2 AND deleted = 0",
         event_id,
         user_id,
         deleted_at,
-    )
+    ))
 
 
-async def suggested_create_event_record(conn, *, event_id: str, user_id: str, title: str, start_date: str):
-    """An accepted calendar suggestion (inside the suggestion's own transaction): a family all-day-less event on that day."""
-    return await conn.execute(
+async def suggested_create_event_record(conn, *, event_id: str, user_id: str, title: str, start_date: str,
+                                        stamps_at: Optional[dict] = None):
+    """An accepted calendar suggestion (inside the suggestion's own transaction, so the kernel hears ``done`` only once THAT has
+    committed: ``kernel_door.reports_after``): a family all-day-less event on that day, the accepting member's."""
+    asked = await _gate("event.create", actor=user_id, event_id=event_id, owner=user_id, visibility="family", stamps_at=stamps_at)
+    return await kernel_door.write(asked, conn.execute(
         """INSERT INTO events (id, user_id, title, start_date, category, all_day, visibility, deleted)
                VALUES ($1, $2, $3, $4, 'general', 0, 'family', 0)""",
         event_id,
         user_id,
         title,
         start_date,
-    )
+    ))
 
 
 # ── The 0052 calendar data model (docs/architecture/calendar-data-model.md) ──────────────────────────────

@@ -3579,14 +3579,19 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
     if intent.domain == "clock":
         return _resolve_clock(intent)
     if intent.domain == "calendar":
-        if intent.action == "create_event":
-            return await _resolve_calendar_create(intent, user_id, db)
-        if intent.action == "update_time":
-            return await _resolve_calendar_update_time(intent, user_id, db, context)
-        if intent.action == "edit_event":
-            return await _resolve_calendar_edit_event(intent, user_id, db, context)
-        if intent.action == "delete_event":
-            return await _resolve_calendar_delete_event(intent, user_id, db, context)
+        try:
+            if intent.action == "create_event":
+                return await _resolve_calendar_create(intent, user_id, db)
+            if intent.action == "update_time":
+                return await _resolve_calendar_update_time(intent, user_id, db, context)
+            if intent.action == "edit_event":
+                return await _resolve_calendar_edit_event(intent, user_id, db, context)
+            if intent.action == "delete_event":
+                return await _resolve_calendar_delete_event(intent, user_id, db, context)
+        except calendar_service.EventRefused as exc:    # the Zoe OS kernel refused (ZOE_OS_CALENDAR=kernel): final, nothing written
+            line = exc.line()
+            return {"handled": True, "intent": {"domain": "calendar", "action": intent.action, "status": "refused"},
+                    "spoken_summary": line, "cards": [_status_card("I can't change that event", line)], "actions": []}
         return await _resolve_calendar(intent, user_id, db)
     if intent.domain == "weather":
         return await _resolve_weather(intent, user_id, db)
@@ -3906,6 +3911,7 @@ def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
 
 
 async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    stamps_at = calendar_service.stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
     if user_id in {"guest", "voice-guest"}:
         return {
             "handled": True,
@@ -3929,7 +3935,7 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
     await calendar_service.spoken_create_event_record(
         db, event_id=event_id, user_id=user_id, title=intent.title, start_date=start.isoformat(),
         start_time=None if intent.all_day else intent.target_time, end_date=start.isoformat(),
-        end_time=None if intent.all_day else (intent.end_time or None), all_day=1 if intent.all_day else 0)
+        end_time=None if intent.all_day else (intent.end_time or None), all_day=1 if intent.all_day else 0, stamps_at=stamps_at)
     await _maybe_commit(db)
     write_receipts.record(user_id, "calendar", event_id, "skybridge:create_event")
     refreshed = await _resolve_calendar(SkybridgeIntent("calendar", "show", start.isoformat(), start, start), user_id, db)
@@ -4001,8 +4007,9 @@ def _score_event_for_target(event: dict[str, Any], target: str) -> int:
     return score + sum(1 for token in target_tokens if token in haystack)
 
 
-async def _calendar_refusal(db: Any, user_id: str, event_id: Any, intent: SkybridgeIntent, verb: str) -> dict[str, Any] | None:
-    """None when the member may change the chosen event; else the answer. Read from the stored row through
+async def _calendar_refusal(db: Any, user_id: str, event_id: Any, intent: SkybridgeIntent,
+                            verb: str) -> "tuple[dict[str, Any] | None, dict[str, Any] | None]":
+    """``(the stored row, None)`` when the member may change the chosen event; else ``(None, the answer)``. Read from the stored row through
     ``calendar_read.load_for_write`` (family-or-own, with its calendar's writable flag) - never from the client's context
     card. An id the caller cannot see is "not found", with no hint of whose it is or where it came from; a read-only or
     provider-owned event gets the honest "change it there"."""
@@ -4011,19 +4018,20 @@ async def _calendar_refusal(db: Any, user_id: str, event_id: Any, intent: Skybri
     row = await calendar_read.load_for_write(db, user_id, event_id, pg_fetch=True)
     if row is None:
         line = f"I could not find a calendar event to {verb}."
-        return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
-                "cards": [_status_card("Which appointment?", line)], "actions": []}
+        return None, {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
+                      "cards": [_status_card("Which appointment?", line)], "actions": []}
     if calendar_read.is_writable(row) and not calendar_read.is_repeating_row(row):
-        return None
+        return row, None
     if not calendar_read.is_writable(row):
         line = calendar_read.refusal(row)
     else:   # a repeating event: the card lists one occurrence, the write would hit the whole series
         line = calendar_read.REPEATING_MOVE_LINE if verb == "move" else calendar_read.REPEATING_DELETE_LINE
-    return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
-            "cards": [_status_card(f"I can't {verb} that event", line)], "actions": []}
+    return None, {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
+                  "cards": [_status_card(f"I can't {verb} that event", line)], "actions": []}
 
 
 async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    stamps_at = calendar_service.stamps_now()      # the Zoe OS calendar door: stamped before the event (and so whose it is) is read
     if user_id in {"guest", "voice-guest"}:
         return {
             "handled": True,
@@ -4069,11 +4077,12 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
         }
     event = matches[0]
     event_id = event.get("id")
-    refused = await _calendar_refusal(db, user_id, event_id, intent, "move")
+    stored, refused = await _calendar_refusal(db, user_id, event_id, intent, "move")
     if refused:
         return refused
-    update_result = await calendar_service.spoken_move_event_record(db, event_id=event_id, user_id=user_id,
-                                                                    start_time=intent.target_time)
+    update_result = await calendar_service.spoken_move_event_record(
+        db, event_id=event_id, user_id=user_id, start_time=intent.target_time, owner=stored.get("user_id"),
+        visibility=stored.get("visibility"), stamps_at=stamps_at)
     if _affected_rows(update_result) == 0:
         return {
             "handled": True,
@@ -4165,6 +4174,7 @@ async def _resolve_calendar_edit_event(intent: SkybridgeIntent, user_id: str, db
 
 
 async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    stamps_at = calendar_service.stamps_now()      # the Zoe OS calendar door: stamped before the event (and so whose it is) is read
     if user_id in {"guest", "voice-guest"}:
         return {
             "handled": True,
@@ -4210,11 +4220,12 @@ async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, 
         }
     event = matches[0]
     event_id = event.get("id")
-    refused = await _calendar_refusal(db, user_id, event_id, intent, "delete")
+    stored, refused = await _calendar_refusal(db, user_id, event_id, intent, "delete")
     if refused:
         return refused
-    delete_result = await calendar_service.spoken_delete_event_record(db, event_id=event_id, user_id=user_id,
-                                                                      deleted_at=calendar_service.now_text())
+    delete_result = await calendar_service.spoken_delete_event_record(
+        db, event_id=event_id, user_id=user_id, deleted_at=calendar_service.now_text(), owner=stored.get("user_id"),
+        visibility=stored.get("visibility"), stamps_at=stamps_at)
     if _affected_rows(delete_result) == 0:
         return {
             "handled": True,

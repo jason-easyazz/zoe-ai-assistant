@@ -3537,9 +3537,10 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:
-        from calendar_service import conversational_visibility, create_event_record
+        from calendar_service import EventRefused, conversational_visibility, create_event_record, stamps_now
         from database import get_db_ctx
 
+        stamps_at = stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
         async with get_db_ctx() as db:
             record = await create_event_record(
                 db,
@@ -3551,6 +3552,8 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
                 all_day=not start_time,
                 # a health event written from a conversation is personal (calendar_service)
                 visibility=conversational_visibility(title, category),
+                actor=user_id,
+                stamps_at=stamps_at,
             )
         event_id = record["id"]
         await _notify_ui_channel(
@@ -3563,6 +3566,8 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
         clock = _say_clock(start_time) if start_time else ""
         when_phrase = f"{when} at {clock}" if clock else when
         return f"Added {title} to your calendar {when_phrase}.{_past_event_note(start_date, start_time, now)}"
+    except EventRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_CALENDAR=kernel): final, nothing was written, said plainly
+        return exc.line()
     except Exception as exc:
         logger.warning("calendar_create direct execution unavailable: %s", exc)
         return None
