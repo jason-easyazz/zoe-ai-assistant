@@ -30,7 +30,9 @@ class JournalRefused(kernel_door.Refused):
     fallback = "I'm not allowed to change that journal entry."
 
 
-stamps_now = kernel_door.stamps_now     # a caller's first statement, before anything it awaits; handed back as ``stamps_at``
+def stamps_now() -> Optional[dict]:
+    """A caller's first statement, before anything it awaits; handed back as ``stamps_at``. None unless the JOURNAL door is on."""
+    return kernel_door.stamps_now("journal")
 
 
 def _gate(verb: str, *, actor, entry_id: str, owner, stamps_at):
