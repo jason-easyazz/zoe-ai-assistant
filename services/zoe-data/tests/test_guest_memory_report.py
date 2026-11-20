@@ -126,7 +126,7 @@ def test_the_executed_purge_erases_only_guest_rows_through_the_audited_path(tmp_
     calls = []
 
     class _Svc:
-        async def erase_rows(self, user_id, ids, *, actor, reason):
+        async def erase_rows(self, user_id, ids, *, actor, reason, **_kw):
             calls.append((user_id, sorted(ids), actor))
             return {"rows_removed": len(ids)}
 
@@ -152,7 +152,7 @@ def test_the_purge_passes_each_owner_exactly_as_stored(tmp_path):
     calls = []
 
     class _Svc:
-        async def erase_rows(self, user_id, ids, *, actor, reason):
+        async def erase_rows(self, user_id, ids, *, actor, reason, **_kw):
             calls.append((user_id, sorted(ids)))
             return {"rows_removed": len(ids)}
 

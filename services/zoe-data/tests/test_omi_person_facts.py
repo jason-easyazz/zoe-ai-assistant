@@ -156,7 +156,7 @@ def env(monkeypatch, tmp_path):
 
     erased: list = []
 
-    async def erase_rows(user_id, ids, *, actor, reason="", gate_held=False):
+    async def erase_rows(user_id, ids, *, actor, reason="", gate_held=False, **_kw):
         """The seam: ``erase_rows`` itself (drawers, audit, physical residue) is pinned by the memory suite; here, the owner's rows go.
         ``gate_held``: the day review's forgets hold the member's erase gate when they get here (they say so)."""
         erased.append((user_id, list(ids), reason))
@@ -216,7 +216,7 @@ def fake_model(rules):
     return llm
 
 
-def review(env, rules, *, user=A):
+def review(env, rules, *, user=A, **_kw):
     llm = fake_model(rules)
     dr.set_llm(llm)
     res = run(dr.review_day(user, DAY, dr.Config(lane="night"), as_of=AS_OF))

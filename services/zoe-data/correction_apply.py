@@ -28,6 +28,7 @@ reaches this module.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 from dataclasses import dataclass, field
@@ -197,6 +198,7 @@ async def apply_date_correction(
     text: str, user_id: str, recent_messages: list[str], *, svc=None, db=None,
     session_id: Optional[str] = None,
 ) -> Optional[CorrectionResult]:
+    acting = memory_actor.member(user_id)
     from date_locale import find_numeric_dates, misread_pattern, render_date
 
     if not is_date_correction(text):
@@ -248,6 +250,7 @@ async def apply_date_correction(
                     note=f"date correction ({order} order)",
                     source_excerpt=" ".join((text or "").split()),
                     session_id=session_id,
+                    acting=acting,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("correction_apply: date edit failed (%s)", type(exc).__name__)
@@ -467,6 +470,7 @@ def _pet_evidence(user_id: str, text: str):
 async def apply_pet_correction(
     text: str, user_id: str, *, svc=None, db=None, session_id: Optional[str] = None,
 ) -> Optional[CorrectionResult]:
+    acting = memory_actor.member(user_id)
     stmt = pet_statement(text)
     if not stmt:
         return None
@@ -505,7 +509,7 @@ async def apply_pet_correction(
         try:
             ref = await svc.review(r.id, decision="edit", edits=new, actor=SOURCE,
                                    note="pet is not a child (correction)", source_excerpt=excerpt,
-                                   session_id=session_id)
+                                   session_id=session_id, acting=acting)
         except Exception as exc:  # noqa: BLE001
             logger.warning("correction_apply: pet edit failed (%s)", type(exc).__name__)
             continue
@@ -524,6 +528,7 @@ async def apply_pet_correction(
                 status="approved", tags=["person", "pet", name.lower()],
                 entity_type="person" if people else "person_pending", entity_id=entity_id,
                 metadata={"pattern_type": "pet"}, source_excerpt=excerpt,
+                acting=acting,
             )
             changed += 1 if ref is not None else 0
         except Exception as exc:  # noqa: BLE001
@@ -547,6 +552,7 @@ async def apply_row_correction(
     supersedes (nothing is deleted), under the user-class writer ``conversation_correction`` with the correcting utterance as
     evidence. None (the caller says so) when the correction path is off, the row is gone / not approved / not this user's, the text
     does not change, or the edit is refused. Never raises."""
+    acting = memory_actor.member(user_id)
     if not enabled() or _is_unidentified(user_id) or not (new_text or "").strip():
         return None
     try:
@@ -574,6 +580,7 @@ async def apply_row_correction(
         ref = await svc.review(
             row_id, decision="edit", edits=new, actor=SOURCE, note="row correction (owner named the row)",
             source_excerpt=" ".join((utterance or "").split()), session_id=session_id,
+            acting=acting,
         )
         if ref is None:
             return None

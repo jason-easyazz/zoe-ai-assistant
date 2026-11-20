@@ -7,6 +7,7 @@ or admitted by Multica/evidence gates before any sidecar retain call occurs.
 
 from __future__ import annotations
 
+import memory_actor
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -286,6 +287,7 @@ async def create_hindsight_retain_candidate(
         source_excerpt=payload["source_excerpt"],
         scope=payload["metadata"].get("scope"),
         metadata=payload["metadata"],
+        acting=memory_actor.AUTOMATIC,
     )
 
 

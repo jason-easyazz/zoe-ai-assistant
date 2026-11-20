@@ -3,7 +3,8 @@
 ``member``: a household member asked for this change (spoken, typed, tapped, or a tool the brain called for them).
 ``automatic``: no member asked for THIS write: a per-turn extractor, a night pass, a mirror of a change another area's door
 already decided (a note, a journal entry, a contact), an eraser finishing an earlier forget, a seeder.
-``passes_on``: the service calling itself for the caller it is already serving.
+``passes_on``: the function was TOLD who is acting (its own ``acting`` parameter: the service calling itself, or a helper
+shared by member and automatic callers) and hands that on; its callers are the ones that choose.
 """
 MUTATING = ("ingest", "delete_user", "sweep_soft_archive", "review", "supersede_by", "retire_with_quote", "set_curated_standing", "archive_duplicate", "flag_challenged", "record_candidate", "erase_rows", "relink_entity", "archive_by_entity")
 
@@ -14,9 +15,9 @@ SITES = {
     ('correction_apply.py', 'apply_pet_correction', 'ingest'): ('member', 1),
     ('correction_apply.py', 'apply_pet_correction', 'review'): ('member', 1),
     ('correction_apply.py', 'apply_row_correction', 'review'): ('member', 1),
-    ('expert_dispatch.py', '_ingest_or_supersede', 'ingest'): ('member', 1),
-    ('expert_dispatch.py', '_ingest_or_supersede', 'review'): ('member', 1),
-    ('expert_dispatch.py', '_ingest_or_supersede', 'supersede_by'): ('member', 1),
+    ('expert_dispatch.py', '_ingest_or_supersede', 'ingest'): ('passes_on', 1),
+    ('expert_dispatch.py', '_ingest_or_supersede', 'review'): ('passes_on', 1),
+    ('expert_dispatch.py', '_ingest_or_supersede', 'supersede_by'): ('passes_on', 1),
     ('forget_topic.py', '_forget', 'erase_rows'): ('member', 1),
     ('forget_topic.py', '_forget', 'review'): ('member', 1),
     ('hindsight_retain_candidates.py', 'create_hindsight_retain_candidate', 'ingest'): ('automatic', 1),
@@ -51,14 +52,14 @@ SITES = {
     ('memory_extractor.py', 'extract_and_ingest', 'ingest'): ('automatic', 2),
     ('memory_extractor.py', 'extract_and_ingest', 'review'): ('automatic', 1),
     ('memory_retire.py', 'decide', 'retire_with_quote'): ('automatic', 1),
-    ('memory_service.py', '_undo_night_write', 'erase_rows'): ('passes_on', 1),
+    ('memory_service.py', '_undo_night_write', 'erase_rows'): ('automatic', 1),
     ('memory_service.py', 'archive_by_entity', 'review'): ('passes_on', 1),
     ('memory_service.py', 'sweep_soft_archive', 'review'): ('passes_on', 1),
     ('memory_space.py', 'forget_row', 'erase_rows'): ('member', 1),
     ('memory_space.py', 'forget_row', 'review'): ('member', 2),
     ('memory_space.py', 'guardian_forget', 'erase_rows'): ('member', 1),
     ('memory_space.py', 'guardian_forget', 'review'): ('member', 1),
-    ('memory_space.py', 'retire_twins', 'review'): ('member', 1),
+    ('memory_space.py', 'retire_twins', 'review'): ('passes_on', 1),
     ('memory_supersede.py', 'nightly_conflict_pass', 'supersede_by'): ('automatic', 1),
     ('memory_supersede.py', 'retire_by_claims', 'supersede_by'): ('automatic', 1),
     ('memory_supersede.py', 'supersede_for_turn', 'supersede_by'): ('automatic', 1),

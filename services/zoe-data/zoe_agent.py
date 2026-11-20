@@ -22,6 +22,7 @@ the _ZOE_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
 
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import hashlib
 import json
@@ -1224,6 +1225,7 @@ async def _mempalace_add(
     duplicate idempotency key) also return True because from the agent's
     perspective the memory "arrived" — it just didn't need a new row.
     """
+    acting = memory_actor.member(user_id)
     if not summary or not summary.strip():
         return False
     # Write-quality gate (mem0-style): reject conversational candidates that
@@ -1259,6 +1261,7 @@ async def _mempalace_add(
                 memory_type="fact",
                 confidence=0.7,
                 status="approved",
+                acting=acting,
             )
         except MemoryServiceError as exc:
             logger.warning("mempalace_add failed (non-fatal): %s", exc)
@@ -3987,6 +3990,7 @@ async def _background_memory_save(
                     confidence=0.68,
                     status="approved",
                     tags=["conversation", "legacy_fallback"],
+                    acting=memory_actor.AUTOMATIC,
                 )
         except Exception as fallback_exc:
             logger.debug("background_memory_save fallback failed: %s", fallback_exc)

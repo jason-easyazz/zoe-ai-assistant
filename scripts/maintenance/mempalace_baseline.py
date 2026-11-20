@@ -34,7 +34,7 @@ async def _main() -> int:
         print(json.dumps(summary, indent=2, sort_keys=True))
     finally:
         if not args.keep:
-            removed = await service.delete_user(args.user_id, actor="mempalace_baseline")
+            removed = await service.delete_user(args.user_id, actor="mempalace_baseline", acting=__import__("memory_actor").AUTOMATIC)
             print(json.dumps({"cleanup_removed": removed, "user_id": args.user_id}, sort_keys=True))
     return 0
 

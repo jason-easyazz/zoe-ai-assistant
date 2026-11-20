@@ -93,7 +93,7 @@ def env(monkeypatch, tmp_path):
     async def not_opted_out(_uid):
         return False
 
-    async def erase_rows(user_id, ids, *, actor, reason=""):
+    async def erase_rows(user_id, ids, *, actor, reason="", **_kw):
         erased.append((user_id, list(ids), actor))
         return dict(rows_removed=len(list(ids)))
 

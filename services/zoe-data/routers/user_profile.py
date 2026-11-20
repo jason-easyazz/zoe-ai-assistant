@@ -1,3 +1,4 @@
+import memory_actor
 import json
 import re
 from collections import Counter
@@ -91,6 +92,7 @@ async def analyze_profile(user: dict = Depends(get_current_user), db=Depends(get
                 entity_type="profile",
                 entity_id=user_id,
                 user_turn_id=f"profile-analysis-{user_id}",
+                acting=memory_actor.AUTOMATIC,
             )
         except MemoryServiceError as exc:
             import logging as _lg

@@ -112,7 +112,7 @@ async def test_maintenance_runner_cleans_up_after_baseline_failure(monkeypatch, 
         def __init__(self):
             self.deleted = []
 
-        async def delete_user(self, user_id: str, *, actor: str):
+        async def delete_user(self, user_id: str, *, actor: str, **_kw):
             self.deleted.append((user_id, actor))
             return 7
 

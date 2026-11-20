@@ -56,7 +56,7 @@ class _FakeSvc:
         rows = [r for r in self.rows if r.metadata.get("status") == status]
         return rows[offset:offset + limit]
 
-    async def review(self, mem_id, *, decision, actor, edits=None, note=None):
+    async def review(self, mem_id, *, decision, actor, edits=None, note=None, **_kw):
         assert decision == "archive", "entity forget must soft-archive, never delete"
         self.archived.append(mem_id)
         for r in self.rows:

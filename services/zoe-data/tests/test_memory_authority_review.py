@@ -210,7 +210,7 @@ def test_idle_consolidation_over_a_direct_row_is_held_not_half_applied(svc):
     out = asyncio.run(expert_dispatch._ingest_or_supersede(
         svc, "User lives in Perth.", user_id=UID, source="idle_consolidation", session_id="s1",
         user_turn_id="idle:1", memory_type="fact", confidence=0.8, tags=["idle"],
-        anchor_text="I moved to Perth in March"))
+        anchor_text="I moved to Perth in March", acting=__import__("memory_actor").AUTOMATIC))
     assert out == "dropped"                                       # held back as a candidate
     assert status(svc, old.id) == "approved" and recalled(svc) == ["User lives in Sydney."]
     (cand,) = asyncio.run(svc.list_by_status(user_id=UID, status="disputed"))
@@ -229,7 +229,7 @@ def test_idle_consolidation_over_a_model_row_supersedes_in_one_operation(svc, mo
     out = asyncio.run(expert_dispatch._ingest_or_supersede(
         svc, "User lives in Perth.", user_id=UID, source="idle_consolidation", session_id="s1",
         user_turn_id="idle:2", memory_type="fact", confidence=0.8, tags=["idle"],
-        anchor_text="I moved to Perth in March"))
+        anchor_text="I moved to Perth in March", acting=__import__("memory_actor").AUTOMATIC))
     assert out == "stored" and status(svc, old.id) == "superseded"
     assert recalled(svc) == ["User lives in Perth."]               # ONE current fact, not two
     assert svc._col.rows[old.id][1]["superseded_by_id"]

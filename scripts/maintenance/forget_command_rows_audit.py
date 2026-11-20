@@ -475,14 +475,14 @@ async def cleanup(todo: dict[str, list[str]], *, svc, premarked: Iterable[str] =
                 archived.append(rid)
                 continue
             try:
-                ref = await svc.review(rid, decision="archive", actor=ACTOR, note=ARCHIVE_NOTE)
+                ref = await svc.review(rid, decision="archive", actor=ACTOR, note=ARCHIVE_NOTE, acting=__import__("memory_actor").AUTOMATIC)
             except Exception:  # noqa: BLE001 - never erased on top of a failed archive
                 ref = None
             if ref is not None:
                 archived.append(rid)
         erase_failed = 0
         try:
-            res = await svc.erase_rows(owner, archived, actor=ACTOR, reason=REASON) if archived else {"rows_removed": 0}
+            res = await svc.erase_rows(owner, archived, actor=ACTOR, reason=REASON, acting=__import__("memory_actor").AUTOMATIC) if archived else {"rows_removed": 0}
         except Exception:  # noqa: BLE001
             # erase_rows can raise AFTER the drawer rows are gone (the audit-trail delete or the completion write failed): the scrub
             # is NEVER counted done here. The ids go to the pending-recovery file (a retry finishes the audit delete + scrub); rows

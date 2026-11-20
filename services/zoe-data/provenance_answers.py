@@ -43,6 +43,7 @@ anchored regex; an answer is one bounded read of the owner's rows (<= ``SCAN_LIM
 """
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import datetime
 from functools import lru_cache
@@ -1296,6 +1297,7 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
     ``strict_twins`` (the panel's tapped correction): a twin that cannot be retired is NOT acknowledged - the reply is
     ``STORE_DOWN_REPLY`` (the caller keeps the tap armed) and the same correction said again finishes the remaining twins
     (``memory_space.correct_row``'s superseded-retry rule), so a stale approved twin cannot silently keep the old value."""
+    acting = memory_actor.member(user_id)
     import correction_apply
 
     if speaker_verified is False:
@@ -1333,11 +1335,11 @@ async def fix(user_id: str, session_id: str, utterance: str, value: str, exp: "m
         if strict_twins:
             import memory_space
 
-            await memory_space.retire_twins(user_id, twins, svc)    # raises when one stays: caught below -> STORE_DOWN_REPLY
+            await memory_space.retire_twins(user_id, twins, svc, acting=acting)    # raises when one stays: caught below -> STORE_DOWN_REPLY
         else:
             for tw in twins:   # the twin rows one utterance left behind still hold the old value
                 try:
-                    await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction")
+                    await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction", acting=acting)
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("provenance_answers: twin retire skipped (%s)", type(exc).__name__)
         mp.clear_explained(user_id)
@@ -1469,6 +1471,7 @@ def _rearm(user_id: str, exp: "mp.Explained") -> None:
 async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speaker_verified: Optional[bool] = None) -> str:
     """"forget it" right after an answer named a row: reject THAT row and its twins, erase the text for real (when physical erase is
     on), and delete the owner's quoted turn from the exact-words index. NEVER raises."""
+    acting = memory_actor.member(user_id)
     if speaker_verified is False:
         return UNVERIFIED_SPEAKER_REPLY
     if not exp.row_id:
@@ -1494,7 +1497,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                     if physical_erase_enabled():
                         import os_shadow
 
-                        erased = await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)")
+                        erased = await svc.erase_rows(user_id, carried, actor=user_id, reason="forgotten by request (explained)", acting=acting)
                         # no plan yet on this repeat path: with the shadow in play a physical erase that did not confirm keeps the
                         # carried rows; with it off this is main's path exactly (cleared, and the forget goes on)
                         if ((erased or {}).get("physical") or {}).get("ok") is False and os_shadow.in_play():
@@ -1511,13 +1514,13 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
         twins = await twins_of(user_id, ref, svc=svc, strict=True)     # a failed lookup stops the forget BEFORE it starts
         await _speculation_barrier()
         plan = await _plan_forget(user_id, [ref.id, *(tw.id for tw in twins)], exp, ref.text or "")   # PARK FIRST, before the reject
-        done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
+        done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained", acting=acting)
         if done is None:
             await plan.drop()
             return STORE_DOWN_REPLY
         gone = [ref.id]
         for tw in twins:
-            if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_explained") is not None:
+            if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_explained", acting=acting) is not None:
                 gone.append(tw.id)
             else:
                 plan.failed()
@@ -1526,7 +1529,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
                 from memory_service import physical_erase_enabled
 
                 if physical_erase_enabled():
-                    erased = await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)")
+                    erased = await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (explained)", acting=acting)
                     plan.note_erase(result=erased)
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 plan.failed()
@@ -1560,6 +1563,7 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
 async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) -> str:
     """"forget it" after an answer that quoted one of the owner's verbatim turns: delete that turn from the exact-words index and
     retract the rows the same utterance produced (their evidence is that turn). NEVER raises."""
+    acting = memory_actor.member(user_id)
     try:
         svc = svc or _svc_default()
         await _speculation_barrier()
@@ -1576,7 +1580,7 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
                                             READ_BUDGET_S):
                 ex = re.sub(r"\s+", " ", str((r.metadata or {}).get("source_excerpt") or "")).strip().lower()
                 if _owns(r.metadata or {}, user_id) and ex and (ex == key or key in ex):
-                    if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained") is not None:
+                    if await svc.review(r.id, decision="reject", actor=user_id, note="forget_explained", acting=acting) is not None:
                         gone += 1
         mp.clear_explained(user_id)
         logger.info("PROVENANCE_FORGET user=%s turn=1 rows=%d erased=%d", user_id, gone, erased)

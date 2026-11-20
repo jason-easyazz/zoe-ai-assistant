@@ -9,6 +9,7 @@ injection or durable writes outside the explicit synthetic setup step.
 
 from __future__ import annotations
 
+import memory_actor
 import json
 import time
 from dataclasses import dataclass
@@ -112,6 +113,7 @@ async def seed_prompt_packet_measure_memories(
                 "scope": "project",
                 "evidence_refs": [f"fixture:mempalace_baseline:{case.case_id}"],
             },
+            acting=memory_actor.AUTOMATIC,
         )
         count += 1
     return count

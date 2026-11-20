@@ -102,7 +102,7 @@ def _correct(store, said):
 def _idle(store, mined):
     """The idle pass's write of one mined fact (memory_idle_consolidation -> expert_dispatch._ingest_or_supersede)."""
     return run(ed._ingest_or_supersede(store, mined, user_id=UID, source="idle_consolidation", session_id=None,
-                                       user_turn_id=None, memory_type="fact", confidence=0.8, tags=["idle"]))
+                                       user_turn_id=None, memory_type="fact", confidence=0.8, tags=["idle"], acting=__import__("memory_actor").AUTOMATIC))
 
 
 def _person(store, monkeypatch, name, kind, value):

@@ -33,7 +33,7 @@ class _FakeSvc:
     def __init__(self):
         self.deleted: list[tuple[str, str]] = []
 
-    async def delete_user(self, user_id, *, actor):
+    async def delete_user(self, user_id, *, actor, **_kw):
         self.deleted.append((user_id, actor))
         return 4
 
@@ -186,7 +186,7 @@ def test_failed_delete_is_audited_and_still_400(svc, monkeypatch, caplog):
     import logging
     from memory_service import MemoryServiceError
 
-    async def boom(user_id, *, actor):
+    async def boom(user_id, *, actor, **_kw):
         raise MemoryServiceError("delete_user failed: audit table locked")
     monkeypatch.setattr(svc, "delete_user", boom)
     with caplog.at_level(logging.WARNING, logger=memories_mod.logger.name):

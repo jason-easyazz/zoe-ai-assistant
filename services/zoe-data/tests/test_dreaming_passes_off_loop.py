@@ -243,7 +243,7 @@ async def test_link_resolver_reads_off_the_loop(store, monkeypatch):
 
     relinked = []
 
-    async def _relink(uid, mem_id, et, eid):
+    async def _relink(uid, mem_id, et, eid, **_kw):
         relinked.append((mem_id, et, eid))
         return True
 

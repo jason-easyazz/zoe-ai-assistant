@@ -370,3 +370,46 @@ def _forget_session_epochs_are_per_test(tmp_path, monkeypatch):
     monkeypatch.setattr(forget_session, "_EPOCH", {})
     monkeypatch.setattr(forget_session, "_LOADED", False)
     yield
+
+
+# ---- memory: who is acting ---------------------------------------------------------------------------------------------------------
+# Every mutating ``MemoryService`` method REQUIRES ``acting=`` (``memory_actor``): production has no default, and
+# ``tests/test_memory_one_writer.py`` checks every production call site says who is acting. A TEST that calls the service directly
+# is nobody asking: for test callers only, a call that does not say is AUTOMATIC. ``unwrapped`` on each method is the real one
+# (the test that a missing ``acting`` is a TypeError uses it).
+def _memory_tests_act_as_nobody(cls) -> None:
+    import functools
+
+    import memory_actor
+    from memory_writers import MUTATING
+
+    for name in MUTATING:
+        real = cls.__dict__.get(name)
+        if real is None or hasattr(real, "unwrapped"):
+            continue
+
+        def make(real):
+            @functools.wraps(real)
+            async def as_nobody(self, *args, **kw):
+                kw.setdefault("acting", memory_actor.AUTOMATIC)
+                return await real(self, *args, **kw)
+
+            as_nobody.unwrapped = real
+            return as_nobody
+
+        setattr(cls, name, make(real))
+
+
+@pytest.fixture(autouse=True)
+def _memory_service_calls_from_tests_are_automatic():
+    """Applied to whichever ``memory_service`` module is loaded now (a test may have reloaded or replaced it)."""
+    mod = sys.modules.get("memory_service")
+    if mod is None:
+        try:
+            import memory_service as mod
+        except Exception:  # noqa: BLE001 - a test that stubs the module out has no service to wrap
+            mod = None
+    cls = getattr(mod, "MemoryService", None)
+    if isinstance(cls, type) and "ingest" in cls.__dict__:
+        _memory_tests_act_as_nobody(cls)
+    yield

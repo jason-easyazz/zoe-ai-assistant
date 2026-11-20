@@ -200,7 +200,7 @@ class FakeSvc:
     async def ingest(self, text, *, user_id, source, **kw):
         return self._add(text, source=source, user_id=user_id, **kw)
 
-    async def relink_entity(self, user_id, mem_id, entity_type, entity_id):
+    async def relink_entity(self, user_id, mem_id, entity_type, entity_id, **_kw):
         self.rows[mem_id].metadata.update(entity_type=entity_type, entity_id=entity_id)
         return True
 

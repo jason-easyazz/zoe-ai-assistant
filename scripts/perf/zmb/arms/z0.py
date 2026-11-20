@@ -274,7 +274,7 @@ class Z0Arm(Arm):
     async def _ingest(self, text: str, source: str, rep: IngestReport, **kw) -> Any:
         if self._cur_day and "captured_at" not in kw:      # a turn said N days ago is captured N days ago (the service's own restore parameter)
             kw["captured_at"] = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=self._cur_day)).isoformat()
-        ref = await self.service.ingest(text, user_id=self._user, source=source, **kw)
+        ref = await self.service.ingest(text, user_id=self._user, source=source, **kw, acting=__import__("memory_actor").AUTOMATIC)
         if ref is None:
             rep.refused += 1
         else:
@@ -350,9 +350,9 @@ class Z0Arm(Arm):
                 continue
             if t.op == "edit":
                 got = await self.service.review(target, decision="edit", edits=fact, actor=writer,
-                                                anchor_text=t.text)
+                                                anchor_text=t.text, acting=__import__("memory_actor").AUTOMATIC)
             else:
-                got = await self.service.review(target, decision="archive", actor=writer)
+                got = await self.service.review(target, decision="archive", actor=writer, acting=__import__("memory_actor").AUTOMATIC)
             if got is None:
                 rep.refused += 1
             else:
@@ -799,7 +799,7 @@ class Z0Arm(Arm):
         """The audited hard delete (``MemoryService.delete_user``) of this cell's user, with the controls
         applied. Returns the rows removed."""
         with self._ctl():
-            return int(self._run(self.service.delete_user(self._user, actor="admin", reason="rtbf")) or 0)
+            return int(self._run(self.service.delete_user(self._user, actor="admin", reason="rtbf", acting=__import__("memory_actor").AUTOMATIC)) or 0)
 
     def disk_residue(self, tokens: "list[str]") -> "dict[str, Any]":
         """Byte-scan a COPY of this arm's real palace for each token: ``{"tokens": {token: {"total", "files",

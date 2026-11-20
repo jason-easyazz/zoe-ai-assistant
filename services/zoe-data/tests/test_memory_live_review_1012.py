@@ -144,7 +144,7 @@ def _store(svc, anchor, monkeypatch, old_id):
     monkeypatch.setattr(mq, "reconcile_for_ingest", reconcile)
     return run(expert_dispatch._ingest_or_supersede(
         svc, NEW, user_id=UID, source="idle_consolidation", session_id="s9", user_turn_id="t9", memory_type="fact",
-        confidence=0.8, tags=["idle"], anchor_text=anchor))
+        confidence=0.8, tags=["idle"], anchor_text=anchor, acting=__import__("memory_actor").AUTOMATIC))
 
 
 def _status(svc, mid):

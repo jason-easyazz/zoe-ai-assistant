@@ -40,6 +40,7 @@ fact must have been answered in the SAME session's recent history; English only.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 from dataclasses import dataclass, field
@@ -520,6 +521,7 @@ async def _owner_row(user_id: str, question: str, held: Atom) -> Optional[Any]:
 async def _apply_update(user_id: str, session_id: str, row: Any, held: Atom, pushed: Atom, message: str) -> bool:
     """Edit the owner's row to the value they stood by, as the owner's account (``user_confirmed``; a
     superseding edit - nothing is deleted). True only when the edit went through."""
+    acting = memory_actor.member(user_id)
     try:
         from memory_service import get_memory_service
 
@@ -530,7 +532,7 @@ async def _apply_update(user_id: str, session_id: str, row: Any, held: Atom, pus
         ref = await get_memory_service().review(
             row.id, decision="edit", edits=new_text, actor=user_id,
             note="owner stood by a corrected value after one gentle check (hold_the_fact)",
-            source_excerpt=" ".join((message or "").split()), session_id=session_id)
+            source_excerpt=" ".join((message or "").split()), session_id=session_id, acting=acting)
         return ref is not None
     except Exception as exc:  # noqa: BLE001
         logger.warning("hold_the_fact: update failed (%s)", type(exc).__name__)
