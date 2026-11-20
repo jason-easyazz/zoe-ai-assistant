@@ -1429,7 +1429,7 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
-    stamps_at = kernel_door.stamps_now()      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
+    stamps_at = kernel_door.stamps_now("reminders", "calendar")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
 

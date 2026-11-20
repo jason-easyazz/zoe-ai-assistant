@@ -313,6 +313,8 @@ async def test_an_edit_that_silences_a_ringing_alarm_is_never_held_up(door, capl
                 await asyncio.sleep(0.01)
             assert ("decision=recorded" in _lines(caplog)[-1]) is (kernel == "allow")
             assert ("decision=objected reason=not_owner" in _lines(caplog)[-1]) is (kernel != "allow")
+        else:
+            await _told(caplog, 2)                                   # the door's thread has finished with this test's kernel
 
 
 @pytest.mark.parametrize("kernel", ["refuse:not_owner", "slow"])
@@ -339,6 +341,16 @@ async def test_turning_an_alarm_off_is_never_held_up_and_any_other_edit_still_as
             with pytest.raises(alarms.AlarmRefused):
                 await w.rest.update_alarm(a["id"], {"label": WORD}, None, user=_member(ANN), db=db)
     assert not (await w.rows())["alarms"][0][scenarios_col("enabled")]
+    if kernel == "slow":
+        await asyncio.sleep(1.3)                                     # the told-afterwards ask is out of the door's thread
+
+
+async def _told(caplog, n: int, timeout: float = 3.0) -> None:
+    """Wait until the door's own thread has logged ``n`` lines (a told-afterwards ask against a slow or absent kernel is still
+    in flight when the call under test returns: the next test must not inherit it)."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end and len(_lines(caplog)) < n:
+        await asyncio.sleep(0.02)
 
 
 @pytest.mark.asyncio

@@ -586,9 +586,10 @@ async def _own_row(conn: Any, uid: str, row_id: str) -> Optional[dict]:
 async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[Optional[str], dict]:
     """Run the real tool. ``(reply, receipt)``; reply None = unavailable (``ALARMS_OFF``)."""
     import alarms as _alarms_door
+    import kernel_door
     import list_service
 
-    stamps_at = list_service.stamps_now()
+    stamps_at = kernel_door.stamps_now("reminders", "lists")      # one snapshot for the two doors a "yes" can reach below
     actor = _alarms_door.Viewer(user_id=uid)      # who a Zoe OS alarms ask is from: made first, it carries the erase stamps of NOW
     s, kind = r["slots"], r["kind"]
     today = now.astimezone(_tz()).date()
