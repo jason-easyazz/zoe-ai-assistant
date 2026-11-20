@@ -22,19 +22,17 @@ themselves honest.
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
 TABLES = ("events", "event_attendees", "event_alarms", "calendars")
-EVENT_WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA
-                         + r"[\"`\[]?(?:" + "|".join(TABLES) + r")\b", re.I)
+EVENT_WRITE = sql_scan.write_pattern(*TABLES)      # f-strings and concatenations whole, any schema, ONLY (tests/sql_scan.py)
 DOOR = "calendar_service.py"
 UPSERTS = ("upsert_row", "upsert_by_external_id")
 FEED, UPSERT_HOME = "calendar_feed.py", "connected_accounts.py"       # the feed, and the module that defines the two helpers
@@ -51,16 +49,8 @@ def _modules() -> list:
     return sorted(p for p in ROOT.rglob("*.py") if not skip.intersection(p.relative_to(ROOT).parts))
 
 
-def _texts(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
-
-
 def event_writes(source: str) -> list:
-    return [" ".join(text.split())[:80] for text in _texts(ast.parse(source)) if EVENT_WRITE.search(text)]
+    return [text[:80] for text in sql_scan.writes(source, EVENT_WRITE)]
 
 
 def feed_upserts(source: str) -> list:
@@ -106,6 +96,9 @@ def test_a_planted_event_write_is_caught():
     for sql in ('f"UPDATE {schema}.events SET x = ?"', 'f"DELETE FROM {schema}.event_attendees WHERE {col} = ?"',
                 "f\"UPDATE events SET {', '.join(sets)} WHERE id = ?\""):
         assert event_writes(f"async def f(db, schema, col, sets):\n    await db.execute({sql})\n"), sql
+    for table in TABLES:                          # a write split by ``+``, and Postgres' ONLY (control: ``sql_scan`` skipping ``+``)
+        for planted in sql_scan.planted_forms(table):
+            assert event_writes(planted), planted
     # other tables whose names end in ``events``, a longer name, and a read are not calendar writes
     assert not event_writes("async def f(db):\n    await db.execute('INSERT INTO alarm_events (id) VALUES (?)')\n"
                             "    await db.execute('UPDATE struggle_events SET x = 1')\n    await db.execute('SELECT * FROM events WHERE id = ?')\n"
