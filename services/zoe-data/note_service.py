@@ -33,7 +33,9 @@ class NoteRefused(kernel_door.Refused):
     fallback = "I'm not allowed to change that note."
 
 
-stamps_now = kernel_door.stamps_now     # a caller's first statement, before anything it awaits; handed back as ``stamps_at``
+def stamps_now() -> Optional[dict]:
+    """A caller's first statement, before anything it awaits; handed back as ``stamps_at``. None unless the NOTES door is on."""
+    return kernel_door.stamps_now("notes")
 
 
 def _gate(verb: str, *, actor, note_id: str, owner, visibility, stamps_at):
