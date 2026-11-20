@@ -711,6 +711,63 @@ def test_the_contacts_door_and_the_real_kernel_agree_on_verbs_codes_and_the_deci
         stop(proc)
 
 
+# ---- the music and home-control doors (ZOE_OS_MUSIC / ZOE_OS_HOME = kernel) against the real kernel ---------------------------------------
+def test_the_action_doors_and_the_real_kernel_agree_on_verbs_levels_and_the_decision(state, monkeypatch):
+    """``action_doors`` asks the REAL daemon, with a child's level stated beside its roster through ``home_level``: the child
+    turns a light and (at level ``comfort``) a plug on; the heating, a lock and setting their own level are refused; an adult
+    unlocks; a stranger plays nothing. Control run: with the levels reader not installed by the daemon's ``build`` the child's
+    plug is refused and this fails."""
+    import action_doors
+    import home_level
+    import kernel_door
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import home_door, music_door
+    finally:
+        sys.path.remove(str(LAB))
+    assert tuple(os_shadow.AREAS["music"].verbs) == tuple(music_door.VERBS) and tuple(os_shadow.AREAS["home"].verbs) == tuple(home_door.VERBS)
+    assert home_level.CLASSES == home_door.CLASSES and set(home_level.NAMED) == set(home_door.LEVELS) and home_level.FILE == home_door.LEVELS_FILE
+    assert set(action_doors.HOME_QUIET) <= set(home_door.VERBS) and action_doors.SECURE_CLASSES == home_door.SECURE_CLASSES
+    kid = "member-kid"
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_MUSIC", "kernel")
+        monkeypatch.setenv("ZOE_OS_HOME", "kernel")
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 2.0)
+
+        async def may(who, area, verb, target, secure=False):
+            kernel_door.note_actor(who)
+            try:
+                asked = await action_doors.before(area, verb, target, quiet=False, secure=secure,
+                                                  refused=action_doors.HomeRefused if area == "home" else action_doors.MusicRefused)
+            except kernel_door.Refused as exc:
+                return exc.reason
+            action_doors.after(asked, True)
+            return asked.decision
+
+        async def run():
+            out = [await may(kid, "home", "switch.on", "switch.kettle_plug")]                 # nothing stated yet: lights only
+            await home_level.set_level(MEMBER, kid, "comfort", where=state / home_level.FILE)
+            try:
+                await home_level.set_level(kid, kid, "most", where=state / home_level.FILE)
+            except action_doors.HomeRefused as exc:
+                out.append("level:" + exc.reason)
+            out += [await may(kid, "home", "light.on", "light.kitchen_lamp"), await may(kid, "home", "switch.on", "switch.kettle_plug"),
+                    await may(kid, "home", "climate.set", "climate.hall"), await may(kid, "home", "lock.open", "lock.front_door", True),
+                    await may(MEMBER, "home", "lock.open", "lock.front_door", True), await may(kid, "music", "music.play", "ply0001"),
+                    await may("member-nobody", "music", "music.play", "ply0001")]
+            return out
+
+        assert asyncio.run(run()) == ["adults_only", "level:adults_only", "allow", "allow", "adults_only", "adults_only", "allow",
+                                      "allow", "unknown_person"]
+        assert holds(state, "kettle", kernel=False) == [] and holds(state, "member-nobody") == []
+    finally:
+        kernel_door._ACTOR.set(None)
+        stop(proc)
+
+
 @needs_forget
 def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
     """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:

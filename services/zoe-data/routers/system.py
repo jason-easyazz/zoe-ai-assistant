@@ -2379,6 +2379,7 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     import panel_principal as _pp
 
     _pp.record_home_control(not (_pp.is_guest_id(user_id) or user_id.lower() in ("anonymous", "voice-daemon")))
+    _pp._note_actor({"user_id": user_id})      # the Zoe OS action doors: this dispatch acts for the turn's member
     # Household authority table (flag-dark ZOE_PROBLEM_LOOP=shadow|on): LOG-ONLY evidence of what the table would say about
     # this call (AUTHORITY_SHADOW ... would=allow|ask|refuse). Fire-and-forget: it never delays, changes or refuses the dispatch.
     _authority_shadow(intent_name, dict(body.slots or {}), user_id)

@@ -3010,7 +3010,10 @@ async def resolve_skybridge_request(
         from music_service import resolve_music
         # user_id threads the acting user into the listening journal (guest
         # fallback happens at music_history.resolve_music_user, not here).
-        return _attach_skybridge_context(await resolve_music(intent, user_id=user_id))
+        try:
+            return _attach_skybridge_context(await resolve_music(intent, user_id=user_id))
+        except kernel_door.Refused as exc:      # the Zoe OS kernel refused (ZOE_OS_MUSIC=kernel): final, the command was not sent
+            return _action_refused("music", intent, exc.line(), "I can't change the music")
 
     if intent.domain == "voice":
         return _attach_skybridge_context(await _resolve_voice_settings(intent))
@@ -3023,7 +3026,10 @@ async def resolve_skybridge_request(
         # about. Empty set = no room context = unchanged behaviour, which is
         # every install that has not created a room.
         room_eids = await _room_eids_for_context(context, db)
-        out = _attach_skybridge_context(await resolve_smart_home(intent, room_eids))
+        try:
+            out = _attach_skybridge_context(await resolve_smart_home(intent, room_eids))
+        except kernel_door.Refused as exc:      # the Zoe OS kernel refused (ZOE_OS_HOME=kernel): final, nothing was sent
+            return _action_refused("smart_home", intent, exc.line(), "I haven't done that")
         _remember_smart_home_target(intent, out)
         record_device_receipt(user_id, out, "skybridge")   # the write-claim guard's evidence of a REAL switch
         return out
@@ -3746,6 +3752,12 @@ def _list_refused(intent: SkybridgeIntent, reason: str) -> dict[str, Any]:
     return {"handled": True,
             "intent": {"domain": "lists", "action": intent.action, "list_type": intent.list_type, "status": "refused"},
             "spoken_summary": line, "cards": [_status_card("I can't change that list", line)], "actions": []}
+
+
+def _action_refused(domain: str, intent: SkybridgeIntent, line: str, title: str) -> dict[str, Any]:
+    """The answer for a music or home command the Zoe OS kernel refused: said plainly, a status card, no action."""
+    return {"handled": True, "intent": {"domain": domain, "action": intent.action, "status": "refused"},
+            "spoken_summary": line, "cards": [_status_card(title, line)], "actions": []}
 
 
 def _status_card(title: str, body: str, *, status: str = "Needs context") -> dict[str, Any]:
