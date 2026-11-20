@@ -2,6 +2,7 @@
 FastAPI router for journal entries.
 Mounted at prefix="/api/journal" with tag "journal".
 """
+import memory_actor
 import json
 import random
 import uuid
@@ -111,6 +112,7 @@ async def _store_journal_memory(db, user_id: str, entry: dict, action: str):
                 tags=["journal", action],
                 entity_type="journal",
                 entity_id=entry.get("id"),
+                acting=memory_actor.AUTOMATIC,
             )
         except MemoryServiceError as exc:
             import logging as _lg

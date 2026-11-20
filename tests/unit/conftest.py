@@ -195,3 +195,36 @@ def _no_live_cold_first_turn(monkeypatch):
     that drives a probe ``main()`` must never reach the brain: switch the stage off by its own env default (the stage's
     own tests call ``judge_cold_start`` / ``run_cold_start_stage`` directly)."""
     monkeypatch.setenv("ZOE_VOICE_PROBE_COLD_CHECK", "0")
+
+
+# Every mutating ``MemoryService`` method REQUIRES ``acting=`` (``services/zoe-data/memory_actor.py``; production has no default).
+# A unit test that calls the service directly is nobody asking: for test callers only, a call that does not say is AUTOMATIC
+# (the same rule, and the same list of methods, as ``services/zoe-data/tests/conftest.py``).
+@pytest.fixture(autouse=True)
+def _memory_service_calls_from_tests_are_automatic():
+    import functools
+    import importlib.util
+
+    mod = sys.modules.get("memory_service")
+    cls = getattr(mod, "MemoryService", None)
+    if isinstance(cls, type) and "ingest" in cls.__dict__ and "memory_actor" in sys.modules:
+        spec = importlib.util.spec_from_file_location("_zoe_memory_writers", _ZOE_DATA / "tests" / "memory_writers.py")
+        writers = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(writers)
+        automatic = sys.modules["memory_actor"].AUTOMATIC
+        for name in writers.MUTATING:
+            real = cls.__dict__.get(name)
+            if real is None or hasattr(real, "unwrapped"):
+                continue
+
+            def make(real):
+                @functools.wraps(real)
+                async def as_nobody(self, *args, **kw):
+                    kw.setdefault("acting", automatic)
+                    return await real(self, *args, **kw)
+
+                as_nobody.unwrapped = real
+                return as_nobody
+
+            setattr(cls, name, make(real))
+    yield

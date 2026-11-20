@@ -64,7 +64,7 @@ class _FakeSvc:
         self.reviewed.append((mem_id, kw))
         return _Row(f"edited-{mem_id}", kw.get("edits", ""))
 
-    async def relink_entity(self, user_id, mem_id, entity_type, entity_id):
+    async def relink_entity(self, user_id, mem_id, entity_type, entity_id, **_kw):
         self.relinked.append((mem_id, entity_type, entity_id))
         return True
 

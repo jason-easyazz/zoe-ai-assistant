@@ -10,6 +10,7 @@ See `docs/architecture/memory.md` for the full design.
 
 from __future__ import annotations
 
+import memory_actor
 import datetime
 import json
 import logging
@@ -167,6 +168,7 @@ async def create_memory_proposal(
     other proposals land as `status='pending'` and surface in the review
     queue. The write goes straight into MemPalace — no SQLite mirror.
     """
+    acting = memory_actor.member(user["user_id"])
     await require_feature_access(db, user, feature="memories", action="write")
     if len(body.content or "") > PROPOSAL_MAX_CHARS or len(body.source_excerpt or "") > PROPOSAL_MAX_CHARS:
         raise HTTPException(status_code=413, detail=f"content too long (max {PROPOSAL_MAX_CHARS} characters)")
@@ -190,6 +192,7 @@ async def create_memory_proposal(
             tags=tags,
             entity_type=body.entity_type,
             entity_id=body.entity_id,
+            acting=acting,
         )
     except MemoryServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -234,6 +237,7 @@ async def review_memory(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    acting = memory_actor.member(user["user_id"])
     await require_feature_access(db, user, feature="memories", action="review")
     action = (body.action or "").lower().strip()
     if action not in {"approve", "reject", "edit"}:
@@ -273,6 +277,7 @@ async def review_memory(
             # an admin reviewing ANOTHER user's row acts as an operator, not as the account
             # (memory_authority: only the account itself is user_confirmed on its own rows)
             origin="admin" if (is_admin and owner and owner != user["user_id"]) else None,
+            acting=acting,
         )
     except MemoryServiceError as exc:
         # ValueErrors from bad input become 400, missing-row becomes 404.
@@ -1551,8 +1556,9 @@ async def forget_user(
     Audited to `mempalace_audit`. Idempotent — a second call returns
     `{removed: 0}`.
     """
+    acting = memory_actor.member(admin["user_id"])
     try:
-        removed = await _svc().delete_user(target_user, actor=admin["user_id"])
+        removed = await _svc().delete_user(target_user, actor=admin["user_id"], acting=acting)
     except MemoryServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"user_id": target_user, "removed": removed, **_physical_note()}
@@ -1654,7 +1660,7 @@ async def forget_synthetic_user(target_user: str, request: Request):
                    "real users need the admin forget",
         )
     try:
-        removed = await _svc().delete_user(target_user, actor="internal:forget-synthetic")
+        removed = await _svc().delete_user(target_user, actor="internal:forget-synthetic", acting=memory_actor.AUTOMATIC)
     except MemoryServiceError as exc:
         # delete_user removes memory rows before audit rows, so a raise here can
         # be a PARTIAL delete — it must be visible in the audit log, not just a 400.

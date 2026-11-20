@@ -10,6 +10,7 @@ Entity ID strategy:
 Every write also recalculates health_score and increments notification_count.
 """
 
+import memory_actor
 import logging
 from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
@@ -688,6 +689,7 @@ async def _reconcile_same_kind_entity_row(
         source_excerpt=source_excerpt,
         session_id=session_id,
         origin=origin,
+        acting=memory_actor.AUTOMATIC,
     )
     if new_ref is None:
         # A REFUSAL by the authority wall (the row is the user's own words and this writer is
@@ -705,7 +707,7 @@ async def _reconcile_same_kind_entity_row(
     )
     try:
         if entity_id and not entity_id.startswith("slug:"):
-            await svc.relink_entity(user_id, new_ref.id, "person", entity_id)
+            await svc.relink_entity(user_id, new_ref.id, "person", entity_id, acting=memory_actor.AUTOMATIC)
     except Exception as exc:
         logger.debug("person_extractor: relink after entity supersede failed: %s", exc)
     for stale in extras:
@@ -713,6 +715,7 @@ async def _reconcile_same_kind_entity_row(
             await svc.review(
                 stale.id, decision="archive", actor=source,
                 note=f"stale duplicate {pattern_type} (entity-keyed supersede)",
+                acting=memory_actor.AUTOMATIC,
             )
         except Exception:
             pass
@@ -736,7 +739,7 @@ async def _ingest_own_fact(text: str, user_id: str, *, source: str, session_id: 
 
         ref = await get_memory_service().ingest(
             text, user_id=user_id, source=source, session_id=session_id, memory_type="fact", status="approved",
-            tags=["auto_extract", "own_fact"], source_excerpt=source_excerpt, origin=origin)
+            tags=["auto_extract", "own_fact"], source_excerpt=source_excerpt, origin=origin, acting=memory_actor.AUTOMATIC)
         if ref is not None and (getattr(ref, "metadata", None) or {}).get("authority_blocked"):
             return AUTHORITY_BLOCKED
         return ref.id if ref else None
@@ -865,6 +868,7 @@ async def _ingest_to_mempalace(
                     source_excerpt=source_excerpt,
                     session_id=session_id,
                     origin=origin,
+                    acting=memory_actor.AUTOMATIC,
                 )
                 if new_ref is not None:
                     logger.info("person_extractor: superseded %s with %s", target_id, _utag(text))
@@ -878,7 +882,7 @@ async def _ingest_to_mempalace(
                     try:
                         if entity_id and not entity_id.startswith("slug:"):
                             await svc.relink_entity(
-                                user_id, new_ref.id, "person", entity_id)
+                                user_id, new_ref.id, "person", entity_id, acting=memory_actor.AUTOMATIC)
                     except Exception as exc:
                         logger.debug("person_extractor: relink after supersede failed: %s", exc)
                     return new_ref.id
@@ -901,6 +905,7 @@ async def _ingest_to_mempalace(
             entity_id=entity_id or f"slug:{person_name.lower().replace(' ', '_')}",
             source_excerpt=source_excerpt,
             origin=origin,
+            acting=memory_actor.AUTOMATIC,
         )
         if ref is not None and (getattr(ref, "metadata", None) or {}).get("authority_blocked"):
             return AUTHORITY_BLOCKED
@@ -1094,6 +1099,7 @@ async def _edge_may_change(db, user_id: str, edge_id: str, authority: str, origi
                 "edge_old_text": (name_a + " is " + name_b + "'s " + old_rel_type.replace("_", " ") + "."
                                   if old_rel_type else ""),
             },
+            acting=memory_actor.AUTOMATIC,
         )
     except Exception as exc:  # noqa: BLE001 - the candidate is a courtesy, the wall is the rule
         logger.debug("person_extractor: edge candidate not stored (%s)", type(exc).__name__)
@@ -1216,6 +1222,7 @@ async def _hold_edge_belief(user_id: str, name_a: str, name_b: str, rel_type: st
             f"{name_a} is {name_b}'s {rel_type.replace('_', ' ')}.", user_id=user_id, writer=origin,
             contradicts=contradicts, kind="relationship", memory_type="person", status="pending", basis=basis,
             cls=_auth.USER_STATED if authority == _auth.USER_STATED else None, extra=extra or {},
+            acting=memory_actor.AUTOMATIC,
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("person_extractor: held relationship not recorded (%s)", type(exc).__name__)
@@ -1232,6 +1239,7 @@ async def _hold_fact_belief(user_id: str, name: str, fact_text: str, *, origin: 
         await get_memory_service().record_candidate(
             fact_text[:300], user_id=user_id, writer=origin, kind="fact", memory_type="person", status="pending",
             basis=basis, cls=_auth.USER_STATED, extra=extra or {},
+            acting=memory_actor.AUTOMATIC,
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("person_extractor: held fact not recorded (%s)", type(exc).__name__)

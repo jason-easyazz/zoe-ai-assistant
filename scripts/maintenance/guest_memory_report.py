@@ -184,7 +184,7 @@ async def purge(rows: list[dict[str, Any]], *, palace: str, svc=None) -> dict[st
             by_owner.setdefault(r["owner"], []).append(r["id"])
     done: dict[str, Any] = {}
     for owner, ids in sorted(by_owner.items()):
-        res = await svc.erase_rows(owner, ids, actor=PURGE_ACTOR, reason=PURGE_REASON)
+        res = await svc.erase_rows(owner, ids, actor=PURGE_ACTOR, reason=PURGE_REASON, acting=__import__("memory_actor").AUTOMATIC)
         removed = int((res or {}).get("rows_removed") or 0)
         done[owner] = {"asked": len(ids), "rows_removed": removed, "complete": removed == len(ids)}
     return done

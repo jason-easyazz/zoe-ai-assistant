@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import concurrent.futures
 import contextvars
@@ -5536,6 +5537,7 @@ async def _store_skybridge_memory_fact(
     person_id: str | None = None,
     person_name: str = "",
 ) -> bool:
+    acting = memory_actor.member(user_id)
     if not fact.strip():
         return False
     try:
@@ -5553,6 +5555,7 @@ async def _store_skybridge_memory_fact(
                 entity_type="person" if person_id else None,
                 entity_id=person_id,
                 source_excerpt=person_name or fact[:80],
+                acting=acting,
             )
             return True
         except MemoryServiceError:

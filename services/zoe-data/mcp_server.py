@@ -3,6 +3,7 @@ MCP Server for zoe-data.
 Exposes Zoe tools that Hermes skills and local agents can call.
 Runs as a stdio MCP server alongside the REST API.
 """
+import memory_actor
 import asyncio
 import json
 import random
@@ -1429,9 +1430,10 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
-    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal", "people")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
+    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal", "people", "memory")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
+    acting = memory_actor.Member(str(user_id or ""), stamps_at)      # the member this tool call is for
 
     if "list_type" in args:
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
@@ -3119,6 +3121,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     entity_type=args.get("entity_type"),
                     entity_id=args.get("entity_id"),
                     expires_at=args.get("expires_at"),
+                    acting=acting,
                 )
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
@@ -3206,6 +3209,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     # the person said (memory_authority). ``actor`` stays the account that
                     # asked, for the audit trail.
                     origin="mcp",
+                    acting=acting,
                 )
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
@@ -3243,7 +3247,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     decision="reject",
                     actor=user_id,
                     note=args.get("note") or "memory_forget",
-                    origin="mcp",  # a model writer acting for the member (memory_authority)
+                    origin="mcp",  # a model writer acting for the member (memory_authority),
+                    acting=acting,
                 )
             except MemoryServiceError as exc:
                 return {"error": str(exc)}

@@ -373,7 +373,7 @@ def test_ingest_or_supersede_skips_dup_of_richer_existing(monkeypatch):
         user_id="jason", source="idle_consolidation",
         session_id="s1", user_turn_id="t1",
         memory_type="fact", confidence=0.8, tags=["idle"],
-    ))
+    acting=__import__("memory_actor").AUTOMATIC))
     assert svc.ingested == [], "near-dup of a richer fact must not be stored"
     assert svc.archived == [], "the richer existing row must be kept"
 

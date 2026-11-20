@@ -45,6 +45,7 @@ set-but-empty = the tier does nothing and every turn is exactly what it was).
 """
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import hashlib
 import logging
@@ -264,6 +265,7 @@ async def remember(clause: str, user_id: str, *, utterance: str = "", session_id
     memory ask after all (an instruction to the assistant): the caller then proceeds as it always did.
 
     The reply is decided by the write's OUTCOME, never before it."""
+    acting = memory_actor.member(user_id)
     clause = (clause or "").strip()
     utterance = (utterance or clause).strip()
     if not clause or _is_guest(user_id):
@@ -310,7 +312,7 @@ async def remember(clause: str, user_id: str, *, utterance: str = "", session_id
         from expert_dispatch import _ingest_or_supersede
 
         write = asyncio.ensure_future(_ingest_or_supersede(
-            svc, clause, user_id=user_id, source=WRITER, session_id=session_id or None,
+            svc, clause, acting=acting, user_id=user_id, source=WRITER, session_id=session_id or None,
             user_turn_id=turn_id(user_id, clause), memory_type="fact", confidence=0.9,
             tags=["explicit", TAG], source_excerpt=utterance,
             **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),

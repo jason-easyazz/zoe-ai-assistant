@@ -11,7 +11,7 @@ import pytest
 from memory_service import MemoryService
 
 
-async def _ingest(svc, text):
+async def _ingest(svc, text, **_kw):
     return await svc.ingest(
         text, user_id="u1", source="test", memory_type="fact", status="approved",
     )

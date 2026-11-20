@@ -9,6 +9,7 @@ Pattern priority: domain-specific (calendar, reminder, contact, note) checked
 BEFORE generic list patterns to avoid collisions like "what's on my calendar"
 matching as list_show.
 """
+import memory_actor
 import asyncio
 import hashlib
 import hmac
@@ -4279,6 +4280,7 @@ async def _execute_forget_last(user_id: str) -> str:
     """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - the rows written from it, its in-flight capture
     (refused from now on), its exact-words index entry and its transcript row (flagged off the record for the nightly
     readers). Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. Never raises."""
+    acting = memory_actor.member(user_id)
     import turn_forget
 
     turn = turn_forget.previous_turn(user_id)
@@ -4326,7 +4328,7 @@ async def _execute_forget_last(user_id: str) -> str:
 
     async def _reject(row) -> bool:
         try:
-            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
+            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last", acting=acting) is not None
         except Exception as exc:  # noqa: BLE001
             plan.failed()
             logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
@@ -4368,7 +4370,7 @@ async def _execute_forget_last(user_id: str) -> str:
         try:
             from memory_service import physical_erase_enabled
             if physical_erase_enabled():
-                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)")
+                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (last)", acting=acting)
                 plan.note_erase(result=erased)
                 await turn_forget.clear_unerased(user_id)
                 finished_earlier = bool(carried)
@@ -4443,6 +4445,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
+    acting = memory_actor.member(user_id)
     await _speculative_side_effect_barrier(intent.name)
     try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): the intent NAME that executed this user's turn - a deque append
         import struggle_detector as _sd
@@ -4822,7 +4825,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 if not erase_ids:
                     return
                 erased = await svc.erase_rows(user_id, erase_ids, actor=user_id,
-                                              reason="forgotten by request (entity)")
+                                              reason="forgotten by request (entity)", acting=acting)
                 plan.note_erase(result=erased)
                 logger.info("memory_forget_entity: erased=%s ok=%s", erased.get("rows_removed"),
                             (erased.get("physical") or {}).get("ok"))
@@ -4858,7 +4861,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         for r in matches:
             try:
                 ref = await svc.review(r.id, decision="archive", actor=user_id,
-                                       note=f"forget_entity:{name}")
+                                       note=f"forget_entity:{name}", acting=acting)
                 forgotten += 1
                 if ref is not None:      # None = the archive was refused / did nothing: never erase on top of that
                     archived_ids.append(r.id)
@@ -5022,6 +5025,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 metadata=(emo_metadata or None),
                 anchor_text=anchor or None,
                 origin=teach_origin,
+                acting=acting,
             )
         except Exception as exc:
             logger.warning("memory_store ingest failed: %s", exc)

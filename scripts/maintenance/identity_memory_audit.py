@@ -251,6 +251,7 @@ async def purge(conflicts: list[dict[str, Any]], identities: dict[str, idf.Ident
                 c["id"], decision="edit", actor="identity_audit",
                 edits=f"User's name is {ident.account_name}.",
                 note="identity audit: conflicted with the account name",
+                acting=__import__("memory_actor").AUTOMATIC,
             )
             results.append({"id": c["id"], "ok": ref is not None, "new_id": getattr(ref, "id", None)})
         except Exception as exc:  # noqa: BLE001 — report and continue

@@ -24,6 +24,7 @@ Pure matching (``statement``, ``rewrite``); the write is one ``review`` per row.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 from typing import NamedTuple, Optional
@@ -1359,6 +1360,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 speaker_verified: Optional[bool] = None) -> int:
     """Supersede the member's stored rows the correction in ``user_message`` is about. Returns the rows rewritten (0 = nothing
     changed). An unverified speaker, an unidentified member or an opted-out member changes nothing. Never raises."""
+    acting = memory_actor.member(user_id)
     if speaker_verified is False:
         return 0
     corr = statement(user_message)
@@ -1466,7 +1468,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             ref = await svc.review(
                 r.id, decision="edit", edits=new_text, actor=SOURCE, note="spoken value correction (durable supersede)",
                 source_excerpt=excerpt, anchor_text=excerpt, session_id=session_id,
-                **({} if speaker_verified is None else {"speaker_verified": speaker_verified}))
+                **({} if speaker_verified is None else {"speaker_verified": speaker_verified}), acting=acting)
             if ref is not None:
                 done += 1
                 tied.append(getattr(ref, "id", None))

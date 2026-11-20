@@ -32,6 +32,7 @@ person_extractor.process_text. Never raises into the turn.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 from dataclasses import dataclass
@@ -374,13 +375,14 @@ async def _ingest_user_fact(fact: str, user_id: str, source: str, session_id, ex
         return target
     if op == "update" and target:
         ref = await svc.review(target, decision="edit", edits=fact, actor=source,
-                               note="named relations supersede", source_excerpt=excerpt)
+                               note="named relations supersede", source_excerpt=excerpt, acting=memory_actor.AUTOMATIC)
         if ref is not None:
             return ref.id
     ref = await svc.ingest(
         fact, user_id=user_id, source=source, session_id=session_id, memory_type="fact",
         status="approved", tags=["person", "auto_extract", "named_relations"],
         source_excerpt=excerpt,
+        acting=memory_actor.AUTOMATIC,
     )
     return ref.id if ref else None
 
@@ -514,7 +516,7 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
             if new_owner:
                 from memory_service import get_memory_service
 
-                await get_memory_service().relink_entity(user_id, mem_id, "person", new_owner)
+                await get_memory_service().relink_entity(user_id, mem_id, "person", new_owner, acting=memory_actor.AUTOMATIC)
         except Exception as exc:  # noqa: BLE001 - the idle link-resolver also repairs this
             logger.debug("named_relations: relink skipped (%s)", type(exc).__name__)
     return wrote

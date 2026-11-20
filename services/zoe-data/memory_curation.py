@@ -40,6 +40,7 @@ Pure of HTTP: ``routers/memories_curation.py`` turns :class:`CurationRefused` in
 """
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import datetime
 import hashlib
@@ -365,6 +366,7 @@ async def add(db, curator: Account, member_id: str, text: str, category: str, *,
 
 
 async def _add_locked(db, curator: Account, member_id: str, text: str, category: str, *, via: str, svc: Any) -> dict:
+    acting = memory_actor.member(curator.user_id)
     pol = await policy(db, curator, member_id)
     clean, cat, sensitive = check_text(text, category, pol)
     await refuse_forgotten(curator, pol.member, clean, _store_text(clean, pol.member))
@@ -372,7 +374,7 @@ async def _add_locked(db, curator: Account, member_id: str, text: str, category:
     ref = await _svc(svc).ingest(
         _store_text(clean, pol.member), user_id=pol.member.user_id, source=WRITER, origin=WRITER, memory_type="fact",
         confidence=0.95, status="approved", scope="personal", tags=["curated", "curated:" + cat],
-        metadata=_stamps(curator, cat, sensitive, via))
+        metadata=_stamps(curator, cat, sensitive, via), acting=acting)
     await _finished(db, curator.user_id, pol.member.user_id, "add", ref is not None, cat, getattr(ref, "id", ""))
     if ref is None or str((ref.metadata or dict()).get("status") or "") != "approved":
         raise CurationRefused(409, "I could not save that one.")
@@ -386,6 +388,7 @@ async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, 
 
 
 async def _edit_locked(db, curator: Account, member_id: str, row_id: str, text: str, *, via: str, svc: Any) -> dict:
+    acting = memory_actor.member(curator.user_id)
     pol = await policy(db, curator, member_id)
     old = await _one(pol, row_id, svc)
     clean, cat, sensitive = check_text(text, str((old.metadata or dict()).get("curated_category") or "other"), pol)
@@ -393,7 +396,7 @@ async def _edit_locked(db, curator: Account, member_id: str, row_id: str, text: 
     await _audited(db, curator.user_id, pol.member.user_id, "edit", cat, old.id)
     ref = await _svc(svc).review(old.id, decision="edit", actor=curator.user_id, origin=WRITER,
                                  edits=_store_text(clean, pol.member), note="edited by a curator",
-                                 metadata=_stamps(curator, cat, sensitive, via))
+                                 metadata=_stamps(curator, cat, sensitive, via), acting=acting)
     await _finished(db, curator.user_id, pol.member.user_id, "edit", ref is not None, cat, old.id)
     if ref is None:
         raise CurationRefused(409, "I could not change that one.")
@@ -441,6 +444,7 @@ async def forget(db, curator: Account, member_id: str, row_id: str, *, svc: Any 
 
 
 async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, svc: Any) -> None:
+    acting = memory_actor.member(curator.user_id)
     from memory_service import physical_erase_enabled
 
     svc = _svc(svc)
@@ -462,11 +466,11 @@ async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, s
     cat = str((old.metadata or dict()).get("curated_category") or "")
     await _audited(db, curator.user_id, pol.member.user_id, "forget", cat, old.id)
     ok = rejected or await svc.review(old.id, decision="reject", actor=curator.user_id, origin=WRITER,
-                                      note="removed by a curator") is not None
+                                      note="removed by a curator", acting=acting) is not None
     if ok and hasattr(svc, "erase_rows") and physical_erase_enabled():
         chain = await _earlier_revisions(pol, old, svc)
         erased = await svc.erase_rows(pol.member.user_id, [old.id, *chain], actor=curator.user_id,
-                             reason="curated note removed by a curator")
+                             reason="curated note removed by a curator", acting=acting)
         plan.note_erase(result=erased)
     if ok:
         await plan.ok()
@@ -500,6 +504,7 @@ async def held(db, curator: Account, member_id: str, *, svc: Any = None) -> list
 
 async def decide_held(db, curator: Account, member_id: str, held_id: str, action: str, *, svc: Any = None) -> dict:
     """``keep``: the curated note stands, the held note is dismissed. ``accept``: the curated note becomes what the member said."""
+    acting = memory_actor.member(curator.user_id)
     if action not in ("keep", "accept"):
         raise CurationRefused(422, "Choose keep or accept.")
     svc = _svc(svc)
@@ -513,7 +518,7 @@ async def decide_held(db, curator: Account, member_id: str, held_id: str, action
     if action == "accept":
         out = await edit(db, curator, member_id, note["against"]["id"], note["text"], svc=svc)
     ok = await svc.review(held_id, decision="reject", actor=curator.user_id, origin=WRITER,
-                          note="held note: the curator chose " + action) is not None
+                          note="held note: the curator chose " + action, acting=acting) is not None
     await _finished(db, curator.user_id, member_id, "held_" + action, ok, cat, held_id)
     if not ok:
         raise CurationRefused(409, "I could not close that note. Try again.")
@@ -575,6 +580,7 @@ async def my_settings(db, user_id: str) -> dict:
 async def set_my_optin(db, user_id: str, category: str, on: bool, *, svc: Any = None) -> dict:
     """An ADULT opts one of their own categories in to (or out of) curation. Out releases the curated rows of that category
     (restamped ``user_stated``: their own word wins again); back in protects them again."""
+    acting = memory_actor.member(user_id)
     _require_enabled()
     cat = str(category or "").lower()
     if cat not in ALL_CATEGORIES:
@@ -592,7 +598,7 @@ async def set_my_optin(db, user_id: str, category: str, on: bool, *, svc: Any = 
         rows = await svc.list_all_by_status_strict(user_id=user_id, status="approved")
         ids = [r.id for r in rows
                if _is_curated(r.metadata or dict(), user_id) and str((r.metadata or dict()).get("curated_category") or "") == cat]
-        return await svc.set_curated_standing(user_id, ids, protect=on, actor=user_id) if ids else 0
+        return await svc.set_curated_standing(user_id, ids, protect=on, actor=user_id, acting=acting) if ids else 0
 
     restamped = 0
     async with _member_lock(user_id):         # the whole restamp -> flip -> restamp is one step against a curator's add / edit
