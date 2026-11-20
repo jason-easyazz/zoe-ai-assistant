@@ -1048,14 +1048,9 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         eid = str(uuid.uuid4())
         title = slots.get("title") or slots.get("description", "Event")
         start_date = slots.get("start_date") or date.today().isoformat()
-        await conn.execute(
-            """INSERT INTO events (id, user_id, title, start_date, category, all_day, visibility, deleted)
-               VALUES ($1, $2, $3, $4, 'general', 0, 'family', 0)""",
-            eid,
-            user_id,
-            title,
-            start_date,
-        )
+        from calendar_service import suggested_create_event_record
+
+        await suggested_create_event_record(conn, event_id=eid, user_id=user_id, title=title, start_date=start_date)
         return {"event_id": eid, "title": title, "start_date": start_date}
 
     if action == "note_create":
