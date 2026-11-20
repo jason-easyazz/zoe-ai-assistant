@@ -3591,11 +3591,9 @@ async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[
 
         note_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
-            await db.execute(
-                "INSERT INTO notes (id, user_id, title, content, category, visibility)"
-                " VALUES (?,?,?,?,?,?)",
-                (note_id, user_id, title, content, category, "personal"),
-            )
+            import note_service
+
+            await note_service.said_note_record(db, note_id=note_id, user_id=user_id, title=title, content=content, category=category)
             # Mirror mcp_server: best-effort MemPalace write inside the same
             # session, never fatal to the note write itself.
             try:
@@ -3643,11 +3641,10 @@ async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Option
 
         entry_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
-            await db.execute(
-                "INSERT INTO journal_entries (id, user_id, content, title, mood, mood_score,"
-                " tags, visibility, deleted) VALUES (?,?,?,?,?,?,?,'personal',0)",
-                (entry_id, user_id, content, title, mood, mood_score, tags_json),
-            )
+            import journal_service
+
+            await journal_service.said_entry_record(db, entry_id=entry_id, user_id=user_id, content=content, title=title, mood=mood,
+                                                    mood_score=mood_score, tags_json=tags_json)
             try:
                 from routers.journal import _store_journal_memory  # type: ignore
 
