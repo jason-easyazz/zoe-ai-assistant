@@ -444,7 +444,7 @@ def test_a_slow_one_restart_per_tick_loop_still_alerts_within_the_window(units_r
         clock[0] += 120
         props[(BOT, "NRestarts")] = str(n)
         rc = mod.check_units([BOT], 5, 1800, False)
-    assert rc == 2 and len(sent) == 1 and "5x in the last 15 min" in sent[0]
+    assert rc == 2 and len(sent) == 1 and "5 times in the last 15 minutes" in sent[0]
 
 
 def test_restarts_older_than_the_window_do_not_add_up(units_rig, monkeypatch):

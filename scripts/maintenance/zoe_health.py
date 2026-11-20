@@ -18,11 +18,12 @@ Probes, all bounded (2 s HTTP, 5 s docker/systemctl):
   * the forget ledger: zoe-data's ``/health`` field ``forget_ledger`` (an enum; the secret itself is never read here).
     ``unconfigured`` is red (a forget is not permanent); unreadable is ``unknown``, never red on its own.
 While the night window is open (``~/.zoe/night-window/WINDOW_OPEN``) the spine is stopped ON PURPOSE: its probes
-are skipped, not failed.
+are skipped, not failed. A valid PLANNED-window marker (``maintenance_window.sh``; ``read_planned_window``) skips the
+probes in ``WINDOW_TAKES`` the same way. docs/knowledge/health-alerts.md has the marker and wording contracts.
 
-Alerting is on TRANSITIONS only: a check must fail on two consecutive runs before it alerts (one restart window is
-not an outage), then stays quiet until it recovers, which sends one "recovered" line. State:
-``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the shared owner-alert helper
+Alerting is on TRANSITIONS only: two consecutive failures alert, one recovery message follows (only for something
+alerted), a run's news goes out as ONE message or, when it would not fit the delivery limit, a few (at most 4; a message the outbox only queues holds the run until it lands), plain sentences (``CHECK_WORDS`` + ``zoe_crash_loop_watch.PLAIN_WORDS``); a check that
+keeps dropping out is said once (``FLAP_*``). State: ``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the shared owner-alert helper
 (``zoe_crash_loop_watch.deliver``: retries + a durable outbox) - a process separate from zoe-data, so it can report
 zoe-data's death. The "owner alerts" check is red while that helper records alerting as broken (Telegram refused the
 credential, or no recipient), so the health log says so even though its own Telegram line cannot get through.
@@ -41,6 +42,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
@@ -51,6 +53,16 @@ HOME = Path(os.environ.get("HOME", str(Path.home())))
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE = Path(os.environ.get("ZOE_HEALTH_STATE", str(HOME / ".local" / "state" / "zoe-health" / "state.json")))
 NIGHT_MARKER = Path(os.environ.get("NIGHT_DIR", str(HOME / ".zoe" / "night-window"))) / "WINDOW_OPEN"
+# The planned-window marker (scripts/AGENTS.md; written by maintenance_window.sh): JSON {"until": <epoch>, "kind": <kind>}
+# and nothing else. Overridable for tests the same way NIGHT_DIR is.
+MAINT_MARKER = Path(os.environ.get("MAINTENANCE_WINDOW_DIR", str(HOME / ".zoe" / "maintenance-window"))) / "OPEN"
+WINDOW_KINDS = {"test": "test", "replay": "voice replay", "deploy": "update", "other": "maintenance"}
+WINDOW_MAX_S = 2 * 3600       # a marker further ahead than this is ignored: a stale marker can never silence an outage
+OVERRUN_RECALL_S = 2 * 3600   # an ended window still explains (in words) a service that stayed off, for this long
+# The services a planned window stops ON PURPOSE. Today only the speech service: the landing probe window stops and
+# restarts kokoro-tts and nothing else (scripts/landing/landing_lib.sh landing_probe_window). The brain, zoe-data, the
+# database, disk and memory are NOT expected to drop and keep alerting through any window.
+WINDOW_TAKES = ("kokoro-tts",)
 
 # The canonical spine (docs/CANONICAL.md): name -> port. Retired lanes (Hermes :8642, OpenClaw :18789, Flue 1.x
 # :3578) are deliberately absent; tests/unit/test_zoe_health.py fails if one comes back.
@@ -64,6 +76,9 @@ SPINE: dict[str, int] = {
 DISK_WARN_PCT = 90
 MEM_WARN_MB = 700          # the remote voice-gate floor; below it the box is in trouble
 FAILS_TO_ALERT = 2
+FLAP_COUNT = 3                # the 3rd alerted drop of one check within FLAP_WINDOW_S is said once, as "keeps dropping out"
+FLAP_WINDOW_S = 6 * 3600      # ...and the dropouts are over (one closing line) after this long with no new drop
+FLAP_LONG_S = 3600            # while dropping out, a single drop longer than this is told like an ordinary outage
 
 
 @dataclass
@@ -72,6 +87,63 @@ class Check:
     ok: bool
     detail: str
     unknown: bool = False      # no verdict this run: printed, but neither alerts nor recovers (``transitions`` skips it)
+    code: str = ""             # the short technical code that ends an owner message, e.g. "no-answer" (never a path)
+    skipped: bool = False      # taken down ON PURPOSE by a planned window: no verdict, and a not-yet-alerted count restarts
+    overrun: Optional[dict] = None   # {"kind", "until"} of a planned window that ended while this check is still failing
+
+
+def _http_code(ok: bool, why: str) -> str:
+    if ok:
+        return "ok"
+    if why.startswith("HTTP "):
+        return "error-reply"
+    return "timed-out" if "timeout" in why.lower() else "no-answer"
+
+
+def read_planned_window(now: float, path: Optional[Path] = None) -> tuple[Optional[dict], Optional[dict], str]:
+    """(open, overrun, note). ``open`` is {kind, until} of a VALID unexpired marker; ``overrun`` is a valid-shaped marker
+    whose ``until`` passed less than OVERRUN_RECALL_S ago (the tooling never closed it, or the window ran long). A marker
+    that is unreadable, has any key but ``until`` + ``kind``, an unknown kind, a non-number ``until`` or an ``until``
+    more than WINDOW_MAX_S ahead is IGNORED (note says why, for the log): it silences nothing."""
+    try:
+        return _read_planned_window(now, path or MAINT_MARKER)
+    except Exception:  # noqa: BLE001 - whatever the file holds, the health check must still run: a marker never crashes it
+        return None, None, "planned-window marker ignored: malformed"
+
+
+MARKER_MAX_BYTES = 4096   # the writer's marker is ~40 bytes; anything bigger is not ours and is not parsed
+
+
+def _read_planned_window(now: float, p: Path) -> tuple[Optional[dict], Optional[dict], str]:
+    try:
+        with p.open("rb") as fh:
+            data = fh.read(MARKER_MAX_BYTES + 1)
+    except FileNotFoundError:
+        return None, None, ""
+    except OSError:               # a directory, no permission, ...
+        return None, None, "planned-window marker ignored: unreadable"
+    if len(data) > MARKER_MAX_BYTES:
+        return None, None, "planned-window marker ignored: malformed"
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (ValueError, RecursionError):   # not UTF-8, not JSON, or nested too deep
+        return None, None, "planned-window marker ignored: unreadable"
+    if not isinstance(raw, dict) or set(raw) != {"until", "kind"}:
+        return None, None, "planned-window marker ignored: malformed"
+    kind = raw["kind"]
+    if not isinstance(kind, str) or kind not in WINDOW_KINDS:
+        return None, None, "planned-window marker ignored: malformed"
+    until = raw["until"]
+    if isinstance(until, bool) or not isinstance(until, (int, float)) or until != until:
+        return None, None, "planned-window marker ignored: malformed"
+    if until > now + WINDOW_MAX_S:
+        return None, None, "planned-window marker ignored: too far ahead"
+    w = {"kind": kind, "until": float(until)}
+    if until > now:
+        return w, None, f"planned {kind} window open: {', '.join(WINDOW_TAKES)} probe skipped"
+    if now - until <= OVERRUN_RECALL_S:
+        return None, w, f"planned {kind} window ended {int(now - until)} s ago (marker not closed)"
+    return None, None, "planned-window marker ignored: expired"
 
 
 def http_ok(port: int, path: str = "/health", timeout: float = 2.0) -> tuple[bool, str]:
@@ -101,7 +173,7 @@ def restore_drill_check(run: Callable = _run) -> Check:
     # rc 6 = stale, but the drill is still running (a run recorded in the last 2 days): its own owner_alert cadence
     # (transition, weekly reminder, "passed again") is the ONE voice, so this check stays ok (report-only; the line still
     # says STALE in health.log). When the drill stops running (dead timer), rc becomes 4 and this check alerts instead.
-    return Check("restore drill", rc in (0, 6), line[0])
+    return Check("restore drill", rc in (0, 6), line[0], code="stale" if rc not in (0, 6) else "ok")
 
 
 def night_timer_check(run: Callable = _run) -> Check:
@@ -112,7 +184,8 @@ def night_timer_check(run: Callable = _run) -> Check:
     _, enabled = run(["systemctl", "--user", "is-enabled", NIGHT_TIMER])
     active, enabled = (active or "").strip(), (enabled or "").strip()
     ok = active == "active" and enabled in ("enabled", "enabled-runtime")
-    return Check("night-window timer", ok, f"{NIGHT_TIMER} is {active or '?'} / {enabled or '?'}" if not ok else "armed")
+    return Check("night-window timer", ok, f"{NIGHT_TIMER} is {active or '?'} / {enabled or '?'}" if not ok else "armed",
+                 code=f"{active or '?'}/{enabled or '?'}")
 
 
 # Desktop-session units (xdg portals, pipewire, gnome-*) fail on a headless login and are not Zoe's: alerting on them
@@ -140,33 +213,41 @@ def forget_ledger_check(state: Optional[str]) -> Check:
         return Check("forget ledger", True, "configured")
     if state == "unconfigured":
         return Check("forget ledger", False, "unconfigured: a forget is not permanent until ZOE_FORGET_LEDGER_SALT is set "
-                                            "in zoe-data's env")
+                                            "in zoe-data's env", code="unconfigured")
     return Check("forget ledger", True, "unknown (zoe-data status unreadable)", unknown=True)
 
 
 def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _run,
           night_open: Optional[bool] = None,
-          forget_ledger: Optional[Callable[[], Optional[str]]] = None) -> list[Check]:
+          forget_ledger: Optional[Callable[[], Optional[str]]] = None,
+          planned: Optional[tuple] = None) -> list[Check]:
+    """``planned`` is ``read_planned_window``'s (open, overrun, ...) result; None reads the marker now."""
     out: list[Check] = []
     night = NIGHT_MARKER.exists() if night_open is None else night_open
+    w_open, w_over = (planned or read_planned_window(time.time()))[:2]
     for name, port in SPINE.items():
         if night:
             continue
+        if w_open and name in WINDOW_TAKES:
+            out.append(Check(f"{name} :{port}", True, f"skipped: planned {w_open['kind']} window", skipped=True))
+            continue
         ok, why = http(port)
-        out.append(Check(f"{name} :{port}", ok, why))
+        out.append(Check(f"{name} :{port}", ok, why, code=_http_code(ok, why),
+                         overrun=w_over if name in WINDOW_TAKES and not ok else None))
     rc, _ = run(["docker", "exec", "zoe-database", "pg_isready", "-U", "zoe", "-q"])
-    out.append(Check("postgres", rc == 0, f"pg_isready rc={rc}"))
+    out.append(Check("postgres", rc == 0, f"pg_isready rc={rc}", code="not-ready"))
     rc, txt = run(["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"])
     bad = [ln.split("\t")[0] for ln in txt.splitlines() if "(unhealthy)" in ln or "\tRestarting" in ln] if rc == 0 else []
-    out.append(Check("containers", rc == 0 and not bad, ", ".join(bad) if bad else f"docker rc={rc}" if rc else "ok"))
+    out.append(Check("containers", rc == 0 and not bad, ", ".join(bad) if bad else f"docker rc={rc}" if rc else "ok",
+                     code=", ".join(bad) if bad else "docker-unreadable"))
     rc, txt = run(["systemctl", "--user", "--failed", "--plain", "--no-legend", "--type=service,timer"])
     failed = sorted(u for u in (ln.split()[0] for ln in txt.splitlines() if ln.strip()) if not _foreign_unit(u)) if rc == 0 else []
-    out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none"))
+    out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none", code=", ".join(failed)))
     out.append(night_timer_check(run))
     out.append(restore_drill_check(run))
     du = shutil.disk_usage("/")
     pct = round(100 * du.used / du.total)
-    out.append(Check("disk /", pct < DISK_WARN_PCT, f"{pct}% used"))
+    out.append(Check("disk /", pct < DISK_WARN_PCT, f"{pct}% used", code=f"{pct}% full"))
     avail = 0
     try:
         for line in open("/proc/meminfo"):
@@ -174,32 +255,278 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
                 avail = int(line.split()[1]) // 1024
     except OSError:
         pass
-    out.append(Check("memory", avail >= MEM_WARN_MB, f"MemAvailable {avail} MB"))
+    out.append(Check("memory", avail >= MEM_WARN_MB, f"MemAvailable {avail} MB", code=f"{avail} MB free"))
     if forget_ledger is not None:
         out.append(forget_ledger_check(forget_ledger()))
     return out
 
 
-def transitions(checks: list[Check], state: dict) -> tuple[list[str], dict]:
-    """New state + the alert lines this run sends. A check alerts on its FAILS_TO_ALERT-th consecutive failure
-    and once on recovery after having alerted. Checks absent this run (night window) keep their state."""
-    lines: list[str] = []
+# ── what each check means to the owner (2026-11-16: "a bit more human, not like reading a log") ─────────────────────
+# The spine services' words live in zoe_crash_loop_watch.PLAIN_WORDS (shared with the crash-loop watch). ``tech`` names
+# the thing in the bracket at the END of a message; ``outage`` picks "It was out for" over "That lasted".
+TODO_WAIT = "Nothing for you to do yet; I'll tell you when it's back."
+TODO_SELF = "Nothing for you to do yet; it normally restarts by itself, and I'll tell you when it's back."
+# after a planned window the service was STOPPED by hand, so a restart-on-failure policy will not bring it back
+TODO_OVERRUN = "It may have been left switched off; if it isn't back soon, someone technical needs to start it again."
+TODO_TECH = "It won't sort itself out, so it needs someone technical to look at it; nothing else breaks meanwhile."
+CHECK_WORDS: dict[str, dict] = {
+    "postgres": {"noun": "my memory", "tech": "database", "outage": True, "todo": TODO_WAIT,
+                 "headline": "I can't reach my memory.",
+                 "means": "I can't remember or look anything up: lists, reminders and what I know are out of reach.",
+                 "back": "I can reach my memory again."},
+    "containers": {"noun": "my background helpers", "tech": "containers", "outage": True, "todo": TODO_WAIT,
+                   "headline": "One of my background helpers is unwell.",
+                   "means": "Most things still work, but whatever that helper does for me may be slow or missing.",
+                   "back": "My background helpers are all healthy again."},
+    "failed units": {"noun": "my scheduled jobs", "tech": "jobs", "outage": False,
+                     "todo": "Nothing for you to do yet; I'll tell you once it's sorted.",
+                     "headline": "One of my scheduled jobs did not finish.",
+                     "means": "Everything still works for now, but that job needs to run properly next time.",
+                     "back": "My scheduled jobs are all finishing again."},
+    "night-window timer": {"noun": "my overnight routine", "tech": "zoe-night-window.timer", "outage": False,
+                           "todo": TODO_TECH, "headline": "My overnight routine is switched off.",
+                           "means": "Tonight I won't do my overnight thinking and tidying up.",
+                           "back": "My overnight routine is switched back on."},
+    "restore drill": {"noun": "my practice restore", "tech": "restore-drill", "outage": False,
+                      "todo": "It needs someone technical to look at it this week; nothing breaks meanwhile.",
+                      "headline": "My practice restore from backup has stopped running.",
+                      "means": "The backups may well be fine, but I can't promise they would restore until one passes.",
+                      "back": "My practice restore is running again."},
+    "disk /": {"noun": "my storage", "tech": "disk", "outage": False,
+               "todo": "It won't clear by itself; some old files need tidying up, so ask someone technical soon.",
+               "headline": "I'm running out of storage.",
+               "means": "If it fills up I won't be able to save anything new.",
+               "back": "I have enough storage again."},
+    "memory": {"noun": "my working memory", "tech": "memory", "outage": False, "todo": TODO_WAIT,
+               "headline": "I'm running short of working memory.",
+               "means": "I may be slow to answer, or miss a request now and then.",
+               "back": "My working memory is back to normal."},
+    "forget ledger": {"noun": "permanent forgetting", "tech": "forget-ledger", "outage": False,
+                      "todo": "It needs a setting that someone technical can add; nothing else is affected.",
+                      "headline": "Forgetting isn't permanent right now.",
+                      "means": "If you ask me to forget something I'll hide it, but I can't promise it's gone for good.",
+                      "back": "Forgetting is permanent again."},
+    "owner alerts": {"noun": "my messages to you", "tech": "telegram", "outage": True,
+                     "todo": "I'm keeping them and will send them as soon as it works; the Telegram setup may need a look.",
+                     "headline": "My messages to you aren't getting through.",
+                     "means": "Telegram is refusing them, so you may miss news from me.",
+                     "back": "My messages are getting through to you again."},
+}
+BACKUP_WORDS = {"headline": "My latest backup did not finish.",
+                "means": "Nothing is lost, but the newest copy of your data is older than it should be."}
+_FALLBACK = {"noun": "one of my checks", "tech": "check", "outage": False, "todo": TODO_WAIT,
+             "headline": "Something in my background checks is failing.", "means": "It may affect how well I work.",
+             "back": "That background check is fine again."}
+_SHARED: Optional[dict] = None
+
+
+def _shared_words() -> dict:
+    """The spine services' words, read once from the crash-loop watch (it is loaded anyway, for deliver()). A load
+    failure falls back to generic words: wording must never stop an alert."""
+    global _SHARED
+    if _SHARED is None:
+        try:
+            _SHARED = dict(_ops().PLAIN_WORDS)
+        except Exception:  # noqa: BLE001
+            _SHARED = {}
+    return _SHARED
+
+
+def words(c: Check) -> dict:
+    base = c.name.split(" :")[0]
+    if base in SPINE:
+        w = _shared_words().get(base) or {**_FALLBACK, "noun": "one of my services",
+                                          "headline": "One of my services isn't answering."}
+        w = {"outage": True, "todo": TODO_SELF, **w, "tech": base}
+    else:
+        w = dict(CHECK_WORDS.get(c.name, _FALLBACK))
+        if c.name == "failed units" and "backup" in c.code:
+            w.update(BACKUP_WORDS)
+    w["code"] = f"{w['tech']}: {c.code or 'failing'}"
+    return w
+
+
+def say_duration(seconds: float) -> str:
+    """Plain English, deterministic: "a minute", "14 minutes", "3 hours", "2 days"."""
+    m = int(max(0.0, seconds) / 60 + 0.5)
+    if m <= 1:
+        return "a minute"
+    if m < 120:
+        return f"{m} minutes"
+    h = int(m / 60 + 0.5)
+    return f"{h} hours" if h < 48 else f"{int(h / 24 + 0.5)} days"
+
+
+def _cap(noun: str) -> str:
+    return noun[:1].upper() + noun[1:]
+
+
+def _down_line(c: Check, w: dict, since: float, now: float) -> str:
+    if c.overrun:
+        kind = WINDOW_KINDS.get(c.overrun["kind"], "maintenance")
+        when = (f"The planned {kind} window ended {say_duration(now - c.overrun['until'])} ago, "
+                f"but {w['noun']} has not come back.")
+    elif w["outage"]:
+        when = f"It stopped about {say_duration(now - since)} ago and has not come back by itself."
+    else:
+        when = f"I noticed it about {say_duration(now - since)} ago."
+    todo = TODO_OVERRUN if c.overrun else w["todo"]
+    return f"{w['headline']} {w['means']} {when} {todo} ({w['code']}{', window overran' if c.overrun else ''})"
+
+
+def _flap_line(w: dict, incidents: list, now: float) -> str:
+    done = [e - b for b, e in incidents if e]
+    each = f", for about {say_duration(sum(done) / len(done))} each time" if done else ""
+    return (f"{_cap(w['noun'])} keeps dropping out: {len(incidents)} times in the last "
+            f"{say_duration(now - incidents[0][0])}{each}. It is out again now. When it is out: {w['means']} "
+            f"Rather than message you every time, I'll only tell you if a drop lasts more than "
+            f"{say_duration(FLAP_LONG_S)}, and once it has stayed steady for {say_duration(FLAP_WINDOW_S)}. "
+            f"({w['tech']}: keeps dropping out)")
+
+
+def _several_extra(c: Check, w: dict, now: float) -> str:
+    """What one bullet of the several-at-once message adds to the headline: a planned window that overran says so and
+    that someone technical may need to start it again; otherwise any guidance that is not the generic "nothing to do"."""
+    if c.overrun:
+        kind = WINDOW_KINDS.get(c.overrun["kind"], "maintenance")
+        return (f" The planned {kind} window ended {say_duration(now - c.overrun['until'])} ago, "
+                f"but {w['noun']} has not come back. {TODO_OVERRUN}")
+    return "" if w["todo"] in (TODO_WAIT, TODO_SELF) else f" {w['todo']}"
+
+
+MSG_LIMIT = 1000        # the delivery helper truncates anything longer (zoe_crash_loop_watch.MAX_TEXT; a test pins them equal)
+MAX_MESSAGES = 4        # per run; anything past this is summarised in the last one and stays NOT alerted until the next run
+
+
+def _item(text: str, kind: str, names: list, nouns: list) -> dict:
+    return {"text": text, "kind": kind, "names": list(names), "nouns": list(nouns)}
+
+
+def _chunks(entries: list, render: Callable[[list], str], limit: int) -> list[list]:
+    """Greedy split of ``entries`` (kept in order) so each chunk's rendering fits ``limit``; one entry always stands alone."""
+    out: list[list] = []
+    cur: list = []
+    for e in entries:
+        if cur and len(render(cur + [e])) > limit:
+            out.append(cur)
+            cur = []
+        cur.append(e)
+    return out + ([cur] if cur else [])
+
+
+def _down_para(chunk: list, now: float) -> str:
+    if len(chunk) == 1:
+        return _down_line(*chunk[0], now)
+    first = min(since for _c, _w, since in chunk)
+    plain = (TODO_WAIT, TODO_SELF)
+    rows = [f"- {w['headline']} {w['means']}" + _several_extra(c, w, now) for c, w, _s in chunk]
+    rest = " about the rest" if any(c.overrun or w["todo"] not in plain for c, w, _s in chunk) else ""
+    return "\n".join(["A few things went wrong at once:"] + rows + [
+        f"It started about {say_duration(now - first)} ago. Nothing for you to do yet{rest}; "
+        f"I'll tell you as each one comes back. "
+        f"({'; '.join(w['code'] + (', window overran' if c.overrun else '') for c, w, _s in chunk)})"])
+
+
+def _up_line(w: dict, since: Optional[float], now: float, single: bool) -> str:
+    if single:
+        tail = "" if since is None else (f" It was out for {say_duration(now - since)}." if w["outage"]
+                                         else f" That lasted {say_duration(now - since)}.")
+        return w["back"] + tail
+    return w["back"] if since is None else f"{w['back'][:-1]} after {say_duration(now - since)}."
+
+
+def _up_para(chunk: list, now: float) -> str:
+    if len(chunk) == 1:
+        return _up_line(chunk[0][0], chunk[0][1], now, True)
+    return "\n".join(_up_line(w, since, now, False) for w, since, _n in chunk)
+
+
+def _compose(downs: list, ups: list, others: list, now: float) -> list[dict]:
+    """This run's message ITEMS, in order: the new problems (several at once become one paragraph per fitting group), what
+    came back, then the dropping-out summaries. Each item says which checks' state it carries, so a send failure can
+    be undone for exactly those. ``downs`` are (check, words, since); ``ups`` (words, since, name); ``others``
+    (text, kind, name, noun)."""
+    out: list[dict] = []
+    for ch in _chunks(downs, lambda c: _down_para(c, now), MSG_LIMIT):
+        out.append(_item(_down_para(ch, now), "down", [c.name for c, _w, _s in ch], [w["noun"] for _c, w, _s in ch]))
+    for ch in _chunks(ups, lambda c: _up_para(c, now), MSG_LIMIT):
+        out.append(_item(_up_para(ch, now), "up", [n for _w, _s, n in ch], [w["noun"] for w, _s, _n in ch]))
+    for text, kind, name, noun in others:
+        out.append(_item(text, kind, [name], [noun]))
+    return out
+
+
+def transitions(checks: list[Check], state: dict, now: Optional[float] = None) -> tuple[list[str], dict]:
+    """New state + this run's message paragraphs (text only; ``plan`` keeps the items ``send_run`` needs)."""
+    items, new = plan(checks, state, now)
+    return [i["text"] for i in items], new
+
+
+def plan(checks: list[Check], state: dict, now: Optional[float] = None) -> tuple[list[dict], dict]:
+    """New state + this run's message ITEMS (see ``_compose``). A check alerts on its
+    FAILS_TO_ALERT-th consecutive failure and once on recovery after having alerted (never a recovery for something
+    not alerted). Checks absent this run (night window) keep their state; ``unknown`` ones are not looked at; ``skipped``
+    ones (a planned window) keep an alerted state, and a drop not yet told starts afresh (count and start time cleared)."""
+    now = time.time() if now is None else now
     new = dict(state)
+    downs: list = []
+    ups: list = []
+    others: list = []
     for c in checks:
         if c.unknown:
             continue
-        s = dict(new.get(c.name, {"fails": 0, "alerted": False}))
-        if c.ok:
+        s = dict(new.get(c.name, {}))
+        s.setdefault("fails", 0)
+        s.setdefault("alerted", False)
+        incidents = [list(i) for i in s.get("incidents", []) if i[1] is None or now - i[1] <= FLAP_WINDOW_S]   # kept until 6 h after the RECOVERY
+        if c.skipped:
+            if not s["alerted"]:           # planned downtime is not an outage: a drop never told starts afresh after the window
+                if s.get("since") is not None:
+                    gone = [i for i in incidents if i[0] == s["since"] and i[1] is None]
+                    incidents = [i for i in incidents if i not in gone]
+                    if gone and s.get("flap"):
+                        s["flap_n"] = max(0, s.get("flap_n", 0) - 1)
+                s.update(fails=0, since=None)
+        elif c.ok:
+            for i in incidents:
+                i[1] = now if i[1] is None else i[1]
             if s["alerted"]:
-                lines.append(f"recovered: {c.name} ({c.detail})")
-            s = {"fails": 0, "alerted": False}
+                ups.append((words(c), s.get("since"), c.name))
+            if s.get("flap") and all(e is not None and now - e >= FLAP_WINDOW_S for _b, e in incidents):   # steady = 6 h since the last recovery
+                w = words(c)
+                others.append((f"{_cap(w['noun'])} has stayed steady for {say_duration(FLAP_WINDOW_S)} now, so I "
+                               f"think the dropouts are over. It dropped out {s.get('flap_n', 0)} times in all.",
+                               "steady", c.name, w["noun"]))
+                s.update(flap=False, flap_n=0)
+                incidents = []
+            s.update(fails=0, alerted=False, since=None)
         else:
+            if not s["fails"] or s.get("since") is None:
+                s["since"] = now
             s["fails"] += 1
-            if s["fails"] >= FAILS_TO_ALERT and not s["alerted"]:
-                lines.append(f"DOWN: {c.name} ({c.detail})")
-                s["alerted"] = True
+            if s["fails"] >= FAILS_TO_ALERT:
+                if not any(b == s["since"] for b, _e in incidents):
+                    incidents.append([s["since"], None])
+                    if s.get("flap"):
+                        s["flap_n"] = s.get("flap_n", 0) + 1
+                if s.get("flap"):
+                    if not s["alerted"] and now - s["since"] >= FLAP_LONG_S:
+                        w = words(c)
+                        others.append((f"{w['headline']} This drop has lasted {say_duration(now - s['since'])}, "
+                                       f"longer than the earlier ones. {w['means']} {w['todo']} ({w['code']})",
+                                       "long", c.name, w["noun"]))
+                        s["alerted"] = True
+                elif not s["alerted"]:
+                    recent = [i for i in incidents if now - i[0] <= FLAP_WINDOW_S]   # drops BEGUN in the window
+                    if len(recent) >= FLAP_COUNT:
+                        others.append((_flap_line(words(c), recent, now), "flap", c.name, words(c)["noun"]))
+                        s.update(flap=True, flap_n=len(recent))
+                    else:
+                        downs.append((c, words(c), s["since"]))
+                        s["alerted"] = True
+        s["incidents"] = incidents
         new[c.name] = s
-    return lines, new
+    return _compose(downs, ups, others, now), new
 
 
 def _ops():
@@ -215,34 +542,150 @@ def alerting_check(broken: "Callable[[], Optional[dict]] | None" = None) -> Chec
     try:
         b = (broken or _ops().alerting_broken)()
     except Exception as exc:  # noqa: BLE001
-        return Check("owner alerts", True, f"unreadable ({type(exc).__name__})")
+        return Check("owner alerts", True, f"unreadable ({type(exc).__name__})", unknown=True)
     if not b:
         return Check("owner alerts", True, "ok")
     since = datetime.fromtimestamp(float(b.get("since") or 0)).isoformat(timespec="minutes")
-    return Check("owner alerts", False, f"BROKEN since {since}: Telegram {b.get('reason', '?')} failure, alerts held in the outbox")
+    return Check("owner alerts", False, f"BROKEN since {since}: Telegram {b.get('reason', '?')} failure, alerts held in the outbox",
+                 code=f"{b.get('reason', '?')} failure")
+
+
+def _deliver_one(text: str, ops=None) -> str:
+    """The delivery outcome (delivered | uncertain | queued | gave_up | failed) for ONE message; never raises."""
+    if os.environ.get("ZOE_HEALTH_NO_ALERT"):
+        return "delivered"
+    try:
+        return (ops or _ops()).deliver("health", text)[0]
+    except Exception as exc:  # noqa: BLE001
+        print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
+        return "failed"
 
 
 def send(lines: list[str]) -> bool:
-    """True when the lines were delivered (or there was nothing to send)."""
+    """True when the lines were delivered as ONE message (or there was nothing to send)."""
     if not lines:
         return True
-    if os.environ.get("ZOE_HEALTH_NO_ALERT"):
-        return True
+    return _deliver_one("\n\n".join(lines)) in ("delivered", "uncertain")
+
+
+def pack(items: list[dict], limit: int = MSG_LIMIT, cap: int = MAX_MESSAGES) -> tuple[list[tuple[str, list]], list]:
+    """(messages, overflow). Messages are paragraph-joined items each within ``limit`` (an item is never cut); at most ``cap``
+    of them. Items past the cap are the overflow: the last message ends with one line naming them in plain words."""
+    msgs: list[list] = []
+    for it in items:
+        if msgs and len("\n\n".join(i["text"] for i in msgs[-1] + [it])) <= limit:
+            msgs[-1].append(it)
+        else:
+            msgs.append([it])
+    out = [("\n\n".join(i["text"] for i in m), m) for m in msgs]
+    if len(msgs) <= cap:
+        return out, []
+
+    def summary(extra: list) -> str:
+        nouns = list(dict.fromkeys(n for it in extra for n in it["nouns"]))
+        return f"And {len(nouns)} more to tell you next time: {', '.join(nouns)}."
+    rest = [it for m in msgs[cap - 1:] for it in m]          # the last allowed message: as many as fit beside the summary
+    for k in range(len(rest), -1, -1):
+        body = [i["text"] for i in rest[:k]] + [summary(rest[k:])] if k < len(rest) else [i["text"] for i in rest]
+        if len("\n\n".join(body)) <= limit or k == 0:
+            out = out[:cap - 1] + [("\n\n".join(body), rest[:k])]
+            overflow = rest[k:]
+            break
+    return out, overflow
+
+
+def _revert(before: dict, after: dict, it: dict) -> dict:
+    """``after`` with the checks of an item that did NOT reach the owner put back so the next run says it again."""
+    out = dict(after)
+    for name in it["names"]:
+        if it["kind"] in ("up", "steady"):
+            if name in before:
+                out[name] = before[name]       # still recovered next run, so the recovery / steady line comes again
+        else:                                  # down, flap, long: the pending flags (the count and start time stay)
+            out[name] = undelivered({name: before.get(name, {})}, {name: after[name]})[name]
+    return out
+
+
+QUEUED_KEY = "__queued"   # state key: the message the outbox is holding (undelivered), and the state its checks reach once it lands
+
+
+def _health_pending() -> bool:
+    """True while the shared outbox still holds an undelivered "health" message (unreadable counts as still held)."""
     try:
-        outcome, _reason = _ops().deliver("health", "Zoe health: " + "; ".join(lines))
-        return outcome in ("delivered", "uncertain", "queued")   # queued: the shared outbox retries it
-    except Exception as exc:  # noqa: BLE001
-        print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
-        return False
+        return "health" in _ops().outbox_status()["pending_codes"]
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def resolve_queued(state: dict, pending: Optional[Callable[[], bool]] = None) -> tuple[dict, bool]:
+    """(state, held). While a message from an earlier run is still queued in the outbox, the run is HELD: nothing new is
+    composed or sent (a later deliver() would REPLACE the queued entry, since the outbox keeps one entry per code) and the
+    state stays frozen. Once the entry has left the outbox (delivered by its retries) the checks it carried are marked as
+    told, and the run goes on normally."""
+    q = state.get(QUEUED_KEY)
+    if not q:
+        return state, False
+    if (pending or _health_pending)():
+        return state, True
+    out = {k: v for k, v in state.items() if k != QUEUED_KEY}
+    out.update(q.get("after") or {})
+    return out, False
+
+
+def send_run(items: list[dict], before: dict, after: dict, deliver: Optional[Callable[[str], str]] = None,
+             now: Optional[float] = None) -> tuple[dict, list[str], bool]:
+    """Deliver this run's items as one or more messages, in order. Returns (state to keep, texts delivered, all delivered).
+    A transition is kept as alerted ONLY if the message carrying it was DELIVERED. A message the outbox merely queued is
+    not delivered: its checks stay pending in the state, their would-be state is parked under ``QUEUED_KEY`` (see
+    ``resolve_queued``), and sending stops (the outbox keeps one entry per code; another message would overwrite it).
+    A failure stops sending too. Every item not delivered (or past the per-run cap) is put back for the next run."""
+    deliver = deliver or _deliver_one
+    msgs, left = pack(items)
+    sent: list[str] = []
+    parked: dict = {}
+    halted = False
+    for text, its in msgs:
+        if halted:
+            left += its
+            continue
+        outcome = deliver(text)
+        if outcome in ("delivered", "uncertain"):
+            sent.append(text)
+            continue
+        halted = True
+        left += its
+        if outcome == "queued":
+            parked = {n: after[n] for it in its for n in it["names"] if n in after}
+    state = after
+    for it in left:
+        state = _revert(before, state, it)
+    if parked:
+        state = {**state, QUEUED_KEY: {"after": parked, "ts": time.time() if now is None else now}}
+    return state, sent, not left
+
+
+def run_cycle(checks: list[Check], state: dict, now: float, deliver: Optional[Callable[[str], str]] = None,
+              pending: Optional[Callable[[], bool]] = None) -> tuple[dict, list[str], bool, bool]:
+    """One alerting pass: (state to persist, texts delivered, all delivered, held)."""
+    state, held = resolve_queued(state, pending)
+    if held:
+        return state, [], False, True
+    items, new = plan(checks, state, now)
+    new, sent, ok = send_run(items, state, new, deliver, now)
+    return new, sent, ok, False
 
 
 def undelivered(state_before: dict, state_after: dict) -> dict:
     """The state to persist when this run's alerts were NOT delivered: a DOWN that did not reach anyone stays
-    pending (alerted=False) so the next run retries it, instead of being recorded as sent and never repeated."""
+    pending (alerted=False) so the next run retries it, instead of being recorded as sent and never repeated. The same
+    holds for a "keeps dropping out" summary (flap): undelivered, it is said again next run."""
     out = dict(state_after)
     for name, s in state_after.items():
-        if s.get("alerted") and not state_before.get(name, {}).get("alerted"):
-            out[name] = {**s, "alerted": False}
+        before = state_before.get(name, {})
+        if s.get("alerted") and not before.get("alerted"):
+            out[name] = {**out[name], "alerted": False}
+        if s.get("flap") and not before.get("flap"):
+            out[name] = {**out[name], "flap": False}
     return out
 
 
@@ -250,10 +693,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args(argv)
-    checks = probe(forget_ledger=fetch_forget_ledger) + [alerting_check()]
+    now = time.time()
+    planned = read_planned_window(now)
+    checks = probe(forget_ledger=fetch_forget_ledger, planned=planned) + [alerting_check()]
     stamp = datetime.now().isoformat(timespec="seconds")
     if NIGHT_MARKER.exists():
         print(f"[{stamp}] night window open: spine probes skipped")
+    if planned[2]:
+        print(f"[{stamp}] {planned[2]}")
     for c in checks:
         print(f"[{stamp}] {'?   ' if c.unknown else 'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
     if ns.dry_run:
@@ -262,12 +709,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         state = json.loads(STATE.read_text())
     except (OSError, ValueError):
         state = {}
-    lines, new = transitions(checks, state)
-    for ln in lines:
-        print(f"[{stamp}] ALERT {ln}")
-    if not send(lines):          # deliver FIRST; persist "alerted" only for what actually went out
-        new = undelivered(state, new)
-        print(f"[{stamp}] alert NOT delivered - will retry next run", file=sys.stderr)
+    new, sent, all_sent, held = run_cycle(checks, state, now)   # deliver FIRST; persist "alerted" only for what was delivered
+    for text in sent:
+        print(f"[{stamp}] ALERT {text}")
+    if held:
+        print(f"[{stamp}] an earlier alert is still queued in the outbox: nothing new is sent until it is delivered")
+    elif not all_sent:
+        print(f"[{stamp}] some alerts NOT delivered - will retry next run", file=sys.stderr)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(new))
