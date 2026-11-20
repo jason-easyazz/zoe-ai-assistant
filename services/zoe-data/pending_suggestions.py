@@ -1012,7 +1012,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
     import kernel_door
     import list_service
 
-    stamps_at = kernel_door.stamps_now("lists", "calendar")      # one snapshot for the two doors an accepted suggestion can reach here
+    stamps_at = kernel_door.stamps_now("lists", "calendar", "notes")      # one snapshot for the doors an accepted suggestion can reach here
     if action == "list_add":
         lt = slots.get("list_type", "shopping")
         text = slots.get("item") or slots.get("description", "")
@@ -1061,7 +1061,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         content = slots.get("content") or slots.get("description", "")
         from note_service import suggested_note_record
 
-        await suggested_note_record(conn, note_id=nid, user_id=user_id, title=title, content=content)
+        await suggested_note_record(conn, note_id=nid, user_id=user_id, title=title, content=content, stamps_at=stamps_at)
         return {"note_id": nid, "title": title}
 
     if action == "person_create":

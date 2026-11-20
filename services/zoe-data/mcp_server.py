@@ -1429,7 +1429,7 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
-    stamps_at = kernel_door.stamps_now("reminders", "calendar")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
+    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
 
@@ -1687,8 +1687,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         nid = str(uuid.uuid4())
         import note_service
 
-        await note_service.said_note_record(db, note_id=nid, user_id=user_id, title=args.get("title"), content=args["content"],
-                                            category=args.get("category", "general"))
+        try:
+            await note_service.said_note_record(db, note_id=nid, user_id=user_id, title=args.get("title"), content=args["content"],
+                                                category=args.get("category", "general"), stamps_at=stamps_at)
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_NOTES=kernel): nothing was saved
+            return {"error": exc.line() + " Nothing was saved.", "status": "refused"}
         result = {"id": nid, "title": args.get("title"), "category": args.get("category", "general")}
         await _notify_ui("notes", "note_created", result)
         try:
@@ -2133,8 +2136,12 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         tags_json = json.dumps([t.strip() for t in tags_str.split(",")]) if tags_str else None
         import journal_service
 
-        await journal_service.tool_entry_record(db, entry_id=eid, user_id=user_id, content=args["content"], title=args.get("title"),
-                                                mood=args.get("mood"), mood_score=args.get("mood_score"), tags_json=tags_json)
+        try:
+            await journal_service.tool_entry_record(
+                db, entry_id=eid, user_id=user_id, content=args["content"], title=args.get("title"), mood=args.get("mood"),
+                mood_score=args.get("mood_score"), tags_json=tags_json, stamps_at=stamps_at)
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_JOURNAL=kernel): nothing was saved
+            return {"error": exc.line() + " Nothing was saved.", "status": "refused"}
         result = {"id": eid, "title": args.get("title"), "mood": args.get("mood")}
         await _notify_ui("journal", "entry_created", result)
         try:
@@ -2478,7 +2485,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         params.extend([nid, user_id])
         import note_service
 
-        await note_service.tool_update_note_record(db, note_id=nid, user_id=user_id, updates=updates, params=params)
+        try:
+            await note_service.tool_update_note_record(db, note_id=nid, user_id=user_id, updates=updates, params=params,
+                                                       stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         await _notify_ui("notes", "note_updated", {"id": nid})
         return {"id": nid, "status": "updated"}
 
@@ -2489,7 +2500,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"Note {nid} not found"}
         import note_service
 
-        await note_service.tool_delete_note_record(db, note_id=nid, user_id=user_id)
+        try:
+            await note_service.tool_delete_note_record(db, note_id=nid, user_id=user_id, stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was deleted.", "status": "refused"}
         await _notify_ui("notes", "note_deleted", {"id": nid})
         return {"id": nid, "status": "deleted"}
 
