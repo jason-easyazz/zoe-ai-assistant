@@ -21,17 +21,15 @@ Negative controls run on the real tree (then restored): the raw ``INSERT INTO pe
 """
 from __future__ import annotations
 
-import ast
-import re
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
 PEOPLE_DOOR, EDGE_DOOR = "people_service.py", "people_graph.py"
 PEOPLE_NAMED = {
     "contacts_store.py": "shared mechanics: the address-book store (card import, voice learning, the day review, a voice tag)",
@@ -53,27 +51,15 @@ SIDE_STATEMENTS = {"contacts_store.py": 27, "correction_apply.py": 2, "database.
                    "routers/people.py": 11}
 
 
-def _write(table: str):
-    return re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA + r"[\"`\[]?" + table + r"\b", re.I)
-
-
 def _modules() -> dict:
     skip = {"tests", "alembic", "node_modules", "__pycache__"}
     return {p.relative_to(ROOT).as_posix(): p for p in sorted(ROOT.rglob("*.py")) if not skip.intersection(p.relative_to(ROOT).parts)}
 
 
-def _texts(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
-
-
 def writes(source: str, table: str) -> set:
-    """The distinct statement texts (whitespace folded) in ``source`` that write ``table``."""
-    pattern = _write(table)
-    return {" ".join(text.split()) for text in _texts(ast.parse(source)) if pattern.search(text)}
+    """The distinct statement texts (whitespace folded; f-strings and concatenations whole, any schema, ONLY:
+    ``tests/sql_scan.py``) in ``source`` that write ``table``."""
+    return set(sql_scan.writes(source, sql_scan.write_pattern(table)))
 
 
 def test_only_the_door_and_the_named_modules_write_people():
@@ -124,6 +110,9 @@ def test_a_planted_write_is_caught():
             assert writes(f"async def f(db):\n    await db.execute('{sql}')\n", table), sql
         for sql in (f'f"UPDATE {{schema}}.{table} SET x = ?"', f"f\"UPDATE {table} SET {{', '.join(sets)}} WHERE id = ?\""):
             assert writes(f"async def f(db, schema, sets):\n    await db.execute({sql})\n", table), sql
+    for table in ("people", "person_relationships"):          # a write split by ``+``, and Postgres' ONLY
+        for planted in sql_scan.planted_forms(table):
+            assert writes(planted, table), planted
     assert not writes("async def f(db):\n    await db.execute('INSERT INTO people_field_values (id) VALUES (?)')\n"
                       "    await db.execute('UPDATE source_people SET x = 1')\n    await db.execute('SELECT * FROM people')\n"
                       "    await db.execute('UPDATE people_archive SET x = 1')\n", "people")
