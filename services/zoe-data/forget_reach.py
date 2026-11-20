@@ -283,7 +283,8 @@ OTHER: tuple[Store, ...] = (
           "TTL 2 h, lost on restart; every forget path drops the member's markers (turn, topic, entity, delete_user).",
           member="correction_marker.forget_user", entity="correction_marker.forget_user", markers=("PENDING_CORRECTION",)),
     Store("reminder_just_set", "memory", METADATA, REACHED, "intent_router._JUST_SET_REMINDER: in process only, member id -> {a keyed "
-          "digest of the title a spoken create was asked with (HMAC under a random per-process key) -> the id of the reminder it made + "
+          "digest of the conversation a create happened in (its chat session or panel; of the title it was asked with when no "
+          "conversation is named; HMAC under a random per-process key) -> the id of the reminder it made + "
           "a monotonic time}, NO words (\"cancel that\" reads the title from the row when it cancels). 2 minutes, pruned on every "
           "access, lost on restart; delete_user and the entity forget drop the member's whole map.",
           member="forget_redact.clear_turn_caches", entity="forget_redact.clear_turn_caches", markers=("_JUST_SET_REMINDER",)),
