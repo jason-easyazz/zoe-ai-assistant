@@ -413,8 +413,17 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         await _announce(reminder)
     else:                             # read back inside the caller's transaction; everything else waits for its commit
         async def _after(jobs_db) -> None:
+            # The row is read AGAIN here, after the commit: the copy read inside the transaction can be stale by now (the
+            # member's forget, or a delete, can land between the commit and this step). A reminder that has gone is not
+            # scheduled, not broadcast and not told to the shadow; only the receipt of the write that did happen is kept.
+            cur = await jobs_db.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ? AND deleted = 0", [reminder_id, user_id])
+            fresh = row_to_dict(await cur.fetchone())
+            if not fresh:
+                write_receipts.record(user_id, "reminder", reminder_id, "create_reminder_record")
+                logger.info("reminder create: the row had gone before its after-commit step; nothing scheduled or announced")
+                return
             _vouch()
-            await _announce(reminder, jobs_db)
+            await _announce(fresh, jobs_db)
 
         after_commit.append(_after)
     return reminder
