@@ -327,6 +327,15 @@ class _TimerStore:
                     return owner, t
         return None
 
+    def spoke(self, timer: dict[str, Any], queued: bool) -> None:
+        """The "timer is done" line for this timer was queued (``announced``), or could not be / must not be (``voice_failed``:
+        final, the page speaks it; never retried, never twice). Every change to a timer is made by this class."""
+        if queued:
+            timer["announced"] = True
+        else:
+            timer["voice_failed"] = True
+        self._save()
+
     def _arm(self, timer: dict[str, Any]) -> None:
         """(Re)start the one task that announces this timer when it ends. Needs a panel and a running loop; a no-op otherwise."""
         if not timer.get("panel_id") or timer.get("announced") or timer.get("voice_failed"):
@@ -387,11 +396,7 @@ async def _ring_when_done(store: _TimerStore, timer_id: str) -> None:
             if left <= 0:
                 return
             outcome = await _queue_timer_done(owner, t, left)
-            if outcome == "queued":
-                t["announced"] = True
-            else:
-                t["voice_failed"] = True  # final: the page speaks it (spoken_by_panel false); never retried, never twice
-            store._save()
+            store.spoke(t, outcome == "queued")
             logger.info("TIMER_ANNOUNCE outcome=%s", outcome)  # counts only: never the label or the owner
             return
     finally:
