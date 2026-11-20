@@ -89,7 +89,7 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     _pg("people", "people the household talks about (names, notes)", "contacts_store.py, pending_suggestions.py"),
     _pg("person_relationships", "who is related to whom", "people_graph.py"),
     _pg("event_attendees", "attendee names and emails", "calendar_service.py"),
-    _pg("events", "calendar event titles, places, descriptions", "skybridge_service.py, pending_suggestions.py"),
+    _pg("events", "calendar event titles, places, descriptions", "calendar_service.py"),
     _pg("chat_sessions", "chat titles", "routers/chat.py, proactive/session_utils.py"),
     _pg("chat_messages", "the verbatim chat transcript (every channel)", "routers/chat.py, proactive/session_utils.py"),
     _pg("chat_feedback", "a corrected response", "conversation_feedback.py"),

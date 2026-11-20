@@ -3926,29 +3926,10 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
             "actions": [],
         }
     event_id = str(uuid.uuid4())
-    await db.execute(
-        """
-        INSERT INTO events (
-            id, user_id, title, start_date, start_time, end_date, end_time,
-            duration, category, location, all_day, recurring, metadata,
-            visibility, deleted
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
-        """,
-        event_id,
-        user_id,
-        intent.title,
-        start.isoformat(),
-        None if intent.all_day else intent.target_time,
-        start.isoformat(),
-        None if intent.all_day else (intent.end_time or None),
-        None,
-        "general",
-        None,
-        1 if intent.all_day else 0,
-        None,
-        None,
-        "family",
-    )
+    await calendar_service.spoken_create_event_record(
+        db, event_id=event_id, user_id=user_id, title=intent.title, start_date=start.isoformat(),
+        start_time=None if intent.all_day else intent.target_time, end_date=start.isoformat(),
+        end_time=None if intent.all_day else (intent.end_time or None), all_day=1 if intent.all_day else 0)
     await _maybe_commit(db)
     write_receipts.record(user_id, "calendar", event_id, "skybridge:create_event")
     refreshed = await _resolve_calendar(SkybridgeIntent("calendar", "show", start.isoformat(), start, start), user_id, db)
@@ -4091,14 +4072,8 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
     refused = await _calendar_refusal(db, user_id, event_id, intent, "move")
     if refused:
         return refused
-    update_result = await db.execute(
-        # Giving an all-day event a time makes it a timed event — clear all_day so
-        # the row can't be both (renderers/spoken summaries would disagree).
-        "UPDATE events SET start_time = $1, all_day = 0, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
-        intent.target_time,
-        event_id,
-        user_id,
-    )
+    update_result = await calendar_service.spoken_move_event_record(db, event_id=event_id, user_id=user_id,
+                                                                    start_time=intent.target_time)
     if _affected_rows(update_result) == 0:
         return {
             "handled": True,
@@ -4238,12 +4213,8 @@ async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, 
     refused = await _calendar_refusal(db, user_id, event_id, intent, "delete")
     if refused:
         return refused
-    delete_result = await db.execute(
-        "UPDATE events SET deleted = 1, updated_at = NOW(), deleted_at = $3 WHERE id = $1 AND user_id = $2 AND deleted = 0",
-        event_id,
-        user_id,
-        calendar_service.now_text(),
-    )
+    delete_result = await calendar_service.spoken_delete_event_record(db, event_id=event_id, user_id=user_id,
+                                                                      deleted_at=calendar_service.now_text())
     if _affected_rows(delete_result) == 0:
         return {
             "handled": True,

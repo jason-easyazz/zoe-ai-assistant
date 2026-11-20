@@ -109,7 +109,7 @@ Generated from `household_text.py`; do not edit by hand.
 | `people` | primary | `pg:people` | people the household talks about (names, notes) | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | contacts_store.py, pending_suggestions.py | - |
 | `person_relationships` | primary | `pg:person_relationships` | who is related to whom | `memory_forget_cascade._run` | - | gap | no age limit: kept until deleted | people_graph.py | - |
 | `event_attendees` | primary | `pg:event_attendees` | attendee names and emails | `memory_forget_cascade._run` | `calendar_forget.forget_user` | gap | no age limit: kept until deleted | calendar_service.py | - |
-| `events` | primary | `pg:events` | calendar event titles, places, descriptions | `memory_forget_cascade._run` | `calendar_forget.forget_user` | gap | no age limit: kept until deleted | skybridge_service.py, pending_suggestions.py | - |
+| `events` | primary | `pg:events` | calendar event titles, places, descriptions | `memory_forget_cascade._run` | `calendar_forget.forget_user` | gap | no age limit: kept until deleted | calendar_service.py | - |
 | `chat_sessions` | primary | `pg:chat_sessions` | chat titles | `forget_redact.on_forget` | - | gap | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py | - |
 | `chat_messages` | primary | `pg:chat_messages` | the verbatim chat transcript (every channel) | `forget_redact.on_forget` | - | gap | no age limit: kept until deleted | routers/chat.py, proactive/session_utils.py | - |
 | `chat_feedback` | primary | `pg:chat_feedback` | a corrected response | - | - | gap | no age limit: kept until deleted | conversation_feedback.py | - |

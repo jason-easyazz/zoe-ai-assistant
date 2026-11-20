@@ -421,8 +421,7 @@ async def update_event(
 
     updates.append("updated_at = NOW()")
     params.extend([event_id])
-    sql = f"UPDATE events SET {', '.join(updates)} WHERE id = ?"
-    await db.execute(sql, params)
+    await cal.update_event_record(db, event_id=event_id, updates=updates, params=params)
     if attendees is not None:
         await cal.replace_attendees(db, event_id, owner_id, attendees)
     await db.commit()
@@ -454,10 +453,7 @@ async def delete_event(
     # household member — same rationale as update_event above (soft delete,
     # reversible; mirrors the people router's family-or-own semantics).
 
-    await db.execute(
-        "UPDATE events SET deleted = 1, deleted_at = ?, updated_at = NOW() WHERE id = ?",
-        [cal.now_text(), event_id],
-    )
+    await cal.delete_event_record(db, event_id=event_id, deleted_at=cal.now_text())
     await db.commit()
 
     event = _row_to_event({k: v for k, v in row.items() if k not in ("calendar_writable", "calendar_name")})
