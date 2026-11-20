@@ -1070,6 +1070,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         if not person_suggestions_enabled():
             raise ValueError("unsupported_action:person_create")
         name = (slots.get("name") or "").strip()
+        import people_service
         from person_extractor import _looks_like_person_name  # tiny pure guard; lazy import
         if not name or not _looks_like_person_name(name):
             raise ValueError("invalid_person_name")
@@ -1092,16 +1093,9 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
                 # lacks it — never overwrite a relationship already on the row.
                 fill_rel = slot_rel if (slot_rel and not existing["relationship"]) else None
                 if fill_rel is not None:
-                    await conn.execute(
-                        "UPDATE people SET is_partial=0, relationship=$1 WHERE id=$2",
-                        fill_rel,
-                        existing["id"],
-                    )
+                    await people_service.write_contact(conn, "offer_promote_with_relation", (fill_rel, existing["id"]), raw=True)
                 else:
-                    await conn.execute(
-                        "UPDATE people SET is_partial=0 WHERE id=$1",
-                        existing["id"],
-                    )
+                    await people_service.write_contact(conn, "offer_promote", (existing["id"],), raw=True)
                 return {
                     "person_id": existing["id"],
                     "name": name,
@@ -1135,10 +1129,9 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
                 return {"name": name, "created": False, "relationship": relationship,
                         "ask_same_person": {"id": hits[0]["id"], "name": hits[0]["name"]}}
             if verdict == "upgrade":
-                await conn.execute(
-                    "UPDATE people SET name=$1, relationship=COALESCE($2, relationship), is_partial=0,"
-                    " updated_at=$3 WHERE id=$4 AND user_id=$5",
-                    name, relationship, datetime.now(timezone.utc).isoformat(), hits[0]["id"], user_id)
+                await people_service.write_contact(
+                    conn, "offer_upgrade",
+                    (name, relationship, datetime.now(timezone.utc).isoformat(), hits[0]["id"], user_id), raw=True)
                 await _cc.refresh_person_mirror(user_id, hits[0]["id"], name, relationship)
                 return {"person_id": hits[0]["id"], "name": name, "created": False,
                         "upgraded_from": hits[0]["name"], "relationship": relationship}
@@ -1153,17 +1146,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         # may be personal (a therapist, a work colleague); don't auto-share it
         # with the whole family. Owner still sees it (people query is OR user_id).
         visibility = (slots.get("visibility") or "").strip() or "personal"
-        await conn.execute(
-            "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility, is_partial)"
-            " VALUES ($1,$2,$3,$4,$5,$6,$7,0)",
-            pid,
-            user_id,
-            name,
-            relationship,
-            circle,
-            "suggested",
-            visibility,
-        )
+        await people_service.write_contact(conn, "offer_create", (pid, user_id, name, relationship, circle, "suggested", visibility), raw=True)
         return {"person_id": pid, "name": name, "relationship": relationship, "created": True}
 
     if action == "memory_dispute":

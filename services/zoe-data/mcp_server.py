@@ -1661,8 +1661,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "people_create":
         pid = str(uuid.uuid4())
-        await db.execute(
-            "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email, notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        import people_service
+
+        await people_service.write_contact(
+            db, "tool_create",
             (pid, user_id, args["name"], args.get("relationship"), args.get("birthday"),
              args.get("phone"), args.get("email"), args.get("notes"), "family",
              args.get("circle", "circle"), args.get("context", "personal")),
@@ -2522,7 +2524,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": "No fields to update"}
         updates.append("updated_at=NOW()")
         params.extend([pid, user_id])
-        await db.execute(f"UPDATE people SET {','.join(updates)} WHERE id=? AND user_id=?", params)
+        import people_service
+
+        await people_service.write_contact(db, "tool_update", params, sets=updates)
         await _notify_ui("all", "people:updated", {"id": pid})
         return {"id": pid, "status": "updated"}
 
@@ -2531,7 +2535,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         cursor = await db.execute("SELECT id FROM people WHERE id=? AND user_id=? AND deleted=0", (pid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Person {pid} not found"}
-        await db.execute("UPDATE people SET deleted=1, updated_at=NOW() WHERE id=? AND user_id=?", (pid, user_id))
+        import people_service
+
+        await people_service.write_contact(db, "tool_delete", (pid, user_id))
         await _notify_ui("all", "people:deleted", {"id": pid})
         return {"id": pid, "status": "deleted"}
 

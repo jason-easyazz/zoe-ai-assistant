@@ -30,6 +30,7 @@ from people_utils import row_to_person
 from push import broadcaster
 from relationship_graph import neighbors as _graph_neighbors
 from relationship_graph import relationship_graph_enabled
+import people_service
 
 router = APIRouter(prefix="/api/people", tags=["people"])
 
@@ -259,13 +260,8 @@ async def create_person(
     if context not in _VALID_CONTEXTS:
         context = "personal"
 
-    await db.execute(
-        """
-        INSERT INTO people (id, user_id, name, relationship, circle, context, email, phone, birthday,
-                            notes, preferences, visibility, is_partial, how_we_met, first_met_date,
-                            introduced_by_person_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+    await people_service.write_contact(
+        db, "screen_create",
         (
             person_id, user_id, body.name, body.relationship, circle, context,
             body.email, body.phone, body.birthday, body.notes, pref, body.visibility,
@@ -517,8 +513,7 @@ async def update_person(
 
     if updates:
         params.append(person_id)
-        sql = f"UPDATE people SET {', '.join(updates)}, updated_at = NOW() WHERE id = ?"
-        await db.execute(sql, params)
+        await people_service.write_contact(db, "screen_update", params, sets=updates)
         await db.commit()
 
     async with db.execute("SELECT * FROM people WHERE id = ?", (person_id,)) as cur:
@@ -551,10 +546,7 @@ async def delete_person(
     if not row:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    await db.execute(
-        "UPDATE people SET deleted = 1, updated_at = NOW() WHERE id = ?",
-        (person_id,),
-    )
+    await people_service.write_contact(db, "screen_delete", (person_id,))
     await db.commit()
 
     # Archive all MemPalace facts for this entity (tracked so it can't be GC'd mid-flight)
@@ -995,11 +987,7 @@ async def add_relationship(
             # Create a partial stub
             other_id = str(uuid.uuid4())
             inferred_context = "work" if group in _WORK_GROUPS else "personal"
-            await db.execute(
-                "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (other_id, user_id, name, "circle", inferred_context, "family", 1),
-            )
+            await people_service.write_contact(db, "screen_relation_stub", (other_id, user_id, name, "circle", inferred_context, "family", 1))
             await db.commit()
         else:
             # Search by name
@@ -1052,10 +1040,7 @@ async def add_relationship(
 
     # Auto-update context of the other person based on rel_group
     inferred_ctx = "work" if group in _WORK_GROUPS else "personal"
-    await db.execute(
-        "UPDATE people SET context = ? WHERE id = ? AND user_id = ?",
-        (inferred_ctx, other_id, user_id),
-    )
+    await people_service.write_contact(db, "screen_relation_context", (inferred_ctx, other_id, user_id))
     await db.commit()
 
     await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
@@ -1132,10 +1117,7 @@ async def update_relationship(
         # under the same pair lock as a type change, and conditional on the edge STILL being current: if a type change
         # replaced it first, this matches nothing and says so (409) instead of reporting a lost edit as saved
         async with pg.edge_transaction(db, user_id, edge["person_a_id"], edge["person_b_id"]):
-            cur = await db.execute(
-                "UPDATE person_relationships SET notes = ?, updated_at = ? WHERE id = ? AND user_id = ? AND valid_to IS NULL",
-                (body["notes"], pg.now_iso(), rel_id, user_id),
-            )
+            cur = await pg.set_edge_notes(db, user_id, rel_id, body["notes"], now=pg.now_iso())
             landed = (getattr(cur, "rowcount", 1) or 0) > 0
         if not landed:
             raise HTTPException(status_code=409, detail="Relationship changed; reload and try again")

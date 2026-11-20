@@ -46,6 +46,7 @@ from typing import Any, Optional
 
 import omi_day_review as dr
 import user_erase_gate as erase_gate
+import people_service
 
 logger = logging.getLogger(__name__)
 
@@ -309,8 +310,7 @@ async def write_person_relation(user_id: str, c: dict, via: str) -> str:
         # the intent FIRST: a crash between the people update and the final ``written_ref`` must leave a pointer a forget can follow
         await db.execute("UPDATE omi_day_candidates SET written_ref = ? WHERE id = ? AND user_id = ? AND status = 'approving'",
                          (ref, c["id"], user_id))
-        cur = await db.execute("UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL "
-                               "AND (deleted = 0 OR deleted IS NULL)", (rel, person["id"], user_id))
+        cur = await people_service.write_contact(db, "reviewed_relation", (rel, person["id"], user_id))
         await db.commit()
     if not getattr(cur, "rowcount", 0):
         raise ApplyError("held_conflict")      # set (or removed) between the read and the write: the owner looks again
@@ -430,8 +430,7 @@ async def unwrite(user_id: str, rows: list, *, gate_held: bool = False) -> int:
         from db_compat import get_compat_db
         async with get_compat_db() as db:
             for pid, rel in rels:
-                cur = await db.execute("UPDATE people SET relationship = NULL WHERE id = ? AND user_id = ? AND relationship = ?",
-                                       (pid, user_id, dr.clean(rel, 60)))
+                cur = await people_service.write_contact(db, "reviewed_relation_undo", (pid, user_id, dr.clean(rel, 60)))
                 n += int(getattr(cur, "rowcount", 0) or 0)
             await db.commit()
     if mem or rels or any(notes):

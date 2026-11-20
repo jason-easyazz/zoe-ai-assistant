@@ -3342,10 +3342,9 @@ async def _handle_introduce_intent(
             # Create a new contact
             import uuid as _uuid
             person_id = str(_uuid.uuid4())
-            await db.execute(
-                "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES (?,?,?,?,?,?,?)",
-                (person_id, user_id, name, "contact", "circle", "personal", "family"),
-            )
+            import people_service
+
+            await people_service.write_contact(db, "introduced", (person_id, user_id, name, "contact", "circle", "personal", "family"))
             await db.commit()
     except Exception as exc:
         logger.warning("_handle_introduce_intent: DB error: %s", exc)

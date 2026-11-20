@@ -36,6 +36,7 @@ from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
 from typed_env import env_bool, env_str
 from weather_speech import WeatherAsk, classify_weather_ask, speak_weather
+import people_service
 
 logger = logging.getLogger(__name__)
 
@@ -5560,20 +5561,7 @@ async def _find_or_create_person(user_id: str, name: str, db: Any) -> dict[str, 
     if rows:
         return row_to_person(rows[0])
     person_id = str(uuid.uuid4())
-    await db.execute(
-        """
-        INSERT INTO people (id, user_id, name, relationship, circle, context, visibility, is_partial)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        """,
-        person_id,
-        user_id,
-        name,
-        None,
-        "circle",
-        "personal",
-        "family",
-        0,
-    )
+    await people_service.write_contact(db, "spoken_create", (person_id, user_id, name, None, "circle", "personal", "family", 0), raw=True)
     await _maybe_commit(db)
     return {
         "id": person_id,
@@ -5658,10 +5646,7 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
         params.extend([person["id"], user_id])
         # MemoryService is the write gate for the fact; this table update is the
         # people-card projection so the visible profile reflects the saved memory.
-        await db.execute(
-            f"UPDATE people SET {', '.join(updates)} WHERE id = ${len(params)-1} AND user_id = ${len(params)}",
-            *params,
-        )
+        await people_service.write_contact(db, "spoken_fact", params, sets=updates, raw=True)
         await _maybe_commit(db)
     refreshed = await _resolve_people(
         SkybridgeIntent(domain="people", action="show", query=intent.person_name),
