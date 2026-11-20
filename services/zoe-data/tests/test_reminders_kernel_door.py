@@ -619,20 +619,23 @@ def test_nobody_but_a_door_puts_an_ask_to_the_kernel_and_the_service_never_impor
         out = []
         for node in ast.walk(ast.parse(src)):
             if isinstance(node, ast.ImportFrom) and node.module in ("os_shadow", "kernel_door"):
-                out += [a.name for a in node.names if a.name in ("ask_door", "ask_list", "_ask", "report_door", "report_list")]
-            elif isinstance(node, ast.Attribute) and node.attr in ("ask_door", "ask_list", "_ask") and getattr(node.value, "id", "") != "self":
+                out += [a.name for a in node.names if a.name in ("ask_door", "ask_list", "_ask", "report_door", "report_list", "record_door")]
+            elif isinstance(node, ast.Attribute) and node.attr in ("ask_door", "ask_list", "_ask", "record_door") \
+                    and getattr(node.value, "id", "") != "self":
                 out.append(node.attr)
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
                 out += [n for n in names if n.split(".")[0] in ("labs", "zoe_os")]
         return out
 
-    doors = {"list_service.py", "reminder_service.py", "os_shadow.py", "kernel_door.py"}
+    # the doors, by their path from the service root (``routers/alarms.py`` shares a file name with a door and is NOT one)
+    doors = {"list_service.py", "reminder_service.py", "alarms.py", "skybridge_service.py", "os_shadow.py", "kernel_door.py"}
     for path in _modules():
-        if path.name not in doors:
+        if path.relative_to(SVC).as_posix() not in doors:
             assert offends(path.read_text("utf-8")) == [], path.name
     assert offends("from os_shadow import ask_door as a\n") == ["ask_door"]
     assert offends("import os_shadow as o\nasync def f():\n    await o.ask_door('reminders', 'v', 'u')\n") == ["ask_door"]
+    assert offends("import os_shadow\ndef f():\n    os_shadow.record_door('timers', 'timer.stop', 'u')\n") == ["record_door"]
     assert offends("from labs.zoe_os import door\nimport zoe_os.wire\n") == ["labs.zoe_os", "zoe_os.wire"]
     for name in doors:                                          # ... and a door module itself never reaches into the lab
         assert [o for o in offends((SVC / name).read_text("utf-8")) if o.split(".")[0] in ("labs", "zoe_os")] == [], name

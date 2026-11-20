@@ -24,8 +24,8 @@ The verbs it serves: ``list.add``, ``list.remove`` (registered HERE, over the sa
 ``ZOE_OS_SHADOW_VERBS``; the kernel serves all four.
 
 It ALSO serves the door (``zoe_os/door.py``): there the kernel DECIDES a change by the roster's roles and records ids only; the
-thing changed stays in production's store. Two areas: lists (``list_ask`` / ``list_report``, ``zoe_os/lists.py``) and reminders
-(``door_ask`` / ``door_report`` with ``area="reminders"``, ``zoe_os/remind_door.py``). Same socket, same credentials (the
+thing changed stays in production's store. Areas: lists (``list_ask`` / ``list_report``, ``zoe_os/lists.py``), and on ``door_ask`` /
+``door_report`` reminders (``zoe_os/remind_door.py``), alarms and timers (``zoe_os/alarm_door.py``). Same socket, same credentials (the
 ``brain`` one).
 
 What it grants itself, and why that is honest only in shadow: every roster member gets a RECORD-ONLY grant of the ``brain``
@@ -58,6 +58,7 @@ from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders 
 from zoe_os.capability import Person, person_from_entry  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.lists import VERBS as LIST_DOOR_VERBS  # noqa: E402
+from zoe_os.alarm_door import ALARM_VERBS as ALARM_DOOR_VERBS, TIMER_VERBS as TIMER_DOOR_VERBS  # noqa: E402
 from zoe_os.remind_door import VERBS as REMINDER_DOOR_VERBS  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os import shadow_state  # noqa: E402
@@ -69,9 +70,9 @@ ADAPTERS = ({"skill": "voice", "emits": ["utterance"], "origin": True},
 PUMP_S = 0.5
 #: the brain manifest's ceiling plus the shadow-only ``list.remove``
 ACTS = (*BRAIN["acts"], "list.remove")       # the acts every roster member is given record-only, and the brain may propose
-#: the manifest also names the door's verbs, every area's (``zoe_os/lists.py``, ``zoe_os/remind_door.py``): a ceiling for
+#: the manifest also names the door's verbs, every area's (``zoe_os/lists.py``, ``zoe_os/remind_door.py``, ``zoe_os/alarm_door.py``): a ceiling for
 #: ``list_ask`` / ``door_ask``, decided by role, granted to nobody
-SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS, *REMINDER_DOOR_VERBS]}
+SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS, *REMINDER_DOOR_VERBS, *ALARM_DOOR_VERBS, *TIMER_DOOR_VERBS]}
 
 
 def register_list_remove(kernel, lists: Lists) -> None:

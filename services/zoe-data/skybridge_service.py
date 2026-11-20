@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import alarm_voice
 import alarms
 import command_shapes
+import kernel_door
+import os_shadow
 import conversation_cues
 import panel_principal
 import write_receipts
@@ -218,7 +220,7 @@ class _TimerStore:
         """Cancel a timer by id whoever owns it (the panel's per-card tap-cancel)."""
         self._load()
         for owner in list(self._by_owner):
-            hit = self.cancel_by_id(owner, timer_id)
+            hit = self.cancel_by_id(owner, timer_id, by="")       # by the shared panel, nobody identified
             if hit is not None:
                 return hit
         return None
@@ -240,6 +242,7 @@ class _TimerStore:
         self._save()
         self._arm(timer)
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
+        self._note("timer.create", owner, timer)
         return timer
 
     def list(self, owner: str) -> list[dict[str, Any]]:
@@ -303,19 +306,23 @@ class _TimerStore:
         self._save()
         self._arm(timer)  # a shortened timer must not wait out its old end
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
+        self._note("timer.edit", owner, timer)
         return timer
 
-    def cancel_by_id(self, owner: str, timer_id: str) -> dict[str, Any] | None:
+    def cancel_by_id(self, owner: str, timer_id: str, *, by: str | None = None) -> dict[str, Any] | None:
+        """``by``: who is doing it when that is not the owner (``""`` = the shared panel)."""
         self._prune(owner)
         timers = self._by_owner.get(owner, [])
         target = next((t for t in timers if t["timer_id"] == timer_id), None)
         if target is not None:
+            ended = target["expires_at"] <= time.time()      # a finished timer is RINGING: this silences it
             timers.remove(target)
             self._disarm(timer_id)  # cancelled or dismissed: it never speaks
             if target.get("panel_id"):  # ... and a line already queued but not yet claimed is withdrawn
                 _spawn(_revoke_timer_done(target))
             self._prune(owner)
             self._save()
+            self._note("timer.stop" if ended else "timer.cancel", owner, target, by=by)
         return target
 
     def find_by_id(self, timer_id: str) -> tuple[str, dict[str, Any]] | None:
@@ -326,6 +333,19 @@ class _TimerStore:
                 if t["timer_id"] == timer_id:
                     return owner, t
         return None
+
+    def _note(self, verb: str, owner: str, timer: dict[str, Any], *, by: str | None = None) -> None:
+        """The Zoe OS timers door (``ZOE_OS_ALARMS=kernel``): tell the kernel about a change that HAS BEEN MADE. Every timer change
+        is told afterwards, never asked first: the timer path is synchronous end to end (there is nowhere to wait for an answer),
+        and a ringing timer must always be silenceable at once. ``os_shadow.record_door`` never blocks, never raises and never
+        refuses; only ids cross (the timer's, the acting member's, the member it is for), never the label. A guest's timer is the
+        HOUSE's (no owner is told: a guest principal is not a person). Flag off: one flag read."""
+        if not os_shadow.area_on("timers"):
+            return
+        actor = owner if by is None else by
+        house = kernel_door.is_panel(owner)
+        os_shadow.record_door("timers", verb, "" if kernel_door.is_panel(actor) else actor, panel=kernel_door.is_panel(actor),
+                              target=timer["timer_id"], owner=None if house else owner, household=house)
 
     def spoke(self, timer: dict[str, Any], queued: bool) -> None:
         """The "timer is done" line for this timer was queued (``announced``), or could not be / must not be (``voice_failed``:

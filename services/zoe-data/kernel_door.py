@@ -106,6 +106,18 @@ async def write(decision: Optional[Decision], pending):
 
 
 @asynccontextmanager
+async def reported(decision: Optional[Decision]):
+    """Around a door's own writes: the kernel hears ``done`` once they have returned (inside a caller's held transaction: once
+    THAT has committed, ``reports_after``), or ``failed`` if any of them raised."""
+    try:
+        yield
+    except BaseException:
+        wrote(decision, "failed")
+        raise
+    wrote(decision)
+
+
+@asynccontextmanager
 async def reports_after():
     """Around a transaction that holds door writes (of any area): their reports go out when the block exits (``done``), or
     ``failed`` if it raised (rolled back). Nested use joins the outer block. With every door off: a flag read per area."""
