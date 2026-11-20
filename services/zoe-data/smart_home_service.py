@@ -11,6 +11,7 @@ to a friendly "couldn't reach the home hub" card, never a broken turn.
 """
 from __future__ import annotations
 
+import home_control
 import asyncio
 import contextvars
 import logging
@@ -91,12 +92,11 @@ async def _ha_post(path: str, payload: dict[str, Any]) -> Optional[dict[str, Any
     if _turn_refused(f"POST {path}"):
         return None
     try:
-        async with httpx.AsyncClient(timeout=_call_timeout_s()) as c:
-            r = await c.post(f"{_ha_url()}{path}", json=payload)
-            if r.status_code != 200:
-                logger.debug("HA POST %s -> HTTP %s", path, r.status_code)
-                return None
-            return r.json()
+        r = await home_control.send(_ha_url(), path, payload, timeout=_call_timeout_s())
+        if r.status_code != 200:
+            logger.debug("HA POST %s -> HTTP %s", path, r.status_code)
+            return None
+        return r.json()
     except httpx.TimeoutException as exc:
         marks = _TIMED_OUT.get()
         if marks is not None:
@@ -181,7 +181,7 @@ def _friendly_name(row: dict[str, Any]) -> str:
 # Ceiling Fan, TV, …). They never appear under /lights or /switches, which is why
 # the card used to look empty. We pull them from /entities and infer a display
 # class from the friendly name + mdi icon so each tile gets the right glyph. They
-# toggle through the same /devices/control turn_on/turn_off path (the bridge maps
+# toggle through the same device-command turn_on/turn_off path (the bridge maps
 # the service from the entity's own domain), so control stays exact + safe.
 def _entity_domain(name: str, entity_id: str, icon: str) -> str:
     hay = f"{name} {entity_id} {icon}".lower()
@@ -367,12 +367,12 @@ async def set_device(entity_id: str, on: bool, *, brightness_pct: int | None = N
     }
     if data:
         payload["data"] = data
-    result = await _ha_post("/devices/control", payload)
+    result = await _ha_post(home_control.DEVICE, payload)
     return _control_ok(result, entity_id)
 
 
 async def activate_scene(scene_id: str) -> bool:
-    result = await _ha_post("/scenes/activate", {"scene_id": scene_id})
+    result = await _ha_post(home_control.SCENE, {"scene_id": scene_id})
     return isinstance(result, dict)
 
 
