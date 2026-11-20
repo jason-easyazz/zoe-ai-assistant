@@ -621,6 +621,9 @@ async def cluster_is_me(db, user_id: str, cluster_id: str) -> int:
 
 async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Optional[str], ref: str) -> dict:
     import contacts_store as cs
+    import people_service
+
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door (a member's tag can make a contact): before anything is awaited
     if person_id:
         p = await cs.own_person(db, user_id, person_id)
         if not p:
@@ -637,7 +640,8 @@ async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Opti
     if same:
         raise VoiceError("more than one of your people has that name - pick one", 409)
     now = cs.now_iso()
-    pid = await cs._create_person(db, user_id, clean, now=now)      # visibility 'personal': layer 2, never the household's
+    # visibility 'personal': layer 2, never the household's. A member's tag (or their guided enrolment of a guest) drives this.
+    pid = await cs._create_person(db, user_id, clean, now=now, actor=user_id, stamps_at=stamps_at)
     await cs.add_field(db, user_id, pid, kind="name", value=clean, provenance="entered_by_member", provenance_ref=ref)
     return {"id": pid, "name": clean, "birthday": None, "relationship": None, "created": True}
 

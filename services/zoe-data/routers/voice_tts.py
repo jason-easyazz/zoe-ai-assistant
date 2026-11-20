@@ -3329,6 +3329,9 @@ async def _handle_introduce_intent(
     if _is_unidentified(user_id):
         logger.info("GUEST_MEMORY_DISCARD lane=voice writer=people_introduce")
         return person_id
+    import people_service
+
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
     try:
         # Try to find existing person
         cursor = await db.execute(
@@ -3342,10 +3345,13 @@ async def _handle_introduce_intent(
             # Create a new contact
             import uuid as _uuid
             person_id = str(_uuid.uuid4())
-            import people_service
-
-            await people_service.write_contact(db, "introduced", (person_id, user_id, name, "contact", "circle", "personal", "family"))
+            await people_service.write_contact(db, "introduced", (person_id, user_id, name, "contact", "circle", "personal", "family"),
+                                               actor=user_id, person_id=person_id, owner=user_id, visibility="family",
+                                               stamps_at=stamps_at)
             await db.commit()
+    except people_service.ContactRefused as exc:      # the Zoe OS kernel said no: no contact is filed and there is no card to open
+        logger.info("_handle_introduce_intent: contact not filed (kernel: %s)", exc.reason)
+        return ""
     except Exception as exc:
         logger.warning("_handle_introduce_intent: DB error: %s", exc)
         import uuid as _uuid2
@@ -4791,6 +4797,8 @@ async def voice_command(
         _quick_intent = await _detect_async(text, effective_user, context=_ctx)
         if _quick_intent:
             _ctx.activate(_quick_intent.name, getattr(_quick_intent, "slots", {}), text)
+            if panel_id:      # this panel's voice is one conversation: "cancel that" reaches the reminder IT just made, no other's
+                _quick_intent.conversation = f"panel:{panel_id}"
         # (Removed Tier-0.5 LLM classifier.) It produced 0 hits across 7 days of
         # live logs and 0 non-None returns over 41 real missed utterances, while
         # costing a ~1.5s LLM call on every short missed utterance. The Tier-1

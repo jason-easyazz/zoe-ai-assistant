@@ -19,6 +19,63 @@ NOT HERE, and why (``tests/test_people_one_door.py`` names each by path):
 """
 from __future__ import annotations
 
+from typing import Optional
+
+import kernel_door
+import os_shadow
+
+# ── The Zoe OS contacts door (ZOE_OS_PEOPLE=kernel; docs/knowledge/zoe-os-people-door.md) ─────────────────────────────────────
+# A person's change to a contact asks the kernel first ("may ``actor`` do this to a contact in ``owner``'s book?"), is made, then
+# reported. A kernel refusal raises ``ContactRefused``: FINAL, nothing written. Kernel down or slow: the change proceeds, logged
+# ``not_checked``. With the flag off nothing of this runs but a flag read. Only ids cross. READING is never asked.
+#
+# Two ways in. ``write_contact`` asks for the statement it issues (the caller says who is acting and whose the contact is). A
+# change made of several statements, or made through the shared mechanics (a relationship edge, a merge, the address-book
+# store), asks ONCE up front (``ask_contact`` / ``ask_about``) and its statements then say ``under=True``.
+
+
+class ContactRefused(kernel_door.Refused):
+    """The kernel refused this contact change. FINAL: nothing was written. ``reason`` is a closed code; ``line()`` the plain sentence."""
+
+    area = "people"
+    lines = {
+        "not_owner": "That contact is someone else's, so I can't change it.",
+        "adults_only": "Only an adult can change a contact the whole house shares.",
+        "unknown_person": "I don't know who is asking, so I can't change your contacts.",
+    }
+    fallback = "I'm not allowed to change that contact."
+
+
+def stamps_now() -> Optional[dict]:
+    """A caller's first statement, before anything it awaits; handed back as ``stamps_at``. None unless the CONTACTS door is on."""
+    return kernel_door.stamps_now("people")
+
+
+async def ask_contact(verb: str, *, actor: Optional[str], person_id: str, owner: object, visibility: object,
+                      stamps_at: Optional[dict]) -> "Optional[kernel_door.Decision]":
+    """The ask at the door. None with the flag off. ``owner`` is ``people.user_id`` (whose address book the contact is in);
+    ``visibility`` ``family`` is a household contact. Raises ``ContactRefused`` on a refusal."""
+    return await kernel_door.gate("people", verb, actor=actor, target=person_id, owner=owner,
+                                  household=str(visibility or "") == "family", stamps_at=stamps_at, refused=ContactRefused)
+
+
+async def ask_about(db, verb: str, *, actor: Optional[str], person_id: str, stamps_at: Optional[dict]) -> "Optional[kernel_door.Decision]":
+    """``ask_contact`` for a STORED contact whose row the caller has not read (the screen's delete and merge read only ids): with
+    the door on, the door reads whose it is, in the scope the screen itself uses (the household's and the caller's own). A
+    contact the caller cannot see is not asked about: the caller's own lookup answers "not found", as it always did. A fault in
+    this read RAISES (the change is not made unasked). Flag off: a flag read and nothing else."""
+    if stamps_at is None or not os_shadow.area_on("people"):
+        return None
+    cur = await db.execute("SELECT user_id, visibility FROM people WHERE id = ? AND deleted = 0 AND (visibility = 'family' OR user_id = ?)",
+                           (person_id, actor))
+    row = await cur.fetchone()
+    if row is None:
+        os_shadow.door_unchecked(verb, "no_row", "people")
+        return None
+    row = dict(row)
+    return await ask_contact(verb, actor=actor, person_id=person_id, owner=row.get("user_id"), visibility=row.get("visibility"),
+                             stamps_at=stamps_at)
+
 #: entry point -> its statement, kept to the byte
 SQL = {
     # the screen (routers/people.py)
@@ -74,20 +131,36 @@ def statement(entry: str, sets=None, n: int = 0) -> str:
     return _BUILT[entry](sets, n) if entry in _BUILT else SQL[entry]
 
 
-async def write_contact(db, entry: str, params, *, sets=None, raw: bool = False):
-    """Issue ``entry``'s statement with ``params`` and hand back what the handle returned (a cursor, or asyncpg's command tag)."""
+#: entry point -> what the kernel is asked (an entry that is not a create or a delete is an edit)
+_CREATES = frozenset({"screen_create", "screen_relation_stub", "tool_create", "said_create", "spoken_create", "introduced", "offer_create"})
+_DELETES = frozenset({"screen_delete", "tool_delete"})
+
+
+def verb_of(entry: str) -> str:
+    return "contact.create" if entry in _CREATES else "contact.delete" if entry in _DELETES else "contact.edit"
+
+
+async def write_contact(db, entry: str, params, *, sets=None, raw: bool = False, actor: Optional[str] = None,
+                        person_id: Optional[str] = None, owner: object = None, visibility: object = None,
+                        stamps_at: Optional[dict] = None, under: bool = False):
+    """Issue ``entry``'s statement with ``params`` and hand back what the handle returned (a cursor, or asyncpg's command tag).
+
+    The door: unless ``under`` (this statement is part of a change its caller already asked about), the kernel is asked first
+    about ``person_id`` in ``owner``'s book, and told how the write ended."""
     sql = statement(entry, sets, len(params))
-    if raw:
-        return await db.execute(sql, *params)
-    return await db.execute(sql, params)
+    if under:
+        return await (db.execute(sql, *params) if raw else db.execute(sql, params))
+    asked = await ask_contact(verb_of(entry), actor=actor, person_id=str(person_id or ""), owner=owner, visibility=visibility,
+                              stamps_at=stamps_at)
+    return await kernel_door.write(asked, db.execute(sql, *params) if raw else db.execute(sql, params))
 
 
-async def write_contact_either(db, pg_entry: str, entry: str, args: tuple) -> bool:
+async def write_contact_either(db, pg_entry: str, entry: str, args: tuple, *, under: bool = True) -> bool:
     """A statement tried in asyncpg's form, then in the pooled form (``correction_apply`` holds either kind of handle): True
-    when one of them ran."""
+    when one of them ran. Always part of a change its caller asked about (``under``): a correction asks once, up front."""
     for key, dollar in ((pg_entry, True), (entry, False)):
         try:
-            await write_contact(db, key, args, raw=dollar)
+            await write_contact(db, key, args, raw=dollar, under=True)
             return True
         except Exception:  # noqa: BLE001 — try the other placeholder style
             continue

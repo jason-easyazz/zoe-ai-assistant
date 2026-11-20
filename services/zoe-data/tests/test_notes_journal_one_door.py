@@ -14,22 +14,16 @@ Negative controls run on the real tree (then restored): the raw ``INSERT INTO no
 """
 from __future__ import annotations
 
-import ast
-import re
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
 DOORS = {"notes": "note_service.py", "journal_entries": "journal_service.py"}     # table -> its door, by RELATIVE PATH
-
-
-def _write(table: str):
-    return re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA + r"[\"`\[]?" + table + r"\b", re.I)
 
 
 def _modules() -> list:
@@ -37,17 +31,9 @@ def _modules() -> list:
     return sorted(p for p in ROOT.rglob("*.py") if not skip.intersection(p.relative_to(ROOT).parts))
 
 
-def _texts(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
-
-
 def writes(source: str, table: str) -> list:
-    pattern = _write(table)
-    return [" ".join(text.split())[:80] for text in _texts(ast.parse(source)) if pattern.search(text)]
+    """f-strings and concatenations whole, any schema, ONLY (``tests/sql_scan.py``)."""
+    return [text[:80] for text in sql_scan.writes(source, sql_scan.write_pattern(table))]
 
 
 def test_only_the_doors_write_notes_and_the_journal():
@@ -68,6 +54,8 @@ def test_a_planted_write_is_caught():
             assert writes(f"async def f(db):\n    await db.execute('{sql}')\n", table), sql
         for sql in (f'f"UPDATE {{schema}}.{table} SET x = ?"', f"f\"UPDATE {table} SET {{', '.join(sets)}} WHERE id = ?\""):
             assert writes(f"async def f(db, schema, sets):\n    await db.execute({sql})\n", table), sql
+        for planted in sql_scan.planted_forms(table):         # a write split by ``+``, and Postgres' ONLY
+            assert writes(planted, table), planted
     # other tables whose names end in ``notes``, a column called notes, a longer name, and a read are not writes of ``notes``
     assert not writes("async def f(db):\n    await db.execute('INSERT INTO conversation_notes (id) VALUES (?)')\n"
                       "    await db.execute('UPDATE people SET notes = ? WHERE id = ?')\n    await db.execute('SELECT * FROM notes')\n"

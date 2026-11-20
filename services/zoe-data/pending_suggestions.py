@@ -1009,9 +1009,10 @@ async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_comm
 
 
 async def _execute_action(conn, action: str, slots: dict, user_id: str, after_commit: list | None = None) -> dict:
+    import kernel_door
     import list_service
 
-    stamps_at = list_service.stamps_now()
+    stamps_at = kernel_door.stamps_now("lists", "calendar", "notes", "people")      # one snapshot for the doors an accepted suggestion can reach here
     if action == "list_add":
         lt = slots.get("list_type", "shopping")
         text = slots.get("item") or slots.get("description", "")
@@ -1092,9 +1093,11 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
                 # lacks it — never overwrite a relationship already on the row.
                 fill_rel = slot_rel if (slot_rel and not existing["relationship"]) else None
                 if fill_rel is not None:
-                    await people_service.write_contact(conn, "offer_promote_with_relation", (fill_rel, existing["id"]), raw=True)
+                    await people_service.write_contact(conn, "offer_promote_with_relation", (fill_rel, existing["id"]), raw=True,
+                                                       actor=user_id, person_id=existing["id"], owner=user_id, stamps_at=stamps_at)
                 else:
-                    await people_service.write_contact(conn, "offer_promote", (existing["id"],), raw=True)
+                    await people_service.write_contact(conn, "offer_promote", (existing["id"],), raw=True, actor=user_id,
+                                                       person_id=existing["id"], owner=user_id, stamps_at=stamps_at)
                 return {
                     "person_id": existing["id"],
                     "name": name,
@@ -1130,7 +1133,8 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
             if verdict == "upgrade":
                 await people_service.write_contact(
                     conn, "offer_upgrade",
-                    (name, relationship, datetime.now(timezone.utc).isoformat(), hits[0]["id"], user_id), raw=True)
+                    (name, relationship, datetime.now(timezone.utc).isoformat(), hits[0]["id"], user_id), raw=True,
+                    actor=user_id, person_id=hits[0]["id"], owner=user_id, stamps_at=stamps_at)
                 await _cc.refresh_person_mirror(user_id, hits[0]["id"], name, relationship)
                 return {"person_id": hits[0]["id"], "name": name, "created": False,
                         "upgraded_from": hits[0]["name"], "relationship": relationship}
@@ -1145,7 +1149,8 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str, after_co
         # may be personal (a therapist, a work colleague); don't auto-share it
         # with the whole family. Owner still sees it (people query is OR user_id).
         visibility = (slots.get("visibility") or "").strip() or "personal"
-        await people_service.write_contact(conn, "offer_create", (pid, user_id, name, relationship, circle, "suggested", visibility), raw=True)
+        await people_service.write_contact(conn, "offer_create", (pid, user_id, name, relationship, circle, "suggested", visibility), raw=True,
+                                           actor=user_id, person_id=pid, owner=user_id, visibility=visibility, stamps_at=stamps_at)
         return {"person_id": pid, "name": name, "relationship": relationship, "created": True}
 
     if action == "memory_dispute":

@@ -506,7 +506,8 @@ def _takes_first(fn) -> bool:
     if len(binds) != 1 or len(assigns) != 1 or assigns[0].lineno >= first_await:
         return False
     value = assigns[0].value                  # the WHOLE right-hand side is ``stamps_now()`` / ``x.stamps_now()``, no arguments
-    return (isinstance(value, ast.Call) and not value.args and not value.keywords
+    return (isinstance(value, ast.Call) and not value.keywords       # (its only arguments: the names of the areas it serves)
+            and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in value.args)
             and getattr(value.func, "id", getattr(value.func, "attr", "")) == "stamps_now")
 
 

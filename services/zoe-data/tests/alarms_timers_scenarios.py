@@ -413,7 +413,44 @@ def timer_scenarios() -> dict:
         w.clock["now"] = T0 + 600 + w.sky.TIMER_RING_GRACE_S + 1
         return w.sky.all_active_timers()
 
+    def done(how, *, cancel_first=False, twice=False):
+        """The timer ends and the one task that announces it runs (``_ring_when_done``: the only path that sets ``announced`` /
+        ``voice_failed``): the queue takes the line, refuses it, or it is quiet hours."""
+        def run(w):
+            import db_compat
+            import voice_announce
+
+            w.sky.bind_timer_panel("panel-zed")
+            try:
+                say(w, "set a pasta timer for 10 minutes")
+            finally:
+                w.sky.bind_timer_panel("")
+            w.clock["now"] = T0 + 601                                       # it has ended: inside the ring grace
+
+            async def enqueue(db, **kw):
+                w.log.append(["announce", _plain({k: kw[k] for k in sorted(kw)})])
+                if how == "failed":
+                    raise RuntimeError("queue down")
+
+            @contextlib.asynccontextmanager
+            async def no_db():
+                yield None
+
+            _set(voice_announce, "enqueue_announcement", enqueue)
+            _set(db_compat, "get_compat_db", no_db)
+            _set(w.sky, "_timer_quiet_now", lambda: how == "quiet")
+            if cancel_first:
+                w.sky.cancel_any_timer(tid())
+            for _ in range(2 if twice else 1):
+                asyncio.run(w.sky._ring_when_done(w.store, tid()))
+            return [[t["timer_id"], bool(t.get("announced")), bool(t.get("voice_failed"))]
+                    for timers in w.store._by_owner.values() for t in timers]
+        return run
+
     return {
+        "timer_done_is_announced": done("queued"), "timer_done_when_the_queue_fails": done("failed"),
+        "timer_done_in_quiet_hours": done("quiet"), "timer_done_is_announced_once": done("queued", twice=True),
+        "timer_done_after_a_cancel_says_nothing": done("queued", cancel_first=True),
         "timer_create": create, "timer_create_direct": create_direct, "timer_create_for_a_guest": create_for_a_guest,
         "timer_create_from_a_panel_voice_turn": create_from_a_panel_voice_turn,
         "timer_add_time": add_time, "timer_take_time_off": take_time_off,

@@ -30,6 +30,7 @@ from people_utils import row_to_person
 from push import broadcaster
 from relationship_graph import neighbors as _graph_neighbors
 from relationship_graph import relationship_graph_enabled
+import kernel_door
 import people_service
 
 router = APIRouter(prefix="/api/people", tags=["people"])
@@ -249,6 +250,7 @@ async def create_person(
     db=Depends(get_db),
 ):
     """Create a person."""
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
     await require_feature_access(db, user, feature="people", action="create")
     user_id = user["user_id"]
     person_id = str(uuid.uuid4())
@@ -270,6 +272,7 @@ async def create_person(
             getattr(body, "first_met_date", None),
             getattr(body, "introduced_by_person_id", None),
         ),
+        actor=user_id, person_id=person_id, owner=user_id, visibility=body.visibility, stamps_at=stamps_at,
     )
     await _upsert_custom_fields(db, person_id, body.custom_fields)
     await db.commit()
@@ -469,6 +472,20 @@ async def update_person(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
+    always ran (``_update_person``), and the kernel is told how it ended. Flag off: a flag read."""
+    stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    asked_0 = await people_service.ask_about(db, "contact.edit", actor=user["user_id"], person_id=person_id, stamps_at=stamps_at)
+    async with kernel_door.reported(asked_0):
+        return await _update_person(person_id, body, user, db)
+
+
+async def _update_person(
+    person_id,
+    body,
+    user,
+    db,
+):
     """Update a person."""
     await require_feature_access(db, user, feature="people", action="update")
     user_id = user["user_id"]
@@ -513,7 +530,7 @@ async def update_person(
 
     if updates:
         params.append(person_id)
-        await people_service.write_contact(db, "screen_update", params, sets=updates)
+        await people_service.write_contact(db, "screen_update", params, sets=updates, under=True)
         await db.commit()
 
     async with db.execute("SELECT * FROM people WHERE id = ?", (person_id,)) as cur:
@@ -534,6 +551,19 @@ async def delete_person(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
+    always ran (``_delete_person``), and the kernel is told how it ended. Flag off: a flag read."""
+    stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    asked_0 = await people_service.ask_about(db, "contact.delete", actor=user["user_id"], person_id=person_id, stamps_at=stamps_at)
+    async with kernel_door.reported(asked_0):
+        return await _delete_person(person_id, user, db)
+
+
+async def _delete_person(
+    person_id,
+    user,
+    db,
+):
     """Soft-delete a person and archive their MemPalace facts."""
     await require_feature_access(db, user, feature="people", action="delete")
     user_id = user["user_id"]
@@ -546,7 +576,7 @@ async def delete_person(
     if not row:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    await people_service.write_contact(db, "screen_delete", (person_id,))
+    await people_service.write_contact(db, "screen_delete", (person_id,), under=True)
     await db.commit()
 
     # Archive all MemPalace facts for this entity (tracked so it can't be GC'd mid-flight)
@@ -573,6 +603,25 @@ async def merge_person_endpoint(
     target_id: str,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+):
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
+    always ran (``_merge_person_endpoint``), and the kernel is told how it ended. Flag off: a flag read."""
+    stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    asked_0 = await people_service.ask_about(db, "contact.edit", actor=user["user_id"], person_id=target_id, stamps_at=stamps_at)
+    try:      # a merge changes BOTH contacts: both are asked first, and neither is touched if either is refused
+        asked_1 = await people_service.ask_about(db, "contact.delete", actor=user["user_id"], person_id=source_id, stamps_at=stamps_at)
+    except BaseException:
+        kernel_door.wrote(asked_0, "failed")
+        raise
+    async with kernel_door.reported(asked_0), kernel_door.reported(asked_1):
+        return await _merge_person_endpoint(source_id, target_id, user, db)
+
+
+async def _merge_person_endpoint(
+    source_id,
+    target_id,
+    user,
+    db,
 ):
     """Fold an ``is_partial`` stub (``source_id``) into a real contact (``target_id``),
     re-pointing all its relationships + satellite facts. Explicit, user-triggered,
@@ -958,6 +1007,20 @@ async def add_relationship(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
+    always ran (``_add_relationship``), and the kernel is told how it ended. Flag off: a flag read."""
+    stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    asked_0 = await people_service.ask_about(db, "contact.edit", actor=user["user_id"], person_id=person_id, stamps_at=stamps_at)
+    async with kernel_door.reported(asked_0):
+        return await _add_relationship(person_id, body, user, db)
+
+
+async def _add_relationship(
+    person_id,
+    body,
+    user,
+    db,
+):
     """Create a typed relationship edge.
 
     Body:
@@ -987,7 +1050,8 @@ async def add_relationship(
             # Create a partial stub
             other_id = str(uuid.uuid4())
             inferred_context = "work" if group in _WORK_GROUPS else "personal"
-            await people_service.write_contact(db, "screen_relation_stub", (other_id, user_id, name, "circle", inferred_context, "family", 1))
+            await people_service.write_contact(db, "screen_relation_stub", (other_id, user_id, name, "circle", inferred_context, "family", 1),
+                                               under=True)
             await db.commit()
         else:
             # Search by name
@@ -1040,7 +1104,7 @@ async def add_relationship(
 
     # Auto-update context of the other person based on rel_group
     inferred_ctx = "work" if group in _WORK_GROUPS else "personal"
-    await people_service.write_contact(db, "screen_relation_context", (inferred_ctx, other_id, user_id))
+    await people_service.write_contact(db, "screen_relation_context", (inferred_ctx, other_id, user_id), under=True)
     await db.commit()
 
     await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
@@ -1068,6 +1132,21 @@ async def update_relationship(
     body: dict,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+):
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
+    always ran (``_update_relationship``), and the kernel is told how it ended. Flag off: a flag read."""
+    stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    asked_0 = await people_service.ask_about(db, "contact.edit", actor=user["user_id"], person_id=person_id, stamps_at=stamps_at)
+    async with kernel_door.reported(asked_0):
+        return await _update_relationship(person_id, rel_id, body, user, db)
+
+
+async def _update_relationship(
+    person_id,
+    rel_id,
+    body,
+    user,
+    db,
 ):
     """Update relationship notes or type.
 
@@ -1131,6 +1210,20 @@ async def delete_relationship(
     rel_id: str,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+):
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
+    always ran (``_delete_relationship``), and the kernel is told how it ended. Flag off: a flag read."""
+    stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    asked_0 = await people_service.ask_about(db, "contact.edit", actor=user["user_id"], person_id=person_id, stamps_at=stamps_at)
+    async with kernel_door.reported(asked_0):
+        return await _delete_relationship(person_id, rel_id, user, db)
+
+
+async def _delete_relationship(
+    person_id,
+    rel_id,
+    user,
+    db,
 ):
     """Remove a relationship edge. Invalidate, never delete: the edge is CLOSED (``close_reason='user_removed'``) so it
     stops being current and stays in the history (``?include=history``)."""

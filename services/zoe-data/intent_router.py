@@ -248,6 +248,9 @@ class Intent:
     name: str
     slots: dict = field(default_factory=dict)
     confidence: float = 0.9
+    #: the conversation this intent was detected in (a chat session id, ``panel:<id>`` for a panel's voice): an id, never
+    #: words. "" when the caller did not say. What "cancel that" binds the reminder just made to (``_JUST_SET_REMINDER``).
+    conversation: str = field(default="", compare=False, repr=False)
 
 
 _TIME_QUERY_RE = re.compile(
@@ -2413,6 +2416,36 @@ async def detect_and_extract_intent(
     context: "Optional[ConversationContext]" = None,
     session_id: Optional[str] = None,
 ) -> Optional["Intent"]:
+    """``_detect_and_extract_intent`` (below), with the conversation carried on the intent it returns (``Intent.conversation``
+    = ``session_id``) and "cancel that" bound to the reminder THIS conversation just made.
+
+    The binding does not depend on the caller keeping a ``ConversationContext``: the non-streaming chat route keeps none, so
+    there "cancel that" went to the brain, which has no way to cancel. When the caller names its conversation, the whole
+    utterance is an affirmative cancel of "that" (``conversation_context._CANCEL_THAT_RE``) and this conversation holds a
+    just-set reminder, the turn IS ``reminder_cancel``. Any other intent detected in the conversation ends the binding (what
+    "that" means has moved on); a turn that matches no intent leaves it, as the context's own two minutes always did."""
+    conversation = str(session_id or "")
+    intent: Optional[Intent] = None
+    if _conversation_spoke_of_a_reminder(user_id, conversation):
+        from conversation_context import _CANCEL_THAT_RE
+
+        if _CANCEL_THAT_RE.match(str(text or "").strip().lower()):
+            intent = Intent("reminder_cancel", {"title": "", "after": "reminder_create"})
+    if intent is None:
+        intent = await _detect_and_extract_intent(text, user_id, context=context, session_id=session_id)
+        if conversation and intent is not None and intent.name not in ("reminder_create", "reminder_cancel"):
+            _forget_reminder_just_set(user_id, "", conversation)
+    if intent is not None and conversation:
+        intent.conversation = conversation
+    return intent
+
+
+async def _detect_and_extract_intent(
+    text: str,
+    user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
+    context: "Optional[ConversationContext]" = None,
+    session_id: Optional[str] = None,
+) -> Optional["Intent"]:
     """
     Async wrapper around detect_intent that populates structured slots for create
     intents via the local LLM (nlu_extractor).
@@ -2862,10 +2895,12 @@ async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
 # is nothing to cancel, whatever older reminders share its title). Memory only, the conversation context's own two minutes.
 #
 # One member can be in several conversations at once (chat keeps a context per session, each panel its own), so the note is not
-# "the member's last reminder": it is, per member, a small map from a KEYED DIGEST of the title as that create was asked to the
-# reminder it made. A "cancel that" carries the title ITS conversation resolved, so it finds the reminder its own conversation
-# made, and one made meanwhile in another conversation is out of its reach. The digest is an HMAC under a random key made when
-# the process starts: never the title, never a plain hash of it, and useless outside this process.
+# "the member's last reminder": it is, per member, a small map from THE CONVERSATION the create happened in to the reminder it
+# made. The conversation is what the route knows it by (``Intent.conversation``: a chat session id, ``panel:<id>`` for a
+# panel's voice); a "cancel that" in that conversation finds that reminder and no other, so two chats that each set a reminder
+# with the SAME title cannot cancel each other's. Only a caller that names no conversation (an in-process dispatch) is filed
+# under the title as its create was asked, as before. Either key is stored as an HMAC under a random key made when the
+# process starts: never the title, never the session id, never a plain hash of either, and useless outside this process.
 #
 # It holds IDS, DIGESTS AND A NUMBER, never a word: what the reminder says is read from its row at the moment it is cancelled.
 # Expired notes are removed on every access, and a member's whole map goes with their forget
@@ -2877,9 +2912,11 @@ _JUST_SET_PER_MEMBER = 8               # conversations one member can have a jus
 _JUST_SET_KEY = os.urandom(32)
 
 
-def _asked_digest(title: str) -> str:
-    """A keyed digest of the title as a create was asked (trimmed, case-folded): what a note is filed under."""
-    return hmac.new(_JUST_SET_KEY, " ".join(str(title or "").split()).casefold().encode("utf-8"), hashlib.sha256).hexdigest()
+def _asked_digest(title: str, conversation: str = "") -> str:
+    """What a note is filed under: a keyed digest of the conversation the create happened in, or (no conversation named) of
+    the title as that create was asked (trimmed, case-folded). The two kinds can never collide (a different prefix is hashed)."""
+    what = "c\x00" + str(conversation) if conversation else "t\x00" + " ".join(str(title or "").split()).casefold()
+    return hmac.new(_JUST_SET_KEY, what.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _prune_just_set() -> None:
@@ -2892,39 +2929,57 @@ def _prune_just_set() -> None:
             del _JUST_SET_REMINDER[uid]
 
 
-def _forget_reminder_just_set(user_id: str, title: str) -> None:
+def _forget_reminder_just_set(user_id: str, title: str, conversation: str = "") -> None:
     """Drop the note for this request (a new create of it is being attempted, or its reminder was cancelled or has gone)."""
     _prune_just_set()
     notes = _JUST_SET_REMINDER.get(user_id)
     if notes is not None:
-        notes.pop(_asked_digest(title), None)
+        notes.pop(_asked_digest(title, conversation), None)
         if not notes:
             del _JUST_SET_REMINDER[user_id]
 
 
-def _note_reminder_just_set(user_id: str, reminder_id: str, title: str) -> None:
+def _note_reminder_just_set(user_id: str, reminder_id: str, title: str, conversation: str = "") -> None:
     _prune_just_set()
     if user_id not in _JUST_SET_REMINDER and len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
         _JUST_SET_REMINDER.clear()
     notes = _JUST_SET_REMINDER.setdefault(user_id, {})
-    notes.pop(_asked_digest(title), None)                       # the same request again: the latest reminder is "that"
+    notes.pop(_asked_digest(title, conversation), None)         # the same conversation again: the latest reminder is "that"
     while len(notes) >= _JUST_SET_PER_MEMBER:
         del notes[min(notes, key=lambda k: notes[k][1])]        # the oldest goes
-    notes[_asked_digest(title)] = (reminder_id, time.monotonic())
+    notes[_asked_digest(title, conversation)] = (reminder_id, time.monotonic())
 
 
-def _reminder_just_set(user_id: str, title: str) -> Optional[str]:
-    """The id of the reminder made by the spoken create this conversation's "cancel that" follows (the create asked with this
-    title), while it is still inside the window; else None. No reminder is looked up by its title: only this note is."""
+def _reminder_just_set(user_id: str, title: str, conversation: str = "") -> Optional[str]:
+    """The id of the reminder made by the create this conversation's "cancel that" follows, while it is still inside the
+    window; else None. No reminder is looked up by its title: only this note is."""
     _prune_just_set()
-    entry = _JUST_SET_REMINDER.get(user_id, {}).get(_asked_digest(title))
-    return entry[0] if entry else None
+    entry = _JUST_SET_REMINDER.get(user_id, {}).get(_asked_digest(title, conversation))
+    return (entry[0] or None) if entry else None
+
+
+def _conversation_spoke_of_a_reminder(user_id: str, conversation: str) -> bool:
+    """Did this conversation just set a reminder, or just cancel the one it set (inside the window)? Then "cancel that" is
+    about that reminder, and is answered by the cancel executor even when nothing is left to cancel."""
+    _prune_just_set()
+    return bool(conversation) and _asked_digest("", conversation) in _JUST_SET_REMINDER.get(user_id, {})
+
+
+def _reminder_just_cancelled(user_id: str, asked: str, conversation: str) -> None:
+    """The reminder was cancelled (or has gone). With no conversation named the note is dropped, as before. In a named
+    conversation it is kept for the rest of its window with NO id: a second "cancel that" there is still about the reminder,
+    and is told there is nothing to cancel instead of being sent off to the brain."""
+    if conversation:
+        _note_reminder_just_set(user_id, "", asked, conversation)
+    else:
+        _forget_reminder_just_set(user_id, asked)
 
 
 async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
     # a new create of this request is being attempted: "that" is no longer what the last attempt at it made
-    _forget_reminder_just_set(user_id, str(slots.get("title") or ""))
+    conversation = str(getattr(intent, "conversation", "") or "")
+    _forget_reminder_just_set(user_id, str(slots.get("title") or ""), conversation)
     if slots.get("unsupported_recurrence"):
         return (
             f"I can't repeat a reminder {slots['unsupported_recurrence']} yet, so I haven't set it. "
@@ -2953,7 +3008,7 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
             reminder = await create_reminder_record(payload, user=user, db=db, stamps_at=stamps_at)
         reply = _format_response(intent, json.dumps(reminder, default=str))
         if reminder.get("id"):
-            _note_reminder_just_set(user_id, str(reminder["id"]), title)       # only now: the reminder exists
+            _note_reminder_just_set(user_id, str(reminder["id"]), title, conversation)       # only now: the reminder exists
         return reply
     except ReminderRefused as exc:   # the Zoe OS kernel said no (ZOE_OS_REMINDERS=kernel): final, nothing was written, said plainly
         return exc.line()
@@ -2977,8 +3032,9 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
     falls through to the brain."""
     from reminder_service import SPOKEN, ReminderRefused, delete_reminder_record
 
-    asked = str((intent.slots or {}).get("title") or "")       # the title THIS conversation's create was asked with
-    reminder_id = _reminder_just_set(user_id, asked)
+    asked = str((intent.slots or {}).get("title") or "")       # the title the create was asked with (used only with no conversation)
+    conversation = str(getattr(intent, "conversation", "") or "")
+    reminder_id = _reminder_just_set(user_id, asked, conversation)
     if reminder_id is None:
         return SPOKEN["cancel_nothing"]
     try:
@@ -2991,17 +3047,17 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
             cursor = await db.execute("SELECT title FROM reminders WHERE user_id = ? AND id = ? AND deleted = 0", (user_id, reminder_id))
             row = await cursor.fetchone()
             if row is None:                                # gone since it was set: nothing to cancel
-                _forget_reminder_just_set(user_id, asked)
+                _reminder_just_cancelled(user_id, asked, conversation)
                 return SPOKEN["cancel_nothing"]
             title = str(dict(row).get("title") or "").strip()
             await delete_reminder_record(db, user, reminder_id, own_only=True)
-        _forget_reminder_just_set(user_id, asked)          # cancelled: a second "cancel that" has nothing to cancel
+        _reminder_just_cancelled(user_id, asked, conversation)           # cancelled: a second "cancel that" has nothing to cancel
         return SPOKEN["cancelled"].format(title=title)
     except ReminderRefused as exc:   # the Zoe OS kernel said no: final, nothing was cancelled
         return exc.line()
     except HTTPException as exc:
         if exc.status_code == 404:
-            _forget_reminder_just_set(user_id, asked)
+            _reminder_just_cancelled(user_id, asked, conversation)
             return SPOKEN["cancel_not_found"]
         return SPOKEN["cancel_failed"]
     except Exception as exc:  # noqa: BLE001 - the store failing: say nothing changed
@@ -3705,6 +3761,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
     try:
         from database import get_db_ctx
 
+        stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
         person_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
             # Ensure the acting user exists first. The intent-dispatch path the
@@ -3741,6 +3798,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
                 db, "said_create",
                 (person_id, user_id, name, relationship, None, None, None, None,
                  visibility, circle, context),
+                actor=user_id, person_id=person_id, owner=user_id, visibility=visibility, stamps_at=stamps_at,
             )
             try:
                 from routers.people import _store_person_memory  # type: ignore
@@ -3761,6 +3819,8 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             return _cc.format_created(name, relationship)
         rel_phrase = f" as your {relationship}" if relationship else ""
         return f"Added {name}{rel_phrase} to your contacts."
+    except people_service.ContactRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_PEOPLE=kernel): final, nothing was written
+        return exc.line()
     except Exception as exc:
         logger.warning("people_create direct execution unavailable: %s", exc)
         return None
@@ -3911,11 +3971,13 @@ async def _rename_person_row(db, user_id: str, person_id: str, name: str,
                              relationship: Optional[str]) -> None:
     """Rename a contact in place: name, relationship (kept when none given),
     is_partial cleared (it is a full contact now), memory mirror refreshed."""
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door (the statement names the member: their own contact)
     from datetime import datetime, timezone
 
     await people_service.write_contact(
         db, "said_rename",
         (name, relationship or None, datetime.now(timezone.utc).isoformat(), person_id, user_id),
+        actor=user_id, person_id=person_id, owner=user_id, stamps_at=stamps_at,
     )
     await _notify_ui_channel(
         "all", "people:updated", {"id": person_id, "name": name, "relationship": relationship or None})

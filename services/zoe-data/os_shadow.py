@@ -1179,6 +1179,10 @@ NOTES_FLAG = "ZOE_OS_NOTES"
 NOTE_DOOR_VERBS = ("note.create", "note.edit", "note.delete")
 JOURNAL_FLAG = "ZOE_OS_JOURNAL"
 JOURNAL_DOOR_VERBS = ("journal.create", "journal.edit", "journal.delete")
+#: The contacts area (``labs/zoe-os/zoe_os/people_door.py``; the service door is ``people_service``). Ids only: never a name, a
+#: number, a birthday, a note or a relationship. Reading is not asked.
+PEOPLE_FLAG = "ZOE_OS_PEOPLE"
+PEOPLE_DOOR_VERBS = ("contact.create", "contact.edit", "contact.delete")
 AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_VERBS, "list_ask", "list_report", "list", "items", False),
          "reminders": _Area(REMINDERS_FLAG, None, REMINDER_DOOR_VERBS, REMINDER_SHADOW_VERBS, "door_ask", "door_report", "target",
                             None, True),
@@ -1186,7 +1190,8 @@ AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_V
          "timers": _Area(ALARMS_FLAG, None, TIMER_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "calendar": _Area(CALENDAR_FLAG, None, CALENDAR_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "notes": _Area(NOTES_FLAG, None, NOTE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
-         "journal": _Area(JOURNAL_FLAG, None, JOURNAL_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
+         "journal": _Area(JOURNAL_FLAG, None, JOURNAL_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
+         "people": _Area(PEOPLE_FLAG, None, PEOPLE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256

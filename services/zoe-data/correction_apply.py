@@ -419,6 +419,18 @@ async def _retype_edge_as_pet(db, user_id: str, edge_id: str, a: str, b: str, pe
 
 
 async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None) -> int:
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): a spoken correction is a change to the member's OWN contact (its
+    relationship and its edges): asked once, up front, then made exactly as it always was (``_make_pet_asked``)."""
+    import kernel_door
+
+    stamps_at = people_service.stamps_now()
+    asked = await people_service.ask_contact("contact.edit", actor=user_id, person_id=person_id, owner=user_id, visibility=None,
+                                             stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        return await _make_pet_asked(db, user_id, person_id, current_rel, kind, evidence)
+
+
+async def _make_pet_asked(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None) -> int:
     """Relationship -> ``pet <kind>``; parent/sibling/... edges -> the ``pet`` edge type
     (pet = person_a, owner = person_b; labels as ``RELATIONSHIP_TYPES['pet']``). The old edges are closed, not
     rewritten (see ``_retype_edge_as_pet``).
@@ -677,6 +689,7 @@ async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
     (the contact update or its memory mirror did not hold: the note and the contact now disagree). A failure is logged at WARNING
     with the account and the contact's id, never a name."""
     pid = ""
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before the contact is read
     try:
         from datetime import datetime
 
@@ -691,7 +704,8 @@ async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
             if len(rows) != 1:
                 return "none"
             pid = str(rows[0]["id"])
-            await people_service.write_contact(db, "corrected_name", (new, datetime.utcnow().isoformat() + "Z", pid, user_id))
+            await people_service.write_contact(db, "corrected_name", (new, datetime.utcnow().isoformat() + "Z", pid, user_id),
+                                               actor=user_id, person_id=pid, owner=user_id, stamps_at=stamps_at)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("correction_apply: contact rename FAILED user=%s person=%s (%s): the note changed, the contact did not",
