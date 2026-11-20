@@ -195,6 +195,7 @@ _INTENT_UNGATED: dict[str, str] = {
     "pending_offer_accept": "reply to a pending offer (context follow-up)",
     "pending_offer_dismiss": "reply to a pending offer (context follow-up)",
     "people_same_person_reply": "reply to a same-person question (context follow-up)",
+    "reminder_cancel": "\"cancel that\" about the reminder this conversation just made (context follow-up)",
     # operator / system / engineering commands: explicit command syntax, no router class
     "status_check": "system command",
     "extend_capability": "system command",
