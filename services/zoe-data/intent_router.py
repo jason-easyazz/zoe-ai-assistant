@@ -10,6 +10,8 @@ BEFORE generic list patterns to avoid collisions like "what's on my calendar"
 matching as list_show.
 """
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -2855,39 +2857,73 @@ async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
 
 
 # "Cancel that" after a spoken reminder is bound to the reminder that create MADE: its id, noted here only once the create has
-# succeeded, and dropped the moment the next create is ATTEMPTED (so after a refused or failed create there is nothing to
-# cancel, whatever older reminders share its title). Memory only, per member, the conversation context's own two minutes.
-# It holds IDS AND A NUMBER, never a word: what the reminder says is read from its row at the moment it is cancelled. Expired
-# notes are removed on every access, and a member's note goes with their forget (``forget_redact.clear_turn_caches``, run by
-# ``MemoryService.delete_user`` and the entity forget; ``forget_reach.py`` lists it).
-_JUST_SET_REMINDER: dict = {}          # user id -> (reminder id, monotonic time)
+# succeeded, and dropped the moment a create of the same request is ATTEMPTED again (so after a refused or failed create there
+# is nothing to cancel, whatever older reminders share its title). Memory only, the conversation context's own two minutes.
+#
+# One member can be in several conversations at once (chat keeps a context per session, each panel its own), so the note is not
+# "the member's last reminder": it is, per member, a small map from a KEYED DIGEST of the title as that create was asked to the
+# reminder it made. A "cancel that" carries the title ITS conversation resolved, so it finds the reminder its own conversation
+# made, and one made meanwhile in another conversation is out of its reach. The digest is an HMAC under a random key made when
+# the process starts: never the title, never a plain hash of it, and useless outside this process.
+#
+# It holds IDS, DIGESTS AND A NUMBER, never a word: what the reminder says is read from its row at the moment it is cancelled.
+# Expired notes are removed on every access, and a member's whole map goes with their forget
+# (``forget_redact.clear_turn_caches``, run by ``MemoryService.delete_user`` and the entity forget; ``forget_reach.py`` lists it).
+_JUST_SET_REMINDER: dict = {}          # user id -> {title digest: (reminder id, monotonic time)}
 _JUST_SET_WINDOW_S = 120.0
-_JUST_SET_MAX = 256
+_JUST_SET_MAX = 256                    # members
+_JUST_SET_PER_MEMBER = 8               # conversations one member can have a just-set reminder in at once
+_JUST_SET_KEY = os.urandom(32)
+
+
+def _asked_digest(title: str) -> str:
+    """A keyed digest of the title as a create was asked (trimmed, case-folded): what a note is filed under."""
+    return hmac.new(_JUST_SET_KEY, " ".join(str(title or "").split()).casefold().encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _prune_just_set() -> None:
     now = time.monotonic()
-    for uid in [u for u, entry in _JUST_SET_REMINDER.items() if now - entry[1] > _JUST_SET_WINDOW_S]:
-        del _JUST_SET_REMINDER[uid]
+    for uid in list(_JUST_SET_REMINDER):
+        notes = _JUST_SET_REMINDER[uid]
+        for key in [k for k, entry in notes.items() if now - entry[1] > _JUST_SET_WINDOW_S]:
+            del notes[key]
+        if not notes:
+            del _JUST_SET_REMINDER[uid]
 
 
-def _note_reminder_just_set(user_id: str, reminder_id: str) -> None:
+def _forget_reminder_just_set(user_id: str, title: str) -> None:
+    """Drop the note for this request (a new create of it is being attempted, or its reminder was cancelled or has gone)."""
     _prune_just_set()
-    if len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
+    notes = _JUST_SET_REMINDER.get(user_id)
+    if notes is not None:
+        notes.pop(_asked_digest(title), None)
+        if not notes:
+            del _JUST_SET_REMINDER[user_id]
+
+
+def _note_reminder_just_set(user_id: str, reminder_id: str, title: str) -> None:
+    _prune_just_set()
+    if user_id not in _JUST_SET_REMINDER and len(_JUST_SET_REMINDER) >= _JUST_SET_MAX:
         _JUST_SET_REMINDER.clear()
-    _JUST_SET_REMINDER[user_id] = (reminder_id, time.monotonic())
+    notes = _JUST_SET_REMINDER.setdefault(user_id, {})
+    notes.pop(_asked_digest(title), None)                       # the same request again: the latest reminder is "that"
+    while len(notes) >= _JUST_SET_PER_MEMBER:
+        del notes[min(notes, key=lambda k: notes[k][1])]        # the oldest goes
+    notes[_asked_digest(title)] = (reminder_id, time.monotonic())
 
 
-def _reminder_just_set(user_id: str) -> Optional[str]:
-    """The id of the reminder this member's last spoken create made, while it is still inside the window; else None."""
+def _reminder_just_set(user_id: str, title: str) -> Optional[str]:
+    """The id of the reminder made by the spoken create this conversation's "cancel that" follows (the create asked with this
+    title), while it is still inside the window; else None. No reminder is looked up by its title: only this note is."""
     _prune_just_set()
-    entry = _JUST_SET_REMINDER.get(user_id)
+    entry = _JUST_SET_REMINDER.get(user_id, {}).get(_asked_digest(title))
     return entry[0] if entry else None
 
 
 async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
-    _JUST_SET_REMINDER.pop(user_id, None)      # a new create is being attempted: "that" is no longer the one before it
+    # a new create of this request is being attempted: "that" is no longer what the last attempt at it made
+    _forget_reminder_just_set(user_id, str(slots.get("title") or ""))
     if slots.get("unsupported_recurrence"):
         return (
             f"I can't repeat a reminder {slots['unsupported_recurrence']} yet, so I haven't set it. "
@@ -2915,7 +2951,7 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
             reminder = await create_reminder_record(payload, user=user, db=db)
         reply = _format_response(intent, json.dumps(reminder, default=str))
         if reminder.get("id"):
-            _note_reminder_just_set(user_id, str(reminder["id"]))       # only now: the reminder exists
+            _note_reminder_just_set(user_id, str(reminder["id"]), title)       # only now: the reminder exists
         return reply
     except HTTPException as exc:
         # reminder_service.ReminderPastError: a day or time already gone, nothing stored. A spoken turn is told so; the
@@ -2937,7 +2973,8 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
     falls through to the brain."""
     from reminder_service import SPOKEN, delete_reminder_record
 
-    reminder_id = _reminder_just_set(user_id)
+    asked = str((intent.slots or {}).get("title") or "")       # the title THIS conversation's create was asked with
+    reminder_id = _reminder_just_set(user_id, asked)
     if reminder_id is None:
         return SPOKEN["cancel_nothing"]
     try:
@@ -2950,15 +2987,15 @@ async def _execute_reminder_cancel_direct(intent: Intent, user_id: str) -> str:
             cursor = await db.execute("SELECT title FROM reminders WHERE user_id = ? AND id = ? AND deleted = 0", (user_id, reminder_id))
             row = await cursor.fetchone()
             if row is None:                                # gone since it was set: nothing to cancel
-                _JUST_SET_REMINDER.pop(user_id, None)
+                _forget_reminder_just_set(user_id, asked)
                 return SPOKEN["cancel_nothing"]
             title = str(dict(row).get("title") or "").strip()
             await delete_reminder_record(db, user, reminder_id, own_only=True)
-        _JUST_SET_REMINDER.pop(user_id, None)          # cancelled: a second "cancel that" has nothing to cancel
+        _forget_reminder_just_set(user_id, asked)          # cancelled: a second "cancel that" has nothing to cancel
         return SPOKEN["cancelled"].format(title=title)
     except HTTPException as exc:
         if exc.status_code == 404:
-            _JUST_SET_REMINDER.pop(user_id, None)
+            _forget_reminder_just_set(user_id, asked)
             return SPOKEN["cancel_not_found"]
         return SPOKEN["cancel_failed"]
     except Exception as exc:  # noqa: BLE001 - the store failing: say nothing changed
