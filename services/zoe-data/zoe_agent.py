@@ -1612,17 +1612,18 @@ async def _context_enhance(message: str, portrait: str, user_id: str) -> str:
 # ── HA control ───────────────────────────────────────────────────────────────
 
 async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> dict:
-    """Call /devices/control on the HA bridge."""
+    """Send one device command to the HA bridge (``home_control.send``)."""
     import panel_principal
 
     if panel_principal.home_control_refused(f"agent ha_control {action}"):   # home control on a turn (2026-10-18)
         return {"error": panel_principal.HOME_CONTROL_REFUSAL}
     body = {"entity_id": entity_id, "action": action, "data": data or {}}
     try:
-        async with httpx.AsyncClient(timeout=_TOOL_TIMEOUT) as client:
-            r = await client.post(f"{_HA_BRIDGE}/devices/control", json=body)
-            r.raise_for_status()
-            return r.json()
+        import home_control
+
+        r = await home_control.send(_HA_BRIDGE, home_control.DEVICE, body, timeout=_TOOL_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
     except httpx.ConnectError:
         return {"error": "HA bridge offline — is homeassistant-mcp-bridge running?"}
     except Exception as exc:

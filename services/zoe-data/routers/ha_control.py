@@ -19,6 +19,7 @@ Routes:
   GET  /api/ha/entities       — list entities for a domain / area
   GET  /api/ha/state/{entity} — get current state of a single entity
 """
+import home_control
 import logging
 import os
 import re
@@ -85,10 +86,9 @@ async def _bridge_get(path: str) -> dict:
 
 
 async def _bridge_post(path: str, body: dict) -> dict:
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        r = await client.post(f"{_HA_BRIDGE}{path}", json=body)
-        r.raise_for_status()
-        return r.json()
+    r = await home_control.send(_HA_BRIDGE, path, body, timeout=_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
 
     try:
         body = {"entity_id": entity_id, "action": service, "data": params}
-        result = await _bridge_post("/devices/control", body)
+        result = await _bridge_post(home_control.DEVICE, body)
         logger.info("ha/control entity=%s service=%s caller=%s", entity_id, service, caller.get("user_id"))
         return {"ok": True, "entity_id": entity_id, "service": service, "result": result}
     except httpx.ConnectError:

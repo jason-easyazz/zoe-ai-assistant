@@ -6292,7 +6292,9 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
     if _pp.home_control_refused("music media_player"):   # executor backstop (2026-10-18); the intent already refused
         return _pp.HOME_CONTROL_REFUSAL
     try:
-        response = await client.post(f"{ha_url}/devices/control", json=payload)
+        import home_control
+
+        response = await home_control.send(ha_url, home_control.DEVICE, payload, client=client)
     except Exception as exc:
         logger.warning("music HA control failed: %s", exc)
         return "I couldn't reach the Home Assistant bridge to control the music."
