@@ -18,18 +18,17 @@ cases below keep the scans themselves honest.
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
-ALARM_WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA
-                         + r"[\"`\[]?(?:alarms|alarm_events|alarm_overrides)\b", re.I)
+ALARM_TABLES = ("alarms", "alarm_events", "alarm_overrides")
+ALARM_WRITE = sql_scan.write_pattern(*ALARM_TABLES)      # f-strings and concatenations whole, any schema, ONLY (tests/sql_scan.py)
 TIMER_FIELDS = {"timer_id", "label", "duration_seconds", "set_seconds", "created_at", "expires_at", "panel_id", "announced", "voice_failed"}
 STORE, STORE_CLASS, STORE_MODULE = "_timers", "_TimerStore", "skybridge_service"
 
@@ -39,16 +38,8 @@ def _modules() -> list:
     return sorted(p for p in ROOT.rglob("*.py") if not skip.intersection(p.relative_to(ROOT).parts))
 
 
-def _texts(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
-
-
 def alarm_writes(source: str) -> list:
-    return [text for text in _texts(ast.parse(source)) if ALARM_WRITE.search(text)]
+    return sql_scan.writes(source, ALARM_WRITE)
 
 
 def test_only_alarms_py_writes_the_alarm_tables():
@@ -69,6 +60,9 @@ def test_a_planted_alarm_write_is_caught():
     for sql in ('f"UPDATE {schema}.alarms SET x = ?"', 'f"DELETE FROM {schema}.alarm_overrides WHERE {col} = ?"',
                 "f\"UPDATE alarms SET {', '.join(sets)} WHERE id = ?\""):
         assert alarm_writes(f"async def f(db, schema, col, sets):\n    await db.execute({sql})\n"), sql
+    for table in ALARM_TABLES:                    # a write split by ``+``, and Postgres' ONLY (control: ``sql_scan`` skipping ``+``)
+        for planted in sql_scan.planted_forms(table):
+            assert alarm_writes(planted), planted
     # the calendar's ``event_alarms`` is another table; a read is not a write
     assert not alarm_writes("async def f(db):\n    await db.execute('DELETE FROM event_alarms WHERE event_id = ?')\n"
                             "    await db.execute('SELECT * FROM alarms WHERE id = ?')\n    await db.execute('UPDATE alarms_archive SET x = 1')\n")

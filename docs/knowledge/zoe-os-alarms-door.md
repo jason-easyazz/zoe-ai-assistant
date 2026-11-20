@@ -27,8 +27,9 @@ Both already had one writer. `tests/test_alarms_timers_one_door.py` pins it over
 
 | Change | Kernel | Why |
 |---|---|---|
-| Alarm: set, edit, a day's override and its undo, delete | **asked first**; refusal is final (`AlarmRefused`), down or slow = proceeds `not_checked` | an ordinary change: the kernel can decide it |
+| Alarm: set, edit (one that neither silences nor turns it off), a day's override and its undo, delete | **asked first**; refusal is final (`AlarmRefused`), down or slow = proceeds `not_checked` | an ordinary change: the kernel can decide it |
 | Alarm: snooze, dismiss | **made first, told afterwards** | a ringing alarm must always be silenceable by whoever is standing there |
+| Alarm: an edit made while it rings or is snoozed (every edit lands it idle), and any edit that turns it off | **made first, told afterwards** (`alarm.stop` when it was sounding, else `alarm.edit`) | turning an alarm off on the screen is how many people silence it: the kernel can neither delay nor refuse it |
 | Timer: every change (set, add or take time, cancel, the panel's dismiss of a ringing one) | **made first, told afterwards** | the timer path is synchronous end to end, so there is nowhere to wait for an answer; and a ringing timer must be silenceable |
 | The ring engine (ring, auto-stop, reschedule) | nothing | it acts for nobody |
 
