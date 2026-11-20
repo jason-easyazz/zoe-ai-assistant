@@ -1,33 +1,23 @@
-"""All ordinary list writes go through list_service."""
+"""All ordinary list writes go through list_service.
+
+The scan reads f-strings and concatenations whole and admits ``ONLY`` and any schema (``tests/sql_scan.py``). Control run: with
+``sql_scan.texts`` skipping ``+`` expressions the planted ``'UPDATE ' + 'lists SET ...'`` below escapes."""
 import ast
 from pathlib import Path
-import re
 
 import pytest
+
+import sql_scan
 
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 # Erasure uses dynamically named tables, so has no literal SQL exemption.
 ERASERS = {}
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
-#: (``ONLY``: Postgres' ``UPDATE ONLY t`` / ``DELETE FROM ONLY t`` write the same table)
-WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA + r"[\"`\[]?(?:lists|list_items)\b", re.I)
-
-
-def _texts(tree):
-    """Every SQL-bearing string of a module: plain constants, and each f-string put back together with ``x`` standing where a
-    value is interpolated (so ``f"UPDATE {schema}.lists SET ..."`` reads ``UPDATE x.lists SET ...``; its pieces alone would each
-    look harmless). Control run: with f-strings left in pieces the interpolated-schema forms planted below are not caught."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
+WRITE = sql_scan.write_pattern("lists", "list_items")
 
 
 def writes(source):
-    return [text for text in _texts(ast.parse(source)) if WRITE.search(text)]
+    return sql_scan.writes(source, WRITE)
 
 
 def test_one_door():
@@ -51,18 +41,12 @@ def test_one_door():
 def test_planted_write_is_caught():
     assert writes("async def f(db):\n    await db.execute('UPDATE list_items SET text = ?')\n")
     # a schema-qualified table, quoted or not, is still a list write
-    # (a schema name with a digit or a ``$`` in it is a schema too: ``public1.lists`` escaped the letters-only pattern; control
-    # run: with the unquoted schema pattern back to letters and underscores this fails for it)
-    for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?',
-                'UPDATE public1.lists SET name = ?', 'DELETE FROM app_2$x.list_items WHERE id = ?', 'UPDATE public . lists SET name = ?',
-                # control run: without the optional ONLY in the pattern these three escape and this test fails
-                'UPDATE ONLY lists SET name = ?', 'DELETE FROM ONLY list_items WHERE id = ?', 'update only public1.list_items set x = ?'):
+    for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?'):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
-    # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not
-    for sql in ('f"UPDATE {schema}.lists SET name = ?"', 'f"DELETE FROM {schema}.list_items WHERE id = ?"',
-                "f'INSERT INTO \"{schema}\".list_items (id) VALUES (?)'", 'f"UPDATE {schema}.list_items SET {col} = ?"'):
-        assert writes(f"async def f(db, schema, col):\n    await db.execute({sql})\n"), sql
-    assert not writes('async def f(db, t):\n    await db.execute(f"SELECT * FROM {t}.lists WHERE id = ?")\n')
+    for table in ("lists", "list_items"):
+        for planted in sql_scan.planted_forms(table):
+            assert writes(planted), planted
+    assert writes("async def f(db, sets):\n    await db.execute(f\"UPDATE lists SET {', '.join(sets)} WHERE id = ?\")\n")
     assert not writes("async def f(db):\n    await db.execute('UPDATE listings SET x = ?')\n")
 
 
