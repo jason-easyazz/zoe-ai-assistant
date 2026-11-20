@@ -3587,13 +3587,14 @@ async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[
     title = str(title).strip() if title else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:
+        import note_service
         from database import get_db_ctx
 
+        stamps_at = note_service.stamps_now()      # the Zoe OS notes door: stamped before anything is awaited
         note_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
-            import note_service
-
-            await note_service.said_note_record(db, note_id=note_id, user_id=user_id, title=title, content=content, category=category)
+            await note_service.said_note_record(db, note_id=note_id, user_id=user_id, title=title, content=content, category=category,
+                                                stamps_at=stamps_at)
             # Mirror mcp_server: best-effort MemPalace write inside the same
             # session, never fatal to the note write itself.
             try:
@@ -3613,6 +3614,8 @@ async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[
             "notes", "note_created", {"id": note_id, "title": title, "category": category},
         )
         return "Saved your note."
+    except note_service.NoteRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_NOTES=kernel): final, nothing was written
+        return exc.line()
     except Exception as exc:
         logger.warning("note_create direct execution unavailable: %s", exc)
         return None
@@ -3637,14 +3640,14 @@ async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Option
         json.dumps([t.strip() for t in str(tags_str).split(",")]) if tags_str else None
     )
     try:
+        import journal_service
         from database import get_db_ctx
 
+        stamps_at = journal_service.stamps_now()      # the Zoe OS journal door: stamped before anything is awaited
         entry_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
-            import journal_service
-
             await journal_service.said_entry_record(db, entry_id=entry_id, user_id=user_id, content=content, title=title, mood=mood,
-                                                    mood_score=mood_score, tags_json=tags_json)
+                                                    mood_score=mood_score, tags_json=tags_json, stamps_at=stamps_at)
             try:
                 from routers.journal import _store_journal_memory  # type: ignore
 
@@ -3660,6 +3663,8 @@ async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Option
             "journal", "entry_created", {"id": entry_id, "title": title, "mood": mood},
         )
         return "Saved your journal entry."
+    except journal_service.JournalRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_JOURNAL=kernel): final, nothing was written
+        return exc.line()
     except Exception as exc:
         logger.warning("journal_create direct execution unavailable: %s", exc)
         return None
