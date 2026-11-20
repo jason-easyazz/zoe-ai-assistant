@@ -585,9 +585,11 @@ async def _own_row(conn: Any, uid: str, row_id: str) -> Optional[dict]:
 
 async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[Optional[str], dict]:
     """Run the real tool. ``(reply, receipt)``; reply None = unavailable (``ALARMS_OFF``)."""
+    import alarms as _alarms_door
     import list_service
 
     stamps_at = list_service.stamps_now()
+    actor = _alarms_door.Viewer(user_id=uid)      # who a Zoe OS alarms ask is from: made first, it carries the erase stamps of NOW
     s, kind = r["slots"], r["kind"]
     today = now.astimezone(_tz()).date()
     when = _day(_date(s.get("start_date")) or today, today)
@@ -596,7 +598,7 @@ async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[O
 
         if not alarms.enabled():
             return None, {}
-        alarm = await alarms.create_alarm(conn, uid, time_hhmm=s["wake_time"], repeat="once", once_date=s["start_date"],
+        alarm = await alarms.create_alarm(conn, uid, actor=actor, time_hhmm=s["wake_time"], repeat="once", once_date=s["start_date"],
                                           label=f"{str(s.get('label') or 'Early').capitalize()} day", now=now.timestamp())
         return (f"Done - a one-off alarm for {_clock(s['wake_time'])} {when}. Your usual alarm stays as it is.",
                 {"alarm_id": alarm.get("id")})
@@ -635,7 +637,11 @@ async def answer(user_id: str, suggestion_id: str, accept: bool, *, now: Optiona
     if _ASKED.get(uid, {}).get("id") == suggestion_id:
         _ASKED.pop(uid, None)
     try:
-        async with _conn(db) as conn:
+        import kernel_door
+
+        # a Zoe OS door reached from here (the alarm or the reminder a "yes" makes) reports only once this block has ended:
+        # never while the connection, or a transaction a caller holds on it, could still undo the row. Doors off: a flag read.
+        async with kernel_door.reports_after(), _conn(db) as conn:
             r = await _own_row(conn, uid, suggestion_id)
             if r is None or r["resolved"] != OPEN:
                 return STALE

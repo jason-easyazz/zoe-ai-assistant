@@ -513,6 +513,8 @@ async def resolve(cmd: AlarmCommand, user_id: str) -> dict[str, Any]:
             return await _run(db, cmd, v)
     except alarms.AlarmError as exc:
         return _result(cmd, exc.reason, "Not set")
+    except alarms.AlarmRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_ALARMS=kernel): final, nothing was changed, said plainly
+        return _result(cmd, exc.line(), "Not allowed")
 
 
 async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
@@ -527,7 +529,7 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
             return _result(cmd, "Which day should I set it for?", "Needs a day")
         a = await alarms.create_alarm(
             db, v.owner_id, time_hhmm=cmd.time_hhmm, repeat=cmd.repeat, once_date=cmd.once_date.isoformat() if cmd.once_date else None,
-            label=cmd.label, sound_kind=cmd.sound_kind, sound_id=cmd.sound_id, sound_name=cmd.sound_name)
+            label=cmd.label, sound_kind=cmd.sound_kind, sound_id=cmd.sound_id, sound_name=cmd.sound_name, actor=v)
         # The receipt the write-claim guard checks "I've set your alarm" against (an alarm is a "timer" kind there).
         write_receipts.record(v.user_id or "guest", "timer", a.get("id", ""), "alarm_voice:set")
         spoken = f"Alarm set for {alarms.when_phrase(a['next_fire_at'], now)}"
@@ -558,7 +560,7 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
             if a["snooze_count"] >= alarms.MAX_SNOOZES:
                 continue
             try:
-                done.append(await alarms.snooze(db, a, minutes=cmd.snooze_minutes or None, now=now))
+                done.append(await alarms.snooze(db, a, minutes=cmd.snooze_minutes or None, now=now, actor=v))
             except alarms.AlarmError:
                 continue  # it stopped ringing between the read and the write: nothing to snooze for that one
         if not done and live:
@@ -572,12 +574,12 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         live = _which([a for a in await alarms.active(db) if alarms.can_silence(a, v)], cmd, v)
         if live:
             for a in live:
-                await alarms.dismiss(db, a, now=now)
+                await alarms.dismiss(db, a, now=now, actor=v)
             return _result(cmd, "Alarm off.", "Alarm off")
     editable = [a for a in rows if alarms.can_edit(a, v)]
     if cmd.action == "cancel" and cmd.all_alarms:
         for a in editable:
-            await alarms.delete_alarm(db, a["id"])
+            await alarms.delete_alarm(db, a["id"], actor=v, alarm=a)
         return _result(cmd, f"Cancelled {len(editable)} alarm{'s' if len(editable) != 1 else ''}." if editable else "You have no alarms to cancel.")
     hits = _which(editable, cmd, v)
     if cmd.action == "off":
@@ -590,12 +592,12 @@ async def _run(db: Any, cmd: AlarmCommand, v: alarms.Viewer) -> dict[str, Any]:
         return _result(cmd, f"You have {len(hits)} alarms: {', '.join(_name(a) for a in hits[:4])}. Which one?", "Which one?")
     a = hits[0]
     if cmd.action == "cancel":
-        await alarms.delete_alarm(db, a["id"])
+        await alarms.delete_alarm(db, a["id"], actor=v, alarm=a)
         return _result(cmd, f"Cancelled your {_name(a)} alarm.", "Cancelled")
     if cmd.action == "off":
-        await alarms.update_alarm(db, a, {"enabled": False})
+        await alarms.update_alarm(db, a, {"enabled": False}, actor=v)
         return _result(cmd, f"Turned off your {_name(a)} alarm.", "Alarm off")
-    b = await alarms.update_alarm(db, a, {"enabled": True})
+    b = await alarms.update_alarm(db, a, {"enabled": True}, actor=v)
     return _result(cmd, f"Your {_name(a)} alarm is back on, {alarms.when_phrase(b['next_fire_at'], now)}.", "Alarm on")
 
 
@@ -641,7 +643,7 @@ async def _run_shift(db: Any, cmd: AlarmCommand, v: alarms.Viewer, rows: list[di
         if len(hits) > 1:
             return _result(cmd, f"You have {len(hits)} alarm changes that day. Which alarm?", "Which one?")
         a, d = hits[0]
-        await alarms.clear_override(db, a, d.isoformat(), now=now)
+        await alarms.clear_override(db, a, d.isoformat(), now=now, actor=v)
         return _result(cmd, f"Back to normal: {alarms.clock_phrase(a['time_hhmm'])} {day_phrase(d, now)}.", "Back to normal")
     hits = [(a, d) for a in mine for d in [day_of(a)] if d is not None and alarms.effective_time(a, d) is not None]
     if not hits:
@@ -649,7 +651,7 @@ async def _run_shift(db: Any, cmd: AlarmCommand, v: alarms.Viewer, rows: list[di
             d = resolve_date(cmd.day_spec, cmd.time_hhmm, now)
             if d is None:
                 return _result(cmd, "That time has already passed. Which day?", "Needs a day")
-            a = await alarms.create_alarm(db, v.owner_id, time_hhmm=cmd.time_hhmm, repeat="once", once_date=d.isoformat())
+            a = await alarms.create_alarm(db, v.owner_id, time_hhmm=cmd.time_hhmm, repeat="once", once_date=d.isoformat(), actor=v)
             write_receipts.record(v.user_id or "guest", "timer", a.get("id", ""), "alarm_voice:set")
             return _result(cmd, f"Alarm set for {alarms.clock_phrase(cmd.time_hhmm)} {day_phrase(d, now)}." + _offer(cmd), "Alarm set")
         d = resolve_date(cmd.day_spec, "23:59", now)
@@ -663,13 +665,13 @@ async def _run_shift(db: Any, cmd: AlarmCommand, v: alarms.Viewer, rows: list[di
     if new is None:
         return _result(cmd, "That would move it into another day. Tell me the time instead.", "Not changed")
     if new == a["time_hhmm"] and a["repeat_rule"] != "once":
-        b = await alarms.clear_override(db, a, d.isoformat(), now=now)
+        b = await alarms.clear_override(db, a, d.isoformat(), now=now, actor=v)
         if b is not None:
             return _result(cmd, f"Back to normal: {alarms.clock_phrase(new)} {day_phrase(d, now)}.", "Back to normal")
     if a["repeat_rule"] == "once":
-        await alarms.update_alarm(db, a, {"time_hhmm": new, "once_date": d.isoformat()})
+        await alarms.update_alarm(db, a, {"time_hhmm": new, "once_date": d.isoformat()}, actor=v)
     else:
-        await alarms.set_override(db, a, d.isoformat(), time_hhmm=new, now=now)
+        await alarms.set_override(db, a, d.isoformat(), time_hhmm=new, now=now, actor=v)
     write_receipts.record(v.user_id or "guest", "timer", a.get("id", ""), "alarm_voice:shift")
     spoken = f"I'll wake you at {alarms.clock_phrase(new)} {day_phrase(d, now)} instead of {alarms.clock_phrase(was)}."
     return _result(cmd, spoken + _offer(cmd), "Alarm changed")

@@ -24,10 +24,11 @@ import logging
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+import kernel_door
 import os_shadow
 from time_utils import zoe_timezone
 
@@ -205,6 +206,10 @@ def repeat_phrase(rule: str) -> str:
 class Viewer:
     user_id: str  # a member id, or "" for the panel principal
     panel: bool = False  # the wall panel / a guest at it (household rules)
+    # The Zoe OS alarms door (below): the erase stamps as they were when this viewer was MADE. A viewer is made first thing in a
+    # request, before anything is read, and the alarm it then acts on (and so its owner) is read by the caller: the stamps an ask
+    # carries must not be newer than that read. None with every door off (flag reads only, nothing copied).
+    stamps_at: Optional[dict] = field(default_factory=kernel_door.stamps_now, compare=False, repr=False)
 
     @property
     def owner_id(self) -> str:
@@ -244,6 +249,60 @@ def present(alarm: dict, v: Viewer, now: Optional[float] = None) -> dict:
     if v.panel and alarm["user_id"] != HOUSEHOLD:
         out.update(label="", sound_kind="tone", sound_id="", sound_name="", masked=True)
     return out
+
+
+# ── The Zoe OS alarms door (ZOE_OS_ALARMS=kernel; docs/knowledge/zoe-os-alarms-door.md) ────────────────────────────────────────────
+# The kernel decides and records (ids only); the rows stay here. ``actor`` on each writer below is WHO is doing it (a ``Viewer``);
+# the alarm's owner is who it is FOR (``HOUSEHOLD`` = the house: told as "household", with no owner, because the marker is not a
+# person). With the flag at any other value: one flag read, no kernel call, no extra statement, every write exactly what it was.
+#
+#   ASKED FIRST  create, edit (also a day's override and its undo), delete: ``_gate`` before the write, the outcome reported after
+#                it. A kernel refusal raises ``AlarmRefused``: FINAL, nothing written. Kernel down or slow: the change proceeds.
+#   TOLD AFTER   snooze and dismiss: SILENCING A RINGING ALARM IS NEVER HELD UP. The write is made first, exactly as before, and
+#                the kernel is told afterwards on the door's own thread (``_note`` -> ``os_shadow.record_door``: it never blocks,
+#                never raises, never refuses). Whatever the kernel says or however long it takes, the alarm is already quiet.
+#   NOT A PERSON the ring engine (``tick``) acts for nobody: it asks nothing and records nothing.
+class AlarmRefused(kernel_door.Refused):
+    """The kernel refused this alarm change. FINAL: nothing was written. ``reason`` is a closed code; ``line()`` the plain sentence."""
+
+    area = "alarms"
+    lines = {
+        "not_owner": "That alarm is someone else's, so I can't change it.",
+        "unknown_person": "I don't know who is asking, so I can't change that alarm.",
+    }
+    fallback = "I'm not allowed to change that alarm."
+
+
+def _door_ids(actor: "Viewer", owner: str) -> dict:
+    """The ask's ids: the acting member (or the shared panel), and who the alarm is for (nobody, for a household alarm)."""
+    panel = bool(actor.panel or not actor.user_id)
+    return {"user_id": "" if panel else actor.user_id, "panel": panel, "owner": None if owner == HOUSEHOLD else owner,
+            "household": owner == HOUSEHOLD,
+            "stamps_at": actor.stamps_at if actor.stamps_at is not None else os_shadow.stamp_snapshot()}
+
+
+async def _gate(verb: str, actor: Optional["Viewer"], alarm_id: str, owner: str) -> Optional[kernel_door.Decision]:
+    """The ask at the door. None with the flag off (ONE flag read). Raises ``AlarmRefused`` on a kernel refusal."""
+    if not os_shadow.area_on("alarms"):
+        return None
+    if actor is None:
+        os_shadow.door_unchecked(verb, "no_actor", "alarms")
+        return None
+    decision, reason, ask, stamps = await os_shadow.ask_door("alarms", verb, target=alarm_id, **_door_ids(actor, owner))
+    if decision == "refuse":
+        raise AlarmRefused(reason)
+    return kernel_door.Decision(decision, reason, ask, stamps=stamps, area="alarms")
+
+
+def _note(verb: str, actor: Optional["Viewer"], alarm: dict) -> None:
+    """Tell the kernel a ringing alarm was silenced, or an alarm turned off (already done). Never blocks, never raises. Flag
+    off: one flag read."""
+    if not os_shadow.area_on("alarms"):
+        return
+    if actor is None:
+        os_shadow.door_unchecked(verb, "no_actor", "alarms")
+        return
+    os_shadow.record_door("alarms", verb, target=alarm["id"], **_door_ids(actor, alarm["user_id"]))
 
 
 # ── storage ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -360,7 +419,7 @@ def _schedule(hhmm: str, rule: str, once_date: Optional[str], now: float,
 
 async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "once", once_date: Optional[str] = None, label: Any = "",
                        sound_kind: Any = "tone", sound_id: Any = "", sound_name: Any = "", snooze_minutes: Any = None,
-                       ramp_seconds: Any = None, now: Optional[float] = None) -> dict:
+                       ramp_seconds: Any = None, now: Optional[float] = None, actor: Optional[Viewer] = None) -> dict:
     now = time.time() if now is None else now
     hhmm, rule = normalise_time(time_hhmm), normalise_repeat(repeat)
     kind, sid, sname = _clean_sound(sound_kind, sound_id, sound_name)
@@ -371,7 +430,8 @@ async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "on
         if int((await cur.fetchone())[0]) >= MAX_ALARMS_PER_OWNER:
             raise AlarmError("That is the most alarms I can keep.", 409)
     aid = uuid.uuid4().hex[:12]
-    async with _atomic(db):
+    asked = await _gate("alarm.create", actor, aid, owner)
+    async with kernel_door.reported(asked), _atomic(db):
         await db.execute(
             "INSERT INTO alarms (id, user_id, label, time_hhmm, repeat_rule, once_date, sound_kind, sound_id, sound_name, snooze_minutes,"
             " ramp_seconds, enabled, next_fire_at, state, snooze_count, created_at, updated_at)"
@@ -389,7 +449,7 @@ async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "on
 _EDITABLE = ("time_hhmm", "repeat", "once_date", "label", "sound_kind", "sound_id", "sound_name", "snooze_minutes", "ramp_seconds", "enabled")
 
 
-async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[float] = None) -> dict:
+async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[float] = None, actor: Optional[Viewer] = None) -> dict:
     """Apply an edit and reschedule. Editing or re-enabling always lands on idle with a fresh ``next_fire_at``: a ring in progress
     is stopped by it (turning an alarm off while it rings must silence it)."""
     now = time.time() if now is None else now
@@ -422,27 +482,46 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
             stored_date = date.fromisoformat(str(ch["once_date"])).isoformat()
         except ValueError:
             raise AlarmError("That is not a date I can use.") from None
+    # An edit that SILENCES is never held up by the kernel: every edit lands the alarm idle, so one made while it rings or is
+    # snoozed stops it, and one that turns it off must take effect at once. Those are made first and told afterwards, as snooze
+    # and dismiss are (``_note``); the kernel can neither delay nor refuse them. Every other edit asks first.
+    was_sounding = alarm.get("state") in ("ringing", "snoozed")
+    silences = was_sounding or ("enabled" in ch and not on)
     # The write is guarded by the version the edit was computed from (``updated_at``): a concurrent disable / dismiss / ring that
     # landed in between changes it, and this edit then refuses instead of writing back its stale copy of every column.
-    async with _atomic(db):
-        won = await _rowcount(
-            db, "UPDATE alarms SET label = ?, time_hhmm = ?, repeat_rule = ?, once_date = ?, sound_kind = ?, sound_id = ?, sound_name = ?,"
-            " snooze_minutes = ?, ramp_seconds = ?, enabled = ?, next_fire_at = ?, state = 'idle', ring_started_at = NULL,"
-            " snooze_until = NULL, snooze_count = 0, updated_at = ? WHERE id = ? AND updated_at = ?",
-            (label, hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, 1 if on else 0, nxt, now, alarm["id"], alarm["updated_at"]))
-        if won:
-            if drop_overrides:
-                await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ?", (alarm["id"],))
-            await log_event(db, alarm["id"], "updated", "on" if on else "off", now=now)
-    if not won:
-        raise AlarmError("That alarm just changed. Try again.", 409)
+    asked = None if silences else await _gate("alarm.edit", actor, alarm["id"], alarm["user_id"])
+    async with kernel_door.reported(asked):       # a write that raises, or that lost its race, is reported ``failed``
+        async with _atomic(db):
+            won = await _rowcount(
+                db, "UPDATE alarms SET label = ?, time_hhmm = ?, repeat_rule = ?, once_date = ?, sound_kind = ?, sound_id = ?, sound_name = ?,"
+                " snooze_minutes = ?, ramp_seconds = ?, enabled = ?, next_fire_at = ?, state = 'idle', ring_started_at = NULL,"
+                " snooze_until = NULL, snooze_count = 0, updated_at = ? WHERE id = ? AND updated_at = ?",
+                (label, hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, 1 if on else 0, nxt, now, alarm["id"], alarm["updated_at"]))
+            if won:
+                if drop_overrides:
+                    await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ?", (alarm["id"],))
+                await log_event(db, alarm["id"], "updated", "on" if on else "off", now=now)
+        if not won:
+            raise AlarmError("That alarm just changed. Try again.", 409)
     await db.commit()
+    if silences:
+        _note("alarm.stop" if was_sounding else "alarm.edit", actor, alarm)     # AFTER the write: told, never asked first
     await _emit("updated", alarm)
     return await get_alarm(db, alarm["id"])  # type: ignore[return-value]
 
 
-async def delete_alarm(db: Any, alarm_id: str) -> bool:
-    async with _atomic(db):
+async def delete_alarm(db: Any, alarm_id: str, *, actor: Optional[Viewer] = None, alarm: Optional[dict] = None) -> bool:
+    """``alarm``: the row the caller already holds (it names who the alarm is for). Without it the door reads the row itself,
+    with the flag on only; a database fault in that read raises (it never skips the kernel)."""
+    asked = None
+    if os_shadow.area_on("alarms"):
+        if alarm is None and actor is not None:
+            alarm = await get_alarm(db, alarm_id)
+        if alarm is None:
+            os_shadow.door_unchecked("alarm.delete", "no_actor" if actor is None else "no_row", "alarms")
+        else:
+            asked = await _gate("alarm.delete", actor, alarm_id, alarm["user_id"])
+    async with kernel_door.reported(asked), _atomic(db):
         n = await _rowcount(db, "DELETE FROM alarms WHERE id = ?", (alarm_id,))
         if n:
             await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (alarm_id,))
@@ -527,17 +606,19 @@ def _not_before(alarm: dict, now: float) -> float:
     return max(now, _at(fired_day, "23:59") + 59)
 
 
-async def _reschedule(db: Any, alarm: dict, ovs: dict, now: float, write) -> dict:
+async def _reschedule(db: Any, alarm: dict, ovs: dict, now: float, write, actor: Optional[Viewer] = None) -> dict:
     """Run ``write`` (the override row change) and move ``next_fire_at`` with it, in one transaction guarded by the alarm's version."""
     nxt = (next_occurrence(alarm["time_hhmm"], alarm["repeat_rule"], None, _not_before(alarm, now), ovs) if alarm["enabled"]
            else alarm["next_fire_at"])
-    async with _atomic(db):
-        won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
-                              (nxt, now, alarm["id"], alarm["updated_at"]))
-        if won:
-            await write()
-    if not won:
-        raise AlarmError("That alarm just changed. Try again.", 409)
+    asked = await _gate("alarm.edit", actor, alarm["id"], alarm["user_id"])      # a day's change is an edit of the alarm
+    async with kernel_door.reported(asked):
+        async with _atomic(db):
+            won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
+                                  (nxt, now, alarm["id"], alarm["updated_at"]))
+            if won:
+                await write()
+        if not won:
+            raise AlarmError("That alarm just changed. Try again.", 409)
     await db.commit()
     a = await get_alarm(db, alarm["id"]) or alarm
     a["overrides"] = ovs
@@ -545,7 +626,7 @@ async def _reschedule(db: Any, alarm: dict, ovs: dict, now: float, write) -> dic
 
 
 async def set_override(db: Any, alarm: dict, on_date: Any, *, time_hhmm: Any = None, skip: bool = False,
-                       now: Optional[float] = None) -> dict:
+                       now: Optional[float] = None, actor: Optional[Viewer] = None) -> dict:
     """Ring a repeating alarm at ``time_hhmm`` on ``on_date`` only (or not at all, ``skip``). Refused for a one-off (change the alarm
     itself), an alarm that is off, a day it does not ring, a day more than a year out, or a time already gone."""
     now = time.time() if now is None else now
@@ -579,10 +660,11 @@ async def set_override(db: Any, alarm: dict, on_date: Any, *, time_hhmm: Any = N
                          (alarm["id"], key, ovs[key][0], hhmm, now))
         await log_event(db, alarm["id"], "override", f"{key} {'skip' if skip else hhmm}", now=now)
 
-    return await _reschedule(db, alarm, ovs, now, write)
+    return await _reschedule(db, alarm, ovs, now, write, actor)
 
 
-async def clear_override(db: Any, alarm: dict, on_date: Any, *, now: Optional[float] = None) -> Optional[dict]:
+async def clear_override(db: Any, alarm: dict, on_date: Any, *, now: Optional[float] = None,
+                         actor: Optional[Viewer] = None) -> Optional[dict]:
     """Put ``on_date`` back to the alarm's own time. None when there was no override for that day."""
     now = time.time() if now is None else now
     key = str(on_date)
@@ -595,7 +677,7 @@ async def clear_override(db: Any, alarm: dict, on_date: Any, *, now: Optional[fl
         await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ? AND on_date = ?", (alarm["id"], key))
         await log_event(db, alarm["id"], "override_cleared", key, now=now)
 
-    return await _reschedule(db, alarm, ovs, now, write)
+    return await _reschedule(db, alarm, ovs, now, write, actor)
 
 
 # ── ring lifecycle ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -612,7 +694,8 @@ async def active(db: Any) -> list[dict]:
         return [_row(r) for r in await cur.fetchall()]
 
 
-async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Optional[float] = None) -> dict:
+async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Optional[float] = None,
+                 actor: Optional[Viewer] = None) -> dict:
     """Ringing -> snoozed for the alarm's own snooze minutes. Refused when it is not ringing or the snooze budget is spent."""
     now = time.time() if now is None else now
     if alarm["state"] != "ringing":
@@ -629,11 +712,12 @@ async def snooze(db: Any, alarm: dict, *, minutes: Optional[int] = None, now: Op
     await db.commit()
     if not won:  # the ring engine auto-stopped (or a dismiss landed) between the caller's read and this write
         raise AlarmError("That alarm is not ringing.", 409)
+    _note("alarm.snooze", actor, alarm)       # AFTER the alarm is quiet: the kernel is told, it is never asked first
     await _emit("snoozed", alarm)
     return await get_alarm(db, alarm["id"]) or alarm
 
 
-async def dismiss(db: Any, alarm: dict, *, now: Optional[float] = None) -> dict:
+async def dismiss(db: Any, alarm: dict, *, now: Optional[float] = None, actor: Optional[Viewer] = None) -> dict:
     """Ringing or snoozed -> idle (the next occurrence stays scheduled; a one-off is already off). Idle alarms are left alone."""
     now = time.time() if now is None else now
     async with _atomic(db):
@@ -643,6 +727,7 @@ async def dismiss(db: Any, alarm: dict, *, now: Optional[float] = None) -> dict:
             await log_event(db, alarm["id"], "dismissed", "", now=now)
     await db.commit()
     if won:
+        _note("alarm.stop", actor, alarm)     # AFTER the alarm is quiet: the kernel is told, it is never asked first
         await _emit("dismissed", alarm)
     return await get_alarm(db, alarm["id"]) or alarm
 
