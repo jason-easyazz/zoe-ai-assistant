@@ -86,7 +86,7 @@ FROM_FORGET_REACH: tuple[TextStore, ...] = (
     _pg("user_model_cards", "the user-model card (derived prose)", "user_model_card.py"),
     _pg("open_loops", "unfinished things the member mentioned", "memory_digest.py, omi_review_apply.py"),
     _pg("proactive_candidates", "things Zoe might raise (derived text)", "commitments.py, proactive/selector.py"),
-    _pg("people", "people the household talks about (names, notes)", "contacts_store.py, pending_suggestions.py"),
+    _pg("people", "people the household talks about (names, notes)", "people_service.py, contacts_store.py"),
     _pg("person_relationships", "who is related to whom", "people_graph.py"),
     _pg("event_attendees", "attendee names and emails", "calendar_service.py"),
     _pg("events", "calendar event titles, places, descriptions", "calendar_service.py"),

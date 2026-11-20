@@ -35,6 +35,7 @@ from list_service import HouseholdListUnavailable, ListRefused, note_item_left, 
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+import people_service
 
 if TYPE_CHECKING:
     from conversation_context import ConversationContext
@@ -3736,9 +3737,8 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
                     can_ask=not slots.get("no_followup"))
                 if merged:
                     return merged
-            await db.execute(
-                "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email,"
-                " notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            await people_service.write_contact(
+                db, "said_create",
                 (person_id, user_id, name, relationship, None, None, None, None,
                  visibility, circle, context),
             )
@@ -3913,9 +3913,8 @@ async def _rename_person_row(db, user_id: str, person_id: str, name: str,
     is_partial cleared (it is a full contact now), memory mirror refreshed."""
     from datetime import datetime, timezone
 
-    await db.execute(
-        "UPDATE people SET name = ?, relationship = COALESCE(?, relationship), is_partial = 0,"
-        " updated_at = ? WHERE id = ? AND user_id = ?",
+    await people_service.write_contact(
+        db, "said_rename",
         (name, relationship or None, datetime.now(timezone.utc).isoformat(), person_id, user_id),
     )
     await _notify_ui_channel(
