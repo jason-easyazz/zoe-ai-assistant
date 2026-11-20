@@ -55,7 +55,7 @@ PUBLIC_HOUSEHOLD_INTENTS: frozenset[str] = frozenset({
 # Intent names that should always require user identity.
 USER_SCOPED_INTENTS: frozenset[str] = frozenset({
     "calendar_create", "calendar_update", "calendar_delete",
-    "reminder_create", "reminder_list", "reminder_update", "reminder_delete",
+    "reminder_create", "reminder_list", "reminder_update", "reminder_delete", "reminder_cancel",
     "note_create", "note_search", "note_update",
     "journal_create", "journal_streak", "journal_prompt", "journal_search",
     "transaction_create", "transaction_summary", "transaction_list",

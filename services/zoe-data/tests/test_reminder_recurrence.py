@@ -559,10 +559,10 @@ async def test_clearing_a_recurring_reminders_date_re_anchors_it(monkeypatch):
     async def noop(*_a, **_k):
         return None
 
-    monkeypatch.setattr(rr, "require_feature_access", noop)
-    monkeypatch.setattr(rr, "_cancel_reminder_jobs_safe", noop)
-    monkeypatch.setattr(rr, "_reschedule_reminder_due_safe", noop)
-    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
+    monkeypatch.setattr("reminder_service.require_feature_access", noop)
+    monkeypatch.setattr("reminder_service._cancel_reminder_jobs_safe", noop)
+    monkeypatch.setattr("reminder_service._reschedule_reminder_due_safe", noop)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", noop)
 
     await rr.update_reminder("r1", ReminderUpdate(due_date=None), user={"user_id": "jason"}, db=_Db())
     sql, params = updates[0]
@@ -621,11 +621,11 @@ async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
     async def resched(_db, rid):
         calls.append(("reschedule", rid))
 
-    monkeypatch.setattr(rr, "require_feature_access", noop)
-    monkeypatch.setattr(rr, "_cancel_reminder_jobs_safe", cancel)
-    monkeypatch.setattr(rr, "_reschedule_reminder_due_safe", resched)
-    monkeypatch.setattr(rr, "_create_notification", noop)
-    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
+    monkeypatch.setattr("reminder_service.require_feature_access", noop)
+    monkeypatch.setattr("reminder_service._cancel_reminder_jobs_safe", cancel)
+    monkeypatch.setattr("reminder_service._reschedule_reminder_due_safe", resched)
+    monkeypatch.setattr("reminder_service._create_notification", noop)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", noop)
 
     row["snoozed_until"] = "2026-09-28T00:00:00Z"
     await rr.acknowledge_reminder("r1", user={"user_id": "jason"}, db=_Db())

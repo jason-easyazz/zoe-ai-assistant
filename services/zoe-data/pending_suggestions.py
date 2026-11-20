@@ -11,6 +11,8 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
+from fastapi import HTTPException
+
 from db_pool import get_db_ctx, get_pool
 import own_name
 from people_utils import name_covered_by_contacts
@@ -863,7 +865,149 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
         return 0
 
 
-async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
+class _BriefDb:
+    """A db handle for work AFTER a transaction, once its connection is back in the pool: each statement borrows a connection for
+    that statement alone and gives it back before the caller goes on (the rows are already read), so nothing done through it holds
+    a connection while something else (the scheduler) borrows its own."""
+
+    def execute(self, sql, params=()):
+        return _BriefStatement(sql, params)
+
+    async def commit(self) -> None:
+        return None
+
+
+class _BriefStatement:
+    def __init__(self, sql, params) -> None:
+        self.sql, self.params = sql, params
+
+    async def _run(self):
+        from db_pool import AsyncpgCompat
+
+        async with get_pool().acquire() as conn:
+            return await AsyncpgCompat(conn).execute(self.sql, self.params)
+
+    def __await__(self):
+        return self._run().__await__()
+
+    async def __aenter__(self):
+        return await self._run()
+
+    async def __aexit__(self, *_exc) -> bool:
+        return False
+
+
+def _suggested_when(title: str, slots: dict) -> tuple[str | None, str | None]:
+    """(due_date, due_time) of a reminder offer. The offer's own day and time slots and its ``when_hint`` are MERGED (the producer
+    keeps the model's slots and adds the hint beside them): a slot wins for its own field, and the hint fills whichever field has
+    no slot ("date: friday" with the hint "3pm" is Friday at 3 pm, never Friday at the default time).
+
+    A hint counts only when it was read ENTIRELY: by the spoken-reminder grammar with nothing of it left over, or as a readable
+    day with a trailing clock time. "next week at 3pm" is not "3 pm today": a hint read in part, or not at all, leaves the offer
+    open (None, None), whatever the slots say."""
+    due_date = slots.get("due_date") or slots.get("date") or None
+    due_time = slots.get("due_time") or slots.get("time") or None
+    hint = str(slots.get("when_hint") or "").strip()
+    if hint and not (due_date and due_time):
+        hint_date, hint_time = _read_hint(title, hint)
+        if not (hint_date or hint_time):
+            return None, None       # the offer says WHEN in words nobody could read in full: it stays open, never "the slot alone"
+        due_date, due_time = due_date or hint_date, due_time or hint_time
+    return due_date, due_time
+
+
+_HINT_JOINERS = re.compile(r"(?:\s+(?:at|on|by|for))+\s*$", re.IGNORECASE)
+
+
+def _read_hint(title: str, hint: str) -> tuple[str | None, str | None]:
+    """(day, time) a ``when_hint`` says, or (None, None) unless ALL of it was understood."""
+    from fastapi import HTTPException as _HTTPException
+    from intent_router import _extract_simple_reminder_slots
+    from reminder_service import ReminderPastError, normalize_due_date
+
+    parsed = _extract_simple_reminder_slots(f"remind me to {title} {hint}") or {}
+    left = _HINT_JOINERS.sub("", str(parsed.get("title") or "")).strip().lower()
+    if parsed and left == title.strip().lower():
+        return parsed.get("date") or None, parsed.get("time") or None      # the grammar consumed the whole hint
+    # the grammar read none of it, or only a part (its date would then be a default, not what was said): the other reading
+    day, due_time = _day_and_time_of_hint(hint)
+    if day:
+        try:
+            normalize_due_date(day)
+        except ReminderPastError:
+            pass                                    # a real day that has gone: read, and refused later with its own sentence
+        except _HTTPException:
+            return None, None                       # "next week", "sometime soonish": not a day anyone can schedule
+    return day, due_time
+
+
+_HINT_TIME_TAIL = re.compile(r"\s*(?:\bat\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*$", re.IGNORECASE)
+_HINT_TIME_WORDS = re.compile(r"\b(?:at\s+\d|\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight|morning|afternoon|evening|tonight)\b", re.IGNORECASE)
+
+
+def _day_and_time_of_hint(hint: str) -> tuple[str | None, str | None]:
+    """A ``when_hint`` the spoken-reminder grammar declined ("friday at 3pm"): its trailing clock time is read here and the rest is
+    the day. A hint carrying any other clock wording ("friday morning", "friday at 3") is NOT fully understood and is refused
+    (None, None: the offer stays open) rather than accepted as a day with the time silently dropped."""
+    from intent_router import _parse_time
+
+    day, due_time = hint, None
+    m = _HINT_TIME_TAIL.search(hint)
+    if m:
+        due_time = _parse_time(m.group(1))
+        if due_time is None:
+            return None, None
+        day = hint[:m.start()].strip()
+    if _HINT_TIME_WORDS.search(day):
+        return None, None
+    return (day or None), due_time
+
+
+async def _create_suggested_reminder(conn, slots: dict, user_id: str, after_commit: list | None = None) -> dict:
+    """An accepted reminder offer goes through the one writer (it was a raw INSERT with no date or time, which never fires).
+    An offer with no day or time is refused and stays open, never stored as a reminder that cannot fire.
+
+    It runs on the SAME connection, inside the SAME transaction, as the update that resolves the suggestion (``conn`` is the
+    transaction's own connection; ``AsyncpgCompat.commit`` is a no-op, so a second connection or a bare commit is not atomic):
+    both land or neither does, and a retry after a failure finds the offer still open and the reminder not made. The job, receipt
+    and broadcast are handed back in ``after_commit`` for the caller to run once the transaction has committed."""
+    from db_pool import AsyncpgCompat
+    from intent_router import _load_direct_execution_user
+    from models import ReminderCreate
+    from reminder_service import create_reminder_record
+
+    title = str(slots.get("title") or slots.get("description") or "Reminder").strip()
+    due_date, due_time = _suggested_when(title, slots)
+    if not (due_date or due_time):
+        raise ValueError("reminder_needs_time")
+    # What a person said is read HERE, once: a day or time that cannot be read leaves the offer open under a fixed code, and only a
+    # real ISO date / clock time ever reaches the store, a column or a log. (``_suggested_when`` may hand over an unreadable
+    # ``when_hint`` as the day; the store's refusals quote the text they were given.)
+    from reminder_service import ReminderPastError, normalize_due_date, normalize_due_time
+
+    try:
+        due_date, due_time = normalize_due_date(due_date), normalize_due_time(due_time)
+    except ReminderPastError as exc:
+        raise ValueError(exc.spoken) from None
+    except HTTPException:
+        raise ValueError("reminder_needs_time") from None
+    if not (due_date or due_time):
+        raise ValueError("reminder_needs_time")
+    db = conn if hasattr(conn, "commit") else AsyncpgCompat(conn)
+    user = await _load_direct_execution_user(db, user_id)
+    if not user:
+        raise ValueError("unknown_user")
+    try:
+        reminder = await create_reminder_record(
+            ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"), user=user, db=db,
+            after_commit=after_commit if after_commit is not None else [], shadow_source="suggestion")
+    except HTTPException as exc:      # the door refused (a time already gone, a role): the offer stays open, said by a fixed code
+        raise ValueError(getattr(exc, "spoken", None) or "reminder_not_valid") from None
+    return {"reminder_id": reminder.get("id"), "title": title,
+            "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time")}
+
+
+async def _execute_action(conn, action: str, slots: dict, user_id: str, after_commit: list | None = None) -> dict:
     import list_service
 
     stamps_at = list_service.stamps_now()
@@ -897,17 +1041,7 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
         return {"item_id": item_id, "list_id": list_id, "text": text}
 
     if action == "reminder_create":
-        rid = str(uuid.uuid4())
-        title = slots.get("title") or slots.get("description", "Reminder")
-        await conn.execute(
-            """INSERT INTO reminders (id, user_id, title, description, reminder_type,
-               category, priority, due_date, due_time, is_active, acknowledged, visibility, deleted)
-               VALUES ($1, $2, $3, '', 'general', 'general', 'medium', NULL, NULL, 1, 0, 'personal', 0)""",
-            rid,
-            user_id,
-            title,
-        )
-        return {"reminder_id": rid, "title": title}
+        return await _create_suggested_reminder(conn, slots, user_id, after_commit)
 
     if action == "calendar_create":
         eid = str(uuid.uuid4())
@@ -1075,6 +1209,7 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
         import list_service
         import os_shadow
 
+        after_commit: list = []  # a reminder's job / receipt / broadcast: run only once the transaction below has committed
         pool = get_pool()
         # ZOE_OS_LISTS=kernel only: a list write in here asks the Zoe OS kernel, and its outcome is reported once THIS transaction
         # has committed (``done``) or rolled back (``failed``), never while the row could still be undone. With the flag off
@@ -1092,7 +1227,7 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                     return {"ok": False, "error": "not_found"}
                 action = row["action_type"]
                 slots = json.loads(row["pre_filled_slots"] or "{}")
-                result = await _execute_action(conn, action, slots, user_id)
+                result = await _execute_action(conn, action, slots, user_id, after_commit)
                 await conn.execute(
                     "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1 AND user_id = $2",
                     suggestion_id,
@@ -1100,6 +1235,14 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                 )
                 if action == "forget_alias":
                     await _scrub_forget_alias(suggestion_id, conn)
+        # Committed, and the transaction's connection is BACK IN THE POOL: only now the reminder's receipt, shadow note, job and
+        # broadcast. Scheduling borrows a connection of its own; run while this one was still held, enough accepts at once would
+        # each hold a connection and wait for another (a full pool, nobody able to finish).
+        for later in after_commit:
+            try:
+                await later(_BriefDb())
+            except Exception as exc:  # noqa: BLE001 - best-effort: the row is committed and the scan retries a job
+                logger.warning("pending_suggestions: a reminder's after-commit step failed (%s)", type(exc).__name__)
         if action == "list_add" and isinstance(result, dict):
             # The member said yes: a real list add, so the Zoe OS shadow (os_shadow.py) hears it, AFTER the transaction committed (the row
             # is written inside it, by _execute_action). Never raises; a flag read with the shadow off.
@@ -1107,11 +1250,6 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
 
             os_shadow.note_add(user_id, source="suggestion", list_type=slots.get("list_type", "shopping"),
                                list_name=str(slots.get("list_type", "shopping")).capitalize(), item=result.get("text"))
-        elif action == "reminder_create" and isinstance(result, dict):
-            import os_shadow      # the member's yes is a real reminder: shadowed after the commit (no due time: the kernel cannot say it)
-
-            os_shadow.note_reminder_create(user_id, source="suggestion", note=result.get("title"), due_date=None, due_time=None,
-                                           recurring=False)
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}

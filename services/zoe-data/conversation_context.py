@@ -17,6 +17,16 @@ _DATE_RE         = re.compile(
     re.I,
 )
 _TIME_RE         = re.compile(r'\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight)\b', re.I)
+# "cancel that" as a COMMAND about the thing just made: the WHOLE utterance is an affirmative cancel of "that / it / the reminder"
+# (a little politeness around it allowed). A cancel word anywhere is not that: "don't cancel that", "how do I delete an old
+# reminder?" and "remind me to cancel the gym" all contain one. Only this shape may be bound to the reminder just made.
+_CANCEL_THAT_RE  = re.compile(
+    r"^(?:(?:oh|ok|okay|actually|please|sorry|wait|hey|zoe|um|uh)[\s,]+)*"
+    r"(?:cancel|delete|remove|dismiss|clear|scrap|never\s*mind)\s+"
+    r"(?:that|it|this|that\s+one|this\s+one|(?:the|that|this)\s+(?:last\s+)?reminder|the\s+last\s+one)"
+    r"(?:[\s,]+(?:please|thanks|thank\s+you|actually))*[\s.!]*$",
+    re.I,
+)
 
 
 @dataclass
@@ -109,7 +119,13 @@ class ConversationContext:
                 new_slots = dict(self.last_slots)
                 new_slots["time"] = time_m.group(0)
                 return self.last_intent, new_slots
-            if _CANCEL_RE.search(t):
+            if self.last_intent == "reminder_create" and _CANCEL_THAT_RE.match(t):
+                # "cancel that" right after a reminder was asked for: the executor cancels the reminder THAT create made, by
+                # its id (``intent_router._execute_reminder_cancel_direct``), never one found by its title. ONLY when the whole
+                # utterance is that command: a negation ("don't cancel that"), a question, or a sentence that merely contains
+                # a cancel word is NOT bound; it takes the branch below and goes where it always went.
+                return "reminder_cancel", {"title": self.last_slots.get("title", ""), "after": "reminder_create"}
+            if _CANCEL_RE.search(t):          # as it always was (after a reminder or a timer): nothing here cancels anything
                 return "reminder_cancel", {"title": self.last_slots.get("title", "")}
             if _SHOW_RE.search(t):
                 return "reminder_list", {}

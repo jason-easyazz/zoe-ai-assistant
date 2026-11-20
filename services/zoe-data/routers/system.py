@@ -2398,10 +2398,17 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
             result = await alarm_voice.run_brain_intent(intent_name, dict(body.slots or {}), user_id)
         else:
             from intent_router import Intent, execute_intent
+            import reminder_service as _rs
 
-            result = await execute_intent(
-                Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
-            )
+            # a reminder for a day or time already gone: this endpoint keeps its 422 (its log and the brain's tool read the
+            # status); only a spoken fast-path turn is answered with the sentence
+            _tok = _rs.PAST_IS_AN_ERROR.set(True)
+            try:
+                result = await execute_intent(
+                    Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
+                )
+            finally:
+                _rs.PAST_IS_AN_ERROR.reset(_tok)
     except HTTPException as exc:
         # A validation verdict from the fulfilment path (e.g. reminder_service's
         # 422 for an unfireable due_date) is the answer, not a failure: pass it

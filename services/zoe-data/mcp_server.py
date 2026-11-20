@@ -2368,16 +2368,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Reminder {rid} not found"}
-        updates, params = [], []
-        for field in ("title", "due_date", "due_time", "priority"):
-            if field in args:
-                updates.append(f"{field}=?")
-                params.append(args[field])
-        if not updates:
+        from reminder_service import tool_update_reminder_record      # the one writer of the reminders table
+
+        if not await tool_update_reminder_record(db, user_id=user_id, reminder_id=rid, fields=args):
             return {"error": "No fields to update"}
-        updates.append("updated_at=NOW()")
-        params.extend([rid, user_id])
-        await db.execute(f"UPDATE reminders SET {','.join(updates)} WHERE id=? AND user_id=?", params)
         await _notify_ui("reminders", "reminder_updated", {"id": rid})
         return {"id": rid, "status": "updated"}
 
@@ -2386,7 +2380,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Reminder {rid} not found"}
-        await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=NOW() WHERE id=? AND user_id=?", (rid, user_id))
+        from reminder_service import tool_delete_reminder_record
+
+        await tool_delete_reminder_record(db, user_id=user_id, reminder_id=rid)
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
         # Cancel any unfired proactive_scheduled job linked to this reminder.
         try:
@@ -2419,10 +2415,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         new_date = new_time_local.strftime("%Y-%m-%d")
         new_time_str = new_time_local.strftime("%H:%M")
         snoozed_until_iso = new_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        await db.execute(
-            "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?",
-            (new_date, new_time_str, snoozed_until_iso, rid),
-        )
+        from reminder_service import tool_snooze_reminder_record
+
+        await tool_snooze_reminder_record(db, reminder_id=rid, due_date=new_date, due_time=new_time_str,
+                                          snoozed_until=snoozed_until_iso)
         result = {"id": rid, "snoozed_until": snoozed_until_iso}
         await _notify_ui("reminders", "reminder_snoozed", result)
         # Cancel existing scheduled job(s) for this reminder; ReminderScanTrigger
