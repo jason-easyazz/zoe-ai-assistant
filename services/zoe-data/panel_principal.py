@@ -402,7 +402,15 @@ async def record_turn_home_control(request: Any, user: Mapping[str, Any] | None,
         logger.warning("panel_principal: turn home-control check failed (%s) - refusing", type(exc).__name__)
         allowed = False
     record_home_control(allowed)
+    _note_actor(user)
     return allowed
+
+
+def _note_actor(user: Mapping[str, Any] | None) -> None:
+    """Tell the Zoe OS action doors (music, home control) who this request or turn is acting for (``kernel_door.note_actor``)."""
+    import kernel_door  # lazy: kernel_door imports this module
+
+    kernel_door.note_actor((user or {}).get("user_id"))
 
 
 # ── FastAPI dependencies for the house-state routes outside ``/api/ha`` (security follow-up 2026-10-18) ──────────────────────
@@ -434,6 +442,7 @@ def _refuse(kind: str, request: Any, user: Mapping[str, Any] | None, detail: str
 async def require_member_or_panel(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """A signed-in member or the panel (``may_control_home``); anyone else gets 403."""
     if await may_control_home(request, user):
+        _note_actor(user)
         return user
     raise _refuse("neither a member nor the panel", request, user, "Sign in, or use the wall panel")
 

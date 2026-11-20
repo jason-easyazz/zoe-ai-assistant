@@ -8,6 +8,8 @@ spoken / Skybridge resolver (``smart_home_service``), the panel's control route 
 checks, its own timeout and its own handling of a failure: this function only sends, exactly as each of them sent it.
 
 READS of the house (entity lists, states) are not commands and do not come through here.
+
+The Zoe OS home door (``ZOE_OS_HOME=kernel``; ``action_doors``) sits here: the one place a command leaves. Flag off: a flag read.
 """
 from __future__ import annotations
 
@@ -25,7 +27,19 @@ async def send(base_url: str, path: str, body: dict, *, timeout: Any = None, cli
     never raise catches it, as it always did). ``client``: the caller's own open client (music through the house keeps one)."""
     if path not in PATHS:
         raise ValueError("not a Home Assistant command path")
-    if client is not None:
-        return await client.post(f"{base_url}{path}", json=body)
-    async with httpx.AsyncClient(timeout=timeout) as c:
-        return await c.post(f"{base_url}{path}", json=body)
+    import action_doors
+
+    verb, entity = action_doors.home_verb(path, body)
+    asked = await action_doors.before("home", verb, entity, quiet=verb in action_doors.HOME_QUIET,
+                                      secure=action_doors.home_secure(verb), refused=action_doors.HomeRefused)
+    try:
+        if client is not None:
+            r = await client.post(f"{base_url}{path}", json=body)
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{base_url}{path}", json=body)
+    except BaseException:
+        action_doors.after(asked, False)
+        raise
+    action_doors.after(asked, getattr(r, "status_code", 500) < 400)
+    return r

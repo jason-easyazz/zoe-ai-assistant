@@ -1627,6 +1627,10 @@ async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> 
     except httpx.ConnectError:
         return {"error": "HA bridge offline — is homeassistant-mcp-bridge running?"}
     except Exception as exc:
+        import kernel_door
+
+        if isinstance(exc, kernel_door.Refused):      # the Zoe OS kernel said no (ZOE_OS_HOME=kernel): nothing was sent
+            return {"error": exc.line(), "status": "refused"}
         return {"error": str(exc)}
 
 

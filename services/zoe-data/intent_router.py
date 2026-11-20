@@ -35,6 +35,7 @@ from list_service import HouseholdListUnavailable, ListRefused, note_item_left, 
 from time_utils import today_for_zoe_tz
 from typed_env import env_str
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+import kernel_door
 import people_service
 
 if TYPE_CHECKING:
@@ -6189,6 +6190,8 @@ async def _music_assistant_play(query: str, user_id: str, room: object = None) -
         if hit:
             return "playing", hit
         return ("nothing_found" if await _ms.get_players() else "unavailable"), None
+    except kernel_door.Refused:      # the Zoe OS kernel said no: said by the executor; never a fall back to a house speaker
+        raise
     except Exception as exc:  # noqa: BLE001 - the HA fallback must still run
         logger.warning("music_play: music engine attempt failed (%s)", type(exc).__name__)
         return "unavailable", None
@@ -6267,6 +6270,8 @@ async def _music_assistant_control(cmd: str, room: object = None, value: object 
 
         command, args = spec
         return bool(await _ms._ma_ok(command, **args))
+    except kernel_door.Refused:      # the Zoe OS kernel said no (ZOE_OS_MUSIC=kernel): said by the executor, not as an engine fault
+        raise
     except Exception as exc:  # noqa: BLE001 - reported as a failure, never as success
         logger.warning("music_control: music engine command failed (%s)", type(exc).__name__)
         return False
@@ -6295,6 +6300,8 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
         import home_control
 
         response = await home_control.send(ha_url, home_control.DEVICE, payload, client=client)
+    except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_HOME=kernel): nothing was sent
+        return exc.line()
     except Exception as exc:
         logger.warning("music HA control failed: %s", exc)
         return "I couldn't reach the Home Assistant bridge to control the music."
@@ -6305,6 +6312,15 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
 
 
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
+    """``_execute_music_intent_asked`` (below). A refusal by the Zoe OS kernel (``ZOE_OS_MUSIC`` / ``ZOE_OS_HOME`` = kernel) is
+    final and said plainly; flag off, this is a plain call."""
+    try:
+        return await _execute_music_intent_asked(intent, user_id)
+    except kernel_door.Refused as exc:
+        return exc.line()
+
+
+async def _execute_music_intent_asked(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents: `music_play` tries Music Assistant first, then (like the
     rest) an HA media_player via the zoe-data HA bridge."""
     if (intent.slots or {}).get("delayed"):
@@ -6609,6 +6625,8 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 pass
             return f"Volume set to {level}%."
 
+    except kernel_door.Refused:      # the Zoe OS kernel said no: the wrapper says the sentence
+        raise
     except Exception as exc:
         logger.warning("music intent failed: %s", exc)
     return None

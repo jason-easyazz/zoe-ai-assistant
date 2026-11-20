@@ -20,6 +20,7 @@ Routes:
   GET  /api/ha/state/{entity} — get current state of a single entity
 """
 import home_control
+import kernel_door
 import logging
 import os
 import re
@@ -67,6 +68,7 @@ _ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 async def _require_caller(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """A signed-in member or the panel (``panel_principal.may_control_home``); anyone else gets 403."""
     if await panel_principal.may_control_home(request, user):
+        panel_principal._note_actor(user)
         return user
     log_throttled(
         logger, logging.WARNING, f"ha-refused:{request.method}",
@@ -167,6 +169,8 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
         result = await _bridge_post(home_control.DEVICE, body)
         logger.info("ha/control entity=%s service=%s caller=%s", entity_id, service, caller.get("user_id"))
         return {"ok": True, "entity_id": entity_id, "service": service, "result": result}
+    except kernel_door.Refused:      # the Zoe OS kernel said no (ZOE_OS_HOME=kernel): the one app handler answers 403
+        raise
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:

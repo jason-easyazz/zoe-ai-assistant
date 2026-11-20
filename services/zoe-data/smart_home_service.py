@@ -12,6 +12,7 @@ to a friendly "couldn't reach the home hub" card, never a broken turn.
 from __future__ import annotations
 
 import home_control
+import kernel_door
 import asyncio
 import contextvars
 import logging
@@ -97,6 +98,8 @@ async def _ha_post(path: str, payload: dict[str, Any]) -> Optional[dict[str, Any
             logger.debug("HA POST %s -> HTTP %s", path, r.status_code)
             return None
         return r.json()
+    except kernel_door.Refused:      # the Zoe OS kernel said no (ZOE_OS_HOME=kernel): not "the bridge is down": the caller says so
+        raise
     except httpx.TimeoutException as exc:
         marks = _TIMED_OUT.get()
         if marks is not None:

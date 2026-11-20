@@ -66,6 +66,25 @@ def is_panel(user_id: Optional[str]) -> bool:
     return panel_principal.is_guest_id(user_id) or user_id in (panel_principal.HOUSEHOLD_OWNER_ID, panel_principal.HOUSEHOLD_VIEWER)
 
 
+#: who is acting on THIS request or turn, for the two action areas (music, home control): ``(member id, erase stamps)``. Every
+#: authenticated entry point notes it; a command sent with nobody noted is automatic (an alarm's music, a routine).
+_ACTOR: contextvars.ContextVar = contextvars.ContextVar("zoe_kernel_door_actor", default=None)
+
+
+def note_actor(user_id: Optional[str]) -> None:
+    """An entry point has identified its caller: a member id, or a guest / panel id (nobody identified: the shared panel).
+    Taken with the erase stamps of this moment, before anything about the action is read. Never raises; doors off: flag reads."""
+    try:
+        _ACTOR.set((str(user_id or "guest"), stamps_now("music", "home")))
+    except Exception:  # noqa: BLE001 - identifying the caller for a door must never break the request
+        pass
+
+
+def acting() -> Optional[tuple]:
+    """``(member id, stamps)`` of whoever this request or turn is acting for, or None (nobody: automatic work)."""
+    return _ACTOR.get()
+
+
 def stamps_now(*areas: str) -> Optional[dict]:
     """The erase stamps as they are NOW (``os_shadow.stamp_snapshot``: a small copy from memory, no I/O), or None when none of
     ``areas`` has its door on (a flag read per area named, nothing copied). AN AREA'S CALLERS COPY NOTHING UNLESS THAT AREA IS
