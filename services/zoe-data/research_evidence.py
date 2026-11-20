@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import lookup_door
 import logging
 import os
 import re
@@ -723,6 +724,7 @@ def fetch_web_fallback(
     ``_MIN_PROVIDER_BUDGET_S`` is left — the outcome then says so in ``detail``.
     ``None`` (B10.0 chat callers) keeps the plain per-provider timeout.
     """
+    lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     q = (query or "").strip()
     if not q:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "none", [], "empty query")
@@ -801,6 +803,7 @@ def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: floa
     uses :func:`fetch_web_fallback`, which picks the provider and says WHY rows
     are empty.
     """
+    lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     q = (query or "").strip()
     if not q:
         return []

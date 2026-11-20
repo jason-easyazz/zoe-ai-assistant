@@ -9,6 +9,7 @@ This module is intentionally lightweight for phase-1 rollout:
 
 from __future__ import annotations
 
+import lookup_door
 import base64
 import re
 import time
@@ -762,6 +763,7 @@ async def fetch_page_text(
     Never raises for an ordinary failure — returns ``{"ok": False, "error": ...}``
     so a caller enriching a search packet degrades instead of exploding.
     """
+    lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     import importlib.util
 
     if importlib.util.find_spec("cloakbrowser") is None:
@@ -1009,6 +1011,7 @@ async def search_web(
     domain}``; non-http(s) targets never appear. ``ok`` is True only for
     ``results``. Never raises.
     """
+    lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
     import asyncio
     import logging
 

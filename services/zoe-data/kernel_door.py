@@ -75,7 +75,7 @@ def note_actor(user_id: Optional[str]) -> None:
     """An entry point has identified its caller: a member id, or a guest / panel id (nobody identified: the shared panel).
     Taken with the erase stamps of this moment, before anything about the action is read. Never raises; doors off: flag reads."""
     try:
-        _ACTOR.set((str(user_id or "guest"), stamps_now("music", "home")))
+        _ACTOR.set((str(user_id or "guest"), stamps_now("music", "home", "lookups")))
     except Exception:  # noqa: BLE001 - identifying the caller for a door must never break the request
         pass
 
