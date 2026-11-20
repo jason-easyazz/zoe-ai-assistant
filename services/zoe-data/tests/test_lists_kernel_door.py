@@ -772,9 +772,12 @@ def test_rest_answers_a_refusal_with_403_and_the_plain_sentence(door, monkeypatc
 def test_main_registers_the_refusal_handler_for_the_whole_app():
     tree = ast.parse((SVC / "main.py").read_text("utf-8"))
     calls = [c for c in ast.walk(tree) if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "add_exception_handler"]
-    assert [[getattr(a, "id", "") for a in c.args] for c in calls] == [["_ListRefused", "_list_refused_response"]]
-    imported = {a.asname: a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "routers.lists" for a in n.names}
-    assert imported == {"_ListRefused": "ListRefused", "_list_refused_response": "list_refused_response"}
+    assert [[getattr(a, "id", "") for a in c.args] for c in calls] == [["_DoorRefused", "_door_refused_response"]]
+    imported = {a.asname: a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "kernel_door" for a in n.names}
+    assert imported == {"_DoorRefused": "Refused", "_door_refused_response": "refused_response"}
+    import kernel_door                    # ONE handler for every area: a list refusal reaches it through its class chain
+
+    assert issubclass(list_service.ListRefused, kernel_door.Refused)
 
 
 @pytest.mark.asyncio
@@ -903,7 +906,10 @@ async def test_with_lists_off_an_accepted_suggestion_enters_nothing_of_the_door(
     else:
         monkeypatch.setenv("ZOE_OS_LISTS", value)
     monkeypatch.setenv("ZOE_ANTICIPATION", "off")
+    import kernel_door
+
     monkeypatch.setattr(list_service, "kernel_reports_after", never)
+    monkeypatch.setattr(kernel_door, "reports_after", never)       # the hold itself, under the name the suggestion path calls
     monkeypatch.setattr(os_shadow, "ask_list", never)
     conn = _Conn()
     monkeypatch.setattr(pending_suggestions, "get_pool", lambda: _Pool(conn))

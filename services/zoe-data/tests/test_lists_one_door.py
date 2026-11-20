@@ -1,22 +1,23 @@
-"""All ordinary list writes go through list_service."""
+"""All ordinary list writes go through list_service.
+
+The scan reads f-strings and concatenations whole and admits ``ONLY`` and any schema (``tests/sql_scan.py``). Control run: with
+``sql_scan.texts`` skipping ``+`` expressions the planted ``'UPDATE ' + 'lists SET ...'`` below escapes."""
 import ast
 from pathlib import Path
-import re
 
 import pytest
+
+import sql_scan
 
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 # Erasure uses dynamically named tables, so has no literal SQL exemption.
 ERASERS = {}
-WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[\"`\[]?[a-z_]+[\"`\]]?\.)?[\"`\[]?(?:lists|list_items)\b", re.I)
+WRITE = sql_scan.write_pattern("lists", "list_items")
 
 
 def writes(source):
-    tree = ast.parse(source)
-    return [node.value for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-            and WRITE.search(node.value)]
+    return sql_scan.writes(source, WRITE)
 
 
 def test_one_door():
@@ -42,6 +43,10 @@ def test_planted_write_is_caught():
     # a schema-qualified table, quoted or not, is still a list write
     for sql in ('UPDATE public.lists SET name = ?', 'UPDATE "public".lists SET name = ?', 'DELETE FROM "public"."list_items" WHERE id = ?'):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
+    for table in ("lists", "list_items"):
+        for planted in sql_scan.planted_forms(table):
+            assert writes(planted), planted
+    assert writes("async def f(db, sets):\n    await db.execute(f\"UPDATE lists SET {', '.join(sets)} WHERE id = ?\")\n")
     assert not writes("async def f(db):\n    await db.execute('UPDATE listings SET x = ?')\n")
 
 

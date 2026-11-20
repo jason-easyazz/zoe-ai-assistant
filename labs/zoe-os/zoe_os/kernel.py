@@ -9,7 +9,8 @@ from .attention import Attention
 from .capability import Enforcer, Grant, GrantStore, Person
 from .events import Event, Kind, Visibility
 from .explain import Explainer
-from .lists import ListDoor
+from . import lists
+from .door import Door
 from .provenance import subject_of
 from .retention import POLICY, Retention
 from .receipts import ClaimAuditor, Dispatcher, Receipt
@@ -59,7 +60,9 @@ class Kernel:
             "SELECT COUNT(*) FROM events WHERE kind = 'grant_change'").fetchone()[0])
         self.actions = Dispatcher(self.spine, self.enforcer)
         self.recovered = self.actions.recover()     # intents a dead kernel left open: uncertain
-        self.lists = ListDoor(self.spine, self.enforcer)    # decides and records list changes; holds no list
+        # the one door: decides and records a change to something production holds (a list, ...); holds none of it
+        self.door = Door(self.spine, self.enforcer, (lists.AREA,))
+        self.lists = lists.ListDoor(self.door)
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
         self.explainer = Explainer(self.spine, self.grants.people)
