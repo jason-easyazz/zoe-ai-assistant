@@ -276,6 +276,99 @@ async def test_a_ringing_alarm_is_silenced_at_once_whatever_the_kernel_does(door
             assert len(door.ops("door_report")) == (2 if kernel == "allow" else 1)          # an objection closes nothing
 
 
+@pytest.mark.parametrize("kernel", ["allow", "refuse:not_owner", "slow", "gone"])
+@pytest.mark.parametrize("change", [{"enabled": False}, {"label": WORD}])
+@pytest.mark.asyncio
+async def test_an_edit_that_silences_a_ringing_alarm_is_never_held_up(door, caplog, monkeypatch, kernel, change):
+    """Every edit lands the alarm idle, so an edit made while it rings stops it: turning it off on the screen is how many people
+    silence an alarm. That edit is made first and told afterwards, exactly as dismiss is: a slow kernel costs it no time, a
+    refusing one cannot leave it ringing. Control run: with ``silences`` forced False in ``update_alarm`` (the edit asks first)
+    the refusing kernel raises ``AlarmRefused`` with the alarm still ringing, and the slow one makes the call wait."""
+    monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 1.0)
+    w = _world()
+    a = await _create(w)
+    await _ring(w)
+    assert (await w.rows())["alarms"][0][scenarios_col("state")] == "ringing"
+    if kernel == "slow":
+        door.delay = 0.8
+    elif kernel == "gone":
+        door.close()
+    else:
+        door.door = kernel
+    started = time.monotonic()
+    with caplog.at_level(logging.INFO, logger="os_shadow"):
+        async with w.db() as db:
+            out = await w.rest.update_alarm(a["id"], dict(change), None, user=_member(ANN), db=db)
+        took = time.monotonic() - started
+        row = (await w.rows())["alarms"][0]
+        assert row[scenarios_col("state")] == "idle" and out["alarm"]["state"] == "idle" and took < 0.4, took
+        if "enabled" in change:
+            assert not row[scenarios_col("enabled")]
+        if kernel in ("allow", "refuse:not_owner"):
+            told = _wait(door, "door_ask", 2)[1]                    # ... and afterwards the kernel hears that it was stopped
+            assert (told["verb"], told["person"], told["owner"], told["target"]) == ("alarm.stop", ANN, ANN, a["id"])
+            for _ in range(300):
+                if len(_lines(caplog)) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert ("decision=recorded" in _lines(caplog)[-1]) is (kernel == "allow")
+            assert ("decision=objected reason=not_owner" in _lines(caplog)[-1]) is (kernel != "allow")
+
+
+@pytest.mark.parametrize("kernel", ["refuse:not_owner", "slow"])
+@pytest.mark.asyncio
+async def test_turning_an_alarm_off_is_never_held_up_and_any_other_edit_still_asks_first(door, monkeypatch, kernel):
+    """Turning an alarm OFF takes effect at once even when it is not ringing (told afterwards as ``alarm.edit``); an edit that
+    neither silences nor turns off still asks first and a refusal is final. Control run: with the ``"enabled" in ch and not on``
+    half of ``silences`` dropped, the refusing kernel raises on the turn-off."""
+    monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 1.0)
+    w = _world()
+    a = await _create(w)
+    if kernel == "slow":
+        door.delay = 0.8
+    else:
+        door.door = kernel
+    started = time.monotonic()
+    async with w.db() as db:
+        out = await w.rest.update_alarm(a["id"], {"enabled": False}, None, user=_member(ANN), db=db)
+        assert out["alarm"]["enabled"] is False and time.monotonic() - started < 0.4
+        if kernel != "slow":
+            assert _wait(door, "door_ask", 2)[1]["verb"] == "alarm.edit"
+            with pytest.raises(alarms.AlarmRefused):                 # turning it back on, or renaming it, is an ordinary edit
+                await w.rest.update_alarm(a["id"], {"enabled": True}, None, user=_member(ANN), db=db)
+            with pytest.raises(alarms.AlarmRefused):
+                await w.rest.update_alarm(a["id"], {"label": WORD}, None, user=_member(ANN), db=db)
+    assert not (await w.rows())["alarms"][0][scenarios_col("enabled")]
+
+
+@pytest.mark.asyncio
+async def test_a_yes_to_an_anticipation_offer_holds_the_alarms_report_until_its_block_has_ended(door, monkeypatch):
+    """``anticipation.answer`` runs the alarm's create on its own connection; the door's report goes out only once that block
+    has ended (``kernel_door.reports_after``), never while the row could still be undone. Proven on the create itself inside a
+    held block, and ``answer`` is pinned to enter one. Controls run: with ``kernel_door.wrote`` ignoring the held block the
+    report is seen inside it; with ``reports_after`` dropped from ``answer`` the last assertion fails."""
+    import anticipation
+
+    w = _world()
+    seen = {}
+    real = alarms.create_alarm
+
+    async def create(db, owner, **kw):
+        out = await real(db, owner, **kw)
+        _wait(door, "door_ask", 1)
+        await asyncio.sleep(0.05)
+        seen["reports_inside"] = list(door.ops("door_report"))
+        return out
+
+    async with w.db() as db:
+        async with kernel_door.reports_after():                      # what ``answer`` now enters around its connection
+            monkeypatch.setattr(alarms, "create_alarm", create)
+            await alarms.create_alarm(db, ANN, time_hhmm="07:00", actor=alarms.Viewer(user_id=ANN))
+    assert seen["reports_inside"] == [] and [r["outcome"] for r in _wait(door, "door_report", 1)] == ["done"]
+    src = Path(anticipation.__file__).read_text("utf-8")
+    assert "async with kernel_door.reports_after(), _conn(db) as conn:" in src
+
+
 def scenarios_col(name: str) -> int:
     return alarms.COLS.index(name)
 
