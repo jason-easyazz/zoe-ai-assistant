@@ -3621,7 +3621,12 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
         if intent.action == "identity":
             return await _resolve_self_identity(user_id, db, kind=intent.query)
         if intent.action == "remember_fact":
-            return await _resolve_people_remember_fact(intent, user_id, db)
+            try:
+                return await _resolve_people_remember_fact(intent, user_id, db)
+            except people_service.ContactRefused as exc:    # the Zoe OS kernel refused (ZOE_OS_PEOPLE=kernel): final, nothing written
+                line = exc.line()
+                return {"handled": True, "intent": {"domain": "people", "action": intent.action, "status": "refused"},
+                        "spoken_summary": line, "cards": [_status_card("I can't change that contact", line)], "actions": []}
         if intent.action == "pending_offers":
             return await _resolve_people_pending_offers(user_id, db)
         if intent.action == "create":
@@ -5545,6 +5550,7 @@ async def _store_skybridge_memory_fact(
 
 
 async def _find_or_create_person(user_id: str, name: str, db: Any) -> dict[str, Any]:
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
     rows = await db.fetch(
         """
         SELECT *
@@ -5561,7 +5567,8 @@ async def _find_or_create_person(user_id: str, name: str, db: Any) -> dict[str, 
     if rows:
         return row_to_person(rows[0])
     person_id = str(uuid.uuid4())
-    await people_service.write_contact(db, "spoken_create", (person_id, user_id, name, None, "circle", "personal", "family", 0), raw=True)
+    await people_service.write_contact(db, "spoken_create", (person_id, user_id, name, None, "circle", "personal", "family", 0), raw=True,
+                                       actor=user_id, person_id=person_id, owner=user_id, visibility="family", stamps_at=stamps_at)
     await _maybe_commit(db)
     return {
         "id": person_id,
@@ -5587,6 +5594,7 @@ def _append_note(existing: str | None, addition: str) -> str:
 
 
 async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before the contact is read
     if user_id in {"guest", "voice-guest"}:
         return {
             "handled": True,
@@ -5646,7 +5654,9 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
         params.extend([person["id"], user_id])
         # MemoryService is the write gate for the fact; this table update is the
         # people-card projection so the visible profile reflects the saved memory.
-        await people_service.write_contact(db, "spoken_fact", params, sets=updates, raw=True)
+        await people_service.write_contact(db, "spoken_fact", params, sets=updates, raw=True, actor=user_id,
+                                           person_id=str(person["id"]), owner=user_id, visibility=person.get("visibility"),
+                                           stamps_at=stamps_at)
         await _maybe_commit(db)
     refreshed = await _resolve_people(
         SkybridgeIntent(domain="people", action="show", query=intent.person_name),

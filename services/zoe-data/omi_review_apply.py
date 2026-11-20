@@ -204,9 +204,11 @@ async def write_person(user_id: str, c: dict, via: str) -> str:
     import contacts_store
     from db_compat import get_compat_db
 
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
     p = c["payload"]
     async with get_compat_db() as db:
-        pid, _created = await contacts_store.ensure_person(db, user_id, p["name"], relationship=p.get("relation") or None)
+        pid, _created = await contacts_store.ensure_person(db, user_id, p["name"], relationship=p.get("relation") or None,
+                                                           actor=user_id, stamps_at=stamps_at)
         await db.commit()
     return f"people:{pid}"
 
@@ -292,6 +294,7 @@ async def write_person_relation(user_id: str, c: dict, via: str) -> str:
     already set is held for the owner (``held_conflict``), never overwritten."""
     from db_compat import get_compat_db
 
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before the contact is read
     p = c["payload"]
     person = await _own_person(user_id, str(p.get("person_id") or ""))
     if str(person.get("visibility") or "") != "personal":
@@ -310,7 +313,8 @@ async def write_person_relation(user_id: str, c: dict, via: str) -> str:
         # the intent FIRST: a crash between the people update and the final ``written_ref`` must leave a pointer a forget can follow
         await db.execute("UPDATE omi_day_candidates SET written_ref = ? WHERE id = ? AND user_id = ? AND status = 'approving'",
                          (ref, c["id"], user_id))
-        cur = await people_service.write_contact(db, "reviewed_relation", (rel, person["id"], user_id))
+        cur = await people_service.write_contact(db, "reviewed_relation", (rel, person["id"], user_id), actor=user_id,
+                                                 person_id=person["id"], owner=user_id, visibility="personal", stamps_at=stamps_at)
         await db.commit()
     if not getattr(cur, "rowcount", 0):
         raise ApplyError("held_conflict")      # set (or removed) between the read and the write: the owner looks again
@@ -430,7 +434,8 @@ async def unwrite(user_id: str, rows: list, *, gate_held: bool = False) -> int:
         from db_compat import get_compat_db
         async with get_compat_db() as db:
             for pid, rel in rels:
-                cur = await people_service.write_contact(db, "reviewed_relation_undo", (pid, user_id, dr.clean(rel, 60)))
+                # a forget's undo of what an approval wrote: an ERASER's work, never asked (it must not be refused)
+                cur = await people_service.write_contact(db, "reviewed_relation_undo", (pid, user_id, dr.clean(rel, 60)), under=True)
                 n += int(getattr(cur, "rowcount", 0) or 0)
             await db.commit()
     if mem or rels or any(notes):

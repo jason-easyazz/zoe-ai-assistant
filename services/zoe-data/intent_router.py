@@ -3761,6 +3761,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
     try:
         from database import get_db_ctx
 
+        stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
         person_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
             # Ensure the acting user exists first. The intent-dispatch path the
@@ -3797,6 +3798,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
                 db, "said_create",
                 (person_id, user_id, name, relationship, None, None, None, None,
                  visibility, circle, context),
+                actor=user_id, person_id=person_id, owner=user_id, visibility=visibility, stamps_at=stamps_at,
             )
             try:
                 from routers.people import _store_person_memory  # type: ignore
@@ -3817,6 +3819,8 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             return _cc.format_created(name, relationship)
         rel_phrase = f" as your {relationship}" if relationship else ""
         return f"Added {name}{rel_phrase} to your contacts."
+    except people_service.ContactRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_PEOPLE=kernel): final, nothing was written
+        return exc.line()
     except Exception as exc:
         logger.warning("people_create direct execution unavailable: %s", exc)
         return None
@@ -3967,11 +3971,13 @@ async def _rename_person_row(db, user_id: str, person_id: str, name: str,
                              relationship: Optional[str]) -> None:
     """Rename a contact in place: name, relationship (kept when none given),
     is_partial cleared (it is a full contact now), memory mirror refreshed."""
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door (the statement names the member: their own contact)
     from datetime import datetime, timezone
 
     await people_service.write_contact(
         db, "said_rename",
         (name, relationship or None, datetime.now(timezone.utc).isoformat(), person_id, user_id),
+        actor=user_id, person_id=person_id, owner=user_id, stamps_at=stamps_at,
     )
     await _notify_ui_channel(
         "all", "people:updated", {"id": person_id, "name": name, "relationship": relationship or None})

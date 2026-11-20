@@ -1429,7 +1429,7 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
-    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
+    stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal", "people")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
 
@@ -1663,12 +1663,16 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         pid = str(uuid.uuid4())
         import people_service
 
-        await people_service.write_contact(
-            db, "tool_create",
-            (pid, user_id, args["name"], args.get("relationship"), args.get("birthday"),
-             args.get("phone"), args.get("email"), args.get("notes"), "family",
-             args.get("circle", "circle"), args.get("context", "personal")),
-        )
+        try:
+            await people_service.write_contact(
+                db, "tool_create",
+                (pid, user_id, args["name"], args.get("relationship"), args.get("birthday"),
+                 args.get("phone"), args.get("email"), args.get("notes"), "family",
+                 args.get("circle", "circle"), args.get("context", "personal")),
+                actor=user_id, person_id=pid, owner=user_id, visibility="family", stamps_at=stamps_at,
+            )
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_PEOPLE=kernel): nothing was saved
+            return {"error": exc.line() + " Nothing was saved.", "status": "refused"}
         result = {"id": pid, "name": args["name"], "relationship": args.get("relationship")}
         await _notify_ui("all", "people:created", result)
         # Mirror to MemPalace so OpenClaw-authored contacts show up in
@@ -2526,7 +2530,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         params.extend([pid, user_id])
         import people_service
 
-        await people_service.write_contact(db, "tool_update", params, sets=updates)
+        try:      # the tool found the contact as the member's own; it reads only the id, so the ask says private
+            await people_service.write_contact(db, "tool_update", params, sets=updates, actor=user_id, person_id=pid, owner=user_id,
+                                               stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         await _notify_ui("all", "people:updated", {"id": pid})
         return {"id": pid, "status": "updated"}
 
@@ -2537,7 +2545,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"Person {pid} not found"}
         import people_service
 
-        await people_service.write_contact(db, "tool_delete", (pid, user_id))
+        try:
+            await people_service.write_contact(db, "tool_delete", (pid, user_id), actor=user_id, person_id=pid, owner=user_id,
+                                               stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was deleted.", "status": "refused"}
         await _notify_ui("all", "people:deleted", {"id": pid})
         return {"id": pid, "status": "deleted"}
 

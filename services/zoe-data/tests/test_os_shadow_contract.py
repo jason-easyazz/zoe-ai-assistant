@@ -646,6 +646,71 @@ def test_the_notes_and_journal_doors_and_the_real_kernel_agree_on_verbs_codes_an
         stop(proc)
 
 
+# ---- the contacts door (ZOE_OS_PEOPLE=kernel) against the real kernel ---------------------------------------------------------------------
+def test_the_contacts_door_and_the_real_kernel_agree_on_verbs_codes_and_the_decision(state, monkeypatch):
+    """``people_service`` asks the REAL daemon. Today's rule: a child changes a household contact in an adult's book (allowed,
+    closed ``done``) and the panel adds one; an adult's change to a child's PRIVATE contact, the panel's delete of a household
+    one and a stranger are refused with the kernel's own code and nothing is written. The kernel's file holds ids only.
+    Control run: with ``people_door.AREA`` left out of the kernel's areas every ask is ``not_checked`` and this fails at the
+    first refusal."""
+    import people_service as ps
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import people_door
+    finally:
+        sys.path.remove(str(LAB))
+    assert tuple(os_shadow.AREAS["people"].verbs) == tuple(people_door.VERBS) and people_door.AREA.name == "people"
+    assert people_door.HOUSEHOLD_CHANGE_ADULTS_ONLY is False
+    kid, pid, word = "member-kid", "pp_bar_0001", "womble"
+
+    class DB:
+        def __init__(self):
+            self.writes = []
+
+        async def execute(self, sql, params=()):
+            self.writes.append(sql.split()[0])
+
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": OTHER, "role": "adult"},
+                         {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_PEOPLE", "kernel")
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 2.0)      # a cold subprocess on a busy box; the deadline has its own test
+
+        async def change(db, entry, who, owner, visibility):
+            await ps.write_contact(db, entry, (word, pid, owner), actor=who, person_id=pid, owner=owner, visibility=visibility,
+                                   stamps_at=ps.stamps_now())
+
+        async def run():
+            ok = DB()
+            await change(ok, "corrected_name", kid, MEMBER, "family")              # a child, a household contact
+            await change(ok, "introduced", "guest", "guest", "family")             # the panel adds a household contact
+            out = []
+            for entry, who, owner, visibility in (("corrected_name", OTHER, kid, "personal"), ("tool_delete", "guest", MEMBER, "family"),
+                                                  ("corrected_name", "member-nobody", MEMBER, "family")):
+                db = DB()
+                with pytest.raises(ps.ContactRefused) as exc:
+                    await change(db, entry, who, owner, visibility)
+                out.append((exc.value.reason, db.writes))
+            return ok.writes, out
+
+        assert asyncio.run(run()) == (["UPDATE", "INSERT"], [("not_owner", []), ("not_owner", []), ("unknown_person", [])])
+        end = time.monotonic() + 10
+        rows: list = []
+        while time.monotonic() < end and len(rows) < 2:
+            with closing(kernel_db(state)) as con:
+                rows = con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%\"done\"%'").fetchall()
+            time.sleep(0.05)
+        assert len(rows) == 2                                    # both allowed changes were reported and closed
+        with closing(kernel_db(state)) as con:
+            kept = [json.loads(p) for (p,) in con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%allowed%'")]
+        assert sorted(p["action"] for p in kept) == ["contact.create", "contact.edit"] and all(p["contact"] == pid for p in kept)
+        assert holds(state, word) == [] and holds(state, "member-nobody") == [] and holds(state, "guest") == []
+    finally:
+        stop(proc)
+
+
 @needs_forget
 def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
     """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:

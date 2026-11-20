@@ -184,23 +184,44 @@ async def _live_people(db, user_id: str) -> list[dict]:
     return [dict(zip(("id", "name", "email", "phone", "is_partial"), r)) for r in rows]
 
 
-async def _create_person(db, user_id: str, name: str, *, now: str) -> str:
+async def _create_person(db, user_id: str, name: str, *, now: str, actor: Optional[str] = None,
+                         stamps_at: Optional[dict] = None) -> str:
+    """A new PERSONAL contact in ``user_id``'s own book. ``actor``: the member whose action this is (the day review's approval,
+    a voice tag, a settled review): the Zoe OS contacts door is asked first (``people_service.ask_contact``; a refusal raises
+    ``ContactRefused``, nothing written). The automatic callers (a card import, voice learning) name nobody and are not asked."""
+    import kernel_door
+    import people_service
+
     pid = str(uuid.uuid4())
-    await _run(db, "INSERT INTO people (id, user_id, name, visibility, is_partial, deleted, created_at, updated_at) "
-                   "VALUES (?, ?, ?, 'personal', 0, 0, ?, ?)", (pid, user_id, name, now, now))
+    asked = None
+    if actor:
+        asked = await people_service.ask_contact("contact.create", actor=actor, person_id=pid, owner=user_id, visibility="personal",
+                                                 stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        await _run(db, "INSERT INTO people (id, user_id, name, visibility, is_partial, deleted, created_at, updated_at) "
+                       "VALUES (?, ?, ?, 'personal', 0, 0, ?, ?)", (pid, user_id, name, now, now))
     return pid
 
 
-async def ensure_person(db, user_id: str, name: str, *, relationship: Optional[str] = None) -> tuple[str, bool]:
+async def ensure_person(db, user_id: str, name: str, *, relationship: Optional[str] = None, actor: Optional[str] = None,
+                        stamps_at: Optional[dict] = None) -> tuple[str, bool]:
     """``(person_id, created)``: the member's live person whose name folds to ``name``, else a new PERSONAL row in their own layer
     (the pendant day review's approved "person" candidate). A relationship fills an empty one only, never overwrites."""
     key = fold(name)
     pid, created = next((p["id"] for p in await _live_people(db, user_id) if key and fold(p["name"]) == key), None), False
     if pid is None:
-        pid, created = await _create_person(db, user_id, name, now=now_iso()), True
+        pid, created = await _create_person(db, user_id, name, now=now_iso(), actor=actor, stamps_at=stamps_at), True
     if relationship:              # an existing person gains an EMPTY relationship too; a set one is never overwritten
-        await _run(db, "UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL",
-                   (relationship[:60], pid, user_id))
+        import kernel_door
+        import people_service
+
+        asked = None
+        if actor and not created:      # (a contact made just now was asked about as it was made)
+            asked = await people_service.ask_contact("contact.edit", actor=actor, person_id=pid, owner=user_id, visibility="personal",
+                                                     stamps_at=stamps_at)
+        async with kernel_door.reported(asked):
+            await _run(db, "UPDATE people SET relationship = ? WHERE id = ? AND user_id = ? AND relationship IS NULL",
+                       (relationship[:60], pid, user_id))
     return pid, created
 
 
@@ -643,6 +664,9 @@ async def list_reviews(db, user_id: str, status: str = "open") -> list[dict]:
 async def resolve_review(db, user_id: str, review_id: str, action: str, *, person_id: Optional[str] = None) -> dict:
     """The member settles a review: ``link`` (to ``person_id``), ``new`` (a separate person), ``dismiss``. Only the member's own
     reviews and people; a resolved review cannot be resolved again."""
+    import people_service
+
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door (``new`` makes a contact): before anything is awaited
     rows = await _all(db, f"SELECT {', '.join(_REVIEW_COLS)} FROM contact_merge_reviews WHERE id = ? AND user_id = ?",
                       (review_id, user_id))
     if not rows:
@@ -680,7 +704,8 @@ async def resolve_review(db, user_id: str, review_id: str, action: str, *, perso
                     raise ContactsError("link needs one of your people", 400)
                 target, status = person_id, "linked"
             else:
-                target, status = await _create_person(db, user_id, card.get("full_name") or "Unnamed", now=now), "kept_separate"
+                target, status = await _create_person(db, user_id, card.get("full_name") or "Unnamed", now=now, actor=user_id,
+                                                      stamps_at=stamps_at), "kept_separate"
             await _link(db, user_id, target, rv["source_contact_id"], method="member_confirmed", linked_by=user_id,
                         evidence={"review": review_id}, now=now)
             await _apply_source_card(db, user_id, target, rv["source_contact_id"], card, source=provider, read_only=ro, now=now)
