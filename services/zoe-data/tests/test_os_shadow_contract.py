@@ -768,6 +768,68 @@ def test_the_action_doors_and_the_real_kernel_agree_on_verbs_levels_and_the_deci
         stop(proc)
 
 
+# ---- the memory door (ZOE_OS_MEMORY = kernel) against the real kernel -------------------------------------------------------------------
+def test_the_memory_door_and_the_real_kernel_agree_on_verbs_codes_and_the_decision(state, monkeypatch):
+    """``MemoryService`` on a recording collection asks the REAL daemon: a child remembers and corrects their own fact; the
+    child's correction of the adult's private fact is refused and the fact is unchanged; the adult corrects the child's (today's
+    rule: an adult may); a stranger's own remember is refused; a forget by the child is made and recorded. Nothing the kernel
+    holds carries a word of any fact. Control run: with the memory verbs left out of the daemon's manifest every ask is
+    refused (``not_in_manifest``) and the first remember raises."""
+    import memory_actor
+    import memory_door
+    import memory_scenarios as scenarios
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import memory_door as lab_door
+    finally:
+        sys.path.remove(str(LAB))
+    assert tuple(os_shadow.AREAS["memory"].verbs) == tuple(lab_door.VERBS)
+    assert (memory_door.REMEMBER, memory_door.CORRECT, memory_door.APPROVE, memory_door.FORGET) == tuple(lab_door.VERBS)
+    assert set(memory_door.MemoryRefused.lines) <= {"not_owner", "adults_only", "unknown_person"} and lab_door.STRICT is False
+    kid, old, new = "member-kid", "User's dog is named Teddy.", "User's dog is named Rex."
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_MEMORY", "kernel")
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 2.0)
+
+        async def run():
+            scenarios._fresh()
+            w = scenarios.World()
+            out = []
+
+            async def tried(awaitable):
+                try:
+                    return "made" if await awaitable is not None else "dropped"
+                except memory_door.MemoryRefused as exc:
+                    return exc.reason
+
+            mine = await w.svc.ingest(old, user_id=kid, source="voice_fact", acting=memory_actor.member(kid))
+            theirs = await w.svc.ingest("User likes quiet mornings.", user_id=MEMBER, source="voice_fact", acting=memory_actor.member(MEMBER))
+            out.append(await tried(w.svc.review(theirs.id, decision="edit", edits="User likes loud mornings.", actor=kid,
+                                                acting=memory_actor.member(kid))))
+            out.append(w.col.rows[theirs.id][1]["status"])
+            out.append(await tried(w.svc.review(mine.id, decision="edit", edits=new, actor=MEMBER, origin="admin",
+                                                acting=memory_actor.member(MEMBER))))
+            out.append(await tried(w.svc.ingest(old, user_id="member-nobody", source="voice_fact",
+                                                acting=memory_actor.member("member-nobody"))))
+            out.append(await tried(w.svc.review(mine.id, decision="reject", actor=kid, acting=memory_actor.member(kid))))
+            await asyncio.sleep(0.5)                       # the told-afterwards forget reaches the kernel
+            return out
+
+        try:
+            assert asyncio.run(run()) == ["not_owner", "approved", "made", "unknown_person", "made"]
+        finally:
+            scenarios._restore()
+            scenarios._fresh(done=True)
+        for word in ("Teddy", "Rex", "quiet", "mornings", "dog"):
+            assert holds(state, word) == [], word
+        assert holds(state, "member-nobody") == []
+    finally:
+        stop(proc)
+
+
 @needs_forget
 def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
     """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:

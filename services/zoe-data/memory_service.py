@@ -41,6 +41,7 @@ Safety rails enforced here, not in callers:
 from __future__ import annotations
 
 import memory_actor
+import memory_door as _memory_door
 import asyncio
 import contextlib
 import functools
@@ -2280,6 +2281,7 @@ class MemoryService:
         # the last physical-erase report (counts only) of a hard delete / forget, for the operator endpoints
         self.last_erase_report: dict[str, Any] | None = None
 
+    @_memory_door.reporting
     async def ingest(
         self,
         text: str,
@@ -2364,6 +2366,12 @@ class MemoryService:
         # writer. Identity comes from the account; the shared guest bucket is readable by every guest session and is nobody's
         # memory. The words cannot be re-attributed to a member later without proof, so they are discarded, not held.
         # In-session context (the conversation history) is not this store and is untouched.
+        try:      # ZOE_OS_MEMORY=kernel and a member acting: may they remember this? (off / automatic: nothing)
+            await _memory_door.ask(acting, _memory_door.REMEMBER, owner=user_id,
+                                   household=_MEMORY_SCOPE_TO_VISIBILITY.get(str(scope)) == "family")
+        except _memory_door.MemoryRefused:
+            if not _is_unidentified(user_id):
+                raise          # (nobody identified: refused there too, and dropped below exactly as it always was)
         if _is_unidentified(user_id):
             self._bump(GUEST_DROP, source)
             logger.info("GUEST_MEMORY_DISCARD writer=%s op=ingest", source)
@@ -2948,6 +2956,7 @@ class MemoryService:
     # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
     # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
     @_erase_gate.whole_member_erase
+    @_memory_door.reporting
     async def delete_user(self, user_id: str, *, acting: "memory_actor.Acting", actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
@@ -2961,6 +2970,8 @@ class MemoryService:
         sweep that matches no rows writes nothing — it removes nothing. Documented in
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
         memory_actor.check(acting)
+        # a whole-member forget: made first, told afterwards (their own: the kernel forgets them too, and records nothing)
+        _memory_door.tell_after(acting, owner=user_id if getattr(acting, "user_id", None) == user_id else None)
         self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
@@ -3320,6 +3331,7 @@ class MemoryService:
             return None
         return row
 
+    @_memory_door.reporting
     async def review(
         self,
         mem_id: str,
@@ -3388,6 +3400,12 @@ class MemoryService:
             raise MemoryServiceError(f"memory {mem_id} not found")
         user_id = current.metadata.get("user_id") or current.metadata.get("wing")
         self._require(user_id, "reviewed row is missing user_id metadata")
+        _household = current.metadata.get("visibility") == "family"
+        if decision in ("edit", "approve"):      # ZOE_OS_MEMORY=kernel and a member acting: asked first
+            await _memory_door.ask(acting, _memory_door.CORRECT if decision == "edit" else _memory_door.APPROVE,
+                                   owner=user_id, household=_household, row=mem_id)
+        else:                                    # reject / archive: a forget, made first and told afterwards
+            _memory_door.tell_after(acting, owner=user_id, household=_household, row=mem_id)
         if decision == "edit" and _is_unidentified(user_id):
             # an edit WRITES a new row: none for a guest-owned row (same wall as ingest); reject/archive still clear one
             self._bump(GUEST_DROP, actor)
@@ -3719,6 +3737,7 @@ class MemoryService:
                                         source=f"edit:{actor}")
         return MemoryRef(id=new_id, text=scrubbed, metadata=new_meta)
 
+    @_memory_door.reporting
     async def supersede_by(
         self, user_id: str, old_id: str, new_id: str, *, acting: "memory_actor.Acting", actor: str, note: str = "",
     ) -> bool:
@@ -3733,6 +3752,10 @@ class MemoryService:
         ``col.update`` without documents keeps both embeddings. Never raises.
         """
         memory_actor.check(acting)
+        if _memory_door.on(acting):      # (door on only) the row being replaced says whether the house shares it
+            _old = await self.get(old_id)
+            await _memory_door.ask(acting, _memory_door.CORRECT, owner=user_id, row=old_id,
+                                   household=bool(_old and _old.metadata.get("visibility") == "family"))
         if not user_id or not old_id or not new_id or old_id == new_id:
             return False
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
@@ -4200,12 +4223,14 @@ class MemoryService:
             return ""
         return _auth.row_class(target.metadata or {}, target.text) if target is not None else ""
 
+    @_memory_door.reporting
     async def set_curated_standing(self, user_id: str, mem_ids: Iterable[str], *, acting: "memory_actor.Acting", protect: bool, actor: str) -> int:
         """Restamp curated rows (``origin="curator"``) of ``user_id``: ``protect`` -> the ``curated`` class (only a curator changes
         them), else ``user_stated`` (the member own word wins again; ``authority_basis="curated_released"``, origin kept). The
         adult opt-out / opt-in of a category (``memory_curation``). Only approved curated rows the member owns are touched; each is
         audited. Returns how many changed."""
         memory_actor.check(acting)
+        await _memory_door.ask(acting, _memory_door.CORRECT, owner=user_id, household=False)
         want = [str(i) for i in mem_ids if i]
         if not user_id or not want:
             return 0
@@ -4282,6 +4307,7 @@ class MemoryService:
             logger.warning("memory_service: archive_duplicate failed (%s)", type(exc).__name__)
             return False
 
+    @_memory_door.reporting
     async def flag_challenged(self, mem_id: str, *, acting: "memory_actor.Acting", user_id: str, utterance: str,
                               actor: str = "trait_challenge") -> bool:
         """The owner HEDGED or DENIED what this approved row says about them ("I'm not sure I'm a
@@ -4291,6 +4317,7 @@ class MemoryService:
         an approve restores it. Only the row's own user may do this; any other row is refused.
         Never raises; returns whether it flagged."""
         memory_actor.check(acting)
+        await _memory_door.ask(acting, _memory_door.CORRECT, owner=user_id, household=False, row=mem_id)
         try:
             if not user_id:
                 return False
@@ -4593,6 +4620,7 @@ class MemoryService:
         await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
                               lock_held=True, reach_shadow=False, acting=memory_actor.AUTOMATIC)   # the night's own fresh rows, never shadowed; under the memory lock
 
+    @_memory_door.reporting
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, acting: "memory_actor.Acting", actor: str,
                          reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False,
                          reach_shadow: bool = True, finish_missing: bool = False) -> dict[str, Any]:
@@ -4604,6 +4632,8 @@ class MemoryService:
         intent row cannot be written nothing is deleted. ``finish_missing`` is the parked replay: clean the owned audit trail and
         physical residue even when the rows already went, and raise if physical cleanup fails. Returns counts only."""
         memory_actor.check(acting)
+        ids = list(ids)
+        _memory_door.tell_after(acting, owner=user_id, row=ids[0] if len(ids) == 1 else None)      # a forget: made first, told afterwards
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "erase_rows")
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
