@@ -94,7 +94,9 @@ class EventRefused(kernel_door.Refused):
     fallback = "I'm not allowed to change that event."
 
 
-stamps_now = kernel_door.stamps_now     # a caller's first statement, before anything it awaits; handed back as ``stamps_at``
+def stamps_now() -> Optional[dict]:
+    """A caller's first statement, before anything it awaits; handed back as ``stamps_at``. None unless the CALENDAR door is on."""
+    return kernel_door.stamps_now("calendar")
 
 
 async def _gate(verb: str, *, actor: Optional[str], event_id: str, owner: object, visibility: object,

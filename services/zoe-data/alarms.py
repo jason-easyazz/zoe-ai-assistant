@@ -208,8 +208,8 @@ class Viewer:
     panel: bool = False  # the wall panel / a guest at it (household rules)
     # The Zoe OS alarms door (below): the erase stamps as they were when this viewer was MADE. A viewer is made first thing in a
     # request, before anything is read, and the alarm it then acts on (and so its owner) is read by the caller: the stamps an ask
-    # carries must not be newer than that read. None with every door off (flag reads only, nothing copied).
-    stamps_at: Optional[dict] = field(default_factory=kernel_door.stamps_now, compare=False, repr=False)
+    # carries must not be newer than that read. None unless the alarms / timers door is on (a flag read, nothing copied).
+    stamps_at: Optional[dict] = field(default_factory=lambda: kernel_door.stamps_now("alarms", "timers"), compare=False, repr=False)
 
     @property
     def owner_id(self) -> str:
@@ -295,7 +295,8 @@ async def _gate(verb: str, actor: Optional["Viewer"], alarm_id: str, owner: str)
 
 
 def _note(verb: str, actor: Optional["Viewer"], alarm: dict) -> None:
-    """Tell the kernel a ringing alarm was silenced (already done). Never blocks, never raises. Flag off: one flag read."""
+    """Tell the kernel a ringing alarm was silenced, or an alarm turned off (already done). Never blocks, never raises. Flag
+    off: one flag read."""
     if not os_shadow.area_on("alarms"):
         return
     if actor is None:
@@ -481,9 +482,14 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
             stored_date = date.fromisoformat(str(ch["once_date"])).isoformat()
         except ValueError:
             raise AlarmError("That is not a date I can use.") from None
+    # An edit that SILENCES is never held up by the kernel: every edit lands the alarm idle, so one made while it rings or is
+    # snoozed stops it, and one that turns it off must take effect at once. Those are made first and told afterwards, as snooze
+    # and dismiss are (``_note``); the kernel can neither delay nor refuse them. Every other edit asks first.
+    was_sounding = alarm.get("state") in ("ringing", "snoozed")
+    silences = was_sounding or ("enabled" in ch and not on)
     # The write is guarded by the version the edit was computed from (``updated_at``): a concurrent disable / dismiss / ring that
     # landed in between changes it, and this edit then refuses instead of writing back its stale copy of every column.
-    asked = await _gate("alarm.edit", actor, alarm["id"], alarm["user_id"])
+    asked = None if silences else await _gate("alarm.edit", actor, alarm["id"], alarm["user_id"])
     async with kernel_door.reported(asked):       # a write that raises, or that lost its race, is reported ``failed``
         async with _atomic(db):
             won = await _rowcount(
@@ -498,6 +504,8 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
         if not won:
             raise AlarmError("That alarm just changed. Try again.", 409)
     await db.commit()
+    if silences:
+        _note("alarm.stop" if was_sounding else "alarm.edit", actor, alarm)     # AFTER the write: told, never asked first
     await _emit("updated", alarm)
     return await get_alarm(db, alarm["id"])  # type: ignore[return-value]
 

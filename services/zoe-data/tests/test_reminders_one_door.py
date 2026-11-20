@@ -276,7 +276,9 @@ async def test_accepted_suggestion_is_one_transaction_on_one_connection(monkeypa
     (row,) = state.reminders.values()
     assert (row["due_date"], row["due_time"]) == ("2099-06-16", "15:00")
     assert scheduled == [(row["id"], 0)] and len(announced) == 1         # job and broadcast only after the commit (depth 0)
-    assert {d for c in pool.conns for _, d in c.log} == {1}              # EVERY statement inside the transaction
+    entries = [e for c in pool.conns for e in c.log]
+    assert {op for op, d in entries if d == 0} <= {"SELECT"}             # outside the transaction: only the after-commit re-read
+    assert {d for op, d in entries if op != "SELECT"} == {1}             # EVERY write inside the transaction
 
 
 @pytest.mark.asyncio
@@ -442,6 +444,53 @@ async def test_an_accepted_suggestion_never_holds_its_connection_while_the_job_b
     out = await asyncio.wait_for(pending_suggestions.execute_suggestion("sug-1", A), timeout=3)
     assert out["ok"] is True and scheduled == list(state.reminders) and len(scheduled) == 1
     assert pool.gate._value == 1                               # every borrowed connection was given back
+
+
+@pytest.mark.parametrize("gone", [False, True])
+@pytest.mark.asyncio
+async def test_an_accepted_suggestions_reminder_is_read_again_after_the_commit_before_it_is_announced(monkeypatch, gone):
+    """The after-commit step used the row read INSIDE the transaction. A forget or a delete can land between the commit and
+    that step: the reminder is read again there, and one that has gone is not scheduled, not broadcast and not told to the
+    shadow (only the receipt of the write that did happen is kept). One still there is announced from the fresh row. Control
+    run: with the re-read dropped from ``reminder_service._after`` (the stale row used) the gone reminder is scheduled and
+    broadcast and this fails."""
+    import os_shadow
+    import write_receipts
+
+    state = _PgState(slots='{"title": "book the vet", "time": "15:00"}')
+    pool, seen = _OnePool(state), []
+    real_brief = pending_suggestions._BriefDb
+
+    async def allow(*_a, **_k):
+        return None
+
+    async def schedule_reminder(**kw):
+        seen.append(("scheduled", kw["item_id"]))
+
+    async def broadcast(channel, event, data, **_k):
+        seen.append(("broadcast", event, data.get("id")))
+
+    def after_the_commit():                                   # what a forget landing right after the commit leaves behind
+        if gone:
+            state.reminders.clear()
+        return real_brief()
+
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: pool)
+    monkeypatch.setattr(pending_suggestions, "_BriefDb", after_the_commit)
+    monkeypatch.setattr("reminder_service.require_feature_access", allow)
+    monkeypatch.setattr("reminder_service.broadcaster.broadcast", broadcast)
+    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", schedule_reminder)
+    monkeypatch.setattr(os_shadow, "note_reminder_create", lambda *a, **k: seen.append(("shadow",)))
+    monkeypatch.setattr(write_receipts, "record", lambda *a, **k: seen.append(("receipt", a[1], a[2])))
+    monkeypatch.setattr("anticipation.mode", lambda: "off")
+    out = await asyncio.wait_for(pending_suggestions.execute_suggestion("sug-1", A), timeout=3)
+    rid = out["result"]["reminder_id"]
+    assert out["ok"] is True and ("receipt", "reminder", rid) in seen
+    kinds = [e[0] for e in seen]
+    if gone:
+        assert kinds == ["receipt"]                           # nothing scheduled, nothing broadcast, nothing told to the shadow
+    else:
+        assert sorted(kinds) == ["broadcast", "receipt", "scheduled", "shadow"] and ("broadcast", "reminder_created", rid) in seen
 
 
 # ── fault 2: the spoken "cancel that" is bound to the reminder the create just made, by id ─────────────────────────────────
@@ -821,3 +870,153 @@ async def test_an_accepted_weekday_hint_with_a_time_makes_a_reminder_at_that_tim
     _accept_world(monkeypatch, state2)
     assert await pending_suggestions.execute_suggestion("sug-1", A) == {"ok": False, "error": "reminder_needs_time"}
     assert state2.reminders == {} and state2.resolved == 0
+
+
+# ── "cancel that" over the CHAT route, end to end (found live after #2686: it went to the brain, which could not cancel) ─────
+class _ChatRequest:
+    """What ``routers.chat.chat`` reads of a request: its JSON body and its headers."""
+
+    def __init__(self, body):
+        self._body, self.headers, self.client, self.state = body, {}, None, type("S", (), {})()
+
+    async def json(self):
+        return self._body
+
+
+@pytest.fixture
+def chat_turn(monkeypatch, quiet):
+    """One non-streaming chat turn through the REAL route function (``POST /api/chat/?stream=false``): the real intent
+    detection (the slot filler answered as it would for the sentence), the real executors and the real reminder door over a
+    store of rows. Everything a turn does besides (session rows, the transcript, memory candidates, the tiers that answer
+    read-only questions) is stubbed; the brain is wired to FAIL the test if a turn reaches it."""
+    import fast_tiers
+    import intent_router
+    import nlu_extractor
+    import panel_principal
+    from routers import chat as chat_router
+
+    store = _Rows()
+    intent_router._JUST_SET_REMINDER.clear()
+    chat_router._CHAT_CONTEXTS.clear()
+
+    async def nothing(*_a, **_k):
+        return None
+
+    async def session_of(body, user_id, **_k):
+        return body["session_id"]
+
+    async def slots(name, raw):
+        assert name == "reminder_create"
+        return {"title": "take pills", "date": "2099-06-16", "time": "10:00"}
+
+    async def brain(*_a, **_k):
+        raise AssertionError("the turn went to the brain")
+
+    monkeypatch.setattr("database.get_db_ctx", _ctx(store))
+    monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", quiet["schedule_due"])
+    monkeypatch.setattr(nlu_extractor, "extract_slots_for_intent", slots)
+    monkeypatch.setattr(fast_tiers, "resolve", nothing)
+    monkeypatch.setattr(fast_tiers, "keyword_intent_allowed", lambda *a, **k: True)
+    for name in ("mark_if_panel", "record_turn_home_control"):
+        monkeypatch.setattr(panel_principal, name, nothing)
+    for name in ("_ensure_user_and_chat_session", "_save_chat_message", "_persist_memory_candidates"):
+        monkeypatch.setattr(chat_router, name, nothing)
+    monkeypatch.setattr(chat_router, "resolve_session_id", session_of)
+    monkeypatch.setattr(chat_router, "_brain_oneshot", brain)
+    monkeypatch.setattr(chat_router, "_INTENT_FAST_PATH_ENABLED", True)
+    monkeypatch.setattr(chat_router, "_pi_hybrid_enabled_for_chat", lambda *a, **k: False, raising=False)
+
+    async def turn(text, session="chat-one", who=A):
+        out = await chat_router.chat(_ChatRequest({"message": text, "session_id": session}), user={"user_id": who, "role": "user"},
+                                     stream=False)
+        return out.get("response")
+
+    yield store, turn
+    intent_router._JUST_SET_REMINDER.clear()
+    chat_router._CHAT_CONTEXTS.clear()
+
+
+def _live(store) -> list:
+    return sorted(rid for rid, row in store.rows.items() if not row["deleted"])
+
+
+@pytest.mark.asyncio
+async def test_cancel_that_works_over_the_chat_route(chat_turn):
+    """"remind me to X tomorrow at 10am" then "cancel that" in the SAME chat session cancels that reminder and answers from the
+    executor: the turn never reaches the brain. Control run: with the binding dropped from ``detect_and_extract_intent`` (the
+    wrapper calling the inner detector only) the second turn goes to the brain and the fixture's stub fails the test."""
+    store, turn = chat_turn
+    assert "take pills" in (await turn("remind me to take pills tomorrow at 10am")).lower()
+    (made,) = _live(store)
+    assert await turn("cancel that") == rs.SPOKEN["cancelled"].format(title="take pills")
+    assert _live(store) == [] and store.rows[made]["deleted"] == 1
+    assert await turn("cancel that") == rs.SPOKEN["cancel_nothing"]             # nothing is left that "that" could mean
+
+
+@pytest.mark.asyncio
+async def test_two_chats_with_the_same_title_never_cancel_each_others_reminder(chat_turn):
+    """The same member, two chat sessions, the SAME words: each "cancel that" reaches the reminder its own session made. The
+    note used to be filed under the title, so the second create replaced the first and the first chat's "cancel that" deleted
+    the other chat's reminder. Control run: with ``_asked_digest`` ignoring the conversation this fails at the first cancel."""
+    store, turn = chat_turn
+    await turn("remind me to take pills tomorrow at 10am", session="chat-one")
+    (first,) = _live(store)
+    await turn("remind me to take pills tomorrow at 10am", session="chat-two")
+    second = next(r for r in _live(store) if r != first)
+    assert await turn("cancel that", session="chat-one") == rs.SPOKEN["cancelled"].format(title="take pills")
+    assert _live(store) == [second]                                              # the other chat's reminder is untouched
+    assert await turn("cancel that", session="chat-two") == rs.SPOKEN["cancelled"].format(title="take pills")
+    assert _live(store) == []
+
+
+@pytest.mark.asyncio
+async def test_over_chat_a_refusing_sentence_cancels_nothing_and_another_intent_ends_the_binding(chat_turn, monkeypatch):
+    """"don't cancel that" is not a cancel (it is left to normal interpretation: here the brain stub, which the test allows for
+    that one turn). And once another intent has been handled in the conversation, "that" is no longer the reminder. Control
+    run: with the ``_forget_reminder_just_set`` line dropped from the wrapper, the last "cancel that" deletes the reminder."""
+    import intent_router
+    from routers import chat as chat_router
+
+    store, turn = chat_turn
+    await turn("remind me to take pills tomorrow at 10am")
+    (made,) = _live(store)
+
+    async def brain(*_a, **_k):
+        return "ok"
+
+    monkeypatch.setattr(chat_router, "_brain_oneshot", brain)
+    await turn("don't cancel that")
+    assert _live(store) == [made]
+    assert intent_router._reminder_just_set(A, "", "chat-one") == made           # still bound: nothing else has happened
+    await turn("what time is it")                                                # another intent, handled in this conversation
+    assert intent_router._reminder_just_set(A, "", "chat-one") is None
+    await turn("cancel that")
+    assert _live(store) == [made]
+
+
+@pytest.mark.asyncio
+async def test_two_panels_voices_are_two_conversations_and_the_voice_route_names_its_panel(monkeypatch, quiet):
+    """On the panel voice path the conversation is the panel (``panel:<id>``, set on the intent right after detection): the
+    same member setting the same reminder at two panels gets two notes, and each panel's "cancel that" reaches its own.
+    Control run: with the ``_quick_intent.conversation = ...`` line dropped from ``routers/voice_tts.py`` the source pin fails."""
+    import intent_router
+
+    store = _Rows()
+    monkeypatch.setattr("database.get_db_ctx", _ctx(store))
+    monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", quiet["schedule_due"])
+    intent_router._JUST_SET_REMINDER.clear()
+    made = {}
+    for panel in ("panel:hall", "panel:kitchen"):
+        before = set(store.rows)
+        await execute_intent(Intent("reminder_create", {"title": "take pills", "date": "2099-06-16", "time": "15:00"}, conversation=panel), A)
+        (made[panel],) = set(store.rows) - before
+    out = await execute_intent(Intent("reminder_cancel", {"title": "take pills", "after": "reminder_create"}, conversation="panel:hall"), A)
+    assert out == rs.SPOKEN["cancelled"].format(title="take pills")
+    assert store.rows[made["panel:hall"]]["deleted"] == 1 and store.rows[made["panel:kitchen"]]["deleted"] == 0
+    held = repr(intent_router._JUST_SET_REMINDER)
+    assert "panel" not in held and "hall" not in held and "pills" not in held        # digests, ids and a number only
+    intent_router._JUST_SET_REMINDER.clear()
+    from pathlib import Path
+
+    voice = (Path(intent_router.__file__).parent / "routers" / "voice_tts.py").read_text("utf-8")
+    assert '_quick_intent.conversation = f"panel:{panel_id}"' in voice

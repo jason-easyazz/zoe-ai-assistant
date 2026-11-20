@@ -75,8 +75,9 @@ def stamps_now() -> dict | None:
     """The erase stamps as they are NOW, or None with every door off (``kernel_door.stamps_now``). Every ``*_reminder_record``
     function takes this as its FIRST statement, before anything it awaits (the row read that names the reminder's owner
     included). A caller of ``create_reminder_record`` TELLS the door who the reminder is for, so it takes its own as ITS first
-    statement and passes it as ``stamps_at`` (``tests/test_reminders_kernel_door.py`` scans every caller)."""
-    return kernel_door.stamps_now()
+    statement and passes it as ``stamps_at`` (``tests/test_reminders_kernel_door.py`` scans every caller). None unless the
+    REMINDERS door is on."""
+    return kernel_door.stamps_now("reminders")
 
 
 async def _gate(verb: str, *, actor: Mapping[str, object], reminder_id: str, owner: object, visibility: object,
@@ -412,8 +413,17 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         await _announce(reminder)
     else:                             # read back inside the caller's transaction; everything else waits for its commit
         async def _after(jobs_db) -> None:
+            # The row is read AGAIN here, after the commit: the copy read inside the transaction can be stale by now (the
+            # member's forget, or a delete, can land between the commit and this step). A reminder that has gone is not
+            # scheduled, not broadcast and not told to the shadow; only the receipt of the write that did happen is kept.
+            cur = await jobs_db.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ? AND deleted = 0", [reminder_id, user_id])
+            fresh = row_to_dict(await cur.fetchone())
+            if not fresh:
+                write_receipts.record(user_id, "reminder", reminder_id, "create_reminder_record")
+                logger.info("reminder create: the row had gone before its after-commit step; nothing scheduled or announced")
+                return
             _vouch()
-            await _announce(reminder, jobs_db)
+            await _announce(fresh, jobs_db)
 
         after_commit.append(_after)
     return reminder

@@ -7,36 +7,25 @@ Negative control (run, then restored): ``UPDATE reminders SET deleted = 1`` plan
 fails naming that file. The planted cases below keep the scan itself honest; control run for the f-string case: with
 ``_texts`` reading constants only, the interpolated-schema forms are not caught and ``test_planted_write_is_caught`` fails;
 control run for the schema: with the unquoted schema pattern back to letters and underscores, ``public1.reminders`` escapes and
-the same test fails."""
-import ast
-import re
+the same test fails; control run for a concatenation: with ``sql_scan.texts`` skipping ``+`` expressions, the planted
+``'UPDATE ' + 'reminders SET ...'`` escapes and the same test fails; control run for ONLY: with the optional ``ONLY`` dropped from
+``sql_scan.write_pattern`` the planted ``UPDATE ONLY reminders`` escapes."""
+import ast  # noqa: F401 (kept for readers of the scan: the helper below walks the tree)
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 DOOR = "reminder_service.py"
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
-#: (``ONLY``: Postgres' ``UPDATE ONLY t`` / ``DELETE FROM ONLY t`` write the same table)
-WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA + r"[\"`\[]?reminders\b", re.I)
-
-
-def _texts(tree):
-    """Every SQL-bearing string of a module: plain constants, and each f-string put back together with ``x`` standing where a
-    value is interpolated (so ``f"UPDATE {schema}.reminders SET ..."`` reads ``UPDATE x.reminders SET ...``; its pieces alone
-    would each look harmless)."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
+WRITE = sql_scan.write_pattern("reminders")
 
 
 def writes(source: str) -> list:
-    """Every string (f-strings whole) that writes the table."""
-    return [text for text in _texts(ast.parse(source)) if WRITE.search(text)]
+    """Every text (f-strings and concatenations whole; ``tests/sql_scan.py``) that writes the table."""
+    return sql_scan.writes(source, WRITE)
 
 
 def test_one_door():
@@ -52,15 +41,17 @@ def test_planted_write_is_caught():
     for sql in ("UPDATE reminders SET title = ?", "INSERT INTO reminders (id) VALUES (?)", "DELETE FROM reminders WHERE id = ?",
                 'UPDATE "public"."reminders" SET x = ?', "insert or replace into reminders (id) values (1)",
                 "UPDATE public.reminders SET x = ?", "UPDATE public1.reminders SET x = ?", "DELETE FROM app_2$x.reminders WHERE id = ?",
-                'INSERT INTO "My Schema 1".reminders (id) VALUES (?)', "UPDATE public . reminders SET x = ?",
-                # control run: without the optional ONLY in the pattern these three escape and this test fails
-                "UPDATE ONLY reminders SET x = ?", "DELETE FROM ONLY reminders WHERE id = ?", "update only public1.reminders set x = ?"):
+                'INSERT INTO "My Schema 1".reminders (id) VALUES (?)', "UPDATE public . reminders SET x = ?"):
         assert writes(f"async def f(db):\n    await db.execute('{sql}')\n"), sql
     assert writes("async def f(db, sets):\n    await db.execute(f\"UPDATE reminders SET {', '.join(sets)} WHERE id = ?\")\n")
     # a write split across the parts of an f-string (review of #2686): an interpolated schema, quoted or not, and a split keyword
     for sql in ('f"UPDATE {schema}.reminders SET x = ?"', 'f"DELETE FROM {schema}.reminders WHERE id = ?"',
                 "f'INSERT INTO \"{schema}\".reminders (id) VALUES (?)'", 'f"UPDATE {schema}.reminders SET {col} = ?"'):
         assert writes(f"async def f(db, schema, col):\n    await db.execute({sql})\n"), sql
+    # a write split by ``+``, and Postgres' ONLY (review of #2686: a scan that reads whole constants misses both)
+    for planted in sql_scan.planted_forms("reminders"):
+        assert writes(planted), planted
+    assert not writes("async def f(db):\n    n = 1 + 2\n    await db.execute('SELECT * FROM ' + 'reminders')\n")
     assert not writes('async def f(db, t):\n    await db.execute(f"SELECT * FROM {t}.reminders WHERE id = ?")\n')
     assert not writes("async def f(db):\n    await db.execute('UPDATE reminders_archive SET x = ?')\n"
                       "    await db.execute('SELECT * FROM reminders WHERE id = ?')\n")
