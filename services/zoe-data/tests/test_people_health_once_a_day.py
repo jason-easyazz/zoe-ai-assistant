@@ -53,8 +53,26 @@ class DB:
                      {"id": WREN, "name": "Wren", "user_id": MEMBER, "last_contacted_at": None, "context": None}])
 
 
-def tick(db, when=NINE):
-    return [r.item_id for r in asyncio.run(ph.PeopleHealthTrigger().check(db, now=when))]
+def tick(db, when=NINE, deliver=lambda item_id: None):
+    """One slow-loop tick as the ENGINE runs it: ``check``, then ``engine._fire_trigger_results`` with ``fire_notification``
+    replaced by ``deliver`` (which may raise). Returns the people offered."""
+    from proactive import engine
+
+    async def fire(**kw):
+        deliver(kw["item_id"])
+        if not any(p == (kw["user_id"], kw["item_id"]) for p in getattr(db, "pending", [])) and hasattr(db, "pending"):
+            db.pending.append((kw["user_id"], kw["item_id"]))      # the pending row every delivered nudge leaves
+
+    async def run():
+        results = await ph.PeopleHealthTrigger().check(db, now=when)
+        real, engine.fire_notification = engine.fire_notification, fire
+        try:
+            await engine._fire_trigger_results(results)
+        finally:
+            engine.fire_notification = real
+        return [r.item_id for r in results]
+
+    return asyncio.run(run())
 
 
 @pytest.fixture(autouse=True)
@@ -76,6 +94,31 @@ def test_a_restart_inside_the_hour_does_not_repeat_a_nudge_already_recorded():
     """A new process has an empty in-process set; the row the first nudge left is what stops the repeat. Control run: with
     ``already`` ignored in ``check`` the restarted process nudges about Quill again."""
     assert tick(DB(pending=[(MEMBER, QUILL)])) == [WREN]
+
+
+def test_a_nudge_that_failed_before_its_row_existed_is_tried_again_on_the_next_tick():
+    """The mark is made only once the nudge is out. A delivery that raises (a composition or database error before the pending
+    row exists) leaves that person unmarked, so the next tick offers them again, as main did; the one that went out is not
+    repeated. Control run: with ``_fired.add(mark)`` put back in ``check`` (marked before delivery) the second tick offers
+    nobody and Quill's nudge is lost for the day."""
+    db = DB(pending_fails=True)                       # the fired-today read is no help: only the in-process mark is
+
+    def quill_fails(item_id):
+        if item_id == QUILL:
+            raise RuntimeError("compose failed")
+
+    assert tick(db, deliver=quill_fails) == [QUILL, WREN]
+    assert tick(db, NINE + timedelta(minutes=5), deliver=quill_fails) == [QUILL]        # only the one that failed
+    assert tick(db, NINE + timedelta(minutes=10)) == [QUILL]                            # ... and it goes out now
+    assert tick(db, NINE + timedelta(minutes=15)) == []
+
+
+def test_a_row_seen_once_is_remembered_when_a_later_read_fails():
+    """Control run: with the ``_fired.add(mark)`` under ``key in already`` removed, the failing read lets Quill through again."""
+    db = DB(pending=[(MEMBER, QUILL), (MEMBER, WREN)])
+    assert tick(db) == []
+    db.pending_fails = True
+    assert tick(db, NINE + timedelta(minutes=5)) == []
 
 
 def test_the_line_holds_when_the_fired_today_read_fails_and_the_next_day_starts_clean():

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable, Optional
 
 
 @dataclass
@@ -14,6 +14,9 @@ class TriggerResult:
     trigger_type: str
     item_id: str = ""
     context: dict[str, Any] = field(default_factory=dict)
+    #: called by the engine once ``fire_notification`` has returned for this result (the nudge is recorded, or deferred to a
+    #: scheduled job), never when it raised: a trigger's own "already sent today" mark belongs here, not in ``check``
+    on_delivered: Optional[Callable[[], None]] = field(default=None, repr=False, compare=False)
 
 
 class ProactiveTrigger(ABC):

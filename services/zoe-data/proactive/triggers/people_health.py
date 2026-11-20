@@ -7,6 +7,10 @@ ONCE A DAY PER PERSON. The gate used to be the hour alone, and the slow loop run
 spoken to ..." nudge went out up to twelve times inside the 9 o'clock hour. The rule is the birthday trigger's
 (``people_birthday``): a (member, person) already nudged on the household's local day is skipped, read from the
 ``proactive_pending`` row every nudge leaves, with an in-process set holding the line when that read fails or the row has gone.
+
+MARKED ONLY ONCE THE NUDGE IS OUT. ``check`` does not mark a person: it hands the engine a result whose ``on_delivered`` adds
+the mark, and the engine calls that only after ``fire_notification`` returned. A nudge that failed before its pending row
+existed (a composition error, a database error) leaves no mark, so the next tick tries again, as it did before this rule.
 """
 from __future__ import annotations
 
@@ -108,9 +112,12 @@ class PeopleHealthTrigger(ProactiveTrigger):
                     pass
 
             key = (d["user_id"], d["id"])
-            if key in already or key + (local_day,) in _fired:
+            mark = key + (local_day,)
+            if key in already:
+                _fired.add(mark)             # its row exists: remembered here too, for a later tick whose read fails
+                continue
+            if mark in _fired:
                 continue                     # this person was already nudged about today
-            _fired.add(key + (local_day,))
             weeks = _weeks_since(last_c)
             msg = f"You haven't spoken to {d['name']} in {weeks}."
             results.append(TriggerResult(
@@ -119,6 +126,7 @@ class PeopleHealthTrigger(ProactiveTrigger):
                 trigger_type=self.trigger_type,
                 item_id=d["id"],
                 context={"person_id": d["id"], "person_name": d["name"]},
+                on_delivered=lambda mark=mark: _fired.add(mark),
             ))
 
         return results
