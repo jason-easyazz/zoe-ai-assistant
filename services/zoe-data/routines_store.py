@@ -37,6 +37,8 @@ step_added|one_off> kind=<k> via=<said|tapped|-> verified=<0|1> member=<hash8> r
 from __future__ import annotations
 
 import contextlib
+import kernel_door
+import routine_door
 import hashlib
 import logging
 import re
@@ -388,6 +390,7 @@ async def create_routine(owner: str, name: str, anchor: str, *, created_by: Opti
                          window_start: Optional[str] = None, window_end: Optional[str] = None, days_rule: Optional[str] = None,
                          prompt_mode: str = "card", steps=()) -> dict:
     """A new routine for ``owner`` (the subject) with its template steps (``(text, kind)`` pairs or bare texts). Raises StoreError."""
+    stamps_at = routine_door.stamps_now()      # ZOE_OS_ROUTINES=kernel: before anything is awaited (None while off)
     seen = _start()
     if _guest(owner):
         raise StoreError("guest_owns_nothing", 403)
@@ -409,7 +412,10 @@ async def create_routine(owner: str, name: str, anchor: str, *, created_by: Opti
         _check_text(text)
         _check_kind(kind, visibility)
     rid, now = str(uuid.uuid4()), _iso()
-    async with _guarded_write(seen, subject=owner, actors=(created_by or owner,), texts=(name, *(t for t, _ in pairs))) as w:
+    asked = await routine_door.ask(routine_door.CREATE, created_by or owner, rid, owner=owner, household=visibility == "family",
+                                   stamps_at=stamps_at)
+    async with kernel_door.reported(asked), _guarded_write(
+            seen, subject=owner, actors=(created_by or owner,), texts=(name, *(t for t, _ in pairs))) as w:
         db = w.db
         await db.execute(
             "INSERT INTO routines (id, user_id, created_by, name, anchor, window_start, window_end, days_rule, visibility, prompt_mode, "
@@ -496,6 +502,7 @@ async def names_forgotten(members, text) -> bool:
 
 
 async def add_step(actor: str, routine_id: str, text: str, kind: str = "check") -> dict:
+    stamps_at = routine_door.stamps_now()
     seen = _start()
     _check_text(text)
     async with _db() as db:
@@ -506,7 +513,9 @@ async def add_step(actor: str, routine_id: str, text: str, kind: str = "check") 
         raise StoreError("not_allowed", 403)
     _check_kind(kind, r["visibility"])
     sid, now = str(uuid.uuid4()), _iso()
-    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
+    asked = await routine_door.ask(routine_door.change(routine_door.EDIT, r), actor, routine_id, owner=r["user_id"],
+                                   household=r["visibility"] == "family", stamps_at=stamps_at)
+    async with kernel_door.reported(asked), _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
         if await _load(w.db, routine_id) is None:              # erased or deleted since the read above
             raise StoreError("not_found", 404)
         top = await _rows(w.db, "SELECT COALESCE(MAX(position), 0), COUNT(*) FROM routine_steps WHERE routine_id = ? AND deleted = 0",
@@ -596,6 +605,7 @@ async def add_one_off(actor: str, routine_id: str, day: date, text: str, *, kind
                       now: Optional[datetime] = None) -> dict:
     """One extra line on ONE day's copy ("take the drill", tomorrow's morning). Refused for a past day, a day the routine does not run,
     a medicine kind (a medicine line is a template step, never a one-off), or someone who may not edit the routine."""
+    stamps_at = routine_door.stamps_now()
     seen = _start()
     _check_text(text)
     if kind not in ONE_OFF_KINDS:
@@ -612,7 +622,9 @@ async def add_one_off(actor: str, routine_id: str, day: date, text: str, *, kind
     if not r["enabled"] or not runs_on(r, day):
         raise StoreError("not_that_day")
     stamp = _iso()
-    async with _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
+    asked = await routine_door.ask(routine_door.change(routine_door.EDIT, r), actor, routine_id, owner=r["user_id"],
+                                   household=r["visibility"] == "family", stamps_at=stamps_at)
+    async with kernel_door.reported(asked), _guarded_write(seen, subject=r["user_id"], actors=(actor,), texts=(text,)) as w:
         if await _load(w.db, routine_id) is None:
             raise StoreError("not_found", 404)
         did = await _ensure_day(w, r, day, today)
@@ -731,6 +743,7 @@ async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, ver
     """Change one day line: done | skip | snooze (from pending / snoozed) or undo (back to pending). Every visibility and medicine
     rule is checked HERE, so neither the voice tier nor a card route can skip them. A closed day is settled: nothing on it changes
     (``day_closed``). The write is gated on the SUBJECT's and the ACTOR's erasure (``_guarded_write``)."""
+    stamps_at = routine_door.stamps_now()
     seen = _start()
     async with _db() as db:
         rows = await _rows(db, "SELECT ds.state, ds.kind, d.routine_id, d.closed_at FROM routine_day_steps ds "
@@ -764,6 +777,7 @@ async def _apply(ds_id: str, action: str, actor: Optional[str], *, via: str, ver
             (new, until, known, None if _guest(actor) else actor, int(bool(verified)), _iso(), ds_id, state))
         if int(getattr(cur, "rowcount", 1) or 0) == 0:
             raise StoreError("changed_meanwhile", 409)       # a tap and a voice raced (or the day closed): never a double act
+    routine_door.told(new, actor, r, stamps_at)              # made first, told afterwards (ZOE_OS_ROUTINES=kernel; off: nothing)
     event = {"done": "ticked", "skipped": "skipped", "snoozed": "snoozed", "pending": "undo"}[new]
     _log(event, kind=kind, via=via, verified=verified, member=r["user_id"], routine=r["id"],
          **({"was": state} if new == "pending" else {}))
