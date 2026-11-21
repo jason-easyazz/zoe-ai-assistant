@@ -402,6 +402,9 @@ async def record_turn_home_control(request: Any, user: Mapping[str, Any] | None,
         logger.warning("panel_principal: turn home-control check failed (%s) - refusing", type(exc).__name__)
         allowed = False
     record_home_control(allowed)
+    import home_opening
+
+    home_opening.note_turn(user)      # who this turn is for: unlocking or opening needs an adult (home_opening.py)
     return allowed
 
 

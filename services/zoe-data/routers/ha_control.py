@@ -28,6 +28,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+import home_opening
 import panel_principal
 from auth import get_current_user
 from log_throttle import log_throttled, log_upstream_failure
@@ -162,6 +163,10 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
     if not service:
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
+    # Unlocking or opening needs an adult member or a verified voice session (home_opening.py); nothing is sent otherwise.
+    # (The Zoe OS kernel's home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    if await home_opening.refused(entity_id, service, params, user=caller, via="panel_route"):
+        raise HTTPException(status_code=403, detail=home_opening.REFUSAL)
     try:
         body = {"entity_id": entity_id, "action": service, "data": params}
         result = await _bridge_post("/devices/control", body)
