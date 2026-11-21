@@ -115,3 +115,5 @@ Focused pytest in `../tests/` for the touched router plus a live `/health` check
 ## Child DOX Index
 
 No child AGENTS.md files.
+
+- `routines.py` — the routines card API, flag-dark behind `ZOE_ROUTINES` (off = every route 404 before auth): `GET /api/routines/today`, `POST /api/routines/steps/act`. It only says WHO is asking (a member's own session, verified; the bare panel as the household, family routines only); every rule and every write is `routines_store`'s, so a tap is told to the Zoe OS kernel afterwards when `ZOE_OS_ROUTINES=kernel`. No SQL here (`tests/test_routines_card_api.py`).

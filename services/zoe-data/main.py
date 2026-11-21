@@ -2369,6 +2369,8 @@ from routers.music_ma_ui import router as music_ma_ui_router
 app.include_router(music_ma_ui_router)
 from routers.handoff import router as handoff_router
 app.include_router(handoff_router)
+from routers.routines import router as routines_router      # flag-dark (ZOE_ROUTINES): every route 404 while off
+app.include_router(routines_router)
 from routers.smart_home_setup import router as smart_home_setup_router
 app.include_router(smart_home_setup_router)
 app.include_router(skybridge_router)
