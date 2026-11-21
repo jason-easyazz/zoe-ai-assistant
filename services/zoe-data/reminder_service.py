@@ -332,7 +332,8 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         if schedule and reminder.get("id"):
             try:
                 from proactive.triggers.reminder_scan import schedule_due_reminder
-                await schedule_due_reminder(jobs_db, reminder, now_utc=now_utc)
+                with _jobs_on(jobs_db):
+                    await schedule_due_reminder(jobs_db, reminder, now_utc=now_utc)
             except Exception:
                 logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
         await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
@@ -393,6 +394,14 @@ def is_rrule(pattern) -> bool:
     return bool(pattern) and parse_rrule(str(pattern)) is not None
 
 
+def _jobs_on(db):
+    """Around a door's job calls: they run on the door's OWN connection (``proactive.triggers.reminders.on_connection``), never
+    on a second one borrowed while this one is held. That wait is how a full pool deadlocks: every door holds one and waits."""
+    from proactive.triggers.reminders import on_connection
+
+    return on_connection(db)
+
+
 async def _cancel_reminder_jobs_safe(reminder_id: str) -> None:
     """Cancel a reminder's pending jobs BEFORE a state change commits (B2). Best-effort: the in-job claim is the backstop."""
     try:
@@ -422,12 +431,14 @@ async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
                 snooze_at = None
             if snooze_at and snooze_at > datetime.now(timezone.utc):
                 from proactive.triggers.reminders import schedule_reminder
-                await schedule_reminder(user_id=r.get("user_id"), message=r.get("title") or "Reminder",
-                                        send_at=snooze_at, item_id=reminder_id)
+                with _jobs_on(db):
+                    await schedule_reminder(user_id=r.get("user_id"), message=r.get("title") or "Reminder",
+                                            send_at=snooze_at, item_id=reminder_id)
             return  # snooze in the past → reminder_scan will re-pick it up
         if r.get("due_time") or r.get("due_date"):
             from proactive.triggers.reminder_scan import schedule_due_reminder
-            await schedule_due_reminder(db, row)
+            with _jobs_on(db):
+                await schedule_due_reminder(db, row)
     except Exception:
         logger.exception("reminder resync: reschedule failed for %s", reminder_id)
 
@@ -495,7 +506,8 @@ async def update_reminder_record(db, actor: Mapping[str, object], reminder_id: s
     # Bump the schedule generation so any old-time job that already won its claim self-voids at fire time.
     updates.append("schedule_generation = COALESCE(schedule_generation, 0) + 1")
     params.append(reminder_id)
-    await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
+    with _jobs_on(db):
+        await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
     await db.execute(f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?", params)
     await db.commit()
     await _reschedule_reminder_due_safe(db, reminder_id)
@@ -508,7 +520,8 @@ async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: s
     """Cancel a reminder (soft delete): the pending job is cancelled BEFORE the row is marked deleted."""
     await require_feature_access(db, actor, feature="reminders", action="delete")
     await load_for_actor(db, actor, reminder_id, verb="cancel", own_only=own_only)
-    await _cancel_reminder_jobs_safe(reminder_id)
+    with _jobs_on(db):
+        await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute("UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
     await db.commit()
     await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id}, user_id=str(actor["user_id"]))
@@ -517,7 +530,7 @@ async def delete_reminder_record(db, actor: Mapping[str, object], reminder_id: s
 
 async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: str, minutes: int) -> dict:
     """Snooze (the screen's, owner only): ``snoozed_until`` is a UTC instant it re-fires at; the due date, the time, the rule
-    and the done mark are untouched. (The brain's snooze tool writes a different row: ``tool_snooze_reminder_record``.)"""
+    and the done mark are untouched. The ONE snooze: the brain's ``reminder_snooze`` tool calls this too."""
     await require_feature_access(db, actor, feature="reminders", action="snooze")
     user_id = str(actor["user_id"])
     row = await load_for_actor(db, actor, reminder_id, verb="snooze")
@@ -525,7 +538,8 @@ async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: s
     title = row.get("title") or "Reminder"
     snoozed_until = (datetime.utcnow() + timedelta(minutes=minutes)).isoformat() + "Z"
     # B2: cancel the OLD-time job before the state change commits; the generation bump voids an already-claimed one.
-    await _cancel_reminder_jobs_safe(reminder_id)
+    with _jobs_on(db):
+        await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
         "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
         "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
@@ -540,7 +554,8 @@ async def snooze_reminder_record(db, actor: Mapping[str, object], reminder_id: s
         snooze_at = datetime.fromisoformat(snoozed_until.replace("Z", "+00:00"))
         if snooze_at.tzinfo is None:
             snooze_at = snooze_at.replace(tzinfo=timezone.utc)
-        await schedule_reminder(user_id=owner_id, message=title, send_at=snooze_at, item_id=reminder_id)
+        with _jobs_on(db):
+            await schedule_reminder(user_id=owner_id, message=title, send_at=snooze_at, item_id=reminder_id)
     except Exception:
         logger.exception("reminder snooze: reschedule at snoozed_until failed for %s", reminder_id)
     reminder = await _reread(db, reminder_id)
@@ -563,14 +578,16 @@ async def acknowledge_reminder_record(db, actor: Mapping[str, object], reminder_
             [reminder_id],
         )
     else:
-        await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
+        with _jobs_on(db):
+            await _cancel_reminder_jobs_safe(reminder_id)  # B2: before the state change commits
         await db.execute("UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?", [reminder_id])
     await _create_notification(db, user_id=user_id, notif_type="reminder_acknowledged", title="Reminder Done",
                                message=f"Reminder acknowledged: {row.get('title', 'Reminder')}",
                                data={"reminder_id": reminder_id})
     await db.commit()
     if recurring:
-        await _cancel_reminder_jobs_safe(reminder_id)
+        with _jobs_on(db):
+            await _cancel_reminder_jobs_safe(reminder_id)
         await _reschedule_reminder_due_safe(db, reminder_id)
     reminder = await _reread(db, reminder_id)
     await broadcaster.broadcast("reminders", "reminder_acknowledged", reminder, user_id=user_id)
@@ -578,9 +595,9 @@ async def acknowledge_reminder_record(db, actor: Mapping[str, object], reminder_
 
 
 # ── The brain's MCP reminder tools (``mcp_server``: reminder_update / reminder_delete / reminder_snooze) ────────────────────
-# These tools have always written DIFFERENT rows from the screen's routes (no normalising, a delete that also switches the
-# reminder off, a snooze that moves the due date and time). Unifying them with the screen is a separate, later decision; until
-# then each tool's row is written HERE, statement for statement, so this module stays the one writer of the table. The tools
+# The edit and delete tools have always written DIFFERENT rows from the screen's routes (no normalising, a delete that also
+# switches the reminder off). Unifying them with the screen is a separate, later decision; until then each tool's row is written
+# HERE, statement for statement, so this module stays the one writer of the table. The tools
 # keep their own lookups, UI notice and job cancelling in ``mcp_server``.
 TOOL_EDIT_FIELDS = ("title", "due_date", "due_time", "priority")
 
@@ -603,11 +620,3 @@ async def tool_update_reminder_record(db, *, user_id: str, reminder_id: str, fie
 async def tool_delete_reminder_record(db, *, user_id: str, reminder_id: str) -> None:
     """The delete tool's row: deleted AND switched off, on the member's OWN reminder."""
     await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=NOW() WHERE id=? AND user_id=?", (reminder_id, user_id))
-
-
-async def tool_snooze_reminder_record(db, *, reminder_id: str, due_date: str, due_time: str, snoozed_until: str) -> None:
-    """The snooze tool's row: the due date and time moved to the snoozed local time, the snooze instant set, the done mark cleared."""
-    await db.execute(
-        "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?",
-        (due_date, due_time, snoozed_until, reminder_id),
-    )
