@@ -9,7 +9,7 @@ from .attention import Attention
 from .capability import Enforcer, Grant, GrantStore, Person
 from .events import Event, Kind, Visibility
 from .explain import Explainer
-from . import alarm_door, calendar_door, home_door, lists, lookups_door, memory_door, messages_door, music_door, notes_door, people_door, remind_door
+from . import alarm_door, calendar_door, home_door, lists, lookups_door, memory_door, messages_door, music_door, notes_door, people_door, remind_door, routines_door
 from .door import Door
 from .provenance import subject_of
 from .retention import POLICY, Retention
@@ -64,7 +64,7 @@ class Kernel:
         self.door = Door(self.spine, self.enforcer, (lists.AREA, remind_door.AREA, alarm_door.ALARMS, alarm_door.TIMERS,
                                                      calendar_door.AREA, notes_door.NOTES, notes_door.JOURNAL,
                                                      people_door.AREA, music_door.AREA, home_door.AREA, memory_door.AREA, lookups_door.AREA,
-                                                     messages_door.AREA))
+                                                     messages_door.AREA, routines_door.AREA))
         self.lists = lists.ListDoor(self.door)
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
