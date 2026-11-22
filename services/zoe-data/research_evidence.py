@@ -419,6 +419,7 @@ def _fetch_page_price(url: str, timeout_s: float) -> str:
     }
     try:
         with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
+            lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             data = resp.read(350000).decode("utf-8", errors="replace")
     except Exception:  # incl. SSRFBlocked
         return ""
@@ -598,10 +599,12 @@ def _fetch_ddg(query: str, max_results: int, timeout_s: float, *, enrich_prices:
     detail = ""
     try:
         with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
+            lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             status = int(getattr(resp, "status", None) or getattr(resp, "code", None) or 200)
             body = _read_bounded_response(resp, DDG_SEARCH_HTML_MAX_BYTES).decode("utf-8", errors="replace")
     except HTTPError as exc:
         # urllib raises on 4xx/5xx; the body still carries the wall's markers.
+        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
         status = int(exc.code)
         try:
             body = exc.read(DDG_SEARCH_HTML_MAX_BYTES).decode("utf-8", errors="replace")
@@ -724,7 +727,7 @@ def fetch_web_fallback(
     ``_MIN_PROVIDER_BUDGET_S`` is left — the outcome then says so in ``detail``.
     ``None`` (B10.0 chat callers) keeps the plain per-provider timeout.
     """
-    lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+    lookup_door.check(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     q = (query or "").strip()
     if not q:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "none", [], "empty query")
@@ -803,7 +806,7 @@ def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: floa
     uses :func:`fetch_web_fallback`, which picks the provider and says WHY rows
     are empty.
     """
-    lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+    lookup_door.check(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     q = (query or "").strip()
     if not q:
         return []
