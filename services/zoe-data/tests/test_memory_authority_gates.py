@@ -138,7 +138,9 @@ async def test_person_merge_by_the_account_still_works_and_off_is_the_control(mo
 def test_the_merge_endpoint_passes_the_account_as_actor():
     from routers import people
 
-    assert "actor=user_id" in inspect.getsource(people.merge_person_endpoint)
+    # the route asks the Zoe OS contacts door and hands on to ``_merge_person_endpoint``, which makes the merge
+    assert "_merge_person_endpoint(" in inspect.getsource(people.merge_person_endpoint)
+    assert "actor=user_id" in inspect.getsource(people._merge_person_endpoint)
 
 
 # ── edges: the exact function that closes Postgres edges ──────────────────────
