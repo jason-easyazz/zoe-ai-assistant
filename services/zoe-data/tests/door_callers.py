@@ -126,3 +126,24 @@ def check_coverage(found: dict, recorded: dict, not_recorded: dict, fixture_name
         assert names and all(name in fixture_names for name in names), key
     for key, why in not_recorded.items():
         assert isinstance(why, str) and len(why) > 20, key
+
+
+def sql_writes_by_function(source: str, pattern) -> dict:
+    """``{function: distinct write statements}`` for one module (``<module>`` for text outside any function): what an
+    allowlist of a module's permitted writers is checked against, so a NEW writer inside an allowed module is seen too."""
+    import sql_scan
+
+    tree = ast.parse(source)
+    found = {}
+    for name, fn in _top_functions(tree):
+        n = len(sql_scan.writes(ast.get_source_segment(source, fn), pattern))
+        if n:
+            found[name] = n
+    outside = [n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            outside += [n for n in node.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    n = len(sql_scan.writes(ast.unparse(ast.Module(body=outside, type_ignores=[])), pattern)) if outside else 0
+    if n:
+        found["<module>"] = n
+    return found

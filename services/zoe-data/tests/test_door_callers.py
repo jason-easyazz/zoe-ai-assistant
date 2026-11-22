@@ -74,3 +74,10 @@ def test_a_listed_entry_point_the_code_no_longer_holds_and_one_not_listed_both_f
                                           ({}, {("a.py", "f", "change"): "why"}, {"s1"})):             # no real reason given
         with pytest.raises(AssertionError):
             door_callers.check_coverage(found, recorded, not_recorded, names)
+
+
+def test_writes_are_counted_per_function_and_outside_any():
+    import sql_scan
+
+    src = DOOR + 'LATER = "DELETE FROM things WHERE a = 1"\n\nasync def two(db):\n    await db.execute("UPDATE things SET a = 2")\n    await db.execute("INSERT INTO things (a) VALUES (1)")\n'
+    assert door_callers.sql_writes_by_function(src, sql_scan.write_pattern("things")) == {"_row": 1, "two": 2, "<module>": 1}
