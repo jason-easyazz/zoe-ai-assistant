@@ -5553,6 +5553,17 @@ async def _store_skybridge_memory_fact(
 
 async def _find_or_create_person(user_id: str, name: str, db: Any) -> dict[str, Any]:
     stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before anything is awaited
+    person = await _find_person(user_id, name, db)
+    if person is not None:
+        return person
+    person_id = str(uuid.uuid4())
+    await people_service.write_contact(db, "spoken_create", (person_id, user_id, name, None, "circle", "personal", "family", 0), raw=True,
+                                       actor=user_id, person_id=person_id, owner=user_id, visibility="family", stamps_at=stamps_at)
+    await _maybe_commit(db)
+    return _spoken_person(person_id, user_id, name)
+
+
+async def _find_person(user_id: str, name: str, db: Any) -> dict[str, Any] | None:
     rows = await db.fetch(
         """
         SELECT *
@@ -5566,12 +5577,11 @@ async def _find_or_create_person(user_id: str, name: str, db: Any) -> dict[str, 
         user_id,
         name,
     )
-    if rows:
-        return row_to_person(rows[0])
-    person_id = str(uuid.uuid4())
-    await people_service.write_contact(db, "spoken_create", (person_id, user_id, name, None, "circle", "personal", "family", 0), raw=True,
-                                       actor=user_id, person_id=person_id, owner=user_id, visibility="family", stamps_at=stamps_at)
-    await _maybe_commit(db)
+    return row_to_person(rows[0]) if rows else None
+
+
+def _spoken_person(person_id: str, user_id: str, name: str) -> dict[str, Any]:
+    """The new household contact a spoken fact made, as the rest of the turn sees it."""
     return {
         "id": person_id,
         "user_id": user_id,
@@ -5613,7 +5623,34 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
             "cards": [_status_card("Who is this about?", "Say the person's name and the fact you want Zoe to remember.")],
             "actions": [],
         }
-    person = await _find_or_create_person(user_id, intent.person_name, db)
+    asked: list = []        # the Zoe OS contacts door, flag on: every ask made BEFORE anything is written (create, then edit)
+    if stamps_at is None:
+        person = await _find_or_create_person(user_id, intent.person_name, db)      # flag off: main's order, exactly
+    else:
+        person = await _find_person(user_id, intent.person_name, db)
+        new_id = str(uuid.uuid4()) if person is None else ""
+        if person is None or not person.get("user_id") or person.get("user_id") == user_id:     # what the check below lets through
+            # a refusal of either leaves nothing behind: no contact made, no fact saved, no card changed
+            try:
+                if new_id:
+                    asked.append(await people_service.ask_contact("contact.create", actor=user_id, person_id=new_id, owner=user_id,
+                                                                  visibility="family", stamps_at=stamps_at))
+                if intent.fact_text or intent.birthday:
+                    asked.append(await people_service.ask_contact(
+                        "contact.edit", actor=user_id, person_id=new_id or str(person["id"]), owner=user_id,
+                        visibility="family" if new_id else person.get("visibility"), stamps_at=stamps_at))
+            except BaseException:
+                for each in asked:
+                    kernel_door.wrote(each, "failed")
+                raise
+        if new_id:
+            create = asked.pop(0)
+            async with kernel_door.reported(create):
+                await people_service.write_contact(
+                    db, "spoken_create", (new_id, user_id, intent.person_name, None, "circle", "personal", "family", 0), raw=True,
+                    under=True)
+                await _maybe_commit(db)
+            person = _spoken_person(new_id, user_id, intent.person_name)
     if person.get("user_id") and person.get("user_id") != user_id:
         return {
             "handled": True,
@@ -5635,6 +5672,8 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
             person_name=intent.person_name,
         )
         if not memory_stored:
+            for each in asked:
+                kernel_door.wrote(each, "failed")       # the edit that was asked about is not made
             return {
                 "handled": True,
                 "intent": _intent_dict(intent),
@@ -5656,9 +5695,13 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
         params.extend([person["id"], user_id])
         # MemoryService is the write gate for the fact; this table update is the
         # people-card projection so the visible profile reflects the saved memory.
-        await people_service.write_contact(db, "spoken_fact", params, sets=updates, raw=True, actor=user_id,
-                                           person_id=str(person["id"]), owner=user_id, visibility=person.get("visibility"),
-                                           stamps_at=stamps_at)
+        if stamps_at is None:
+            await people_service.write_contact(db, "spoken_fact", params, sets=updates, raw=True, actor=user_id,
+                                               person_id=str(person["id"]), owner=user_id, visibility=person.get("visibility"),
+                                               stamps_at=stamps_at)
+        else:
+            async with kernel_door.reported(asked.pop(0) if asked else None):       # asked above, before the fact was saved
+                await people_service.write_contact(db, "spoken_fact", params, sets=updates, raw=True, under=True)
         await _maybe_commit(db)
     refreshed = await _resolve_people(
         SkybridgeIntent(domain="people", action="show", query=intent.person_name),
