@@ -82,11 +82,12 @@ def here():
 
 _SCREEN = "routers/people.py"
 #: every (module, function, writer of ``people_graph``) the CODE holds -> the scenarios that record it, or why none does
+#: (with the kernel door, each screen route asks first and then runs its ``_``-named body, which is what names the writer)
 EDGES_RECORDED = {
-    (_SCREEN, "add_relationship", "insert_edge"): ("screen_relation_with_a_new_stub", "screen_relation_notes_edited"),
-    (_SCREEN, "update_relationship", "set_edge_notes"): ("screen_relation_notes_edited",),
-    (_SCREEN, "update_relationship", "replace_current_edge"): ("screen_relation_retyped",),
-    (_SCREEN, "delete_relationship", "close_edge"): ("screen_relation_removed",),
+    (_SCREEN, "_add_relationship", "insert_edge"): ("screen_relation_with_a_new_stub", "screen_relation_notes_edited"),
+    (_SCREEN, "_update_relationship", "set_edge_notes"): ("screen_relation_notes_edited",),
+    (_SCREEN, "_update_relationship", "replace_current_edge"): ("screen_relation_retyped",),
+    (_SCREEN, "_delete_relationship", "close_edge"): ("screen_relation_removed",),
     ("correction_apply.py", "_retype_edge_as_pet", "close_edge"): ("corrected_to_a_pet",),
     ("correction_apply.py", "_retype_edge_as_pet", "insert_edge"): ("corrected_to_a_pet",),
 }
