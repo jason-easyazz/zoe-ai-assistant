@@ -198,6 +198,28 @@ async def _said_nothing_named(w):
     await w.call("said", w.rs.act_said("s1", ALEX, "done", verified=True))
 
 
+async def _said_then_undone(w):
+    """ "No, I haven't" right after a said tick: that one line goes back (``undo_said``); another member's undo, and a second
+    one, change nothing."""
+    r = await w.morning()
+    d = await w.day(ALEX, r)
+    w.log.append(["named", await w.rs.note_named("s1", ALEX, d["steps"][0]["id"])])
+    await w.call("said", w.rs.act_said("s1", ALEX, "done", verified=True))
+    await w.call("undo-other-member", w.rs.undo_said("s1", SAM, verified=True))
+    await w.call("undo", w.rs.undo_said("s1", ALEX, verified=True))
+    await w.call("undo-again", w.rs.undo_said("s1", ALEX, verified=True))
+
+
+async def _erase_entity(w):
+    """ "Forget <a thing>" (``erase_entity``, the forget cascade's call): in the member's OWN routines the step and the day line
+    whose words name it go; another member's routine with the same words stays."""
+    r = await w.morning()
+    await w.day(ALEX, r)
+    await w.morning(RILEY, by=ALEX)
+    w.log.append(["erased", await w.rs.erase_entity(ALEX, re.compile(r"\bteeth\b", re.I), strict=True)])
+    w.log.append(["erased-nothing", await w.rs.erase_entity(ALEX, re.compile(r"\bquince\b", re.I), strict=True)])
+
+
 async def _forget_user(w):
     await w.morning()
     await w.morning(RILEY, by=ALEX)
@@ -246,7 +268,7 @@ def scenarios() -> dict:
         "tap_medicine_unverified_refused": _tap(ALEX, steps=med), "tap_medicine_verified": _tap(ALEX, steps=med, verified=True),
         "tap_medicine_other_refused": _tap(SAM, steps=med, verified=True),
         "tap_done_undo_snooze_done": _tap_then_undo, "said_done_then_nothing_named": _said, "said_with_nothing_named": _said_nothing_named,
-        "forget_user": _forget_user,
+        "forget_user": _forget_user, "said_done_then_undone": _said_then_undone, "erase_entity_own_routines_only": _erase_entity,
         "tier_walk": _tier_walk, "tier_yep_alone": _tier_yep_alone, "tier_one_off_and_timed_reminder": _tier_one_off,
         "tier_other_member": _tier_other_member,
     }
