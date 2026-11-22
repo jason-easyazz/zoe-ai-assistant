@@ -14,10 +14,42 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 
-from db_compat import get_compat_db as _get_compat_db
+import contextlib
+import contextvars
+
+import db_compat
 from proactive.scheduler import register_job, cancel_job, CancelResult, run_blocking
 
 log = logging.getLogger(__name__)
+
+# ── One connection per caller ────────────────────────────────────────────────────────────────────────────────────────────
+# Scheduling and cancelling a reminder's job read and write ``proactive_scheduled``. A caller that already HOLDS a pool
+# connection (every reminder door: the REST route's, a tool's, the spoken path's, a background maker's) used to wait here for a
+# SECOND one, several times per job: with as many such callers at once as the pool has connections, each holds one and waits
+# for another, and nobody finishes. ``on_connection(db)`` (the door wraps its job calls in it) makes every statement below run
+# on the caller's own handle instead. Outside it (the scheduler firing a job, the scan, start-up reconcile) nothing changes:
+# a connection is borrowed per block, as before.
+_CALLERS_DB: contextvars.ContextVar = contextvars.ContextVar("reminder_jobs_callers_db", default=None)
+
+
+@contextlib.contextmanager
+def on_connection(db):
+    """Run the reminder-job calls inside this block on ``db`` (the caller's own handle) instead of borrowing connections."""
+    token = _CALLERS_DB.set(db)
+    try:
+        yield
+    finally:
+        _CALLERS_DB.reset(token)
+
+
+@contextlib.asynccontextmanager
+async def _get_compat_db():
+    held = _CALLERS_DB.get()
+    if held is not None:
+        yield held                       # the caller's: never closed or released here
+        return
+    async with db_compat.get_compat_db() as db:
+        yield db
 
 # A reminder claim held longer than this (because the claiming process crashed
 # mid-delivery) becomes reclaimable so the reminder isn't lost. Shared by the

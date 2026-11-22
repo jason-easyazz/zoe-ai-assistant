@@ -19,8 +19,9 @@ decides and records; the reminder rows stay in Postgres.
 `update_reminder_record`, `delete_reminder_record`, `snooze_reminder_record`, `acknowledge_reminder_record`. The screen's REST
 routes, the brain's MCP tools, the spoken path, an accepted suggestion and the background makers all call them
 (`tests/test_reminders_table_one_writer.py` fails for any other module that writes the table). The brain's MCP tools write different rows from
-the screen's and always have (`tool_update_reminder_record`, `tool_delete_reminder_record`, `tool_snooze_reminder_record`); those
-rows are kept exactly and sit behind the same door (edit, delete, snooze). Moving the writes changed no behaviour at any entry
+the screen's for edit and delete and always have (`tool_update_reminder_record`, `tool_delete_reminder_record`); those
+rows are kept exactly and sit behind the same door. The snooze tool calls the screen's `snooze_reminder_record`, so the door
+makes no read of its own on any path. Moving the writes changed no behaviour at any entry
 point: `tests/test_reminders_same_as_main.py` compares each with a record captured from main. Nothing in the scheduler writes the
 table: jobs live in `proactive_scheduled`.
 
@@ -43,8 +44,7 @@ A refusal at each caller: REST 403 with a plain sentence (the app's one handler 
 **Flag off is main exactly:** a flag read, no kernel call, no socket, no thread, and the same statements as before the door
 existed (`tests/test_reminders_kernel_door.py` compares them with a fixture captured from the pre-door code). The screen's
 doors read nothing of their own from the database even when on: the row every edit already loads names who the reminder is for.
-The one exception is the snooze tool, whose statement names no owner: with the flag on its door reads the owner first (a
-database fault there raises; it never skips the kernel).
+That now holds for the brain's snooze tool too: it calls the screen's snooze, so no door reads the owner separately.
 
 ## 3. Who may do what [code; the table is the kernel's, `labs/zoe-os/zoe_os/remind_door.py`]
 
