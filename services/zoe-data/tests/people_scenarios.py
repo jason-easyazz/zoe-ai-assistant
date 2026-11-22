@@ -198,9 +198,10 @@ class World:
         _set(db_compat, "get_compat_db", pooled)
 
     def rows(self) -> dict:
-        keep = ("id", "user_id", "name", "relationship", "birthday", "notes", "visibility", "deleted", "circle", "context", "is_partial",
-                "updated_at")
-        people = [{k: r[k] for k in keep if r[k] is not None} for r in self.con.execute("SELECT * FROM people ORDER BY id")]
+        # EVERY column a contact has (phone, email and preferences among them: a write that changed one of those used to pass
+        # unseen), bar ``created_at``: the store stamps it from the real clock
+        people = [{k: v for k, v in dict(r).items() if v is not None and k != "created_at"}
+                  for r in self.con.execute("SELECT * FROM people ORDER BY id")]
         edges = [{k: v for k, v in dict(r).items() if v is not None} for r in self.con.execute("SELECT * FROM person_relationships ORDER BY id")]
         return {"people": people, "person_relationships": edges}
 
@@ -262,6 +263,36 @@ def scenarios() -> dict:
                 os.environ.pop("ZOE_PERSON_SUGGEST_ENABLED", None)
         return run
 
+    async def offer_upgrades_a_stub(w):
+        """An accepted offer of a FULL name while a one-name stub with the same specific relation exists and nothing hangs off
+        it: the stub is renamed in place (``offer_upgrade``), no second row."""
+        import os
+
+        import contacts_conversation
+
+        async def no_linked_memories(user_id, person_ids, timeout=1.5):
+            w.log.append(["linked_memory_ids", user_id, list(person_ids)])
+            return set()
+
+        _set(contacts_conversation, "linked_memory_ids", no_linked_memories)
+        w.con.execute("UPDATE people SET relationship = 'neighbour' WHERE id = 'p-ann-stub'")
+        w.con.commit()
+        os.environ["ZOE_CONTACTS_CONVERSATIONAL"] = "1"
+        try:
+            return await offer(name="Plover Zed", relationship="neighbour", email="plover@example.invalid")(w)
+        finally:
+            os.environ.pop("ZOE_CONTACTS_CONVERSATIONAL", None)
+
+    def edge(then, **body):
+        """The screen links two contacts, then edits that link: its notes, its kind, or removes it."""
+        async def run(w):
+            await relation("add_relationship", "p-ann-family", other_person_id="p-ann-private", rel_type="friend", rel_group="friends")(w)
+            (rel_id,) = w.con.execute("SELECT id FROM person_relationships").fetchone()
+            if then == "delete_relationship":
+                return await w.people.delete_relationship("p-ann-family", rel_id, user=_member(ANN), db=w.db)
+            return await w.people.update_relationship("p-ann-family", rel_id, body, user=_member(ANN), db=w.db)
+        return run
+
     async def offer_while_off(w):
         return await w.sugg._execute_action(w.pg, "person_create", {"name": WORD}, ANN)
 
@@ -298,8 +329,12 @@ def scenarios() -> dict:
         "screen_relation_with_a_new_stub": relation("add_relationship", "p-ann-family", other_person_name=WORD, create_partial=True,
                                                     rel_type="friend", rel_group="friends"),
         "screen_relation_without_a_name": relation("add_relationship", "p-ann-family", rel_type="friend"),
+        "screen_relation_notes_edited": edge("update_relationship", notes="met at the womble fair"),
+        "screen_relation_retyped": edge("update_relationship", rel_type="colleague", rel_group="work"),
+        "screen_relation_removed": edge("delete_relationship"),
         # the brain's tools
         "tool_create": tool("people_create", name=WORD, relationship="friend", notes="likes wombles"),
+        "tool_create_with_contact_details": tool("people_create", name=WORD, phone="555-0100", email="womble@example.invalid"),
         "tool_update": tool("people_update", person_id="p-ann-private", name=WORD, notes="likes wombles"),
         "tool_update_no_fields": tool("people_update", person_id="p-ann-private"),
         "tool_update_another_members_household_contact": tool("people_update", BOB, person_id="p-ann-family", name=WORD),
@@ -322,6 +357,7 @@ def scenarios() -> dict:
         "offer_accepted_for_a_stub": offer(name="Plover"),
         "offer_accepted_for_a_full_contact": offer(name="Quango Zorb"),
         "offer_accepted_with_a_bad_name": offer(name="him"),
+        "offer_accepted_upgrades_a_one_name_stub": offer_upgrades_a_stub,
         "offer_accepted_while_the_feature_is_off": offer_while_off,
         # a spoken correction, and the pendant day review
         "corrected_to_a_pet": corrected_pet,
@@ -332,7 +368,20 @@ def scenarios() -> dict:
     }
 
 
+def _isolated() -> None:
+    """Refuse to run outside the test configuration: a contact made or changed reaches stores that default under the live
+    ``~/.zoe`` (logs, the memory mirror, the shadow's files). ``tests/conftest.py`` points each at a temporary directory."""
+    import os
+
+    live = os.path.join(os.path.expanduser("~"), ".zoe")
+    for var in ("ZOE_LOG_DIR", "MEMPALACE_DATA_DIR", "ZOE_MEMORY_REJECT_LEDGER"):
+        value = os.environ.get(var, "")
+        if not value or os.path.abspath(value).startswith(live):
+            raise RuntimeError(f"people scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
+
+
 def run_all() -> dict:
+    _isolated()
     out = {}
     for name, call in scenarios().items():
         log: list = []
@@ -352,7 +401,8 @@ def run_all() -> dict:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, sys.argv[1])
+    sys.path[:0] = [sys.argv[1], sys.argv[1].rstrip("/") + "/tests"]
+    import conftest  # noqa: F401 - that tree's test configuration: every live store path pinned to a temporary directory
     record = run_all()
     text = "{\n" + ",\n".join(f" {json.dumps(k)}: {json.dumps(record[k], sort_keys=True)}" for k in sorted(record)) + "\n}\n"
     Path(sys.argv[2]).write_text(text, "utf-8")
