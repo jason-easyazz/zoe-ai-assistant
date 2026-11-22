@@ -11,7 +11,7 @@ Covered: the screen's create, update and delete (their own, a household contact 
 member) and its "add a relationship" (which can mint a stub); the brain's ``people_create`` / ``people_update`` /
 ``people_delete``; the spoken add and the same-person rename; Skybridge's "remember that <name> ..." (a new person, their own,
 another member's); the panel's introduce; an accepted "add X as a contact" offer (new, a stub with and without a relation, a
-full contact, a bad name, the feature off); a spoken correction (a pet, a name); the day review's approved relationship and its
+full contact, a bad name, the feature off); a spoken correction (a pet, on the pooled handle and on a raw connection; a name); the day review's approved relationship and its
 undo; an accepted offer that renames a one-name stub; the screen's edit of a link's notes, its retype and its removal; a
 contact made with a phone and an email. NOT covered here, and not moved: the shared mechanics (``contacts_store``, ``person_merge``) and the automatic makers.
 
@@ -58,13 +58,16 @@ def here():
     import people_graph
     import people_service
 
-    kept = {(people_service, "statement"): people_service.statement}
+    kept = {(people_service, "write_contact"): people_service.write_contact}
 
-    def statement(entry, *a, **k):
+    async def write_contact(db, entry, *a, **k):
+        # noted only once the handle has RUN the statement (review of #2698: counting it when its SQL was merely built let
+        # ``corrected_pet_pg`` count while the pooled handle refused the raw call and the other form ran instead)
+        out = await kept[(people_service, "write_contact")](db, entry, *a, **k)
         USED["entries"].add(entry)
-        return kept[(people_service, "statement")](entry, *a, **k)
+        return out
 
-    people_service.statement = statement
+    people_service.write_contact = write_contact
     for name in edge_writers():
         real = kept[(people_graph, name)] = getattr(people_graph, name)
 
@@ -144,6 +147,24 @@ def test_the_fixture_covers_every_scenario_and_every_entry_point(here):
     writers = edge_writers()
     assert len(writers) >= 4 and sorted(writers - USED["edges"]) == []
     door_callers.check_coverage(door_callers.entry_points(ROOT, "people_graph", writers), EDGES_RECORDED, EDGES_NOT_RECORDED, set(ON_MAIN))
+
+
+def test_a_correction_on_a_raw_connection_runs_the_dollar_statement(here):
+    """``corrected_pet_pg`` is REACHED only where it runs: on the raw asyncpg connection its UPDATE is executed and the row it
+    leaves is in the record; on the pooled handle the raw call is refused and the ``?`` form runs instead (review of #2698:
+    the spy counted the entry when its SQL was built, so the only scenario never ran it).
+    Controls run: ``WHERE id=$3 AND user_id=$4`` made ``WHERE user_id=$4`` in ``corrected_pet_pg`` (every contact of the
+    member retyped) -> ``corrected_to_a_pet_on_a_raw_connection`` fails; ``relationship=$1`` made a fixed ``'pet'`` -> it
+    fails; the raw scenario run on the pooled handle instead (the hole: the statement is built, refused, never run) -> the
+    coverage test fails naming ``corrected_pet_pg``."""
+    raw = here["corrected_to_a_pet_on_a_raw_connection"]
+    runs = [e for e in raw if e[0] == "pg" and e[1].startswith("UPDATE people SET relationship=$1")]
+    assert len(runs) == 1 and runs[0][2][0] == "pet dog" and runs[0][2][2:] == ["p-ann-family", scenarios.ANN]
+    rows = {r["id"]: r for r in raw[-1][1]["people"]}
+    assert rows["p-ann-family"]["relationship"] == "pet dog"
+    assert [r["relationship"] for k, r in rows.items() if k != "p-ann-family" and "relationship" in r] == ["cousin", "boss"]
+    pooled = here["corrected_to_a_pet"]
+    assert not [e for e in pooled if e[0] == "pg"] and [e for e in pooled if e[0] == "sql" and e[1].startswith("UPDATE people SET relationship=?")]
 
 
 def test_the_record_holds_every_column_of_a_contact(here):
