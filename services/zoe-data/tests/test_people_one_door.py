@@ -40,6 +40,23 @@ PEOPLE_NAMED = {
     "memory_forget_cascade.py": "the eraser, and its undo",
 }
 EDGE_NAMED = {"person_merge.py": "shared mechanics: a merge re-points edges", "memory_forget_cascade.py": "the eraser, and its undo"}
+#: ... and WHERE in each named module, by function, with the exact number of write statements (as the memory rows' scan
+#: does): a named module is not a blank cheque. (Review of #2698: the scans skipped these modules whole, so a new writer added
+#: inside one of them passed.)
+PEOPLE_WRITERS = {
+    ("contacts_store.py", "_create_person"): 1, ("contacts_store.py", "ensure_person"): 1,
+    ("person_merge.py", "merge_person"): 4, ("person_merge.py", "_merge_people_fields"): 3,
+    ("person_extractor.py", "_create_partial_person"): 2, ("person_extractor.py", "_mint_stub"): 2,
+    ("person_extractor.py", "_write_relationship"): 2, ("person_extractor.py", "_post_write_hooks"): 2,
+    ("named_relations.py", "_mint_owned_people"): 3, ("named_relations.py", "_set_role_if_blank"): 3,
+    ("person_health.py", "recalc_and_save"): 2,
+    ("memory_forget_cascade.py", "_run"): 1, ("memory_forget_cascade.py", "restore_contacts"): 1,
+    ("routers/people.py", "mark_person_read"): 1, ("routers/people.py", "add_activity"): 1,       # the two counters (NOT_YET)
+}
+EDGE_WRITERS = {
+    ("person_merge.py", "_repoint_relationships"): 2,
+    ("memory_forget_cascade.py", "_run"): 1, ("memory_forget_cascade.py", "restore_contacts"): 1,
+}
 #: the screen's two counters, by their exact text: not yet behind the door (a counter names no change a person would be refused)
 NOT_YET = {"routers/people.py": {
     "UPDATE people SET notification_count = 0, updated_at = NOW() WHERE id = ? AND user_id = ?",
@@ -87,6 +104,24 @@ def test_only_the_graph_writes_relationships():
     assert len(writes(rel[EDGE_DOOR].read_text("utf-8"), "person_relationships")) >= 3
     for name in EDGE_NAMED:
         assert writes(rel[name].read_text("utf-8"), "person_relationships"), name
+
+
+def test_the_named_modules_write_only_in_their_named_functions():
+    """Module, function and exact count, for ``people`` and for ``person_relationships``. Controls run: a second
+    ``UPDATE people SET notes = ?`` planted in ``person_health.recalc_and_save`` fails this (3, not 2); an ``UPDATE people``
+    planted in a NEW function of ``contacts_store.py`` fails it naming that function; a ``DELETE FROM person_relationships``
+    planted in ``person_merge.merge_person`` fails it. All three passed the module-wide exemption."""
+    import door_callers
+    import sql_scan
+
+    rel = _modules()
+    for table, named, expected in (("people", {**PEOPLE_NAMED, **NOT_YET}, PEOPLE_WRITERS),
+                                   ("person_relationships", EDGE_NAMED, EDGE_WRITERS)):
+        pattern = sql_scan.write_pattern(table)
+        found = {(name, fn): n for name in named
+                 for fn, n in door_callers.sql_writes_by_function(rel[name].read_text("utf-8"), pattern).items()}
+        assert found == expected, table
+        assert {name for name, _fn in expected} == set(named), table
 
 
 def test_what_is_not_yet_behind_the_door_is_counted():

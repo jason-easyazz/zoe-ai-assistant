@@ -239,7 +239,20 @@ def scenarios() -> dict:
     }
 
 
+def _isolated() -> None:
+    """Refuse to run outside the test configuration: a music or home command reaches stores that default under the live ``~/.zoe`` (logs, the
+    shadow's files). ``tests/conftest.py`` points each at a temporary directory."""
+    import os
+
+    live = os.path.join(os.path.expanduser("~"), ".zoe")
+    for var in ("ZOE_LOG_DIR", "MEMPALACE_DATA_DIR", "ZOE_MEMORY_REJECT_LEDGER"):
+        value = os.environ.get(var, "")
+        if not value or os.path.abspath(value).startswith(live):
+            raise RuntimeError(f"music and home scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
+
+
 def run_all() -> dict:
+    _isolated()
     out = {}
     for name, call in scenarios().items():
         log: list = []
@@ -256,7 +269,8 @@ def run_all() -> dict:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, sys.argv[1])
+    sys.path[:0] = [sys.argv[1], sys.argv[1].rstrip("/") + "/tests"]
+    import conftest  # noqa: F401 - that tree's test configuration: every live store path pinned to a temporary directory
     record = run_all()
     text = "{\n" + ",\n".join(f" {json.dumps(k)}: {json.dumps(record[k], sort_keys=True)}" for k in sorted(record)) + "\n}\n"
     Path(sys.argv[2]).write_text(text, "utf-8")

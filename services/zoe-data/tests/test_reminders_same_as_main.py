@@ -1,5 +1,5 @@
 """Moving every reminder write into ``reminder_service`` changed NOTHING at any entry point (the three named fault fixes aside,
-which have their own tests in ``test_reminders_one_door.py``).
+which have their own tests in ``test_reminders_one_door.py``; and the brain's snooze tool, repaired since: ``FIXED_SINCE_MAIN``).
 
 ``tests/fixtures/reminders_as_on_main.json`` is the record of ``main`` (5533e3b08, the commit this work starts from): for each
 entry point and action, every statement with its values, every scheduled-job touch, every announcement, the role check, and the
@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-import reminder_service as rs
 import reminders_scenarios as scenarios
 
 pytestmark = pytest.mark.ci_safe
@@ -36,12 +35,48 @@ def here():
     return scenarios.run_all()
 
 
+_REST, _TOOL, _SPOKEN = "routers/reminders.py", ("mcp_server.py", "_execute_tool"), "intent_router.py"
+_MAKER = "an automatic maker: it calls create_reminder_record, whose record is rest_create / tool_create / spoken_create"
+#: every (module, function, door function) the CODE holds -> the scenarios that record it
+RECORDED = {
+    (_REST, "create_reminder", "create_reminder_record"): ("rest_create", "rest_create_family_recurring"),
+    (_REST, "update_reminder", "update_reminder_record"): ("rest_edit_title", "rest_edit_family_row_by_another_member"),
+    (_REST, "delete_reminder", "delete_reminder_record"): ("rest_delete", "rest_delete_family_row_by_another_member"),
+    (_REST, "snooze_reminder", "snooze_reminder_record"): ("rest_snooze", "rest_snooze_a_done_reminder"),
+    (_REST, "acknowledge_reminder", "acknowledge_reminder_record"): ("rest_done", "rest_done_recurring"),
+    (*_TOOL, "create_reminder_record"): ("tool_create",),
+    (*_TOOL, "tool_update_reminder_record"): ("tool_update", "tool_update_another_members_row"),
+    (*_TOOL, "tool_delete_reminder_record"): ("tool_delete", "tool_delete_another_members_row"),
+    (*_TOOL, "snooze_reminder_record"): ("tool_snooze", "tool_snooze_another_members_row"),
+    (_SPOKEN, "_execute_reminder_create_direct", "create_reminder_record"): ("spoken_create",),
+}
+#: ... or why it has no record of main to compare with
+NOT_RECORDED = {
+    (_SPOKEN, "_execute_reminder_cancel_direct", "delete_reminder_record"):
+        "new with the one-door change (main had no handler for it): pinned by the cancel-that tests in test_reminders_one_door.py",
+    ("anticipation.py", "_do", "create_reminder_record"): _MAKER,
+    ("commitments.py", "_make_reminder", "create_reminder_record"): _MAKER,
+    ("omi_review_apply.py", "write_reminder", "create_reminder_record"): _MAKER,
+    ("panel_review_cards.py", "loop_to_reminder", "create_reminder_record"): _MAKER,
+    ("pending_suggestions.py", "_create_suggested_reminder", "create_reminder_record"): _MAKER,
+}
+
+
 def test_the_fixture_covers_every_scenario_and_every_entry_point():
+    """The entry points are READ FROM THE CODE (``tests/door_callers.py``): every function of the service that names a writing
+    function of ``reminder_service``. Each is recorded by a named scenario or listed with the reason it is not, so a new caller
+    of the door fails here until it is given one or the other.
+    Control run: a new ``async def sneak(db): await reminder_service.delete_reminder_record(db, {}, "r")`` added to
+    ``routers/reminders.py`` fails this test naming it."""
+    import door_callers
+    import sql_scan
+
     assert set(ON_MAIN) == set(scenarios.scenarios())
-    for prefix, actions in (("rest_", ("create", "edit", "delete", "snooze", "done")), ("tool_", ("create", "update", "delete", "snooze")),
-                            ("spoken_", ("create",))):
-        for action in actions:
-            assert any(name.startswith(prefix + action) for name in ON_MAIN), prefix + action
+    root = Path(__file__).resolve().parents[1]
+    door = (root / "reminder_service.py").read_text("utf-8")
+    writers = door_callers.door_functions(door, door_callers.direct_sql_writers(door, sql_scan.write_pattern("reminders")))
+    assert len(writers) >= 7
+    door_callers.check_coverage(door_callers.entry_points(root, "reminder_service", writers), RECORDED, NOT_RECORDED, set(ON_MAIN))
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
@@ -72,20 +107,26 @@ def test_the_screens_snooze_sets_only_the_snooze_and_never_re_arms_a_done_remind
     assert here["rest_snooze_a_done_reminder"][-1][1]["acknowledged"] is True
 
 
-@pytest.mark.asyncio
-async def test_the_snooze_tools_row_is_mains_due_date_time_snooze_and_done_mark():
-    """On main the snooze TOOL never reaches its write: ``mcp_server._execute_tool`` binds ``datetime`` locally further down, so
-    the tool raises before it (``tool_snooze*`` in the fixture: one read, then that error, no write). That is reproduced as it
-    is. The row main's code WOULD write is kept statement for statement in ``tool_snooze_reminder_record``: the due date and
-    time moved to the snoozed local time, the snooze instant, the done mark cleared; ``is_active`` and ``deleted`` untouched."""
-    for name in ("tool_snooze", "tool_snooze_default_minutes_a_done_reminder", "tool_snooze_another_members_row"):
-        assert _writes(ON_MAIN[name]) == [] and ON_MAIN[name][-1][0] == "raised"
-    log: list = []
-    await rs.tool_snooze_reminder_record(scenarios.DB(log), reminder_id=scenarios.RID, due_date="2026-06-10", due_time="12:30",
-                                         snoozed_until="2026-06-10T04:30:00Z")
-    assert log == [["sql", "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?",
-                    ["2026-06-10", "12:30", "2026-06-10T04:30:00Z", scenarios.RID]]]
-    assert "is_active" not in log[0][1] and "deleted" not in log[0][1]
+#: The ONE place this record is no longer main's, on purpose (fix/reminder-tools-faults): on main the snooze TOOL raised
+#: ``UnboundLocalError`` after its first read and wrote nothing (``_execute_tool`` bound ``datetime`` locally in another arm). It
+#: now snoozes exactly as the screen does. These three scenarios were re-recorded from the fixed code; every other scenario in
+#: the fixture is still main's.
+FIXED_SINCE_MAIN = ("tool_snooze", "tool_snooze_another_members_row", "tool_snooze_default_minutes_a_done_reminder")
+
+
+def test_the_snooze_tool_now_does_what_the_screens_snooze_does(here):
+    """Control run: with ``acknowledged = 0`` added to the one snooze statement this fails (and so do the screen's scenarios)."""
+    assert sorted(n for n in ON_MAIN if n.startswith("tool_snooze")) == sorted(FIXED_SINCE_MAIN)
+    (screen_sql, _), _notice = _writes(here["rest_snooze"])
+    for name, minutes in (("tool_snooze", 30), ("tool_snooze_default_minutes_a_done_reminder", 30)):
+        (sql, params), (notice_sql, notice) = _writes(here[name])
+        assert sql == screen_sql and "due_date" not in sql and "acknowledged" not in sql
+        assert params == [f"2026-06-10T04:{minutes}:00.123456Z", scenarios.RID]            # a UTC instant: no clock offset
+        assert notice_sql.startswith("INSERT INTO notifications") and f"snoozed for {minutes} minutes" in notice[4]
+        assert ["feature", {"action": "snooze", "feature": "reminders"}] in here[name]     # the screen's role check, now here too
+        assert here[name][-1] == ["returned", {"id": scenarios.RID, "snoozed_until": None, "status": "snoozed"}]
+    assert here["tool_snooze_another_members_row"][-1] == ["returned", {"error": f"Reminder {scenarios.RID} not found"}]
+    assert _writes(here["tool_snooze_another_members_row"]) == []
 
 
 def test_the_edit_tool_writes_the_values_as_given_and_touches_no_job(here):
