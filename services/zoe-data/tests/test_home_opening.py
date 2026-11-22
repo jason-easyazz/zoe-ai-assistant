@@ -45,7 +45,7 @@ OPENING = [("lock.front_door", "unlock"), ("cover.garage_door", "open_cover"), (
            ("cover.blind", "set_cover_position"), ("cover.garage_door", "turn_on")]
 CLOSING = [("lock.front_door", "lock"), ("cover.garage_door", "close_cover"), ("cover.blind", "stop_cover"),
            ("alarm_control_panel.house", "alarm_arm_away"), ("valve.water_main", "close_valve")]
-ORDINARY = [("light.kitchen_lamp", "turn_on"), ("switch.kettle_plug", "toggle"), ("scene.movie_time", "turn_on"),
+ORDINARY = [("light.kitchen_lamp", "turn_on"), ("switch.kettle_plug", "toggle"), ("fan.attic", "turn_on"),      # scenes: test_home_runnables
             ("media_player.den", "media_pause")]
 
 

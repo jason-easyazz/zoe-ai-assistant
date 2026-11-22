@@ -324,7 +324,7 @@ async def test_tile_query_targets_exact_entity_id(bridge):
 
 
 @pytest.mark.asyncio
-async def test_scene_chip_targets_exact_scene_id(bridge):
+async def test_scene_chip_targets_exact_scene_id(bridge, scenes_anyone_may_run):
     i = classify_skybridge_intent("activate Movie Time @scene.movie_time", None)
     assert i is not None and i.action == "activate_scene" and i.entity_id == "scene.movie_time"
     await smart_home_service.resolve_smart_home(i)
@@ -389,7 +389,7 @@ async def test_class_only_named_device_tile_stays_exact(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_scene_activates(bridge):
+async def test_resolve_scene_activates(bridge, scenes_anyone_may_run):
     r = await smart_home_service.resolve_smart_home(_Intent("activate_scene", query="movie time"))
     assert bridge.scenes_activated == ["scene.movie_time"]
     assert "Movie Time" in r["spoken_summary"]

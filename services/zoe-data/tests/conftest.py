@@ -370,3 +370,34 @@ def _forget_session_epochs_are_per_test(tmp_path, monkeypatch):
     monkeypatch.setattr(forget_session, "_EPOCH", {})
     monkeypatch.setattr(forget_session, "_LOADED", False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_test_reads_a_scene_from_the_real_bridge(monkeypatch):
+    """``home_runnables`` reads what a scene or script does from the bridge on loopback, where the LIVE bridge listens on a
+    Zoe host. No test may reach it: every test starts with a bridge that has no such endpoint (so a scene is unreadable and
+    adult-only, the day-one state) and an empty verdict cache. A test that wants a readable scene replaces ``_read``."""
+    try:
+        import home_runnables
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+
+    async def _no_endpoint(entity_id):
+        return None
+
+    monkeypatch.setattr(home_runnables, "_read", _no_endpoint)
+    monkeypatch.setattr(home_runnables, "_CACHE", {})
+    yield
+
+
+@pytest.fixture
+def scenes_anyone_may_run(monkeypatch, _no_test_reads_a_scene_from_the_real_bridge):
+    """OPT-IN: the bridge reads every scene and script as lights only, so a test about something else (a timeout, a name
+    match) runs its scene for the caller it has. Who may run what is ``tests/test_home_runnables.py``."""
+    import home_runnables
+
+    async def _lights_only(entity_id):
+        return {"readable": True, "actions": [{"entity_id": "light.test_lamp", "service": "", "state": "on"}]}
+
+    monkeypatch.setattr(home_runnables, "_read", _lights_only)

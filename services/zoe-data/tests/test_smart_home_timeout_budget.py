@@ -125,7 +125,7 @@ async def test_partial_multi_device_timeout_is_not_reported_as_all_done(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_scene_timeout_is_spoken_honestly_and_plain_failure_is_not(monkeypatch):
+async def test_scene_timeout_is_spoken_honestly_and_plain_failure_is_not(monkeypatch, scenes_anyone_may_run):
     def timed_out(path, payload):
         shs._TIMED_OUT.get().append(path)
         return None
