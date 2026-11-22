@@ -1,6 +1,89 @@
 {
  "add_items_to_list": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "shopping"
+   ],
+   [
+    "list_add|L1"
+   ],
+   [
+    "L1"
+   ],
+   [
+    "<id>",
+    "L1",
+    "womble",
+    "normal",
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "shopping"
+   ],
+   [
+    "list_add|L1"
+   ],
+   [
+    "L1"
+   ],
+   [
+    "<id>",
+    "L1",
+    "quince",
+    "normal",
+    null,
+    null,
+    null,
+    null
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "assigned_to": null,
+     "category": null,
+     "deleted": 0,
+     "id": "<id>",
+     "list_id": "L1",
+     "parent_id": null,
+     "priority": "normal",
+     "quantity": null,
+     "text": "quince"
+    },
+    {
+     "assigned_to": null,
+     "category": null,
+     "deleted": 0,
+     "id": "<id>",
+     "list_id": "L1",
+     "parent_id": null,
+     "priority": "normal",
+     "quantity": null,
+     "text": "womble"
+    },
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "SELECT l.id, l.name, l.created_at, (SELECT COUNT(*) FROM list_items i WHERE i.list_id = l.id AND i.deleted = 0) AS n FROM lists l WHERE l.list_type = ? AND l.visibility = 'family' AND l.deleted = 0 ORDER BY l.created_at ASC, l.id ASC",
    "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
@@ -10,64 +93,362 @@
    "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
    "SELECT id, text FROM list_items WHERE list_id=? AND deleted=0 AND (completed IS NULL OR completed=0)",
    "INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ]
+  ],
+  "unapplied": []
  },
  "create_item_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "<id>",
+    "L1",
+    "womble",
+    "normal",
+    null,
+    null,
+    null,
+    null
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "assigned_to": null,
+     "category": null,
+     "deleted": 0,
+     "id": "<id>",
+     "list_id": "L1",
+     "parent_id": null,
+     "priority": "normal",
+     "quantity": null,
+     "text": "womble"
+    },
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ]
+  ],
+  "unapplied": []
  },
  "create_list_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "<id>",
+    "member-ova",
+    "Vellum",
+    "personal",
+    null,
+    "personal"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "description": null,
+     "id": "<id>",
+     "list_type": "personal",
+     "name": "Vellum",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    },
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "INSERT INTO lists (id, user_id, name, list_type, description, visibility) VALUES (?, ?, ?, ?, ?, ?)"
-  ]
+  ],
+  "unapplied": []
  },
  "delete_list_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "L1"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 1,
+     "id": "L1",
+     "name": "Shopping",
+     "updated_at": "<now>",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?"
-  ]
+  ],
+  "unapplied": []
  },
  "remove_item_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "I1",
+    "L1"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 1,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel",
+     "updated_at": "<now>"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?"
-  ]
+  ],
+  "unapplied": []
  },
  "rename_item_on_list": {
+  "fetch_args": [
+   [
+    "L1"
+   ],
+   [
+    "L1"
+   ]
+  ],
   "fetched": [
    "SELECT user_id, visibility FROM lists WHERE id = $1 AND deleted = 0 FOR SHARE",
    "SELECT id, text, completed FROM list_items WHERE list_id = $1 AND deleted = 0"
   ],
+  "params": [
+   [
+    "list_add|L1"
+   ],
+   [
+    "womble",
+    "I1",
+    "L1"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "womble",
+     "updated_at": "<now>"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
    "UPDATE list_items SET text = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0"
-  ]
+  ],
+  "unapplied": []
  },
  "set_item_checked": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "I1"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 1,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel",
+     "updated_at": "<now>"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?"
-  ]
+  ],
+  "unapplied": []
  },
  "set_list_visibility_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "L1",
+    "member-ova"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "updated_at": "<now>",
+     "user_id": "member-ova",
+     "visibility": "family"
+    }
+   ]
+  },
   "sql": [
    "UPDATE lists SET visibility = 'family', updated_at = NOW() WHERE id = $1 AND user_id = $2 AND deleted = 0 AND visibility <> 'family'"
-  ]
+  ],
+  "unapplied": []
  },
  "update_item_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "womble",
+    "I1",
+    "L1"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "womble"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Shopping",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "UPDATE list_items SET text = ? WHERE id = ? AND list_id = ?"
-  ]
+  ],
+  "unapplied": []
  },
  "update_list_record": {
+  "fetch_args": [],
   "fetched": [],
+  "params": [
+   [
+    "Vellum",
+    "L1"
+   ]
+  ],
+  "rows": {
+   "list_items": [
+    {
+     "completed": 0,
+     "deleted": 0,
+     "id": "I1",
+     "list_id": "L1",
+     "text": "wombel"
+    }
+   ],
+   "lists": [
+    {
+     "deleted": 0,
+     "id": "L1",
+     "name": "Vellum",
+     "user_id": "member-ova",
+     "visibility": "personal"
+    }
+   ]
+  },
   "sql": [
    "UPDATE lists SET name = ? WHERE id = ?"
-  ]
+  ],
+  "unapplied": []
  }
 }

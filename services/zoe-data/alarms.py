@@ -208,8 +208,8 @@ class Viewer:
     panel: bool = False  # the wall panel / a guest at it (household rules)
     # The Zoe OS alarms door (below): the erase stamps as they were when this viewer was MADE. A viewer is made first thing in a
     # request, before anything is read, and the alarm it then acts on (and so its owner) is read by the caller: the stamps an ask
-    # carries must not be newer than that read. None with every door off (flag reads only, nothing copied).
-    stamps_at: Optional[dict] = field(default_factory=kernel_door.stamps_now, compare=False, repr=False)
+    # carries must not be newer than that read. None unless the alarms / timers door is on (a flag read, nothing copied).
+    stamps_at: Optional[dict] = field(default_factory=lambda: kernel_door.stamps_now("alarms", "timers"), compare=False, repr=False)
 
     @property
     def owner_id(self) -> str:
