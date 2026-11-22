@@ -171,3 +171,64 @@ def test_one_handler_turns_every_areas_refusal_into_a_403_with_its_own_sentence(
         assert (client.get("/toy/not_owner").status_code, client.get("/toy/not_owner").json()) == (403, {"detail": "That toy is someone else's."})
         assert client.get("/toy/womble").json() == {"detail": "I'm not allowed to change that."}      # an unknown code: the fallback
         assert client.get("/list").json() == {"detail": list_service.refusal_line("not_owner")}
+
+
+# ---- an area's callers copy the erase stamps only when THAT area is on -----------------------------------------------------------------
+_AREA_STAMPS = {"lists": lambda: __import__("list_service").stamps_now(),
+                "reminders": lambda: __import__("reminder_service").stamps_now(),
+                "calendar": lambda: __import__("calendar_service").stamps_now(),
+                "notes": lambda: __import__("note_service").stamps_now(),
+                "journal": lambda: __import__("journal_service").stamps_now(),
+                "alarms": lambda: __import__("alarms").Viewer(user_id="member-ova").stamps_at}
+_FLAG = {"lists": "ZOE_OS_LISTS", "reminders": "ZOE_OS_REMINDERS", "calendar": "ZOE_OS_CALENDAR", "alarms": "ZOE_OS_ALARMS",
+         "notes": "ZOE_OS_NOTES", "journal": "ZOE_OS_JOURNAL"}
+
+
+@pytest.mark.parametrize("area", sorted(_AREA_STAMPS))
+def test_an_areas_callers_copy_nothing_while_only_other_areas_are_on(monkeypatch, area):
+    """Lists are on in production while the calendar is off: a calendar request must then copy no forget marks at all, and the
+    same holds for every area against every other. With its OWN flag on, the area's callers get the snapshot. Control run: with
+    ``kernel_door.stamps_now`` asking ``doors_on()`` whatever areas it was given, the first assertion fails for every area."""
+    for name in os_shadow.AREAS.values():
+        monkeypatch.setenv(name.flag, "kernel")
+    monkeypatch.setenv(_FLAG[area], "off")
+
+    def never():
+        raise AssertionError(f"{area}: the forget marks were copied with the area's own door off")
+
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", never)
+    assert _AREA_STAMPS[area]() is None
+    for name in os_shadow.AREAS.values():
+        monkeypatch.setenv(name.flag, "off")
+    monkeypatch.setenv(_FLAG[area], "kernel")
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", lambda: {"member-ova": 3})
+    assert _AREA_STAMPS[area]() == {"member-ova": 3}
+
+
+def test_a_snapshot_shared_by_two_doors_is_taken_when_either_is_on_and_no_caller_asks_for_every_area(monkeypatch):
+    """Where one function reaches two doors under one name (the brain's tools, an accepted suggestion, an anticipation "yes")
+    it names both areas. And no module of the service calls ``stamps_now()`` with no area on ``kernel_door`` itself: that form
+    answers for EVERY area and is the leak this test is about. Control run: with ``"calendar"`` dropped from the tools' call,
+    the source assertion fails; a planted bare call is reported below."""
+    import ast
+
+    for name in os_shadow.AREAS.values():
+        monkeypatch.setenv(name.flag, "off")
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", lambda: {"m": 1})
+    assert kernel_door.stamps_now("reminders", "calendar") is None
+    monkeypatch.setenv("ZOE_OS_CALENDAR", "kernel")
+    assert kernel_door.stamps_now("reminders", "calendar") == {"m": 1} and kernel_door.stamps_now("reminders", "lists") is None
+
+    def bare(src: str) -> list:
+        return [n.lineno for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call) and not n.args and not n.keywords
+                and isinstance(n.func, ast.Attribute) and n.func.attr == "stamps_now" and getattr(n.func.value, "id", "") == "kernel_door"]
+
+    root = Path(os_shadow.__file__).resolve().parent
+    skip = {"tests", "alembic", "node_modules", "__pycache__"}
+    modules = [p for p in sorted(root.rglob("*.py")) if not skip.intersection(p.relative_to(root).parts)]
+    assert len(modules) > 100
+    offenders = {p.relative_to(root).as_posix(): found for p in modules if (found := bare(p.read_text("utf-8")))}
+    assert not offenders, offenders
+    assert bare("import kernel_door\ndef f():\n    a = kernel_door.stamps_now()\n    b = kernel_door.stamps_now('lists')\n") == [3]
+    tools = (root / "mcp_server.py").read_text("utf-8")
+    assert 'stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal")' in tools

@@ -22,19 +22,17 @@ themselves honest.
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
 TABLES = ("events", "event_attendees", "event_alarms", "calendars")
-EVENT_WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA
-                         + r"[\"`\[]?(?:" + "|".join(TABLES) + r")\b", re.I)
+EVENT_WRITE = sql_scan.write_pattern(*TABLES)      # f-strings and concatenations whole, any schema, ONLY (tests/sql_scan.py)
 DOOR = "calendar_service.py"
 UPSERTS = ("upsert_row", "upsert_by_external_id")
 FEED, UPSERT_HOME = "calendar_feed.py", "connected_accounts.py"       # the feed, and the module that defines the two helpers
@@ -44,6 +42,14 @@ NOT_A_PERSON = {
     "calendar_forget.py": "the eraser for a member's calendar",
     "memory_forget_cascade.py": "the eraser for a forgotten person's attendee rows",
 }
+#: ... and WHERE in each of the three, by function, with the exact number of write statements: an exempt module is not a blank
+#: cheque (review: the scan skipped these modules whole, so a new writer added inside one passed)
+NOT_A_PERSON_WRITERS = {
+    ("calendar_feed.py", "_ensure_calendar"): 1, ("calendar_feed.py", "_link_members"): 1, ("calendar_feed.py", "_mark_success"): 1,
+    ("calendar_feed.py", "_sync_once"): 1, ("calendar_feed.py", "_write_items"): 1,
+    ("calendar_forget.py", "forget_user"): 7, ("calendar_forget.py", "<module>"): 1,       # (the module's docstring names one)
+    ("memory_forget_cascade.py", "_run"): 2,
+}
 
 
 def _modules() -> list:
@@ -51,16 +57,8 @@ def _modules() -> list:
     return sorted(p for p in ROOT.rglob("*.py") if not skip.intersection(p.relative_to(ROOT).parts))
 
 
-def _texts(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
-
-
 def event_writes(source: str) -> list:
-    return [" ".join(text.split())[:80] for text in _texts(ast.parse(source)) if EVENT_WRITE.search(text)]
+    return [text[:80] for text in sql_scan.writes(source, EVENT_WRITE)]
 
 
 def feed_upserts(source: str) -> list:
@@ -88,6 +86,19 @@ def test_only_the_door_writes_the_event_tables():
         assert event_writes(rel[name].read_text("utf-8")), name
 
 
+def test_the_three_exempt_modules_write_only_in_their_named_functions():
+    """Module, function and exact count, as the memory rows' scan does. Control run: a second
+    ``await db.execute("DELETE FROM events WHERE id = ?", (x,))`` planted in ``calendar_feed._mark_success`` fails this (count
+    2, not 1), and one planted in a new function of ``calendar_forget.py`` fails it naming that function; both passed the
+    module-wide exemption."""
+    import door_callers
+
+    found = {(name, fn): n for name in NOT_A_PERSON
+             for fn, n in door_callers.sql_writes_by_function((ROOT / name).read_text("utf-8"), EVENT_WRITE).items()}
+    assert found == NOT_A_PERSON_WRITERS
+    assert {name for name, _fn in NOT_A_PERSON_WRITERS} == set(NOT_A_PERSON)
+
+
 def test_only_the_feed_upserts_calendar_rows():
     offenders = {p.relative_to(ROOT).as_posix(): found for p in _modules()
                  if p.relative_to(ROOT).as_posix() not in (FEED, UPSERT_HOME) and (found := feed_upserts(p.read_text("utf-8")))}
@@ -106,6 +117,9 @@ def test_a_planted_event_write_is_caught():
     for sql in ('f"UPDATE {schema}.events SET x = ?"', 'f"DELETE FROM {schema}.event_attendees WHERE {col} = ?"',
                 "f\"UPDATE events SET {', '.join(sets)} WHERE id = ?\""):
         assert event_writes(f"async def f(db, schema, col, sets):\n    await db.execute({sql})\n"), sql
+    for table in TABLES:                          # a write split by ``+``, and Postgres' ONLY (control: ``sql_scan`` skipping ``+``)
+        for planted in sql_scan.planted_forms(table):
+            assert event_writes(planted), planted
     # other tables whose names end in ``events``, a longer name, and a read are not calendar writes
     assert not event_writes("async def f(db):\n    await db.execute('INSERT INTO alarm_events (id) VALUES (?)')\n"
                             "    await db.execute('UPDATE struggle_events SET x = 1')\n    await db.execute('SELECT * FROM events WHERE id = ?')\n"

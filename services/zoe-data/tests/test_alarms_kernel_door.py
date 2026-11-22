@@ -276,6 +276,111 @@ async def test_a_ringing_alarm_is_silenced_at_once_whatever_the_kernel_does(door
             assert len(door.ops("door_report")) == (2 if kernel == "allow" else 1)          # an objection closes nothing
 
 
+@pytest.mark.parametrize("kernel", ["allow", "refuse:not_owner", "slow", "gone"])
+@pytest.mark.parametrize("change", [{"enabled": False}, {"label": WORD}])
+@pytest.mark.asyncio
+async def test_an_edit_that_silences_a_ringing_alarm_is_never_held_up(door, caplog, monkeypatch, kernel, change):
+    """Every edit lands the alarm idle, so an edit made while it rings stops it: turning it off on the screen is how many people
+    silence an alarm. That edit is made first and told afterwards, exactly as dismiss is: a slow kernel costs it no time, a
+    refusing one cannot leave it ringing. Control run: with ``silences`` forced False in ``update_alarm`` (the edit asks first)
+    the refusing kernel raises ``AlarmRefused`` with the alarm still ringing, and the slow one makes the call wait."""
+    monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 1.0)
+    w = _world()
+    a = await _create(w)
+    await _ring(w)
+    assert (await w.rows())["alarms"][0][scenarios_col("state")] == "ringing"
+    if kernel == "slow":
+        door.delay = 0.8
+    elif kernel == "gone":
+        door.close()
+    else:
+        door.door = kernel
+    started = time.monotonic()
+    with caplog.at_level(logging.INFO, logger="os_shadow"):
+        async with w.db() as db:
+            out = await w.rest.update_alarm(a["id"], dict(change), None, user=_member(ANN), db=db)
+        took = time.monotonic() - started
+        row = (await w.rows())["alarms"][0]
+        assert row[scenarios_col("state")] == "idle" and out["alarm"]["state"] == "idle" and took < 0.4, took
+        if "enabled" in change:
+            assert not row[scenarios_col("enabled")]
+        if kernel in ("allow", "refuse:not_owner"):
+            told = _wait(door, "door_ask", 2)[1]                    # ... and afterwards the kernel hears that it was stopped
+            assert (told["verb"], told["person"], told["owner"], told["target"]) == ("alarm.stop", ANN, ANN, a["id"])
+            for _ in range(300):
+                if len(_lines(caplog)) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert ("decision=recorded" in _lines(caplog)[-1]) is (kernel == "allow")
+            assert ("decision=objected reason=not_owner" in _lines(caplog)[-1]) is (kernel != "allow")
+        else:
+            await _told(caplog, 2)                                   # the door's thread has finished with this test's kernel
+
+
+@pytest.mark.parametrize("kernel", ["refuse:not_owner", "slow"])
+@pytest.mark.asyncio
+async def test_turning_an_alarm_off_is_never_held_up_and_any_other_edit_still_asks_first(door, monkeypatch, kernel):
+    """Turning an alarm OFF takes effect at once even when it is not ringing (told afterwards as ``alarm.edit``); an edit that
+    neither silences nor turns off still asks first and a refusal is final. Control run: with the ``"enabled" in ch and not on``
+    half of ``silences`` dropped, the refusing kernel raises on the turn-off."""
+    monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 1.0)
+    w = _world()
+    a = await _create(w)
+    if kernel == "slow":
+        door.delay = 0.8
+    else:
+        door.door = kernel
+    started = time.monotonic()
+    async with w.db() as db:
+        out = await w.rest.update_alarm(a["id"], {"enabled": False}, None, user=_member(ANN), db=db)
+        assert out["alarm"]["enabled"] is False and time.monotonic() - started < 0.4
+        if kernel != "slow":
+            assert _wait(door, "door_ask", 2)[1]["verb"] == "alarm.edit"
+            with pytest.raises(alarms.AlarmRefused):                 # turning it back on, or renaming it, is an ordinary edit
+                await w.rest.update_alarm(a["id"], {"enabled": True}, None, user=_member(ANN), db=db)
+            with pytest.raises(alarms.AlarmRefused):
+                await w.rest.update_alarm(a["id"], {"label": WORD}, None, user=_member(ANN), db=db)
+    assert not (await w.rows())["alarms"][0][scenarios_col("enabled")]
+    if kernel == "slow":
+        await asyncio.sleep(1.3)                                     # the told-afterwards ask is out of the door's thread
+
+
+async def _told(caplog, n: int, timeout: float = 3.0) -> None:
+    """Wait until the door's own thread has logged ``n`` lines (a told-afterwards ask against a slow or absent kernel is still
+    in flight when the call under test returns: the next test must not inherit it)."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end and len(_lines(caplog)) < n:
+        await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_a_yes_to_an_anticipation_offer_holds_the_alarms_report_until_its_block_has_ended(door, monkeypatch):
+    """``anticipation.answer`` runs the alarm's create on its own connection; the door's report goes out only once that block
+    has ended (``kernel_door.reports_after``), never while the row could still be undone. Proven on the create itself inside a
+    held block, and ``answer`` is pinned to enter one. Controls run: with ``kernel_door.wrote`` ignoring the held block the
+    report is seen inside it; with ``reports_after`` dropped from ``answer`` the last assertion fails."""
+    import anticipation
+
+    w = _world()
+    seen = {}
+    real = alarms.create_alarm
+
+    async def create(db, owner, **kw):
+        out = await real(db, owner, **kw)
+        _wait(door, "door_ask", 1)
+        await asyncio.sleep(0.05)
+        seen["reports_inside"] = list(door.ops("door_report"))
+        return out
+
+    async with w.db() as db:
+        async with kernel_door.reports_after():                      # what ``answer`` now enters around its connection
+            monkeypatch.setattr(alarms, "create_alarm", create)
+            await alarms.create_alarm(db, ANN, time_hhmm="07:00", actor=alarms.Viewer(user_id=ANN))
+    assert seen["reports_inside"] == [] and [r["outcome"] for r in _wait(door, "door_report", 1)] == ["done"]
+    src = Path(anticipation.__file__).read_text("utf-8")
+    assert "async with kernel_door.reports_after(), _conn(db) as conn:" in src
+
+
 def scenarios_col(name: str) -> int:
     return alarms.COLS.index(name)
 
@@ -402,6 +507,100 @@ DOOR_FNS = {"create_alarm", "update_alarm", "delete_alarm", "snooze", "dismiss",
 def _modules() -> list:
     skip = {"tests", "alembic", "node_modules", "__pycache__"}
     return sorted(p for p in SVC.rglob("*.py") if not skip.intersection(p.relative_to(SVC).parts))
+
+
+def test_a_viewer_copies_nothing_while_only_another_areas_door_is_on(monkeypatch):
+    """Lists (and reminders) are on in production while alarms are off: making a viewer must then copy no forget marks. The
+    alarms area ALONE decides (``kernel_door.stamps_now("alarms", "timers")``); with its own flag on and the others off the
+    viewer gets the snapshot. (Review of #2689: the viewer asked ``doors_on()``, so any area's door made every alarm request
+    copy the marks.) Control run: with the viewer's ``default_factory`` back to the bare ``kernel_door.stamps_now`` the first
+    assertion fails."""
+    monkeypatch.setenv("ZOE_OS_LISTS", "kernel")
+    monkeypatch.setenv("ZOE_OS_REMINDERS", "kernel")
+    monkeypatch.setenv("ZOE_OS_ALARMS", "off")
+
+    def never():
+        raise AssertionError("the forget marks were copied with the alarms door off")
+
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", never)
+    assert alarms.Viewer(user_id=ANN).stamps_at is None
+    monkeypatch.setenv("ZOE_OS_LISTS", "off")
+    monkeypatch.setenv("ZOE_OS_REMINDERS", "off")
+    monkeypatch.setenv("ZOE_OS_ALARMS", "kernel")
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", lambda: {ANN: 3})
+    assert alarms.Viewer(user_id=ANN).stamps_at == {ANN: 3}
+    assert kernel_door.stamps_now("alarms", "timers") == {ANN: 3} and kernel_door.stamps_now("lists") is None
+
+
+@pytest.mark.parametrize("value, reads", [(None, 0), ("off", 0), ("shadow", 0), ("kernel", 1)])
+def test_a_timer_cancel_reads_the_clock_for_the_door_only_when_the_door_is_on(door, monkeypatch, value, reads):
+    """``cancel_by_id`` tells the door ``timer.stop`` for a ringing timer and ``timer.cancel`` for a running one, and reads the
+    clock to tell them apart. With the door off nothing is told, so the clock is not read for it: the calls to ``time.time``
+    made by ``cancel_by_id`` ITSELF are counted (the store's own pruning reads the clock either way, as on main).
+    Control run: with the ``os_shadow.area_on("timers") and`` guard removed, the three flag-off cases count one read."""
+    import sys
+
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_ALARMS", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_OS_ALARMS", value)
+    w = scenarios._TimerWorld([])
+    try:
+        made = [w.sky._timers.create(ANN, WORD, 600), w.sky._timers.create(ANN, WORD, 30)]
+        w.clock["now"] += 31                                                # the second one is ringing
+        callers: list = []
+
+        def clock():
+            callers.append(sys._getframe(1).f_code.co_name)
+            return w.clock["now"]
+
+        monkeypatch.setattr(w.sky.time, "time", clock)
+        for timer in made:
+            assert w.sky.cancel_timer_by_id(ANN, timer["timer_id"]) is not None
+        assert callers.count("cancel_by_id") == reads * len(made) and "_prune" in callers and w.state() == {}
+        if reads:
+            assert [a["verb"] for a in _wait(door, "door_ask", 4)][2:] == ["timer.cancel", "timer.stop"]
+        else:
+            assert door.ops("door_ask") == []
+    finally:
+        scenarios._restore()
+
+
+@pytest.mark.asyncio
+async def test_a_yes_to_an_offer_asks_with_the_stamps_from_before_the_offer_was_read(door, monkeypatch):
+    """``anticipation.answer`` reads the offer (and the event it was made for) before it makes the alarm. The actor the alarms
+    door is asked as is made BEFORE those reads, so a forget of the member confirmed while they run does not make the ask look
+    newer than the forget. (Review of #2689: the actor was made in ``_do``, after the reads.)
+    Control run: with ``asked_as`` not handed to ``_do`` (it makes its own actor, after the reads) the ask carries the moved-on
+    stamp and this fails."""
+    import anticipation
+
+    w = _world()
+    before = os_shadow.erase_stamp(ANN)
+    offer = {"id": "sug-0001", "resolved": anticipation.OPEN, "kind": "wake", "expires": None,
+             "slots": {"wake_time": "05:30", "start_date": "2026-11-05", "label": WORD}}
+
+    async def own_row(conn, uid, row_id):
+        os_shadow._forget_marks[ANN] += 1                      # the kernel confirms a whole-member forget WHILE the offer is read
+        return dict(offer)
+
+    async def offered(conn, uid, slots):
+        return object()
+
+    async def done(*a, **k):
+        return True
+
+    for name, fake in (("_own_row", own_row), ("_offered", offered), ("_set", done), ("_edge", done)):
+        monkeypatch.setattr(anticipation, name, fake)
+    monkeypatch.setattr(anticipation, "_log_outcome", lambda *a, **k: None)
+    async with w.db() as db:
+        from datetime import datetime, timezone
+
+        reply = await anticipation.answer(ANN, "sug-0001", True, db=db, now=datetime.fromtimestamp(w.clock["now"], timezone.utc))
+    assert reply.startswith("Done - a one-off alarm")
+    (ask,) = _wait(door, "door_ask", 1)
+    assert ask["verb"] == "alarm.create" and ask["stamps"][ANN] == before and os_shadow.erase_stamp(ANN) > before
+    scenarios._restore()
 
 
 def callers_without_an_actor(src: str) -> list:
