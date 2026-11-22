@@ -188,7 +188,10 @@ async def accept_pending_suggestion(
 ):
     """Execute a pending save offer (direct API — no intent re-parse)."""
     await require_feature_access(db, user, feature="proactive", action="accept")
+    import panel_principal as _pp
     from pending_suggestions import execute_suggestion
+
+    _pp._note_actor(user)      # the action doors (music, home): who acts: the member accepting the offer
 
     result = await execute_suggestion(suggestion_id, user["user_id"])
     if not result.get("ok"):

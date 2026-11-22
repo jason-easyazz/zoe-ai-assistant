@@ -1,7 +1,7 @@
 """Music and home control go to the Zoe OS kernel, a flag each (``ZOE_OS_MUSIC=kernel``, ``ZOE_OS_HOME=kernel``;
 docs/knowledge/zoe-os-music-home-door.md). Nothing is stored for either: the door sits at the one sender of each.
 
-* any other flag value: NO kernel call and exactly main's outbound calls for all 45 scenarios; the same with the doors on and
+* any other flag value: NO kernel call and exactly main's outbound calls for every scenario; the same with the doors on and
   the kernel allowing; and a command nobody is acting for (automatic) is never asked or told;
 * QUIET commands (stop / turn down the music; a light or a media player off) are SENT FIRST and told afterwards: a kernel that
   is slow, gone or says no neither delays nor stops them;
@@ -312,6 +312,119 @@ async def test_an_allowed_unlock_is_sent_and_closing_or_locking_is_an_ordinary_c
     assert len(_sent(log, "house")) == 2
 
 
+# ---- a TYPED Skybridge command: the route notes who is acting (review #2703) -----------------------------------------------------------
+KID = "member-kip"
+
+
+async def _typed(message, who, *, setup=None):
+    """The typed Skybridge route itself (``POST /api/skybridge/resolve``), as a signed-in member ``who`` calls it, against the fake
+    house and music engine. Nothing is noted beforehand: the route must note its caller."""
+    from routers import skybridge
+
+    log: list = []
+    w = scenarios.World(log)
+    if setup:
+        setup(w)
+    out = await skybridge.resolve_skybridge_command({"message": message}, user={"user_id": who, "role": "user"}, db=None,
+                                                    request=None)
+    return out, log
+
+
+def _cover_listed_as_a_switch(w):
+    """The worst case for a typed command: a bridge that lists a garage door among the switches. A turn-on of it is a cover
+    ``on``: SECURE (asked first; a kernel that cannot answer means no)."""
+    real = scenarios.HA_ANSWERS["/switches"]
+    w_answer = w.answer
+
+    def answer(method, url, body, timeout):
+        if method == "GET" and str(url).split("?")[0].endswith("/switches"):
+            w.log.append(["http", method, "/switches", None, timeout])
+            return scenarios._Response(200, {"switches": [*real["switches"], {"entity_id": "cover.garage_door", "state": "closed",
+                                                                               "attributes": {"friendly_name": "Garage door"}}]})
+        return w_answer(method, url, body, timeout)
+    w.answer = answer
+
+
+@pytest.mark.asyncio
+async def test_a_childs_typed_home_command_is_asked_as_the_child_and_a_refusal_sends_nothing(door):
+    """Before the fix the typed route noted nobody: the command was AUTOMATIC, never asked, and the kettle plug was switched on
+    for a child whose level does not allow switches. Control run: with ``panel_principal._note_actor(user)`` removed from
+    ``routers/skybridge.resolve_skybridge_command`` no ask is made and the switch is sent."""
+    door.door = "refuse:adults_only"
+    out, log = await _typed("turn on the kettle plug", KID)
+    assert out["spoken_summary"] == action_doors.HomeRefused("adults_only").line() and out["intent"]["status"] == "refused"
+    assert _sent(log, "house") == []
+    (ask,) = _wait(door, "door_ask", 1)
+    assert (ask["area"], ask["verb"], ask["person"], ask["target"]) == ("home", "switch.on", KID, "switch.kettle_plug")
+
+
+@pytest.mark.parametrize("how,reason", [("refuse:adults_only", "adults_only"), ("close", "unavailable"), ("slow", "unavailable")])
+@pytest.mark.asyncio
+async def test_a_childs_typed_command_that_could_open_the_house_is_refused_and_never_sent_unchecked(door, how, reason):
+    """SECURE through the typed route: refused by the kernel, or not checkable (kernel gone or slow), nothing is sent. Before
+    the fix it went out unasked, kernel or no kernel. Control run: the same removal of the route's actor note sends the
+    garage door's command in every case."""
+    if how == "slow":
+        door.delay = 0.5
+    else:
+        door.door = how
+    out, log = await _typed("turn on the garage door", KID, setup=_cover_listed_as_a_switch)
+    assert out["spoken_summary"] == action_doors.HomeRefused(reason).line()
+    assert _sent(log, "house") == []
+    assert {(a["verb"], a["person"], a["target"]) for a in door.ops("door_ask")} <= {("cover.on", KID, "cover.garage_door")}
+
+
+@pytest.mark.asyncio
+async def test_a_typed_music_command_is_asked_and_a_refusal_plays_nothing(door):
+    """Control run: with the route's actor note removed the music plays unasked."""
+    door.door = "refuse:unknown_person"
+    out, log = await _typed("play womble", KID)
+    assert out["spoken_summary"] == action_doors.MusicRefused("unknown_person").line()
+    assert _sent(log, "player_queues/play_media") == []
+    assert [(a["area"], a["verb"], a["person"]) for a in _wait(door, "door_ask", 1)] == [("music", "music.play", KID)]
+
+
+@pytest.mark.parametrize("value", [None, "off"])
+@pytest.mark.asyncio
+async def test_with_the_doors_off_a_typed_command_is_sent_as_before_and_the_kernel_is_never_called(door, monkeypatch, value):
+    """Flag off: noting the actor changes nothing; the same typed commands are sent exactly as with no note at all, and the
+    kernel is not called. Control run: with ``before`` ignoring the area flag this sees a ``door_ask``."""
+    for flag in FLAGS:
+        if value is None:
+            monkeypatch.delenv(flag, raising=False)
+        else:
+            monkeypatch.setenv(flag, value)
+    sent = {}
+    for message, what, setup in (("turn on the kettle plug", "house", None), ("turn on the garage door", "house", _cover_listed_as_a_switch),
+                                 ("play womble", "player_queues/play_media", None)):
+        out, log = await _typed(message, KID, setup=setup)
+        sent[message] = [e[2:4] for e in _sent(log, what)]
+        kernel_door._ACTOR.set(None)
+        bare, bare_log = await _typed_without_note(message, KID, setup=setup)
+        assert [e[2:4] for e in _sent(bare_log, what)] == sent[message] and len(sent[message]) == 1, message
+        assert {k: v for k, v in out.items() if k != "skybridge_context"} == {k: v for k, v in bare.items() if k != "skybridge_context"}
+    assert door.ops("door_ask") == [] and door.ops("door_report") == []
+
+
+async def _typed_without_note(message, who, *, setup=None):
+    """The same command through the resolver the route calls, with no actor noted: what the route did before the fix."""
+    import skybridge_service as sky
+
+    log: list = []
+    w = scenarios.World(log)
+    if setup:
+        setup(w)
+    return await sky.resolve_skybridge_request(message, who, context=None, db=None), log
+
+
+def test_power_on_is_asked_first_and_only_power_off_is_a_stop():
+    """``players/cmd/power`` was always the quiet ``music.stop``: a power-ON sent first and told afterwards, a refusal ignored.
+    Control run: with the old mapping (every power command a stop) the power-on assertion fails."""
+    assert action_doors.music_verb("players/cmd/power", {"player_id": "ply0001", "powered": False}) == "music.stop"
+    for args in ({"player_id": "ply0001", "powered": True}, {"player_id": "ply0001"}, {"powered": "false"}):
+        assert action_doors.music_verb("players/cmd/power", args) == "music.play", args
+
+
 # ---- what crosses, and how a send that failed is reported -----------------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_an_ask_carries_ids_and_closed_codes_only_and_the_panel_is_never_named(door, caplog):
@@ -404,10 +517,9 @@ async def test_a_level_is_set_only_through_the_ask_and_never_while_the_kernel_ca
 
 
 # ---- structure --------------------------------------------------------------------------------------------------------------------
-def test_each_sender_asks_before_it_sends_and_every_entry_point_notes_who_is_acting():
-    """In the two senders the door's ``before`` comes before the POST and ``after`` follows it. And each authenticated entry
-    point notes the caller for the doors. Control run: with ``before`` moved after the POST in ``home_control.send`` this
-    fails; with ``_note_actor`` dropped from ``panel_principal.record_turn_home_control`` the pin fails."""
+def test_each_sender_asks_before_it_sends():
+    """In the two senders the door's ``before`` comes before the POST and ``after`` follows it. Control run: with ``before``
+    moved after the POST in ``home_control.send`` this fails."""
     for module, fn_name in (("home_control.py", "send"), ("music_service.py", "_ma_response")):
         tree = ast.parse((SVC / module).read_text("utf-8"))
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == fn_name)
@@ -416,9 +528,85 @@ def test_each_sender_asks_before_it_sends_and_every_entry_point_notes_who_is_act
         posts = [ln for ln, name in calls if name == "post"]
         after = [ln for ln, name in calls if name == "after"]
         assert len(before) == 1 and posts and before[0] < min(posts) and after and max(after) > min(posts), module
-    pp = (SVC / "panel_principal.py").read_text("utf-8")
-    for needle in ("    record_home_control(allowed)\n    _note_actor(user)\n", "    if await may_control_home(request, user):\n        _note_actor(user)\n"):
-        assert needle in pp, needle
-    assert "panel_principal._note_actor(user)" in (SVC / "routers" / "ha_control.py").read_text("utf-8")
-    assert (SVC / "music_jukebox.py").read_text("utf-8").count("panel_principal._note_actor(") == 2
-    assert '_pp._note_actor({"user_id": user_id})' in (SVC / "routers" / "system.py").read_text("utf-8")
+
+
+SENDERS = {("home_control.py", "send"), ("music_service.py", "_ma_response")}
+NOTERS = {"note_actor", "_note_actor"}
+_SETUP = "music provider sign-in / set-up: it reaches Music Assistant only with config and provider commands (no action verb)"
+_READ = "a read: it asks Music Assistant which speakers there are and sends no command"
+_AUTO = "automatic: nobody is acting (started by the service itself, not by a request)"
+_INHERITS = "run as a task of a turn that has already noted its actor: a task copies its spawner's context, the actor with it"
+_ROOM = "the LiveKit room agent: each room turn notes its own speaker (``_run_pipeline``, ``_run_text_pipeline``)"
+#: entry points (routes, websocket handlers, spawned tasks) from which a sender is reachable but that note NO actor: each with why
+NOTES_NOBODY = {
+    ("routers/handoff.py", "handoff_start"): _SETUP,
+    **{("routers/music_setup.py", fn): _SETUP for fn in ("browser_start", "oauth_start", "setup_form", "setup_save")},
+    ("music_oauth.py", "_run_and_report"): _SETUP,
+    ("ytmusic_signin.py", "_run_watcher"): _SETUP,
+    ("ytmusic_signin.py", "refresh_now"): _AUTO,
+    ("music_history.py", "observe_once"): _AUTO,
+    ("routers/panel_config.py", "put_panel_config"): _READ,
+    ("brain_dispatch.py", "brain_oneshot"): _INHERITS,                     # the chat stream's own brain call
+    ("pi_intent_lab.py", "_execute_safe_fulfillment_intent"): _INHERITS,     # the lab route's (its dependency notes the operator)
+    ("routers/voice_tts.py", "get_livekit_token"): _ROOM,
+    **{("routers/voice_livekit.py", fn): _ROOM for fn in ("_agent_loop", "_collect_audio_stream", "_smart_turn_check",
+                                                          "ensure_livekit_started")},
+}
+
+
+@pytest.fixture(scope="module")
+def code():
+    import actor_reach
+
+    return actor_reach.Code(SVC)
+
+
+def _unnoted(code) -> dict:
+    """Every entry point from which a sender is reachable and that notes nobody: ``{entry point: 'route' | 'task'}``. An entry
+    point NOTES when its own body (or a function it calls whose own body does) calls ``note_actor`` / ``_note_actor``, or one of
+    its ``Depends(...)`` (any depth) does."""
+    reach = code.reaching(SENDERS)
+    direct = {k for k in code.edges if code.calls(k, NOTERS)}
+
+    def notes(key) -> bool:
+        return key in direct or bool(code.edges.get(key, set()) & direct)
+
+    routes, tasks = code.routes(), code.spawned()
+    out = {}
+    for key in sorted((set(routes) | set(tasks)) & reach):
+        deps = set(routes.get(key, ()))
+        deps |= {d2 for d in list(deps) for d2 in code.dependencies(d)}
+        if not (notes(key) or any(notes(d) for d in deps)):
+            out[key] = "route" if key in routes else "task"
+    return out
+
+
+def test_every_entry_point_that_can_reach_a_sender_notes_who_is_acting(code):
+    """The ENTRY POINTS ARE DERIVED FROM THE CODE (``tests/actor_reach.py``): the call graph, by import resolution, walked back
+    from the two senders to every route, websocket handler and spawned task it reaches. Each must note who is acting (itself, a
+    function it calls, or a dependency of it), or be listed in ``NOTES_NOBODY`` with why it acts for nobody. A command sent with
+    nobody noted is AUTOMATIC: not asked, not told, so a child's level and the opening rule would not apply to it.
+    Controls run: with the actor note removed from the typed Skybridge route (``routers/skybridge.py``) this fails naming
+    ``resolve_skybridge_command`` (it is how review #2703 found the hole the old fixed list of snippets missed); with it removed
+    from the LiveKit room turn (``_run_pipeline``) it fails naming that; with ``_note_actor`` dropped from
+    ``panel_principal.record_turn_home_control`` it fails naming the chat and voice routes."""
+    found = set(_unnoted(code))
+    assert found == set(NOTES_NOBODY), {
+        "reaches a sender, notes nobody, not listed": sorted(found - set(NOTES_NOBODY)),
+        "listed, but notes an actor now or no longer reaches a sender": sorted(set(NOTES_NOBODY) - found)}
+    for key, why in NOTES_NOBODY.items():
+        assert isinstance(why, str) and len(why) > 30, key
+
+
+def test_the_graph_reaches_the_entry_points_it_must(code):
+    """The derivation has something to bite on: the routes every review has named are among the entry points it finds, and
+    they note an actor. Control run: with the module-attribute edges (``m.fn``) dropped from ``actor_reach.Code._named`` the
+    panel's control route is no longer found."""
+    reach = code.reaching(SENDERS)
+    routes = code.routes()
+    for key in (("routers/skybridge.py", "resolve_skybridge_command"), ("routers/ha_control.py", "ha_control"),
+                ("routers/chat.py", "chat"), ("routers/voice_tts.py", "voice_command"), ("routers/music.py", "music_play"),
+                ("routers/system.py", "intent_dispatch"), ("routers/system.py", "a2a_task_stream"),
+                ("routers/ui_actions.py", "confirm_action_form"), ("routers/proactive.py", "accept_pending_suggestion")):
+        assert key in routes and key in reach, key
+    assert len(routes) > 300 and len(reach) > 100

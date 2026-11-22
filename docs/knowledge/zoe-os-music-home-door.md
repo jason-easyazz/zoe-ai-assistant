@@ -30,8 +30,14 @@ service: an agent that calls it directly, not through zoe-data, is not behind th
 
 **Who is acting.** Every authenticated entry point notes its caller for the doors (`kernel_door.note_actor`: the turn recorder
 `panel_principal.record_turn_home_control`, `require_member_or_panel`, the jukebox dependency, `/api/ha`'s own check, the
-brain's dispatch). A command sent with nobody noted is AUTOMATIC (an alarm's music, the discovery jobs, a routine Zoe runs
-herself): not asked, not told.
+brain's dispatch, the typed Skybridge route, the A2A stream, the card / form / suggestion actions, the PIN-resumed voice
+command, the lab's operator check, and each LiveKit room turn). A command sent with nobody noted is AUTOMATIC (an alarm's
+music, the discovery jobs, a routine Zoe runs herself): not asked, not told. Which entry points must note is DERIVED from the
+code (`tests/actor_reach.py`: the call graph walked back from the two senders to every route, websocket handler and spawned
+task); one that reaches a sender without noting fails `test_actions_kernel_door.py` unless it is listed with its reason
+(provider set-up, a read, automatic work, a task of a turn that already noted). Voice turns from the panel's device token
+act as THE PANEL even when the voice names a member (the scope member can be a bound or recent session, not the speaker), so
+a child speaking at the panel is held to the panel's rule, not their own level: an open question, not changed here.
 
 ## 2. Three kinds of command [code]
 
