@@ -6,6 +6,7 @@ closing, locking or arming it - is sent to Home Assistant only for:
   * a household member who is POSITIVELY an adult by their account record (``manner_block.is_adult``: a missing account, an
     unknown role, a child, a guest and a failed lookup are all NOT an adult), or
   * the panel while a VERIFIED VOICE SESSION is open on it (``voice_session.active_member``), and that member is an adult.
+    WHICH panel a caller is comes from ``panel_principal.panel_of`` (device token, kiosk credential or registered address).
 
 The shared panel with nobody identified, and a guest, are refused. Lock, close and arm stay open to everyone who may control
 the house today. Every member-driven sender asks ``refused(...)`` right before it sends; a refusal sends nothing.
@@ -31,8 +32,9 @@ CLOSING = frozenset({"lock", "close", "close_cover", "close_cover_tilt", "close_
 _TURN: contextvars.ContextVar[Optional[Mapping[str, Any]]] = contextvars.ContextVar("zoe_home_opening_turn", default=None)
 
 
-def note_turn(user: Optional[Mapping[str, Any]]) -> None:
-    _TURN.set(dict(user) if user else {})
+def note_turn(user: Optional[Mapping[str, Any]], panel: Optional[str] = None) -> None:
+    """Note this turn's caller. ``panel``: the panel the turn came from (``panel_principal.panel_of``; "" = not a panel)."""
+    _TURN.set({**(user or {}), **({} if panel is None else {"panel_id": panel})})
 
 
 def _domains(entity_id: Any, data: Any) -> set:
@@ -51,34 +53,39 @@ async def _adult(user_id: Any) -> bool:
     try:
         import manner_block
 
-        return bool(user_id) and bool(await manner_block.is_adult(str(user_id)))
+        return bool(user_id) and bool(await manner_block.is_adult(str(user_id), quiet=True))     # quiet: no id in the log
     except Exception:  # noqa: BLE001 - not knowing is not an adult
         return False
 
 
-async def may_open(user: Optional[Mapping[str, Any]]) -> bool:
-    """Is this caller an adult member, or a panel whose open verified voice session belongs to one? Never raises."""
+async def may_open(user: Optional[Mapping[str, Any]], request: Any = None) -> bool:
+    """Is this caller an adult member, or a panel whose open verified voice session belongs to one? Never raises.
+    With a ``request`` the panel is whatever ``panel_principal.panel_of`` proves it to be; without one, the record's own."""
     u = user or {}
-    if await _adult(u.get("user_id")):
+    if u.get("unauthenticated_override"):      # a header-less caller promoted by a legacy setting is nobody, whatever its id
+        u = {"user_id": "guest", "role": "guest", "panel_id": u.get("panel_id")}
+    elif await _adult(u.get("user_id")):
         return True
-    panel = str(u.get("panel_id") or "").strip()
-    if not panel:
-        return False
     try:
+        import panel_principal
         import voice_session
 
+        panel = await panel_principal.panel_of(request, u) if request is not None else str(u.get("panel_id") or "").strip()
+        if not panel:
+            return False
         return await _adult(voice_session.active_member(panel))
     except Exception:  # noqa: BLE001 - no session to read is no session
         return False
 
 
-async def refused(entity_id: Any, action: Any, data: Any = None, *, user: Any = "turn", via: str = "") -> bool:
-    """True when this command would open the house and its caller may not. ``user``: the caller's record, or (default) the
-    caller of this turn. One log line, closed codes only: the lane, the domain and the service class, never a name or an id."""
+async def refused(entity_id: Any, action: Any, data: Any = None, *, user: Any = "turn", request: Any = None,
+                  via: str = "") -> bool:
+    """True when this command would open the house and its caller may not. ``user``: the caller's record (with its
+    ``request``, which says which panel it is), or (default) the caller of this turn. One log line, closed codes only: the lane, the domain and the service class, never a name or an id."""
     if not opens(entity_id, action, data):
         return False
     who = _TURN.get() if user == "turn" else user
-    if await may_open(who):
+    if await may_open(who, request):
         return False
     logger.warning("HOME_OPENING refused via=%s domain=%s", via or "-", ",".join(sorted(_domains(entity_id, data) & SECURE_DOMAINS)))
     return True

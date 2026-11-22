@@ -134,7 +134,7 @@ async def get_entity_state(entity_id: str, caller: dict = Depends(_require_calle
 
 
 @router.post("/control")
-async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_caller)):
+async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_caller), request: Request = None):
     """
     Call a HA service directly from the touch panel.
 
@@ -165,7 +165,7 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
 
     # Unlocking or opening needs an adult member or a verified voice session (home_opening.py); nothing is sent otherwise.
     # (The Zoe OS kernel's home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
-    if await home_opening.refused(entity_id, service, params, user=caller, via="panel_route"):
+    if await home_opening.refused(entity_id, service, params, user=caller, request=request, via="panel_route"):
         raise HTTPException(status_code=403, detail=home_opening.REFUSAL)
     try:
         body = {"entity_id": entity_id, "action": service, "data": params}

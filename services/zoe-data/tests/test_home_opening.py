@@ -10,22 +10,31 @@ restored). Invented people and devices only.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
+import auth
 import home_opening
 import manner_block
+import panel_kiosk_credential
 import panel_principal
+import persona_layer
 import smart_home_service
 import voice_session
 import zoe_agent
-from routers import ha_control
+from routers import ha_control, panel_auth
+from test_ha_control_auth import CF, GUEST_SID, PANEL_IP, PANEL_TOKEN, PHONE_IP, PROXY, _env, _ha, registry  # noqa: F401 - fixtures
 
 pytestmark = pytest.mark.ci_safe
 
-ADULT, CHILD, PANEL = "member-ova", "member-kip", "panel-hall"
+ADULT, CHILD, PANEL = "member-ova", "member-kip", "kitchen-panel"      # the panel the shared registry fixture registers
+REAL_LOOKUP = manner_block._account_is_adult
 MEMBER = {"user_id": ADULT, "role": "user"}
 KID = {"user_id": CHILD, "role": "user"}
 GUEST = {"user_id": "guest", "role": "guest"}
@@ -46,7 +55,7 @@ def house(monkeypatch):
     command that reached the bridge."""
     state = {"session": None, "sent": []}
 
-    async def is_adult(user_id, db=None):
+    async def account_is_adult(user_id, db=None):      # the account record; the real ``manner_block.is_adult`` runs over it
         return user_id == ADULT
 
     async def bridge(path, body):
@@ -79,7 +88,7 @@ def house(monkeypatch):
 
             return R()
 
-    monkeypatch.setattr(manner_block, "is_adult", is_adult)
+    monkeypatch.setattr(manner_block, "_account_is_adult", account_is_adult)
     monkeypatch.setattr(voice_session, "active_member", lambda panel: state["session"] if panel == PANEL else None)
     monkeypatch.setattr(ha_control, "_bridge_post", bridge)
     monkeypatch.setattr(smart_home_service, "_ha_post", spoken_bridge)
@@ -116,18 +125,91 @@ async def test_the_route_opens_for_an_adult_and_for_nobody_else(house, entity, a
     assert (await _route(MEMBER, entity, action))["ok"] is True and len(house["sent"]) == 1
 
 
-async def test_the_route_opens_at_the_panel_only_while_an_adults_verified_voice_session_is_open(house):
-    """Control run: with ``may_open`` ignoring the voice session the adult's session is refused; with it not asking whether
-    the session's member is an adult the child's session opens the door."""
+def _kiosk_cookie(monkeypatch):
+    """A REAL kiosk credential, minted from a device token issued to the panel."""
+    monkeypatch.setenv("ZOE_PANEL_KIOSK_CREDENTIAL", "1")
+    monkeypatch.setitem(panel_auth._token_cache, "hash-of-a-test-token", dict(panel_id=PANEL, role="voice", expires_at=None, revoked=0))
+    return "%s=%s" % (panel_kiosk_credential.COOKIE_NAME, panel_kiosk_credential.mint_credential(PANEL, "hash-of-a-test-token"))
+
+
+def _panel_request(way, monkeypatch):
+    """(peer, headers) for each way a panel authenticates; ``get_current_user`` and ``panel_principal`` make the caller."""
+    return {"device_token": (PHONE_IP, {"X-Device-Token": PANEL_TOKEN}),
+            "kiosk_credential": (PROXY, {"X-Real-IP": PHONE_IP, "Cookie": _kiosk_cookie(monkeypatch)}),
+            "registered_address": (PROXY, {"X-Real-IP": PANEL_IP}),
+            "registered_address_guest_session": (PROXY, {"X-Real-IP": PANEL_IP, "X-Session-ID": GUEST_SID})}[way]
+
+
+def _unlock(peer, headers):
+    return _ha(peer).post("/api/ha/control", json={"entity_id": "lock.front_door", "action": "unlock"}, headers=headers)
+
+
+@pytest.mark.parametrize("way", ["device_token", "kiosk_credential", "registered_address", "registered_address_guest_session"])
+def test_every_kind_of_panel_opens_only_while_an_adults_verified_voice_session_is_open_on_it(house, registry, monkeypatch, way):
+    """Real HTTP, the real ``get_current_user`` and the real panel test: the caller is whatever each authorisation path makes.
+    Controls run: with ``may_open`` reading only the caller's own ``panel_id`` the kiosk-credential and registered-address
+    panels refuse the adult; with it not asking whether the session's member is an adult the child's session opens the door."""
+    peer, headers = _panel_request(way, monkeypatch)
     house["session"] = ADULT
-    assert (await _route(BARE_PANEL, "lock.front_door", "unlock"))["ok"] is True
+    assert _unlock(peer, headers).status_code == 200 and len(house["sent"]) == 1
     house["session"] = CHILD
-    with pytest.raises(HTTPException):
-        await _route(BARE_PANEL, "lock.front_door", "unlock")
+    r = _unlock(peer, headers)
+    assert r.status_code == 403 and r.json()["detail"] == home_opening.REFUSAL
     house["session"] = None
-    with pytest.raises(HTTPException):
-        await _route(BARE_PANEL, "lock.front_door", "unlock")
-    assert len(house["sent"]) == 1
+    assert _unlock(peer, headers).json()["detail"] == home_opening.REFUSAL
+    house["session"] = ADULT
+    assert _unlock(peer, {**headers, **CF}).status_code == 403 and len(house["sent"]) == 1      # never over the tunnel
+
+
+def test_an_address_that_names_no_single_panel_and_a_header_less_promoted_caller_open_nothing(house, registry, monkeypatch):
+    """Controls run: with ``_panel_id_at`` taking the first of two panels at one address the first assertion fails; with the
+    ``unauthenticated_override`` branch dropped from ``may_open`` the last one fails (the promoted id reads as an adult)."""
+    registry.con.execute("INSERT INTO panels VALUES ('other-panel', ?, 1, 1)", (PANEL_IP,))
+    house["session"] = ADULT
+    assert _unlock(PROXY, {"X-Real-IP": PANEL_IP}).status_code == 403
+    registry.con.execute("DELETE FROM panels WHERE panel_id = 'other-panel'")
+    house["session"] = None
+
+    async def everyone_is_an_adult(user_id, db=None):
+        return True
+
+    monkeypatch.setattr(manner_block, "_account_is_adult", everyone_is_an_adult)
+    monkeypatch.setattr(auth, "_UNAUTH_ROLE", "family-admin")      # the legacy setting: a header-less caller is "admin"
+    assert _unlock(PROXY, {"X-Real-IP": PANEL_IP}).json()["detail"] == home_opening.REFUSAL and house["sent"] == []
+
+
+# ---- the real bridge -------------------------------------------------------------------------------------------------------------
+async def test_an_adults_unlock_or_open_reaches_home_assistant_through_the_real_bridge(house, monkeypatch):
+    """The bridge is the REAL ``homeassistant-mcp-bridge`` ``control_device`` with its real ``SERVICE_MAPPING`` (only Home
+    Assistant itself is faked): before this PR it had no unlock, open, close, lock or disarm, so an allowed command died there.
+    Control run: with ``unlock`` taken out of the bridge's ``SERVICE_MAPPING`` the adult's unlock is a 502 and this fails."""
+    spec = importlib.util.spec_from_file_location(
+        "ha_mcp_bridge_main", Path(__file__).resolve().parents[2] / "homeassistant-mcp-bridge" / "main.py")
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
+    called = []
+
+    class FakeHomeAssistant:
+        async def call_service(self, domain, service, entity_id=None, data=None):
+            called.append((domain, service, entity_id))
+            return {"ok": True}
+
+    async def real_bridge(path, body):
+        return await bridge.control_device(bridge.DeviceControlRequest(**body))
+
+    monkeypatch.setattr(bridge, "ha_bridge", FakeHomeAssistant())
+    monkeypatch.setattr(ha_control, "_bridge_post", real_bridge)
+    wanted = [("lock.front_door", "unlock", "unlock"), ("cover.garage_door", "open", "open_cover"),
+              ("valve.water_main", "open_valve", "open_valve"), ("alarm_control_panel.house", "alarm_disarm", "alarm_disarm"),
+              ("lock.front_door", "lock", "lock"), ("cover.garage_door", "close", "close_cover")]
+    for entity, action, service in wanted:
+        assert (await _route(MEMBER, entity, action))["service"] == service
+    assert called == [(e.partition(".")[0], service, e) for e, _a, service in wanted]
+    with pytest.raises(HTTPException) as exc:
+        await _route(KID, "lock.front_door", "unlock")
+    assert exc.value.status_code == 403 and len(called) == len(wanted)
+    assert home_opening.CLOSING - {"close", "close_cover_tilt", "stop_cover_tilt", "alarm_arm_vacation",
+                                   "alarm_arm_custom_bypass"} <= set(bridge.SERVICE_MAPPING)
 
 
 @pytest.mark.parametrize("caller", [MEMBER, KID, GUEST, BARE_PANEL])
@@ -185,6 +267,21 @@ async def test_a_turn_notes_who_it_is_for(house, monkeypatch):
     assert (await zoe_agent._ha_control("lock.front_door", "unlock"))["status"] == "refused"
 
 
+async def test_a_turn_from_the_kiosk_at_its_registered_address_notes_which_panel_it_is(house, registry):
+    """The real ``may_control_home`` and ``panel_of`` over a real request: the kiosk browser's turn carries no ``panel_id``.
+    Control run: with ``record_turn_home_control`` noting the caller without its panel the adult's session is refused."""
+    kiosk = Request({"type": "http", "method": "POST", "path": "/", "headers": [(b"x-real-ip", PANEL_IP.encode())], "client": (PROXY, 1)})
+    phone = Request({"type": "http", "method": "POST", "path": "/", "headers": [], "client": (PHONE_IP, 1)})
+    house["session"] = ADULT
+    assert await panel_principal.record_turn_home_control(kiosk, dict(GUEST)) is True
+    assert await zoe_agent._ha_control("lock.front_door", "unlock") == {"ok": True}
+    house["session"] = CHILD
+    assert (await zoe_agent._ha_control("lock.front_door", "unlock"))["status"] == "refused"
+    house["session"] = ADULT
+    assert await panel_principal.record_turn_home_control(phone, dict(GUEST)) is False      # a phone on the Wi-Fi is no panel
+    assert await home_opening.refused("lock.front_door", "unlock") is True and len(house["sent"]) == 1
+
+
 # ---- the spoken / Skybridge device command ---------------------------------------------------------------------------------------
 async def test_a_spoken_on_or_off_never_reaches_a_lock_or_a_cover_for_anyone_but_an_adult(house):
     """The spoken resolver sends only ``turn_on`` / ``turn_off``; aimed at a lock or a cover that is an unknown service on a
@@ -201,23 +298,43 @@ async def test_a_spoken_on_or_off_never_reaches_a_lock_or_a_cover_for_anyone_but
     assert house["sent"] == [("/devices/control", "light.kitchen_lamp", "turn_on"), ("/devices/control", "cover.garage_door", "turn_on")]
 
 
-def test_the_spoken_resolver_says_the_sentence_before_it_sends_anything():
-    """Control run: with the refusal loop dropped from ``resolve_smart_home`` this fails."""
-    import inspect
+async def test_the_spoken_resolver_says_the_sentence_and_sends_nothing_for_anyone_but_an_adult(house, monkeypatch):
+    """The REAL ``resolve_smart_home`` on a spoken "turn on the garage door" with only the bridge faked (its listing carries a
+    cover and a light). Control run: with the refusal loop dropped from ``resolve_smart_home`` the sentence is not said (the
+    ``set_device`` backstop alone answers "I couldn't reach") and the first assertion fails."""
+    async def listing(path):
+        rows = [{"entity_id": "cover.garage_door", "name": "Garage Door", "state": "off"},
+                {"entity_id": "switch.porch_lamp", "name": "Porch Lamp", "state": "off"}]
+        return {"/lights": {"lights": []}, "/switches": {"switches": rows}, "/scenes": {"scenes": []}}.get(path, {"entities": []})
 
-    src = inspect.getsource(smart_home_service.resolve_smart_home)
-    loop = src.index('home_opening.refused(str(d.get("entity_id")), "turn_on" if on else "turn_off", via="spoken")')
-    assert loop < src.index("if await set_device(str(d.get(\"entity_id\")), on") and '"spoken_summary": home_opening.REFUSAL' in src
+    monkeypatch.setattr(smart_home_service, "_ha_get", listing)
+    said = SimpleNamespace(action="turn_on", query="garage door", entity_id="")
+    for turn in NOBODY:
+        home_opening.note_turn(turn)
+        out = await smart_home_service.resolve_smart_home(said)
+        assert out["spoken_summary"] == home_opening.REFUSAL and out["cards"] == [] and house["sent"] == []
+    home_opening.note_turn(KID)                                                         # a lamp: unchanged for a child
+    await smart_home_service.resolve_smart_home(SimpleNamespace(action="turn_on", query="porch lamp", entity_id=""))
+    home_opening.note_turn(MEMBER)
+    out = await smart_home_service.resolve_smart_home(said)
+    assert out["controlled_entities"] == ["cover.garage_door"] and out["spoken_summary"] != home_opening.REFUSAL
+    assert house["sent"] == [("/devices/control", "switch.porch_lamp", "turn_on"), ("/devices/control", "cover.garage_door", "turn_on")]
 
 
-async def test_a_lookup_that_fails_and_an_unknown_account_are_not_an_adult(house, monkeypatch):
-    """Positively an adult or refused. Control run: with ``_adult`` answering True when the lookup raises, this fails."""
+async def test_a_lookup_that_fails_is_not_an_adult_and_logs_no_id_and_no_traceback(house, monkeypatch, caplog):
+    """Positively an adult or refused, with ``is_adult`` NOT mocked: the member-mode read underneath it raises. Controls run:
+    with ``manner_block.is_adult`` answering True when its lookup raises the first assertion fails; with ``quiet=True`` dropped from
+    ``home_opening._adult`` the log holds the member's id and a traceback and the log assertions fail."""
     async def boom(user_id, db=None):
-        raise RuntimeError("no database")
+        raise RuntimeError(f"no database for {user_id}")
 
-    monkeypatch.setattr(manner_block, "is_adult", boom)
-    assert await home_opening.may_open(MEMBER) is False
-    assert await home_opening.refused("lock.front_door", "unlock", user=MEMBER) is True
+    monkeypatch.setattr(manner_block, "_account_is_adult", REAL_LOOKUP)
+    monkeypatch.setattr(persona_layer, "load_member_mode", boom)
+    with caplog.at_level(logging.DEBUG):
+        assert await home_opening.refused("lock.front_door", "unlock", user=MEMBER, via="panel_route") is True
+    assert [r.getMessage() for r in caplog.records] == ["HOME_OPENING refused via=panel_route domain=lock"]
+    assert ADULT not in caplog.text and "Traceback" not in caplog.text and not any(r.exc_info for r in caplog.records)
+    assert await manner_block.is_adult(ADULT) is False and ADULT in caplog.text         # other callers still get their warning
     assert await home_opening.refused("lock.front_door", "unlock", user={"user_id": "member-unknown"}) is True
     assert await home_opening.refused("lock.front_door", "lock", user=None) is False
 
