@@ -9,13 +9,18 @@ even if it alters every caller alike. The same scenarios run here and must give 
 
 Covered: the screen's REST create / edit / delete / snooze / done (own rows, a family row by another member, recurring rows, a
 form that re-sends the row, a re-sent past day); the brain's MCP create / update / delete / snooze; the spoken create. There is
-no MCP "done" tool, skybridge writes no reminder, and the background makers (commitments, anticipation, the pendant review, the
-panel cards) all call ``create_reminder_record``, whose record is the ``rest_create`` one.
+no MCP "done" tool, skybridge writes no reminder; the automatic makers (anticipation's leave-by offer, a late commitment, the
+pendant review, the panel's open-loop card, an accepted suggestion) are each driven through their own function, so a maker that
+changed the title, owner, day or anything else it hands the door changes its record. Every recorded entry point must also be
+REACHED by its scenarios (a trace of who called the door), not only named.
 
 Negative controls run (each broke the code, saw the named scenario fail, restored): ``is_active=0`` dropped from the delete
 tool's statement -> ``tool_delete``; ``acknowledged = 0`` added to the screen's snooze -> ``rest_snooze_a_done_reminder``; the
 edit tool's value normalised -> ``tool_update``; the role check added to the delete tool -> ``tool_delete``; the receipt moved
-after the read-back in create -> ``rest_create``.
+after the read-back in create -> ``rest_create``; for the automatic makers: the late commitment's title changed ->
+``maker_commitment_late``; the leave-by reminder made ``family`` -> ``maker_anticipation_leave``; the pendant's description
+reworded -> ``maker_pendant_review``; the open-loop card's description reworded -> ``maker_panel_card``; an accepted suggestion
+made ``family`` -> ``maker_suggestion``; the after-commit re-read changed -> ``maker_suggestion``.
 """
 from __future__ import annotations
 
@@ -36,7 +41,6 @@ def here():
 
 
 _REST, _TOOL, _SPOKEN = "routers/reminders.py", ("mcp_server.py", "_execute_tool"), "intent_router.py"
-_MAKER = "an automatic maker: it calls create_reminder_record, whose record is rest_create / tool_create / spoken_create"
 #: every (module, function, door function) the CODE holds -> the scenarios that record it
 RECORDED = {
     (_REST, "create_reminder", "create_reminder_record"): ("rest_create", "rest_create_family_recurring"),
@@ -49,16 +53,17 @@ RECORDED = {
     (*_TOOL, "tool_delete_reminder_record"): ("tool_delete", "tool_delete_another_members_row"),
     (*_TOOL, "snooze_reminder_record"): ("tool_snooze", "tool_snooze_another_members_row"),
     (_SPOKEN, "_execute_reminder_create_direct", "create_reminder_record"): ("spoken_create",),
+    # the automatic makers, each driven through its own function
+    ("anticipation.py", "_do", "create_reminder_record"): ("maker_anticipation_leave",),
+    ("commitments.py", "_make_reminder", "create_reminder_record"): ("maker_commitment_late",),
+    ("omi_review_apply.py", "write_reminder", "create_reminder_record"): ("maker_pendant_review",),
+    ("panel_review_cards.py", "loop_to_reminder", "create_reminder_record"): ("maker_panel_card",),
+    ("pending_suggestions.py", "_create_suggested_reminder", "create_reminder_record"): ("maker_suggestion",),
 }
 #: ... or why it has no record of main to compare with
 NOT_RECORDED = {
     (_SPOKEN, "_execute_reminder_cancel_direct", "delete_reminder_record"):
         "new with the one-door change (main had no handler for it): pinned by the cancel-that tests in test_reminders_one_door.py",
-    ("anticipation.py", "_do", "create_reminder_record"): _MAKER,
-    ("commitments.py", "_make_reminder", "create_reminder_record"): _MAKER,
-    ("omi_review_apply.py", "write_reminder", "create_reminder_record"): _MAKER,
-    ("panel_review_cards.py", "loop_to_reminder", "create_reminder_record"): _MAKER,
-    ("pending_suggestions.py", "_create_suggested_reminder", "create_reminder_record"): _MAKER,
 }
 
 
@@ -79,8 +84,38 @@ def test_the_fixture_covers_every_scenario_and_every_entry_point():
     door_callers.check_coverage(door_callers.entry_points(root, "reminder_service", writers), RECORDED, NOT_RECORDED, set(ON_MAIN))
 
 
+@pytest.mark.parametrize("key", sorted(RECORDED), ids=lambda k: f"{k[0]}:{k[1]}")
+def test_each_recorded_entry_point_is_driven_through_its_own_code(key):
+    """A scenario named for an entry point must REACH the door through that function (``tests/door_reach.py`` traces who
+    called each ``reminder_service`` function), so a record cannot stand in for a caller it never ran.
+    Control run: ``maker_commitment_late`` pointed at ``rest_create``'s call instead of ``commitments._make_reminder`` fails
+    here for ``commitments.py:_make_reminder``."""
+    import door_reach
+
+    root = Path(__file__).resolve().parents[1]
+    reached = set()
+    for name in RECORDED[key]:
+        reached |= door_reach.reached(lambda: scenarios.run_one(name), root, "reminder_service.py")
+    assert key in reached, sorted(reached)
+
+
+#: The ONE deliberate change this PR makes to a recorded entry point: an accepted suggestion's after-commit step reads the reminder
+#: AGAIN once the transaction has committed (a reminder forgotten or deleted since is not scheduled, broadcast or told to the
+#: shadow; ``test_reminders_one_door.py`` drives the row-gone case). Main's record plus exactly that read is the record here.
+RE_READ_AFTER_COMMIT = ["sql", "SELECT * FROM reminders WHERE id = ? AND user_id = ? AND deleted = 0", ["<id>", scenarios.OWNER]]
+CHANGED_HERE = {"maker_suggestion": RE_READ_AFTER_COMMIT}
+
+
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
 def test_every_moved_entry_point_does_exactly_what_main_did(here, name):
+    if name in CHANGED_HERE:
+        record = list(here[name])
+        assert record.count(CHANGED_HERE[name]) == 1
+        at = record.index(CHANGED_HERE[name])
+        assert ["commit"] in record[:at] and record[at + 1][0] == "receipt"      # after the commit, before anything it vouches for
+        del record[at]
+        assert record == ON_MAIN[name]
+        return
     assert here[name] == ON_MAIN[name]
 
 
