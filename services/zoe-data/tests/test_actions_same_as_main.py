@@ -84,7 +84,7 @@ MUSIC_NOT_RECORDED = {
                                                            "resolve_recommendation_tracks", "taste_seed")},
     ("music_history.py", "observe_once", _MUSIC): _AUTO,
     (_SCREEN, "music_group", _MUSIC): _GAP, (_SCREEN, "music_queue_move", _MUSIC): _GAP, (_SCREEN, "music_queue_save", _MUSIC): _GAP,
-    (_ROUTER, "_execute_music_intent", _MUSIC): _GAP,                    # the spoken "I like this song" (favorite_now_playing)
+    (_ROUTER, "_execute_music_intent_asked", _MUSIC): _GAP,              # the spoken "I like this song" (favorite_now_playing); the body the kernel door runs
     ("music_discovery.py", "play_discovery", _MUSIC): _GAP,
 }
 
