@@ -299,6 +299,11 @@ def scenarios() -> dict:
     async def corrected_pet(w):
         return await w.fix._make_pet(w.db, ANN, "p-ann-family", "friend", "dog", "womble is a dog")
 
+    async def corrected_pet_raw(w):
+        """The same correction holding a raw asyncpg connection (as the spoken-correction path can): here the $-form statement
+        (``corrected_pet_pg``) is the one that runs, and its row is what the record keeps."""
+        return await w.fix._make_pet(w.pg, ANN, "p-ann-family", "friend", "dog", "womble is a dog")
+
     async def corrected_name(w):
         return await w.fix._rename_contact(ANN, "", "Quango Zorb", "Quango Tansy")
 
@@ -361,6 +366,7 @@ def scenarios() -> dict:
         "offer_accepted_while_the_feature_is_off": offer_while_off,
         # a spoken correction, and the pendant day review
         "corrected_to_a_pet": corrected_pet,
+        "corrected_to_a_pet_on_a_raw_connection": corrected_pet_raw,
         "corrected_name": corrected_name,
         "reviewed_relation": reviewed(),
         "reviewed_relation_on_a_household_contact": reviewed(person_id="p-ann-family"),
