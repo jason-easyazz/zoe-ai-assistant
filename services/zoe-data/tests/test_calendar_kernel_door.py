@@ -110,8 +110,11 @@ async def _delete(w, event_id, user=None):
 @pytest.mark.parametrize("value", [None, "off", "shadow", "on", "KERNELS"])
 def test_any_other_flag_value_is_main_exactly_for_every_entry_point(door, monkeypatch, value):
     """All 59 scenarios (every statement with its values, commit, hook, receipt, result, the rows afterwards) equal the record
-    captured from main, with every way into the kernel wired to fail the test. Control run: with the flag check removed from
-    ``calendar_service._gate`` (always ask) the ``never`` stub raises in the first create and the record differs."""
+    captured from main, with every way into the kernel wired to fail the test. Nothing in the record is masked or dropped: the
+    clock is frozen and ids are counted, so attendee and alarm ids and every stamp are compared as stored. Controls run: with the
+    flag check removed from ``calendar_service._gate`` (always ask) the ``never`` stub raises in the first create and the record
+    differs; an attendee id, an alarm id (``str(uuid.uuid4())[:-1] + "f"`` in ``replace_attendees`` / ``replace_alarms``) or a
+    card's ``created_at`` moved one second in ``card_service.build_card`` each fails this."""
     def never(*a, **k):
         raise AssertionError("the kernel was reached with the flag off")
 
@@ -128,7 +131,8 @@ def test_any_other_flag_value_is_main_exactly_for_every_entry_point(door, monkey
 def test_with_the_door_on_and_allowing_every_entry_point_still_issues_mains_statements(door):
     """The door adds no statement of its own even when it is on (every caller hands it the event it already read), and nothing
     a person hears or the store holds changes when the kernel allows. Control run: with ``delete_event_record`` reading the row
-    itself before it asks, ``rest_delete_own`` gains a statement and this fails."""
+    itself before it asks, ``rest_delete_own`` gains a statement and this fails; the same attendee-id, alarm-id and card-stamp
+    changes as the flag-off test each fail this too."""
     assert scenarios.run_all() == ON_MAIN
     asked = {a["verb"] for a in door.ops("door_ask")}
     assert asked == {"event.create", "event.edit", "event.delete"} and {a["area"] for a in door.ops("door_ask")} == {"calendar"}
