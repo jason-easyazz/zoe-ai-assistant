@@ -23,19 +23,20 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from calendar_scenarios import _Pooled, _Raw, _plain, _restore, _set
+from calendar_scenarios import STORE_NOW, _Pooled, _Raw, _plain, _restore, _set
 
 ANN, BOB = "ann-0001", "bob-0002"
 WORD = "womble"
-DDL = """
+# the column defaults are the frozen store clock (``STORE_NOW``): every stored stamp is a real value in the record
+DDL = f"""
 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, content TEXT NOT NULL, category TEXT DEFAULT 'general',
     tags TEXT, visibility TEXT NOT NULL DEFAULT 'personal', deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    created_at TEXT NOT NULL DEFAULT '{STORE_NOW}', updated_at TEXT NOT NULL DEFAULT '{STORE_NOW}');
 CREATE TABLE journal_entries (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, content TEXT NOT NULL, mood TEXT,
     mood_score INTEGER, tags TEXT, weather TEXT, location TEXT, photos TEXT, privacy_level TEXT DEFAULT 'personal',
     visibility TEXT NOT NULL DEFAULT 'personal', deleted INTEGER DEFAULT 0, person_id TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    created_at TEXT NOT NULL DEFAULT '{STORE_NOW}', updated_at TEXT NOT NULL DEFAULT '{STORE_NOW}');
 INSERT INTO users (id, name) VALUES ('ann-0001', 'Member A'), ('bob-0002', 'Member B');
 INSERT INTO notes (id, user_id, title, content, visibility) VALUES
     ('note-ann', 'ann-0001', 'gribble', 'snark', 'personal'), ('note-ann-family', 'ann-0001', 'quango', 'zorb', 'family'),
