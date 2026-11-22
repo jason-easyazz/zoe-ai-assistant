@@ -27,13 +27,10 @@ import pytest
 import list_service
 import os_shadow
 import user_erase_gate
+from lists_door_scenarios import DB, DOORS, KID, NAME, OWNER, WORD, TxDB, _Cur, pin_db  # noqa: F401 - re-exported to other tests
 from test_os_shadow import SVC, FakeKernel
 
 pytestmark = pytest.mark.ci_safe
-
-OWNER, KID = "member-ova", "member-kip"
-WORD, NAME = "womble", "Vellum"
-
 
 class DoorKernel(FakeKernel):
     door = "allow"
@@ -82,85 +79,9 @@ def door(monkeypatch):
     shutil.rmtree(state, ignore_errors=True)
 
 
-class _Cur:
-    def __init__(self, rows=()):
-        self.rows = list(rows)
-
-    async def fetchone(self):
-        return self.rows[0] if self.rows else None
-
-    async def fetchall(self):
-        return list(self.rows)
-
-
-class DB:
-    """Records every statement; one list row (``L1``) for the door's own lookup. ``transaction`` only when asked for."""
-
-    def __init__(self, owner=OWNER, visibility="family", items=()):
-        self.sql, self.fetched, self.owner, self.visibility, self.items = [], [], owner, visibility, list(items)
-        self.depth = self.committed = 0
-
-    async def execute(self, sql, *params):
-        self.sql.append(" ".join(sql.split()))
-        return _Cur([{"id": "L1"}] if sql.lstrip().upper().startswith("SELECT") and "FROM lists" in sql else [])
-
-    async def fetch(self, sql, *args):
-        self.fetched.append(" ".join(sql.split()))
-        if "FROM list_items WHERE list_id" in sql:
-            return self.items
-        return [{"id": "L1", "user_id": self.owner, "visibility": self.visibility}]
-
-    async def commit(self):
-        pass
-
-    @property
-    def writes(self):
-        return [s for s in self.sql if s.split()[0].upper() in ("INSERT", "UPDATE", "DELETE")]
-
-
-class TxDB(DB):
-    fail_commit = False
-
-    def transaction(self):
-        db = self
-
-        class _T:
-            async def __aenter__(self):
-                db.depth += 1
-
-            async def __aexit__(self, exc_type, *a):
-                db.depth -= 1
-                if exc_type is None and db.depth == 0:
-                    if db.fail_commit:
-                        raise RuntimeError("commit failed")
-                    db.committed += 1
-                return False
-        return _T()
-
-
-#: every door function: (the kernel verb it asks, how to call it as ``who``)
-DOORS = {
-    "create_list_record": ("list.create", lambda db, who: list_service.create_list_record(
-        db, user_id=who, name=NAME, list_type="personal", visibility="personal", stamps_at=list_service.stamps_now())),
-    "create_item_record": ("item.add", lambda db, who: list_service.create_item_record(db, list_id="L1", text=WORD, user_id=who)),
-    "remove_item_record": ("item.remove", lambda db, who: list_service.remove_item_record(db, user_id=who, item_id="I1", list_id="L1")),
-    "set_item_checked": ("item.tick", lambda db, who: list_service.set_item_checked(db, user_id=who, item_id="I1", completed=1)),
-    "update_item_record": ("item.edit", lambda db, who: list_service.update_item_record(
-        db, user_id=who, item_id="I1", list_id="L1", updates=["text = ?"], params=[WORD, "I1", "L1"])),
-    "update_list_record": ("list.rename", lambda db, who: list_service.update_list_record(
-        db, user_id=who, list_id="L1", updates=["name = ?"], params=[NAME, "L1"])),
-    "delete_list_record": ("list.delete", lambda db, who: list_service.delete_list_record(db, user_id=who, list_id="L1")),
-    "set_list_visibility_record": ("list.share", lambda db, who: list_service.set_list_visibility_record(
-        db, user_id=who, list_id="L1", share=True)),
-    "rename_item_on_list": ("item.edit", lambda db, who: list_service.rename_item_on_list(
-        db, user_id=who, list_id="L1", old_text="wombel", new_text=WORD)),
-    "add_items_to_list": ("item.add", lambda db, who: list_service.add_items_to_list(
-        db, text=f"{WORD} and quince", user_id=who, list_type="shopping", list_name="Shopping", new_list_visibility="family")),
-}
-
-
-#: the statements each door function issued BEFORE it could ask the kernel (generated once from the one-door branch's
-#: ``list_service`` with these same calls; SQL text only). Regenerate only for a deliberate change to a list write.
+#: what each door function did BEFORE it could ask the kernel: every statement WITH its values, every read with its arguments,
+#: and the list and item rows the writes left. Recorded by ``python3 tests/lists_door_scenarios.py`` run in an export of main at
+#: 2f003fce7 (lists behind one door, no kernel ask yet), never by this branch's code. Regenerate only for a deliberate change.
 BEFORE_THE_DOOR = json.loads((Path(__file__).parent / "fixtures" / "lists_door_flag_off_statements.json").read_text())
 
 
@@ -176,7 +97,7 @@ async def test_any_other_flag_value_makes_no_kernel_call_no_extra_query_and_the_
     async def never(*a, **k):
         raise AssertionError("the kernel was asked with the flag off")
 
-    allowed = _db()
+    allowed = pin_db()
     await DOORS[name][1](allowed, OWNER)                       # flag on, allowed: the statements to compare against
     asked = len(door.ops("list_ask"))
     assert asked >= 1
@@ -187,16 +108,49 @@ async def test_any_other_flag_value_makes_no_kernel_call_no_extra_query_and_the_
         monkeypatch.delenv("ZOE_OS_LISTS")
     else:
         monkeypatch.setenv("ZOE_OS_LISTS", value)
-    off = _db()
+    off = pin_db()
     await DOORS[name][1](off, OWNER)
     door_lookups = [s for s in allowed.fetched if s not in off.fetched]
     assert len(door.ops("list_ask")) == asked and off.sql == allowed.sql and off.writes
-    # ... and against an INDEPENDENT record: what the code before the door issued for the same call (captured from the one-door
-    # branch, where no kernel ask exists; a change that alters flag-on and flag-off alike still fails here)
-    assert {"sql": off.sql, "fetched": off.fetched} == BEFORE_THE_DOOR[name]
+    # ... and against an INDEPENDENT record: what the code before the door did for the same call (recorded from main before any
+    # kernel ask existed; a change that alters flag-on and flag-off alike still fails here). Statements, VALUES and resulting ROWS.
+    assert off.record() == BEFORE_THE_DOOR[name] and off.unapplied == []
     assert [s for s in off.fetched if "SELECT id, user_id, visibility FROM lists WHERE id = $1" == s
             or s.startswith("SELECT l.id, l.user_id")] == []   # the door's own read never runs with the flag off
     assert name == "create_list_record" or door_lookups         # ... and it did run with the flag on (the control)
+
+
+def test_the_flag_off_record_holds_values_and_rows_for_every_door_function():
+    """The record is more than SQL text: every write has its values, and every call left a row changed or made.
+
+    Controls run (each broke ``list_service`` leaving every statement's TEXT as it was, saw the named flag-off case fail,
+    restored): the delete given the member id as its value -> ``delete_list_record``; a new item's priority defaulted to
+    ``high`` -> ``create_item_record``; the share's two values swapped -> ``set_list_visibility_record``. The record this
+    replaces (statement text only) passed all three."""
+    import lists_door_scenarios
+
+    assert set(BEFORE_THE_DOOR) == set(DOORS)
+    start = lists_door_scenarios.pin_db().record()["rows"]
+    for name, rec in BEFORE_THE_DOOR.items():
+        writes = [(s, p) for s, p in zip(rec["sql"], rec["params"]) if s.split()[0] in ("INSERT", "UPDATE", "DELETE")]
+        assert writes and all(p for _, p in writes), name
+        assert len(rec["params"]) == len(rec["sql"]) and len(rec["fetch_args"]) == len(rec["fetched"]) and rec["unapplied"] == []
+        assert rec["rows"] != start, name                      # the write reached a row
+
+
+def test_the_recording_fake_applies_a_write_to_the_row_it_names_only():
+    """The fake has teeth of its own: a value lands on the named row, a write for another row changes nothing, and a statement
+    it cannot read is named, never silently passed."""
+    db = pin_db()
+    start = db.record()["rows"]
+    asyncio.run(db.execute("UPDATE list_items SET text = ?, updated_at = NOW() WHERE id = ? AND list_id = ?", (WORD, "I9", "L1")))
+    assert db.record()["rows"] == start
+    asyncio.run(db.execute("UPDATE list_items SET text = $1 WHERE id = $2 AND deleted = 0", WORD, "I1"))
+    assert db.rows["list_items"]["I1"]["text"] == WORD
+    asyncio.run(db.execute("UPDATE lists SET visibility = 'family' WHERE id = $1 AND user_id = $2 AND visibility <> 'family'", "L1", KID))
+    assert db.rows["lists"]["L1"]["visibility"] == "personal"   # not the owner: no row
+    asyncio.run(db.execute("DELETE FROM list_items WHERE id IN (SELECT 1)"))
+    assert db.unapplied == ["DELETE FROM list_items WHERE id IN (SELECT 1)"]
 
 
 # ---- allowed ----------------------------------------------------------------------------------------------------------------------
