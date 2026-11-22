@@ -26,7 +26,9 @@ are pinned against main by 36 scenarios (`tests/fixtures/routines_as_on_main.jso
 | adds a template step, adds a one-off line | `add_step`, `add_one_off` | asked first (`routine.edit`, or `routine.edit_given` when someone else set the routine up for its subject) |
 | ticks, skips, snoozes, unticks a step (said or tapped) | `_apply` (behind `act_said`, `undo_said`, `act_tapped`) | **made first, told afterwards** (`routine.tick` / `skip` / `snooze` / `undo`) |
 
-* Asked first: a "no" is final (`RoutineRefused`: nothing is written; the card API answers 403 with a plain sentence, the
+* Asked first, meaning before anything is written and AFTER every check of the store's own (who may edit, `MAX_STEPS`, a
+  closed day, the write gate's erase and forgotten-words checks): a change the store itself refuses is never asked and comes
+  back with the store's own refusal. A "no" is final (`RoutineRefused`: nothing is written; the card API answers 403 with a plain sentence, the
   spoken one-off says it). Kernel down, old or slow: the change proceeds, `not_checked`. The kernel then hears `done` or
   `failed`.
 * Told afterwards: never asked, never delayed. The store's own rules run first and are not the kernel's: a medicine line

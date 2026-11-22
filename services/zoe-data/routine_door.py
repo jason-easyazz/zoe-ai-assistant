@@ -2,8 +2,9 @@
 
 ``routines_store.py`` is the one writer of the four routines tables; this is what its entry points call.
 
-  * create / edit (a template step, a one-off line) / delete  ASK the kernel first. A "no" is final: nothing is written and
-    ``RoutineRefused`` is raised. A kernel that is down, old or slow is ``not_checked``: the change proceeds.
+  * create / edit (a template step, a one-off line) / delete  ASK the kernel before writing, and only AFTER every check of the
+    store's own (who may edit, ``MAX_STEPS``, a closed day, the write gate's erase and forgotten-words checks): the kernel never
+    hears, or refuses, a change the store itself would refuse. A "no" is final: nothing is written and ``RoutineRefused`` is raised. A kernel that is down, old or slow is ``not_checked``: the change proceeds.
   * tick / skip / snooze / undo  are MADE FIRST and the kernel is TOLD afterwards: the person has already done the thing and a
     spoken walk has nowhere to wait. The store's own rules (a medicine line needs its verified subject; a closed day is
     settled; the said tick acts only on the step Zoe just named) run BEFORE the change and are not the kernel's.

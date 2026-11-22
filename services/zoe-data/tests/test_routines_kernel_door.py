@@ -4,7 +4,8 @@
   * flag off (any value but ``kernel``) = ``main`` exactly: every scenario of ``tests/routines_scenarios.py`` gives the record
     of main and the kernel is never reached;
   * door on and the kernel allowing = the same record;
-  * creating a routine, adding a step and adding a one-off ask FIRST; a refusal is final (nothing written); a kernel that is
+  * creating a routine, adding a step and adding a one-off ask BEFORE they write and AFTER every check of the store's own
+    (so the kernel never hears a change the store would refuse); a refusal is final (nothing written); a kernel that is
     down, old or slow = the change proceeds, ``not_checked``;
   * a tick, skip, snooze or undo is MADE FIRST and told afterwards whatever the kernel does; the store's own rules (a
     medicine line needs its verified subject) still refuse before anything is told;
@@ -141,6 +142,49 @@ async def test_a_refused_change_writes_nothing_and_the_spoken_one_off_says_why(d
     assert _tables(world) == before
     await world.say("remind me to take the drill to work tomorrow", RILEY)
     assert world.log[-1][2] == routine_door.RoutineRefused(reason).line() and _tables(world) == before
+
+
+async def test_a_change_the_store_itself_refuses_is_never_asked_and_the_stores_own_refusal_comes_back(door, world, monkeypatch):
+    """The kernel is asked only AFTER every check of the store's own: a step past ``MAX_STEPS``, a one-off past ``MAX_STEPS``,
+    a one-off on a closed day, a routine or step naming a forgotten entity (the write gate's shield). Each comes back as the
+    store's ``StoreError`` with its own code, the kernel is never asked (a kernel that WOULD refuse everything stands in), and
+    nothing is written. On the old code (the ask before the guarded write) every one of these was asked and came back as the
+    kernel's ``RoutineRefused`` (run against that code: fails). Controls run: the ``add_step`` ask moved above its
+    ``MAX_STEPS`` check; the ``add_one_off`` ask moved above its closed-day check; the ``create_routine`` ask moved above its
+    guarded write (the forgotten-words shield) - each fails this."""
+    import memory_forgotten
+
+    rs = world.rs
+    full = await rs.create_routine(ALEX, "Morning", "waking", steps=[f"step {i}" for i in range(rs.MAX_STEPS)])
+    open_ = await rs.create_routine(ALEX, "Evening", "bed", steps=("brush teeth",))
+    tomorrow = world.today + timedelta(days=1)
+    for i in range(rs.MAX_STEPS):
+        await rs.add_one_off(ALEX, open_["id"], tomorrow, f"line {i}")
+    await rs.day_copy(ALEX, open_["id"])
+    world.db.conn.execute("UPDATE routine_days SET closed_at = ?, close_reason = 'window_end' WHERE day = ?",
+                          (world.today.isoformat(), world.today.isoformat()))
+    world.db.conn.commit()
+    assert await memory_forgotten.add(ALEX, "Quinn")
+    asked: list = []
+
+    async def would_refuse(area, verb, *a, **k):
+        asked.append(verb)
+        return "refuse", "not_owner", None, None
+
+    monkeypatch.setattr(os_shadow, "ask_door", would_refuse)
+    before = _tables(world)
+    for change, code in ((lambda: rs.add_step(ALEX, full["id"], "feed the cat"), "too_many_steps"),
+                         (lambda: rs.add_one_off(ALEX, open_["id"], tomorrow, "take the drill"), "too_many_steps"),
+                         (lambda: rs.add_one_off(ALEX, open_["id"], world.today, "take the drill"), "day_closed"),
+                         (lambda: rs.add_step(ALEX, open_["id"], "call Quinn"), "names_forgotten"),
+                         (lambda: rs.create_routine(ALEX, "Quinn visit", "window"), "names_forgotten")):
+        with pytest.raises(rs.StoreError) as exc:
+            await change()
+        assert exc.value.code == code and asked == [], (code, asked)
+    assert _tables(world) == before
+    with pytest.raises(routine_door.RoutineRefused):               # control: a change the store allows IS asked (and refused)
+        await rs.add_step(ALEX, open_["id"], "feed the cat")
+    assert asked == ["routine.edit"] and _tables(world) == before
 
 
 @pytest.mark.parametrize("how", ["slow", "gone", "old_kernel"])

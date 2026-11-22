@@ -1,8 +1,9 @@
 """Routines: ONE module writes the four tables, and nothing its entry points do has changed against ``main``.
 
-``tests/fixtures/routines_as_on_main.json`` is the record of ``main`` (9ecea063c), made by running
+``tests/fixtures/routines_as_on_main.json`` is the record of ``main`` (b2bbe84ca), made by running
 ``tests/routines_scenarios.py`` against an export of that commit under its own test configuration, never by this branch's
-code: for each scenario, what every call returned or refused and the four tables as they stand at the end. The same
+code: for each scenario, what every call returned or refused and the four tables as they stand at the end, every column
+of every row (read from the schema, not listed). The same
 scenarios run here and must give the same record.
 
 Covered (36): creating a routine (own, for a child by an adult, family, a guest, a family routine with a medicine line);
@@ -13,8 +14,10 @@ someone else; the said tick (the one step just named, then nothing named, then a
 conversation tier's walk ("what's next?", "done", "skip", "yep"), a bare "yep", a one-off against a timed reminder, another
 member.
 
-The one-writer scan is over every module of the service, no file exempt by name: a statement that writes ``routines``,
-``routine_steps``, ``routine_days`` or ``routine_day_steps`` may appear only in ``routines_store.py``.
+The one-writer scan is over every module of the service, its ``scripts/`` and ``alembic/`` included, and the repository's
+``scripts/``, no file or directory exempt: a statement that writes ``routines``, ``routine_steps``, ``routine_days`` or
+``routine_day_steps`` may appear only in ``routines_store.py`` (or, if ever legitimate, in ``ALLOWED`` by module, function and
+exact count).
 
 Negative controls run (each broke the code, saw the named test fail, restored): a medicine line ticked unverified ->
 ``tap_medicine_unverified_refused``; the family fridge rule dropped -> ``tap_family_by_the_panel``; a one-off allowed for a
@@ -123,10 +126,17 @@ def test_every_routines_entry_point_does_exactly_what_it_did_on_main(here, name)
 
 
 def test_the_record_shows_the_rows_and_the_refusals_not_only_the_replies(here):
-    """The comparison has something to bite on: a tick's record holds the day line with its state, who acted and whether the
-    voice was verified; a refusal holds its code; the tier's record holds Zoe's words."""
+    """The comparison has something to bite on: a tick's record holds the WHOLE day line (every column, read from the schema:
+    its state, when a snooze ends, who acted, whether the voice was verified, how it was made); a refusal holds its code; the
+    tier's record holds Zoe's words. Controls run: the snooze length written changed (``SNOOZE_MIN`` 15 -> 16) ->
+    ``tap_snooze_subject`` and ``tap_done_undo_snooze_done`` fail; the one-off's ``created_via`` written as ``"spoken"`` instead
+    of ``"voice"`` -> ``tier_one_off_and_timed_reminder`` fails (neither column was recorded before)."""
     done = [e for e in here["tap_medicine_verified"] if e[0] == "routine_day_steps"][0]
-    assert done[5:] == ["take the tablets", "medicine", 1, "done", done[9], scenarios.ALEX, 1, 0]
+    assert done[5:14] == ["take the tablets", "medicine", 1, "done", None, "tapped", scenarios.ALEX, 1, 0]
+    snoozed = [e for e in here["tap_snooze_subject"] if e[0] == "routine_day_steps"][0]       # every column: snooze_until ...
+    assert snoozed[8:10] == ["snoozed", "2026-11-12T07:45:00+00:00"]
+    one_off = [e for e in here["tier_one_off_and_timed_reminder"] if e[0] == "routine_day_steps"][0]   # ... and created_via
+    assert one_off[4] == "one_off" and one_off[15] == "voice" and len(one_off) == 1 + 17
     assert ["tap", "refused", "unverified", 403] in here["tap_medicine_unverified_refused"] or \
         any(e[:3] == ["tap", "refused", "unverified"] for e in here["tap_medicine_unverified_refused"])
     assert any(e[:3] == ["tap", "refused", "not_found"] for e in here["tap_other_refused"])
@@ -134,23 +144,75 @@ def test_the_record_shows_the_rows_and_the_refusals_not_only_the_replies(here):
     assert not [e for e in here["forget_user"] if e[0] == "routines" and scenarios.ALEX in e]
 
 
+REPO = ROOT.parents[1]
+#: the scripts and migrations scanned with the service: the service's own ``scripts/`` and ``alembic/`` and the repository's
+#: ``scripts/`` (a maintenance script is as much a second writer as a module of the service).
+OUTSIDE = (ROOT / "scripts", ROOT / "alembic", REPO / "scripts")
+#: a write to a routines table outside the store that is LEGITIMATE, as {(module, function): exact number of distinct writes}.
+#: None today (``alembic/versions/0081_routines.py`` creates and drops the tables, it writes no row); a data migration that
+#: has to backfill one is listed here by its module and function, with its count, so a second write beside it still fails.
+ALLOWED: dict = {}
+
+
 def _modules() -> dict:
+    """Every Python module of the service (its ``scripts/`` and ``alembic/`` included) and of the repository's ``scripts/``,
+    keyed by path from the repository root's view of the service (``alembic/...``) or the repository (``<repo>/scripts/...``)."""
     out = {}
     for path in sorted(ROOT.rglob("*.py")):
         rel = path.relative_to(ROOT).as_posix()
-        if rel.startswith(("tests/", "scripts/", "alembic/")) or "/tests/" in rel or ".venv" in rel:
+        if rel.startswith("tests/") or "/tests/" in rel or ".venv" in rel or "__pycache__" in rel:
             continue
         out[rel] = path
+    for path in sorted((REPO / "scripts").rglob("*.py")):
+        if "__pycache__" not in path.parts and ".venv" not in path.parts:
+            out["<repo>/" + path.relative_to(REPO).as_posix()] = path
     return out
 
 
+def _writes_by_function(source: str, pattern) -> dict:
+    """{function (dotted, ``<module>`` for top level): number of distinct writes in it}. A module that does not parse (an old
+    archived script) is searched as raw text instead, so it cannot hide a write by being broken."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        found = {" ".join(m.group(0).split()) for m in pattern.finditer(source)}
+        return {"<unparsed>": len(found)} if found else {}
+    out: dict = {}
+
+    def walk(node, where):              # every SQL text belongs to the innermost function (or class) around it
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                walk(child, child.name if where == "<module>" else f"{where}.{child.name}")
+            elif isinstance(child, ast.expr):
+                for text in sql_scan.texts(ast.Expression(child)):
+                    if pattern.search(text):
+                        out.setdefault(where, set()).add(" ".join(text.split()))
+            else:
+                walk(child, where)
+
+    walk(tree, "<module>")
+    return {fn: len(found) for fn, found in out.items()}
+
+
 def test_only_the_routines_store_writes_the_four_tables():
+    """No module but the store writes a routines table: the service's modules, its ``scripts/`` and ``alembic/``, and the
+    repository's ``scripts/`` (none exempt by directory; a legitimate one would be listed in ``ALLOWED`` by module, function
+    and exact count). Controls run: an ``UPDATE routine_day_steps`` planted in ``routines_tier.py``; a ``DELETE FROM
+    routine_days`` planted in ``alembic/versions/0081_routines.py``'s ``downgrade``; an ``INSERT INTO routine_steps`` planted in
+    the repository's ``scripts/setup/populate_multica.py`` - each fails this."""
     modules = _modules()
-    assert len(modules) > 100 and {DOOR, "routines_tier.py", "memory_service.py", "memory_forget_cascade.py", "fast_tiers.py"} <= set(modules)
+    assert len(modules) > 100 and {DOOR, "routines_tier.py", "memory_service.py", "memory_forget_cascade.py", "fast_tiers.py",
+                                   "alembic/versions/0081_routines.py", "<repo>/scripts/setup/populate_multica.py"} <= set(modules)
+    assert sum(rel.startswith("alembic/") for rel in modules) >= 50 and sum(rel.startswith("<repo>/scripts/") for rel in modules) >= 100
     pattern = sql_scan.write_pattern(*TABLES)
-    offenders = {rel: sql_scan.writes(path.read_text("utf-8"), pattern) for rel, path in modules.items() if rel != DOOR}
-    assert not {rel: found for rel, found in offenders.items() if found}
+    found = {(rel, fn): n for rel, path in modules.items() if rel != DOOR
+             for fn, n in _writes_by_function(path.read_text("utf-8", errors="replace"), pattern).items()}
+    assert found == ALLOWED
     assert len(set(sql_scan.writes(modules[DOOR].read_text("utf-8"), pattern))) >= 12        # the scan sees the door's own writes
+    door = _writes_by_function(modules[DOOR].read_text("utf-8"), pattern)
+    assert sum(door.values()) >= 12 and "<module>" not in door                                  # ... and places each in its function
 
 
 def test_the_scan_sees_each_way_a_write_can_be_spelled():
