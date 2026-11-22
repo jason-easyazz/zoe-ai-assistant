@@ -43,9 +43,47 @@ ON_MAIN = scenarios.unpack(json.loads((Path(__file__).parent / "fixtures" / "mem
 STANDING = ("status", "authority", "authority_class", "authority_basis", "source", "visibility", "user_id")
 
 
+def run_with_spy():
+    """``(the scenarios' record, the call sites reached)``. A spy on every mutating ``MemoryService`` method only NOTES, for
+    each call, every function on the stack that made it (module, function, method); the call passes through untouched, so the
+    record is the same with or without it (the comparison with main below would fail otherwise)."""
+    import functools
+    import sys
+
+    import memory_service
+    import memory_writers
+
+    root = Path(__file__).resolve().parents[1]
+    reached: set = set()
+    kept = {}
+    for name in memory_writers.MUTATING:
+        real = kept[name] = getattr(memory_service.MemoryService, name)
+
+        def spy(self, *a, _real=real, _name=name, **k):
+            frame = sys._getframe(1)
+            while frame is not None:
+                try:
+                    reached.add((Path(frame.f_code.co_filename).resolve().relative_to(root).as_posix(), frame.f_code.co_name, _name))
+                except ValueError:
+                    pass
+                frame = frame.f_back
+            return _real(self, *a, **k)
+
+        setattr(memory_service.MemoryService, name, functools.wraps(real)(spy))     # (its signature stays readable: the scenarios ask it)
+    try:
+        return scenarios.run_all(), reached
+    finally:
+        for name, real in kept.items():
+            setattr(memory_service.MemoryService, name, real)
+
+
+_RAN: dict = {}
+
+
 @pytest.fixture(scope="module")
 def here():
-    return scenarios.run_all()
+    record, _RAN["reached"] = run_with_spy()
+    return record
 
 
 def _seed(record):
@@ -58,11 +96,72 @@ def _row(record, row_id):
     return next(((e[2], e[3]) for e in record if e[0] == "row" and e[1] == row_id), None)
 
 
-def test_the_fixture_covers_every_scenario():
+#: the call sites of a mutating ``MemoryService`` method (``tests/memory_writers.py`` ``SITES``, itself checked against the code
+#: by ``test_memory_one_writer.py``) that NO scenario runs through its real function: (module, function, method). Their writer
+#: LABELS are recorded (the ``member_`` / ``auto_`` scenarios hand each label to the service directly); the function around the
+#: call is not. Exact, so the list cannot grow unseen: a new call site must be run by an entry scenario or be added here.
+NOT_RUN = {
+    # member: 31
+    ("correction_apply.py", "apply_date_correction", "review"), ("correction_apply.py", "apply_pet_correction", "ingest"),
+    ("correction_apply.py", "apply_pet_correction", "review"), ("correction_apply.py", "apply_row_correction", "review"),
+    ("expert_dispatch.py", "_ingest_or_supersede", "review"), ("hold_the_fact.py", "_apply_update", "review"),
+    ("intent_router.py", "_erase_named", "erase_rows"), ("intent_router.py", "_execute_forget_last", "erase_rows"),
+    ("intent_router.py", "_reject", "review"), ("intent_router.py", "execute_intent", "ingest"),
+    ("intent_router.py", "execute_intent", "review"), ("mcp_server.py", "_execute_tool", "ingest"),
+    ("mcp_server.py", "_execute_tool", "review"), ("memory_curation.py", "_add_locked", "ingest"),
+    ("memory_curation.py", "_edit_locked", "review"), ("memory_curation.py", "_forget_locked", "erase_rows"),
+    ("memory_curation.py", "_forget_locked", "review"), ("memory_curation.py", "_restamp", "set_curated_standing"),
+    ("memory_curation.py", "decide_held", "review"), ("memory_space.py", "retire_twins", "review"),
+    ("omi_review_apply.py", "write_owner_fact", "ingest"), ("omi_review_apply.py", "write_person_fact", "ingest"),
+    ("provenance_answers.py", "_forget_turn", "review"), ("provenance_answers.py", "fix", "review"),
+    ("provenance_answers.py", "forget_it", "erase_rows"), ("provenance_answers.py", "forget_it", "review"),
+    ("routers/memories.py", "create_memory_proposal", "ingest"), ("routers/memories.py", "forget_user", "delete_user"),
+    ("routers/memories.py", "review_memory", "review"), ("trait_challenge.py", "apply_challenge", "flag_challenged"),
+    ("value_correction.py", "apply", "review"),
+    # automatic: 35
+    ("contacts_conversation.py", "refresh_person_mirror", "review"),
+    ("hindsight_retain_candidates.py", "create_hindsight_retain_candidate", "ingest"),
+    ("memory_digest.py", "_emotional_memory_pass", "ingest"),
+    ("memory_digest.py", "_merge_near_duplicates", "archive_duplicate"),
+    ("memory_digest.py", "_resolve_contradictions", "review"),
+    ("memory_digest.py", "_resolve_pending_person_links", "relink_entity"),
+    ("memory_digest.py", "_synthesis_pass", "erase_rows"), ("memory_digest.py", "_synthesis_pass", "ingest"),
+    ("memory_digest.py", "run_memory_digest", "ingest"), ("memory_digest.py", "run_memory_digest", "review"),
+    ("memory_digest.py", "run_music_taste_digest", "ingest"), ("memory_digest.py", "run_turn_digest", "ingest"),
+    ("memory_digest.py", "run_turn_digest", "review"), ("memory_digest.py", "run_weekly_consolidation", "sweep_soft_archive"),
+    ("memory_extractor.py", "extract_and_ingest", "ingest"), ("memory_retire.py", "decide", "retire_with_quote"),
+    ("memory_supersede.py", "nightly_conflict_pass", "supersede_by"),
+    ("memory_supersede.py", "retire_by_claims", "supersede_by"), ("mempalace_baseline.py", "run_mempalace_baseline", "ingest"),
+    ("named_relations.py", "_apply_one", "relink_entity"), ("named_relations.py", "_ingest_user_fact", "ingest"),
+    ("omi_review_apply.py", "unwrite", "erase_rows"), ("person_extractor.py", "_edge_may_change", "record_candidate"),
+    ("person_extractor.py", "_hold_edge_belief", "record_candidate"),
+    ("person_extractor.py", "_hold_fact_belief", "record_candidate"), ("person_extractor.py", "_ingest_to_mempalace", "ingest"),
+    ("person_extractor.py", "_ingest_to_mempalace", "relink_entity"), ("person_extractor.py", "_ingest_to_mempalace", "review"),
+    ("person_extractor.py", "_reconcile_same_kind_entity_row", "relink_entity"),
+    ("person_extractor.py", "_reconcile_same_kind_entity_row", "review"),
+    ("routers/memories.py", "forget_synthetic_user", "delete_user"), ("routers/user_profile.py", "analyze_profile", "ingest"),
+    ("turn_forget.py", "finish_parked", "erase_rows"), ("zoe_agent.py", "_background_memory_save", "ingest"),
+    ("zoe_memory_prompt_packet_measure.py", "seed_prompt_packet_measure_memories", "ingest"),
+    # passes_on: 1
+    ("memory_service.py", "_undo_night_write", "erase_rows"),
+}
+
+
+def test_the_fixture_covers_every_scenario(here):
+    """Coverage is read from the code and from what RAN, not counted by name prefix. Every mutating method of the service is
+    reached by a scenario (``delete_user`` aside: left out on purpose, see above). Every call site of one, as the code holds
+    them, is either run through its real function by an entry scenario or named in ``NOT_RUN``; nothing is in both.
+    Controls run: a call site added to ``memory_writers.SITES`` (``("memory_curation.py", "sneak", "ingest")``: what
+    ``test_memory_one_writer`` demands for any new call in the code) fails this as "not run, not listed"."""
+    import memory_writers
+
     assert set(ON_MAIN) == set(scenarios.scenarios()) and len(ON_MAIN) >= 170
-    for prefix, least in (("member_remember_", 26), ("member_correct_", 5), ("auto_ingest_", 48), ("auto_edit_", 22),
-                          ("auto_supersede_", 11), ("entry_member_", 11), ("entry_auto_", 7), ("entry_mirror_", 3)):
-        assert sum(name.startswith(prefix) for name in ON_MAIN) >= least, prefix
+    reached = _RAN["reached"]
+    assert set(memory_writers.MUTATING) - {method for _m, _f, method in reached} == {"delete_user"}
+    sites = {(module, fn.split(".")[-1], method) for module, fn, method in memory_writers.SITES}
+    run = {site for site in sites if site in reached}
+    assert len(run) >= 20
+    assert sites - run == NOT_RUN, {"not run, not listed": sorted(sites - run - NOT_RUN), "listed, but run or gone": sorted(NOT_RUN - (sites - run))}
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))

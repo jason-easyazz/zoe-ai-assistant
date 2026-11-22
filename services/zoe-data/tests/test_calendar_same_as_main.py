@@ -35,11 +35,50 @@ def here():
     return scenarios.run_all()
 
 
+_REST, _TOOLS, _SKY = "routers/calendar.py", ("mcp_server.py", "_execute_tool"), "skybridge_service.py"
+#: every (module, function, door function of ``calendar_service``) the CODE holds -> the scenarios that record it
+RECORDED = {
+    (_REST, "create_event", "create_event_record"): ("rest_create", "rest_create_private", "rest_create_by_the_panel"),
+    (_REST, "create_event", "replace_attendees"): ("rest_create_with_notes_and_guests",),
+    (_REST, "update_event", "update_event_record"): ("rest_edit_own", "rest_edit_household_event_by_another_member"),
+    (_REST, "update_event", "replace_attendees"): ("rest_edit_guests_only",),
+    (_REST, "delete_event", "delete_event_record"): ("rest_delete_own", "rest_delete_household_event_by_another_member"),
+    (*_TOOLS, "create_event_record"): ("tool_create", "tool_create_a_health_event"),
+    (*_TOOLS, "tool_update_event_record"): ("tool_update", "tool_update_another_members_household_event"),
+    (*_TOOLS, "tool_delete_event_record"): ("tool_delete", "tool_delete_another_members_household_event"),
+    (_SKY, "_resolve_calendar_create", "spoken_create_event_record"): ("spoken_create", "spoken_create_all_day"),
+    (_SKY, "_resolve_calendar_update_time", "spoken_move_event_record"): ("spoken_move_own", "spoken_move_own_from_the_card"),
+    (_SKY, "_resolve_calendar_delete_event", "spoken_delete_event_record"): ("spoken_delete_own", "spoken_delete_the_households_event"),
+    ("intent_router.py", "_execute_calendar_create_direct", "create_event_record"): ("spoken_quick_add", "spoken_quick_add_today"),
+    ("pending_suggestions.py", "_execute_action", "suggested_create_event_record"): ("suggestion_accepted",),
+    ("omi_review_apply.py", "write_calendar_event", "create_event_record"): ("day_review_event",),
+    ("calendar_ical.py", "store_parsed", "create_event_record"): ("ics_import",),
+    ("calendar_ical.py", "store_parsed", "replace_attendees"): ("ics_import",),
+    ("calendar_ical.py", "store_parsed", "replace_alarms"): ("ics_import",),
+}
+_FEED = "the subscribed feed's own reconcile (nobody is acting): it writes its rows itself and is named in test_calendar_one_door.py"
+NOT_RECORDED = {
+    ("calendar_feed.py", "_write_items", "replace_attendees"): _FEED,
+    ("calendar_feed.py", "_write_items", "replace_alarms"): _FEED,
+}
+
+
 def test_the_fixture_covers_every_scenario_and_every_entry_point():
+    """The entry points are READ FROM THE CODE (``tests/door_callers.py``): every function of the service that names a writing
+    function of ``calendar_service``. Each is recorded by named scenarios or listed with the reason it is not, so a new caller
+    of the door fails here until it has one or the other (the hand-picked name prefixes this replaces could not see one).
+    Control run: ``async def sneak(db): await calendar_service.delete_event_record(db, {}, "e")`` added to
+    ``routers/calendar.py`` fails this naming it."""
+    import door_callers
+    import sql_scan
+
     assert set(ON_MAIN) == set(scenarios.scenarios())
-    for prefix in ("rest_create", "rest_edit", "rest_delete", "tool_create", "tool_update", "tool_delete", "spoken_create",
-                   "spoken_move", "spoken_delete", "spoken_quick_add", "suggestion_accepted", "day_review_event", "ics_import"):
-        assert any(name.startswith(prefix) for name in ON_MAIN), prefix
+    root = Path(__file__).resolve().parents[1]
+    door = (root / "calendar_service.py").read_text("utf-8")
+    writers = door_callers.door_functions(door, door_callers.direct_sql_writers(
+        door, sql_scan.write_pattern("events", "event_attendees", "event_alarms", "calendars")))
+    assert len(writers) >= 11
+    door_callers.check_coverage(door_callers.entry_points(root, "calendar_service", writers), RECORDED, NOT_RECORDED, set(ON_MAIN))
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
