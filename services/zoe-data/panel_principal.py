@@ -434,8 +434,9 @@ async def record_turn_home_control(request: Any, user: Mapping[str, Any] | None,
     record_home_control(allowed)
     import home_opening
 
-    # who this turn is for, and from which panel: unlocking or opening needs an adult (home_opening.py)
-    home_opening.note_turn(user, "" if is_member(user) else await panel_of(request, user, db))
+    # who this turn is for: unlocking or opening needs an adult (home_opening.py). No lookup here: the panel is resolved from
+    # the request only if the turn asks to open something.
+    home_opening.note_turn(user, request)
     return allowed
 
 

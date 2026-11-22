@@ -32,9 +32,10 @@ CLOSING = frozenset({"lock", "close", "close_cover", "close_cover_tilt", "close_
 _TURN: contextvars.ContextVar[Optional[Mapping[str, Any]]] = contextvars.ContextVar("zoe_home_opening_turn", default=None)
 
 
-def note_turn(user: Optional[Mapping[str, Any]], panel: Optional[str] = None) -> None:
-    """Note this turn's caller. ``panel``: the panel the turn came from (``panel_principal.panel_of``; "" = not a panel)."""
-    _TURN.set({**(user or {}), **({} if panel is None else {"panel_id": panel})})
+def note_turn(user: Optional[Mapping[str, Any]], request: Any = None) -> None:
+    """Note this turn's caller and the request it came in on. Nothing is looked up here: WHICH panel the turn is from is
+    resolved (``panel_principal.panel_of``) only if the turn asks to open something, and then once."""
+    _TURN.set({"user": dict(user or {}), "request": request})
 
 
 def _domains(entity_id: Any, data: Any) -> set:
@@ -58,9 +59,10 @@ async def _adult(user_id: Any) -> bool:
         return False
 
 
-async def may_open(user: Optional[Mapping[str, Any]], request: Any = None) -> bool:
+async def may_open(user: Optional[Mapping[str, Any]], request: Any = None, turn: Optional[dict] = None) -> bool:
     """Is this caller an adult member, or a panel whose open verified voice session belongs to one? Never raises.
-    With a ``request`` the panel is whatever ``panel_principal.panel_of`` proves it to be; without one, the record's own."""
+    With a ``request`` the panel is whatever ``panel_principal.panel_of`` proves it to be (kept on ``turn``, so a turn resolves
+    it once); without one, the record's own ``panel_id``."""
     u = user or {}
     if u.get("unauthenticated_override"):      # a header-less caller promoted by a legacy setting is nobody, whatever its id
         u = {"user_id": "guest", "role": "guest", "panel_id": u.get("panel_id")}
@@ -70,7 +72,14 @@ async def may_open(user: Optional[Mapping[str, Any]], request: Any = None) -> bo
         import panel_principal
         import voice_session
 
-        panel = await panel_principal.panel_of(request, u) if request is not None else str(u.get("panel_id") or "").strip()
+        if turn is not None and "panel" in turn:
+            panel = turn["panel"]
+        elif request is not None:
+            panel = await panel_principal.panel_of(request, u)
+            if turn is not None:
+                turn["panel"] = panel
+        else:
+            panel = str(u.get("panel_id") or "").strip()
         if not panel:
             return False
         return await _adult(voice_session.active_member(panel))
@@ -84,8 +93,10 @@ async def refused(entity_id: Any, action: Any, data: Any = None, *, user: Any = 
     ``request``, which says which panel it is), or (default) the caller of this turn. One log line, closed codes only: the lane, the domain and the service class, never a name or an id."""
     if not opens(entity_id, action, data):
         return False
-    who = _TURN.get() if user == "turn" else user
-    if await may_open(who, request):
+    turn = _TURN.get() if user == "turn" else None
+    if user == "turn":
+        user, request = (turn or {}).get("user"), (turn or {}).get("request")
+    if await may_open(user, request, turn):
         return False
     logger.warning("HOME_OPENING refused via=%s domain=%s", via or "-", ",".join(sorted(_domains(entity_id, data) & SECURE_DOMAINS)))
     return True

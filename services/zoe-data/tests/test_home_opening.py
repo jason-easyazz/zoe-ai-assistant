@@ -271,7 +271,7 @@ async def test_a_turn_notes_who_it_is_for(house, monkeypatch):
 
 async def test_a_turn_from_the_kiosk_at_its_registered_address_notes_which_panel_it_is(house, registry):
     """The real ``may_control_home`` and ``panel_of`` over a real request: the kiosk browser's turn carries no ``panel_id``.
-    Control run: with ``record_turn_home_control`` noting the caller without its panel the adult's session is refused."""
+    Control run: with ``record_turn_home_control`` noting the caller without its request the adult's session is refused."""
     kiosk = Request({"type": "http", "method": "POST", "path": "/", "headers": [(b"x-real-ip", PANEL_IP.encode())], "client": (PROXY, 1)})
     phone = Request({"type": "http", "method": "POST", "path": "/", "headers": [], "client": (PHONE_IP, 1)})
     house["session"] = ADULT
@@ -282,6 +282,28 @@ async def test_a_turn_from_the_kiosk_at_its_registered_address_notes_which_panel
     house["session"] = ADULT
     assert await panel_principal.record_turn_home_control(phone, dict(GUEST)) is False      # a phone on the Wi-Fi is no panel
     assert await home_opening.refused("lock.front_door", "unlock") is True and len(house["sent"]) == 1
+
+
+async def test_an_ordinary_turn_adds_no_lookup_and_an_opening_turn_resolves_its_panel_once(house, registry, monkeypatch):
+    """Statement count on the panel registry, for the kiosk at its registered address (a guest with no ``panel_id``). Recording
+    the turn runs the ONE statement ``may_control_home`` runs on main; an ordinary command adds none; the first opening
+    command resolves the panel (the strict panel test and the id: two statements); every later one in the turn adds none.
+    Control run: with ``record_turn_home_control`` resolving ``panel_of`` itself the first count is 3 and this fails."""
+    statements, run = [], registry.execute
+
+    async def counted(sql, params=()):
+        statements.append(sql)
+        return await run(sql, params)
+
+    monkeypatch.setattr(registry, "execute", counted)
+    kiosk = Request({"type": "http", "method": "POST", "path": "/", "headers": [(b"x-real-ip", PANEL_IP.encode())], "client": (PROXY, 1)})
+    house["session"] = ADULT
+    assert await panel_principal.record_turn_home_control(kiosk, dict(GUEST)) is True and len(statements) == 1
+    assert await zoe_agent._ha_control("light.kitchen_lamp", "turn_on") == {"ok": True}
+    assert await zoe_agent._ha_control("lock.front_door", "lock") == {"ok": True} and len(statements) == 1
+    assert await zoe_agent._ha_control("lock.front_door", "unlock") == {"ok": True} and len(statements) == 3
+    assert await zoe_agent._ha_control("cover.garage_door", "open_cover") == {"ok": True}
+    assert await smart_home_service.set_device("cover.garage_door", True) is True and len(statements) == 3
 
 
 # ---- the spoken / Skybridge device command ---------------------------------------------------------------------------------------
