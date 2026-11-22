@@ -1917,14 +1917,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     # === SELF-AWARENESS TOOLS ===
     elif name == "zoe_get_time":
-        import datetime
+        import datetime as _datetime_mod      # (never ``import datetime`` here: it would shadow the module's ``datetime`` class for every arm)
         tz_name = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
         try:
             import zoneinfo
             tz = zoneinfo.ZoneInfo(tz_name)
-            now = datetime.datetime.now(tz)
+            now = _datetime_mod.datetime.now(tz)
         except Exception:
-            now = datetime.datetime.now()
+            now = _datetime_mod.datetime.now()
         return {
             "datetime": now.isoformat(),
             "formatted": now.strftime("%A, %d %B %Y — %I:%M %p"),
@@ -1932,7 +1932,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         }
 
     elif name == "zoe_get_status":
-        import datetime
+        import datetime as _datetime_mod      # (never ``import datetime`` here: it would shadow the module's ``datetime`` class for every arm)
         import platform
         try:
             import psutil
@@ -1949,7 +1949,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             "cpu_percent": cpu,
             "memory": mem_info,
             "mempalace_dir": os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace")),
-            "datetime": datetime.datetime.now().isoformat(),
+            "datetime": _datetime_mod.datetime.now().isoformat(),
         }
 
     elif name == "zoe_list_skills":
@@ -2049,7 +2049,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"Greptile trigger review failed: {exc}"}
 
     elif name == "zoe_self_capabilities":
-        import datetime
+        import datetime as _datetime_mod      # (never ``import datetime`` here: it would shadow the module's ``datetime`` class for every arm)
         import glob
         import json as _json
         import socket
@@ -2115,7 +2115,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         ]
 
         return {
-            "datetime": datetime.datetime.now().isoformat(),
+            "datetime": _datetime_mod.datetime.now().isoformat(),
             "services": services,
             "active_agents": agents,
             "widgets": sorted(widgets),
@@ -2414,58 +2414,45 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
         # Cancel any unfired proactive_scheduled job linked to this reminder.
+        # On THIS tool's own connection (``on_connection``): borrowing more while it is held is how a full pool deadlocks.
         try:
-            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
-            async with _pg_get_db() as _pdb:
-                _cur = await _pdb.execute(
-                    "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
-                )
-                _sched_rows = await _cur.fetchall()
-            for _sr in _sched_rows:
-                await _cancel_reminder(_sr["id"])
+            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder, on_connection as _on_connection
+            _cur = await db.execute(
+                "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
+            )
+            _sched_rows = await _cur.fetchall()
+            with _on_connection(db):
+                for _sr in _sched_rows:
+                    await _cancel_reminder(_sr["id"])
         except Exception:
             pass
         return {"id": rid, "status": "deleted"}
 
     elif name == "reminder_snooze":
-        rid = args["reminder_id"]
-        minutes = args.get("minutes", 30)
-        cursor = await db.execute("SELECT id, due_date, due_time FROM reminders WHERE id=? AND deleted=0", (rid,))
-        row = await cursor.fetchone()
-        if not row:
-            return {"error": f"Reminder {rid} not found"}
-        from datetime import timezone as _tz
-        now_utc = datetime.now(_tz.utc)
-        new_time_utc = now_utc + timedelta(minutes=minutes)
-        # Store the snooze time as a local (AWST = UTC+8) wall-clock string so the
-        # reminder scanner and UI show the expected local time.
-        _awst_offset = timedelta(hours=8)
-        new_time_local = new_time_utc + _awst_offset
-        new_date = new_time_local.strftime("%Y-%m-%d")
-        new_time_str = new_time_local.strftime("%H:%M")
-        snoozed_until_iso = new_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        from reminder_service import tool_snooze_reminder_record
+        # ONE snooze, the screen's (reminder_service.snooze_reminder_record): ``snoozed_until`` is a UTC instant, the due date and
+        # time are left alone (so no clock offset is involved), the old job is cancelled and one is scheduled for that instant.
+        # Owner only, like the screen. (This tool used to raise before its write: a local ``datetime`` bound in another arm.)
+        from fastapi import HTTPException
+        from reminder_service import snooze_reminder_record
 
+        rid = args["reminder_id"]
         try:
-            await tool_snooze_reminder_record(db, reminder_id=rid, due_date=new_date, due_time=new_time_str,
-                                              snoozed_until=snoozed_until_iso, user_id=user_id, stamps_at=stamps_at)
+            minutes = int(args.get("minutes", 30))
+        except (TypeError, ValueError):
+            return {"error": "minutes must be a whole number", "status": "refused"}
+        if not 1 <= minutes <= 10080:
+            return {"error": "minutes must be between 1 and 10080", "status": "refused"}
+        try:
+            reminder = await snooze_reminder_record(db, actor, rid, minutes)
         except kernel_door.Refused as exc:
             return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
-        result = {"id": rid, "snoozed_until": snoozed_until_iso}
-        await _notify_ui("reminders", "reminder_snoozed", result)
-        # Cancel existing scheduled job(s) for this reminder; ReminderScanTrigger
-        # will pick it up again after snoozed_until passes.
-        try:
-            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
-            async with _pg_get_db() as _pdb:
-                _cur = await _pdb.execute(
-                    "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
-                )
-                _sched_rows = await _cur.fetchall()
-            for _sr in _sched_rows:
-                await _cancel_reminder(_sr["id"])
-        except Exception:
-            pass
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return {"error": f"Reminder {rid} not found"}
+            return {"error": str(exc.detail), "status": "refused"}
+        result = {"id": rid, "snoozed_until": (reminder or {}).get("snoozed_until")}
+        if _STDIO_WORKER:      # the store's broadcast reaches panels only in the zoe-data process (as for reminder_create)
+            await _notify_ui("reminders", "reminder_snoozed", result)
         return {**result, "status": "snoozed"}
 
     # === NOTE CRUD ===
