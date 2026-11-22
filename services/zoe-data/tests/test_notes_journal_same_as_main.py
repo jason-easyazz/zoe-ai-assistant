@@ -36,12 +36,46 @@ def here():
     return scenarios.run_all()
 
 
+_TOOLS, _ROUTER, _OFFER = ("mcp_server.py", "_execute_tool"), "intent_router.py", ("pending_suggestions.py", "_execute_action")
+#: every (module, function, door function) the CODE holds, for ``note_service`` and for ``journal_service`` -> its scenarios
+NOTES_RECORDED = {
+    ("routers/notes.py", "create_note", "create_note_record"): ("note_rest_create", "note_rest_create_for_the_house"),
+    ("routers/notes.py", "update_note", "update_note_record"): ("note_rest_edit", "note_rest_patch",
+                                                               "note_rest_edit_a_household_note_by_another_member"),
+    ("routers/notes.py", "delete_note", "delete_note_record"): ("note_rest_delete", "note_rest_delete_a_household_note_by_another_member"),
+    (*_TOOLS, "said_note_record"): ("note_tool_create",),
+    (*_TOOLS, "tool_update_note_record"): ("note_tool_update", "note_tool_update_another_members_household_note"),
+    (*_TOOLS, "tool_delete_note_record"): ("note_tool_delete", "note_tool_delete_another_members_note"),
+    (_ROUTER, "_execute_note_create_direct", "said_note_record"): ("note_spoken_create",),
+    (*_OFFER, "suggested_note_record"): ("note_suggestion_accepted", "note_suggestion_accepted_with_a_description_only"),
+}
+JOURNAL_RECORDED = {
+    ("routers/journal.py", "create_entry", "create_entry_record"): ("journal_rest_create",),
+    ("routers/journal.py", "update_entry", "update_entry_record"): ("journal_rest_edit", "journal_rest_edit_another_members_entry"),
+    ("routers/journal.py", "delete_entry", "delete_entry_record"): ("journal_rest_delete", "journal_rest_delete_another_members_entry"),
+    (*_TOOLS, "tool_entry_record"): ("journal_tool_create",),
+    (_ROUTER, "_execute_journal_create_direct", "said_entry_record"): ("journal_spoken_create",),
+}
+
+
 def test_the_fixture_covers_every_scenario_and_every_entry_point():
+    """The entry points are READ FROM THE CODE (``tests/door_callers.py``): every function of the service that names a writing
+    function of ``note_service`` or of ``journal_service``. Each is tied to named scenarios; nothing is left unrecorded (the
+    two empty dicts below). A new caller of either door fails here until it has a scenario. (The hand-picked name prefixes this
+    replaces could not see one.)
+    Control run: ``async def sneak(db): await note_service.delete_note_record(db, {}, "n")`` added to ``routers/notes.py`` fails
+    this naming it; the same for ``journal_service.delete_entry_record`` in ``routers/journal.py``."""
+    import door_callers
+    import sql_scan
+
     assert set(ON_MAIN) == set(scenarios.scenarios())
-    for prefix in ("note_rest_create", "note_rest_edit", "note_rest_patch", "note_rest_delete", "note_tool_create", "note_tool_update",
-                   "note_tool_delete", "note_spoken_create", "note_suggestion_accepted", "journal_rest_create", "journal_rest_edit",
-                   "journal_rest_delete", "journal_tool_create", "journal_spoken_create"):
-        assert any(name.startswith(prefix) for name in ON_MAIN), prefix
+    root = Path(__file__).resolve().parents[1]
+    for module, table, recorded, at_least in (("note_service", "notes", NOTES_RECORDED, 7),
+                                               ("journal_service", "journal_entries", JOURNAL_RECORDED, 5)):
+        door = (root / f"{module}.py").read_text("utf-8")
+        writers = door_callers.door_functions(door, door_callers.direct_sql_writers(door, sql_scan.write_pattern(table)))
+        assert len(writers) >= at_least, module
+        door_callers.check_coverage(door_callers.entry_points(root, module, writers), recorded, {}, set(ON_MAIN))
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))

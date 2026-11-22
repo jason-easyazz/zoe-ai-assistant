@@ -290,7 +290,53 @@ def alarm_scenarios() -> dict:
         await rest_create(w)
         return [await ring(w), await ring(w, SEVEN + w.alarms.RING_MAX_S + 1)]
 
+    async def spoken_shift_a_repeating_alarm(w):
+        """One day's change to a repeating alarm (``alarm_voice._run_shift``): a day's exception, the alarm itself untouched."""
+        await said(w, "wake me at 6:30 every weekday")
+        return await said(w, "get me up an hour earlier on thursday")
+
+    async def spoken_shift_undone(w):
+        await spoken_shift_a_repeating_alarm(w)
+        return await said(w, "back to normal on thursday")
+
+    async def spoken_shift_a_one_off(w):
+        await said(w, "set an alarm for 7 am")
+        return await said(w, "get me up an hour earlier tomorrow")
+
+    async def spoken_shift_with_no_alarm(w):
+        return await said(w, "I need to be up at 5:30 on thursday")
+
+    async def forget_member(w):
+        """The right-to-be-forgotten path (``MemoryService.delete_user`` -> ``alarms.forget_user``): the member's alarms, their
+        event rows and their day overrides go; another member's alarm and the household's stay."""
+        import db_pool
+
+        await override(w)                                       # the member's own, with an event row and a day's exception
+        await rest_create(w, user=_member(BOB), label="quince")
+        await rest_create(w, user=PANEL, time="06:30")
+        _set(db_pool, "get_db_ctx", w.db)
+        return await w.alarms.forget_user(ANN)
+
+    async def forget_nobody(w):
+        await rest_create(w)
+        return [await w.alarms.forget_user(""), await w.alarms.forget_user(w.alarms.HOUSEHOLD)]
+
+    async def anticipation_wake(w):
+        """A "yes" to Zoe's offer of an earlier alarm (``anticipation._do``, kind ``wake``): a one-off alarm for that day."""
+        from datetime import timezone
+
+        import anticipation
+
+        offer = {"kind": "wake", "slots": {"wake_time": "05:30", "start_date": "2026-11-05", "label": "womble"}}
+        async with w.db() as db:
+            reply, receipt = await anticipation._do(db, ANN, offer, None, datetime.fromtimestamp(w.clock["now"], timezone.utc))
+        return [reply, receipt]
+
     return {
+        "forget_a_member": forget_member, "forget_nobody_and_the_household": forget_nobody,
+        "anticipation_wake_alarm": anticipation_wake,
+        "spoken_shift_a_repeating_alarm": spoken_shift_a_repeating_alarm, "spoken_shift_undone": spoken_shift_undone,
+        "spoken_shift_a_one_off": spoken_shift_a_one_off, "spoken_shift_with_no_alarm_makes_one": spoken_shift_with_no_alarm,
         "rest_create": create_member, "rest_create_at_the_panel": create_panel, "rest_create_bad_time": create_bad_time,
         "rest_edit": edit, "rest_edit_disable": edit_disable, "rest_edit_someone_elses": edit_someone_elses,
         "rest_edit_household_by_a_member": edit_household_by_member,
@@ -474,7 +520,20 @@ def _outcome(log, call):
         log.append(["raised", getattr(exc, "status_code", getattr(exc, "status", None)), detail])
 
 
+def _isolated() -> None:
+    """Refuse to run outside the test configuration: the timer store and the logs default under the live ``~/.zoe``.
+    ``tests/conftest.py`` points each at a temporary directory."""
+    import os
+
+    live = os.path.join(os.path.expanduser("~"), ".zoe")
+    for var in ("ZOE_TIMER_STORE", "ZOE_LOG_DIR", "MEMPALACE_DATA_DIR"):
+        value = os.environ.get(var, "")
+        if not value or os.path.abspath(value).startswith(live):
+            raise RuntimeError(f"alarm and timer scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
+
+
 def run_all(root: Path | None = None) -> dict:
+    _isolated()
     root = Path(root or Path(__file__).resolve().parents[1])
     out = {}
     for name, call in alarm_scenarios().items():
@@ -499,5 +558,6 @@ def run_all(root: Path | None = None) -> dict:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, sys.argv[1])
+    sys.path[:0] = [sys.argv[1], sys.argv[1].rstrip("/") + "/tests"]
+    import conftest  # noqa: F401 - that tree's test configuration: every live store path pinned to a temporary directory
     print(json.dumps(run_all(Path(sys.argv[1])), indent=1, sort_keys=True))
