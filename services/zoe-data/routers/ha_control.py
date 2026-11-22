@@ -165,6 +165,9 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
 
     # Unlocking or opening needs an adult member or a verified voice session (home_opening.py); nothing is sent otherwise.
     # (The Zoe OS kernel's home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    # Known and left as is: on main the bridge has no mapping for lock, unlock, open, close or arm / disarm, so today those
+    # reach Home Assistant for NOBODY (400 from the bridge, a 502 here). This decides who MAY ask; the mapping comes in a later
+    # PR, only once scenes, scripts and automation entities are adult-only too.
     if await home_opening.refused(entity_id, service, params, user=caller, request=request, via="panel_route"):
         raise HTTPException(status_code=403, detail=home_opening.REFUSAL)
     try:

@@ -326,39 +326,6 @@ async def get_entity(entity_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Actions /devices/control accepts -> the Home Assistant service called on the entity's own domain. Anything else is a 400.
-SERVICE_MAPPING = {
-    "turn_on": "turn_on",
-    "turn_off": "turn_off",
-    "toggle": "toggle",
-    "set_brightness": "turn_on",
-    "set_color": "turn_on",
-    "set_temperature": "set_temperature",
-    # media_player
-    "media_play": "media_play",
-    "media_pause": "media_pause",
-    "media_next_track": "media_next_track",
-    "media_previous_track": "media_previous_track",
-    "volume_up": "volume_up",
-    "volume_down": "volume_down",
-    "volume_set": "volume_set",
-    "play_media": "play_media",
-    # locks, covers (garage doors, blinds), valves, the alarm panel. The bridge has no inbound auth and does NOT decide who
-    # may unlock or open: zoe-data asks home_opening.refused(...) before every send (an adult only).
-    "lock": "lock",
-    "unlock": "unlock",
-    "open_cover": "open_cover",
-    "close_cover": "close_cover",
-    "stop_cover": "stop_cover",
-    "open_valve": "open_valve",
-    "close_valve": "close_valve",
-    "alarm_disarm": "alarm_disarm",
-    "alarm_arm_away": "alarm_arm_away",
-    "alarm_arm_home": "alarm_arm_home",
-    "alarm_arm_night": "alarm_arm_night",
-}
-
-
 @app.post("/devices/control")
 async def control_device(request: DeviceControlRequest):
     """Control a device (light, switch, etc.) in Home Assistant"""
@@ -381,10 +348,29 @@ async def control_device(request: DeviceControlRequest):
                 detail="set_temperature is only supported for climate entities",
             )
 
-        if action not in SERVICE_MAPPING:
+        # Map common actions to Home Assistant services
+        service_mapping = {
+            "turn_on": "turn_on",
+            "turn_off": "turn_off",
+            "toggle": "toggle",
+            "set_brightness": "turn_on",
+            "set_color": "turn_on",
+            "set_temperature": "set_temperature",
+            # media_player
+            "media_play": "media_play",
+            "media_pause": "media_pause",
+            "media_next_track": "media_next_track",
+            "media_previous_track": "media_previous_track",
+            "volume_up": "volume_up",
+            "volume_down": "volume_down",
+            "volume_set": "volume_set",
+            "play_media": "play_media",
+        }
+        
+        if action not in service_mapping:
             raise HTTPException(status_code=400, detail=f"Unsupported action: {action}")
         
-        service = SERVICE_MAPPING[action]
+        service = service_mapping[action]
         
         # Prepare service data
         service_data = {"entity_id": entity_id}

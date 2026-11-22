@@ -178,16 +178,18 @@ def test_an_address_that_names_no_single_panel_and_a_header_less_promoted_caller
     assert _unlock(PROXY, {"X-Real-IP": PANEL_IP}).json()["detail"] == home_opening.REFUSAL and house["sent"] == []
 
 
-# ---- the real bridge -------------------------------------------------------------------------------------------------------------
-async def test_an_adults_unlock_or_open_reaches_home_assistant_through_the_real_bridge(house, monkeypatch):
-    """The bridge is the REAL ``homeassistant-mcp-bridge`` ``control_device`` with its real ``SERVICE_MAPPING`` (only Home
-    Assistant itself is faked): before this PR it had no unlock, open, close, lock or disarm, so an allowed command died there.
-    Control run: with ``unlock`` taken out of the bridge's ``SERVICE_MAPPING`` the adult's unlock is a 502 and this fails."""
+# ---- the real bridge: this PR decides who MAY ask, it does not make unlocking work ------------------------------------------------
+async def test_today_the_real_bridge_carries_no_unlock_or_open_for_anyone(house, monkeypatch):
+    """Every other test here fakes the bridge as ACCEPTING, to show what Zoe sends. The REAL bridge (``homeassistant-mcp-bridge``
+    ``control_device``, only Home Assistant faked) has no mapping for lock, unlock, open, close or arm / disarm, so an adult's
+    allowed unlock reaches the bridge and is answered 400 (a 502 from the route): nothing reaches Home Assistant for anybody.
+    The mapping arrives in a later PR, once scenes, scripts and automation entities are adult-only too; this test changes then.
+    Control run: with the check dropped from ``routers/ha_control.ha_control`` the child's unlock reaches the bridge."""
     spec = importlib.util.spec_from_file_location(
         "ha_mcp_bridge_main", Path(__file__).resolve().parents[2] / "homeassistant-mcp-bridge" / "main.py")
     bridge = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bridge)
-    called = []
+    reached, called = [], []
 
     class FakeHomeAssistant:
         async def call_service(self, domain, service, entity_id=None, data=None):
@@ -195,21 +197,21 @@ async def test_an_adults_unlock_or_open_reaches_home_assistant_through_the_real_
             return {"ok": True}
 
     async def real_bridge(path, body):
+        reached.append(body["action"])
         return await bridge.control_device(bridge.DeviceControlRequest(**body))
 
     monkeypatch.setattr(bridge, "ha_bridge", FakeHomeAssistant())
     monkeypatch.setattr(ha_control, "_bridge_post", real_bridge)
-    wanted = [("lock.front_door", "unlock", "unlock"), ("cover.garage_door", "open", "open_cover"),
-              ("valve.water_main", "open_valve", "open_valve"), ("alarm_control_panel.house", "alarm_disarm", "alarm_disarm"),
-              ("lock.front_door", "lock", "lock"), ("cover.garage_door", "close", "close_cover")]
-    for entity, action, service in wanted:
-        assert (await _route(MEMBER, entity, action))["service"] == service
-    assert called == [(e.partition(".")[0], service, e) for e, _a, service in wanted]
     with pytest.raises(HTTPException) as exc:
         await _route(KID, "lock.front_door", "unlock")
-    assert exc.value.status_code == 403 and len(called) == len(wanted)
-    assert home_opening.CLOSING - {"close", "close_cover_tilt", "stop_cover_tilt", "alarm_arm_vacation",
-                                   "alarm_arm_custom_bypass"} <= set(bridge.SERVICE_MAPPING)
+    assert exc.value.status_code == 403 and reached == []                               # refused by Zoe: never asked of the bridge
+    for entity, action in [("lock.front_door", "unlock"), ("cover.garage_door", "open"), ("alarm_control_panel.house", "alarm_disarm"),
+                           ("lock.front_door", "lock"), ("cover.garage_door", "close")]:
+        with pytest.raises(HTTPException) as exc:
+            await _route(MEMBER, entity, action)
+        assert exc.value.status_code == 502                                             # allowed by Zoe, unknown to the bridge
+    assert len(reached) == 5 and called == []
+    assert (await _route(KID, "light.kitchen_lamp", "turn_on"))["ok"] is True and called == [("light", "turn_on", "light.kitchen_lamp")]
 
 
 @pytest.mark.parametrize("caller", [MEMBER, KID, GUEST, BARE_PANEL])
