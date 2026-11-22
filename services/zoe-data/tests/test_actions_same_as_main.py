@@ -37,10 +37,76 @@ def here():
     return scenarios.run_all()
 
 
+_HOME, _MUSIC, _SCREEN, _ROUTER = "home_control", "music_service", "routers/music.py", "intent_router.py"
+#: HOME: every function of the service that names ``home_control.send`` -> the scenarios that record it
+HOME_RECORDED = {
+    ("routers/ha_control.py", "_bridge_post", "send"): ("home_screen_turn_on", "home_screen_scene", "home_screen_bridge_offline"),
+    ("smart_home_service.py", "_ha_post", "send"): ("home_spoken_turn_on", "home_spoken_scene"),
+    ("zoe_agent.py", "_ha_control", "send"): ("home_tool_turn_on", "home_tool_bridge_offline"),
+    (_ROUTER, "_post_music_ha_control", "send"): ("music_house_pause", "music_house_volume_set"),
+}
+#: MUSIC: every function of the service that names a function of ``music_service`` that reaches Music Assistant -> its scenarios
+MUSIC_RECORDED = {
+    (_SCREEN, "music_control", _MUSIC): ("music_screen_pause", "music_screen_next", "music_screen_volume_set", "music_screen_unknown_action"),
+    (_SCREEN, "music_seek", _MUSIC): ("music_screen_seek",),
+    (_SCREEN, "music_transfer", _MUSIC): ("music_screen_transfer",),
+    (_SCREEN, "music_play", _MUSIC): ("music_screen_play",),
+    (_SCREEN, "music_play_media", _MUSIC): ("music_screen_play_media",),
+    (_SCREEN, "music_queue_clear", _MUSIC): ("music_screen_queue_clear",),
+    (_SCREEN, "music_queue_remove", _MUSIC): ("music_screen_queue_remove",),
+    (_SCREEN, "music_queue_play_index", _MUSIC): ("music_screen_queue_play_index",),
+    (_SCREEN, "music_favorite", _MUSIC): ("music_screen_favorite",),
+    (_SCREEN, "music_unfavorite", _MUSIC): ("music_screen_unfavorite",),
+    (_SCREEN, "music_playlist_add", _MUSIC): ("music_screen_playlist_add",),
+    (_SCREEN, "music_dont_stop", _MUSIC): ("music_screen_dont_stop",),
+    (_SCREEN, "music_ungroup", _MUSIC): ("music_screen_ungroup",),
+    ("skybridge_service.py", "resolve_skybridge_request", _MUSIC): ("music_spoken_play", "music_spoken_pause", "music_spoken_transfer"),
+    (_ROUTER, "_music_assistant_control", _MUSIC): ("music_intent_pause", "music_intent_volume_down", "music_intent_volume_set"),
+    (_ROUTER, "_music_assistant_play", _MUSIC): ("music_intent_play", "music_intent_delayed"),
+    (_ROUTER, "_music_assistant_active_player", _MUSIC): ("music_intent_pause",),
+}
+_READ = "a read: it asks Music Assistant what is there or playing and sends nothing that changes it"
+_SETUP = "provider sign-in / set-up: outside the door, as the record says (a config flow, not a command to a speaker)"
+_AUTO = "automatic (the discovery playlist, the listening history): nobody is acting"
+_GAP = "A COMMAND WITH NO SCENARIO YET (found in review by reading the code; listed so it is seen, to be given one)"
+MUSIC_NOT_RECORDED = {
+    **{(_SCREEN, fn, _MUSIC): _READ for fn in ("_queue_item_art", "music_groups", "music_now_playing", "music_playlist_tracks",
+                                               "music_playlists", "music_recently_played", "music_recommendations", "music_search",
+                                               "set_preferred_player")},
+    (_ROUTER, "_music_assistant_now_playing", _MUSIC): _READ, (_ROUTER, "_execute_music_setup", _MUSIC): _READ,
+    ("routers/panel_config.py", "_known_player_ids", _MUSIC): _READ, ("routers/voice_tts.py", "_media_playing", _MUSIC): _READ,
+    ("routers/music_setup.py", "setup_catalogue", _MUSIC): _READ, ("routers/music_setup.py", "setup_form", _MUSIC): _READ,
+    ("routers/music_setup.py", "setup_save", _MUSIC): _SETUP, ("routers/music_setup.py", "setup_start", _MUSIC): _SETUP,
+    ("routers/handoff.py", "handoff_start", _MUSIC): _SETUP,
+    ("music_oauth.py", "_run_flow", _MUSIC): _SETUP, ("music_oauth.py", "_run_setup_flow", _MUSIC): _SETUP,
+    ("ytmusic_signin.py", "_finish_connect", _MUSIC): _SETUP, ("ytmusic_signin.py", "refresh_now", _MUSIC): _SETUP,
+    **{("music_discovery.py", fn, _MUSIC): _AUTO for fn in ("get_discovery_playlist", "replace_discovery_playlist",
+                                                           "resolve_recommendation_tracks", "taste_seed")},
+    ("music_history.py", "observe_once", _MUSIC): _AUTO,
+    (_SCREEN, "music_group", _MUSIC): _GAP, (_SCREEN, "music_queue_move", _MUSIC): _GAP, (_SCREEN, "music_queue_save", _MUSIC): _GAP,
+    (_ROUTER, "_execute_music_intent_asked", _MUSIC): _GAP,              # the spoken "I like this song" (favorite_now_playing); the body the kernel door runs
+    ("music_discovery.py", "play_discovery", _MUSIC): _GAP,
+}
+
+
 def test_the_fixture_covers_every_scenario_and_every_entry_point():
+    """The entry points are READ FROM THE CODE (``tests/door_callers.py``), not counted by name prefix: every function of the
+    service that names ``home_control.send``, and every function that names a function of ``music_service`` that reaches Music
+    Assistant (``_ma_response`` or anything built on it). Each is tied to named scenarios, or listed with its reason: a read,
+    the provider set-up, automatic work, or (five, marked ``_GAP``) a command that has no scenario yet. A new caller of either
+    door fails here until it is given one or the other.
+    Controls run: ``async def sneak(): await music_service.control("pause")`` added to ``routers/music.py`` fails this naming
+    it; ``async def sneak(): await home_control.send("u", home_control.DEVICE, {})`` added to ``routers/ha_control.py`` too."""
+    import door_callers
+
     assert set(ON_MAIN) == set(scenarios.scenarios())
-    for prefix in ("music_screen_", "music_spoken_", "music_intent_", "music_house_", "home_screen_", "home_spoken_", "home_tool_"):
-        assert sum(name.startswith(prefix) for name in ON_MAIN) >= 2, prefix
+    root = Path(__file__).resolve().parents[1]
+    door_callers.check_coverage(door_callers.entry_points(root, _HOME, {"send"}), HOME_RECORDED, {}, set(ON_MAIN))
+    reaches = door_callers.door_functions((root / "music_service.py").read_text("utf-8"), {"_ma_response"})
+    assert len(reaches) >= 40 and {"control", "play_media", "search_and_play", "transfer", "queue_clear"} <= reaches
+    callers = {key: [_MUSIC] for key in door_callers.entry_points(root, _MUSIC, reaches)}
+    door_callers.check_coverage(callers, MUSIC_RECORDED, MUSIC_NOT_RECORDED, set(ON_MAIN))
+    assert sum(why == _GAP for why in MUSIC_NOT_RECORDED.values()) == 5              # the known gaps cannot quietly grow
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
