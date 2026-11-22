@@ -509,6 +509,100 @@ def _modules() -> list:
     return sorted(p for p in SVC.rglob("*.py") if not skip.intersection(p.relative_to(SVC).parts))
 
 
+def test_a_viewer_copies_nothing_while_only_another_areas_door_is_on(monkeypatch):
+    """Lists (and reminders) are on in production while alarms are off: making a viewer must then copy no forget marks. The
+    alarms area ALONE decides (``kernel_door.stamps_now("alarms", "timers")``); with its own flag on and the others off the
+    viewer gets the snapshot. (Review of #2689: the viewer asked ``doors_on()``, so any area's door made every alarm request
+    copy the marks.) Control run: with the viewer's ``default_factory`` back to the bare ``kernel_door.stamps_now`` the first
+    assertion fails."""
+    monkeypatch.setenv("ZOE_OS_LISTS", "kernel")
+    monkeypatch.setenv("ZOE_OS_REMINDERS", "kernel")
+    monkeypatch.setenv("ZOE_OS_ALARMS", "off")
+
+    def never():
+        raise AssertionError("the forget marks were copied with the alarms door off")
+
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", never)
+    assert alarms.Viewer(user_id=ANN).stamps_at is None
+    monkeypatch.setenv("ZOE_OS_LISTS", "off")
+    monkeypatch.setenv("ZOE_OS_REMINDERS", "off")
+    monkeypatch.setenv("ZOE_OS_ALARMS", "kernel")
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", lambda: {ANN: 3})
+    assert alarms.Viewer(user_id=ANN).stamps_at == {ANN: 3}
+    assert kernel_door.stamps_now("alarms", "timers") == {ANN: 3} and kernel_door.stamps_now("lists") is None
+
+
+@pytest.mark.parametrize("value, reads", [(None, 0), ("off", 0), ("shadow", 0), ("kernel", 1)])
+def test_a_timer_cancel_reads_the_clock_for_the_door_only_when_the_door_is_on(door, monkeypatch, value, reads):
+    """``cancel_by_id`` tells the door ``timer.stop`` for a ringing timer and ``timer.cancel`` for a running one, and reads the
+    clock to tell them apart. With the door off nothing is told, so the clock is not read for it: the calls to ``time.time``
+    made by ``cancel_by_id`` ITSELF are counted (the store's own pruning reads the clock either way, as on main).
+    Control run: with the ``os_shadow.area_on("timers") and`` guard removed, the three flag-off cases count one read."""
+    import sys
+
+    if value is None:
+        monkeypatch.delenv("ZOE_OS_ALARMS", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_OS_ALARMS", value)
+    w = scenarios._TimerWorld([])
+    try:
+        made = [w.sky._timers.create(ANN, WORD, 600), w.sky._timers.create(ANN, WORD, 30)]
+        w.clock["now"] += 31                                                # the second one is ringing
+        callers: list = []
+
+        def clock():
+            callers.append(sys._getframe(1).f_code.co_name)
+            return w.clock["now"]
+
+        monkeypatch.setattr(w.sky.time, "time", clock)
+        for timer in made:
+            assert w.sky.cancel_timer_by_id(ANN, timer["timer_id"]) is not None
+        assert callers.count("cancel_by_id") == reads * len(made) and "_prune" in callers and w.state() == {}
+        if reads:
+            assert [a["verb"] for a in _wait(door, "door_ask", 4)][2:] == ["timer.cancel", "timer.stop"]
+        else:
+            assert door.ops("door_ask") == []
+    finally:
+        scenarios._restore()
+
+
+@pytest.mark.asyncio
+async def test_a_yes_to_an_offer_asks_with_the_stamps_from_before_the_offer_was_read(door, monkeypatch):
+    """``anticipation.answer`` reads the offer (and the event it was made for) before it makes the alarm. The actor the alarms
+    door is asked as is made BEFORE those reads, so a forget of the member confirmed while they run does not make the ask look
+    newer than the forget. (Review of #2689: the actor was made in ``_do``, after the reads.)
+    Control run: with ``asked_as`` not handed to ``_do`` (it makes its own actor, after the reads) the ask carries the moved-on
+    stamp and this fails."""
+    import anticipation
+
+    w = _world()
+    before = os_shadow.erase_stamp(ANN)
+    offer = {"id": "sug-0001", "resolved": anticipation.OPEN, "kind": "wake", "expires": None,
+             "slots": {"wake_time": "05:30", "start_date": "2026-11-05", "label": WORD}}
+
+    async def own_row(conn, uid, row_id):
+        os_shadow._forget_marks[ANN] += 1                      # the kernel confirms a whole-member forget WHILE the offer is read
+        return dict(offer)
+
+    async def offered(conn, uid, slots):
+        return object()
+
+    async def done(*a, **k):
+        return True
+
+    for name, fake in (("_own_row", own_row), ("_offered", offered), ("_set", done), ("_edge", done)):
+        monkeypatch.setattr(anticipation, name, fake)
+    monkeypatch.setattr(anticipation, "_log_outcome", lambda *a, **k: None)
+    async with w.db() as db:
+        from datetime import datetime, timezone
+
+        reply = await anticipation.answer(ANN, "sug-0001", True, db=db, now=datetime.fromtimestamp(w.clock["now"], timezone.utc))
+    assert reply.startswith("Done - a one-off alarm")
+    (ask,) = _wait(door, "door_ask", 1)
+    assert ask["verb"] == "alarm.create" and ask["stamps"][ANN] == before and os_shadow.erase_stamp(ANN) > before
+    scenarios._restore()
+
+
 def callers_without_an_actor(src: str) -> list:
     """Functions that call an ``alarms.<door>`` writer without ``actor=``, or that make a ``Viewer`` after their first await.
     A module-level alias of ``alarms`` (``import alarms as x``; ``y = x``) is followed to a fixed point."""
