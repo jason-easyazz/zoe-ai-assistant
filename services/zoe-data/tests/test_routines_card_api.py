@@ -66,11 +66,34 @@ def _act(env, step, action="done"):
 
 
 def test_flag_off_every_route_is_404_before_anyone_is_identified(api, monkeypatch):
-    """Control run: with the gate dependency dropped from the router the member's ``/today`` is 200."""
+    """The gate runs FIRST: with the flag off neither route identifies anybody (the caller dependency, the real
+    ``get_current_user`` and the panel check are each recorded if called) and both answer 404. Controls run: with the gate
+    dependency dropped from the router the member's ``/today`` is 200; with the gate moved after the caller dependency
+    (``dependencies=[Depends(_caller), Depends(_on)]``) the caller is recorded and this fails."""
+    called: list = []
+
+    def caller():
+        called.append("_caller")
+        return api.caller["user"]
+
+    async def authenticate(request):
+        called.append("get_current_user")
+        return api.caller["user"]
+
+    async def panel(request, user):
+        called.append("member_or_panel")
+        return False
+
+    api.c.app.dependency_overrides[rr._caller] = caller
+    monkeypatch.setattr(rr, "get_current_user", authenticate)
+    monkeypatch.setattr(panel_principal, "member_or_panel", panel)
     monkeypatch.setenv("ZOE_ROUTINES", "off")
     _member(api, SAM)
     assert api.c.get("/api/routines/today").status_code == 404
     assert _act(api, "anything").status_code == 404
+    assert called == []
+    monkeypatch.setenv("ZOE_ROUTINES", "on")                       # the recorder records: the same requests, flag on
+    assert api.c.get("/api/routines/today").status_code == 200 and called == ["_caller"]
 
 
 def test_a_member_sees_their_own_and_the_familys_routines_and_ticks_their_own_medicine_line(api):
