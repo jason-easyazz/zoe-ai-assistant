@@ -3,7 +3,7 @@
 
 Each scenario starts from an empty, migrated SQLite store at a fixed household morning, drives the store's entry points
 (``routines_store``) or the tier's (``routines_tier.tier``), and records what each call returned or refused and the four
-tables as they stand at the end. Ids are random: each is replaced by a label in order of first appearance.
+tables as they stand at the end, every column of every row (read from the schema). Ids are random: each is replaced by a label in order of first appearance.
 
 Invented people and words only. Refuses to run outside the test configuration (``tests/conftest.py``).
 """
@@ -20,10 +20,9 @@ from datetime import timedelta
 ALEX, SAM, RILEY = "m-alex", "m-sam", "m-riley"
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?<=:o)[0-9a-f]{12}\b")      # a routine / step id; a one-off line's random tail
 _UNDO: list = []
-TABLES = {"routines": "id, user_id, created_by, name, anchor, visibility, enabled, deleted",
-          "routine_steps": "id, routine_id, position, text, kind, deleted",
-          "routine_days": "id, routine_id, user_id, day, closed_at IS NOT NULL",
-          "routine_day_steps": "id, day_id, step_id, origin, text, kind, position, state, known_by, actor_user_id, verified, prompts"}
+#: the four tables, recorded WHOLE: every column, read from the migrated store's own schema (``PRAGMA table_info``), never listed
+#: by hand, so a column a later migration adds is recorded too and a value written to any column is pinned.
+TABLES = ("routines", "routine_steps", "routine_days", "routine_day_steps")
 
 
 def _set(obj, name, value) -> None:
@@ -123,8 +122,15 @@ class World:
             raise _Stop()
         return d
 
+    def columns(self, table: str) -> list:
+        """Every column of ``table`` in schema order, from the store itself."""
+        cols = [row[1] for row in self.db.q(f"PRAGMA table_info({table})")]
+        if not cols:
+            raise RuntimeError(f"routines scenarios: no table {table} in the migrated store")
+        return cols
+
     def record(self) -> list:
-        rows = [[t, *row] for t, cols in TABLES.items() for row in self.db.q(f"SELECT {cols} FROM {t} ORDER BY rowid")]
+        rows = [[t, *row] for t in TABLES for row in self.db.q(f"SELECT {', '.join(self.columns(t))} FROM {t} ORDER BY rowid")]
         text = json.dumps(self.log + rows, default=str, sort_keys=True)
         seen: dict = {}
         return json.loads(_UUID.sub(lambda m: seen.setdefault(m.group(0), f"<id{len(seen) + 1}>"), text))
