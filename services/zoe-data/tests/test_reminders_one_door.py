@@ -1020,3 +1020,40 @@ async def test_two_panels_voices_are_two_conversations_and_the_voice_route_names
 
     voice = (Path(intent_router.__file__).parent / "routers" / "voice_tts.py").read_text("utf-8")
     assert '_quick_intent.conversation = f"panel:{panel_id}"' in voice
+
+
+@pytest.mark.asyncio
+async def test_spoken_words_at_two_panels_are_detected_and_carried_out_and_each_cancel_that_reaches_its_own(monkeypatch, quiet):
+    """End to end, the way the voice route does it: the WORDS go through the real detector with that panel's own conversation
+    context, the intent it returns is given the panel's conversation, and that same intent is carried out (the test above
+    builds its intents by hand). The same member sets the same reminder at two panels; "cancel that" said at the hall cancels
+    the hall's and leaves the kitchen's, and said at the kitchen then cancels the kitchen's.
+    Control run: with the conversation left out of every ``_asked_digest(title, conversation)`` key (all panels one
+    conversation), the hall's "cancel that" reaches the kitchen's reminder and this fails."""
+    import intent_router
+    from conversation_context import ConversationContext
+
+    store = _Rows()
+    monkeypatch.setattr("database.get_db_ctx", _ctx(store))
+    monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", quiet["schedule_due"])
+    intent_router._JUST_SET_REMINDER.clear()
+    heard = {panel: ConversationContext() for panel in ("hall", "kitchen")}
+
+    async def say(panel, text):
+        intent = await intent_router.detect_and_extract_intent(text, A, context=heard[panel])
+        assert intent is not None, text
+        heard[panel].activate(intent.name, intent.slots, text)
+        intent.conversation = f"panel:{panel}"
+        return intent.name, await execute_intent(intent, A)
+
+    made = {}
+    for panel in heard:
+        before = set(store.rows)
+        name, _reply = await say(panel, "remind me to take pills tomorrow at 3pm")
+        assert name == "reminder_create"
+        (made[panel],) = set(store.rows) - before
+    assert await say("hall", "cancel that") == ("reminder_cancel", rs.SPOKEN["cancelled"].format(title="take pills"))
+    assert store.rows[made["hall"]]["deleted"] == 1 and store.rows[made["kitchen"]]["deleted"] == 0
+    assert await say("kitchen", "cancel that") == ("reminder_cancel", rs.SPOKEN["cancelled"].format(title="take pills"))
+    assert store.rows[made["kitchen"]]["deleted"] == 1
+    intent_router._JUST_SET_REMINDER.clear()
