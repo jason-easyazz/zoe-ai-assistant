@@ -317,7 +317,9 @@ class _TimerStore:
         timers = self._by_owner.get(owner, [])
         target = next((t for t in timers if t["timer_id"] == timer_id), None)
         if target is not None:
-            ended = target["expires_at"] <= time.time()      # a finished timer is RINGING: this silences it
+            # a finished timer is RINGING: this silences it. Only the Zoe OS door tells the two apart, so the clock is read for
+            # it only when that door is on (off: a flag read, as before the door existed).
+            ended = os_shadow.area_on("timers") and target["expires_at"] <= time.time()
             timers.remove(target)
             self._disarm(timer_id)  # cancelled or dismissed: it never speaks
             if target.get("panel_id"):  # ... and a line already queued but not yet claimed is withdrawn
