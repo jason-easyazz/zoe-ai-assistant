@@ -85,11 +85,13 @@ _TIER = "routines_tier.py"
 #: is found by the spy; these are the ones they do NOT run, each with why. Exact, so the list cannot grow unseen.
 _ERASER = "an eraser's call: the store function itself is recorded (forget_user / erase_entity_own_routines_only), the eraser around it is not"
 _TIER_GAP = "A TIER PATH WITH NO SCENARIO YET (found in review by reading the code; the store function it calls is recorded)"
+_CARD_API = "the card's API, new with this PR: main has no such route to compare with; pinned by tests/test_routines_card_api.py"
 SITES_NOT_RUN = {
     ("memory_service.py", "delete_user", "forget_user"): _ERASER,
     ("memory_forget_cascade.py", "_clear", "erase_entity"): _ERASER,
     (_TIER, "_bare", "note_named"): _TIER_GAP, (_TIER, "_bare", "undo_said"): _TIER_GAP, (_TIER, "_leaving", "day_copy"): _TIER_GAP,
     (_TIER, "_speak_many", "note_named"): _TIER_GAP, (_TIER, "_start", "day_copy"): _TIER_GAP, (_TIER, "_start", "note_named"): _TIER_GAP,
+    ("routers/routines.py", "act", "act_tapped"): _CARD_API, ("routers/routines.py", "today", "day_copy"): _CARD_API,
 }
 
 
