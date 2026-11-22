@@ -14,22 +14,24 @@ Negative controls run on the real tree (then restored): ``UPDATE alarms SET labe
 ``skybridge_service._ring_when_done`` -> ``test_only_the_timer_store_changes_a_timer`` fails naming that function;
 ``from skybridge_service import _timers`` planted in ``routers/skybridge.py`` -> the same test fails naming that file. The planted
 cases below keep the scans themselves honest.
+Control run for the dict-method forms (review of #2688): ``t.update({'announced': True})`` planted in
+``skybridge_service._ring_when_done`` -> ``test_only_the_timer_store_changes_a_timer`` fails naming it (it passed before: only
+subscript writes were read).
 """
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
 
+import sql_scan
+
 pytestmark = pytest.mark.ci_safe
 ROOT = Path(__file__).resolve().parents[1]
 
-#: an optional schema before the table: an unquoted identifier (letters, digits, ``_``, ``$``; not starting with a digit) or a quoted one
-_SCHEMA = r"(?:(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?"
-ALARM_WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?" + _SCHEMA
-                         + r"[\"`\[]?(?:alarms|alarm_events|alarm_overrides)\b", re.I)
+ALARM_TABLES = ("alarms", "alarm_events", "alarm_overrides")
+ALARM_WRITE = sql_scan.write_pattern(*ALARM_TABLES)      # f-strings and concatenations whole, any schema, ONLY (tests/sql_scan.py)
 TIMER_FIELDS = {"timer_id", "label", "duration_seconds", "set_seconds", "created_at", "expires_at", "panel_id", "announced", "voice_failed"}
 STORE, STORE_CLASS, STORE_MODULE = "_timers", "_TimerStore", "skybridge_service"
 
@@ -39,16 +41,8 @@ def _modules() -> list:
     return sorted(p for p in ROOT.rglob("*.py") if not skip.intersection(p.relative_to(ROOT).parts))
 
 
-def _texts(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            yield "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "x" for part in node.values)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
-
-
 def alarm_writes(source: str) -> list:
-    return [text for text in _texts(ast.parse(source)) if ALARM_WRITE.search(text)]
+    return sql_scan.writes(source, ALARM_WRITE)
 
 
 def test_only_alarms_py_writes_the_alarm_tables():
@@ -69,6 +63,9 @@ def test_a_planted_alarm_write_is_caught():
     for sql in ('f"UPDATE {schema}.alarms SET x = ?"', 'f"DELETE FROM {schema}.alarm_overrides WHERE {col} = ?"',
                 "f\"UPDATE alarms SET {', '.join(sets)} WHERE id = ?\""):
         assert alarm_writes(f"async def f(db, schema, col, sets):\n    await db.execute({sql})\n"), sql
+    for table in ALARM_TABLES:                    # a write split by ``+``, and Postgres' ONLY (control: ``sql_scan`` skipping ``+``)
+        for planted in sql_scan.planted_forms(table):
+            assert alarm_writes(planted), planted
     # the calendar's ``event_alarms`` is another table; a read is not a write
     assert not alarm_writes("async def f(db):\n    await db.execute('DELETE FROM event_alarms WHERE event_id = ?')\n"
                             "    await db.execute('SELECT * FROM alarms WHERE id = ?')\n    await db.execute('UPDATE alarms_archive SET x = 1')\n")
@@ -90,9 +87,46 @@ def _store_names(tree) -> set:
         names |= found
 
 
+DICT_WRITES = {"update", "pop", "setdefault", "clear", "popitem", "__setitem__", "__delitem__"}
+
+
+def _is_field(node) -> bool:
+    return isinstance(node, ast.Constant) and node.value in TIMER_FIELDS
+
+
+def _timer_names(fn) -> set:
+    """The names in one function that hold a timer: anything read or written by a timer field (``t["label"]``, ``t.get("label")``)."""
+    names = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and _is_field(node.slice):
+            names.add(node.value.id)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) \
+                and node.func.attr == "get" and node.args and _is_field(node.args[0]):
+            names.add(node.func.value.id)
+    return names
+
+
+def _dict_write(node, timers: set):
+    """A timer changed through a dict METHOD rather than a subscript: ``t.update({"announced": True})`` / ``t.update(announced=
+    True)`` / ``t.pop("announced")`` / ``t.setdefault("announced", ...)`` on anything, and ANY ``update`` / ``pop`` /
+    ``setdefault`` / ``clear`` / ``popitem`` / ``|=`` on a name the function uses as a timer. Returns what to report, or None."""
+    if isinstance(node, ast.AugAssign) and isinstance(node.op, ast.BitOr) and isinstance(node.target, ast.Name) and node.target.id in timers:
+        return f"{node.target.id} |="
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in DICT_WRITES):
+        return None
+    method, args = node.func.attr, node.args
+    names_a_field = (
+        (method in ("pop", "setdefault", "__setitem__", "__delitem__") and args and _is_field(args[0]))
+        or (method == "update" and (any(k.arg in TIMER_FIELDS for k in node.keywords)
+                                    or any(isinstance(a, ast.Dict) and any(_is_field(k) for k in a.keys) for a in args))))
+    on_a_timer = isinstance(node.func.value, ast.Name) and node.func.value.id in timers
+    return f".{method}()" if names_a_field or on_a_timer else None
+
+
 def timer_offences(source: str, *, is_store_module: bool) -> list:
     """Where this module changes a timer, or holds the store, outside ``_TimerStore``: ``(what, where)`` pairs."""
     tree = ast.parse(source)
+    timers_in = {fn.name: _timer_names(fn) for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))}
     inside = {id(n) for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef) and cls.name == STORE_CLASS for n in ast.walk(cls)}
     owner = {}
     for fn in ast.walk(tree):
@@ -110,6 +144,8 @@ def timer_offences(source: str, *, is_store_module: bool) -> list:
         elif isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del)) and isinstance(node.slice, ast.Constant) \
                 and node.slice.value in TIMER_FIELDS and is_store_module:
             out.append((f"[{node.slice.value!r}] =", where))                 # a timer's field written outside the store
+        elif is_store_module and (what := _dict_write(node, timers_in.get(where, set()))):
+            out.append((what, where))                                        # ... or written through a dict method
         elif not is_store_module:
             if isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load):
                 out.append((node.id, where))                                 # another module holding the store
@@ -142,6 +178,16 @@ def test_a_planted_timer_change_outside_the_store_is_caught():
                        "def snapshot(store):\n    store._save()\n"
                        "def fine():\n    return _timers.create()\n")
     assert timer_offences(in_store_module, is_store_module=True) == [("['announced'] =", "ring"), ("_by_owner", "reach"), ("_save", "snapshot")]
+    # a timer changed through a dict method (review of #2688: only subscript writes were read, so each of these escaped)
+    for body, what in (('t.update({"announced": True})', ".update()"), ("t.update(announced=True)", ".update()"),
+                       ('t.pop("voice_failed", None)', ".pop()"), ('t.setdefault("announced", True)', ".setdefault()"),
+                       ('if t["label"]:\n        t.clear()', ".clear()"), ('label = t.get("label")\n    t.update(changes)', ".update()"),
+                       ('t["label"]\n    t |= {"x": 1}', "t |="), ('t.__setitem__("announced", True)', ".__setitem__()")):
+        planted = f"class _TimerStore:\n    def spoke(self, t):\n        t.update({{'announced': True}})\nasync def _ring_when_done(t, changes):\n    {body}\n"
+        assert timer_offences(planted, is_store_module=True) == [(what, "_ring_when_done")], body
+    # a dict that is not a timer, and a read, are not offences
+    assert not timer_offences("def f(d, t):\n    d.update({'x': 1})\n    d.pop('y')\n    d.clear()\n    return t.get('label'), t['label']\n",
+                              is_store_module=True)
     elsewhere = ("import skybridge_service as sky\nfrom skybridge_service import _timers as store, cancel_any_timer\n"
                  "mine = store\nagain = mine\n"
                  "def a():\n    return again.create('u', 'x', 1)\n"

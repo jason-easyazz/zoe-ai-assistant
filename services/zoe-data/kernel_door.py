@@ -66,13 +66,17 @@ def is_panel(user_id: Optional[str]) -> bool:
     return panel_principal.is_guest_id(user_id) or user_id in (panel_principal.HOUSEHOLD_OWNER_ID, panel_principal.HOUSEHOLD_VIEWER)
 
 
-def stamps_now() -> Optional[dict]:
-    """The erase stamps as they are NOW (``os_shadow.stamp_snapshot``: a small copy from memory, no I/O), or None with every
-    door off (a flag read per area, nothing copied). A caller that TELLS a door who a thing belongs to (starting a list, making
-    a reminder: no row to read the owner from yet) takes this as the first thing it does, before anything it awaits, and hands
-    it to the door as ``stamps_at``: a member whose forget is confirmed while the caller is still on its way to the door keeps
-    the stamp from before it. The snapshot is the same for every area, so one serves a caller that reaches two doors."""
-    return os_shadow.stamp_snapshot() if os_shadow.doors_on() else None
+def stamps_now(*areas: str) -> Optional[dict]:
+    """The erase stamps as they are NOW (``os_shadow.stamp_snapshot``: a small copy from memory, no I/O), or None when none of
+    ``areas`` has its door on (a flag read per area named, nothing copied). AN AREA'S CALLERS COPY NOTHING UNLESS THAT AREA IS
+    ON: lists being on must cost a calendar request nothing. Each area's own ``stamps_now`` names its area; a caller whose one
+    snapshot serves two doors names both (the snapshot itself is the same for every area).
+
+    A caller that TELLS a door who a thing belongs to takes this as the first thing it does, before anything it awaits, and
+    hands it to the door as ``stamps_at``: a member whose forget is confirmed while the caller is still on its way to the door
+    keeps the stamp from before it. With no area named it answers for every area (kept for tests; no production caller)."""
+    on = any(os_shadow.area_on(area) for area in areas) if areas else os_shadow.doors_on()
+    return os_shadow.stamp_snapshot() if on else None
 
 
 async def gate(area: str, verb: str, *, actor: Optional[str], target: str, owner: object, household: bool,
