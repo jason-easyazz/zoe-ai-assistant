@@ -35,12 +35,48 @@ def here():
     return scenarios.run_all()
 
 
+_REST, _TOOL, _SPOKEN = "routers/reminders.py", ("mcp_server.py", "_execute_tool"), "intent_router.py"
+_MAKER = "an automatic maker: it calls create_reminder_record, whose record is rest_create / tool_create / spoken_create"
+#: every (module, function, door function) the CODE holds -> the scenarios that record it
+RECORDED = {
+    (_REST, "create_reminder", "create_reminder_record"): ("rest_create", "rest_create_family_recurring"),
+    (_REST, "update_reminder", "update_reminder_record"): ("rest_edit_title", "rest_edit_family_row_by_another_member"),
+    (_REST, "delete_reminder", "delete_reminder_record"): ("rest_delete", "rest_delete_family_row_by_another_member"),
+    (_REST, "snooze_reminder", "snooze_reminder_record"): ("rest_snooze", "rest_snooze_a_done_reminder"),
+    (_REST, "acknowledge_reminder", "acknowledge_reminder_record"): ("rest_done", "rest_done_recurring"),
+    (*_TOOL, "create_reminder_record"): ("tool_create",),
+    (*_TOOL, "tool_update_reminder_record"): ("tool_update", "tool_update_another_members_row"),
+    (*_TOOL, "tool_delete_reminder_record"): ("tool_delete", "tool_delete_another_members_row"),
+    (*_TOOL, "snooze_reminder_record"): ("tool_snooze", "tool_snooze_another_members_row"),
+    (_SPOKEN, "_execute_reminder_create_direct", "create_reminder_record"): ("spoken_create",),
+}
+#: ... or why it has no record of main to compare with
+NOT_RECORDED = {
+    (_SPOKEN, "_execute_reminder_cancel_direct", "delete_reminder_record"):
+        "new with the one-door change (main had no handler for it): pinned by the cancel-that tests in test_reminders_one_door.py",
+    ("anticipation.py", "_do", "create_reminder_record"): _MAKER,
+    ("commitments.py", "_make_reminder", "create_reminder_record"): _MAKER,
+    ("omi_review_apply.py", "write_reminder", "create_reminder_record"): _MAKER,
+    ("panel_review_cards.py", "loop_to_reminder", "create_reminder_record"): _MAKER,
+    ("pending_suggestions.py", "_create_suggested_reminder", "create_reminder_record"): _MAKER,
+}
+
+
 def test_the_fixture_covers_every_scenario_and_every_entry_point():
+    """The entry points are READ FROM THE CODE (``tests/door_callers.py``): every function of the service that names a writing
+    function of ``reminder_service``. Each is recorded by a named scenario or listed with the reason it is not, so a new caller
+    of the door fails here until it is given one or the other.
+    Control run: a new ``async def sneak(db): await reminder_service.delete_reminder_record(db, {}, "r")`` added to
+    ``routers/reminders.py`` fails this test naming it."""
+    import door_callers
+    import sql_scan
+
     assert set(ON_MAIN) == set(scenarios.scenarios())
-    for prefix, actions in (("rest_", ("create", "edit", "delete", "snooze", "done")), ("tool_", ("create", "update", "delete", "snooze")),
-                            ("spoken_", ("create",))):
-        for action in actions:
-            assert any(name.startswith(prefix + action) for name in ON_MAIN), prefix + action
+    root = Path(__file__).resolve().parents[1]
+    door = (root / "reminder_service.py").read_text("utf-8")
+    writers = door_callers.door_functions(door, door_callers.direct_sql_writers(door, sql_scan.write_pattern("reminders")))
+    assert len(writers) >= 7
+    door_callers.check_coverage(door_callers.entry_points(root, "reminder_service", writers), RECORDED, NOT_RECORDED, set(ON_MAIN))
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
