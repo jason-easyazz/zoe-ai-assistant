@@ -4,11 +4,13 @@
 statement with its values (reads too), every hook fired, every receipt, every timer snapshot, the result or refusal, and what the
 store holds afterwards. It was made by running ``tests/alarms_timers_scenarios.py`` against an export of that commit
 (``git archive origin/main services/zoe-data``), never by this branch's own code. The same scenarios run here and must give the
-same record. This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
+same record. (The seven scenarios added in review, the erase, anticipation's alarm and the spoken one-day change, were
+recorded the same way from main at b2bbe84ca; the other 49 came out byte-identical there.) This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
 
-Covered. ALARMS: the screen's REST create / edit / delete / snooze / dismiss / day override and its undo (a member, the panel,
+Covered (the list of entry points is read from the code: ``test_the_fixture_covers_every_scenario_and_every_entry_point``). ALARMS: the screen's REST create / edit / delete / snooze / dismiss / day override and its undo (a member, the panel,
 another member, refusals); the spoken path (set, snooze, off while ringing, cancel, cancel all, off and on, a guest away from the
-panel); the brain's ``alarm_set`` tool (and its refusal of anything but a set); the ring engine. TIMERS: create (spoken, direct,
+panel); the brain's ``alarm_set`` tool (and its refusal of anything but a set); the ring engine; the spoken one-day change (a day's
+exception, its undo, a one-off moved, none to move); anticipation's accepted wake alarm; a member's erasure (``forget_user``). TIMERS: create (spoken, direct,
 for a guest, from a panel voice turn), add and take off time, cancel (one, all, ambiguous, none), status, the panel's tap on a
 running timer and its dismiss of a ringing one, a member's cancel by id (their own, another's), the grace running out, and the
 timer-done task itself (``_ring_when_done``, the one production path this change touches): the line queued, the queue failing,
@@ -38,12 +40,109 @@ def here():
     return scenarios.run_all()
 
 
+_REST, _VOICE = "routers/alarms.py", "alarm_voice.py"
+#: ALARMS: every (module, function, door function of ``alarms.py``) the CODE holds -> the scenarios that record it
+ALARMS_RECORDED = {
+    (_REST, "create_alarm", "create_alarm"): ("rest_create", "rest_create_at_the_panel"),
+    (_REST, "update_alarm", "update_alarm"): ("rest_edit", "rest_edit_disable"),
+    (_REST, "delete_alarm", "delete_alarm"): ("rest_delete",),
+    (_REST, "snooze_alarm", "snooze"): ("rest_snooze", "rest_snooze_by_the_panel"),
+    (_REST, "dismiss_alarm", "dismiss"): ("rest_dismiss", "rest_dismiss_by_the_panel"),
+    (_REST, "set_override", "set_override"): ("rest_override",),
+    (_REST, "clear_override", "clear_override"): ("rest_override_clear",),
+    (_VOICE, "_run", "create_alarm"): ("spoken_set", "spoken_set_repeating", "brain_set"),
+    (_VOICE, "_run", "update_alarm"): ("spoken_turn_off_then_on",),
+    (_VOICE, "_run", "delete_alarm"): ("spoken_cancel", "spoken_cancel_all"),
+    (_VOICE, "_run", "snooze"): ("spoken_snooze",),
+    (_VOICE, "_run", "dismiss"): ("spoken_off_while_ringing",),
+    (_VOICE, "_run_shift", "set_override"): ("spoken_shift_a_repeating_alarm",),
+    (_VOICE, "_run_shift", "clear_override"): ("spoken_shift_undone",),
+    (_VOICE, "_run_shift", "update_alarm"): ("spoken_shift_a_one_off",),
+    (_VOICE, "_run_shift", "create_alarm"): ("spoken_shift_with_no_alarm_makes_one",),
+    ("anticipation.py", "_do", "create_alarm"): ("anticipation_wake_alarm",),
+    ("memory_service.py", "MemoryService.delete_user", "forget_user"): ("forget_a_member", "forget_nobody_and_the_household"),
+    ("main.py", "lifespan", "run_loop"): ("engine_rings_and_stops_by_itself",),      # the loop is ``tick`` on a timer
+}
+ALARMS_NOT_RECORDED = {
+    ("alarm_music.py", "_log", "log_event"):
+        "the clock-radio half (flag-dark): it adds one event row through log_event and changes no alarm; no record of main yet",
+}
+#: TIMERS: every function of ``skybridge_service`` outside the store that calls a store method that saves -> its scenarios
+_SKY = "skybridge_service.py"
+TIMERS_RECORDED = {
+    (_SKY, "_resolve_timer", "_TimerStore"): ("timer_create", "timer_create_direct", "timer_cancel", "timer_cancel_all",
+                                              "timer_cancel_ambiguous", "timer_cancel_none"),
+    (_SKY, "_resolve_timer_change", "_TimerStore"): ("timer_add_time", "timer_take_time_off"),
+    (_SKY, "_timer_reply", "_TimerStore"): ("timer_status",),
+    (_SKY, "_which_timer_line", "_TimerStore"): ("timer_cancel_ambiguous",),
+    (_SKY, "cancel_any_timer", "_TimerStore"): ("timer_panel_tap_cancels_a_running_timer", "timer_panel_dismisses_a_ringing_timer"),
+    (_SKY, "cancel_timer_by_id", "_TimerStore"): ("timer_member_cancels_their_own_by_id", "timer_member_cannot_cancel_anothers_by_id"),
+    (_SKY, "all_active_timers", "_TimerStore"): ("timer_a_finished_timer_leaves_after_the_grace",),
+    (_SKY, "_ring_when_done", "_TimerStore"): ("timer_done_is_announced", "timer_done_when_the_queue_fails", "timer_done_in_quiet_hours"),
+}
+TIMERS_NOT_RECORDED = {
+    (_SKY, "preload_timers", "_TimerStore"): "start-up only: it loads the snapshot and re-arms what it holds; it changes no timer",
+    (_SKY, "active_timers_for", "_TimerStore"): "a read for one owner (the store prunes what has ended, as all_active_timers' scenario records)",
+}
+STORE_NAMES = {"_timers", "store"}       # how ``skybridge_service`` names the store outside the class: the global, or a parameter
+
+
+def timer_entry_points(source: str) -> dict:
+    """``{(module, function): ["_TimerStore"]}``: the functions outside the store that call one of its SAVING methods."""
+    import ast
+
+    import door_callers
+
+    saving = {m.split(".", 1)[1] for m in door_callers.door_functions(source, {"_save"}) if m.startswith("_TimerStore.")}
+    found = {}
+    for name, fn in door_callers._top_functions(ast.parse(source)):
+        if not name.startswith("_TimerStore.") and any(
+                isinstance(n, ast.Attribute) and n.attr in saving and isinstance(n.value, ast.Name) and n.value.id in STORE_NAMES
+                for n in ast.walk(fn)):
+            found[(_SKY, name)] = ["_TimerStore"]
+    return found
+
+
 def test_the_fixture_covers_every_scenario_and_every_entry_point():
+    """The entry points are READ FROM THE CODE (``tests/door_callers.py``), not picked by name: for alarms, every function of
+    the service that names a writing function of ``alarms.py``; for timers, every function that calls a saving method of the
+    store. Each is recorded by named scenarios or listed with the reason it is not.
+    Controls run: a new ``async def sneak(db): await alarms.delete_alarm(db, {})`` in ``routers/alarms.py`` fails this naming
+    it; so does a new ``def sneak(): _timers.cancel_any("t")`` in ``skybridge_service.py``. (The hand-picked prefixes this
+    replaces had no ``forget_user``, no anticipation alarm and no spoken one-day change: all three now have scenarios.)"""
+    import door_callers
+    import sql_scan
+
     assert set(ON_MAIN) == set(scenarios.alarm_scenarios()) | set(scenarios.timer_scenarios())
-    for prefix in ("rest_create", "rest_edit", "rest_delete", "rest_snooze", "rest_dismiss", "rest_override", "spoken_set",
-                   "spoken_snooze", "spoken_off", "spoken_cancel", "brain_set", "engine_", "timer_create", "timer_add",
-                   "timer_take", "timer_cancel", "timer_panel_tap", "timer_panel_dismisses", "timer_member_cancels", "timer_done"):
-        assert any(name.startswith(prefix) for name in ON_MAIN), prefix
+    root = Path(__file__).resolve().parents[1]
+    door = (root / "alarms.py").read_text("utf-8")
+    writers = door_callers.door_functions(door, door_callers.direct_sql_writers(
+        door, sql_scan.write_pattern("alarms", "alarm_events", "alarm_overrides")))
+    assert {"create_alarm", "update_alarm", "delete_alarm", "snooze", "dismiss", "forget_user", "set_override"} <= writers
+    door_callers.check_coverage(door_callers.entry_points(root, "alarms", writers), ALARMS_RECORDED, ALARMS_NOT_RECORDED, set(ON_MAIN))
+    door_callers.check_coverage(timer_entry_points((root / _SKY).read_text("utf-8")), TIMERS_RECORDED, TIMERS_NOT_RECORDED, set(ON_MAIN))
+
+
+def test_the_new_scenarios_record_the_erase_the_anticipation_alarm_and_the_one_day_change(here):
+    """What each added scenario holds. Controls run: the ``DELETE FROM alarm_overrides`` dropped from ``forget_user`` ->
+    ``forget_a_member``; ``repeat="daily"`` given by anticipation's ``_do`` -> ``anticipation_wake_alarm``; the day's exception
+    written for the day after -> ``spoken_shift_a_repeating_alarm``."""
+    def writes(name):
+        return [(e[1].split(" (")[0].split(" WHERE")[0], e[2]) for e in here[name] if e[0] == "sql" and not e[1].startswith("SELECT")]
+
+    erased = writes("forget_a_member")[-3:]
+    assert [w[0] for w in erased] == ["DELETE FROM alarm_events", "DELETE FROM alarm_overrides", "DELETE FROM alarms"]
+    assert all(w[1] in (["a00000000001"], [scenarios.ANN]) for w in erased)
+    left = here["forget_a_member"][-1][1]
+    assert sorted(r[1] for r in left["alarms"]) == sorted([scenarios.BOB, "__household__"]) and left["alarm_overrides"] == []
+    assert here["forget_nobody_and_the_household"][-2] == ["returned", [0, 0]] and len(here["forget_nobody_and_the_household"][-1][1]["alarms"]) == 1
+    made = here["anticipation_wake_alarm"][-1][1]["alarms"]
+    assert len(made) == 1 and made[0][1:6] == [scenarios.ANN, "Womble day", "05:30", "once", "2026-11-05"]
+    day = here["spoken_shift_a_repeating_alarm"][-1][1]
+    assert [r[:4] for r in day["alarm_overrides"]] == [["a00000000001", "2026-11-05", "shift", "05:30"]] and day["alarms"][0][3] == "06:30"
+    assert here["spoken_shift_undone"][-1][1]["alarm_overrides"] == []
+    assert here["spoken_shift_a_one_off"][-1][1]["alarms"][0][3] == "06:00"
+    assert here["spoken_shift_with_no_alarm_makes_one"][-1][1]["alarms"][0][3:6] == ["05:30", "once", "2026-11-05"]
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
