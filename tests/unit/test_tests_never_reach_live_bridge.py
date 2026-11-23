@@ -72,7 +72,10 @@ OFFLINE_SCRIPTS = {"tests/intent_system/test_classification.py", "tests/unit/tes
 # Files a human has read whose only mention of "__main__" is not an entry point (and that import no network module). Exact.
 REVIEWED_MENTIONS = {"tests/unit/test_palace_client_guard.py"}  # sys.modules["__main__"] inside a test body, for a pickle
 # The ONLY calls that may run when a guarded file is imported or started: path and logging set-up, reading the environment.
-PURE_CALLS = ("sys.path.insert", "sys.path.append", "os.path.", "os.environ.get", "os.getenv", "logging.", "Path", "pytest.")
+PURE_CALLS = {"sys.path.insert", "sys.path.append", "os.path.join", "os.path.dirname", "os.path.abspath", "os.path.basename",
+              "os.path.realpath", "os.path.expanduser", "os.path.exists", "os.environ.get", "os.getenv", "logging.basicConfig",
+              "logging.getLogger", "Path", "pytest.fixture", "pytest.importorskip"}  # FULL dotted names, matched exactly
+PURE_MARK = "pytest.mark."  # pytest.mark.<one name>(...) only builds a mark
 PURE_METHODS = {"rstrip", "strip", "lower", "resolve"}  # on the RESULT of another call, which is checked in its own right
 # What the pure names must be bound to, so that ``import httpx as logging`` cannot borrow an allowed name.
 PURE_ROOTS = {"sys": "import sys", "os": "import os", "logging": "import logging", "pytest": "import pytest",
@@ -122,10 +125,17 @@ def _imports(tree):
 
 
 def _pure(call):
-    func = call.func
-    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Call):
-        return func.attr in PURE_METHODS
-    return ast.unparse(func).startswith(PURE_CALLS)
+    """Exact, never by prefix: ``os.path.os.system`` is not ``os.path.<something>``."""
+    func, attrs = call.func, []
+    while isinstance(func, ast.Attribute):
+        attrs.append(func.attr)
+        func = func.value
+    if isinstance(func, ast.Call):  # a method (through plain attributes, e.g. ``.parent.parent.resolve``) on a call's result
+        return attrs[0] in PURE_METHODS
+    if not isinstance(func, ast.Name):
+        return False
+    name = ".".join([func.id, *reversed(attrs)])
+    return name in PURE_CALLS or (name.startswith(PURE_MARK) and name.count(".") == 2)
 
 
 def _rebinding_problems(tree):
@@ -215,33 +225,52 @@ def is_hand_runnable(tree):
     return bool(_main_ifs(tree) or _unrecognised_main(tree))
 
 
+def _collected(tree, rel):
+    """Would pytest collect tests from this file? (python_files = test_*.py; a conftest is loaded, not run by hand.)"""
+    name = rel.rsplit("/", 1)[-1]
+    if name == "conftest.py":
+        return True
+    has_tests = any((isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_"))
+                    or (isinstance(n, ast.ClassDef) and n.name.startswith("Test")) for n in tree.body)
+    return name.startswith("test_") and has_tests
+
+
+def _in_scope(tree, rel):
+    """Hand-runnable: it has a main block (or an unrecognised mention of one), OR it is not a collected test and imports a
+    network module (a plain script whose calls sit at module level needs no main block to be run)."""
+    return is_hand_runnable(tree) or (bool(_imports(tree) & NETWORK) and not _collected(tree, rel))
+
+
 def script_problems(source, rel):
     """Why this file under tests/ could contact the running app without an explicit --live. Reads the source; never runs it."""
     tree = ast.parse(source)
-    if not is_hand_runnable(tree):
+    if not _in_scope(tree, rel):
         return []
-    problems = _unrecognised_main(tree)
-    mains = _main_ifs(tree)
-    if len(mains) > 1:
-        problems.append("more than one main block")
-    offline = not (_imports(tree) & NETWORK)
-    if offline and not mains and rel in REVIEWED_MENTIONS:
+    networked, mains = bool(_imports(tree) & NETWORK), _main_ifs(tree)
+    if not networked and not mains and rel in REVIEWED_MENTIONS:
         return []
-    if offline and rel in OFFLINE_SCRIPTS:
+    problems = _unrecognised_main(tree) + (["more than one main block"] if len(mains) > 1 else [])
+    if not networked and rel in OFFLINE_SCRIPTS:
         return problems
+    if not mains and not _collected(tree, rel):
+        problems.append("a network-importing script with no guarded main block: put its work in a function behind the --live guard")
     walker = _ImportTime(mains)
     walker.visit(tree)
     return problems + [p for m in mains for p in _guard_problems(m)] + walker.problems + _rebinding_problems(tree)
 
 
-def _hand_runnable():
+def _checked_files():
     out = []
     for path in sorted((ROOT / "tests").rglob("*.py")):
         if path.resolve() == Path(__file__).resolve():
             continue  # this checker names the string it looks for
-        if is_hand_runnable(ast.parse(path.read_text(errors="replace"))):
+        if _in_scope(ast.parse(path.read_text(errors="replace")), str(path.relative_to(ROOT))):
             out.append(path)
     return out
+
+
+def _hand_runnable():
+    return [p for p in _checked_files() if is_hand_runnable(ast.parse(p.read_text(errors="replace")))]
 
 
 def test_the_hand_runnable_files_are_found_and_the_offline_list_is_exact():
@@ -252,7 +281,7 @@ def test_the_hand_runnable_files_are_found_and_the_offline_list_is_exact():
         assert not (_imports(ast.parse((ROOT / rel).read_text())) & NETWORK), f"{rel} imports a network module: guard it"
 
 
-@pytest.mark.parametrize("script", _hand_runnable(), ids=lambda p: str(p.relative_to(ROOT)))
+@pytest.mark.parametrize("script", _checked_files(), ids=lambda p: str(p.relative_to(ROOT)))
 def test_a_hand_runnable_file_cannot_contact_the_running_app_without_live(script):
     """Structural, by reading the source: the file is never executed here, so this test cannot itself cause a live action.
 
@@ -299,6 +328,12 @@ PLANTED = {
     "the guard does not refuse": GOOD.replace("_sys.exit(2)", "pass"),
     "an else branch on the main block": GOOD + "else:\n    httpx.get(API)\n",
     "two main blocks": GOOD + GOOD[GOOD.index("if __name__"):],
+    "no main block at all, a call at module level": "import requests\nrequests.post('http://localhost:8000/api/chat/')\n",
+    "no main block, calls only inside functions": "import requests\ndef go():\n    requests.post('x')\n",
+    "a pure-list prefix borrowed (os.path.os.system)": GOOD.replace("def main():", "X = os.path.os.system('x')\ndef main():"),
+    "an unlisted name under an allowed module": GOOD.replace("def main():", "X = os.popen('x')\ndef main():"),
+    "an unlisted logging call": GOOD.replace("import httpx, os\n", "import httpx, os, logging\nlogging.config.listen(9)\n"),
+    "a deeper pytest.mark chain": GOOD.replace("import httpx, os\n", "import httpx, os, pytest\npytest.mark.x.y(httpx)\n"),
     "a new offline-looking script not on the list": "import os\nif __name__ == '__main__':\n    os.system('x')\n",
 }
 
@@ -312,7 +347,7 @@ def test_the_reference_script_is_accepted():
 @pytest.mark.parametrize("why", sorted(PLANTED))
 def test_the_checker_reports_each_planted_hole(why):
     """The controls, kept as tests: every way round the check that review found or that follows from the same construction."""
-    assert is_hand_runnable(ast.parse(PLANTED[why])), "not even discovered"
+    assert _in_scope(ast.parse(PLANTED[why]), "tests/new_script.py"), "not even discovered"
     assert script_problems(PLANTED[why], "tests/new_script.py"), "passed as safe"
 
 
