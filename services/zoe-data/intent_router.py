@@ -2991,9 +2991,13 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
     if not title:
         return None
     try:
+        from reminder_service import ReminderRefused, create_reminder_record, stamps_now
+    except Exception as exc:      # the door cannot load: main's answer (the generic handler below, None) - never an unbound name
+        logger.warning("reminder_create direct execution unavailable: %s", exc)
+        return None
+    try:
         from database import get_db_ctx
         from models import ReminderCreate
-        from reminder_service import ReminderRefused, create_reminder_record, stamps_now
 
         stamps_at = stamps_now()      # the Zoe OS reminders door: stamped before anything is awaited
         async with get_db_ctx() as db:
@@ -3597,6 +3601,10 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     category = str(slots.get("category") or "general").strip() or "general"
     try:
         from calendar_service import EventRefused, conversational_visibility, create_event_record, stamps_now
+    except Exception as exc:      # the door cannot load: main's answer (the generic handler below, None) - never an unbound name
+        logger.warning("calendar_create direct execution unavailable: %s", exc)
+        return None
+    try:
         from database import get_db_ctx
 
         stamps_at = stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
