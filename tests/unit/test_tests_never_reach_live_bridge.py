@@ -1,10 +1,16 @@
 """No test under ``tests/`` or the zoe-data suite can post to the live Home Assistant bridge.
 
-A test whose fake missed the sender once posted a real device command to the house. Both test configurations now overwrite the
-bridge address with a dead local port before anything that reads it is imported.
+What this pins, exactly:
+(a) a collected test, in any lane, cannot reach the live bridge FROM THE TEST PROCESS: both test configurations overwrite the
+    bridge address with a dead local port before anything that reads it is imported;
+(b) a script under tests/ that drives the RUNNING app is live by definition (a test process cannot repoint a running app): every
+    one of them refuses to start without ``--live``.
+Stated gap: collected tests that post to the running app when one is up (the self-hosted integration/e2e lane on the box, and
+tests/unit/test_tool_calling.py, tests/unit/test_ui_functionality.py) still do so by design; none of them may send a device command.
 
 Negative controls run: (1) the line in ``tests/conftest.py`` changed to ``setdefault`` -> the placement and inherited-address
-tests fail; (2) the ``--live`` guard removed from the integration script -> the refusal test fails.
+tests fail; (2) the ``--live`` guard removed from one script -> its refusal test fails; (3) the device phrase put back in
+``test_tool_calling.py`` -> the last test fails.
 """
 import ast
 import os
@@ -59,8 +65,39 @@ def test_an_inherited_live_address_is_overwritten(conftest):
     assert out.stdout.strip() == DEAD, out.stderr
 
 
-def test_the_live_capability_script_refuses_without_an_explicit_opt_in():
-    script = ROOT / "tests" / "integration" / "test_all_capabilities.py"
-    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60)
-    assert out.returncode == 2 and "--live" in out.stdout
-    assert "localhost:8007/" not in script.read_text().replace('"http://localhost:8007").rstrip', "")
+LIVE_ADDRESS = ("localhost:8000", "127.0.0.1:8000", "localhost:8007", "127.0.0.1:8007")
+
+
+def _live_scripts():
+    """Every file under tests/ that can be started by hand (has a ``__main__`` block) and names the running app or the bridge."""
+    out = []
+    for path in sorted((ROOT / "tests").rglob("*.py")):
+        text = path.read_text(errors="replace")
+        if 'if __name__ == "__main__":' in text and any(a in text for a in LIVE_ADDRESS) and path != Path(__file__).resolve():
+            out.append(path)
+    return out
+
+
+def test_there_are_live_scripts_to_check():
+    assert len(_live_scripts()) >= 10
+
+
+@pytest.mark.parametrize("script", _live_scripts(), ids=lambda p: str(p.relative_to(ROOT)))
+def test_a_script_that_drives_the_running_app_refuses_without_live(script):
+    """A test process cannot repoint an app that is already running, so these are live by definition: opt-in only."""
+    text = script.read_text(errors="replace")
+    main_block = text[text.index('if __name__ == "__main__":'):]
+    guard = main_block.find('if "--live" not in _sys.argv[1:]:')
+    assert guard != -1, "no --live guard"
+    first_call = min((main_block.find(c) for c in ("main()", "asyncio.run(", "pytest.main(", "run_all_tests(", "_chat_events(")
+                      if main_block.find(c) != -1), default=len(main_block))
+    assert guard < first_call, "the guard comes after the script has started"
+    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=120, cwd=str(ROOT))
+    assert out.returncode == 2 and "--live" in out.stdout, (out.returncode, out.stdout[-300:], out.stderr[-300:])
+
+
+def test_the_collected_chat_test_sends_no_device_command():
+    text = (ROOT / "tests" / "unit" / "test_tool_calling.py").read_text()
+    params = text[text.index("@pytest.mark.parametrize("):text.index("async def test_chat_tool_calling_returns_structured_response")]
+    strings = [n.value.lower() for n in ast.walk(ast.parse(params + "def _(): pass")) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert strings and not any(w in s for s in strings for w in ("turn on", "turn off", "unlock", "open the", "light"))
