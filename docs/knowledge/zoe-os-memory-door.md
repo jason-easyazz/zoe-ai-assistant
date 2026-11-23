@@ -48,8 +48,8 @@ store drops a guest's fact exactly as it always did.
   remember says it, the brain's memory tools return it). Kernel down, old or slow: the change proceeds, logged `not_checked`.
   The kernel then hears how it ended (`done`, or `failed` when the store dropped or refused the write).
 * Forget: never asked, never delayed, and the door puts nothing in front of an erase. A kernel "no" only makes the record
-  say `objected`; the erase has happened and stands (someone off the roster forgetting, say). A forget that did not happen
-  is not told. **The existing fail-closed forget step is untouched** (`os_shadow.forget_user` / `forget_for_erase` / the
+  say `objected`; the erase has happened and stands (someone off the roster forgetting, say). A forget that did not happen (it
+  failed, or removed no row: an empty request, or ids none of which are the member's) is not told. **The existing fail-closed forget step is untouched** (`os_shadow.forget_user` / `forget_for_erase` / the
   parked plan: main's own, and it alone decides what a kernel that is down means for an erase).
 * zoe-data still decides what it decided before: a child's own forget is refused there as today; a guardian's forget is an
   admin's, for one row; a curator needs the member's opt-in. The kernel records those, it does not decide them.

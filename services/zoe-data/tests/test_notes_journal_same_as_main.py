@@ -1,8 +1,8 @@
 """Notes and the journal each have ONE door, and nothing about what any entry point does has changed against ``main``.
 
-``tests/fixtures/notes_journal_as_on_main.json`` is the record of ``main`` (5533e3b08): for each entry point and action, every
+``tests/fixtures/notes_journal_as_on_main.json`` is the record of ``main`` (re-captured from b2bbe84ca): for each entry point and action, every
 statement with its values (reads too), every commit, hook, memory mirror, broadcast and receipt, the result or refusal, and the
-rows both tables hold afterwards. It was made by running ``tests/notes_journal_scenarios.py`` against an export of that commit
+rows both tables hold afterwards, every column with its stored stamps (the store clock is frozen, nothing is masked). It was made by running ``tests/notes_journal_scenarios.py`` against an export of that commit
 (``git archive origin/main services/zoe-data``), never by this branch's own code. The same scenarios run here and must give the
 same record. This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
 
@@ -16,7 +16,8 @@ Negative controls run (each broke the code, saw the named scenario fail, restore
 ``note_tool_update``; ``"personal"`` made ``"family"`` in ``said_note_record`` -> ``note_spoken_create``; an extra read added
 to ``suggested_note_record`` -> ``note_suggestion_accepted``; ``'personal'`` made ``'family'`` in
 ``journal_service.create_entry_record`` -> ``journal_rest_create``; ``mood`` and ``title`` swapped in ``said_entry_record`` ->
-``journal_spoken_create``.
+``journal_spoken_create``; the ``notes.created_at`` default moved one second (a stored stamp the recorder once masked) -> every
+scenario.
 """
 from __future__ import annotations
 
