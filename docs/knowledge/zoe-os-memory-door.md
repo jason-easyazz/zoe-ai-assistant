@@ -110,6 +110,9 @@ Turn off: remove the flag (or set `off`), restart zoe-data.
 * Not run live; the voice replay gate has not been run (the spoken remember, correct and forget paths are touched).
 * Callers that catch every error (several correction and forget helpers) say a refusal as their ordinary failure line, not
   the kernel's sentence. The change is still not made.
-* A whole-member erase (`delete_user`) of the acting member themself is told, but the kernel has just forgotten them, so it
-  records nothing that names them (by design).
+* A whole-member erase (`delete_user`), the member's own or an admin's of another member, is told once the erase span has
+  ended, with the erased member as the owner; a count of 0 rows removed is not told. The kernel has just forgotten that member,
+  so its erase-stamp order records nothing that names anyone for it (a bare `erased` refusal event): an admin's erase of
+  another member is therefore not attributed to the admin in the kernel either (zoe-data's own content-free `delete_user`
+  audit rows still name the actor).
 * The four bypass writes of section 1 still write without passing through `MemoryService`.
