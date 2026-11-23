@@ -42,6 +42,7 @@ def home(verb, actor, **kw):
 @pytest.fixture(autouse=True)
 def _levels(monkeypatch):
     monkeypatch.setattr(home_door, "levels", dict)
+    monkeypatch.setattr(music_door, "roster", None)          # an in-process ``build`` elsewhere must not leave its roster here
 
 
 # ---- music -----------------------------------------------------------------------------------------------------------------------
@@ -142,6 +143,51 @@ def test_the_levels_file_is_followed_without_a_restart_and_states_nothing_unless
     assert read() == {}
 
 
+def test_a_permission_change_alone_drops_the_levels_at_once(tmp_path):
+    """``chmod`` changes neither the inode, the size nor the modification time: a valid private file that raised a child to
+    ``most`` and is then opened to others (no rewrite) must state nothing at the very next read, and state it again once it is
+    private again. Control run: with the mode left out of the cache's identity in ``file_levels`` the child keeps ``most``."""
+    path = tmp_path / home_door.LEVELS_FILE
+    path.write_text(json.dumps({"levels": {KID: "most", KID2: ["lock"]}}))
+    os.chmod(path, 0o600)
+    read = home_door.file_levels(path)
+    assert read() == {KID: "most", KID2: ["lock"]}
+    before = os.stat(path)
+    os.chmod(path, 0o644)
+    after = os.stat(path)
+    assert (before.st_ino, before.st_size, before.st_mtime_ns) == (after.st_ino, after.st_size, after.st_mtime_ns)
+    assert read() == {}                                                     # opened to others: nothing stated, at once
+    home_door.levels = read
+    try:
+        assert home("climate.set", KID) == refused(door.ADULTS_ONLY) and home("lock.open", KID2) == refused(door.ADULTS_ONLY)
+    finally:
+        home_door.levels = dict
+    os.chmod(path, 0o600)
+    assert read() == {KID: "most", KID2: ["lock"]}
+
+
+@pytest.mark.parametrize("verb", ["music.play", "music.stop", "music.library"])
+def test_a_member_taken_off_the_roster_may_not_control_the_music(monkeypatch, verb):
+    """The kernel keeps a member taken off the roster among its people (so their record can still be forgotten); the roster
+    says who is on it now. Control run: with ``on_roster`` reading ``people`` alone, the removed adult's ``music.play`` is allowed."""
+    monkeypatch.setattr(music_door, "roster", lambda: frozenset(PEOPLE) - {ADULT2, VISITOR})
+    assert ADULT2 in PEOPLE and VISITOR in PEOPLE                            # still people the kernel knows ...
+    assert music(verb, ADULT2) == refused(door.UNKNOWN_PERSON)               # ... but off the roster: nothing
+    assert music(verb, VISITOR) == refused(door.UNKNOWN_PERSON)
+    assert music(verb, OWNER) == ALLOW and music(verb, "kiosk", via="panel") == ALLOW
+
+
+@pytest.mark.parametrize("verb", ["light.on", "media.on", "scene.on", "lock.close", "level.set"])
+def test_a_member_taken_off_the_roster_controls_nothing_in_the_house_and_is_not_a_guest(monkeypatch, verb):
+    """A removed member is kept as a least-access person, which is the GUEST role: read as a guest they could still turn a light
+    on. They are not on the roster, so they control nothing. Control run: with ``home_door.decide`` reading ``people`` alone,
+    the removed adult's ``light.on`` falls to the guest rule and is allowed."""
+    monkeypatch.setattr(music_door, "roster", lambda: frozenset(PEOPLE) - {ADULT2, VISITOR})
+    assert home(verb, ADULT2) == refused(door.UNKNOWN_PERSON)
+    assert home(verb, VISITOR) == refused(door.UNKNOWN_PERSON)
+    assert home(verb, OWNER) == ALLOW
+
+
 # ---- the record ----------------------------------------------------------------------------------------------------------------
 def kernel(tmp_path):
     k = Kernel(str(tmp_path / "k.db"), list(PEOPLE.values()))
@@ -240,3 +286,36 @@ def test_the_daemon_serves_music_and_home_control_and_reads_the_levels_beside_it
     finally:
         d.stop()
     assert b"kiosk-1" not in (state / "kernel" / "zoe-os.db").read_bytes()
+
+
+def test_the_daemon_refuses_a_member_it_still_knows_once_they_are_off_the_roster(tmp_path):
+    """Over the wire, the daemon's own roster: an adult and a guest act (so the kernel holds a record for both), are taken off
+    people.json, and stay people the kernel knows (``known-people.json``: still forgettable). From the next ask on they control
+    no music and nothing in the house; the members still on the roster are unaffected.
+    Control run: with ``build`` not installing ``music_door.roster``, the removed adult's ``music.play`` and the removed guest's
+    ``light.on`` are both allowed."""
+    from test_shadow_daemon import Shadow, settled
+
+    state = Path(tempfile.mkdtemp(prefix="zd"))
+    state.chmod(0o700)
+    settled(state)
+    roster = [{"id": OWNER, "role": "adult"}, {"id": ADULT2, "role": "adult"}, {"id": VISITOR, "role": "guest"}]
+    (state / "people.json").write_text(json.dumps({"people": roster}))
+    d = Shadow(state)
+    try:
+        def call(area, verb, person, **kw):
+            return d.brain.call("door_ask", area=area, verb=verb, person=person, visibility="household", **kw)
+
+        for who in (ADULT2, VISITOR):
+            assert d.brain.call("door_report", ask=call("music", "music.play", who, target="ply0001")["ask"], outcome="done")
+            assert call("home", "light.on", who, target="light.hall_lamp")["ask"]
+        (state / "people.json").write_text(json.dumps({"people": roster[:1]}))
+        assert call("music", "music.play", OWNER, target="ply0001")["ask"]                   # the re-read; the owner unaffected
+        assert {ADULT2, VISITOR} <= set(json.loads((state / "known-people.json").read_text())["people"])   # still known
+        for area, verb, who in (("music", "music.play", ADULT2), ("music", "music.library", VISITOR),
+                                ("home", "light.on", ADULT2), ("home", "light.on", VISITOR), ("home", "scene.on", VISITOR)):
+            with pytest.raises(Refused) as exc:
+                call(area, verb, who, target="ply0001" if area == "music" else "light.hall_lamp")
+            assert str(exc.value) == door.UNKNOWN_PERSON, (area, verb, who)
+    finally:
+        d.stop()

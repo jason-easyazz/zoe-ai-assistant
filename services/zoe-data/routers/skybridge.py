@@ -141,6 +141,9 @@ async def resolve_skybridge_command(
             logger.warning("skybridge resolve: smart-home %s refused for a caller that is neither a member nor the panel",
                            intent.action)
             return _home_control_refused(intent.action, context)
+    # the action doors (music, home): who acts. Without it a typed command was AUTOMATIC: a child's typed home command skipped the level check, an opening
+    # command was sent with the kernel down, music skipped the ask (review #2703).
+    panel_principal._note_actor(user)
     return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), context=context, db=db)
 
 
