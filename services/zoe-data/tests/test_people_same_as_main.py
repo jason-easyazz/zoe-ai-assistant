@@ -5,7 +5,10 @@ statement with its values (reads too), every commit, hook, memory mirror, broadc
 ``people`` and ``person_relationships`` rows afterwards. It was made by running ``tests/people_scenarios.py`` against an export
 of that commit (``git archive origin/main services/zoe-data``), never by this branch's own code. The same scenarios run here and
 must give the same record. (Re-recorded in review from main at b2bbe84ca with EVERY column of a contact in the rows; the
-statements, hooks and results of the 38 scenarios it already held came out identical.) This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
+statements, hooks and results of the 38 scenarios it already held came out identical. Re-recorded in review round 3 from main
+at c1a350458 with the clock frozen instead of masked, the contact's created_at kept, and the memory hook's whole contact, the
+mirror's keywords and the read-back card's whole intent recorded; every statement and row came out identical once the old mask
+was applied to the new record.) This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
 
 Covered: the screen's create, update and delete (their own, a household contact by another member, a private one by another
 member) and its "add a relationship" (which can mint a stub); the brain's ``people_create`` / ``people_update`` /
@@ -32,9 +35,9 @@ import pytest
 import people_scenarios as scenarios
 
 pytestmark = pytest.mark.ci_safe
-# Stored stamps are REAL values in the record: the store's column defaults are the frozen ``STORE_NOW`` of calendar_scenarios (the
-# calendar recorder stopped masking stamps in review round 2), so a changed stored stamp fails the pin. Control run: the default
-# moved one second in people_scenarios.DDL -> this file fails. (A wall-clock stamp production code writes itself is still "<clock>".)
+# Stamps are REAL values in the record, none masked: the store's column defaults are the frozen ``STORE_NOW`` of calendar_scenarios,
+# and every wall-clock read the code makes answers ``people_scenarios.WALL_NOW`` (see ``test_every_stamp_is_a_real_value``).
+# Control run: the default moved one second in people_scenarios.DDL -> this file fails.
 ON_MAIN = json.loads((Path(__file__).parent / "fixtures" / "people_as_on_main.json").read_text("utf-8"))
 
 
@@ -201,3 +204,34 @@ def test_the_record_shows_writes_hooks_and_the_store_not_only_replies(here):
     assert here["screen_update_a_private_contact_by_another_member"][-2] == ["raised", 404, "Person not found"]
     assert here["screen_relation_with_a_new_stub"][-1][1]["person_relationships"]              # the edge landed, through people_graph
     assert here["reviewed_relation"][-1][1]["people"][1]["relationship"] == "neighbour"
+
+
+def test_every_stamp_is_a_real_value(here):
+    """No stamp is masked (review of #2698 round 3: every ISO stamp in values and rows was ``<clock>``, so an entry point that
+    wrote a wrong or changed stamp still matched). The spoken rename, a correction, the offer upgrade and the relationship writes
+    each carry the frozen wall clock in the values they write and in the rows they leave; the contact's ``created_at`` is kept.
+    The fakes record what production hands them whole: the memory hook gets the entire contact, the mirror its keywords too.
+
+    Controls run (each passed under the old mask or the old fakes, fails now): the spoken rename's stamp written without
+    microseconds (``intent_router._rename_person_row``) -> ``said_rename``; ``corrected_name``'s stamp a year off
+    (``correction_apply``) -> ``corrected_name``; the offer upgrade's stamp without microseconds (``pending_suggestions``) ->
+    ``offer_accepted_upgrades_a_one_name_stub``; ``people_graph.now_iso`` one second off -> ``screen_relation_notes_edited``;
+    the screen create handing the memory hook its contact without notes -> ``screen_create``; the spoken rename handing the
+    mirror an extra keyword -> ``said_rename``."""
+    from people_scenarios import WALL_NOW
+
+    assert "<clock>" not in json.dumps(ON_MAIN) and "<clock>" not in json.dumps(here)
+    iso, zulu = WALL_NOW.isoformat(), WALL_NOW.replace(tzinfo=None).isoformat() + "Z"
+
+    def written(name):
+        return [v for e in ON_MAIN[name] if e[0] in ("sql", "pg") and e[1].startswith(("UPDATE", "INSERT")) for v in e[2]]
+
+    assert iso in written("said_rename") and iso in written("offer_accepted_upgrades_a_one_name_stub")
+    assert zulu in written("corrected_name") and zulu in written("corrected_to_a_pet")
+    for name in ("screen_relation_notes_edited", "screen_relation_retyped", "screen_relation_removed", "screen_relation_with_a_new_stub"):
+        assert zulu in written(name), name
+    rows = {r["id"]: r for r in ON_MAIN["said_rename"][-1][1]["people"]}
+    assert rows["p-ann-stub"]["updated_at"] == iso and rows["p-ann-stub"]["created_at"] == scenarios.STORE_NOW
+    memory = [e for e in ON_MAIN["screen_create"] if e[0] == "memory"]
+    assert len(memory) == 1 and memory[0][2]["notes"] == "likes wombles"
+    assert [e for e in ON_MAIN["said_rename"] if e[0] == "mirror"] == [["mirror", [scenarios.ANN, "p-ann-stub", "Plover Tansy", "neighbour"], {}]]
