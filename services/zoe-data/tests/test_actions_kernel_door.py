@@ -511,16 +511,7 @@ async def _typed(message, who, *, setup=None):
 def _cover_listed_as_a_switch(w):
     """The worst case for a typed command: a bridge that lists a garage door among the switches. A turn-on of it is a cover
     ``on``: SECURE (asked first; a kernel that cannot answer means no)."""
-    real = scenarios.HA_ANSWERS["/switches"]
-    w_answer = w.answer
-
-    def answer(method, url, body, timeout):
-        if method == "GET" and str(url).split("?")[0].endswith("/switches"):
-            w.log.append(["http", method, "/switches", None, timeout])
-            return scenarios._Response(200, {"switches": [*real["switches"], {"entity_id": "cover.garage_door", "state": "closed",
-                                                                               "attributes": {"friendly_name": "Garage door"}}]})
-        return w_answer(method, url, body, timeout)
-    w.answer = answer
+    w.ha_answers["/switches"] = {"switches": [*scenarios.HA_ANSWERS["/switches"]["switches"], scenarios.GARAGE]}
 
 
 @pytest.mark.asyncio
