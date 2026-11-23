@@ -5,7 +5,7 @@ statement with its values (reads too), every hook fired, every receipt, every ti
 store holds afterwards. It was made by running ``tests/alarms_timers_scenarios.py`` against an export of that commit
 (``git archive origin/main services/zoe-data``), never by this branch's own code. The same scenarios run here and must give the
 same record. (The seven scenarios added in review, the erase, anticipation's alarm and the spoken one-day change, were
-recorded the same way from main at b2bbe84ca; the other 49 came out byte-identical there.) This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
+recorded the same way from main at b2bbe84ca; the other 49 came out byte-identical there.) The clock-radio's fallback event (``alarm_music._log``, driven through ``_fail``) was added in round 2, recorded from main at b2bbe84ca with the other 56 byte-identical; and every recorded alarms entry point must REACH the door through its own function (``tests/door_reach.py``), two named proxies apart. This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
 
 Covered (the list of entry points is read from the code: ``test_the_fixture_covers_every_scenario_and_every_entry_point``). ALARMS: the screen's REST create / edit / delete / snooze / dismiss / day override and its undo (a member, the panel,
 another member, refusals); the spoken path (set, snooze, off while ringing, cancel, cancel all, off and on, a guest away from the
@@ -62,11 +62,9 @@ ALARMS_RECORDED = {
     ("anticipation.py", "_do", "create_alarm"): ("anticipation_wake_alarm",),
     ("memory_service.py", "MemoryService.delete_user", "forget_user"): ("forget_a_member", "forget_nobody_and_the_household"),
     ("main.py", "lifespan", "run_loop"): ("engine_rings_and_stops_by_itself",),      # the loop is ``tick`` on a timer
+    ("alarm_music.py", "_log", "log_event"): ("music_did_not_start_logs_the_fallback",),
 }
-ALARMS_NOT_RECORDED = {
-    ("alarm_music.py", "_log", "log_event"):
-        "the clock-radio half (flag-dark): it adds one event row through log_event and changes no alarm; no record of main yet",
-}
+ALARMS_NOT_RECORDED: dict = {}
 #: TIMERS: every function of ``skybridge_service`` outside the store that calls a store method that saves -> its scenarios
 _SKY = "skybridge_service.py"
 TIMERS_RECORDED = {
@@ -143,6 +141,43 @@ def test_the_new_scenarios_record_the_erase_the_anticipation_alarm_and_the_one_d
     assert here["spoken_shift_undone"][-1][1]["alarm_overrides"] == []
     assert here["spoken_shift_a_one_off"][-1][1]["alarms"][0][3] == "06:00"
     assert here["spoken_shift_with_no_alarm_makes_one"][-1][1]["alarms"][0][3:6] == ["05:30", "once", "2026-11-05"]
+
+
+@pytest.mark.parametrize("key", sorted(ALARMS_RECORDED), ids=lambda k: f"{k[0]}:{k[1]}:{k[2]}")
+def test_each_alarm_entry_point_is_driven_through_its_own_code(key):
+    """A scenario named for an alarms entry point must REACH ``alarms.py`` through that function (``tests/door_reach.py`` traces
+    who called each door function), not only be named for it. Control run: the clock-radio scenario calling ``alarms.log_event``
+    itself instead of ``alarm_music._fail`` fails here for ``alarm_music.py:_log``."""
+    import door_reach
+
+    root = Path(__file__).resolve().parents[1]
+    reached = set()
+    for name in ALARMS_RECORDED[key]:
+        reached |= door_reach.reached(lambda: scenarios.run_one(name), root, "alarms.py")
+    if key in REACHED_BY_PROXY:            # the scenario runs the door itself; its named caller cannot be run here (reason given)
+        assert ("<tests>", "<scenario>", REACHED_BY_PROXY[key][0]) in reached, sorted(reached)
+        return
+    assert key in reached, sorted(reached)
+
+
+#: The two recorded entry points whose scenario runs the door function itself, not the caller it is named for, and why. Each
+#: caller is a single unconditional call of that function (the coverage test reads it from the code).
+REACHED_BY_PROXY = {
+    ("memory_service.py", "MemoryService.delete_user", "forget_user"):
+        ("forget_user", "the whole-member erase runs some forty stores' own forgets before this one; the scenario runs alarms.forget_user"),
+    ("main.py", "lifespan", "run_loop"): ("tick", "the app's start-up; the scenario runs the loop's body (tick) on the frozen clock"),
+}
+
+
+def test_the_clock_radio_fallback_writes_one_event_row_and_commits_it(here):
+    """``alarm_music._log``: one ``alarm_events`` row (the alarm, ``music_fallback``, the reason, the frozen clock) and its commit
+    straight after it. Control run: the ``db.commit()`` dropped from ``_log`` fails here (and the record comparison)."""
+    rec = here["music_did_not_start_logs_the_fallback"]
+    at = next(i for i, e in enumerate(rec) if e[0] == "sql" and e[1].startswith("INSERT INTO alarm_events") and "music_fallback" in e[2])
+    assert rec[at][2][1:] == ["a00000000001", scenarios.NIGHT, "music_fallback", "no panel player"] and rec[at + 1] == ["commit"]
+    events = rec[-1][1]["alarm_events"]
+    assert ["a00000000001", scenarios.NIGHT, "music_fallback", "no panel player"] in events
+    assert rec[-2] == ["returned", {"reason": "no panel player", "since": scenarios.NIGHT, "state": "failed"}]
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
