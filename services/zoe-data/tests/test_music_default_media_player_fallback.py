@@ -12,6 +12,7 @@ keep the old behaviour so no new failure mode is added.
 """
 from __future__ import annotations
 
+import os
 import asyncio
 import logging
 
@@ -117,11 +118,11 @@ async def test_stale_default_player_falls_back_to_a_real_ha_entity(intent, expec
 
     assert result is not None and "couldn't" not in result
     post = _FakeAsyncClient.posts[0]
-    assert post["url"] == "http://127.0.0.1:8007/devices/control"
+    assert post["url"] == os.environ["ZOE_HA_BRIDGE_URL"] + "/devices/control"
     assert post["json"]["action"] == expected_action
     assert post["json"]["entity_id"] == _REAL          # negative control: pre-fix == _STALE
     assert post["json"]["entity_id"] != _STALE
-    assert _FakeAsyncClient.gets == ["http://127.0.0.1:8007/entities?domain=media_player"]
+    assert _FakeAsyncClient.gets == [os.environ["ZOE_HA_BRIDGE_URL"] + "/entities?domain=media_player"]
     warn = [r for r in caplog.records if r.levelno == logging.WARNING and "ZOE_DEFAULT_MEDIA_PLAYER" in r.getMessage()]
     assert len(warn) == 1
     assert _STALE in warn[0].getMessage() and _REAL in warn[0].getMessage()
