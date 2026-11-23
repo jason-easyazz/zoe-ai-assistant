@@ -364,3 +364,67 @@ def test_a_new_member_named_inside_an_older_record_is_reached_by_their_forget(bu
     assert k.spine._get(old.seq) is not None
     assert k.spine.forget(NEW, actor=NEW)
     assert k.spine._get(old.seq) is None
+
+
+# ---- who ACTS at the door: the current roster, per kernel (``door.Area.former``, ``Door.roster``) --------------------------------
+def _door(srv, area: str, verb: str, person: str, *, owner: str, target: str = "rem_bar_0001", visibility: str = "household") -> str:
+    """The door's answer over the daemon's own op (the roster is re-read first, as on the wire): ``ok`` or the refusal code."""
+    try:
+        with srv.kernel.spine._lock:
+            srv._op_door_ask(BRAIN, {"area": area, "verb": verb, "person": person, "target": target, "owner": owner,
+                                     "visibility": visibility})
+        return "ok"
+    except Refused as exc:
+        return exc.wire
+
+
+def test_a_member_taken_off_the_roster_but_kept_for_forgetting_changes_nobodys_reminder(built):
+    """A member taken off people.json whom the kernel still holds a record for stays in its people (so the record can be
+    forgotten). At the door they are NOBODY: not their own reminder, not the household's, not another member's; a current
+    member can still deal with what they left, they can still be forgotten, and put back on the file they act again. Lists
+    alone keeps main's rule (``Area.former``): there they still act with least access.
+
+    Controls run: ``k.door.roster = lambda: srv.roster`` removed from ``shadow_daemon.build`` -> the first refusal below is
+    ``ok`` (the people map counted as the roster); ``Door._acting`` returning ``people`` whatever the area says -> the same;
+    ``former=True`` dropped from ``lists.AREA`` -> the lists line is ``unknown_person`` (main's pinned rule changed)."""
+    daemon, k, srv, state = built
+    assert _door(srv, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "ok"      # a record names them
+    write(state, [{"id": OWNER, "role": "adult"}])                                    # KID taken off the file
+    assert _door(srv, "reminders", "reminder.create", OWNER, owner=OWNER) == "ok"     # the file is re-read here
+    assert KID in k.grants.people and KID not in srv.roster                           # kept (forgettable), off the roster
+    for owner, visibility in ((KID, "private"), (KID, "household"), (OWNER, "household")):
+        for verb in ("reminder.create", "reminder.edit", "reminder.delete"):
+            assert _door(srv, "reminders", verb, KID, owner=owner, visibility=visibility) == "unknown_person", (verb, owner)
+    assert _door(srv, "reminders", "reminder.delete", OWNER, owner=KID) == "ok"       # what they left can still be dealt with
+    assert _door(srv, "lists", "item.add", KID, owner=OWNER, target="list-qov") == "ok"                  # lists: main's rule, kept
+    write(state, [{"id": OWNER, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])
+    assert _door(srv, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "ok"      # back on the roster
+    write(state, [{"id": OWNER, "role": "adult"}])
+    assert _door(srv, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "unknown_person"
+    assert k.spine.forget(KID, actor=KID).count >= 1                                  # and they can still be forgotten
+
+
+def test_each_kernel_decides_from_its_own_roster_when_two_are_built_in_one_process(state):
+    """Two daemons built in one process (two households): the second must not replace who acts in the first. ``member-kip`` is
+    on the second household's roster and was taken off the first's.
+
+    Control run: the roster kept as a module global that ``build`` assigns (``door.ROSTER = lambda: srv.roster`` read by
+    ``Door._acting``) -> the first kernel answers ``ok`` for the member taken off ITS roster."""
+    import shadow_daemon
+
+    k1, srv1, _ = shadow_daemon.build(state[0])
+    assert _door(srv1, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "ok"
+    write(state[0], [{"id": OWNER, "role": "adult"}])
+    assert _door(srv1, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "unknown_person"
+    other = Path(tempfile.mkdtemp(prefix="zr"))
+    other.chmod(0o700)
+    settled(other)
+    write(other, [{"id": OWNER, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])
+    k2, srv2, _ = shadow_daemon.build(other)
+    try:
+        assert _door(srv2, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "ok"
+        assert _door(srv1, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "unknown_person"
+        assert k1.door.roster is not k2.door.roster and k1.door.roster() == frozenset({OWNER})
+    finally:
+        k1.close()
+        k2.close()
