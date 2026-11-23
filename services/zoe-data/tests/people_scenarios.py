@@ -26,7 +26,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from calendar_scenarios import _plain as _plain_calendar, _restore, _set
+from calendar_scenarios import STORE_NOW, _plain as _plain_calendar, _restore, _set
 
 ANN, BOB = "ann-0001", "bob-0002"
 WORD = "Womble"
@@ -56,7 +56,7 @@ INSERT INTO people (id, user_id, name, relationship, visibility, is_partial) VAL
     ('p-bob-family', 'bob-0002', 'Fed Wibble', 'cousin', 'family', 0),
     ('p-bob-private', 'bob-0002', 'Yarrow Tind', 'boss', 'personal', 0);
 INSERT INTO omi_day_candidates (id, user_id, status) VALUES ('cand_bar_0001', 'ann-0001', 'approving');
-"""
+""".replace("CURRENT_TIMESTAMP", f"'{STORE_NOW}'")      # the frozen store clock: a stored stamp is a real value in the record, never masked
 
 
 def _mask(value):
