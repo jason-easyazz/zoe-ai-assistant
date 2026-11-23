@@ -17,6 +17,13 @@ BASE_URL = "http://localhost:8000"
 TEST_USER = "capability_test_user"
 TIMEOUT = 30.0
 
+import os
+
+# This script talks to the RUNNING app and the real Home Assistant bridge. It is not a pytest test and refuses to run
+# unless started by hand with --live (see the bottom of the file).
+HA_BRIDGE_URL = os.environ.get("ZOE_HA_BRIDGE_URL", "http://localhost:8007").rstrip("/")
+
+
 class Colors:
     GREEN = '\033[92m'
     RED = '\033[91m'
@@ -385,7 +392,7 @@ class ZoeCapabilityTest:
         print(f"\n{Colors.BLUE}Test 6.2: Home Assistant MCP bridge{Colors.RESET}")
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get("http://localhost:8007/")
+                response = await client.get(HA_BRIDGE_URL + "/")
                 if response.status_code == 200:
                     print(f"{Colors.GREEN}✓ HA MCP bridge running{Colors.RESET}")
                     self.results["passed"].append("HomeAssistant - Bridge")
@@ -696,5 +703,9 @@ async def main():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
+    # It sends real chat turns (a smart-home query among them) through the running app: never by accident.
+    if "--live" not in sys.argv[1:]:
+        print("This script drives the RUNNING Zoe app and the real Home Assistant bridge. Re-run with --live if you mean it.")
+        sys.exit(2)
     asyncio.run(main())
 
