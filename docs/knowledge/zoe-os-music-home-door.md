@@ -43,7 +43,7 @@ a child speaking at the panel is held to the panel's rule, not their own level: 
 
 | Kind | Which | Kernel |
 |---|---|---|
-| **Quiet** | music: pause, stop, mute, volume down, and a set volume (its direction is not known); home: a light or a media player OFF | **sent first, told afterwards**: the kernel can neither delay nor refuse it |
+| **Quiet** | music: pause, stop, mute, volume down, and a set volume (its direction is not known); home: a light or a media player OFF (a light's turn-off; a media player's turn-off, pause or stop), never a house speaker turned down or muted, which is asked first like any other command | **sent first, told afterwards**: the kernel can neither delay nor refuse it |
 | **Secure** | home: a lock or a cover (garage doors and blinds are covers; an alarm panel counts as a lock), and any act but closing or locking it. An unknown service on one counts as opening | **always asked first, and a kernel that is down, old or slow means NO** |
 | the rest | everything else | asked first; a refusal is final (nothing is sent); kernel down or slow = sent, `not_checked` |
 

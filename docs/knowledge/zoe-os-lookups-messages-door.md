@@ -104,5 +104,14 @@ person. Never the words, a phone number, a chat id or an address.
   `routers/geo._fetch_nominatim` (the place search and reverse lookup) and `zoe_ui_components._geocode` (a map card's
   address), both to nominatim.openstreetmap.org. There is no lookups class for a place search; one is needed (in the
   kernel's table first). They are listed in `SENDERS` as unrecorded, by name.
-* The brain's tool dispatcher now notes its member when nothing upstream did, so a tool call that reaches music or the
-  house outside the service's own dispatch is treated as that member's, not as automatic.
+* The brain's tool dispatcher notes who each call acts for, for THAT call only (`mcp_server._actor_for_this_call_only`,
+  `kernel_door.actor_scope`): a call that states its caller (the stdio transport) acts for that member whatever an earlier
+  call left noted; a call with no context keeps the member the service's own dispatch noted, or notes its own when nothing
+  did. The actor is put back when the call returns, so on the stdio server (one task for every call) a child's call never
+  reaches a door as the adult before them.
+* The broker's plan pipeline (`browser_broker.execute_text_extraction` and the plan executor's `_execute`) checks before it
+  plans or navigates. The place search route (`routers/weather.search_locations`) notes its signed-in caller itself.
+* Every request a lookup makes has a record of its own (`test_every_outbound_sender...`: a record after each request and
+  before the next one), so a fallback branch cannot send unrecorded behind the first branch's record.
+* NOT changed, to decide: `GET /api/weather/current` and `/forecast` take a signed-in caller and note nobody, so a member's
+  weather read through them is automatic (not recorded, nobody refused), like the wall panel's card.

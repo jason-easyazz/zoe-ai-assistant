@@ -121,17 +121,100 @@ def test_any_other_flag_value_sends_exactly_what_main_sent(door, monkeypatch, va
     assert door.calls == [] and door.connections == 0 and os_shadow._door_worker is None
 
 
+#: scenario -> the ONE ask (verb, target) the kernel gets for it, as the acting member, with the doors on and allowing; every
+#: scenario not listed asks nothing (a read, a refusal the service made first, nothing matched, an unknown action)
+ASKS = {
+    "music_screen_pause": ("music.stop", "ply0001"),
+    "music_screen_next": ("music.play", "ply0001"),
+    "music_screen_volume_set": ("music.quieter", "ply0001"),
+    "music_screen_volume_up": ("music.louder", "ply0001"),
+    "music_screen_seek": ("music.play", "ply0001"),
+    "music_screen_transfer": ("music.play", None),
+    "music_screen_play": ("music.play", "ply0001"),
+    "music_screen_play_media": ("music.play", "ply0002"),
+    "music_screen_queue_clear": ("music.queue", "ply0001"),
+    "music_screen_queue_remove": ("music.queue", "ply0001"),
+    "music_screen_queue_play_index": ("music.play", "ply0001"),
+    "music_screen_favorite": ("music.library", None),
+    "music_screen_unfavorite": ("music.library", None),
+    "music_screen_group": ("music.play", "ply0001"),
+    "music_screen_queue_move": ("music.queue", "ply0001"),
+    "music_screen_queue_save": ("music.library", "ply0001"),
+    "music_screen_playlist_add": ("music.library", None),
+    "music_screen_dont_stop": ("music.play", "ply0001"),
+    "music_screen_ungroup": ("music.play", "ply0002"),
+    "music_spoken_play": ("music.play", "ply0001"),
+    "music_spoken_play_guest": ("music.play", "ply0001"),
+    "music_spoken_pause": ("music.stop", "ply0001"),
+    "music_spoken_transfer": ("music.play", None),
+    "music_spoken_discovery": ("music.play", "ply0001"),
+    "music_intent_favorite": ("music.library", None),
+    "music_intent_pause": ("music.stop", "ply0001"),
+    "music_intent_volume_down": ("music.quieter", "ply0001"),
+    "music_intent_volume_set": ("music.quieter", "ply0001"),
+    "music_intent_play": ("music.play", "ply0001"),
+    "music_house_pause": ("media.off", "media_player.all"),
+    "music_house_volume_set": ("media.set", "media_player.all"),
+    "home_screen_turn_on": ("light.on", "light.kitchen_lamp"),
+    "home_screen_off": ("light.off", "light.hall_lamp"),
+    "home_screen_toggle_a_switch": ("switch.set", "switch.kettle_plug"),
+    "home_screen_scene": ("scene.on", "scene.movie_time"),
+    "home_screen_open_a_cover": ("cover.open", "cover.garage_door"),
+    "home_screen_unlock": ("lock.open", "lock.front_door"),
+    "home_screen_unlock_panel_adult_voice_session": ("lock.open", "lock.front_door"),
+    "home_screen_lock_bare_panel": ("lock.close", "lock.front_door"),
+    "home_screen_close_a_cover_guest": ("cover.close", "cover.garage_door"),
+    "home_screen_media_pause": ("media.off", "media_player.lounge"),
+    "home_screen_bridge_refuses": ("light.on", "light.kitchen_lamp"),
+    "home_screen_bridge_offline": ("light.on", "light.kitchen_lamp"),
+    "home_spoken_turn_on": ("light.on", "light.kitchen_lamp"),
+    "home_spoken_turn_off": ("light.off", "light.hall_lamp"),
+    "home_spoken_brightness": ("light.on", "light.hall_lamp"),
+    "home_spoken_scene": ("scene.on", "scene.movie_time"),
+    "home_said_turn_on": ("light.on", "light.kitchen_lamp"),
+    "home_said_open_a_cover": ("cover.on", "cover.garage_door"),
+    "home_tool_turn_on": ("light.on", "light.kitchen_lamp"),
+    "home_tool_unlock": ("lock.open", "lock.front_door"),
+    "home_tool_lock_guest": ("lock.close", "lock.front_door"),
+    "home_spoken_open_a_cover": ("cover.on", "cover.garage_door"),
+    "home_helper_open_a_cover": ("cover.on", "cover.garage_door"),
+    "home_helper_lamp_guest": ("light.on", "light.kitchen_lamp"),
+    "home_tool_bridge_offline": ("light.on", "light.kitchen_lamp"),
+}
+
+
 def test_with_the_doors_on_and_allowing_every_entry_point_sends_exactly_what_main_sent(door):
-    """The doors add no outbound call and change no result when the kernel allows. Control run: with the gate sending the
-    command twice when allowed, every command scenario gains a call."""
+    """The doors add no outbound call and change no result when the kernel allows; and EACH scenario makes exactly the ask
+    listed in ``ASKS`` (its verb and target, as the acting member, once) and closes it with one report, and every other
+    scenario asks nothing. (A union of the verbs over the whole run was checked before, which a command mapped to the wrong
+    verb passed whenever another scenario asked that verb.) Controls run: with the gate sending the command twice when allowed,
+    every command scenario gains a call; ``"volume_down": "off"`` back in ``_ACT_OF`` leaves this table unchanged (no scenario
+    turns a house speaker down: that is ``test_a_child_at_level_none_turning_a_speaker_down_reaches_no_sender``), and
+    ``media_pause`` read as ``set`` fails it at ``home_screen_media_pause`` and ``music_house_pause``."""
+    def quiet_for(span=0.15, limit=3.0):            # the door's own thread has nothing more to deliver
+        end, last, since = time.monotonic() + limit, -1, time.monotonic()
+        while time.monotonic() < end:
+            if len(door.calls) != last:
+                last, since = len(door.calls), time.monotonic()
+            elif time.monotonic() - since >= span:
+                return
+            time.sleep(0.01)
+
     kernel_door.note_actor(ANN)
     assert scenarios.run_all() == ON_MAIN
-    end = time.monotonic() + 8                                  # the told-afterwards verbs arrive on the door's own thread
-    want = {"music.play", "music.stop", "music.quieter", "music.louder", "music.queue", "music.library", "light.on", "light.off",
-            "switch.set", "scene.on", "cover.open", "lock.open", "media.off"}
-    while time.monotonic() < end and not want <= {a["verb"] for a in door.ops("door_ask")}:
-        time.sleep(0.02)
-    assert want <= {a["verb"] for a in door.ops("door_ask")}
+    assert set(ASKS) <= set(scenarios.scenarios())
+    quiet_for()
+    for name in scenarios.scenarios():
+        want = [ASKS[name]] if name in ASKS else []
+        door.calls.clear()
+        kernel_door.note_actor(ANN)
+        assert scenarios.run_one(name) == ON_MAIN[name], name
+        _wait(door, "door_report", len(want), timeout=3.0)          # a told-afterwards verb arrives on the door's own thread
+        quiet_for()
+        asks, reports = door.ops("door_ask"), door.ops("door_report")
+        assert [(a["verb"], a.get("target")) for a in asks] == want, name
+        assert all(a["person"] == ANN and a["area"] == ("music" if a["verb"].startswith("music.") else "home") for a in asks), name
+        assert len(door.ops("door_report")) == len(want), (name, reports)
 
 
 def test_a_command_nobody_is_acting_for_is_never_asked_or_told(door):
@@ -177,6 +260,95 @@ async def test_stopping_and_turning_off_are_sent_at_once_whatever_the_kernel_doe
             assert ("decision=objected" in _lines(caplog)[-1]) is (kernel != "allow")
         else:
             await _settled(caplog, 1)
+
+
+# ---- turning a house speaker DOWN is not "off": asked first, a refusal is final (review #2703) -----------------------------------------
+KID_AT_NONE = "member-kip"                        # a child whose level is ``none``: the kernel refuses them every home command
+
+
+async def _turn_down_through(sender: str, log: list):
+    """``volume_down`` on a house media player, by a child, through each entry point that can send it."""
+    import panel_principal
+    import zoe_agent
+    from routers import ha_control
+
+    child = {"user_id": KID_AT_NONE, "role": "user"}
+    w = scenarios.World(log)
+    kernel_door.note_actor(KID_AT_NONE)
+    if sender == "screen":
+        try:
+            return await ha_control.ha_control(ha_control.HAControlPayload(entity_id="media_player.lounge", action="volume_down"),
+                                               caller=dict(child))
+        except kernel_door.Refused as exc:
+            return exc.line()
+    if sender == "tool":
+        assert await panel_principal.record_turn_home_control(None, dict(child)) is True
+        return (await zoe_agent._ha_control("media_player.lounge", "volume_down")).get("error")
+    import intent_router                                          # "turn it down" while the music plays through the house
+
+    w.ma_silent = True
+    return await intent_router._execute_music_intent(intent_router.Intent("music_control", {"command": "volume_down"}), KID_AT_NONE)
+
+
+@pytest.mark.parametrize("sender, entity", [("screen", "media_player.lounge"), ("tool", "media_player.lounge"), ("house_music", "media_player.all")])
+@pytest.mark.asyncio
+async def test_a_child_at_level_none_turning_a_speaker_down_reaches_no_sender(door, sender, entity):
+    """``volume_down`` was mapped to ``off``, so it was ``media.off``: QUIET, sent before the kernel was asked, and a child the
+    kernel refuses every home command (level ``none``) could turn a house speaker down. Now it is ``media.set``: asked first,
+    as the child, and the refusal is final: nothing reaches the bridge and the caller says the kernel's sentence.
+    Named control, in the test: the same child pausing the same speaker (``media_pause``: a media player OFF, quiet by the
+    contract) is still sent first and only told. Control run (the old mapping): ``"volume_down": "off"`` put back in ``action_doors._ACT_OF`` ->
+    the command is sent for every entry point, before the kernel is even told (``media.off``, afterwards)."""
+    door.door = "refuse:adults_only"
+    log: list = []
+    told = await _turn_down_through(sender, log)
+    assert _sent(log, "house") == [] and told == action_doors.HomeRefused("adults_only").line(), (sender, told)
+    asks = _wait(door, "door_ask", 1)
+    assert [(a["area"], a["verb"], a["person"], a["target"]) for a in asks] == [("home", "media.set", KID_AT_NONE, entity)]
+    door.calls.clear()
+    log = []
+    scenarios.World(log)
+    kernel_door.note_actor(KID_AT_NONE)
+    from routers import ha_control
+
+    out = await ha_control.ha_control(ha_control.HAControlPayload(entity_id="media_player.lounge", action="pause"),
+                                      caller={"user_id": KID_AT_NONE, "role": "user"})
+    assert out["ok"] and [e[3]["action"] for e in _sent(log, "house")] == ["media_pause"]      # the control: off is sent first
+    told_after = _wait(door, "door_ask", 1)
+    assert [(a["verb"], a["person"]) for a in told_after] == [("media.off", KID_AT_NONE)]
+
+
+#: every (domain, service) the house treats as QUIET (sent first, told afterwards): turning a light or a media player OFF
+_HOME_QUIET_PAIRS = {("light", "turn_off"), ("light", "off"), ("media_player", "turn_off"), ("media_player", "off"),
+                     ("media_player", "media_pause"), ("media_player", "media_stop")}
+#: every Music Assistant command (with its arguments) the music door treats as QUIET: stopping or turning down, as documented
+_MUSIC_QUIET_COMMANDS = {("player_queues/pause", "{}"), ("player_queues/stop", "{}"), ("players/cmd/volume_down", "{}"),
+                         ("players/cmd/volume_set", "{}"), ("players/cmd/volume_mute", '{"muted": true}'),
+                         ("players/cmd/power", '{"powered": false}')}
+
+
+def test_only_turning_off_is_quiet_in_the_house_and_only_stopping_or_turning_down_for_the_music():
+    """EVERY mapping-table entry and every quiet rule, by what it lets through BEFORE the ask: over every domain the door
+    knows (and one it does not) and every service it maps or the bridge accepts, the quiet ones are exactly
+    ``_HOME_QUIET_PAIRS``; over every Music Assistant command it maps (and the argument-dependent ones both ways) exactly
+    ``_MUSIC_QUIET_COMMANDS``. A new alias mapped to ``off`` (as ``volume_down`` and ``volume_mute`` were), or ``media_pause``
+    read as ``off`` for a light, fails here. Control run: ``"volume_mute": "off"`` put back in ``_ACT_OF`` fails this."""
+    bridge = ("turn_on", "turn_off", "toggle", "set_brightness", "set_color", "set_temperature", "media_play", "media_pause",
+              "media_next_track", "media_previous_track", "volume_up", "volume_down", "volume_set", "play_media", "volume_mute",
+              "media_stop", " Turn_Off ")
+    quiet = set()
+    for domain in (*action_doors._CLASS_OF, "vacuum"):
+        for action in {*action_doors._ACT_OF, *bridge}:
+            verb, _ = action_doors.home_verb("/devices/control", {"entity_id": f"{domain}.thing", "action": action})
+            if verb in action_doors.HOME_QUIET:
+                quiet.add((domain, action.strip().lower()))
+    assert quiet == _HOME_QUIET_PAIRS
+    assert action_doors.home_verb("/devices/control", {"entity_id": "media_player.x", "action": "volume_down"})[0] == "media.set"
+    assert action_doors.home_verb("/scenes/activate", {"scene_id": "scene.movie_time"})[0] not in action_doors.HOME_QUIET
+    commands = {(c, "{}") for c in action_doors._MUSIC_EXACT} | {("players/cmd/volume_mute", '{"muted": true}'),
+                ("players/cmd/volume_mute", '{"muted": false}'), ("players/cmd/power", '{"powered": false}'),
+                ("players/cmd/power", '{"powered": true}'), ("players/cmd/some_new_thing", "{}")}
+    assert {(c, a) for c, a in commands if action_doors.music_verb(c, json.loads(a)) in action_doors.MUSIC_QUIET} == _MUSIC_QUIET_COMMANDS
 
 
 # ---- asked first: refused = nothing is sent ---------------------------------------------------------------------------------------------
@@ -511,16 +683,7 @@ async def _typed(message, who, *, setup=None):
 def _cover_listed_as_a_switch(w):
     """The worst case for a typed command: a bridge that lists a garage door among the switches. A turn-on of it is a cover
     ``on``: SECURE (asked first; a kernel that cannot answer means no)."""
-    real = scenarios.HA_ANSWERS["/switches"]
-    w_answer = w.answer
-
-    def answer(method, url, body, timeout):
-        if method == "GET" and str(url).split("?")[0].endswith("/switches"):
-            w.log.append(["http", method, "/switches", None, timeout])
-            return scenarios._Response(200, {"switches": [*real["switches"], {"entity_id": "cover.garage_door", "state": "closed",
-                                                                               "attributes": {"friendly_name": "Garage door"}}]})
-        return w_answer(method, url, body, timeout)
-    w.answer = answer
+    w.ha_answers["/switches"] = {"switches": [*scenarios.HA_ANSWERS["/switches"]["switches"], scenarios.GARAGE]}
 
 
 @pytest.mark.asyncio
@@ -561,8 +724,10 @@ async def test_a_typed_command_that_could_open_the_house_is_refused_by_the_servi
 async def test_a_childs_typed_command_that_could_open_the_house_is_refused_and_never_sent_unchecked(door, monkeypatch, how, reason):
     """The KERNEL's layer of the typed route, on its own: with the service's check out of the way (stubbed to allow, as if
     the caller were someone it lets through), SECURE through the typed route is refused by the kernel, or not checkable
-    (kernel gone or slow), and nothing is sent. Before the fix it went out unasked, kernel or no kernel. Control run: the
-    same removal of the route's actor note sends the garage door's command in every case."""
+    (kernel gone or slow), and nothing is sent. Before the fix it went out unasked, kernel or no kernel. The ask itself is
+    required, as the child, about the garage door (it was a subset check, which passed with no ask at all). Controls run: the
+    same removal of the route's actor note sends the garage door's command in every case; with ``before`` refusing
+    ``unavailable`` for a secure verb WITHOUT asking, nothing is sent and only the ask assertion fails."""
     async def allows(*a, **k):
         return True
 
@@ -574,7 +739,8 @@ async def test_a_childs_typed_command_that_could_open_the_house_is_refused_and_n
     out, log = await _typed("turn on the garage door", KID, setup=_cover_listed_as_a_switch)
     assert out["spoken_summary"] == action_doors.HomeRefused(reason).line()
     assert _sent(log, "house") == []
-    assert {(a["verb"], a["person"], a["target"]) for a in door.ops("door_ask")} <= {("cover.on", KID, "cover.garage_door")}
+    asks = _wait(door, "door_ask", 1)       # the ask is REQUIRED: the kernel's refusal (or silence) is what stopped it
+    assert [(a["area"], a["verb"], a["person"], a["target"]) for a in asks] == [("home", "cover.on", KID, "cover.garage_door")]
 
 
 @pytest.mark.asyncio
