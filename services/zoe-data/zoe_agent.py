@@ -1705,7 +1705,9 @@ def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) 
     try:
         from ddgs import DDGS
         with DDGS(timeout=int(timeout_s)) as ddgs:
-            return list(ddgs.text(query, max_results=max_results)) or []
+            found = list(ddgs.text(query, max_results=max_results)) or []
+        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
+        return found
     except Exception:
         pass
 
@@ -1750,6 +1752,7 @@ def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) 
         try:
             req = Request(url, headers=headers)
             with urlopen(req, timeout=timeout_s) as resp:
+                lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
                 body = _read_bounded_url_response(resp, _DDG_SEARCH_HTML_MAX_BYTES).decode(
                     "utf-8", errors="replace"
                 )
@@ -1913,6 +1916,7 @@ async def _google_maps_local_search(
     try:
         page = await ctx.new_page()
         await page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
         # Let the JS results panel render
         await page.wait_for_timeout(3500)
 
@@ -1989,6 +1993,7 @@ async def _google_maps_local_search(
                             wait_until="domcontentloaded",
                             timeout=12000,
                         )
+                        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
                         fb_html = await fb_page.content()
                     finally:
                         await fb_page.close()
@@ -2077,7 +2082,7 @@ async def _web_research(query: str, user_id: str = "") -> str:
     6. Return extracted text so the LLM can synthesise the final answer
     """
     try:
-        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+        lookup_door.check(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     except kernel_door.Refused as exc:      # a caller the kernel does not know: nothing leaves the box in their name
         return exc.line()
     try:
@@ -2207,6 +2212,7 @@ async def _web_research(query: str, user_id: str = "") -> str:
                 wait_until="domcontentloaded",
                 timeout=20000,
             )
+            lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             _add_urls(await ddg_page.content(), max_results=8)
         finally:
             await ddg_page.close()
@@ -2222,6 +2228,7 @@ async def _web_research(query: str, user_id: str = "") -> str:
                     wait_until="domcontentloaded",
                     timeout=20000,
                 )
+                lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
                 _add_urls(await ddg_page2.content(), max_results=6)
             finally:
                 await ddg_page2.close()
@@ -2310,6 +2317,7 @@ async def _web_research(query: str, user_id: str = "") -> str:
                 # the browser connects (so page.goto raises -> handled below).
                 await guard_browser_page(page)
                 await page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
                 # Let JS settle before any interaction
                 await page.wait_for_timeout(800)
                 await _dismiss_overlays(page)
@@ -2550,6 +2558,7 @@ async def _cloak_search(query: str, max_results: int = 5, timeout_ms: int = 2000
     try:
         page = await ctx.new_page()
         await page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
         html = await page.content()
     finally:
         await ctx.close()
@@ -2706,7 +2715,7 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
     (SSRF into Zoe's own services or the house network).
     """
     try:
-        lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+        lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     except kernel_door.Refused as exc:      # a caller the kernel does not know: nothing leaves the box in their name
         return exc.line()
     import importlib.util as _ilu
@@ -2747,6 +2756,7 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
         # metadata cannot be fetched. Same guard the MCP browser tools install.
         await guard_browser_page(page)
         await page.goto(raw, wait_until="domcontentloaded", timeout=timeout_ms)
+        lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
         html = await page.content()
     except Exception as exc:  # noqa: BLE001
         logger.info("web_browse: load failed for %s: %s", raw[:80], exc)
@@ -2786,7 +2796,7 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
     requiring multiple site visits, use _web_research (backing deep_web_research).
     """
     try:
-        lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+        lookup_door.check(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     except kernel_door.Refused as exc:      # a caller the kernel does not know: nothing leaves the box in their name
         return exc.line()
     import asyncio as _asyncio
@@ -2810,7 +2820,7 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
         if tavily_enabled():
             loop = _asyncio.get_running_loop()
             tav = await loop.run_in_executor(
-                None, lambda: tavily_search_sync(query, max_results=6, timeout_s=8.0)
+                None, lookup_door.carry(lambda: tavily_search_sync(query, max_results=6, timeout_s=8.0))
             )
             if tav:
                 return _fmt(tav)
@@ -2821,7 +2831,7 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
     try:
         loop = _asyncio.get_running_loop()
         results = await loop.run_in_executor(
-            None, lambda: _ddg_search_sync(query, max_results=6, timeout_s=10.0)
+            None, lookup_door.carry(lambda: _ddg_search_sync(query, max_results=6, timeout_s=10.0))
         )
         if results:
             return _fmt(results)

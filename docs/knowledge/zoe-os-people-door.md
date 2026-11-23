@@ -46,7 +46,8 @@ member's action asks before it reaches them (the caller names the acting member)
 |---|---|
 | add, change, delete a contact (every entry point in section 1) | **asked first**; a refusal is final (`ContactRefused`, nothing written); down or slow = proceeds `not_checked` |
 | add, change, remove a relationship on the screen | asked first, as a `contact.edit` of the contact whose page it is |
-| merge | asked first about BOTH: `contact.edit` of the contact kept, `contact.delete` of the one folded in. If either is refused nothing is merged |
+| merge | asked first about BOTH: `contact.edit` of the contact kept, `contact.delete` of the one folded in. If either is refused nothing is merged; with `ZOE_PERSON_MERGE_ENABLED` off it is the usual 404 and nothing is asked |
+| Skybridge's "remember that <name> ..." | a new contact is a `contact.create` AND a `contact.edit`; both are asked before the contact is made, the fact saved to memory or the card changed. A refusal of either leaves nothing behind |
 | a spoken correction (a name, "that's a pet") | asked once, as a `contact.edit`, before the row and its edges change |
 | reading contacts | not asked, recorded nowhere |
 | extractors, the health score, card import, voice learning, the erasers | not asked: nobody is acting |

@@ -831,6 +831,9 @@ async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_ca
     session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
 
     async def _stream():
+        import panel_principal as _pp
+
+        _pp._note_actor({"user_id": user_id})      # the action doors (music, home): who acts (an outside agent is no one on the roster)
         # locked_chat_stream, NOT chat_stream_generator: `session_id` here is
         # CALLER-SUPPLIED (body.session_id, above), so two A2A agents — or one
         # retrying agent — can drive the same session concurrently. The per-session

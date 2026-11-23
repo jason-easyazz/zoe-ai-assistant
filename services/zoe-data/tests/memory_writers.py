@@ -101,12 +101,15 @@ SITES = {
     ('zoe_memory_prompt_packet_measure.py', 'seed_prompt_packet_measure_memories', 'ingest'): ('automatic', 1),
 }
 
-#: the same method names on something that is NOT the memory service (another store's own eraser or review)
+#: the same method names on something that is NOT the memory service (another store's own eraser or review), by exact site
+#: WITH A COUNT: (module, function, method) -> how many of that site's calls are on the other store. One more call of the method
+#: in such a function (a ``MemoryService.delete_user()`` added beside ``struggle_detector.delete_user()``) is NOT hidden by the
+#: exemption: it is left over and must be in SITES with who is acting.
 NOT_THE_SERVICE = {
-    ('evolution_inbox.py', '_failed_turn_cards', 'review'),   # turn_outcomes
-    ('exact_words.py', 'delete_user', 'delete_user'),   # get_backend()
-    ('memory_service.py', 'delete_user', 'delete_user'),   # struggle_detector
-    ('night_mind.py', 'delete_user', 'delete_user'),   # night_store.get_backend()
-    ('routers/struggles.py', 'failed_turns', 'review'),   # turn_outcomes
-    ('struggle_detector.py', '_delete_user_locked', 'delete_user'),   # turn_outcomes.get_backend()
+    ('evolution_inbox.py', '_failed_turn_cards', 'review'): 1,   # turn_outcomes
+    ('exact_words.py', 'delete_user', 'delete_user'): 1,   # get_backend()
+    ('memory_service.py', 'delete_user', 'delete_user'): 3,   # exact_words, night_mind, struggle_detector
+    ('night_mind.py', 'delete_user', 'delete_user'): 1,   # night_store.get_backend()
+    ('routers/struggles.py', 'failed_turns', 'review'): 1,   # turn_outcomes
+    ('struggle_detector.py', '_delete_user_locked', 'delete_user'): 4,   # self_review, night_extract, get_backend(), turn_outcomes
 }

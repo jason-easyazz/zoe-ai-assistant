@@ -20,19 +20,24 @@ timestamp: 2026-11-20T00:00:00Z
 | web_search | `research_evidence`: `_fetch_ddg` | duckduckgo.com | the query |
 | web_search | `web_search_provider.tavily_search_outcome` (only with a Tavily key) | the Tavily API | the query, and the API key |
 | web_search | `zoe_agent`: `_ddg_search_sync`, `_cloak_search`, `_google_maps_local_search` | duckduckgo.com (three hosts), google.com/maps (through the browser) | the query |
-| web_fetch | `zoe_agent`: `_web_browse`, `_visit_with_search`; `browser_broker.fetch_page_text`; `research_evidence._fetch_page_price` | any site a result or the member named, through the local CloakBrowser | the URL (and whatever the site's own page requests) |
+| web_fetch | `zoe_agent`: `_web_browse`, `_visit_with_search`; `browser_broker.fetch_page_text` and its plan executor (`build_cloak_executor._execute`); `research_evidence._fetch_page_price`; the brain's `cloakbrowser_fetch` / `cloakbrowser_screenshot` tools (`mcp_server`) | any site a result or the member named, through the local CloakBrowser | the URL (and whatever the site's own page requests) |
 
 There is no separate path for the time: it is read from the box's clock.
 
-**Entry points** (each calls `lookup_door.sent(<class>)` as its first statement): the six weather functions and the two
-weather tools; `zoe_agent._web_search_ddg`, `_web_research`, `_web_browse`; `browser_broker.search_web`, `fetch_page_text`;
-`research_evidence.fetch_web_fallback`, `fetch_web_fallback_results`. The senders were NOT merged into one per class: they are
-eleven functions on three transports (urllib in worker threads, httpx, the browser), and merging them is a rewrite of the
-research flow. A test lists every sender and fails on a new one.
+**Entry points** (each calls `lookup_door.check(<class>)` as its first statement: the off-roster refusal, which records
+nothing): the six weather functions and the two weather tools; the two page tools; `zoe_agent._web_search_ddg`,
+`_web_research`, `_web_browse`; `browser_broker.search_web`, `fetch_page_text`; `research_evidence.fetch_web_fallback`,
+`fetch_web_fallback_results`. **The record** is `lookup_door.sent(<class>)` right after the line in each sender that sent the
+request (the provider answered, the page loaded). The senders were NOT merged into one per class: they are many functions on
+three transports (urllib in worker threads, httpx, the browser), and merging them is a rewrite of the research flow. A test
+scans EVERY module of zoe-data for outbound transport calls and lists each function with its exact count (`SENDERS`), so a
+new sender anywhere fails until it is listed, and a listed lookup must record after it sends.
 
 ## 2. The lookups door [code; `lookup_door.py`]
 
-* **Told afterwards, never asked, never delayed.** Who, and the class (`lookup.weather` / `lookup.web_search` /
+* **Told afterwards, never asked, never delayed.** Told once the request went out and was answered; a lookup that never
+  left (an empty query, a cache hit, a provider off or not installed, a URL refused as private) is not recorded, and nor is
+  one that failed before an answer came back (DNS, a refused connection, a timeout). Who, and the class (`lookup.weather` / `lookup.web_search` /
   `lookup.web_fetch`). Never the query, the place, the URL or the result: there is no field for them. One record per class
   per request, however many fetches a search fans out into.
 * **Who** is the request's or turn's caller (`kernel_door.acting`). Nobody noted = automatic: the wall panel's weather card
@@ -92,7 +97,12 @@ person. Never the words, a phone number, a chat id or an address.
 * Not run live; the voice replay has not been run (the spoken weather, web and intercom paths are touched).
 * No fixture of outbound calls against main was made for lookups: no sender moved, the door is one call that returns after a
   flag read with the flag off, and the senders' own suites run unchanged.
-* A lookup started in a worker thread with no caller noted is not recorded. The entry points are all in the request's own
-  context; a new one must be too.
+* A lookup started in a worker thread with no caller noted is not recorded. `run_in_executor` does not copy the context, so
+  the three executor calls that run a sender (`browser_broker.search_web`, the Tavily and ddgs tiers of
+  `zoe_agent._web_search_ddg`) go through `lookup_door.carry`; `asyncio.to_thread` copies it on its own.
+* **Gap found by the sender scan, not closed here:** two place searches leave the box with no lookups record:
+  `routers/geo._fetch_nominatim` (the place search and reverse lookup) and `zoe_ui_components._geocode` (a map card's
+  address), both to nominatim.openstreetmap.org. There is no lookups class for a place search; one is needed (in the
+  kernel's table first). They are listed in `SENDERS` as unrecorded, by name.
 * The brain's tool dispatcher now notes its member when nothing upstream did, so a tool call that reaches music or the
   house outside the service's own dispatch is treated as that member's, not as automatic.

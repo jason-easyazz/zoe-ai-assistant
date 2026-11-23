@@ -63,6 +63,7 @@ from zoe_os.alarm_door import ALARM_VERBS as ALARM_DOOR_VERBS, TIMER_VERBS as TI
 from zoe_os.calendar_door import VERBS as CALENDAR_DOOR_VERBS  # noqa: E402
 from zoe_os.notes_door import JOURNAL_VERBS as JOURNAL_DOOR_VERBS, NOTE_VERBS as NOTE_DOOR_VERBS  # noqa: E402
 from zoe_os.people_door import VERBS as PEOPLE_DOOR_VERBS  # noqa: E402
+from zoe_os import music_door  # noqa: E402
 from zoe_os.music_door import VERBS as MUSIC_DOOR_VERBS  # noqa: E402
 from zoe_os import home_door  # noqa: E402
 from zoe_os.memory_door import VERBS as MEMORY_DOOR_VERBS  # noqa: E402
@@ -397,6 +398,9 @@ def build(state: Path):
         k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)    # recorded whatever their role, never consent
     srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people, seen=seen)
     srv.roster_status = roster_status
+    # music and home control act only for the CURRENT roster: a member taken off it stays in the kernel's people (forgettable)
+    # and must control nothing (``music_door.roster``; ``apply_roster`` replaces ``srv.roster`` on each re-read)
+    music_door.roster = lambda: srv.roster
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 

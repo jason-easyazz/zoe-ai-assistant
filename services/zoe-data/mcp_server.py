@@ -1823,7 +1823,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
     # === WEATHER TOOLS (Open-Meteo — free, no API key) ===
     elif name == "weather_current":
         try:
-            lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+            lookup_door.check(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
         except kernel_door.Refused as exc:
             return {"error": exc.line(), "status": "refused"}
         # WMO weather code → human-readable description
@@ -1860,6 +1860,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         }
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
+            lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             r.raise_for_status()
             data = r.json()
         cur = data.get("current", {})
@@ -1876,7 +1877,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "weather_forecast":
         try:
-            lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: told to the kernel; off = a flag read
+            lookup_door.check(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
         except kernel_door.Refused as exc:
             return {"error": exc.line(), "status": "refused"}
         _WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
@@ -1912,6 +1913,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         }
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
+            lookup_door.sent(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             r.raise_for_status()
             data = r.json()
         daily = data.get("daily", {})
@@ -2706,6 +2708,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"ok": True, **report}
 
     elif name == "cloakbrowser_fetch":
+        try:
+            lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
+        except kernel_door.Refused as exc:
+            return {"ok": False, "error": exc.line(), "status": "refused"}
         url = str(args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
@@ -2726,6 +2732,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             # may 30x to an internal/metadata host); aborts the route before connect.
             await guard_browser_page(page)
             await page.goto(url, wait_until=wait_until, timeout=30000)
+            lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             title = await page.title()
             try:
                 text = await page.locator("body").inner_text(timeout=5000)
@@ -2747,6 +2754,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             await context.close()
 
     elif name == "cloakbrowser_screenshot":
+        try:
+            lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
+        except kernel_door.Refused as exc:
+            return {"ok": False, "error": exc.line(), "status": "refused"}
         url = str(args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
@@ -2766,6 +2777,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             # SSRF: validate every request/redirect hop pre-connect (see above).
             await guard_browser_page(page)
             await page.goto(url, wait_until=wait_until, timeout=30000)
+            lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
             screenshot = await page.screenshot(type="png", full_page=full_page)
             import base64 as _base64
             return {
