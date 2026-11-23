@@ -1,10 +1,12 @@
 """Only ``memory_service.py`` writes the memory rows (the palace collection), bar FOUR named bypass writes.
 
-The rows are a collection, not SQL, so the scan is over calls: in every module of the service, a write call (``upsert``,
-``update``, ``delete``, ``add``, ``modify``) on anything that came from the collection (``leased_drawers(...)``,
-``._collection()``, ``get_drawers_collection(...)``, ``get_collection`` / ``get_or_create_collection``, through any chain of
-assignments, a parameter such a value is passed to inside the module, or directly on the call). No file is exempt by name; the
-four allowed writes are named by module and function WITH A COUNT, so a fifth fails.
+The rows are a collection, not SQL, so the scan is over calls, over the WHOLE service at once (``scan``): a write call
+(``upsert``, ``update``, ``delete``, ``add``, ``modify``, also ``getattr(col, "delete")(...)``) on anything that came from the
+collection (``leased_drawers(...)``, ``._collection()``, ``get_drawers_collection(...)``, ``get_collection`` /
+``get_or_create_collection`` / ``create_collection``, or any function that RETURNS one; through any chain of assignments, an
+attribute it was stored in, a closure, a module-level or ``global`` handle, a parameter such a value is passed to in ANY module,
+or directly on the call). No file is exempt by name; the four allowed writes are named by module and function WITH A COUNT, so a
+fifth fails. Module- and class-level code is scanned too (as ``<module>``).
 
 The four (all AUTOMATIC, all on ``main``): ``memory_digest.py`` writes rows back from its night passes in three write calls
 (``_upsert_rows``: one; ``_update_existing``: an update, or an upsert for a store with no update), and ``zoe_agent.py`` has a
@@ -13,8 +15,11 @@ one-off migration (``migrate_mempalace_legacy_records``). They are faults on mai
 Functions are keyed by QUALIFIED name (enclosing classes and functions, dotted), so a later function of the same bare name
 cannot replace an earlier one and hide its write.
 
-Negative control run: a ``col.update`` planted in ``memory_digest._live_ids`` fails
-``test_only_the_memory_service_writes_the_collection`` (and a write planted in a module that has none fails it too).
+Negative control runs: a ``col.update`` planted in ``memory_digest._live_ids`` fails
+``test_only_the_memory_service_writes_the_collection`` (and a write planted in a module that has none fails it too); round 3,
+each fails it too: a class in ``memory_digest`` holding ``self.col = svc._collection()`` and calling ``self.col.delete``; a
+``memory_digest`` function handing ``svc._collection()`` to ``night_mind._finish`` (whose ``res.update`` becomes a write). And a
+``svc.erase_rows`` handed to ``asyncio.to_thread`` in ``memory_digest`` fails the table test (a reference is a site).
 """
 from __future__ import annotations
 
@@ -28,86 +33,198 @@ pytestmark = pytest.mark.ci_safe
 SVC = Path(__file__).resolve().parents[1]
 WRITES = {"upsert", "update", "delete", "add", "modify"}
 COLLECTION_PARAMS = {"col", "coll", "collection", "drawers"}
-SOURCES = {"leased_drawers", "_collection", "_audit_collection", "get_drawers_collection", "get_collection", "get_or_create_collection"}
+SOURCES = {"leased_drawers", "_collection", "_audit_collection", "get_drawers_collection", "get_collection", "get_or_create_collection",
+           "create_collection"}
 #: the bypass writes on main: (module, function) -> how many write calls
 BYPASS = {("memory_digest.py", "_upsert_rows"): 1, ("memory_digest.py", "_update_existing"): 2,
           ("zoe_agent.py", "migrate_mempalace_legacy_records"): 1}
+MODULE = "<module>"                                          #: the unit for code at module and class level
 
 
-def _from_collection(node, names: set) -> bool:
-    """Is this expression the collection: a call of one of SOURCES, or a name already known to hold it?"""
-    while isinstance(node, ast.Await):
-        node = node.value
-    if isinstance(node, ast.Name):
-        return node.id in names
-    if isinstance(node, ast.Call):
-        fn = node.func
-        return (fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")) in SOURCES
-    return False
-
-
-def _functions(tree):
-    """``(qualified name, node)`` for every function: its enclosing classes and functions joined by dots, so a method
-    ``A.save`` and a method ``B.save`` (or a nested ``outer.save``) are two entries, never one replacing the other."""
+def _qualified(tree):
+    """``(qualified name, node)`` for every function AND class: its enclosing classes and functions joined by dots."""
     def walk(node, path):
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 qual = f"{path}.{child.name}" if path else child.name
-                if not isinstance(child, ast.ClassDef):
-                    yield qual, child
+                yield qual, child
                 yield from walk(child, qual)
             else:
                 yield from walk(child, path)
     yield from walk(tree, "")
 
 
-def collection_writes(source: str) -> Counter:
-    """``{qualified function name: write calls on the collection}`` for one module's source."""
-    tree = ast.parse(source)
-    fns = dict(_functions(tree))
-    by_bare: dict = {}
-    for qual, fn in fns.items():
-        by_bare.setdefault(fn.name, []).append(qual)
-    # per function: the names that hold the collection. A parameter CALLED the collection is one (a write handed to an
-    # executor through ``functools.partial`` reaches its helper with no call the scan could follow).
-    holds: dict = {name: {a.arg for a in fn.args.args + fn.args.kwonlyargs if a.arg in COLLECTION_PARAMS} for name, fn in fns.items()}
+def _functions(tree):
+    """``(qualified name, node)`` for every function, so a method ``A.save`` and a method ``B.save`` (or a nested
+    ``outer.save``) are two entries, never one replacing the other."""
+    return ((q, n) for q, n in _qualified(tree) if not isinstance(n, ast.ClassDef))
+
+
+def _own_nodes(node):
+    """Every node of a unit that runs IN it: a nested function's body is its own unit (the module's units are everything
+    outside a function, class bodies included)."""
+    todo = list(ast.iter_child_nodes(node))
+    while todo:
+        n = todo.pop()
+        yield n
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            todo.extend(ast.iter_child_nodes(n))
+
+
+def _params(fn) -> list:
+    ps = [a.arg for a in fn.args.posonlyargs + fn.args.args]
+    return ps[1:] if ps[:1] in (["self"], ["cls"]) else ps
+
+
+def scan(modules: dict) -> Counter:
+    """``{(module, qualified function or "<module>"): write calls on the collection}`` over a whole set of modules at once.
+
+    A value is the collection when it is: a call of a SOURCE (or of any function, in any module, that RETURNS the collection);
+    a name bound to it in the unit or an enclosing one (assignment, tuple unpacking, walrus, ``with ... as``, ``for``, a
+    ``global``); a parameter a caller ANYWHERE in the set passes it to (callees found by bare name, so a helper in another
+    module is followed through its import, a method on an object by its name anywhere); a parameter called the collection; an ATTRIBUTE some unit stored it in (``self.col = ...``, keyed by
+    attribute name over the whole set); either branch of ``a if c else b`` / ``a or b``. A write is a WRITES method named on it
+    (called, or handed on as a callable) or ``getattr(<it>, "<write>")``."""
+    units, parent, globals_of = {}, {}, {}
+    local, top, methods = {}, {}, {}        # (module, bare) -> units; (module, bare) -> top-level units; bare -> methods
+    imported, modnames = {}, {}             # (module, local name) -> (module, bare); (module, local name) -> module
+    for rel, src in modules.items():
+        tree = ast.parse(src)
+        units[(rel, MODULE)] = tree
+        classes = {q for q, n in _qualified(tree) if isinstance(n, ast.ClassDef)}
+        for qual, fn in _functions(tree):
+            units[(rel, qual)] = fn
+            up = qual.rsplit(".", 1)[0] if "." in qual else ""
+            parent[(rel, qual)] = (rel, up) if (rel, up) in units and up else (rel, MODULE)
+            local.setdefault((rel, fn.name), []).append((rel, qual))
+            if "." not in qual:
+                top.setdefault((rel, fn.name), []).append((rel, qual))
+            if up in classes:
+                methods.setdefault(fn.name, []).append((rel, qual))
+        for node in ast.walk(tree):                         # imports anywhere in the module (lazy imports too)
+            if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                for al in node.names:
+                    imported[(rel, al.asname or al.name)] = (node.module.replace(".", "/") + ".py", al.name)
+                    modnames[(rel, al.asname or al.name)] = f"{node.module}.{al.name}".replace(".", "/") + ".py"
+            elif isinstance(node, ast.Import):
+                for al in node.names:
+                    modnames[(rel, al.asname or al.name)] = al.name.replace(".", "/") + ".py"
+
+    def callees(rel, func) -> list:
+        """The functions a call may reach: same-module functions of the name; an imported function (``from m import f``,
+        ``import m`` then ``m.f``); for a method call on an object, every method of that name in the set."""
+        if isinstance(func, ast.Name):
+            found = list(local.get((rel, func.id), ()))
+            if (rel, func.id) in imported:
+                found += top.get(imported[(rel, func.id)], [])
+            return found
+        if isinstance(func, ast.Attribute):
+            found = list(local.get((rel, func.attr), ()))
+            if isinstance(func.value, ast.Name) and (rel, func.value.id) in modnames:
+                return found + top.get((modnames[(rel, func.value.id)], func.attr), [])
+            return found + methods.get(func.attr, [])
+        return []
+    kinds = (ast.Assign, ast.AnnAssign, ast.NamedExpr, ast.withitem, ast.For, ast.AsyncFor, ast.Return, ast.Call, ast.Attribute,
+             ast.Global)
+    own = {u: [n for n in _own_nodes(node) if isinstance(n, kinds)] for u, node in units.items()}
+    for u, nodes in own.items():
+        globals_of[u] = {name for n in nodes if isinstance(n, ast.Global) for name in n.names}
+    holds = {u: ({a.arg for a in node.args.args + node.args.kwonlyargs + node.args.posonlyargs if a.arg in COLLECTION_PARAMS}
+                 if u[1] != MODULE else set()) for u, node in units.items()}
+    attrs: set = set()
+    sources = set(SOURCES)
+
+    def names_of(u):
+        seen = set(holds[u])
+        while u[1] != MODULE:
+            u = parent[u]
+            seen |= holds[u]
+        return seen
+
+    def is_col(node, names) -> bool:
+        while isinstance(node, (ast.Await, ast.NamedExpr)):
+            node = node.value
+        if isinstance(node, ast.Name):
+            return node.id in names
+        if isinstance(node, ast.Attribute):
+            return node.attr in attrs
+        if isinstance(node, ast.Call):
+            fn = node.func
+            return (fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")) in sources
+        if isinstance(node, ast.IfExp):
+            return is_col(node.body, names) or is_col(node.orelse, names)
+        if isinstance(node, ast.BoolOp):
+            return any(is_col(v, names) for v in node.values)
+        return False
+
+    def bind(u, target, value, names) -> bool:
+        """Bind ``target`` (a name, attribute or tuple of them) when ``value`` is the collection; True when anything new."""
+        if isinstance(target, (ast.Tuple, ast.List)):
+            if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts):
+                return any([bind(u, t, v, names) for t, v in zip(target.elts, value.elts)])
+            return False
+        if value is None or not is_col(value, names):
+            return False
+        if isinstance(target, ast.Starred):
+            target = target.value
+        if isinstance(target, ast.Name):
+            home = (u[0], MODULE) if target.id in globals_of[u] else u
+            if target.id not in holds[home]:
+                holds[home].add(target.id)
+                return True
+        elif isinstance(target, ast.Attribute) and target.attr not in attrs:
+            attrs.add(target.attr)
+            return True
+        return False
+
     changed = True
-    while changed:                                          # assignments, aliases, and parameters fed a collection by a caller
+    while changed:
         changed = False
-        for name, fn in fns.items():
-            for node in ast.walk(fn):
-                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and node.value is not None \
-                        and _from_collection(node.value, holds[name]):
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    for t in targets:
-                        if isinstance(t, ast.Name) and t.id not in holds[name]:
-                            holds[name].add(t.id)
-                            changed = True
-                if isinstance(node, ast.Call):
-                    # a call names a function by its bare name: every function of that name may be the callee
-                    called = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
-                    for callee_name in by_bare.get(called, ()):
-                        callee = fns[callee_name]
-                        params = [a.arg for a in callee.args.args]
-                        if params[:1] == ["self"]:
-                            params = params[1:]
+        for u, nodes in own.items():
+            names = names_of(u)
+            for node in nodes:
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                    for t in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                        changed |= bind(u, t, node.value, names)
+                elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+                    changed |= bind(u, node.optional_vars, node.context_expr, names)
+                elif isinstance(node, (ast.For, ast.AsyncFor)):
+                    items = node.iter.elts if isinstance(node.iter, (ast.Tuple, ast.List, ast.Set)) else [node.iter]
+                    for item in items:
+                        changed |= bind(u, node.target, item, names)
+                elif isinstance(node, ast.Return) and u[1] != MODULE and node.value is not None and is_col(node.value, names):
+                    bare = units[u].name
+                    if bare not in sources:
+                        sources.add(bare)
+                        changed = True
+                elif isinstance(node, ast.Call):
+                    for callee in callees(u[0], node.func):
+                        params = _params(units[callee])
                         passed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
                         passed += [(k.arg, k.value) for k in node.keywords if k.arg]
                         for param, value in passed:
-                            if _from_collection(value, holds[name]) and param not in holds[callee_name]:
-                                holds[callee_name].add(param)
+                            if param not in holds[callee] and is_col(value, names):
+                                holds[callee].add(param)
                                 changed = True
+                if changed:
+                    names = names_of(u)
     found: Counter = Counter()
-    for name, fn in fns.items():
-        inner = {n for sub in ast.walk(fn) if sub is not fn and isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
-                 for n in ast.walk(sub)}
-        for node in ast.walk(fn):
-            if node in inner:
-                continue
+    for u, nodes in own.items():
+        names = names_of(u)
+        for node in nodes:
             # the write method named on a collection: called here, or handed on as a callable (``_store(col.update, ...)``)
-            if isinstance(node, ast.Attribute) and node.attr in WRITES and _from_collection(node.value, holds[name]):
-                found[name] += 1
+            if isinstance(node, ast.Attribute) and node.attr in WRITES and is_col(node.value, names):
+                found[u] += 1
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Call) and getattr(node.func.func, "id", "") == "getattr" \
+                    and len(node.func.args) >= 2 and isinstance(node.func.args[1], ast.Constant) \
+                    and node.func.args[1].value in WRITES and is_col(node.func.args[0], names):
+                found[u] += 1                               # ``getattr(col, "delete")(...)``; a bare ``getattr`` probe is a read
     return found
+
+
+def collection_writes(source: str) -> Counter:
+    """``{qualified function name (or "<module>"): write calls on the collection}`` for one module's source."""
+    return Counter({qual: n for (_rel, qual), n in scan({"module.py": source}).items()})
 
 
 def _modules():
@@ -119,19 +236,15 @@ def _modules():
 
 
 def test_only_the_memory_service_writes_the_collection():
-    found = {}
-    for rel, path in _modules():
-        if rel == "memory_service.py":
-            continue
-        for fn, n in collection_writes(path.read_text("utf-8")).items():
-            found[(rel, fn)] = n
+    found = {key: n for key, n in scan({rel: path.read_text("utf-8") for rel, path in _modules()}).items()
+             if key[0] != "memory_service.py"}
     assert found == BYPASS
     assert sum(BYPASS.values()) == 4
 
 
 def test_the_scan_sees_each_way_a_write_can_be_spelled():
     """The reader finds a write through a lease, an alias, a helper's parameter and a direct chain, and ignores reads and
-    dict updates. Control run: with ``_from_collection`` answering False for names, the alias and parameter forms are missed."""
+    dict updates. Control run: with ``is_col`` answering False for names, the alias and parameter forms are missed."""
     src = '''
 def lease(svc):
     col = leased_drawers(svc)
@@ -158,6 +271,84 @@ def reads(svc):
     meta.update(a=1)
 '''
     assert collection_writes(src) == Counter({"lease": 1, "alias": 1, "helper": 1, "chain": 1, "handed_on": 1, "by_name": 1})
+
+
+def test_the_scan_follows_attributes_helpers_elsewhere_wrappers_closures_and_module_level():
+    """Round 3: the forms the call-and-name scan missed, each its own planted write. An attribute handle
+    (``self.col = svc._collection()`` then ``self.col.delete``, also used from another method and another module); a helper
+    in ANOTHER module handed the collection (``import b`` then ``b.erase(col)``; ``from b import wipe_out as wo``; a method
+    ``obj.run(col)`` of any class; a same-named helper nobody hands the collection, ``unrelated``, stays clean); a wrapper that RETURNS
+    it; a closure over it; a module-level handle and a module-level write; a ``global``; ``with ... as``; tuple unpacking;
+    ``a or b``; ``getattr(col, "delete")``; ``create_collection``. Controls run (each fails this test): ``bind`` ignoring
+    attribute targets (the attribute forms are missed); callees looked up in the CALLER's module only (the old per-module
+    scan: ``b.erase`` is missed); ``Return`` not making a source (``wrapped`` is missed)."""
+    a = '''
+import b
+from b import wipe_out as wo
+class Keeper:
+    def __init__(self, svc):
+        self.col = svc._collection()
+    def wipe(self):
+        self.col.delete(ids=[1])
+def hand_off(svc):
+    b.erase(svc._collection())
+    wo(leased_drawers(svc), why="x")
+    svc.eraser.run(svc._collection())
+def _drawers(svc):
+    return leased_drawers(svc)
+def wrapped(svc):
+    _drawers(svc).upsert(ids=[1])
+def closure(svc):
+    col = leased_drawers(svc)
+    def inner():
+        col.update(ids=[1])
+    inner()
+_COL = get_collection("x")
+def uses_module_handle():
+    _COL.add(ids=[1])
+get_collection("y").delete(ids=[1])
+def sets_global(svc):
+    global _LATER
+    _LATER = svc._collection()
+def uses_global():
+    _LATER.upsert(ids=[1])
+def with_as(svc):
+    with leased_drawers(svc) as handle:
+        handle.delete(ids=[1])
+def unpacked(svc):
+    one, two = leased_drawers(svc), 3
+    one.update(ids=[1])
+def either(svc, maybe):
+    h = maybe or svc._collection()
+    h.delete(ids=[1])
+def by_getattr(svc):
+    getattr(svc._collection(), "delete")(ids=[1])
+def created(client):
+    client.create_collection("z").add(ids=[1])
+def reads(svc):
+    col = leased_drawers(svc)
+    col.get(ids=[1])
+    getattr(col, "get")(ids=[1])
+'''
+    b = '''
+def erase(handle):
+    handle.delete(ids=[1])
+def wipe_out(handle, why=None):
+    handle.delete(ids=[1])
+class Eraser:
+    def run(self, h):
+        h.update(ids=[1])
+def unrelated(handle):
+    handle.delete(ids=[1])
+def elsewhere(keeper):
+    keeper.col.modify(name="w")
+'''
+    assert scan({"a.py": a, "b.py": b}) == Counter({
+        ("a.py", "Keeper.wipe"): 1, ("b.py", "erase"): 1, ("b.py", "wipe_out"): 1, ("b.py", "Eraser.run"): 1,
+        ("b.py", "elsewhere"): 1, ("a.py", "wrapped"): 1,
+        ("a.py", "closure.inner"): 1, ("a.py", "uses_module_handle"): 1, ("a.py", "<module>"): 1, ("a.py", "uses_global"): 1,
+        ("a.py", "with_as"): 1, ("a.py", "unpacked"): 1, ("a.py", "either"): 1, ("a.py", "by_getattr"): 1,
+        ("a.py", "created"): 1})
 
 
 def test_a_later_function_of_the_same_name_does_not_hide_an_earlier_write():
@@ -189,7 +380,11 @@ def test_the_memory_service_itself_is_seen_writing():
 
 # ---- every call of a mutating method, and who is acting there -------------------------------------------------------------------
 def mutating_calls(source: str, rel: str) -> Counter:
-    """``{(module, function, method): calls}`` of the mutating method names in one module (nested functions by dotted name)."""
+    """``{(module, function, method): calls}`` of the mutating method names in one module (nested functions by dotted name).
+
+    Every REFERENCE counts, not only a call: ``svc.ingest(...)``, but also the bound method handed on
+    (``asyncio.to_thread(svc.erase_rows, ...)``, ``partial(svc.review, ...)``, ``f = svc.ingest``) and
+    ``getattr(svc, "review")``, so a write run through an executor or an alias is still a site in the table."""
     import memory_writers
 
     found: Counter = Counter()
@@ -199,8 +394,11 @@ def mutating_calls(source: str, rel: str) -> Counter:
             inner = fn
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 inner = child.name if not fn else f"{fn}.{child.name}"
-            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr in memory_writers.MUTATING:
-                found[(rel, fn, child.func.attr)] += 1
+            if isinstance(child, ast.Attribute) and child.attr in memory_writers.MUTATING:
+                found[(rel, fn, child.attr)] += 1
+            elif isinstance(child, ast.Call) and getattr(child.func, "id", "") == "getattr" and len(child.args) >= 2 \
+                    and isinstance(child.args[1], ast.Constant) and child.args[1].value in memory_writers.MUTATING:
+                found[(rel, fn, child.args[1].value)] += 1
             walk(child, inner)
 
     walk(ast.parse(source), "")
@@ -232,6 +430,24 @@ class MemoryService:
     assert service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 2}) == {}
     with pytest.raises(AssertionError):                     # an exemption naming more calls than are there fails too
         service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 3})
+
+
+def test_a_handed_on_or_aliased_mutating_method_is_a_site():
+    """Round 3: a bound method handed to an executor, aliased, or fetched by ``getattr`` is a site like a call. Control run:
+    with ``mutating_calls`` counting only ``Call`` nodes (the old rule) this test fails (all three are missed)."""
+    src = '''
+async def by_thread(svc, ids):
+    await asyncio.to_thread(svc.erase_rows, ids)
+def aliased(svc, row):
+    keep = svc.ingest
+    keep(row)
+def fetched(svc):
+    getattr(svc, "review")(1)
+def a_read(svc):
+    return svc.recall(1)
+'''
+    assert mutating_calls(src, "m.py") == Counter({("m.py", "by_thread", "erase_rows"): 1, ("m.py", "aliased", "ingest"): 1,
+                                                   ("m.py", "fetched", "review"): 1})
 
 
 def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
