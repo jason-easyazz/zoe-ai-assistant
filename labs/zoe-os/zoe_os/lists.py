@@ -42,7 +42,7 @@ def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner
     return Decision(False, ADULTS_ONLY)
 
 
-AREA = Area("lists", VERBS, decide, target="list", parts="items")
+AREA = Area("lists", VERBS, decide, target="list", parts="items", former=True)      # main's pinned rule (``door.Area.former``)
 
 
 class ListDoor:
