@@ -7,6 +7,7 @@ import lookup_door
 import message_door
 import memory_actor
 import asyncio
+import functools
 import json
 import random
 import sys
@@ -1431,12 +1432,28 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
     return row, None
 
 
+def _actor_for_this_call_only(run):
+    """Whoever ``_execute_tool`` notes as acting is the actor of THAT call alone (``kernel_door.actor_scope``). The stdio server
+    answers every call in one task: without this the first caller noted stayed the actor of every later call, so a child's
+    home-control call reached the Zoe OS kernel as the adult before them."""
+    @functools.wraps(run)
+    async def call(*args, **kwargs):
+        with kernel_door.actor_scope():
+            return await run(*args, **kwargs)
+    return call
+
+
+@_actor_for_this_call_only
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
     stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal", "people", "memory", "messages")      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
     acting = memory_actor.Member(str(user_id or ""), stamps_at)      # the member this tool call is for
-    if kernel_door.acting() is None:      # a tool call that did not come through the service's dispatch: this member is who it is for
+    # Who this call acts for at the action doors. A call that states its caller (the stdio transport, or any caller that hands
+    # a context) acts for THAT member, whatever an earlier call left noted. One with no context came through the service's own
+    # dispatch, which noted the turn's member already; if nothing did, this member is who it is for. Put back after the call
+    # (``_actor_for_this_call_only``).
+    if actor_context is not None or kernel_door.acting() is None:
         kernel_door.note_actor(user_id)
 
     if "list_type" in args:
