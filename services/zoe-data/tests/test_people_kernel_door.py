@@ -351,6 +351,125 @@ async def test_the_shared_mechanics_ask_for_a_members_action_and_never_for_autom
     assert _people(w) == before
 
 
+# ---- the spoken and typed entry points that can meet a refusal --------------------------------------------------------------------
+SAME_PERSON = {"confirm": True, "stub_id": "p-ann-stub", "stub_name": "Plover", "name": "Plover Tansy", "relationship": "neighbour"}
+
+
+class _NoNotes:
+    """The memory store a pet correction reads: nothing stored about the name (only the contact is changed)."""
+
+    async def list_by_status(self, **_):
+        return []
+
+
+@pytest.mark.parametrize("reason", ["not_owner", "unknown_person"])
+@pytest.mark.asyncio
+async def test_a_refused_same_person_reply_is_said_on_the_turn_not_raised(door, reason):
+    """Review of #2700: "yes, that's the same person" renames the stub through ``_rename_person_row``; a kernel refusal there
+    raised ``ContactRefused`` out of ``execute_intent`` and the voice turn crashed. Driven through ``execute_intent`` (the real
+    entry point): the refusal's sentence is the reply, nothing is written, nothing is reported or mirrored. Allowed, the rename
+    is made and said as before.
+
+    Control run: the ``except people_service.ContactRefused`` in ``_execute_same_person_reply`` removed -> this fails (the
+    refusal is raised out of ``execute_intent``)."""
+    w = scenarios.World([])
+    before = w.rows()
+    door.door = f"refuse:{reason}"
+    out = await w.router.execute_intent(w.router.Intent("people_same_person_reply", dict(SAME_PERSON)), ANN)
+    assert out == people_service.ContactRefused(reason).line()
+    assert w.rows() == before and door.ops("door_report") == []
+    assert not [e for e in w.log if e[0] in ("notify_ui_channel", "mirror")]
+    door.door = "allow"
+    out = await w.router.execute_intent(w.router.Intent("people_same_person_reply", dict(SAME_PERSON)), ANN)
+    assert out.startswith("Done — I've updated Plover to Plover Tansy") and _people(w)["p-ann-stub"]["name"] == "Plover Tansy"
+
+
+@pytest.mark.parametrize("value", [None, "off"])
+@pytest.mark.asyncio
+async def test_with_the_flag_off_the_same_person_reply_is_mains(door, monkeypatch, value):
+    """Flag off: the reply renames and says so exactly as on main, with no kernel call (every way in wired to fail)."""
+    def never(*a, **k):
+        raise AssertionError("the kernel was reached with the flag off")
+
+    monkeypatch.delenv("ZOE_OS_PEOPLE") if value is None else monkeypatch.setenv("ZOE_OS_PEOPLE", value)
+    for name in ("ask_door", "record_door", "report_door", "door_unchecked", "stamp_snapshot"):
+        monkeypatch.setattr(os_shadow, name, never)
+    w = scenarios.World([])
+    out = await w.router.execute_intent(w.router.Intent("people_same_person_reply", dict(SAME_PERSON)), ANN)
+    assert out == "Done — I've updated Plover to Plover Tansy, your neighbour."      # main's words
+    (update,) = [e for e in w.log if e[0] == "sql" and e[1].startswith("UPDATE")]
+    assert update[1] == " ".join(people_service.SQL["said_rename"].split())
+    assert update[2][:2] + update[2][3:] == ["Plover Tansy", "neighbour", "p-ann-stub", ANN] and update[2][2]      # (the stamp: the wall clock)
+    assert door.calls == []
+
+
+@pytest.mark.parametrize("reason", ["not_owner", "unknown_person"])
+@pytest.mark.asyncio
+async def test_a_refused_pet_correction_is_said_by_the_correction_not_left_to_the_brain(door, monkeypatch, reason):
+    """Found in review round 3 (the sweep of every spoken/typed entry point that can meet ``ContactRefused``): a spoken pet
+    correction's refusal was swallowed by ``maybe_apply`` ("a correction never breaks the turn") and the turn fell through to
+    the brain, which could claim the change. Through ``correction_apply.maybe_apply`` (what the turn calls): the correction
+    answers with the refusal's sentence, kind ``refused``, nothing written. Control run: the ``except
+    people_service.ContactRefused`` in ``apply_pet_correction`` removed -> ``maybe_apply`` answers None and this fails."""
+    import correction_apply
+
+    monkeypatch.setenv("ZOE_CORRECTION_APPLY", "1")
+    w = scenarios.World([])
+    before = w.rows()
+    door.door = f"refuse:{reason}"
+    res = await correction_apply.maybe_apply("Plover is their dog", ANN, "sess-1", svc=_NoNotes(), db=w.db)
+    assert res is not None and (res.kind, res.reply, res.changed) == ("refused", people_service.ContactRefused(reason).line(), [])
+    assert w.rows() == before and door.ops("door_report") == []
+    door.door = "allow"
+    res = await correction_apply.maybe_apply("Plover is their dog", ANN, "sess-1", svc=_NoNotes(), db=w.db)
+    assert res is not None and res.kind == "pet" and _people(w)["p-ann-stub"]["relationship"] == "pet dog"
+
+
+@pytest.mark.asyncio
+async def test_the_spoken_rename_and_the_pet_correction_carry_the_stamps_taken_before_they_read_the_contact(door, monkeypatch):
+    """Review of #2700 (non-blocking): the spoken add's in-place rename (``_merge_into_same_person`` -> ``_rename_person_row``)
+    and the pet correction (``apply_pet_correction`` -> ``_make_pet``) took their erase stamps AFTER their callers had read the
+    contacts, so a forget of the member confirmed in between was ordered before an ask made from what was read before it.
+    Each caller now stamps first and hands the stamps on. Here a whole-member forget of ANN is confirmed right after each read:
+    the ask still carries the stamp from before it.
+
+    Controls run: ``_rename_person_row`` taking its own ``stamps_now()`` again (in place of its caller's) -> the rename's ask
+    carries the moved-on stamp and this fails; the same in ``_make_pet`` -> the correction's ask fails the same way."""
+    import contacts_conversation
+    import correction_apply
+
+    w = scenarios.World([])
+    w.con.execute("UPDATE people SET relationship = 'neighbour' WHERE id = 'p-ann-stub'")
+    w.con.commit()
+    before = os_shadow.erase_stamp(ANN)
+
+    async def no_links(user_id, ids, timeout=1.5):            # runs right AFTER the same-person read of the contacts ...
+        os_shadow._forget_marks[ANN] += 1                     # ... and the kernel confirms a whole-member forget of ANN
+        return set()
+
+    monkeypatch.setattr(contacts_conversation, "linked_memory_ids", no_links)
+    monkeypatch.setenv("ZOE_CONTACTS_CONVERSATIONAL", "1")
+    await w.router._execute_people_create_direct(w.router.Intent("people_create", {"name": "Plover Tansy", "relationship": "neighbour"}), ANN)
+    (rename,) = _wait(door, "door_ask", 1)
+    assert (rename["verb"], rename["target"]) == ("contact.edit", "p-ann-stub") and _people(w)["p-ann-stub"]["name"] == "Plover Tansy"
+    assert rename["stamps"][ANN] == before and os_shadow.erase_stamp(ANN) > before
+
+    w = scenarios.World([])
+    real = correction_apply._people_rows
+    before = os_shadow.erase_stamp(ANN)
+
+    async def read_then_forget(db, user_id, name):
+        rows = await real(db, user_id, name)
+        os_shadow._forget_marks[ANN] += 1
+        return rows
+
+    monkeypatch.setattr(correction_apply, "_people_rows", read_then_forget)
+    res = await correction_apply.apply_pet_correction("Plover is their dog", ANN, svc=_NoNotes(), db=w.db)
+    asks = _wait(door, "door_ask", 2)
+    assert res is not None and res.kind == "pet" and len(asks) == 2
+    assert (asks[1]["verb"], asks[1]["target"]) == ("contact.edit", "p-ann-stub") and asks[1]["stamps"][ANN] == before
+
+
 # ---- ordered against a forget ---------------------------------------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_an_ask_carries_the_stamps_its_caller_took_before_it_read_the_contact(door):
@@ -393,34 +512,63 @@ def _modules() -> dict:
     return {p.relative_to(SVC).as_posix(): p for p in sorted(SVC.rglob("*.py")) if not skip.intersection(p.relative_to(SVC).parts)}
 
 
+def _passes_on(fn) -> bool:
+    """A helper that takes its CALLER's stamps: ``stamps_at`` is a parameter with NO default (a caller cannot leave it out and
+    get a late stamp taken for it) and is never rebound in the body."""
+    args = fn.args
+    params = args.posonlyargs + args.args
+    defaulted = {a.arg for a in params[len(params) - len(args.defaults):]} if args.defaults else set()
+    defaulted |= {a.arg for a, d in zip(args.kwonlyargs, args.kw_defaults) if d is not None}
+    named = {a.arg for a in params + args.kwonlyargs}
+    rebound = [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == "stamps_at" and isinstance(n.ctx, ast.Store)]
+    return "stamps_at" in named and "stamps_at" not in defaulted and not rebound
+
+
 def door_calls_that_say_too_little(src: str, fns=DOOR_FNS) -> list:
     """``(function, door function, what is wrong)`` for every call of a door function (by any alias, followed to a fixed
-    point): it must say ``under=True``, or name the actor AND pass ``stamps_at=stamps_at`` taken first in that function."""
+    point): it must say ``under=True``, or name the actor AND pass ``stamps_at=stamps_at`` taken first in that function.
+
+    A helper that takes its caller's stamps (``_passes_on``) may hand them on, and then ITS callers are held to the same rule,
+    to a fixed point: every call of it passes ``stamps_at=stamps_at`` from a function that took them first (or hands them on
+    itself). Review of #2700: the spoken rename and the pet correction took their own stamps after their callers had read the
+    contact, and a rule that looked only at the function holding the door call could not see that."""
     tree = ast.parse(src)
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     by_name = {name: fn for fn in fns for name in _door_names(tree, fn)}
+    helpers: set = set()
     out = []
-    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+    while True:                       # the helpers that hand a door call's stamps on, and the helpers that call those, ...
+        found = {fn.name for fn in functions if _passes_on(fn) and any(
+            getattr(c.func, "id", getattr(c.func, "attr", "")) in set(by_name) | helpers
+            for c in ast.walk(fn) if isinstance(c, ast.Call))} - helpers
+        if not found:
+            break
+        helpers |= found
+    for fn in functions:
         for call in [n for n in ast.walk(fn) if isinstance(n, ast.Call)]:
-            door_fn = by_name.get(getattr(call.func, "id", getattr(call.func, "attr", "")))
+            called = getattr(call.func, "id", getattr(call.func, "attr", ""))
+            door_fn = by_name.get(called) or (called if called in helpers else None)
             if door_fn is None:
                 continue
             kw = {k.arg: k.value for k in call.keywords}
             if isinstance(kw.get("under"), ast.Constant) and kw["under"].value is True:
                 continue
-            if "actor" not in kw:
+            if door_fn in fns and "actor" not in kw:
                 out.append((fn.name, door_fn, "no actor"))
             if getattr(kw.get("stamps_at"), "id", "") != "stamps_at":
                 out.append((fn.name, door_fn, "no stamps"))
-            elif not _takes_first(fn):
+            elif not (_takes_first(fn) or fn.name in helpers):
                 out.append((fn.name, door_fn, "stamps not taken first"))
     return sorted(set(out))
 
 
 def test_every_caller_of_the_door_says_enough():
     """Over EVERY module of the service. Controls (planted below): a caller with no actor, one with no stamps, one that stamps
-    after an await, one behind an alias. Control run on the real tree: with ``stamps_at=stamps_at`` dropped from the spoken
+    after an await, one behind an alias; a helper handing stamps on whose caller stamps after its read, or passes none, and a
+    helper whose ``stamps_at`` has a default. Control run on the real tree: with ``stamps_at=stamps_at`` dropped from the spoken
     rename this fails naming ``intent_router.py``; with ``under=True`` dropped from the screen's delete it fails naming
-    ``routers/people.py``."""
+    ``routers/people.py``; with ``apply_pet_correction``'s stamp moved below its read of the contacts it fails naming
+    ``correction_apply.py`` (review of #2700)."""
     modules = _modules()
     assert len(modules) > 100
     seen = 0
@@ -440,9 +588,18 @@ def test_every_caller_of_the_door_says_enough():
                "    await send(db, 'tool_create', (), actor='u', stamps_at=stamps_at)\n"
                "async def part(db):\n    await people_service.write_contact(db, 'screen_delete', (), under=True)\n"
                "async def good(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n"
-               "    await people_service.ask_about(db, 'contact.edit', actor='u', person_id='p', stamps_at=stamps_at)\n")
-    assert door_calls_that_say_too_little(planted) == [("bare", "write_contact", "no actor"), ("blind", "write_contact", "no stamps"),
-                                                       ("late", "write_contact", "stamps not taken first")]
+               "    await people_service.ask_about(db, 'contact.edit', actor='u', person_id='p', stamps_at=stamps_at)\n"
+               # a helper handing its caller's stamps on: its callers are held to the rule (review of #2700)
+               "async def rename(db, *, stamps_at):\n    await people_service.write_contact(db, 'said_rename', (), actor='u', stamps_at=stamps_at)\n"
+               "async def merge(db, *, stamps_at):\n    await db.fetch('x')\n    await rename(db, stamps_at=stamps_at)\n"
+               "async def said(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n    await merge(db, stamps_at=stamps_at)\n"
+               "async def read_then_stamp(db):\n    await db.fetch('x')\n    stamps_at = stamps_now()\n    await rename(db, stamps_at=stamps_at)\n"
+               "async def forgot(db):\n    await rename(db, stamps_at=None)\n"
+               "async def defaulted(db, stamps_at=None):\n    await people_service.write_contact(db, 'said_rename', (), actor='u', stamps_at=stamps_at)\n")
+    assert door_calls_that_say_too_little(planted) == [
+        ("bare", "write_contact", "no actor"), ("blind", "write_contact", "no stamps"),
+        ("defaulted", "write_contact", "stamps not taken first"), ("forgot", "rename", "no stamps"),
+        ("late", "write_contact", "stamps not taken first"), ("read_then_stamp", "rename", "stamps not taken first")]
 
 
 def test_the_shared_mechanics_are_reached_with_an_actor_or_from_a_named_automatic_caller():

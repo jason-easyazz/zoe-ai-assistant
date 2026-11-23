@@ -8,8 +8,10 @@ WHO IS ACTING is the turn's (``kernel_door.acting``): every authenticated entry 
 With nobody noted the command is AUTOMATIC (an alarm's music, the discovery jobs, a routine): not asked, not told.
 
 THREE KINDS OF COMMAND, by the closed verb it maps to (never by a device's or a track's name):
-  * QUIET   stopping or turning down music; turning a light or a media player off. MADE FIRST, TOLD AFTERWARDS: the kernel can
-            neither delay nor refuse them (``os_shadow.record_door``).
+  * QUIET   stopping or turning down music (``MUSIC_QUIET``); turning a light or a media player OFF (``HOME_QUIET``: a light's
+            ``turn_off``; a media player's ``turn_off``, pause or stop) and nothing else in the house: turning a house speaker
+            DOWN or muting it is an ordinary command, asked first. MADE FIRST, TOLD AFTERWARDS: the kernel can neither delay nor
+            refuse them (``os_shadow.record_door``).
   * SECURE  anything that could open the house: a lock or a cover, and any act but closing it. ALWAYS ASKED FIRST, and a
             kernel that is down or slow means NO (``HomeRefused("unavailable")``). The one place "kernel down" refuses.
             The door does NOT replace the service's own adults-only check (``home_opening.refused``, on whatever this flag
@@ -87,10 +89,14 @@ def music_verb(command: str, args: dict) -> Optional[str]:
 _CLASS_OF = {"light": "light", "switch": "switch", "input_boolean": "switch", "fan": "switch", "climate": "climate",
              "water_heater": "climate", "humidifier": "climate", "cover": "cover", "valve": "cover", "lock": "lock",
              "alarm_control_panel": "lock", "scene": "scene", "script": "scene", "automation": "scene", "media_player": "media"}
+#: a service -> its act. ``off`` is QUIET for a light and a media player (``HOME_QUIET``), so it is only what turns a thing OFF:
+#: ``volume_down`` and ``volume_mute`` are not (they were, and a child refused the house's media could turn a speaker down
+#: unasked); pausing or stopping is off for a MEDIA PLAYER only (``_MEDIA_OFF``). Anything not listed is ``set``: asked first.
 _ACT_OF = {"turn_on": "on", "on": "on", "media_play": "on", "turn_off": "off", "off": "off", "media_pause": "off",
-           "media_stop": "off", "volume_down": "off", "volume_mute": "off", "open_cover": "open", "open": "open", "unlock": "open",
+           "media_stop": "off", "open_cover": "open", "open": "open", "unlock": "open",
            "open_valve": "open", "alarm_disarm": "open", "close_cover": "close", "close": "close", "lock": "close",
            "close_valve": "close", "alarm_arm_away": "close", "alarm_arm_home": "close", "alarm_arm_night": "close"}
+_MEDIA_OFF = ("media_pause", "media_stop")                 # "off" for a media player only; for any other class: ``set``
 HOME_QUIET = ("light.off", "media.off")
 SECURE_CLASSES = ("lock", "cover")
 
@@ -112,7 +118,10 @@ def home_verb(path: str, body: dict) -> tuple[str, str]:
     for other in (extra if isinstance(extra, (list, tuple, set)) else [extra]):
         if other and _class_of(str(other)) in SECURE_CLASSES and cls not in SECURE_CLASSES:
             entity, cls = str(other), _class_of(str(other))
-    act = _ACT_OF.get(str(body.get("action") or "").strip().lower(), "set")
+    action = str(body.get("action") or "").strip().lower()
+    act = _ACT_OF.get(action, "set")
+    if action in _MEDIA_OFF and cls != "media":
+        act = "set"
     return f"{cls}.{act}", entity
 
 
