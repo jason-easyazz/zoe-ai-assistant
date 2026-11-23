@@ -1,7 +1,8 @@
 """Music and home control each have ONE way out of zoe-data, and nothing any entry point SENDS has changed against ``main``.
 
 Neither area stores anything in Zoe: what an entry point does is the calls it makes to Music Assistant and to the Home
-Assistant bridge. ``tests/fixtures/actions_as_on_main.json`` is the record of ``main`` (b2bbe84ca): for each entry point and
+Assistant bridge. ``tests/fixtures/actions_as_on_main.json`` is the record of ``main`` (c1a350458, which has the adults-only
+rule for unlocking and opening, ``home_opening.py``): for each entry point and
 action, every outbound call (method, path, body, timeout; reads too) to a FAKE Music Assistant and a FAKE bridge, and the result
 or refusal. It was made by running ``tests/actions_scenarios.py`` against an export of that commit, never by this branch's own
 code. The same scenarios run here and must give the same record. It is also the "before the door" record the kernel-door tests
@@ -14,6 +15,11 @@ discovery playlist"; the intent executor's pause, volume down, volume set, play,
 through a house media player. HOME: the panel's
 control route (on with brightness, off, toggle, a scene, open a cover, unlock, pause a media player, no entity, the bridge
 refusing, the bridge offline); the spoken on / off / brightness / scene / no match; the brain's tool (on, unlock, offline).
+UNLOCKING AND OPENING, each BOTH ways (``test_unlocking_or_opening_is_recorded_both_ways``): sent for an adult member (and for
+the panel while an adult's verified voice session is open on it), refused with nothing sent for the bare panel, a guest, a
+child, a child's voice session and a command on no turn at all; through the panel's route, the brain's tool, the spoken
+resolver and the device helper under it. Locking and closing are sent for anyone. The scenarios' "account record" and "voice
+session" are the fake world's (``World.adults``, ``World.voice_sessions``): no account store is read.
 
 Negative controls run (each broke the code, saw the named scenario fail, restored): the scene path sent to the device path in
 ``smart_home_service.activate_scene`` -> ``home_spoken_scene``; ``raise_for_status`` dropped from the panel route's sender ->
@@ -42,9 +48,14 @@ def here():
 _HOME, _MUSIC, _SCREEN, _ROUTER = "home_control", "music_service", "routers/music.py", "intent_router.py"
 #: HOME: every function of the service that names ``home_control.send`` -> the scenarios that record it
 HOME_RECORDED = {
-    ("routers/ha_control.py", "_bridge_post", "send"): ("home_screen_turn_on", "home_screen_scene", "home_screen_bridge_offline"),
-    ("smart_home_service.py", "_ha_post", "send"): ("home_spoken_turn_on", "home_spoken_scene"),
-    ("zoe_agent.py", "_ha_control", "send"): ("home_tool_turn_on", "home_tool_bridge_offline"),
+    ("routers/ha_control.py", "_bridge_post", "send"): ("home_screen_turn_on", "home_screen_scene", "home_screen_bridge_offline",
+                                                        "home_screen_unlock", "home_screen_unlock_guest", "home_screen_open_a_cover",
+                                                        "home_screen_open_a_cover_bare_panel"),
+    ("smart_home_service.py", "_ha_post", "send"): ("home_spoken_turn_on", "home_spoken_scene", "home_spoken_open_a_cover",
+                                                    "home_spoken_open_a_cover_guest", "home_helper_open_a_cover",
+                                                    "home_helper_open_a_cover_bare_panel"),
+    ("zoe_agent.py", "_ha_control", "send"): ("home_tool_turn_on", "home_tool_bridge_offline", "home_tool_unlock",
+                                              "home_tool_unlock_bare_panel"),
     (_ROUTER, "_post_music_ha_control", "send"): ("music_house_pause", "music_house_volume_set"),
 }
 #: MUSIC: every function of the service that names a function of ``music_service`` that reaches Music Assistant -> its scenarios
@@ -129,6 +140,73 @@ def test_the_record_shows_the_calls_not_only_the_replies(here):
     assert seek == [{"command": "player_queues/seek", "args": {"queue_id": "ply0001", "position": 42}}]
     assert here["home_screen_bridge_offline"][-1] == ["raised", 503, "HA bridge offline"]
     assert [e[2] for e in here["music_house_pause"] if e[0] == "http" and e[1] == "POST" and e[2] != "/api"] == ["/devices/control"]
+
+
+_REFUSAL = "Unlocking or opening that needs a grown-up I can recognise, so I haven't done it."
+_UNLOCK = {"entity_id": "lock.front_door", "action": "unlock", "data": {}}
+_OPEN = {"entity_id": "cover.garage_door", "action": "open_cover", "data": {}}
+_COVER_ON = {"entity_id": "cover.garage_door", "action": "turn_on"}
+#: the scenario an actor main ALLOWS (the one command it sends) -> the same command by actors main REFUSES (how each is told)
+_OPENING = {
+    "home_screen_unlock": (_UNLOCK, {name: ["raised", 403, _REFUSAL] for name in (
+        "home_screen_unlock_guest", "home_screen_unlock_child", "home_screen_unlock_bare_panel",
+        "home_screen_unlock_panel_child_voice_session")}),
+    "home_screen_unlock_panel_adult_voice_session": (_UNLOCK, {"home_screen_unlock_bare_panel": ["raised", 403, _REFUSAL]}),
+    "home_screen_open_a_cover": (_OPEN, {"home_screen_open_a_cover_bare_panel": ["raised", 403, _REFUSAL]}),
+    "home_tool_unlock": (_UNLOCK, {name: ["returned", {"error": _REFUSAL, "status": "refused"}] for name in (
+        "home_tool_unlock_bare_panel", "home_tool_unlock_child", "home_tool_unlock_no_turn")}),
+    "home_spoken_open_a_cover": (_COVER_ON, {name: ["returned", {"action": "turn_on", "spoken_summary": _REFUSAL}] for name in (
+        "home_spoken_open_a_cover_guest", "home_spoken_open_a_cover_no_turn")}),
+    "home_helper_open_a_cover": (_COVER_ON, {"home_helper_open_a_cover_bare_panel": ["returned", False]}),
+}
+#: locking, closing and an ordinary light stay open to anyone who may control the house: sent
+_ANYONE = {"home_screen_lock_bare_panel": {"entity_id": "lock.front_door", "action": "lock", "data": {}},
+           "home_screen_close_a_cover_guest": {"entity_id": "cover.garage_door", "action": "close_cover", "data": {}},
+           "home_tool_lock_guest": {"entity_id": "lock.front_door", "action": "lock", "data": {}},
+           "home_helper_lamp_guest": {"entity_id": "light.kitchen_lamp", "action": "turn_on"}}
+
+
+def _commands(record) -> list:
+    return [e[2:4] for e in record if e[0] == "http" and e[1] == "POST" and e[2] != "/api"]
+
+
+@pytest.mark.parametrize("allowed", sorted(_OPENING))
+def test_unlocking_or_opening_is_recorded_both_ways(here, allowed):
+    """Main (#2715) sends a command that unlocks or opens only for an adult member, or the panel while an adult's verified voice
+    session is open on it. Each such command is pinned BOTH ways, on main (the fixture) AND here: by an actor main allows it is
+    SENT (exactly one command, this body), by each actor main refuses NOTHING is sent and the refusal is the recorded one. A
+    fixture holding only refusals would pin no send (as the pre-#2715 record, replayed on the new main, would have); one holding
+    only sends would pin no refusal.
+    Controls run (each broke the code, saw the named scenario fail here and against the main record, restored): the check
+    dropped from ``routers/ha_control.ha_control`` -> ``home_screen_unlock_guest``; from ``zoe_agent._ha_control`` ->
+    ``home_tool_unlock_bare_panel``; from ``smart_home_service.set_device`` -> ``home_helper_open_a_cover_bare_panel``; the
+    refusal loop dropped from ``resolve_smart_home`` -> ``home_spoken_open_a_cover_guest``; ``set_device`` sending to the scene
+    path -> ``home_helper_open_a_cover``; the voice session ignored in ``home_opening.may_open`` ->
+    ``home_screen_unlock_panel_adult_voice_session``; ``set_device`` refusing every caller -> ``home_helper_lamp_guest``."""
+    body, refused = _OPENING[allowed]
+    for record in (ON_MAIN, here):
+        assert _commands(record[allowed]) == [["/devices/control", body]], allowed
+        assert record[allowed][-1][0] == "returned" and _REFUSAL not in json.dumps(record[allowed][-1])
+        for name, told in refused.items():
+            assert _commands(record[name]) == [] and record[name][-1] == told, name
+
+
+def test_every_opening_scenario_is_in_a_pair_and_closing_is_sent_for_anyone(here):
+    """Nothing that unlocks or opens sits in the fixture outside a pair, and the commands that only lock or close (and a lamp)
+    are sent for a guest and for the bare panel. Control run: ``lock`` removed from ``home_opening.CLOSING`` ->
+    ``home_screen_lock_bare_panel`` is refused and this fails."""
+    import home_opening
+
+    assert home_opening.REFUSAL == _REFUSAL
+    paired = set(_OPENING) | {name for _, refused in _OPENING.values() for name in refused}
+    for name, record in ON_MAIN.items():
+        opens = any(home_opening.opens(body.get("entity_id"), body.get("action"), body.get("data")) for _, body in _commands(record))
+        if opens or _REFUSAL in json.dumps(record):
+            assert name in paired, name
+    assert len(paired) == 17
+    for record in (ON_MAIN, here):
+        for name, body in _ANYONE.items():
+            assert _commands(record[name]) == [["/devices/control", body]], name
 
 
 #: scenario -> the one changing command it must send to Music Assistant, with its arguments (on main, so in the fixture too)
