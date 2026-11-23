@@ -3646,6 +3646,10 @@ async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[
     category = str(slots.get("category") or "general").strip() or "general"
     try:
         import note_service
+    except Exception as exc:      # the door cannot load: main's answer (the generic handler below, None) - never an unbound name
+        logger.warning("note_create direct execution unavailable: %s", exc)
+        return None
+    try:
         from database import get_db_ctx
 
         stamps_at = note_service.stamps_now()      # the Zoe OS notes door: stamped before anything is awaited
@@ -3699,6 +3703,10 @@ async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Option
     )
     try:
         import journal_service
+    except Exception as exc:      # the door cannot load: main's answer (the generic handler below, None) - never an unbound name
+        logger.warning("journal_create direct execution unavailable: %s", exc)
+        return None
+    try:
         from database import get_db_ctx
 
         stamps_at = journal_service.stamps_now()      # the Zoe OS journal door: stamped before anything is awaited

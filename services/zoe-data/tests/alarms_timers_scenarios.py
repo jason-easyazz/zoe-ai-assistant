@@ -332,9 +332,22 @@ def alarm_scenarios() -> dict:
             reply, receipt = await anticipation._do(db, ANN, offer, None, datetime.fromtimestamp(w.clock["now"], timezone.utc))
         return [reply, receipt]
 
+    async def music_did_not_start(w):
+        """The clock-radio's music did not start (``alarm_music._fail``, which calls ``_log``): one ``music_fallback`` event row
+        through ``alarms.log_event`` and its commit, on the handle ``_log`` opens itself (``db_pool.get_db_ctx``)."""
+        import alarm_music
+        import db_pool
+
+        await rest_create(w)
+        _set(db_pool, "get_db_ctx", w.db)
+        _set(alarm_music, "time", w.alarms.time)
+        _set(alarm_music, "STATE", {})
+        await alarm_music._fail(None, aid(1), "", "no panel player")
+        return alarm_music.STATE[aid(1)]
+
     return {
         "forget_a_member": forget_member, "forget_nobody_and_the_household": forget_nobody,
-        "anticipation_wake_alarm": anticipation_wake,
+        "anticipation_wake_alarm": anticipation_wake, "music_did_not_start_logs_the_fallback": music_did_not_start,
         "spoken_shift_a_repeating_alarm": spoken_shift_a_repeating_alarm, "spoken_shift_undone": spoken_shift_undone,
         "spoken_shift_a_one_off": spoken_shift_a_one_off, "spoken_shift_with_no_alarm_makes_one": spoken_shift_with_no_alarm,
         "rest_create": create_member, "rest_create_at_the_panel": create_panel, "rest_create_bad_time": create_bad_time,
@@ -532,29 +545,28 @@ def _isolated() -> None:
             raise RuntimeError(f"alarm and timer scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
 
 
-def run_all(root: Path | None = None) -> dict:
+def run_one(name: str, root: Path | None = None) -> list:
+    """One scenario's record, from reset state."""
     _isolated()
     root = Path(root or Path(__file__).resolve().parents[1])
-    out = {}
-    for name, call in alarm_scenarios().items():
-        log: list = []
-        try:
+    log: list = []
+    alarm_calls = alarm_scenarios()
+    try:
+        if name in alarm_calls:
             world = _AlarmWorld(root, log)
-            _outcome(log, lambda: asyncio.run(call(world)))
+            _outcome(log, lambda: asyncio.run(alarm_calls[name](world)))
             log.append(["rows", _plain(asyncio.run(world.rows()))])
-        finally:
-            _restore()
-        out[name] = _plain(log)
-    for name, call in timer_scenarios().items():
-        log = []
-        try:
+        else:
             world = _TimerWorld(log)
-            _outcome(log, lambda: call(world))
+            _outcome(log, lambda: timer_scenarios()[name](world))
             log.append(["store", world.state()])
-        finally:
-            _restore()
-        out[name] = _plain(log)
-    return out
+    finally:
+        _restore()
+    return _plain(log)
+
+
+def run_all(root: Path | None = None) -> dict:
+    return {name: run_one(name, root) for name in [*alarm_scenarios(), *timer_scenarios()]}
 
 
 if __name__ == "__main__":

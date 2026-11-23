@@ -643,6 +643,7 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     import local_text_logs
 
     local_text_logs.begin_turn()
+    panel_principal._note_actor({"user_id": user_id})      # the action doors (music, home): who acts: this room turn's speaker (this task is the turn's own)
     pipeline_started = time.monotonic()
     await _send_data(local_participant, {"type": "state", "state": "thinking"})
 
@@ -799,6 +800,7 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     import local_text_logs
 
     local_text_logs.begin_turn()   # a typed turn's epoch, read where its words enter this process (this task is the turn's own)
+    panel_principal._note_actor({"user_id": user_id})      # the action doors (music, home): who acts: this room turn's sender
     message = (message or "").strip()
     if not message:
         await _send_data(local_participant, {"type": "state", "state": "ambient"})
