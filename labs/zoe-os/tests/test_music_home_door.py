@@ -39,10 +39,20 @@ def home(verb, actor, **kw):
     return home_door.decide(PEOPLE, verb, actor, **kw)
 
 
-@pytest.fixture(autouse=True)
-def _levels(monkeypatch):
-    monkeypatch.setattr(home_door, "levels", dict)
-    monkeypatch.setattr(music_door, "roster", None)          # an in-process ``build`` elsewhere must not leave its roster here
+def test_neither_area_keeps_any_state_of_its_own():
+    """The roster and the levels are each KERNEL's (``Door.roster``, ``Kernel.home``): neither area's module binds a name a
+    ``build`` could assign and a second kernel would then read. Every lower-case name of either module is a function, a class
+    of ``zoe_os`` or a module; ``roster``, ``on_roster``, ``levels`` and a stateful ``home_door.AREA`` are gone.
+    Control run: ``levels = dict`` put back as a module attribute of ``home_door`` fails this."""
+    import types
+
+    for module in (music_door, home_door):
+        for name, value in vars(module).items():
+            if name.startswith("__") or not name[:1].islower() or name == "annotations":
+                continue
+            ours = isinstance(value, type) and value.__module__.startswith("zoe_os")
+            assert isinstance(value, (types.FunctionType, types.ModuleType)) or ours, (module.__name__, name)
+    assert not {"roster", "on_roster"} & set(vars(music_door)) and not {"levels", "AREA"} & set(vars(home_door))
 
 
 # ---- music -----------------------------------------------------------------------------------------------------------------------
@@ -79,22 +89,22 @@ def test_a_child_with_nothing_stated_has_lights_and_media_only():
 
 @pytest.mark.parametrize("level, may", [("none", set()), ("lights", {"light", "media"}), ("comfort", {"light", "media", "switch", "scene"}),
                                         ("most", {"light", "media", "switch", "scene", "climate"})])
-def test_a_named_level_is_exactly_its_set_of_classes(monkeypatch, level, may):
+def test_a_named_level_is_exactly_its_set_of_classes(level, may):
     """No named level holds a lock or a cover. Control run: with ``cover`` added to ``most`` this fails."""
-    monkeypatch.setattr(home_door, "levels", lambda: {KID: level})
+    lv = lambda: {KID: level}  # noqa: E731
     for cls in home_door.CLASSES:
         for act in home_door.ACTS:
-            assert home(f"{cls}.{act}", KID).allowed is (cls in may), (level, cls, act)
-    assert home("light.on", KID2) == ALLOW and home("switch.on", KID2) == refused(door.ADULTS_ONLY)      # another child: the default
+            assert home(f"{cls}.{act}", KID, levels=lv).allowed is (cls in may), (level, cls, act)
+    assert home("light.on", KID2, levels=lv) == ALLOW and home("switch.on", KID2, levels=lv) == refused(door.ADULTS_ONLY)  # the default
     assert not ({"lock", "cover"} & set().union(*home_door.LEVELS.values()))
 
 
-def test_a_listed_level_is_the_only_way_a_child_gets_a_cover_or_a_lock_and_a_bad_statement_is_the_default(monkeypatch):
+def test_a_listed_level_is_the_only_way_a_child_gets_a_cover_or_a_lock_and_a_bad_statement_is_the_default():
     """Control run: with ``allowed_classes`` answering every class for an unknown level name, the mis-stated child may unlock."""
-    monkeypatch.setattr(home_door, "levels", lambda: {KID: ["light", "cover"], KID2: "everything"})
-    assert home("cover.open", KID) == ALLOW and home("light.off", KID) == ALLOW
-    assert home("media.on", KID) == refused(door.ADULTS_ONLY) and home("lock.open", KID) == refused(door.ADULTS_ONLY)
-    assert home("light.on", KID2) == ALLOW and home("lock.open", KID2) == refused(door.ADULTS_ONLY)       # an unknown name: the default
+    lv = lambda: {KID: ["light", "cover"], KID2: "everything"}  # noqa: E731
+    assert home("cover.open", KID, levels=lv) == ALLOW and home("light.off", KID, levels=lv) == ALLOW
+    assert home("media.on", KID, levels=lv) == refused(door.ADULTS_ONLY) and home("lock.open", KID, levels=lv) == refused(door.ADULTS_ONLY)
+    assert home("light.on", KID2, levels=lv) == ALLOW and home("lock.open", KID2, levels=lv) == refused(door.ADULTS_ONLY)  # unknown: default
     for bad in (["light", "rocket"], 7, {"light": True}, None):
         assert home_door.allowed_classes(bad) == home_door.LEVELS["lights"]
 
@@ -157,35 +167,71 @@ def test_a_permission_change_alone_drops_the_levels_at_once(tmp_path):
     after = os.stat(path)
     assert (before.st_ino, before.st_size, before.st_mtime_ns) == (after.st_ino, after.st_size, after.st_mtime_ns)
     assert read() == {}                                                     # opened to others: nothing stated, at once
-    home_door.levels = read
-    try:
-        assert home("climate.set", KID) == refused(door.ADULTS_ONLY) and home("lock.open", KID2) == refused(door.ADULTS_ONLY)
-    finally:
-        home_door.levels = dict
+    assert home("climate.set", KID, levels=read) == refused(door.ADULTS_ONLY) and home("lock.open", KID2, levels=read) == refused(door.ADULTS_ONLY)
     os.chmod(path, 0o600)
     assert read() == {KID: "most", KID2: ["lock"]}
 
 
+def _off_the_roster(tmp_path, roster=frozenset(PEOPLE) - {ADULT2, VISITOR}):
+    """A kernel that still knows ADULT2 and VISITOR (a record names them, so they can be forgotten) but whose CURRENT roster
+    (``Door.roster``, the kernel's own) no longer holds them. ``roster=None``: the control, a kernel with no roster installed."""
+    k = kernel(tmp_path)
+    k.door.roster = None if roster is None else (lambda: roster)
+    return k
+
+
+def _answer(k, area, verb, person, **kw) -> str:
+    try:
+        k.door.ask("door", area, verb, person, visibility="household", **kw)
+        return "ok"
+    except Refused as exc:
+        return exc.wire
+
+
 @pytest.mark.parametrize("verb", ["music.play", "music.stop", "music.library"])
-def test_a_member_taken_off_the_roster_may_not_control_the_music(monkeypatch, verb):
-    """The kernel keeps a member taken off the roster among its people (so their record can still be forgotten); the roster
-    says who is on it now. Control run: with ``on_roster`` reading ``people`` alone, the removed adult's ``music.play`` is allowed."""
-    monkeypatch.setattr(music_door, "roster", lambda: frozenset(PEOPLE) - {ADULT2, VISITOR})
-    assert ADULT2 in PEOPLE and VISITOR in PEOPLE                            # still people the kernel knows ...
-    assert music(verb, ADULT2) == refused(door.UNKNOWN_PERSON)               # ... but off the roster: nothing
-    assert music(verb, VISITOR) == refused(door.UNKNOWN_PERSON)
-    assert music(verb, OWNER) == ALLOW and music(verb, "kiosk", via="panel") == ALLOW
+def test_a_member_taken_off_the_roster_may_not_control_the_music(tmp_path, verb):
+    """The kernel keeps a member taken off the roster among its people (so their record can still be forgotten); ITS roster
+    says who is on it now, and the door hands the music table only them (``Door._acting``). Named control, in the test: the same
+    kernel with no roster installed allows the removed adult (so the refusal is the roster's, not the table's). Control run: with
+    ``Door._acting`` returning ``people`` whatever the area says, the removed adult's ``music.play`` is allowed."""
+    k = _off_the_roster(tmp_path)
+    try:
+        assert ADULT2 in k.grants.people and VISITOR in k.grants.people              # still people the kernel knows ...
+        assert _answer(k, "music", verb, ADULT2, target="ply0001") == door.UNKNOWN_PERSON     # ... but off the roster: nothing
+        assert _answer(k, "music", verb, VISITOR, target="ply0001") == door.UNKNOWN_PERSON
+        assert _answer(k, "music", verb, OWNER, target="ply0001") == "ok"
+        assert _answer(k, "music", verb, "kiosk", via="panel", target="ply0001") == "ok"
+    finally:
+        k.close()
+    (tmp_path / "control").mkdir()
+    k = _off_the_roster(tmp_path / "control", roster=None)
+    try:
+        assert _answer(k, "music", verb, ADULT2, target="ply0001") == "ok"           # the control: no roster, the people map
+    finally:
+        k.close()
 
 
 @pytest.mark.parametrize("verb", ["light.on", "media.on", "scene.on", "lock.close", "level.set"])
-def test_a_member_taken_off_the_roster_controls_nothing_in_the_house_and_is_not_a_guest(monkeypatch, verb):
+def test_a_member_taken_off_the_roster_controls_nothing_in_the_house_and_is_not_a_guest(tmp_path, verb):
     """A removed member is kept as a least-access person, which is the GUEST role: read as a guest they could still turn a light
-    on. They are not on the roster, so they control nothing. Control run: with ``home_door.decide`` reading ``people`` alone,
-    the removed adult's ``light.on`` falls to the guest rule and is allowed."""
-    monkeypatch.setattr(music_door, "roster", lambda: frozenset(PEOPLE) - {ADULT2, VISITOR})
-    assert home(verb, ADULT2) == refused(door.UNKNOWN_PERSON)
-    assert home(verb, VISITOR) == refused(door.UNKNOWN_PERSON)
-    assert home(verb, OWNER) == ALLOW
+    on. They are not on the roster, so they control nothing. Named control, in the test: with no roster installed the removed
+    guest's command falls to the guest rule (allowed, but ``level.set``). Control run: with ``Door._acting`` returning
+    ``people`` whatever the area says, the removed adult's ``light.on`` is allowed."""
+    owner = {"owner": KID} if verb == home_door.SET_LEVEL else {}
+    k = _off_the_roster(tmp_path)
+    try:
+        assert _answer(k, "home", verb, ADULT2, target="light.hall_lamp", **owner) == door.UNKNOWN_PERSON
+        assert _answer(k, "home", verb, VISITOR, target="light.hall_lamp", **owner) == door.UNKNOWN_PERSON
+        assert _answer(k, "home", verb, OWNER, target="light.hall_lamp", **owner) == "ok"
+    finally:
+        k.close()
+    (tmp_path / "control").mkdir()
+    k = _off_the_roster(tmp_path / "control", roster=None)
+    try:
+        want = door.ADULTS_ONLY if verb == home_door.SET_LEVEL else "ok"
+        assert _answer(k, "home", verb, VISITOR, target="light.hall_lamp", **owner) == want    # the control: a guest again
+    finally:
+        k.close()
 
 
 # ---- the record ----------------------------------------------------------------------------------------------------------------
@@ -251,7 +297,7 @@ def test_an_ask_made_before_a_forget_that_arrives_after_it_writes_nothing_that_n
 # ---- the same verbs on the daemon's wire, with a level stated beside the roster ----------------------------------------------------
 def test_the_daemon_serves_music_and_home_control_and_reads_the_levels_beside_its_roster(tmp_path, monkeypatch):
     """Control run: with the music and home verbs left out of the daemon's brain manifest every ask is ``not_in_manifest``;
-    with the levels reader not installed by ``build`` the child's switch is refused."""
+    with the levels reader not installed by ``build`` (``k.home.levels``) the child's switch is refused."""
     from test_shadow_daemon import Shadow, settled
     from zoe_os import wire
 
@@ -292,8 +338,8 @@ def test_the_daemon_refuses_a_member_it_still_knows_once_they_are_off_the_roster
     """Over the wire, the daemon's own roster: an adult and a guest act (so the kernel holds a record for both), are taken off
     people.json, and stay people the kernel knows (``known-people.json``: still forgettable). From the next ask on they control
     no music and nothing in the house; the members still on the roster are unaffected.
-    Control run: with ``build`` not installing ``music_door.roster``, the removed adult's ``music.play`` and the removed guest's
-    ``light.on`` are both allowed."""
+    Control run: with ``build`` not installing ``k.door.roster`` (the kernel's own; music and home have no roster of their own
+    now), the removed adult's ``music.play`` and the removed guest's ``light.on`` are both allowed."""
     from test_shadow_daemon import Shadow, settled
 
     state = Path(tempfile.mkdtemp(prefix="zd"))
@@ -319,3 +365,66 @@ def test_the_daemon_refuses_a_member_it_still_knows_once_they_are_off_the_roster
             assert str(exc.value) == door.UNKNOWN_PERSON, (area, verb, who)
     finally:
         d.stop()
+
+
+# ---- two households in one process: each kernel decides from its OWN levels and roster ------------------------------------------
+def _household(people: list, levels: dict) -> Path:
+    from test_shadow_daemon import settled
+
+    state = Path(tempfile.mkdtemp(prefix="zh"))
+    state.chmod(0o700)
+    settled(state)
+    (state / "people.json").write_text(json.dumps({"people": people}))
+    path = state / home_door.LEVELS_FILE
+    path.write_text(json.dumps({"levels": levels}))
+    os.chmod(path, 0o600)
+    return state
+
+
+def _over_the_wire(srv, area: str, verb: str, person: str, target: str) -> str:
+    """The daemon's own op (the roster is re-read first, as on the wire): ``ok`` or the refusal code."""
+    import types
+
+    try:
+        with srv.kernel.spine._lock:
+            srv._op_door_ask(types.SimpleNamespace(name="brain"), {"area": area, "verb": verb, "person": person, "target": target,
+                                                                   "visibility": "household"})
+        return "ok"
+    except Refused as exc:
+        return exc.wire
+
+
+def test_two_daemons_built_in_one_process_each_decide_from_their_own_levels_and_roster():
+    """Two households' daemons built in ONE process, the same child (``member-kip``) and the same second adult in both. House A
+    states level ``none`` for the child and then takes the adult off its roster (kept: a record names them); house B states a
+    list holding ``lock`` for the child and keeps the adult. B is built AFTER A. Each decides from its own: in A the child may
+    not turn a light on or unlock and the removed adult plays no music and switches nothing; in B the child may unlock and the
+    adult may play music. Named control, in the test: A's child, ruled by A's file, is refused exactly what B's file allows.
+    Control run (the old code): the levels reader installed by ``build`` as a module global (``home_door.levels``, read by
+    ``decide``) -> A's child is allowed ``lock.open`` and ``light.on`` by B's file, and this fails at the first A line after B
+    is built."""
+    import shadow_daemon
+
+    roster = [{"id": OWNER, "role": "adult"}, {"id": ADULT2, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}]
+    a_state = _household(roster, {KID: "none"})
+    k1, a, _ = shadow_daemon.build(a_state)
+    k2 = None
+    try:
+        assert _over_the_wire(a, "music", "music.play", ADULT2, "ply0001") == "ok"           # A's record names the adult
+        (a_state / "people.json.new").write_text(json.dumps({"people": [roster[0], roster[2]]}))  # then A takes them off
+        os.replace(a_state / "people.json.new", a_state / "people.json")
+        assert _over_the_wire(a, "home", "light.on", OWNER, "light.hall_lamp") == "ok"        # (the re-read)
+        k2, b, _ = shadow_daemon.build(_household(roster, {KID: ["light", "lock"]}))
+        for area, verb, person, target, want_a, want_b in (
+                ("home", "lock.open", KID, "lock.front_door", door.ADULTS_ONLY, "ok"),
+                ("home", "light.on", KID, "light.hall_lamp", door.ADULTS_ONLY, "ok"),
+                ("music", "music.play", ADULT2, "ply0001", door.UNKNOWN_PERSON, "ok"),
+                ("home", "light.on", ADULT2, "light.hall_lamp", door.UNKNOWN_PERSON, "ok")):
+            assert _over_the_wire(a, area, verb, person, target) == want_a, ("A", area, verb, person)
+            assert _over_the_wire(b, area, verb, person, target) == want_b, ("B", area, verb, person)
+        assert k1.home is not k2.home and k1.home.levels() == {KID: "none"} and k2.home.levels() == {KID: ["light", "lock"]}
+        assert k1.door.areas["home"] is k1.home.area and k2.door.areas["home"] is k2.home.area
+    finally:
+        k1.close()
+        if k2 is not None:
+            k2.close()
