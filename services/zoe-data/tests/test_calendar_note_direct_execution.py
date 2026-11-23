@@ -366,3 +366,51 @@ async def test_direct_path_is_used(
 
     assert result == reply
     assert calls == [(intent_name, slots, "family-admin")]
+
+
+# --- the notes / journal door cannot load: main's answer, None ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module, run, slots", [
+    ("note_service", _execute_note_create_direct, {"content": "feed the womble"}),
+    ("journal_service", _execute_journal_create_direct, {"content": "the womble slept"}),
+])
+async def test_a_door_that_cannot_be_imported_gives_mains_none_with_both_flags_off(monkeypatch, module, run, slots):
+    """With ``ZOE_OS_NOTES`` / ``ZOE_OS_JOURNAL`` off and the door module failing to import, the executor answers ``None``
+    (main's generic handler), writes nothing and raises nothing. It used to raise ``UnboundLocalError``: the refusal clause
+    named the module the failed import never bound. Control run: the separate import guard removed from
+    ``_execute_note_create_direct`` / ``_execute_journal_create_direct`` (the import back inside the write's ``try``) makes
+    this raise ``UnboundLocalError`` for each."""
+    import sys
+
+    for flag in ("ZOE_OS_NOTES", "ZOE_OS_JOURNAL"):
+        monkeypatch.delenv(flag, raising=False)
+    db = _FakeDB()
+    _silence_ui(monkeypatch)
+    monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
+    monkeypatch.setitem(sys.modules, module, None)          # ``import <module>`` now raises ImportError
+
+    assert await run(Intent("note_create" if module == "note_service" else "journal_create", slots), "member-ova") is None
+    assert db.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run, slots", [
+    (_execute_note_create_direct, {"content": "feed the womble"}),
+    (_execute_journal_create_direct, {"content": "the womble slept"}),
+])
+async def test_a_store_that_cannot_be_reached_still_gives_none(monkeypatch, run, slots):
+    """The other failure the generic handler covers is unchanged: the door loads but the store is unreachable -> ``None``.
+    Control run: the generic ``except Exception`` handler removed from either executor makes this raise."""
+    for flag in ("ZOE_OS_NOTES", "ZOE_OS_JOURNAL"):
+        monkeypatch.delenv(flag, raising=False)
+    _silence_ui(monkeypatch)
+
+    @contextlib.asynccontextmanager
+    async def unreachable():
+        raise ConnectionError("no store")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("database.get_db_ctx", unreachable)
+    assert await run(Intent("note_create", slots), "member-ova") is None
