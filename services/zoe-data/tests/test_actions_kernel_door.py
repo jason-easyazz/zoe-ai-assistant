@@ -6,6 +6,9 @@ docs/knowledge/zoe-os-music-home-door.md). Nothing is stored for either: the doo
 * QUIET commands (stop / turn down the music; a light or a media player off) are SENT FIRST and told afterwards: a kernel that
   is slow, gone or says no neither delays nor stops them;
 * SECURE commands (a lock or a cover, anything but closing it) are ALWAYS asked first and a kernel that cannot answer means NO;
+* the service's own adults-only check for unlocking and opening (``home_opening``, main #2715) stays on whatever the flag
+  says and runs first: BOTH must agree before anything is sent. A command it refuses is not sent and the kernel is never
+  asked about it (nor told); a command it allows is still not sent when the kernel refuses or cannot answer;
 * everything else asks first: refused = nothing is sent and each caller says so; kernel down or slow = sent, ``not_checked``;
 * only ids and closed codes cross: never a track, a device name or a room;
 * a child's level is set only through the ask (an adult only), and never while the kernel cannot be asked.
@@ -30,6 +33,7 @@ import pytest
 import action_doors
 import actions_scenarios as scenarios
 import home_level
+import home_opening
 import kernel_door
 import os_shadow
 import user_erase_gate
@@ -312,6 +316,180 @@ async def test_an_allowed_unlock_is_sent_and_closing_or_locking_is_an_ordinary_c
     assert len(_sent(log, "house")) == 2
 
 
+# ---- BOTH must agree: the service's adults-only check first, then the kernel (main #2715 under the home door) ----------------
+GROWN_UP, CHILD = {"user_id": ANN, "role": "user"}, {"user_id": "member-kip", "role": "user"}
+
+
+async def _open_through(sender, who):
+    """One command that opens the house, through one sender, for caller ``who``, entered the way that sender is entered.
+    Returns ``(what the caller is told, the scenario log)``; the telling is the refusal sentence when there is one."""
+    import panel_principal
+    import skybridge_service as sky
+    import smart_home_service
+    import zoe_agent
+    from fastapi import HTTPException
+    from routers import ha_control
+
+    log: list = []
+    w = scenarios.World(log)
+    if sender == "screen":                      # the panel's route: its dependency notes the caller for the kernel
+        panel_principal._note_actor(who)
+        try:
+            out = await ha_control.ha_control(ha_control.HAControlPayload(entity_id="lock.front_door", action="unlock"), caller=dict(who))
+            return ("sent" if out["ok"] else out), log
+        except HTTPException as exc:
+            return exc.detail, log
+        except kernel_door.Refused as exc:
+            return exc.line(), log
+    assert await panel_principal.record_turn_home_control(None, dict(who)) is True      # a chat / voice turn of a member
+    if sender == "tool":
+        out = await zoe_agent._ha_control("lock.front_door", "unlock")
+        return out.get("error", "sent"), log
+    if sender == "helper":
+        try:
+            return ("sent" if await smart_home_service.set_device("cover.garage_door", True) else "not sent"), log
+        except kernel_door.Refused as exc:
+            return exc.line(), log
+    _cover_listed_as_a_switch(w)
+    out = await sky.resolve_skybridge_request("turn on the garage door", who["user_id"])
+    return ("sent" if out.get("controlled_entities") else out["spoken_summary"]), log
+
+
+SENDERS_THAT_OPEN = ("screen", "tool", "spoken", "helper")
+
+
+@pytest.mark.parametrize("how", ["allow", "refuse:adults_only", "close", "slow"])
+@pytest.mark.parametrize("sender", SENDERS_THAT_OPEN)
+@pytest.mark.asyncio
+async def test_what_the_service_refuses_is_never_sent_and_the_kernel_is_never_asked_about_it(door, sender, how):
+    """A child (a member, so the house is theirs to control, but not an adult) asks to unlock or open. The service's own
+    check refuses, on whatever the flag says: nothing is sent, the service's sentence is what the caller gets, and the kernel
+    is neither asked nor told (the command never reaches the door in ``home_control.send``). The kernel ALLOWING does not
+    send it. Control run: with ``home_opening.refused`` answering False for every caller, the allowing kernel's case sends the
+    command for each of the four senders."""
+    if how == "slow":
+        door.delay = 0.5
+    else:
+        door.door = how
+    told, log = await _open_through(sender, CHILD)
+    assert _sent(log, "house") == []
+    assert told == ("not sent" if sender == "helper" else home_opening.REFUSAL)
+    await asyncio.sleep(0.2)
+    assert door.ops("door_ask") == [] and door.ops("door_report") == []
+
+
+@pytest.mark.parametrize("how,reason", [("refuse:adults_only", "adults_only"), ("close", "unavailable"), ("old_kernel", "unavailable"),
+                                        ("slow", "unavailable")])
+@pytest.mark.parametrize("sender", SENDERS_THAT_OPEN)
+@pytest.mark.asyncio
+async def test_what_the_service_allows_is_still_not_sent_when_the_kernel_refuses_or_cannot_answer(door, sender, how, reason):
+    """An adult member asks: the service's check passes, so the kernel is asked, as her. The kernel refusing, or gone, old or
+    slow, means nothing is sent and the kernel's sentence is said. Controls run: with the secure rule dropped from
+    ``action_doors.before`` (kernel gone = proceed, as for a light) the kernel-gone case sends; with the refusal not raised
+    there either, the refused case sends."""
+    if how == "slow":
+        door.delay = 0.5
+    else:
+        door.door = how
+    told, log = await _open_through(sender, GROWN_UP)
+    assert _sent(log, "house") == []
+    assert told == action_doors.HomeRefused(reason).line()
+    if how == "refuse:adults_only":
+        (ask,) = _wait(door, "door_ask", 1)
+        assert ask["person"] == ANN and ask["verb"] in ("lock.open", "cover.on")
+
+
+@pytest.mark.parametrize("sender", SENDERS_THAT_OPEN)
+@pytest.mark.asyncio
+async def test_when_the_service_and_the_kernel_both_allow_the_command_is_sent_once_and_reported(door, sender):
+    """Control run: with ``home_opening.refused`` answering True for every caller the adult's command is not sent."""
+    told, log = await _open_through(sender, GROWN_UP)
+    assert told == "sent" and len(_sent(log, "house")) == 1
+    (ask,) = _wait(door, "door_ask", 1)
+    assert (ask["person"], ask["target"]) == (ANN, "lock.front_door" if sender in ("screen", "tool") else "cover.garage_door")
+    assert [r["outcome"] for r in _wait(door, "door_report", 1)] == ["done"]
+
+
+@pytest.mark.parametrize("data", [{"entity_id": "lock.front_door"}, {"entity_id": ["light.hall_lamp", "cover.garage_door"]},
+                                  {"entity_id": "LOCK.Front_Door"}])
+@pytest.mark.asyncio
+async def test_a_lock_or_cover_named_as_the_services_own_target_is_asked_about_as_that_and_never_sent_unchecked(door, data):
+    """A service's own target (``data.entity_id``) overrides the entity in the path. The verb was read from the path alone: a
+    turn-on of a lamp whose data named a lock was asked about as ``light.on``, so with the kernel gone it was sent
+    ``not_checked`` for anyone the service's check let through. It is asked about as the lock or cover now: secure, and a
+    kernel that cannot answer means no. Control run: with ``home_verb`` reading the path's entity only, the adult's command
+    is sent with the kernel gone."""
+    from routers import ha_control
+
+    verb, entity = action_doors.home_verb("/devices/control", {"entity_id": "light.kitchen_lamp", "action": "turn_on", "data": data})
+    assert action_doors.home_secure(verb) and verb in ("lock.on", "cover.on") and entity.lower() in ("lock.front_door", "cover.garage_door")
+    door.door = "close"
+    log: list = []
+    scenarios.World(log)
+    kernel_door.note_actor(ANN)
+    with pytest.raises(action_doors.HomeRefused) as exc:
+        await ha_control.ha_control(ha_control.HAControlPayload(entity_id="light.kitchen_lamp", action="turn_on", params=data), caller=dict(GROWN_UP))
+    assert exc.value.reason == "unavailable" and _sent(log, "house") == []
+    for odd in (None, "x", ["lock.front_door"], {"entity_id": None}, {"entity_id": 7}):      # never raises; a lamp stays a lamp
+        assert action_doors.home_verb("/devices/control", {"entity_id": "light.kitchen_lamp", "action": "turn_on", "data": odd}) == ("light.on", "light.kitchen_lamp")
+
+
+def test_whatever_the_service_counts_as_opening_the_kernel_door_treats_as_secure():
+    """The two checks read a command the same way: every (entity, service, service target) that ``home_opening.opens`` counts as
+    opening the house maps to a SECURE verb at the door, so "kernel down means no" covers all of it. Control run: with
+    ``valve`` dropped from ``action_doors._CLASS_OF`` an open valve is opening for the service and an ordinary command at the
+    door, and this fails."""
+    domains = (*sorted(home_opening.SECURE_DOMAINS), "light", "switch", "scene", "media_player", "vacuum")
+    actions = (*sorted(home_opening.CLOSING), "unlock", "open", "open_cover", "open_valve", "alarm_disarm", "toggle", "turn_on",
+               "turn_off", "set_cover_position", "some_new_service", " Unlock ", "")
+    seen = 0
+    for domain in domains:
+        for action in actions:
+            for data in (None, {}, {"entity_id": "lock.front_door"}, {"entity_id": ["light.a", "valve.water_main"]}):
+                entity = f"{domain}.thing"
+                if home_opening.opens(entity, action, data):
+                    verb, _ = action_doors.home_verb("/devices/control", {"entity_id": entity, "action": action, "data": data})
+                    assert action_doors.home_secure(verb), (entity, action, data, verb)
+                    seen += 1
+    assert seen > 150
+
+
+#: every function of the service that sends a DEVICE command (it names ``home_control.DEVICE``) -> how the service's
+#: adults-only check stands before that send
+_CHECKED = "home_opening.refused is awaited in this function before the send"
+DEVICE_SENDERS = {
+    ("smart_home_service.py", "set_device"): _CHECKED,
+    ("zoe_agent.py", "_ha_control"): _CHECKED,
+    ("routers/ha_control.py", "ha_control"): _CHECKED,
+    ("intent_router.py", "_post_music_ha_control"): "music through a house speaker: its target is the configured or listed MEDIA PLAYER, never an id a caller supplies",
+}
+
+
+def test_the_services_adults_only_check_stands_before_every_send_that_could_open_the_house():
+    """READ FROM THE CODE: every function of the service that names the device command path is one of the four known senders;
+    three await ``home_opening.refused`` BEFORE the call that sends, the fourth can only reach a media player. A new sender,
+    or a check moved after its send, fails here. (Scenes go by their own path and are not under the check yet: #2716.)
+    Controls run: with the check moved below the send in ``smart_home_service.set_device`` this fails naming it; with
+    ``async def sneak(): await _bridge_post(home_control.DEVICE, {})`` added to ``routers/ha_control.py`` it fails naming that."""
+    found = {}
+    for path in sorted(SVC.rglob("*.py")):
+        rel = path.relative_to(SVC).as_posix()
+        if rel.startswith(("tests/", "alembic/", ".venv", "venv")) or "home_control.DEVICE" not in (text := path.read_text("utf-8")):
+            continue
+        for fn in ast.walk(ast.parse(text)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            sends = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Call) and "home_control.DEVICE" in ast.unparse(n)
+                     and not any(isinstance(inner, ast.Call) and inner is not n and "home_control.DEVICE" in ast.unparse(inner) for inner in ast.walk(n))]
+            if sends:
+                checks = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Await) and ast.unparse(n.value).startswith("home_opening.refused(")]
+                found[(rel, fn.name)] = bool(checks) and min(checks) < min(sends)
+    assert set(found) == set(DEVICE_SENDERS), {"sends a device command, not listed": sorted(set(found) - set(DEVICE_SENDERS)),
+                                              "listed, sends none now": sorted(set(DEVICE_SENDERS) - set(found))}
+    for key, why in DEVICE_SENDERS.items():
+        assert found[key] is (why == _CHECKED), key
+
+
 # ---- a TYPED Skybridge command: the route notes who is acting (review #2703) -----------------------------------------------------------
 KID = "member-kip"
 
@@ -358,12 +536,37 @@ async def test_a_childs_typed_home_command_is_asked_as_the_child_and_a_refusal_s
     assert (ask["area"], ask["verb"], ask["person"], ask["target"]) == ("home", "switch.on", KID, "switch.kettle_plug")
 
 
+@pytest.mark.parametrize("who", [KID, ANN])
+@pytest.mark.parametrize("how", ["allow", "refuse:adults_only", "close", "slow"])
+@pytest.mark.asyncio
+async def test_a_typed_command_that_could_open_the_house_is_refused_by_the_services_own_check_whatever_the_kernel_says(door, how, who):
+    """The typed route notes who is acting for the kernel, but it is not a chat or voice turn for the service's adults-only
+    check (``home_opening``): that check refuses an opening command there for everyone, exactly as with the flag off. The
+    kernel allowing changes nothing, and the kernel is never asked about a command the service refused.
+    Control run: with ``home_opening.refused`` answering False for every caller, the garage door's command is sent when the
+    kernel allows and the kernel's own sentence (not the service's) is said in the other cases."""
+    if how == "slow":
+        door.delay = 0.5
+    else:
+        door.door = how
+    out, log = await _typed("turn on the garage door", who, setup=_cover_listed_as_a_switch)
+    assert out["spoken_summary"] == home_opening.REFUSAL and out["cards"] == []
+    assert _sent(log, "house") == []
+    await asyncio.sleep(0.2)
+    assert door.ops("door_ask") == [] and door.ops("door_report") == []
+
+
 @pytest.mark.parametrize("how,reason", [("refuse:adults_only", "adults_only"), ("close", "unavailable"), ("slow", "unavailable")])
 @pytest.mark.asyncio
-async def test_a_childs_typed_command_that_could_open_the_house_is_refused_and_never_sent_unchecked(door, how, reason):
-    """SECURE through the typed route: refused by the kernel, or not checkable (kernel gone or slow), nothing is sent. Before
-    the fix it went out unasked, kernel or no kernel. Control run: the same removal of the route's actor note sends the
-    garage door's command in every case."""
+async def test_a_childs_typed_command_that_could_open_the_house_is_refused_and_never_sent_unchecked(door, monkeypatch, how, reason):
+    """The KERNEL's layer of the typed route, on its own: with the service's check out of the way (stubbed to allow, as if
+    the caller were someone it lets through), SECURE through the typed route is refused by the kernel, or not checkable
+    (kernel gone or slow), and nothing is sent. Before the fix it went out unasked, kernel or no kernel. Control run: the
+    same removal of the route's actor note sends the garage door's command in every case."""
+    async def allows(*a, **k):
+        return True
+
+    monkeypatch.setattr(home_opening, "may_open", allows)
     if how == "slow":
         door.delay = 0.5
     else:
@@ -388,7 +591,8 @@ async def test_a_typed_music_command_is_asked_and_a_refusal_plays_nothing(door):
 @pytest.mark.asyncio
 async def test_with_the_doors_off_a_typed_command_is_sent_as_before_and_the_kernel_is_never_called(door, monkeypatch, value):
     """Flag off: noting the actor changes nothing; the same typed commands are sent exactly as with no note at all, and the
-    kernel is not called. Control run: with ``before`` ignoring the area flag this sees a ``door_ask``."""
+    kernel is not called. The typed command that could open the house is NOT sent either way: the service's own check
+    refuses it (main #2715). Control run: with ``before`` ignoring the area flag this sees a ``door_ask``."""
     for flag in FLAGS:
         if value is None:
             monkeypatch.delenv(flag, raising=False)
@@ -401,7 +605,9 @@ async def test_with_the_doors_off_a_typed_command_is_sent_as_before_and_the_kern
         sent[message] = [e[2:4] for e in _sent(log, what)]
         kernel_door._ACTOR.set(None)
         bare, bare_log = await _typed_without_note(message, KID, setup=setup)
-        assert [e[2:4] for e in _sent(bare_log, what)] == sent[message] and len(sent[message]) == 1, message
+        opening = "garage" in message
+        assert [e[2:4] for e in _sent(bare_log, what)] == sent[message] and len(sent[message]) == (0 if opening else 1), message
+        assert (out["spoken_summary"] == home_opening.REFUSAL) is opening
         assert {k: v for k, v in out.items() if k != "skybridge_context"} == {k: v for k, v in bare.items() if k != "skybridge_context"}
     assert door.ops("door_ask") == [] and door.ops("door_report") == []
 
