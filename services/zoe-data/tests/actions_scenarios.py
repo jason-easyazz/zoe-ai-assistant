@@ -3,6 +3,16 @@ bridge: every outbound call (method, path, body), what the entry point returned 
 
 Music and home control store nothing in Zoe: what an entry point DOES is the calls it sends. So that is what is pinned.
 
+What is recorded, so that nothing an entry point hands on can change unseen: each http call's method, path, body (``json`` of
+a POST, ``params`` of a GET), timeout, WHICH service it went to (``ha-bridge`` / ``music-assistant`` by the configured address,
+any other host by name) and the names of the headers it carried; each play written to the listening journal
+(``music_history.record_play``: the user it was written for, and its fields); each device receipt (``write_receipts.record``:
+the user, kind, entity and source); each change of the household's default speaker (``music_service.set_preferred_player_id``,
+kept in the fake world: every scenario starts with none, and no run writes ``data/music_prefs.json``, which the service once
+wrote during the tests and read back in the NEXT scenario); and the entry point's WHOLE return value (a spoken entry point's cards and context too).
+The spoken music commands are driven through the Skybridge entry point itself (``resolve_skybridge_request``: its routing,
+the user id it forwards, its return), as are three spoken home commands; the resolver-level home scenarios stay as well.
+
 Used twice: ``python3 tests/actions_scenarios.py <a zoe-data tree> <out.json>`` writes the record of THAT tree (run against an
 export of ``main`` to make ``tests/fixtures/actions_as_on_main.json``), and ``test_actions_same_as_main.py`` runs the same
 scenarios in-process and compares. It imports nothing the one-door or the kernel-door change added, so it runs unchanged on
@@ -92,7 +102,7 @@ class World:
 
         class Client:
             def __init__(self, *a, **k) -> None:
-                self.timeout = k.get("timeout")
+                self.timeout, self.headers = k.get("timeout"), dict(k.get("headers") or {})
 
             async def __aenter__(self):
                 return self
@@ -101,17 +111,50 @@ class World:
                 return False
 
             async def get(self, url, **k):
-                return world.answer("GET", url, k.get("params"), self.timeout)
+                return world.answer("GET", url, k.get("params"), self.timeout, {**self.headers, **(k.get("headers") or {})})
 
             async def post(self, url, **k):
-                return world.answer("POST", url, k.get("json"), self.timeout)
+                return world.answer("POST", url, k.get("json"), self.timeout, {**self.headers, **(k.get("headers") or {})})
 
         _set(httpx, "AsyncClient", Client)
+        import music_history
+        import write_receipts
 
-    def answer(self, method, url, body, timeout):
+        async def journal(user_id, **fields):          # the listening journal: WHO a play is written for, and what
+            self.log.append(["journal", user_id, _plain({k: v for k, v in fields.items() if k != "played_at"})])
+            return True
+
+        def receipt(user_id, kind, row_id="", source=""):
+            self.log.append(["receipt", user_id, kind, row_id, source])
+
+        _set(music_history, "record_play", journal)
+        _set(write_receipts, "record", receipt)
+        import music_service
+
+        self.preferred = ""                     # the household's default speaker: the world's, never data/music_prefs.json
+
+        def set_preferred(player_id):
+            self.preferred = str(player_id or "")
+            self.log.append(["preferred speaker", self.preferred])
+
+        _set(music_service, "set_preferred_player_id", set_preferred)
+        _set(music_service, "get_preferred_player_id", lambda: self.preferred)
+
+    @staticmethod
+    def _service(netloc: str) -> str:
+        """``ha-bridge`` / ``music-assistant`` for the addresses the service is configured with, any other host by name."""
+        import os
+
+        for name, var, default in (("ha-bridge", "ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007"),
+                                   ("music-assistant", "MUSIC_ASSISTANT_URL", "http://localhost:8095")):
+            if netloc == urlsplit(os.environ.get(var, default)).netloc:
+                return name
+        return netloc
+
+    def answer(self, method, url, body, timeout, headers=None):
         parts = urlsplit(str(url))
         path = parts.path + (f"?{parts.query}" if parts.query else "")
-        self.log.append(["http", method, path, _plain(body), timeout])
+        self.log.append(["http", method, path, _plain(body), timeout, self._service(parts.netloc), sorted(headers or {})])
         if self.fail and self.fail in path:
             import httpx
 
@@ -126,13 +169,17 @@ class World:
         return _Response(200, self.ha_answers.get(parts.path, {}))
 
 
-def _quiet(module, *names):
-    async def nothing(*a, **k):
-        return None
+class _FrozenTime:
+    """The ``time`` module with ``time()`` frozen (everything else is the real module)."""
 
-    for name in names:
-        if hasattr(module, name):
-            _set(module, name, nothing)
+    def __getattr__(self, name):
+        import time
+
+        return getattr(time, name)
+
+    @staticmethod
+    def time() -> float:
+        return 1_700_000_000.0
 
 
 def scenarios() -> dict:
@@ -145,14 +192,20 @@ def scenarios() -> dict:
             return await getattr(rest, route)(payload)
         return run
 
-    def said_music(action, query="", who=ANN, answers=None):
+    def said(message, who=ANN):
+        """A spoken / typed command through Skybridge's own entry point (``resolve_skybridge_request``): how it is routed, the
+        user id it hands on, and its whole answer. Its clock is frozen (a follow-up target is stamped with the time)."""
         async def run(w):
-            import music_service
             import skybridge_service as sky
 
+            _set(sky, "time", _FrozenTime())
+            return await sky.resolve_skybridge_request(message, who)
+        return run
+
+    def said_music(message, who=ANN, answers=None):
+        async def run(w):
             w.ma_answers.update(answers or {})
-            _quiet(music_service, "record_play", "observe")
-            return (await music_service.resolve_music(sky.SkybridgeIntent("music", action, query=query), who)).get("spoken_summary")
+            return await said(message, who)(w)
         return run
 
     def music_intent(name, who=ANN, **slots):
@@ -264,11 +317,15 @@ def scenarios() -> dict:
         "music_screen_playlist_add": music("music_playlist_add", playlist_uri="library://playlist/1", track_uri="library://track/9"),
         "music_screen_dont_stop": music("music_dont_stop", enabled=True),
         "music_screen_ungroup": music("music_ungroup", player_id="ply0002"),
+        # the panel's speaker picker: the household's default speaker (checked against Music Assistant's list, kept in Zoe)
+        "music_screen_set_preferred_player": music("set_preferred_player", player_id="ply0002"),
+        "music_screen_set_preferred_unknown": music("set_preferred_player", player_id="ply9999"),
         # MUSIC: spoken (Skybridge) and the intent executor
-        "music_spoken_play": said_music("play", "womble"),
-        "music_spoken_pause": said_music("pause"),
-        "music_spoken_transfer": said_music("transfer", "bedroom"),
-        "music_spoken_discovery": said_music("play", "my discovery playlist",
+        "music_spoken_play": said_music("play womble"),
+        "music_spoken_play_guest": said_music("play womble", who="guest"),
+        "music_spoken_pause": said_music("pause the music"),
+        "music_spoken_transfer": said_music("move the music to the bedroom"),
+        "music_spoken_discovery": said_music("play my discovery playlist",
                                              answers={"music/playlists/library_items": [
                                                  {"name": "Zoe Discovery", "uri": "library://playlist/7", "item_id": "7"}]}),
         "music_intent_favorite": music_intent("music_favorite"),       # "I like this song": favourite what is playing
@@ -308,6 +365,10 @@ def scenarios() -> dict:
         "home_spoken_brightness": said_home("set_brightness", "hall lamp", 40),
         "home_spoken_scene": said_home("activate_scene", "movie time"),
         "home_spoken_nothing_matches": said_home("turn_on", "nothing like it"),
+        # HOME: spoken through Skybridge's own entry point (its routing, the user id on the device receipt, its whole answer)
+        "home_said_turn_on": said("turn on the kitchen lamp"),
+        "home_said_open_a_cover": on_a_turn_of(adult, with_a_garage_door_listed(said("turn on the garage door"))),
+        "home_said_open_a_cover_guest": on_a_turn_of(GUEST, with_a_garage_door_listed(said("turn on the garage door", "guest"))),
         "home_tool_turn_on": tool_home("light.kitchen_lamp", "turn_on", {"brightness_pct": 50}),
         "home_tool_unlock": on_a_turn_of(adult, tool_home("lock.front_door", "unlock")),
         "home_tool_unlock_bare_panel": on_a_turn_of(BARE_PANEL, tool_home("lock.front_door", "unlock")),
@@ -337,21 +398,25 @@ def _isolated() -> None:
             raise RuntimeError(f"music and home scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
 
 
+def run_one(name: str, call=None) -> list:
+    """One scenario from a fresh world: its record."""
+    _isolated()
+    call = call or scenarios()[name]
+    log: list = []
+    try:
+        world = World(log)
+        try:
+            log.append(["returned", _plain(asyncio.run(call(world)))])
+        except Exception as exc:  # noqa: BLE001 - a refusal is part of the record (an HTTP error by its words; any other by TYPE)
+            log.append(["raised", getattr(exc, "status_code", None), str(getattr(exc, "detail", None) or type(exc).__name__)])
+    finally:
+        _restore()
+    return log
+
+
 def run_all() -> dict:
     _isolated()
-    out = {}
-    for name, call in scenarios().items():
-        log: list = []
-        try:
-            world = World(log)
-            try:
-                log.append(["returned", _plain(asyncio.run(call(world)))])
-            except Exception as exc:  # noqa: BLE001 - a refusal is part of the record (an HTTP error by its words; any other by TYPE)
-                log.append(["raised", getattr(exc, "status_code", None), str(getattr(exc, "detail", None) or type(exc).__name__)])
-        finally:
-            _restore()
-        out[name] = log
-    return out
+    return {name: run_one(name, call) for name, call in scenarios().items()}
 
 
 if __name__ == "__main__":
