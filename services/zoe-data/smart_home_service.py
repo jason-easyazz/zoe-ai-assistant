@@ -367,6 +367,12 @@ async def set_device(entity_id: str, on: bool, *, brightness_pct: int | None = N
     }
     if data:
         payload["data"] = data
+    import home_opening
+
+    # Backstop: unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. (The Zoe
+    # OS kernel's home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    if await home_opening.refused(entity_id, payload["action"], via="spoken"):
+        return False
     result = await _ha_post(home_control.DEVICE, payload)
     return _control_ok(result, entity_id)
 
@@ -836,6 +842,12 @@ async def resolve_smart_home(
                 action,
             )
         targets = live
+        import home_opening
+
+        for d in targets:      # a spoken on / off aimed at a lock or a cover: said plainly, and nothing is sent to any device
+            if await home_opening.refused(str(d.get("entity_id")), "turn_on" if on else "turn_off", via="spoken"):
+                return {"handled": True, "auth_required": True, "intent": {"domain": "smart_home", "action": action},
+                        "spoken_summary": home_opening.REFUSAL, "cards": [], "actions": []}
         ok_any = False
         controlled: list[str] = []
         timed_out: list = []
