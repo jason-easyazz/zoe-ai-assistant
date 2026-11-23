@@ -1,7 +1,7 @@
 """Notes and the journal go to the Zoe OS kernel, a flag each (``ZOE_OS_NOTES=kernel``, ``ZOE_OS_JOURNAL=kernel``;
 docs/knowledge/zoe-os-notes-journal-door.md).
 
-* any other flag value: NO kernel call, no socket, no thread, no extra statement: every one of the 30 entry-point scenarios
+* any other flag value: NO kernel call, no socket, no thread, no extra statement: every one of the 32 entry-point scenarios
   gives the record captured from ``main`` before the doors existed; and each flag turns on its own area only;
 * adding, changing and deleting a note or an entry asks first: allowed = made and reported; refused = ``NoteRefused`` /
   ``JournalRefused``, nothing written, each caller says so in its own way; kernel down or slow = made, one ``not_checked`` line;
@@ -20,6 +20,7 @@ import ast
 import asyncio
 import json
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -86,7 +87,7 @@ def _run(w, name):
 # ---- flag off: main's behaviour, exactly ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("value", [None, "off", "on", "KERNELS"])
 def test_any_other_flag_value_is_main_exactly_for_every_entry_point(door, monkeypatch, value):
-    """All 30 scenarios equal the record captured from main, with every way into the kernel wired to fail the test. Control
+    """All 32 scenarios equal the record captured from main, with every way into the kernel wired to fail the test. Control
     run: with the flag check removed from ``kernel_door.gate`` (always ask) the ``never`` stub raises and the record differs."""
     def never(*a, **k):
         raise AssertionError("the kernel was reached with the flag off")
@@ -106,6 +107,36 @@ def test_with_both_doors_on_and_allowing_every_entry_point_still_issues_mains_st
     asks = door.ops("door_ask")
     assert {a["verb"] for a in asks} == {*os_shadow.NOTE_DOOR_VERBS, *os_shadow.JOURNAL_DOOR_VERBS}
     assert {a["area"] for a in asks} == {"notes", "journal"}
+
+
+def _asks_main_implies(record: list) -> list:
+    """``(area, verb)`` for each write of ``notes`` / ``journal_entries`` in an entry point's MAIN record: an INSERT is a create,
+    an UPDATE setting ``deleted = 1`` a delete, any other UPDATE an edit."""
+    out = []
+    for e in record:
+        m = e[0] in ("sql", "pg") and re.match(r"(INSERT INTO|UPDATE) (notes|journal_entries)\b(.*)", e[1])
+        if m:
+            area, noun = ("notes", "note") if m[2] == "notes" else ("journal", "journal")
+            out.append((area, f"{noun}." + ("create" if m[1] == "INSERT INTO" else "delete" if re.match(r" SET deleted ?= ?1\b", m[3]) else "edit")))
+    return out
+
+
+def test_each_entry_point_asks_once_per_write_its_main_record_holds_and_each_is_reported_done_once(door):
+    """Scenario by scenario (the test above compares SETS over the whole run: an entry point that stopped asking, asked twice,
+    or whose allowed write was never reported hid behind another): an entry point asks exactly for the writes its record on
+    main holds, in order, and the kernel hears ``done`` for each, once; one that writes nothing on main asks nothing. Control
+    run: with ``tool_delete_note_record`` handing ``kernel_door.write`` no decision (asked, written, never reported), this
+    fails on ``note_tool_delete`` while every other test in this file passes."""
+    got, want = {}, {}
+    for name in scenarios.scenarios():
+        asks, reports = len(door.ops("door_ask")), len(door.ops("door_report"))
+        scenarios.run_one(name)
+        made = [(a["area"], a["verb"]) for a in door.ops("door_ask")[asks:]]
+        got[name] = (made, [r["outcome"] for r in _wait(door, "door_report", reports + len(made), timeout=1.0)[reports:]])
+        want[name] = (_asks_main_implies(ON_MAIN[name]), ["done"] * len(_asks_main_implies(ON_MAIN[name])))
+    time.sleep(0.1)
+    assert got == want
+    assert len(door.ops("door_report")) == sum(len(w[0]) for w in want.values()) >= 17      # nothing reported late, or twice
 
 
 @pytest.mark.parametrize("on, asked", [("ZOE_OS_NOTES", "notes"), ("ZOE_OS_JOURNAL", "journal")])
@@ -174,6 +205,7 @@ async def test_a_kernel_refusal_is_final_nothing_is_written_and_each_caller_says
     assert await _run(w, "note_tool_delete") == {"error": note_line + " Nothing was deleted.", "status": "refused"}
     assert await _run(w, "journal_tool_create") == {"error": journal_line + " Nothing was saved.", "status": "refused"}
     assert await _run(w, "note_spoken_create") == note_line and await _run(w, "journal_spoken_create") == journal_line
+    assert (await _run(w, "note_suggestion_accepted_through_the_accept"))["ok"] is False     # the rows below: the offer still pending
     assert w.rows() == before and door.ops("door_report") == []
     assert not [e for e in w.log if e[0] in ("receipt", "broadcast", "notify_ui", "notify_ui_channel", "memory")]      # nothing announced or mirrored
 
@@ -243,21 +275,44 @@ async def test_a_write_that_raises_is_reported_failed(door):
     assert [r["outcome"] for r in _wait(door, "door_report", 2)] == ["failed", "failed"]
 
 
-@pytest.mark.parametrize("ends", ["commits", "rolls_back"])
+@pytest.mark.parametrize("ends", ["commits", "rolls_back", "refused"])
 @pytest.mark.asyncio
-async def test_an_accepted_note_suggestion_is_reported_only_once_its_transaction_has_ended(door, ends):
-    """Control run: with ``kernel_door.wrote`` ignoring the held block (reporting at once), the report is seen before the block ends."""
+async def test_an_accepted_note_suggestion_is_reported_only_once_its_transaction_has_ended(door, monkeypatch, ends):
+    """Driven through ``pending_suggestions.execute_suggestion``, the owner of the transaction (``_Tx``: nothing commits until
+    the block ends). Commits: the kernel hears ``done`` only once the commit has happened, and the offer is resolved. Rolls
+    back (the statement resolving the offer fails, after the note's insert): the kernel never hears ``done``, only
+    ``failed``, and neither the note nor the resolution is left. Refused: nothing is reported, no note, the offer is still
+    pending. Controls run: with ``reports = contextlib.nullcontext()`` in ``execute_suggestion`` (the hold removed), commits
+    sees ``done`` while the transaction is still open and rolls back sees ``done``; with the hold entered INSIDE the
+    transaction (``async with conn.transaction(), reports:``) commits sees ``done`` before the commit."""
+    class Failing(scenarios._Tx):
+        def _run(self, sql, args):
+            if ends == "rolls_back" and sql.startswith("UPDATE pending_suggestions"):
+                raise RuntimeError("store down")
+            return super()._run(sql, args)
+
     w = scenarios.World([])
-    try:
-        async with kernel_door.reports_after():
-            assert (await _run(w, "note_suggestion_accepted"))["note_id"] and len(_wait(door, "door_ask", 1)) == 1
-            await asyncio.sleep(0.05)
-            assert door.ops("door_report") == []
-            if ends == "rolls_back":
-                raise RuntimeError("the transaction failed")
-    except RuntimeError:
-        pass
-    assert [r["outcome"] for r in _wait(door, "door_report", 1)] == ["done" if ends == "commits" else "failed"]
+    w.tx = Failing(w.con, w.log)
+    before = w.rows()
+    if ends == "refused":
+        door.door = "refuse:not_owner"
+    heard = []
+    real = os_shadow.report_door
+    monkeypatch.setattr(os_shadow, "report_door", lambda area, ask, outcome, stamps=None: (
+        heard.append((area, outcome, w.tx.depth, w.tx.ended)), real(area, ask, outcome, stamps)))
+    out = await _run(w, "note_suggestion_accepted_through_the_accept")
+    assert [a["verb"] for a in _wait(door, "door_ask", 1)] == ["note.create"]
+    if ends == "commits":
+        assert out == {"ok": True, "action": "note_create", "result": {"note_id": "00000000-0000-0000-0000-000000000001", "title": WORD}}
+        assert heard == [("notes", "done", 0, "committed")]
+        rows = w.rows()
+        assert sorted(r["id"] for r in rows["notes"]) == sorted([*(r["id"] for r in before["notes"]), out["result"]["note_id"]])
+        assert rows["pending_suggestions"] == [{**before["pending_suggestions"][0], "resolved": 1}]
+    else:
+        assert out["ok"] is False and w.tx.ended == "rolled_back" and w.rows() == before
+        assert heard == ([("notes", "failed", 0, "rolled_back")] if ends == "rolls_back" else [])
+    await asyncio.sleep(0.05)
+    assert [r["outcome"] for r in door.ops("door_report")] == {"commits": ["done"], "rolls_back": ["failed"], "refused": []}[ends]
 
 
 # ---- ordered against a forget ---------------------------------------------------------------------------------------------------------
