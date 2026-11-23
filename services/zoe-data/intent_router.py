@@ -3807,7 +3807,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
                 # first name + relation are one person: never mint a second row.
                 merged = await _merge_into_same_person(
                     db, user_id, name, relationship,
-                    can_ask=not slots.get("no_followup"))
+                    can_ask=not slots.get("no_followup"), stamps_at=stamps_at)
                 if merged:
                     return merged
             await people_service.write_contact(
@@ -3947,7 +3947,7 @@ def _remember_same_person_question(user_id: str, stub: dict, name: str,
 
 async def _merge_into_same_person(db, user_id: str, name: str,
                                   relationship: Optional[str],
-                                  can_ask: bool = True) -> Optional[str]:
+                                  can_ask: bool = True, *, stamps_at: Optional[dict]) -> Optional[str]:
     """Flag ZOE_CONTACTS_CONVERSATIONAL: the reply for a save that matches an
     existing contact of the same first name + compatible relation, or None when
     it is a genuinely new person (see contacts_conversation.decide_same_person).
@@ -3959,6 +3959,9 @@ async def _merge_into_same_person(db, user_id: str, name: str,
         memories); a NULL/'friend' stub or one with data may be a different
         person, so it is ASKED about ("is Dan Murphy the same person?") and
         renamed only on a yes (people_same_person_reply).
+
+    ``stamps_at``: the CALLER's ``people_service.stamps_now()``, taken before this reads the contacts (the Zoe OS contacts door
+    orders the rename against a forget by it; review of #2700: the rename took its own, after this read).
     """
     first = (name.split() or [""])[0]
     cur = await db.execute(
@@ -3972,7 +3975,7 @@ async def _merge_into_same_person(db, user_id: str, name: str,
     linked = await _cc.linked_memory_ids(user_id, stub_ids) if stub_ids else set()
     verdict, hits = _cc.decide_same_person(name, relationship, rows, frozenset(linked))
     if verdict == "upgrade":
-        await _rename_person_row(db, user_id, hits[0]["id"], name, relationship)
+        await _rename_person_row(db, user_id, hits[0]["id"], name, relationship, stamps_at=stamps_at)
     elif verdict == "ask":
         if not can_ask:
             # A channel that cannot bind the user's next turn to a queued question
@@ -3984,10 +3987,11 @@ async def _merge_into_same_person(db, user_id: str, name: str,
 
 
 async def _rename_person_row(db, user_id: str, person_id: str, name: str,
-                             relationship: Optional[str]) -> None:
+                             relationship: Optional[str], *, stamps_at: Optional[dict]) -> None:
     """Rename a contact in place: name, relationship (kept when none given),
-    is_partial cleared (it is a full contact now), memory mirror refreshed."""
-    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door (the statement names the member: their own contact)
+    is_partial cleared (it is a full contact now), memory mirror refreshed.
+    ``stamps_at``: the caller's ``people_service.stamps_now()``, taken before it read the contact (the Zoe OS contacts door;
+    the statement names the member: their own contact). A kernel refusal raises ``people_service.ContactRefused``."""
     from datetime import datetime, timezone
 
     await people_service.write_contact(
@@ -4002,6 +4006,9 @@ async def _rename_person_row(db, user_id: str, person_id: str, name: str,
 
 async def _execute_same_person_reply(intent: Intent, user_id: str) -> str:
     """The user answered 'is <new name> the same person as <stub>?'."""
+    # the Zoe OS contacts door: stamped before anything is awaited (the stub was read on the turn that asked; this reply is the
+    # member acting now, so a forget confirmed in between orders before it, like any later act of theirs)
+    stamps_at = people_service.stamps_now()
     slots = intent.slots or {}
     _cc.pop_same_person(user_id)
     name, rel = str(slots.get("name") or ""), slots.get("relationship") or None
@@ -4009,9 +4016,13 @@ async def _execute_same_person_reply(intent: Intent, user_id: str) -> str:
     if slots.get("confirm"):
         from database import get_db_ctx
 
-        async with get_db_ctx() as db:
-            await _rename_person_row(db, user_id, str(slots.get("stub_id")), name, rel)
-        out = f"Done — I've updated {stub_name} to {name}{_rel_suffix(rel)}."
+        try:
+            async with get_db_ctx() as db:
+                await _rename_person_row(db, user_id, str(slots.get("stub_id")), name, rel, stamps_at=stamps_at)
+        except people_service.ContactRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_PEOPLE=kernel): final, nothing written
+            out = exc.line()                              # (review of #2700: this crashed the voice turn instead of saying so)
+        else:
+            out = f"Done — I've updated {stub_name} to {name}{_rel_suffix(rel)}."
     else:
         out = await _execute_people_create_direct(
             Intent("people_create", {"name": name, "relationship": rel, "force_new": True}), user_id) \

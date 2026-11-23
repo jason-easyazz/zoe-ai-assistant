@@ -210,6 +210,19 @@ def _member(uid):
     return {"user_id": uid, "role": "user"}
 
 
+def _stamped(helper) -> dict:
+    """A helper that takes its CALLER's erase stamps (``stamps_at``: the contacts door's, taken before the caller read the
+    contact) is handed them by the scenario, which is that caller and has read nothing yet. On ``main`` no helper takes them, and
+    nothing is passed (nothing the door added is imported there)."""
+    import inspect
+
+    if "stamps_at" not in inspect.signature(helper).parameters:
+        return {}
+    import people_service
+
+    return {"stamps_at": people_service.stamps_now()}
+
+
 def scenarios() -> dict:
     """name -> a coroutine function of the world; its return value is recorded."""
     from models import PersonCreate, PersonUpdate
@@ -240,7 +253,7 @@ def scenarios() -> dict:
         return run
 
     async def said_rename(w):
-        return await w.router._rename_person_row(w.db, ANN, "p-ann-stub", "Plover Tansy", "neighbour")
+        return await w.router._rename_person_row(w.db, ANN, "p-ann-stub", "Plover Tansy", "neighbour", **_stamped(w.router._rename_person_row))
 
     def spoken_fact(about, who=ANN, **fields):
         async def run(w):
@@ -297,12 +310,12 @@ def scenarios() -> dict:
         return await w.sugg._execute_action(w.pg, "person_create", {"name": WORD}, ANN)
 
     async def corrected_pet(w):
-        return await w.fix._make_pet(w.db, ANN, "p-ann-family", "friend", "dog", "womble is a dog")
+        return await w.fix._make_pet(w.db, ANN, "p-ann-family", "friend", "dog", "womble is a dog", **_stamped(w.fix._make_pet))
 
     async def corrected_pet_raw(w):
         """The same correction holding a raw asyncpg connection (as the spoken-correction path can): here the $-form statement
         (``corrected_pet_pg``) is the one that runs, and its row is what the record keeps."""
-        return await w.fix._make_pet(w.pg, ANN, "p-ann-family", "friend", "dog", "womble is a dog")
+        return await w.fix._make_pet(w.pg, ANN, "p-ann-family", "friend", "dog", "womble is a dog", **_stamped(w.fix._make_pet))
 
     async def corrected_name(w):
         return await w.fix._rename_contact(ANN, "", "Quango Zorb", "Quango Tansy")

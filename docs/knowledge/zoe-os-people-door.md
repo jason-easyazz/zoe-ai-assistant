@@ -53,8 +53,10 @@ member's action asks before it reaches them (the caller names the acting member)
 | extractors, the health score, card import, voice learning, the erasers | not asked: nobody is acting |
 
 How a refusal reaches the person: the screen gets 403 with a plain sentence; the brain's tools return an error result with
-`status: refused`; a spoken turn says the sentence; the panel's introduce files no contact; an accepted offer and the day review
-fail and keep the item pending.
+`status: refused`; a spoken turn says the sentence (the spoken add, its "yes, that's the same person" reply, Skybridge's
+"remember that ...", and a spoken pet correction, which answers the turn itself rather than leaving it to the brain); the
+panel's introduce files no contact; a spoken name correction says the contact did not change; an accepted offer and the day
+review fail and keep the item pending.
 
 **Flag off is main exactly:** a flag read; no kernel call, socket, thread or extra statement. All 38 entry-point scenarios give
 the record captured from main (`tests/test_people_kernel_door.py`). With the flag on, the statements are still main's, with ONE
@@ -103,7 +105,9 @@ erase stamp per member named. Never a name, a number, an address, a birthday, a 
 ## 6. Ordered against a forget [code]
 
 As the other areas: every caller takes `people_service.stamps_now()` as the first thing it does, before it reads the contact,
-and hands it to the door (scanned over every module). The stamps are copied only when THIS area's door is on.
+and hands it to the door (scanned over every module). A helper that changes a contact its caller read (the spoken add's
+in-place rename, the pet correction) takes the CALLER's stamps as a required argument, and the scan holds its callers to the
+same rule. The stamps are copied only when THIS area's door is on.
 
 ## 7. Switch-on (owner steps; nothing here is done by the PR)
 
