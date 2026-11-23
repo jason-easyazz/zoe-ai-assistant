@@ -154,6 +154,64 @@ def _restore() -> None:
             setattr(obj, name, value)
 
 
+class Model:
+    """The local model's endpoint, answered from a script: ``{words in the prompt: the reply}`` (several parts joined by ``|``
+    must ALL be in the request's messages). The first key that matches answers, and the ask is noted in the record (which
+    prompt, never its text). A request no key matches fails as an unreachable model does. EVERY scenario runs with one
+    installed (``World``; an empty script unless the scenario brings its own): the model the service would otherwise call
+    is the live one on this box, and a record must not depend on whether one is listening."""
+
+    def __init__(self, w: "World", script: dict):
+        self.w, self.script = w, script
+
+    def install(self) -> "Model":
+        import httpx
+
+        model = self
+
+        class Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, json=None, **_kw):
+                return model.answer(json or {})
+
+            async def get(self, url, **_kw):
+                raise httpx.ConnectError("the scenarios reach no HTTP service")
+
+        _set(httpx, "AsyncClient", Client)
+        return self
+
+    def answer(self, payload: dict):
+        import httpx
+
+        asked = "\n".join(str(m.get("content") or "") for m in payload.get("messages") or [])
+        for key, reply in self.script.items():
+            if all(part in asked for part in key.split("|")):
+                self.w.log.append(["model-asked", key])
+                return _Reply(reply if isinstance(reply, str) else json.dumps(reply))
+        raise httpx.ConnectError("the scenarios have no model for this request")
+
+
+class _Reply:
+    status_code = 200
+
+    def __init__(self, content: str):
+        self._content = content
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"content": self._content}}]}
+
+
 class World:
     """One fresh service on a recording collection. ``w.log`` is the record."""
 
@@ -187,6 +245,7 @@ class World:
         _set(memory_service._erase_watermark, "record", marked)
         _set(memory_service, "_user_opted_out", opted_in)
         _set(memory_service, "get_memory_service", lambda: self.svc)
+        Model(self, {}).install()
         self.takes_acting = "acting" in inspect.signature(memory_service.MemoryService.ingest).parameters
 
     def who(self, kw: dict, member) -> dict:
@@ -449,21 +508,52 @@ def scenarios() -> dict:
         import memory_entry_scenarios
 
         out.update(memory_entry_scenarios.scenarios())
+        import memory_writer_scenarios
+
+        out.update(memory_writer_scenarios.scenarios())
     except ImportError:
         pass
     return out
 
 
+#: the file stores a whole-member forget (``MemoryService.delete_user``, run by ``entry_member_forget_everything``) rewrites or deletes
+_ERASED_FILES = ("ZOE_ROUTER_HEAD_LOG", "ZOE_INTENT_MISS_LOG", "ZOE_VOICE_STT_LOG", "ZOE_RECALL_GATE_TRACE_DIR",
+                 "ZOE_ROUTER_RETRAIN_DIR", "ZOE_OMI_REPASS_DIR", "ZOE_OMI_AUDIO_DIR", "ZOE_WARM_SPEAKER_STATE")
+
+
 def _isolated() -> None:
     """Refuse to run outside the test configuration: a rejected or forgotten row reaches stores that default under the live
-    ``~/.zoe`` (the reject counters, the shadow's parked forgets). ``tests/conftest.py`` points each at a temporary directory."""
+    ``~/.zoe`` (the reject counters, the shadow's parked forgets, the text logs and recordings a member forget erases).
+    ``tests/conftest.py`` points each at a temporary directory."""
     import os
 
     live = os.path.join(os.path.expanduser("~"), ".zoe")
-    for var in ("ZOE_MEMORY_REJECT_LEDGER", "ZOE_OS_SHADOW_DIR", "MEMPALACE_DATA_DIR", "ZOE_LOG_DIR"):
+    for var in ("ZOE_MEMORY_REJECT_LEDGER", "ZOE_OS_SHADOW_DIR", "MEMPALACE_DATA_DIR", "ZOE_LOG_DIR") + _ERASED_FILES:
         value = os.environ.get(var, "")
         if not value or os.path.abspath(value).startswith(live):
             raise RuntimeError(f"memory scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
+
+
+def _private_stores() -> None:
+    """The stores ``tests/conftest.py`` isolates only INSIDE a test (its autouse fixtures), given to every scenario here, so a
+    run outside pytest (the capture of main's record) is isolated the same way: the self-review and night-extract directories a
+    member forget rewrites, and the forget-epoch file a "forget X" moves (the live service reads the real one). Found
+    2026-11-23: a capture had left an invented id in the box's own forget-epoch file and in its night-extract erase notes."""
+    import os
+
+    base = os.path.join(os.path.dirname(os.path.abspath(os.environ["MEMPALACE_DATA_DIR"])), "memory-scenarios")
+    for var, leaf in (("ZOE_SELF_REVIEW_DIR", "self-review"), ("ZOE_SELF_REVIEW_IMPROVER_DIR", "self-improver"),
+                      ("ZOE_NIGHT_EXTRACT_DIR", "night-extract")):
+        _setenv(var, os.path.join(base, leaf))
+    try:
+        import forget_session
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        return
+    from pathlib import Path
+
+    _set(forget_session, "_PATH", Path(base) / "forget_session_epochs.json")
+    _set(forget_session, "_EPOCH", {})
+    _set(forget_session, "_LOADED", False)
 
 
 _STORES = ("erase_watermark", "exact_words", "night_store", "struggle_detector")     # Postgres in production; in process here
@@ -493,8 +583,9 @@ def run(name: str) -> list:
 
     async def go():
         _fresh()
-        w = World()
         try:
+            _private_stores()
+            w = World()
             await scenarios()[name](w)
             for task in list(getattr(w.svc, "_background_tasks", ()) or ()):
                 try:
