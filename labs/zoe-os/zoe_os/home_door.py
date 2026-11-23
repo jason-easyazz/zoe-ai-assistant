@@ -11,10 +11,13 @@ THE VERB CARRIES THE CLASS OF THING AND WHAT IS DONE TO IT, both closed codes: `
     a child                              only the classes their LEVEL allows (below); else refuse adults_only
     a guest on the roster                as the shared panel
     the shared panel (nobody identified) everything EXCEPT opening: a lock or a cover that is not being closed -> adults_only
-    not on the roster                    refuse unknown_person (a member TAKEN OFF it too: never a guest; ``music_door.roster``)
+    not on the roster                    refuse unknown_person (a member TAKEN OFF it too: never a guest; the door hands this
+                                         table only THAT kernel's current roster, ``Door._acting``)
 
-A CHILD'S LEVEL is a set of classes. It is stated per child, beside the roster (``home-levels.json``, read by ``levels``), as a
-level's name or as a plain list of classes; a child with nothing stated has ``DEFAULT_LEVEL``:
+A CHILD'S LEVEL is a set of classes. It is stated per child, beside the roster (``home-levels.json``, read by ``file_levels``), as
+a level's name or as a plain list of classes; a child with nothing stated has ``DEFAULT_LEVEL``. The reader belongs to ONE
+kernel (``Home.levels``, ``Kernel.home``; the shadow daemon installs the file beside ITS roster): two kernels in one process
+never read each other's, and nothing in this module is state.
 
     level      a child may control
     none       nothing
@@ -38,7 +41,6 @@ from typing import Callable
 
 from .capability import ADULT, CHILD
 from .door import ADULTS_ONLY, PANEL, PRIVATE, UNKNOWN_PERSON, Area
-from .music_door import on_roster
 from .spine import Decision
 
 CLASSES = ("light", "switch", "climate", "cover", "lock", "scene", "media", "other")
@@ -53,8 +55,6 @@ LEVELS = {
     "most": frozenset({"light", "media", "switch", "scene", "climate"}),
 }
 DEFAULT_LEVEL = "lights"
-#: ``() -> {child id: level name | list of classes}``: what is stated beside the roster. The daemon installs the file's reader.
-levels: Callable[[], dict] = dict
 
 
 LEVELS_FILE = "home-levels.json"      # beside people.json, 0600: {"levels": {"<child id>": "<level name>" | [classes]}}
@@ -110,11 +110,11 @@ def allowed_classes(stated) -> frozenset:
 
 
 def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner: str | None = None,
-           visibility: str = PRIVATE) -> Decision:
-    """The whole permission table (module docstring), one rule per line. ``people`` is the kernel's people; only those on the
-    CURRENT roster (``music_door.on_roster``) are anyone here."""
+           visibility: str = PRIVATE, levels: Callable[[], dict] = dict) -> Decision:
+    """The whole permission table (module docstring), one rule per line. ``people``: those on the CURRENT roster (the door
+    hands only them, ``Door._acting``). ``levels``: ``() -> {child id: level name | list of classes}``, the deciding kernel's."""
     panel = via == PANEL
-    who = None if panel else on_roster(people, actor)
+    who = None if panel else people.get(actor)
     if not panel and who is None:
         return Decision(False, UNKNOWN_PERSON)
     if who is not None and who.role == ADULT:                      # an adult: everything, a child's level included
@@ -127,4 +127,14 @@ def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner
     return Decision(False, ADULTS_ONLY) if opens(verb) else Decision(True)      # the panel, a guest: anything but opening
 
 
-AREA = Area("home", VERBS, decide, target="entity")
+class Home:
+    """ONE kernel's home-control area: the table above with that kernel's own levels reader (``levels``; nothing stated until
+    the owner installs one, so every child has the default). Built by ``Kernel.__init__`` (``Kernel.home``), its ``area`` is
+    the door's "home"."""
+
+    def __init__(self, levels: Callable[[], dict] = dict) -> None:
+        self.levels = levels
+        self.area = Area("home", VERBS, self.decide, target="entity")
+
+    def decide(self, people: dict, verb: str, actor: str, **kw) -> Decision:
+        return decide(people, verb, actor, levels=self.levels, **kw)

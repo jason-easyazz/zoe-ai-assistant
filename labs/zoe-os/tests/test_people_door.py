@@ -194,3 +194,56 @@ def test_the_daemon_serves_contacts_on_its_existing_socket(tmp_path):
     finally:
         d.stop()
     assert b"kiosk-1" not in (state / "kernel" / "zoe-os.db").read_bytes()
+
+
+# ---- who ACTS: the current roster, through the real daemon build (``door.Door.roster``, ``Area.former``) --------------------
+from test_roster_sync import BRAIN, built, state, write  # noqa: E402,F401 - the daemon build fixture and its roster file
+
+GONE = ADULT2
+
+
+def _contact(srv, verb: str, person: str, *, owner: str | None, visibility: str = "household", via: str | None = None) -> str:
+    """The daemon's own door op (the roster file re-read first, as on the wire): ``ok`` or the refusal code."""
+    try:
+        with srv.kernel.spine._lock:
+            srv._op_door_ask(BRAIN, {"area": "people", "verb": verb, "person": person, "target": "pp0000000001", "owner": owner,
+                                     "visibility": visibility, "via": via})
+        return "ok"
+    except Refused as exc:
+        return exc.wire
+
+
+def test_a_member_taken_off_the_roster_but_kept_for_forgetting_changes_no_contact(built, monkeypatch):
+    """Review of #2699: the contacts table was decided from the kernel's people map, which keeps a member taken off people.json
+    while a record names them (so it can be forgotten), so such a member could still change another member's household
+    contact and pass the owner check. Through the real daemon build: they are NOBODY at this door (every verb, every book,
+    their own included, the owner's adults-only switch on or off); a current member deals with what they left exactly as the
+    table says (household: create, edit, delete; private: ``not_owner``; the panel adds only); and they can still be forgotten.
+
+    Controls run: ``former=True`` put on ``people_door.AREA`` -> the first ``unknown_person`` below is ``ok``;
+    ``k.door.roster = lambda: srv.roster`` removed from ``shadow_daemon.build`` -> the same."""
+    daemon, k, srv, path = built
+    write(path, [{"id": OWNER, "role": "adult"}, {"id": GONE, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])
+    assert _contact(srv, "contact.create", GONE, owner=GONE, visibility="private") == "ok"         # a record names them
+    assert _contact(srv, "contact.edit", GONE, owner=OWNER) == "ok"                                # on the roster: today's rule
+    write(path, [{"id": OWNER, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])        # GONE taken off
+    assert _contact(srv, "contact.edit", OWNER, owner=OWNER) == "ok"                               # the file is re-read here
+    assert GONE in k.grants.people and GONE not in srv.roster                                      # kept (forgettable), off it
+    for switch in (False, True):
+        monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", switch)
+        for owner, visibility in ((OWNER, "household"), (KID, "household"), (OWNER, "private"), (GONE, "private"),
+                                  (GONE, "household"), (None, "household")):
+            for verb in VERBS:
+                assert _contact(srv, verb, GONE, owner=owner, visibility=visibility) == door.UNKNOWN_PERSON, (verb, owner, switch)
+    monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", False)
+    for verb in VERBS:                                                     # what they left: the table's rows, as for any book
+        assert _contact(srv, verb, OWNER, owner=GONE) == "ok"
+        assert _contact(srv, verb, KID, owner=GONE) == "ok"                                        # today's rule: anyone in the house
+        assert _contact(srv, verb, OWNER, owner=GONE, visibility="private") == door.NOT_OWNER
+        assert _contact(srv, verb, KID, owner=GONE, visibility="private") == door.NOT_OWNER
+    assert _contact(srv, "contact.create", "kiosk-1", owner=GONE, via="panel") == "ok"
+    assert _contact(srv, "contact.edit", "kiosk-1", owner=GONE, via="panel") == door.NOT_OWNER
+    monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", True)
+    assert _contact(srv, "contact.edit", KID, owner=GONE) == door.ADULTS_ONLY                       # the switch applies there too
+    assert _contact(srv, "contact.edit", OWNER, owner=GONE) == "ok"
+    assert k.spine.forget(GONE, actor=GONE).count >= 1                                             # and they can still be forgotten

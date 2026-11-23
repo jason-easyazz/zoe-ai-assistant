@@ -61,9 +61,10 @@ class Kernel:
         self.actions = Dispatcher(self.spine, self.enforcer)
         self.recovered = self.actions.recover()     # intents a dead kernel left open: uncertain
         # the one door: decides and records a change to something production holds (a list, a reminder); holds none of it
+        self.home = home_door.Home()        # THIS kernel's home control: its own levels reader (``Home.levels``), never shared
         self.door = Door(self.spine, self.enforcer, (lists.AREA, remind_door.AREA, alarm_door.ALARMS, alarm_door.TIMERS,
                                                      calendar_door.AREA, notes_door.NOTES, notes_door.JOURNAL,
-                                                     people_door.AREA, music_door.AREA, home_door.AREA, memory_door.AREA))
+                                                     people_door.AREA, music_door.AREA, self.home.area, memory_door.AREA))
         self.lists = lists.ListDoor(self.door)
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
