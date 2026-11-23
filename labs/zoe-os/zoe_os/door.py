@@ -58,12 +58,17 @@ _ID = re.compile(r"[A-Za-z0-9._:@_-]{1,80}\Z")   # the id shapes Zoe uses: uuids
 @dataclass(frozen=True)
 class Area:
     """One area of the door. ``decide(people, verb, actor, *, via, owner, visibility) -> Decision`` is its whole permission table;
-    ``target`` is the record's key for the id of the thing changed, ``parts`` the key for the ids of its parts (None: it has none)."""
+    ``target`` is the record's key for the id of the thing changed, ``parts`` the key for the ids of its parts (None: it has none).
+    An area whose acts change no THING (lookups, messages) has ``target=None``, and may also refuse ``owner`` and ``turn``
+    (``owner=False`` / ``turn=False``): an ask for it that supplies any field the area does not have is malformed and rejected
+    BEFORE anything is read or written, so no caller text (a query, an address) can ride in on an id-shaped field."""
     name: str
     verbs: tuple
     decide: Callable
-    target: str
+    target: str | None
     parts: str | None = None
+    owner: bool = True
+    turn: bool = True
 
 
 def _id(value, *, optional: bool = True) -> str | None:
@@ -101,8 +106,9 @@ class Door:
         if spec is None or verb not in spec.verbs or via not in (None, PANEL) or visibility not in (None, HOUSEHOLD, PRIVATE):
             raise ValueError("unknown area, verb, surface or visibility")
         if not isinstance(person, str) or not isinstance(parts, (list, tuple)) or len(parts) > MAX_PARTS \
-                or (parts and spec.parts is None):
-            raise ValueError("malformed ask")
+                or (parts and spec.parts is None) or (target is not None and spec.target is None) \
+                or (owner is not None and not spec.owner) or (turn is not None and not spec.turn):
+            raise ValueError("malformed ask")       # a field this area does not have: rejected, nothing read or written
         target, owner, turn = _id(target), _id(owner), _id(turn)
         parts = [_id(i, optional=False) for i in parts]
         visibility = visibility or PRIVATE
