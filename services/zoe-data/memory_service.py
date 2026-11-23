@@ -2955,8 +2955,11 @@ class MemoryService:
 
     # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
     # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
-    @_erase_gate.whole_member_erase
+    # The door's report is OUTSIDE that span (ZOE_OS_MEMORY=kernel only): the told forget names the member, and a record naming a
+    # member whose erase is still running is dropped unsent (``os_shadow.record_door``: ``erasing``); sent after it, the kernel's
+    # erase-stamp order writes nothing that names them (the ask's stamps predate the forget it has just been sent).
     @_memory_door.reporting
+    @_erase_gate.whole_member_erase
     async def delete_user(self, user_id: str, *, acting: "memory_actor.Acting", actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
@@ -2970,8 +2973,9 @@ class MemoryService:
         sweep that matches no rows writes nothing — it removes nothing. Documented in
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
         memory_actor.check(acting)
-        # a whole-member forget: made first, told afterwards (their own: the kernel forgets them too, and records nothing)
-        _memory_door.tell_after(acting, owner=user_id if getattr(acting, "user_id", None) == user_id else None)
+        # a whole-member forget: made first, told afterwards (once the erase span has ended), naming WHOSE memory was erased - an
+        # admin's erase of another member too. The kernel has just forgotten them, so it records nothing that names them
+        _memory_door.tell_after(acting, owner=user_id)
         self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
