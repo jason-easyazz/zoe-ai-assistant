@@ -467,6 +467,19 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
     ramp = _clamp(ch.get("ramp_seconds"), RAMP_RANGE, alarm["ramp_seconds"], "volume ramp")
     label = _clean_label(ch["label"]) if "label" in ch else alarm["label"]
     on = bool(ch["enabled"]) if "enabled" in ch else bool(alarm["enabled"])
+    was_sounding = alarm.get("state") in ("ringing", "snoozed")
+    # Does this edit change anything beyond stopping a ring? (Values, not keys: a form that re-sends the row unchanged changes
+    # nothing.) Turning an alarm off, a new label, time, rule, day, sound, snooze or ramp: each is an ordinary edit.
+    ordinary = (label != alarm["label"] or hhmm != alarm["time_hhmm"] or rule != alarm["repeat_rule"] or on != bool(alarm["enabled"])
+                or (kind, sid, sname) != (alarm["sound_kind"], alarm["sound_id"], alarm["sound_name"])
+                or snooze != alarm["snooze_minutes"] or ramp != alarm["ramp_seconds"]
+                or ("once_date" in ch and ch["once_date"] != alarm["once_date"]))
+    if was_sounding and ordinary and os_shadow.area_on("alarms"):
+        # ONLY THE SILENCING PART of an edit skips the ask. Made first and told afterwards: the ring stops (an edit with no change
+        # of its own lands the alarm idle). Then the rest of the edit, on the now idle row, is an ordinary edit: it asks first and
+        # a refusal is final for it. (Flag off: one edit, as on main.)
+        await update_alarm(db, alarm, {}, now=now, actor=actor)
+        return await update_alarm(db, await get_alarm(db, alarm["id"]), changes, now=now, actor=actor)
     if on and rule == "once" and once_date and "once_date" not in ch and next_occurrence(hhmm, rule, once_date, now) is None:
         once_date = None  # a spent one-off turned back on rings at the NEXT such time, not on its (past) old date
     # A day's exception belongs to the rule it was made for: a changed rule (or a one-off) drops them; otherwise they stay in force.
@@ -482,11 +495,10 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
             stored_date = date.fromisoformat(str(ch["once_date"])).isoformat()
         except ValueError:
             raise AlarmError("That is not a date I can use.") from None
-    # An edit that SILENCES is never held up by the kernel: every edit lands the alarm idle, so one made while it rings or is
-    # snoozed stops it, and one that turns it off must take effect at once. Those are made first and told afterwards, as snooze
-    # and dismiss are (``_note``); the kernel can neither delay nor refuse them. Every other edit asks first.
-    was_sounding = alarm.get("state") in ("ringing", "snoozed")
-    silences = was_sounding or ("enabled" in ch and not on)
+    # An edit that only SILENCES is never held up by the kernel: every edit lands the alarm idle, so one made while it rings or is
+    # snoozed stops it. That is made first and told afterwards, as snooze and dismiss are (``_note``); the kernel can neither delay
+    # nor refuse it. Every other edit asks first, turning an idle alarm off included, and a refusal is final.
+    silences = was_sounding and not ordinary
     # The write is guarded by the version the edit was computed from (``updated_at``): a concurrent disable / dismiss / ring that
     # landed in between changes it, and this edit then refuses instead of writing back its stale copy of every column.
     asked = None if silences else await _gate("alarm.edit", actor, alarm["id"], alarm["user_id"])
@@ -505,7 +517,7 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
             raise AlarmError("That alarm just changed. Try again.", 409)
     await db.commit()
     if silences:
-        _note("alarm.stop" if was_sounding else "alarm.edit", actor, alarm)     # AFTER the write: told, never asked first
+        _note("alarm.stop", actor, alarm)     # AFTER the write: told, never asked first
     await _emit("updated", alarm)
     return await get_alarm(db, alarm["id"])  # type: ignore[return-value]
 

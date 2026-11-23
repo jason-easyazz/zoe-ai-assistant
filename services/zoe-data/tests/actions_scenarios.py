@@ -71,6 +71,7 @@ class World:
 
         self.log, self.ha_post, self.ma_status, self.fail = log, (200, {"message": "Successfully executed"}), 200, ""
         self.ma_silent = False                 # True: Music Assistant has no speakers playing (music then goes through the house)
+        self.ma_answers = dict(MA_ANSWERS)     # Music Assistant's answer per command (a scenario can add or change one)
         world = self
 
         class Client:
@@ -103,7 +104,7 @@ class World:
             command = (body or {}).get("command", "")
             if self.ma_silent and command in ("players/all", "player_queues/all"):
                 return _Response(200, [])
-            return _Response(self.ma_status, MA_ANSWERS.get(command))
+            return _Response(self.ma_status, self.ma_answers.get(command))
         if method == "POST":
             return _Response(*self.ha_post)
         return _Response(200, HA_ANSWERS.get(parts.path, {}))
@@ -120,18 +121,20 @@ def _quiet(module, *names):
 
 def scenarios() -> dict:
     """name -> a coroutine function of the world; its return value is recorded."""
-    def music(route, **payload):
+    def music(route, answers=None, **payload):
         async def run(w):
             from routers import music as rest
 
+            w.ma_answers.update(answers or {})
             return await getattr(rest, route)(payload)
         return run
 
-    def said_music(action, query="", who=ANN):
+    def said_music(action, query="", who=ANN, answers=None):
         async def run(w):
             import music_service
             import skybridge_service as sky
 
+            w.ma_answers.update(answers or {})
             _quiet(music_service, "record_play", "observe")
             return (await music_service.resolve_music(sky.SkybridgeIntent("music", action, query=query), who)).get("spoken_summary")
         return run
@@ -200,7 +203,15 @@ def scenarios() -> dict:
         "music_screen_queue_remove": music("music_queue_remove", queue_id="ply0001", item_id="qi1"),
         "music_screen_queue_play_index": music("music_queue_play_index", queue_id="ply0001", index=2),
         "music_screen_favorite": music("music_favorite", uri="library://track/9"),
-        "music_screen_unfavorite": music("music_unfavorite", uri="library://track/9"),
+        # the uri resolves to the LIBRARY row Music Assistant's remove command needs (media type + library id)
+        "music_screen_unfavorite": music("music_unfavorite", uri="library://track/9",
+                                         answers={"music/item_by_uri": {"provider": "library", "item_id": 2, "media_type": "track",
+                                                                        "uri": "library://track/9", "name": "Womble Song"}}),
+        "music_screen_group": music("music_group", target_player_id="ply0001", add=["ply0002"],
+                                    answers={"players/all": [{**PLAYERS[0], "supported_features": ["set_members"]}, PLAYERS[1]]}),
+        "music_screen_queue_move": music("music_queue_move", queue_id="ply0001", item_id="qi1", to_index=2,
+                                         answers={"player_queues/items": [{"queue_item_id": q} for q in ("qi1", "qi2", "qi3")]}),
+        "music_screen_queue_save": music("music_queue_save", queue_id="ply0001", name="Womble mix"),
         "music_screen_playlist_add": music("music_playlist_add", playlist_uri="library://playlist/1", track_uri="library://track/9"),
         "music_screen_dont_stop": music("music_dont_stop", enabled=True),
         "music_screen_ungroup": music("music_ungroup", player_id="ply0002"),
@@ -208,6 +219,10 @@ def scenarios() -> dict:
         "music_spoken_play": said_music("play", "womble"),
         "music_spoken_pause": said_music("pause"),
         "music_spoken_transfer": said_music("transfer", "bedroom"),
+        "music_spoken_discovery": said_music("play", "my discovery playlist",
+                                             answers={"music/playlists/library_items": [
+                                                 {"name": "Zoe Discovery", "uri": "library://playlist/7", "item_id": "7"}]}),
+        "music_intent_favorite": music_intent("music_favorite"),       # "I like this song": favourite what is playing
         "music_intent_pause": music_intent("music_control", command="pause"),
         "music_intent_volume_down": music_intent("music_control", command="volume_down"),
         "music_intent_volume_set": music_intent("music_volume", level=30),

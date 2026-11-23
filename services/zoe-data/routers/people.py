@@ -607,8 +607,13 @@ async def merge_person_endpoint(
     db=Depends(get_db),
 ):
     """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): asked about the stored contact first, then the change exactly as it
-    always ran (``_merge_person_endpoint``), and the kernel is told how it ended. Flag off: a flag read."""
+    always ran (``_merge_person_endpoint``), and the kernel is told how it ended. Flag off: a flag read. Merge disabled
+    (``ZOE_PERSON_MERGE_ENABLED`` off): 404 as always, and nothing is asked (a refusal must not turn it into a 403)."""
     stamps_at = people_service.stamps_now()      # before the contact (and so whose it is) is read
+    from person_merge import person_merge_enabled
+
+    if not person_merge_enabled():
+        return await _merge_person_endpoint(source_id, target_id, user, db)      # its own 404, before any ask or DB work
     asked_0 = await people_service.ask_about(db, "contact.edit", actor=user["user_id"], person_id=target_id, stamps_at=stamps_at)
     try:      # a merge changes BOTH contacts: both are asked first, and neither is touched if either is refused
         asked_1 = await people_service.ask_about(db, "contact.delete", actor=user["user_id"], person_id=source_id, stamps_at=stamps_at)
