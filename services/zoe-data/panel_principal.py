@@ -243,6 +243,36 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
     return await _with_registry(db, _from_registered_panel, client_ip)
 
 
+async def _panel_id_at(db: Any, client_ip: str) -> str:
+    try:      # exactly one active guest panel registered at this address, or nobody
+        row = await (await db.execute(
+            "SELECT MIN(panel_id), COUNT(*) FROM panels WHERE ip_address = ? AND is_active = 1 AND allow_guest = 1", (client_ip,))).fetchone()
+        return str(row[0]) if row and row[1] == 1 and row[0] else ""
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry names no panel
+        logger.warning("panel_principal: panel-by-address lookup failed (%s)", type(exc).__name__)
+        return ""
+
+
+async def panel_of(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> str:
+    """WHICH panel this request is, for every way a panel authenticates (the strict ``is_panel_guest`` test first): its device
+    token's ``panel_id``, its kiosk credential's panel, or the one panel registered at its address. "" = not a panel. Never raises."""
+    try:
+        if (user or {}).get("unauthenticated_override"):
+            user = {"user_id": "guest", "role": "guest"}      # judged as the anonymous caller it is (``may_control_home``)
+        if not await is_panel_guest(request, user, db, mode="registered"):
+            return ""
+        pid = str((user or {}).get("panel_id") or "").strip()
+        if pid:
+            return pid
+        pid = str(panel_kiosk_credential.credential_panel_id(request) or "")
+        if pid and await _with_registry(db, _kiosk_panel_allows_guest, pid):
+            return pid
+        return str(await _with_registry(db, _panel_id_at, trusted_client_ip(request)) or "")
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        logger.warning("panel_principal: panel identity check failed (%s) - not a panel", type(exc).__name__)
+        return ""
+
+
 async def mark_if_panel(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
     """Request-level entry points (chat, skybridge resolve): mark the turn when the caller is the panel. Never raises."""
     try:
@@ -402,6 +432,11 @@ async def record_turn_home_control(request: Any, user: Mapping[str, Any] | None,
         logger.warning("panel_principal: turn home-control check failed (%s) - refusing", type(exc).__name__)
         allowed = False
     record_home_control(allowed)
+    import home_opening
+
+    # who this turn is for: unlocking or opening needs an adult (home_opening.py). No lookup here: the panel is resolved from
+    # the request only if the turn asks to open something.
+    home_opening.note_turn(user, request)
     return allowed
 
 
