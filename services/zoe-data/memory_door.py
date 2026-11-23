@@ -93,10 +93,17 @@ def _close(call: list, ok: bool) -> None:
 
 
 def _made(out: Any) -> bool:
-    """Did the call make its change? None / False: no. A forget's count (``{"rows_removed": n}``): only when it removed a row -
-    an empty request, or ids none of which are the member's, is a forget that did not happen and is not told."""
+    """Did the call make its change? The doored methods answer: a row (``ingest`` / ``review``) or None; a bool
+    (``supersede_by``, ``flag_challenged``); a COUNT of rows changed (``delete_user``: rows removed; ``set_curated_standing``:
+    rows restamped); a forget's count (``erase_rows``: ``{"rows_removed": n}``). None / False / a count of 0: no - a whole-member
+    erase that removed no row, an empty request, or ids none of which are the member's, is a forget that did not happen and is
+    not told (a ``0`` is an int, and ``0 is False`` is not true: it is read as the count it is)."""
     if out is None or out is False:
         return False
+    if isinstance(out, bool):
+        return out
+    if isinstance(out, int):
+        return out > 0
     if isinstance(out, dict) and "rows_removed" in out:
         try:
             return int(out.get("rows_removed") or 0) > 0
@@ -107,7 +114,7 @@ def _made(out: Any) -> bool:
 
 def reporting(method):
     """Around a mutating ``MemoryService`` method: what its body asked is reported ``done`` or ``failed`` when it returns
-    (None / False / an exception / a forget that removed no row = not made), and what it said it would tell is told only if it ended well. With the door off
+    (None / False / a count of 0 / an exception / a forget that removed no row = not made), and what it said it would tell is told only if it ended well. With the door off
     or an automatic caller the method runs exactly as it is."""
     @functools.wraps(method)
     async def run(self, *args, **kw):
