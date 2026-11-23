@@ -22,12 +22,12 @@ is re-read at most ``TTL_S`` later.
 """
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Mapping
 
 import httpx
 
+from typed_env import env_str
 from home_opening import CLOSING as CLOSING_SERVICES, RUNNABLE_DOMAINS, SECURE_DOMAINS
 
 SAFE, OPENS, UNREADABLE = "safe", "opens", "unreadable"
@@ -52,7 +52,7 @@ _clock = time.monotonic
 
 async def _read(entity_id: str) -> Any:
     """The bridge's body for this entity, or None for anything but a 200. Raises on a timeout or no bridge."""
-    base = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
+    base = env_str("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
     async with httpx.AsyncClient(timeout=READ_TIMEOUT_S) as client:
         r = await client.get(f"{base}/definitions/{entity_id}")
         return r.json() if r.status_code == 200 else None
