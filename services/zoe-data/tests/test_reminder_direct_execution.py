@@ -314,3 +314,24 @@ async def test_mcp_reminder_create_stdio_worker_relays_exactly_one_ui_update(mon
         {"id": "rem-1", "title": "check the oven", "due_date": "2099-06-15",
          "due_time": "23:00", "priority": "normal"},
     )]
+
+
+# --- a module the spoken create needs cannot load: main's answer, None ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module", ["database", "models", "reminder_service"])
+async def test_a_module_that_cannot_be_imported_gives_mains_none_with_the_flag_off(monkeypatch, module):
+    """With ``ZOE_OS_REMINDERS`` off and ``database``, ``models`` or the reminders door failing to import, the spoken create
+    answers ``None`` (main's generic handler) and raises nothing. It used to raise ``UnboundLocalError``: the refusal clause
+    named ``ReminderRefused``, which was imported AFTER ``database`` and ``models`` inside the same ``try``, so an earlier
+    failed import left the name unbound when the clause was matched. Control run: ``ReminderRefused`` imported inside the
+    write's ``try`` after the other two again (the separate guard removed) makes the ``database`` and ``models`` cases raise
+    ``UnboundLocalError``."""
+    import sys
+
+    from intent_router import _execute_reminder_create_direct
+
+    monkeypatch.delenv("ZOE_OS_REMINDERS", raising=False)
+    monkeypatch.setitem(sys.modules, module, None)          # ``from <module> import ...`` now raises ImportError
+    assert await _execute_reminder_create_direct(Intent("reminder_create", {"title": "feed the womble"}), "member-ova") is None
