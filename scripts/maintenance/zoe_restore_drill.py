@@ -703,32 +703,35 @@ def _write(state: Path, d: dict) -> None:
         pass                                   # unwritable state: the alert still goes (a repeat beats silence)
 
 
-def _say(text: str) -> bool:
+def _say(text: str, sender: Optional[Callable[[str], bool]] = None) -> bool:
     """The drill's ONE call to the owner-alert path (zoe_offbox.alert -> the shared deliver()). Only owner_alert and
     owner_cleared call it, so every drill alert carries the spell cadence (pinned by a static test). True only when the
     alert was handed off (``ob.alert`` returned True); a False / None return or a raising call is "not handed off" and
     never crashes the drill or changes its exit code."""
     try:
+        if sender is not None:
+            return sender(text) is True
         return ob.alert(text) is True
     except Exception as exc:  # noqa: BLE001 - an alert failure must never mask the result it reports
         print(f"alert not handed off: {type(exc).__name__}", file=sys.stderr)
         return False
 
 
-def owner_alert(state: Path, now: datetime, text: str) -> bool:
+def owner_alert(state: Path, now: datetime, text: str, *, sender: Optional[Callable[[str], bool]] = None) -> bool:
     """THE ONLY place the drill alerts the owner about a bad spell (a failed restore, a loud refusal, a stale drill: any
     mix, in any order, is ONE spell until a pass). It alerts on the TRANSITION into the spell, then at most once per
     ALERT_REMIND, recording ``alert_since`` / ``alert_at`` in the state file (atomic; read back as aware instants, so a
     missing, malformed or naive value counts as "not alerted" and never silences the first alert). The state is recorded
     ONLY after the alert was handed off; if it was not (an unwritable outbox, a raising sender), the state is left as it
     was, so the next run alerts again (a transition stays a transition, a due reminder stays due). True when handed off.
-    Pinned: no other ``ob.alert`` call exists in this file (tests/unit/test_restore_drill.py)."""
+    Pinned: no other ``ob.alert`` call exists in this file (tests/unit/test_restore_drill.py).
+    Other maintenance callers may supply their shared-outbox sender; the cadence and handoff rules stay identical."""
     prev = read_state(state)
     last = _instant(prev.get("alert_at"))
     if last is not None and timedelta(0) <= now - last < ALERT_REMIND:
         return False
     reminder = last is not None and _instant(prev.get("alert_since")) is not None
-    if not _say(("still failing (weekly reminder): " if reminder else "") + text):
+    if not _say(("still failing (weekly reminder): " if reminder else "") + text, sender):
         return False
     prev = read_state(state)                   # re-read: record on the newest state
     prev["alert_since"] = prev.get("alert_since") if reminder else now.isoformat(timespec="seconds")
@@ -737,7 +740,8 @@ def owner_alert(state: Path, now: datetime, text: str) -> bool:
     return True
 
 
-def owner_cleared(state: Path) -> bool:
+def owner_cleared(state: Path, text: str = "weekly restore drill passed again: the backups restore cleanly",
+                  *, sender: Optional[Callable[[str], bool]] = None) -> bool:
     """On a pass: ONE "passed again" line if ANY bad spell was alerted (whatever its kind). The spell is closed only once
     that line was handed off; otherwise it stays open and the next pass tries again. A cleared line that can never be
     delivered only costs one quiet attempt per pass (the drill is due about weekly after a pass): it never blocks, never
@@ -745,7 +749,7 @@ def owner_cleared(state: Path) -> bool:
     prev = read_state(state)
     if _instant(prev.get("alert_since")) is None and _instant(prev.get("alert_at")) is None:
         return False
-    if not _say("weekly restore drill passed again: the backups restore cleanly"):
+    if not _say(text, sender):
         return False
     prev = read_state(state)
     prev.pop("alert_since", None)
