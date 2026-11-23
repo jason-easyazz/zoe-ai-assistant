@@ -163,7 +163,8 @@ async def test_a_kernel_refusal_is_final_nothing_is_written_and_each_caller_says
     """The screen answers 403 through the one app handler; the brain's tools return an error result; a spoken turn says the
     sentence; the panel's introduce files nothing; an accepted offer, a correction and the day review raise (their callers keep
     the thing pending or say it failed). Control run: with the refusal not raised in ``kernel_door.gate`` the contact is
-    created and this fails."""
+    created and this fails; with Skybridge's flag-on path put back to the old order (the fact saved, then the edit asked at its
+    write) this fails on ``memory_fact``."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -192,7 +193,10 @@ async def test_a_kernel_refusal_is_final_nothing_is_written_and_each_caller_says
     out = await w.sky._resolve_with_db(intent, ANN, w.pg)
     assert out["spoken_summary"] == line and out["actions"] == [] and out["intent"]["status"] == "refused"
     assert w.rows() == before and door.ops("door_report") == []
-    assert not [e for e in w.log if e[0] in ("broadcast", "notify_ui", "notify_ui_channel", "memory", "mirror", "health", "archive")]
+    # (the screen's memory mirror is recorded as ``memory``, Skybridge's spoken fact as ``memory_fact``: review of #2700, the
+    # spoken fact was saved before the edit was asked and this list did not name it)
+    assert not [e for e in w.log if e[0] in ("broadcast", "notify_ui", "notify_ui_channel", "memory", "memory_fact", "mirror",
+                                             "health", "archive")]
 
     app = FastAPI()
     app.include_router(w.people.router)
@@ -245,6 +249,7 @@ async def test_a_merge_asks_about_both_contacts_and_touches_neither_if_either_is
 
     monkeypatch.setattr(people_service, "ask_contact", ask)
     monkeypatch.setattr(w.people, "_merge_person_endpoint", merge)
+    monkeypatch.setenv("ZOE_PERSON_MERGE_ENABLED", "1")          # merge disabled is a 404 before any ask (the next test)
     call = w.people.merge_person_endpoint("p-ann-stub", "p-ann-private", user={"user_id": ANN, "role": "user"}, db=w.db)
     if refused:
         with pytest.raises(people_service.ContactRefused):
@@ -257,6 +262,65 @@ async def test_a_merge_asks_about_both_contacts_and_touches_neither_if_either_is
         asks = _wait(door, "door_ask", 2)
         assert [(a["verb"], a["target"]) for a in asks] == [("contact.edit", "p-ann-private"), ("contact.delete", "p-ann-stub")]
         assert [r["outcome"] for r in _wait(door, "door_report", 2)] == ["done", "done"]
+
+
+@pytest.mark.parametrize("people_flag", ["kernel", None])
+@pytest.mark.asyncio
+async def test_a_merge_while_merge_is_disabled_is_404_and_asks_nothing(door, monkeypatch, people_flag):
+    """``ZOE_PERSON_MERGE_ENABLED`` off: the 404 it always was, flag on or off, even with a kernel that refuses everything; the
+    kernel is never asked (review of #2700: the wrapper asked first, so a refusal turned the disabled merge into a 403). Control
+    run: with the merge check removed from the wrapper ``merge_person_endpoint`` (so the inner one runs after the two asks) the
+    flag-on case raises ``ContactRefused`` and this fails."""
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("ZOE_PERSON_MERGE_ENABLED", raising=False)
+    if people_flag is None:
+        monkeypatch.delenv("ZOE_OS_PEOPLE", raising=False)
+    door.door = "refuse:not_owner"
+    w = scenarios.World([])
+    with pytest.raises(HTTPException) as exc:
+        await w.people.merge_person_endpoint("p-ann-stub", "p-ann-private", user={"user_id": ANN, "role": "user"}, db=w.db)
+    assert (exc.value.status_code, exc.value.detail) == (404, "Person merge is disabled")
+    assert door.ops("door_ask") == [] and not [e for e in w.log if e[0] == "sql"]
+
+
+# ---- a spoken fact: every ask before anything is written ---------------------------------------------------------------------------
+@pytest.mark.parametrize("refused", [None, "contact.create", "contact.edit"])
+@pytest.mark.parametrize("scenario", ["spoken_fact_about_a_new_person", "spoken_fact_about_their_own_contact"])
+@pytest.mark.asyncio
+async def test_a_spoken_fact_asks_create_and_edit_before_it_saves_anything(door, monkeypatch, scenario, refused):
+    """Skybridge's "remember that <name> ...": a new contact is a create AND an edit; both are asked before the contact is made,
+    the fact is saved to memory or the card is changed. A refusal of either leaves nothing behind: no row, no memory fact, and
+    an already-allowed create is closed ``failed`` (review of #2700: the fact was saved, and a new contact committed, before the
+    edit was asked). Control run: with the up-front edit ask dropped (the edit asked at its own write, as before the review) the
+    new-person edit-refused case fails: the contact was made and the fact saved."""
+    w = scenarios.World([])
+    before = w.rows()
+    real = people_service.ask_contact
+
+    async def ask(verb, **kw):
+        if verb == refused:
+            raise people_service.ContactRefused("not_owner")
+        return await real(verb, **kw)
+
+    monkeypatch.setattr(people_service, "ask_contact", ask)
+    new = scenario == "spoken_fact_about_a_new_person"
+    if refused == "contact.create" and not new:
+        refused = None                                             # an existing contact is not created: nothing to refuse
+    if refused:
+        with pytest.raises(people_service.ContactRefused):
+            await _run(w, scenario)
+        assert w.rows() == before and not [e for e in w.log if e[0] in ("memory_fact", "show_people")]
+        assert not [e for e in w.log if e[0] == "pg" and not e[1].startswith("SELECT")]
+        want = ["failed"] if refused == "contact.edit" and new else []
+        assert [r["outcome"] for r in _wait(door, "door_report", len(want), timeout=1.0)] == want
+        return
+    await _run(w, scenario)
+    asks = _wait(door, "door_ask", 2 if new else 1)
+    assert [a["verb"] for a in asks] == (["contact.create", "contact.edit"] if new else ["contact.edit"])
+    assert len({a["target"] for a in asks}) == 1
+    assert [r["outcome"] for r in _wait(door, "door_report", len(asks))] == ["done"] * len(asks)
+    assert [e[0] for e in w.log if e[0] in ("memory_fact", "show_people")] == ["memory_fact", "show_people"]
 
 
 # ---- who is not asked ----------------------------------------------------------------------------------------------------------------
