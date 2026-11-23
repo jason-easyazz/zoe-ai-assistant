@@ -372,8 +372,9 @@ async def set_device(entity_id: str, on: bool, *, brightness_pct: int | None = N
         payload["data"] = data
     import home_opening
 
-    # Backstop: unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. (The Zoe
-    # OS kernel's home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    # Backstop: unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. It stays
+    # on whatever ZOE_OS_HOME says: with the kernel's home door on (it sits in ``home_control.send``, so it is asked only
+    # AFTER this check has passed) BOTH must agree before anything is sent. The door adds to this check; it never replaces it.
     if await home_opening.refused(entity_id, payload["action"], via="spoken"):
         return False
     result = await _ha_post(home_control.DEVICE, payload)
