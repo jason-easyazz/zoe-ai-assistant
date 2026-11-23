@@ -5,7 +5,9 @@ demote a row a member authored.
 against an export of that commit under its own test configuration, never by this branch's code. The store is a collection, not
 SQL: the scenarios run on a RECORDING stand-in that logs every write call with the FULL metadata it carried (status, authority,
 its class and basis, source and origin, visibility, owner, the supersede links), every audit entry, and what each call returned
-or raised. The same scenarios run here and must give the same record.
+or raised, and the rows at the end. Every audit entry is written by the service's REAL audit writer into a recording audit
+collection and compared whole (the audited row's id, actor, action, user, reason, the full before and after); the erase mark
+is the real one, noted with all it was given. The same scenarios run here and must give the same record.
 
 Covered (219 scenarios). A MEMBER: remembering through each entry point's labels (spoken teach, brain tool, fast tier, MCP and
 agent tools, Skybridge, the screen's proposal, a curator, the day review, a correction, the note / journal / contact mirrors),
@@ -70,8 +72,14 @@ def run_with_spy():
     """``(the scenarios' record, {scenario: the call sites it reached})``. A spy on every mutating ``MemoryService`` method only
     NOTES, for each call, the function that MADE it (module, function, method: the direct caller, not everything on the stack -
     a helper's write does not count for the function that called the helper); the call passes through untouched, so the record
-    is the same with or without it (the comparison with main below would fail otherwise)."""
+    is the same with or without it (the comparison with main below would fail otherwise).
+
+    It also notes, per scenario, which of those call sites MADE a row write during its own call (an upsert, an update of a row
+    that exists, a delete that removed one: counted on the recording collection between the call's start and its end), and how
+    many row writes were made by calls that are NOT seeding (a call made under ``World.said``, the scenario storing the member's
+    own row first, is seeding). So "the named writer wrote" cannot be satisfied by the seed rows."""
     import functools
+    import inspect
     import sys
 
     import memory_service
@@ -79,25 +87,63 @@ def run_with_spy():
 
     root = Path(__file__).resolve().parents[1]
     reached: set = set()
+    wrote: set = set()
+    made = [0]
     kept = {}
+
+    def row_writes(entries) -> int:
+        return sum(1 for e in entries if e[0] == "rows" and (e[1] in ("upsert", "update") or (e[1] == "delete" and e[2])))
+
+    def seeding(frame) -> bool:
+        while frame is not None:
+            if frame.f_code.co_name == "said" and frame.f_code.co_filename.endswith("memory_scenarios.py"):
+                return True
+            frame = frame.f_back
+        return False
+
     for name in memory_writers.MUTATING:
         real = kept[name] = getattr(memory_service.MemoryService, name)
 
         def spy(self, *a, _real=real, _name=name, **k):
             frame = sys._getframe(1)
+            site = None
             try:
-                reached.add((Path(frame.f_code.co_filename).resolve().relative_to(root).as_posix(), frame.f_code.co_name, _name))
+                site = (Path(frame.f_code.co_filename).resolve().relative_to(root).as_posix(), frame.f_code.co_name, _name)
+                reached.add(site)
             except ValueError:
                 pass
-            return _real(self, *a, **k)
+            seed = seeding(frame)
+            log = getattr(self._collection(), "log", [])
+            start = len(log)
+
+            def note():
+                n = row_writes(log[start:])
+                if n and site is not None:
+                    wrote.add(site)
+                if n and not seed:
+                    made[0] += n
+
+            out = _real(self, *a, **k)
+            if not inspect.isawaitable(out):
+                note()
+                return out
+
+            async def measured():
+                try:
+                    return await out
+                finally:
+                    note()
+            return measured()
 
         setattr(memory_service.MemoryService, name, functools.wraps(real)(spy))     # (its signature stays readable: the scenarios ask it)
     try:
         record, by = {}, {}
         for name in sorted(scenarios.scenarios()):
             reached.clear()
+            wrote.clear()
+            made[0] = 0
             record[name] = scenarios.run(name)
-            by[name] = set(reached)
+            by[name] = (set(reached), set(wrote), made[0])
         return record, by
     finally:
         for name, real in kept.items():
@@ -109,7 +155,10 @@ _RAN: dict = {}
 
 @pytest.fixture(scope="module")
 def here():
-    record, _RAN["by"] = run_with_spy()
+    record, ran = run_with_spy()
+    _RAN["by"] = {name: reached for name, (reached, _w, _m) in ran.items()}
+    _RAN["wrote"] = {name: wrote for name, (_r, wrote, _m) in ran.items()}
+    _RAN["made"] = {name: made for name, (_r, _w, made) in ran.items()}
     _RAN["reached"] = set().union(*_RAN["by"].values())
     return record
 
@@ -247,19 +296,27 @@ def test_the_fixture_covers_every_scenario(here):
 
 def test_each_writer_scenario_makes_its_write_through_the_call_site_it_names(here):
     """A writer scenario is there for ONE call site: it must reach it (as the direct caller), whatever else reaches the same
-    site, and the service must have been asked to write (a ``rows`` entry after the seeded ones, or a delete). Control run: the
-    quote-retire scenario with its judge answering 0 (no pick) no longer reaches ``memory_retire.decide``'s write and fails here."""
+    site, and THAT call must have made a row write itself (counted during the site's own call, so the seeded rows never
+    count). Control runs: the quote-retire scenario with its judge answering 0 (no pick) no longer reaches
+    ``memory_retire.decide``'s write and fails here; round 3: ``MemoryService.retire_with_quote`` returning before it writes
+    (the site is still reached; the old "any rows entry in the record" check passed on the seeds) fails here, and so does the
+    spy never noting that a site wrote."""
     import memory_writer_scenarios
 
     assert set(DRIVEN) == set(memory_writer_scenarios.scenarios())
     for name, (sites, control) in DRIVEN.items():
         assert sites <= _RAN["by"][name], (name, sorted(sites - _RAN["by"][name]))
-        assert control and any(e[0] == "rows" for e in here[name]), name
+        assert control and sites <= _RAN["wrote"][name], (name, "made no row write:", sorted(sites - _RAN["wrote"][name]))
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
 def test_every_writer_makes_the_store_do_exactly_what_it_did_on_main(here, name):
-    assert scenarios.writes_only(here[name]) == ON_MAIN[name]
+    """The WHOLE record: every write, every audit entry whole, every erase mark, what was returned or raised, and the rows at
+    the end. Controls run (round 3): the REAL audit writer's ``reason`` dropped in ``MemoryService._append_audit_sync`` ->
+    ``entry_member_forget_row`` fails here; its audited memory id dropped -> ``member_correct_the_member`` fails here (the old
+    fake audit recorded neither); a final row's metadata changed without a write (``World.record`` adding a key to every row)
+    fails here although every write entry is unchanged."""
+    assert here[name] == ON_MAIN[name]
 
 
 def test_the_record_holds_the_full_metadata_of_each_write(here):
@@ -272,7 +329,9 @@ def test_the_record_holds_the_full_metadata_of_each_write(here):
     record = here["member_correct_the_member"]
     old_id = _seed(record)[0]
     assert _row(record, old_id)[1]["status"] == "superseded" and _row(record, old_id)[1]["superseded_by_id"]
-    assert any(e[0] == "audit" and e[1] == "edit" for e in record)
+    edits = [e for e in record if e[0] == "audit" and e[4]["action"] == "edit"]
+    assert edits and edits[0][4]["actor"] == scenarios.ANN and edits[0][4]["user_id"] == scenarios.ANN and "reason" in edits[0][4]
+    assert (edits[0][4]["before"]["id"], edits[0][4]["before"]["text"], edits[0][4]["after"]["text"]) == (old_id, scenarios.OLD, scenarios.NEW)
     assert here["member_household_row"][0][4]["visibility"] == "family"
 
 
@@ -280,13 +339,15 @@ def test_a_scenario_run_on_its_own_gives_the_record_it_gives_among_the_others(he
     """No record depends on what ran before it (a forget in an earlier scenario shields the process against the same words).
     EVERY scenario is run alone and compared. Control runs: with ``memory_scenarios.run`` not calling ``_fresh`` this fails; with
     ``_fresh`` not clearing ``memory_tombstones`` (the brain's "forget Teddy" then blocks every later row naming Teddy, on main
-    and here alike, so the fixture comparison alone cannot see it) this fails."""
+    and here alike, so the fixture comparison alone cannot see it) this fails. The named scenarios must each make a row write
+    that is NOT their seeding (round 3: "any rows entry" counted the seeds; control: the spy never counting a non-seed write
+    fails this)."""
     for name in sorted(here):
         assert scenarios.run(name) == here[name], name
     for name in ("member_remember_skybridge", "member_remember_mcp_tool", "entry_member_agent_tool_add", "member_forget_row",
                  "entry_auto_turn_extractor", "entry_member_proposal_approved", "entry_member_curator_add",
                  "entry_member_forget_everything", "entry_auto_night_digest", "entry_auto_weekly_consolidation"):
-        assert any(e[0] == "rows" for e in here[name]), name
+        assert _RAN["made"][name] > 0, name          # a row write made by the scenario's writer, not by its seeding
 
 
 def _below_the_member(writer: str) -> bool:

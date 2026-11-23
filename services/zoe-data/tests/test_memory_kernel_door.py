@@ -102,9 +102,31 @@ def _rows(w) -> dict:
 
 
 # ---- flag off; door on and allowing ----------------------------------------------------------------------------------------------
+#: does the stored record of main keep the rows at the end? (``memory_scenarios.pack`` keeps them from the round-3 pin on; an
+#: older fixture holds the writes only, and then the final rows are compared with this branch's own flag-off run instead)
+MAIN_HAS_ROWS = any(e[0] == "row" for rec in ON_MAIN.values() for e in rec)
+
+
+def _as_main(here: dict) -> dict:
+    """Every scenario's WHOLE record (writes, audits, returns AND the rows at the end) in the shape main's fixture is stored in."""
+    return here if MAIN_HAS_ROWS else {name: scenarios.writes_only(rec) for name, rec in here.items()}
+
+
+def _off(monkeypatch) -> dict:
+    """Every scenario with the flag off (the kernel never reached), whole records."""
+    monkeypatch.setenv("ZOE_OS_MEMORY", "off")
+    try:
+        return scenarios.run_all()
+    finally:
+        monkeypatch.setenv("ZOE_OS_MEMORY", "kernel")
+
+
 @pytest.mark.parametrize("value", [None, "off", "shadow", "1"])
 def test_any_other_flag_value_makes_the_store_do_exactly_what_main_did(door, monkeypatch, value):
-    """Control run: with the flag check dropped from ``memory_door.on`` the ``never`` stub raises and the records differ."""
+    """The WHOLE record of every scenario, the final rows included, is main's. Control runs: with the flag check dropped from
+    ``memory_door.on`` the ``never`` stub raises and the records differ; round 3, once main's record keeps its rows (the
+    round-3 pin), a final row changed with no write (``World.record`` adding a key to every row) fails this - it passed while
+    ``writes_only`` dropped the rows."""
     def never(*a, **k):
         raise AssertionError("the kernel was reached with the flag off")
 
@@ -115,18 +137,32 @@ def test_any_other_flag_value_makes_the_store_do_exactly_what_main_did(door, mon
     monkeypatch.setattr(os_shadow, "ask_door", never)
     monkeypatch.setattr(os_shadow, "record_door", never)
     here = scenarios.run_all()
-    assert {name: scenarios.writes_only(rec) for name, rec in here.items()} == ON_MAIN
+    assert _as_main(here) == ON_MAIN
+    if not MAIN_HAS_ROWS:                                   # (an older fixture: the rows against the plain flag-off run)
+        assert here == _off(monkeypatch)
     assert door.ops("door_ask") == [] and door.ops("door_report") == []
 
 
-def test_with_the_door_on_and_allowing_the_store_is_made_to_do_exactly_what_main_did(door):
-    """The door adds no write and changes no result when the kernel allows. Control run: with the door writing the row twice
-    when allowed (a second ``_write_row`` in ``ingest``) every remember scenario gains a write."""
+@pytest.mark.parametrize("kernel", ["allow", "gone"])
+def test_with_the_door_on_and_allowing_the_store_is_made_to_do_exactly_what_main_did(door, monkeypatch, kernel):
+    """The door adds no write and changes no result or row when the kernel allows, and none when the kernel is DOWN either
+    (every ask is ``not_checked`` and the change proceeds): the whole record of every scenario, the final rows included, is the
+    flag-off record and main's. Control runs: with the door writing the row twice when allowed (a second ``_write_row`` in
+    ``ingest``) every remember scenario gains a write; round 3, a final row's metadata changed with no write when the door is
+    on (``World.record`` adding a key to every row under ``ZOE_OS_MEMORY=kernel``) fails this (it passed while ``writes_only``
+    dropped the rows), and with
+    ``not_checked`` read as a refusal in ``memory_door.ask`` the ``gone`` case fails."""
+    off = _off(monkeypatch)
+    if kernel == "gone":
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 0.2)
+        door.close()
     here = scenarios.run_all()
-    assert {name: scenarios.writes_only(rec) for name, rec in here.items()} == ON_MAIN
-    verbs = {a["verb"] for a in door.ops("door_ask")}
-    assert verbs == set(os_shadow.AREAS["memory"].verbs)
-    assert all(a["area"] == "memory" for a in door.ops("door_ask"))
+    assert here == off
+    assert _as_main(here) == ON_MAIN
+    if kernel == "allow":
+        verbs = {a["verb"] for a in door.ops("door_ask")}
+        assert verbs == set(os_shadow.AREAS["memory"].verbs)
+        assert all(a["area"] == "memory" for a in door.ops("door_ask"))
 
 
 # ---- asked first: remember, correct, approve ---------------------------------------------------------------------------------------
@@ -293,6 +329,52 @@ async def test_a_forget_that_removed_no_row_is_not_told(door, ids_of):
     mine = await w.said(OLD)
     await w.svc.erase_rows(ANN, [mine.id], actor=ANN, acting=memory_actor.member(ANN))
     assert len(_wait(door, 1, "memory.forget")) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_admins_whole_member_forget_names_whose_memory_was_erased(door):
+    """An administrator erasing ANOTHER member (``delete_user``, as the route lets an admin) is told with that member as the
+    owner, as the member's own erase is (the kernel's erase-stamp order then records nothing naming them). Controls run: with
+    ``delete_user`` telling ``owner=None`` for another member's erase (the old code) the admin's told forget has no owner and
+    this fails; with the door's report back INSIDE the erase span (the old decorator order) both told forgets are dropped
+    unsent (``os_shadow.record_door``: ``erasing``) and this fails."""
+    w = scenarios.World()
+    await w.said(OLD)
+    keep = await w.said(OTHER, user=BEN)
+    assert await w.svc.delete_user(ANN, actor=BEN, reason="right to be forgotten", acting=memory_actor.member(BEN)) == 1
+    mine = await w.said("User's cat is named Womble.", user=BEN)
+    assert await w.svc.delete_user(BEN, actor=BEN, acting=memory_actor.member(BEN)) == 2
+    told = _wait(door, 2, "memory.forget")
+    assert [(a["person"], a.get("owner")) for a in told] == [(BEN, ANN), (BEN, BEN)]
+    assert keep.id not in w.col.rows and mine.id not in w.col.rows
+
+
+@pytest.mark.asyncio
+async def test_a_whole_member_forget_that_removed_no_row_is_not_told(door):
+    """``delete_user`` answers the number of rows removed: an admin's erase of a member with no rows answers 0, a forget that
+    did not happen, and the kernel is told nothing (the erase of a member WITH rows, right after, is told). Control run: with
+    ``memory_door._made`` back to the identity check (``out is False``: an int 0 counts as made) the empty erase is told."""
+    w = scenarios.World()
+    keep = await w.said(OTHER, user=BEN)
+    assert await w.svc.delete_user(ANN, actor=BEN, acting=memory_actor.member(BEN)) == 0
+    await asyncio.sleep(0.3)
+    assert _asks(door, "memory.forget") == [] and keep.id in w.col.rows
+    assert await w.svc.delete_user(BEN, actor=BEN, acting=memory_actor.member(BEN)) == 1
+    assert [a.get("owner") for a in _wait(door, 1, "memory.forget")] == [BEN]
+
+
+def test_every_answer_a_doored_method_gives_is_read_as_made_or_not():
+    """The return shapes of the seven doored methods (``ingest`` / ``review``: a row or None; ``supersede_by`` /
+    ``flag_challenged``: a bool; ``delete_user`` / ``set_curated_standing``: a count; ``erase_rows``: ``{"rows_removed": n}``):
+    no real change reads as not made, and no empty one as made. Control run: ``_made`` without its bool / int lines fails on
+    ``0``."""
+    import memory_service
+
+    row = memory_service.MemoryRef(id="m1", text="x", metadata={})
+    made = [row, True, 1, 3, {"rows_removed": 2, "audit_removed": 0}]
+    not_made = [None, False, 0, {"rows_removed": 0}, {"rows_removed": None}, {"rows_removed": "x"}]
+    assert [memory_door._made(v) for v in made] == [True] * len(made)
+    assert [memory_door._made(v) for v in not_made] == [False] * len(not_made)
 
 
 @pytest.mark.parametrize("flag,who", [("off", "member"), ("kernel", "automatic"), ("off", "automatic")])

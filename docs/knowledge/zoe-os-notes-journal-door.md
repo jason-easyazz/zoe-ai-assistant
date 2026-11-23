@@ -33,7 +33,7 @@ extraction a note or an entry triggers happen after the write, as before, and ar
 How a refusal reaches the person: the screen gets 403 with a plain sentence; the brain's tools return an error result with
 `status: refused`; a spoken turn says the sentence; an accepted suggestion fails and stays pending.
 
-**Flag off is main exactly:** a flag read; no kernel call, socket, thread or extra statement. All 30 entry-point scenarios give
+**Flag off is main exactly:** a flag read; no kernel call, socket, thread or extra statement. All 32 entry-point scenarios give
 the record captured from main (`tests/test_notes_journal_kernel_door.py`), and still do with both doors on and allowing: every
 caller hands the door the row it already read.
 

@@ -141,7 +141,7 @@ async def test_a_refused_change_writes_nothing_and_the_spoken_one_off_says_why(d
         assert exc.value.reason == reason and isinstance(exc.value, kernel_door.Refused)
     assert _tables(world) == before
     await world.say("remind me to take the drill to work tomorrow", RILEY)
-    assert world.log[-1][2] == routine_door.RoutineRefused(reason).line() and _tables(world) == before
+    assert [e for e in world.log if e[0] == "say"][-1][2] == routine_door.RoutineRefused(reason).line() and _tables(world) == before
 
 
 async def test_a_change_the_store_itself_refuses_is_never_asked_and_the_stores_own_refusal_comes_back(door, world, monkeypatch):
