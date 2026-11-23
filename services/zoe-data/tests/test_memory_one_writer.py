@@ -10,6 +10,9 @@ The four (all AUTOMATIC, all on ``main``): ``memory_digest.py`` writes rows back
 (``_upsert_rows``: one; ``_update_existing``: an update, or an upsert for a store with no update), and ``zoe_agent.py`` has a
 one-off migration (``migrate_mempalace_legacy_records``). They are faults on main to route through ``MemoryService`` later.
 
+Functions are keyed by QUALIFIED name (enclosing classes and functions, dotted), so a later function of the same bare name
+cannot replace an earlier one and hide its write.
+
 Negative control run: a ``col.update`` planted in ``memory_digest._live_ids`` fails
 ``test_only_the_memory_service_writes_the_collection`` (and a write planted in a module that has none fails it too).
 """
@@ -44,15 +47,27 @@ def _from_collection(node, names: set) -> bool:
 
 
 def _functions(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield node
+    """``(qualified name, node)`` for every function: its enclosing classes and functions joined by dots, so a method
+    ``A.save`` and a method ``B.save`` (or a nested ``outer.save``) are two entries, never one replacing the other."""
+    def walk(node, path):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                qual = f"{path}.{child.name}" if path else child.name
+                if not isinstance(child, ast.ClassDef):
+                    yield qual, child
+                yield from walk(child, qual)
+            else:
+                yield from walk(child, path)
+    yield from walk(tree, "")
 
 
 def collection_writes(source: str) -> Counter:
-    """``{function name: write calls on the collection}`` for one module's source."""
+    """``{qualified function name: write calls on the collection}`` for one module's source."""
     tree = ast.parse(source)
-    fns = {f.name: f for f in _functions(tree)}
+    fns = dict(_functions(tree))
+    by_bare: dict = {}
+    for qual, fn in fns.items():
+        by_bare.setdefault(fn.name, []).append(qual)
     # per function: the names that hold the collection. A parameter CALLED the collection is one (a write handed to an
     # executor through ``functools.partial`` reaches its helper with no call the scan could follow).
     holds: dict = {name: {a.arg for a in fn.args.args + fn.args.kwonlyargs if a.arg in COLLECTION_PARAMS} for name, fn in fns.items()}
@@ -69,18 +84,19 @@ def collection_writes(source: str) -> Counter:
                             holds[name].add(t.id)
                             changed = True
                 if isinstance(node, ast.Call):
-                    callee = fns.get(node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", ""))
-                    if callee is None:
-                        continue
-                    params = [a.arg for a in callee.args.args]
-                    if params[:1] == ["self"]:
-                        params = params[1:]
-                    passed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
-                    passed += [(k.arg, k.value) for k in node.keywords if k.arg]
-                    for param, value in passed:
-                        if _from_collection(value, holds[name]) and param not in holds[callee.name]:
-                            holds[callee.name].add(param)
-                            changed = True
+                    # a call names a function by its bare name: every function of that name may be the callee
+                    called = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+                    for callee_name in by_bare.get(called, ()):
+                        callee = fns[callee_name]
+                        params = [a.arg for a in callee.args.args]
+                        if params[:1] == ["self"]:
+                            params = params[1:]
+                        passed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
+                        passed += [(k.arg, k.value) for k in node.keywords if k.arg]
+                        for param, value in passed:
+                            if _from_collection(value, holds[name]) and param not in holds[callee_name]:
+                                holds[callee_name].add(param)
+                                changed = True
     found: Counter = Counter()
     for name, fn in fns.items():
         inner = {n for sub in ast.walk(fn) if sub is not fn and isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -144,10 +160,31 @@ def reads(svc):
     assert collection_writes(src) == Counter({"lease": 1, "alias": 1, "helper": 1, "chain": 1, "handed_on": 1, "by_name": 1})
 
 
+def test_a_later_function_of_the_same_name_does_not_hide_an_earlier_write():
+    """Two methods called ``save`` in two classes, and a nested ``save``: each is its own entry, so the earlier one's write
+    is still counted. Control run: with ``collection_writes`` keying functions by bare name (the old ``{f.name: f}``), the
+    first ``A.save`` write vanishes (the later write-free ``B.save`` replaces it) and this test fails."""
+    src = '''
+class A:
+    def save(self):
+        get_drawers_collection("x").delete(ids=[1])
+class B:
+    def save(self):
+        return None
+def outer():
+    def save():
+        get_drawers_collection("x").upsert(ids=[1])
+    save()
+def save():
+    return None
+'''
+    assert collection_writes(src) == Counter({"A.save": 1, "outer.save": 1})
+
+
 def test_the_memory_service_itself_is_seen_writing():
     """The scan is not blind to the one writer: it finds the service's own row writes."""
     found = collection_writes((SVC / "memory_service.py").read_text("utf-8"))
-    assert found["_write_row"] == 1 and found["_update_row"] >= 1 and sum(found.values()) >= 15
+    assert found["MemoryService._write_row"] == 1 and found["MemoryService._update_row"] >= 1 and sum(found.values()) >= 15
 
 
 # ---- every call of a mutating method, and who is acting there -------------------------------------------------------------------
@@ -170,6 +207,33 @@ def mutating_calls(source: str, rel: str) -> Counter:
     return found
 
 
+def service_calls(found: Counter, not_the_service: dict) -> dict:
+    """The calls left once each exempt site's EXACT count of other-store calls is taken off (never the whole site). An exempt
+    site with fewer calls than its count fails: the table must say what is there."""
+    for key, n in not_the_service.items():
+        assert found.get(key, 0) >= n, f"{key}: {found.get(key, 0)} calls, the exemption names {n}"
+    left = {k: n - not_the_service.get(k, 0) for k, n in found.items()}
+    return {k: n for k, n in left.items() if n}
+
+
+def test_an_exempt_site_does_not_hide_one_more_call():
+    """A ``MemoryService.delete_user()`` planted inside ``memory_service.delete_user`` (which also calls the struggle
+    detector's own ``delete_user``) is left over and must be in the table. Control run: with ``service_calls`` dropping the
+    whole exempt key (the old ``k not in NOT_THE_SERVICE``), the planted call vanishes and this test fails."""
+    src = '''
+class MemoryService:
+    async def delete_user(self, user_id, *, actor):
+        await struggle_detector.delete_user(user_id)
+        await get_memory_service().delete_user(user_id, actor=actor)
+'''
+    found = mutating_calls(src, "memory_service.py")
+    assert service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 1}) == {
+        ("memory_service.py", "delete_user", "delete_user"): 1}
+    assert service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 2}) == {}
+    with pytest.raises(AssertionError):                     # an exemption naming more calls than are there fails too
+        service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 3})
+
+
 def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
     """``tests/memory_writers.py`` is the whole list: a new call site, or one more call in a listed function, fails until it is
     added WITH who is acting there. Control run: a second ``svc.ingest`` planted in ``routers/notes._store_note_memory`` fails."""
@@ -178,9 +242,7 @@ def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
     found: Counter = Counter()
     for rel, path in _modules():
         found.update(mutating_calls(path.read_text("utf-8"), rel))
-    service = {k: n for k, n in found.items() if k not in memory_writers.NOT_THE_SERVICE}
-    assert service == {k: n for k, (_who, n) in memory_writers.SITES.items()}
-    assert memory_writers.NOT_THE_SERVICE <= set(found)
+    assert service_calls(found, memory_writers.NOT_THE_SERVICE) == {k: n for k, (_who, n) in memory_writers.SITES.items()}
     assert {who for who, _n in memory_writers.SITES.values()} == {"member", "automatic", "passes_on"}
     assert len(memory_writers.MUTATING) == 13
 
@@ -315,3 +377,106 @@ def test_a_mutating_method_refuses_a_call_that_does_not_say_who_is_acting():
         asyncio.run(memory_service.MemoryService.review.unwrapped(svc, "row0001", decision="edit", actor="a", acting="member-ann"))
     assert memory_actor.check(memory_actor.AUTOMATIC) is memory_actor.AUTOMATIC
     assert memory_actor.check(memory_actor.Member("member-ann")).user_id == "member-ann"
+
+
+# ---- the tracked Python OUTSIDE the service that calls it (maintenance / performance scripts, labs) --------------------------------
+REPO = SVC.parents[1]
+#: how a caller outside the service names the automatic actor (a script imports from the zoe-data path at run time)
+AUTOMATIC_SPELLINGS = {"memory_actor.AUTOMATIC", "__import__('memory_actor').AUTOMATIC"}
+#: the same method names on something that is NOT the memory service, by exact site WITH A COUNT: (file, function, method) -> calls
+SCRIPTS_NOT_THE_SERVICE = {
+    ("scripts/perf/zmb/arms/zma.py", "ingest", "ingest"): 2,          # the Z0 arm's own ingest (self.z0.ingest)
+    ("scripts/perf/zmb/bakeoff_measure.py", "start", "ingest"): 1,    # a benchmark arm's ingest (self.arm.ingest)
+    ("scripts/perf/zmb/bakeoff_measure.py", "finish", "ingest"): 1,
+    ("scripts/perf/zmb/bakeoff_measure.py", "phase_latency", "ingest"): 1,
+}
+#: the files outside the service whose calls are checked (the scan must not go quiet: a file that stops being found fails)
+SERVICE_CALLERS_OUTSIDE = {
+    "labs/memory-claims-lab/run_baseline.py", "scripts/maintenance/forget_command_rows_audit.py",
+    "scripts/maintenance/guest_memory_report.py", "scripts/maintenance/identity_memory_audit.py",
+    "scripts/maintenance/memory_prompt_packet_measure.py", "scripts/maintenance/mempalace_baseline.py",
+    "scripts/maintenance/restore_memories_from_export.py", "scripts/perf/recall_gate_replay.py", "scripts/perf/zmb/arms/z0.py",
+}
+
+
+def _tracked_python_outside_the_service():
+    """``(repo-relative path, source)`` of every tracked Python file outside ``services/zoe-data`` that names the memory service
+    (tests aside: their calls default to automatic in the test configuration). ``git ls-files`` when there is a checkout, else
+    every ``.py`` under ``scripts/``, ``labs/`` and ``tools/``."""
+    import re
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "--", "*.py"], cwd=REPO, capture_output=True, check=True, timeout=30)
+        files = [f for f in out.stdout.decode("utf-8").split("\0") if f]
+    except Exception:  # noqa: BLE001 - no git (a sold box): the same directories, read from disk
+        files = [p.relative_to(REPO).as_posix() for top in ("scripts", "labs", "tools") for p in sorted((REPO / top).rglob("*.py"))]
+    for rel in sorted(files):
+        parts = rel.split("/")
+        if rel.startswith("services/zoe-data/") or "tests" in parts or parts[-1].startswith("test_") or parts[-1] == "conftest.py" \
+                or ".venv" in parts or "node_modules" in parts:
+            continue
+        path = REPO / rel
+        if not path.is_file():
+            continue
+        text = path.read_text("utf-8", errors="replace")
+        if re.search(r"\bmemory_service\b|get_memory_service|MemoryService", text):
+            yield rel, text
+
+
+def script_acting_faults(source: str, rel: str) -> Counter:
+    """``{(file, function, method): calls}`` of the mutating calls in a caller outside the service that do not say they are
+    AUTOMATIC (no ``acting=``, or anything else passed: nothing a script does is a member asking)."""
+    import memory_writers
+
+    faults: Counter = Counter()
+
+    def walk(node, fn):
+        for child in ast.iter_child_nodes(node):
+            inner = fn
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner = child.name if not fn else f"{fn}.{child.name}"
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr in memory_writers.MUTATING:
+                given = next((ast.unparse(k.value) for k in child.keywords if k.arg == "acting"), None)
+                if given not in AUTOMATIC_SPELLINGS:
+                    faults[(rel, fn, child.func.attr)] += 1
+            walk(child, inner)
+
+    walk(ast.parse(source), "")
+    return faults
+
+
+def test_every_call_outside_the_service_says_it_is_automatic():
+    """The maintenance and performance scripts and the labs that call the memory service pass ``memory_actor.AUTOMATIC`` on
+    every mutating call (the service refuses a call that does not say; a script passing a member would be a script acting as
+    a person). Other-store calls of the same names are exempt by exact site and count. Control runs: ``acting=`` dropped from
+    ``scripts/maintenance/guest_memory_report.py``'s ``erase_rows`` fails this; the same call passing
+    ``memory_actor.member(owner)`` fails it; ``acting=`` dropped from the lab's ``ingest`` (``labs/memory-claims-lab``) fails it;
+    ``SERVICE_CALLERS_OUTSIDE`` losing a file (the scan gone quiet) fails it."""
+    faults: Counter = Counter()
+    callers = set()
+    for rel, text in _tracked_python_outside_the_service():
+        import memory_writers
+
+        if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in memory_writers.MUTATING
+               for n in ast.walk(ast.parse(text))):
+            callers.add(rel)
+        faults.update(script_acting_faults(text, rel))
+    for key, n in SCRIPTS_NOT_THE_SERVICE.items():
+        assert faults.get(key, 0) >= n, f"{key}: {faults.get(key, 0)} calls, the exemption names {n}"
+        faults[key] -= n
+    assert {k: n for k, n in faults.items() if n} == {}
+    assert callers - {k[0] for k in SCRIPTS_NOT_THE_SERVICE} == SERVICE_CALLERS_OUTSIDE
+
+
+def test_the_outside_scan_sees_a_missing_or_wrong_actor():
+    src = '''
+async def ok(svc):
+    await svc.erase_rows("u", ["a"], actor="x", acting=__import__("memory_actor").AUTOMATIC)
+    await svc.ingest("t", user_id="u", acting=memory_actor.AUTOMATIC)
+async def missing(svc):
+    await svc.erase_rows("u", ["a"], actor="x")
+async def member(svc):
+    await svc.review("r", decision="archive", actor="x", acting=memory_actor.member("u"))
+'''
+    assert script_acting_faults(src, "s.py") == Counter({("s.py", "missing", "erase_rows"): 1, ("s.py", "member", "review"): 1})

@@ -7,16 +7,20 @@ SQL: the scenarios run on a RECORDING stand-in that logs every write call with t
 its class and basis, source and origin, visibility, owner, the supersede links), every audit entry, and what each call returned
 or raised. The same scenarios run here and must give the same record.
 
-Covered (171 scenarios). A MEMBER: remembering through each entry point's labels (spoken teach, brain tool, fast tier, MCP and
+Covered (198 scenarios). A MEMBER: remembering through each entry point's labels (spoken teach, brain tool, fast tier, MCP and
 agent tools, Skybridge, the screen's proposal, a curator, the day review, a correction, the note / journal / contact mirrors),
 alone and over an earlier fact; correcting as each corrector; approving and rejecting a held row; forgetting and archiving a
 row; another member's row; a household row; curated standing; a guest. An AUTOMATIC writer, each over a row the member STATED
 and one they CONFIRMED: storing a contradicting fact and the same fact (16 writers), editing, superseding, archiving and
 rejecting (11 actors), the night merge both ways, retire-with-quote, the decay sweep, a held candidate, relinking and archiving
-by person. And 21 through the REAL entry point (``tests/memory_entry_scenarios.py``): forget a row, a guardian's forget,
-correct a row twice over, accept and reject a dispute, a trait challenge, forget a topic, the fast tier's teach, Skybridge, the
-agent's tool, the three mirrors, the per-turn extractor, the person and named-relation extractors, the background save, the
-nightly conflict pass, the per-turn supersede, expiring stale disputes.
+by person. And 48 through the REAL entry point (``tests/memory_entry_scenarios.py``): forget a row, a guardian's forget,
+correct a row (the correction path ON, as a member's correction runs it), with a twin the same utterance left, accept and reject
+a dispute, a trait challenge that flags and one that does not, forget a topic, the fast tier's teach and its supersede,
+Skybridge, the agent's tool, the MCP tools (add, edit, forget), the screen's proposal approved and its edit, the day review's
+owner fact, person fact and its forget, hold-the-fact, the value, date, pet and row corrections, the provenance fix, forget-it
+and forget-the-quoted-turn, "forget that", the brain's store and forget-a-person intents, a curator's add, edit, forget, held
+note and an adult's opt-out, the three mirrors and a contact rename, the per-turn extractor, the person and named-relation
+extractors, the background save, the nightly conflict pass, the per-turn supersede, expiring stale disputes.
 
 Left out on purpose: access ticks (bookkeeping on every recall); ``delete_user`` (its erasers reach stores this record cannot
 isolate one by one; ``tests/test_os_shadow_forget.py`` and the erase suites own it); the model-driven night digest passes are
@@ -25,7 +29,10 @@ pinned by their labels at the service, not by running a model.
 Negative controls run (each broke the code, saw the named test fail, restored): the authority wall in ``memory_authority``
 answering "may change" for every writer -> ``auto_edit_stated_digest`` and the demotion test; a household row stored
 ``personal`` -> ``member_household_row``; an edit's audit entry mislabelled -> ``member_correct_the_member``; the note mirror's
-writer label changed -> ``entry_mirror_note``.
+writer label changed -> ``entry_mirror_note``; the row correction run with its flag off again ->
+``entry_member_correction_row``; the MCP tool's ``memory_add`` source label changed in ``mcp_server._execute_tool`` ->
+``entry_member_mcp_add``; the curator's add confidence changed in ``memory_curation._add_locked`` -> ``entry_member_curator_add``;
+one entry scenario dropped -> the coverage test (its site neither run nor listed).
 """
 from __future__ import annotations
 
@@ -100,26 +107,14 @@ def _row(record, row_id):
 #: by ``test_memory_one_writer.py``) that NO scenario runs through its real function: (module, function, method). Their writer
 #: LABELS are recorded (the ``member_`` / ``auto_`` scenarios hand each label to the service directly); the function around the
 #: call is not. Exact, so the list cannot grow unseen: a new call site must be run by an entry scenario or be added here.
+#: What is left, and why: the model-driven night passes (``memory_digest``, the person extractor's model lanes, the per-turn
+#: extractor and background save, whose rows come from a model answer this record does not run); ``delete_user`` (left out, see
+#: above); the measurement and baseline seeders; and a few branches a plain store state does not reach (the fast tier's archive
+#: of a superseded row, the night undo, the parked-forget replay, a retire chosen by the judge).
 NOT_RUN = {
-    # member: 31
-    ("correction_apply.py", "apply_date_correction", "review"), ("correction_apply.py", "apply_pet_correction", "ingest"),
-    ("correction_apply.py", "apply_pet_correction", "review"), ("correction_apply.py", "apply_row_correction", "review"),
-    ("expert_dispatch.py", "_ingest_or_supersede", "review"), ("hold_the_fact.py", "_apply_update", "review"),
-    ("intent_router.py", "_erase_named", "erase_rows"), ("intent_router.py", "_execute_forget_last", "erase_rows"),
-    ("intent_router.py", "_reject", "review"), ("intent_router.py", "execute_intent", "ingest"),
-    ("intent_router.py", "execute_intent", "review"), ("mcp_server.py", "_execute_tool", "ingest"),
-    ("mcp_server.py", "_execute_tool", "review"), ("memory_curation.py", "_add_locked", "ingest"),
-    ("memory_curation.py", "_edit_locked", "review"), ("memory_curation.py", "_forget_locked", "erase_rows"),
-    ("memory_curation.py", "_forget_locked", "review"), ("memory_curation.py", "_restamp", "set_curated_standing"),
-    ("memory_curation.py", "decide_held", "review"), ("memory_space.py", "retire_twins", "review"),
-    ("omi_review_apply.py", "write_owner_fact", "ingest"), ("omi_review_apply.py", "write_person_fact", "ingest"),
-    ("provenance_answers.py", "_forget_turn", "review"), ("provenance_answers.py", "fix", "review"),
-    ("provenance_answers.py", "forget_it", "erase_rows"), ("provenance_answers.py", "forget_it", "review"),
-    ("routers/memories.py", "create_memory_proposal", "ingest"), ("routers/memories.py", "forget_user", "delete_user"),
-    ("routers/memories.py", "review_memory", "review"), ("trait_challenge.py", "apply_challenge", "flag_challenged"),
-    ("value_correction.py", "apply", "review"),
-    # automatic: 35
-    ("contacts_conversation.py", "refresh_person_mirror", "review"),
+    # member: 2
+    ("expert_dispatch.py", "_ingest_or_supersede", "review"), ("routers/memories.py", "forget_user", "delete_user"),
+    # automatic: 33
     ("hindsight_retain_candidates.py", "create_hindsight_retain_candidate", "ingest"),
     ("memory_digest.py", "_emotional_memory_pass", "ingest"),
     ("memory_digest.py", "_merge_near_duplicates", "archive_duplicate"),
@@ -133,7 +128,7 @@ NOT_RUN = {
     ("memory_supersede.py", "nightly_conflict_pass", "supersede_by"),
     ("memory_supersede.py", "retire_by_claims", "supersede_by"), ("mempalace_baseline.py", "run_mempalace_baseline", "ingest"),
     ("named_relations.py", "_apply_one", "relink_entity"), ("named_relations.py", "_ingest_user_fact", "ingest"),
-    ("omi_review_apply.py", "unwrite", "erase_rows"), ("person_extractor.py", "_edge_may_change", "record_candidate"),
+    ("person_extractor.py", "_edge_may_change", "record_candidate"),
     ("person_extractor.py", "_hold_edge_belief", "record_candidate"),
     ("person_extractor.py", "_hold_fact_belief", "record_candidate"), ("person_extractor.py", "_ingest_to_mempalace", "ingest"),
     ("person_extractor.py", "_ingest_to_mempalace", "relink_entity"), ("person_extractor.py", "_ingest_to_mempalace", "review"),
@@ -155,12 +150,12 @@ def test_the_fixture_covers_every_scenario(here):
     ``test_memory_one_writer`` demands for any new call in the code) fails this as "not run, not listed"."""
     import memory_writers
 
-    assert set(ON_MAIN) == set(scenarios.scenarios()) and len(ON_MAIN) >= 170
+    assert set(ON_MAIN) == set(scenarios.scenarios()) and len(ON_MAIN) >= 198
     reached = _RAN["reached"]
     assert set(memory_writers.MUTATING) - {method for _m, _f, method in reached} == {"delete_user"}
     sites = {(module, fn.split(".")[-1], method) for module, fn, method in memory_writers.SITES}
     run = {site for site in sites if site in reached}
-    assert len(run) >= 20
+    assert len(run) >= 50
     assert sites - run == NOT_RUN, {"not run, not listed": sorted(sites - run - NOT_RUN), "listed, but run or gone": sorted(NOT_RUN - (sites - run))}
 
 
@@ -185,10 +180,13 @@ def test_the_record_holds_the_full_metadata_of_each_write(here):
 
 def test_a_scenario_run_on_its_own_gives_the_record_it_gives_among_the_others(here):
     """No record depends on what ran before it (a forget in an earlier scenario shields the process against the same words).
-    Control run: with ``memory_scenarios.run`` not calling ``_fresh`` this fails."""
-    for name in ("member_remember_skybridge", "member_remember_mcp_tool", "entry_member_agent_tool_add", "member_forget_row",
-                 "entry_auto_turn_extractor"):
+    EVERY scenario is run alone and compared. Control runs: with ``memory_scenarios.run`` not calling ``_fresh`` this fails; with
+    ``_fresh`` not clearing ``memory_tombstones`` (the brain's "forget Teddy" then blocks every later row naming Teddy, on main
+    and here alike, so the fixture comparison alone cannot see it) this fails."""
+    for name in sorted(here):
         assert scenarios.run(name) == here[name], name
+    for name in ("member_remember_skybridge", "member_remember_mcp_tool", "entry_member_agent_tool_add", "member_forget_row",
+                 "entry_auto_turn_extractor", "entry_member_proposal_approved", "entry_member_curator_add"):
         assert any(e[0] == "rows" for e in here[name]), name
 
 
@@ -241,5 +239,7 @@ def test_the_writers_main_lets_change_a_members_row_are_exactly_these(here):
             changed.add(name)
     by_rule = {f"auto_{what}_{actor}" for actor in ("chat_regex", "conversation", "operator", "system")
                for what in ("edit_stated", "edit_confirmed", "archive_stated", "reject_stated")}
+    # (the contact rename archives the stale "Person in contacts" mirror row it wrote itself and writes the new one: a mirror
+    # of the contact, not the member's own words)
     assert changed == by_rule | {"auto_retire_with_quote", "auto_archive_entity", "entry_auto_turn_extractor",
-                                 "entry_auto_named_relation_fact", "entry_auto_background_save"}
+                                 "entry_auto_named_relation_fact", "entry_auto_background_save", "entry_auto_contact_rename_mirror"}

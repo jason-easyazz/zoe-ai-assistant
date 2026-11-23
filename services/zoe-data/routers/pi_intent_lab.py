@@ -21,15 +21,20 @@ router = APIRouter(prefix="/api/pi-intent-lab", tags=["pi-intent-lab"])
 
 async def require_lab_operator(request: Request) -> dict:
     """Allow admin users or Zoe internal loopback/token callers to use the lab."""
+    import panel_principal as _pp
+
     try:
         await auth.require_internal_token(request)
+        _pp._note_actor({"user_id": "internal-pi-intent-lab"})      # the action doors (music, home): who acts (the lab is no one on the roster)
         return {"user_id": "internal-pi-intent-lab", "role": "admin", "auth_path": "internal"}
     except HTTPException as internal_exc:
         if request.headers.get("X-Internal-Token") and getattr(auth, "_ZOE_INTERNAL_TOKEN", ""):
             raise internal_exc
 
     user = await auth.get_current_user(request)
-    return await auth.require_admin(user)
+    admin = await auth.require_admin(user)
+    _pp._note_actor(admin)
+    return admin
 
 
 class PiIntentLabCompareRequest(BaseModel):

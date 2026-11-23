@@ -4632,8 +4632,11 @@ class MemoryService:
         intent row cannot be written nothing is deleted. ``finish_missing`` is the parked replay: clean the owned audit trail and
         physical residue even when the rows already went, and raise if physical cleanup fails. Returns counts only."""
         memory_actor.check(acting)
-        ids = list(ids)
-        _memory_door.tell_after(acting, owner=user_id, row=ids[0] if len(ids) == 1 else None)      # a forget: made first, told afterwards
+        if _memory_door.on(acting):
+            # a member's forget with the door on: made first, told afterwards (the one row it names, when it names one). Only here
+            # is ``ids`` copied: off, or for an automatic writer, it is read once below exactly as before the door existed.
+            ids = list(ids)
+            _memory_door.tell_after(acting, owner=user_id, row=ids[0] if len(ids) == 1 else None)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "erase_rows")
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]

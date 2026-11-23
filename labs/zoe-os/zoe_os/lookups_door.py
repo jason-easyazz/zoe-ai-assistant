@@ -3,7 +3,8 @@ search, a page fetch). Lookups are read-only for the household, so there is noth
 TELLS the kernel afterwards. The kernel is never asked first and can neither delay nor stop one.
 
 What is recorded: who, and the CLASS of lookup (a closed verb). NEVER the query, the place, the URL or the result: the wire
-has no field for them and this area has no target.
+has no field for them: this area has no target, no owner and no turn id, and an ask that supplies any of
+them is rejected before anything is read or written (``door.Area``).
 
     who                                  lookup.weather / lookup.web_search / lookup.web_fetch
     anyone on the roster (a child too)   recorded
@@ -31,4 +32,4 @@ def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner
     return Decision(False, UNKNOWN_PERSON)
 
 
-AREA = Area("lookups", VERBS, decide, target="lookup")
+AREA = Area("lookups", VERBS, decide, target=None, owner=False, turn=False)
