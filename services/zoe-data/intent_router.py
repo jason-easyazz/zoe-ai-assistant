@@ -3594,6 +3594,10 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     category = str(slots.get("category") or "general").strip() or "general"
     try:
         from calendar_service import EventRefused, conversational_visibility, create_event_record, stamps_now
+    except Exception as exc:      # the door cannot load: main's answer (the generic handler below, None) - never an unbound name
+        logger.warning("calendar_create direct execution unavailable: %s", exc)
+        return None
+    try:
         from database import get_db_ctx
 
         stamps_at = stamps_now()      # the Zoe OS calendar door: stamped before anything is awaited
