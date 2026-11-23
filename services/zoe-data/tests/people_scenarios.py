@@ -11,26 +11,33 @@ its owner's alone) and ``person_relationships`` (the edges). Here: one SQLite fi
 ``?`` handle (the screen, the brain's tools, the spoken add, a spoken correction, the day review) and a raw asyncpg-shaped
 connection (Skybridge, an accepted offer).
 
-Invented people and words only. The clock is frozen where a statement carries it and ids are counted, so the record is the same
-on every run.
+Invented people and words only. The clock is FROZEN, not masked: the store's column defaults hold ``STORE_NOW`` and every
+wall-clock read production code makes (``datetime.now`` / ``utcnow`` / ``today``, however the module imported ``datetime``, and
+``time.time``) answers ``WALL_NOW`` while a scenario runs; ids are counted. So every stamp an entry point writes is a real value in
+the record (review of #2698 round 3: ISO stamps were masked as ``<clock>``, so a changed or wrong stamp passed), and the record
+is the same on every run.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import re
 import sqlite3
 import sys
 import tempfile
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from calendar_scenarios import STORE_NOW, _plain as _plain_calendar, _restore, _set
 
 ANN, BOB = "ann-0001", "bob-0002"
 WORD = "Womble"
-_CLOCK = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)?")       # a wall-clock stamp inside a value
+#: the wall clock while a scenario runs (microseconds non-zero, so a stamp written with or without them is told apart)
+WALL_NOW = datetime(2099, 6, 1, 4, 0, 0, 123456, tzinfo=timezone.utc)
 DDL = """
 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT DEFAULT 'user');
 CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT, email TEXT, phone TEXT,
@@ -59,18 +66,54 @@ INSERT INTO omi_day_candidates (id, user_id, status) VALUES ('cand_bar_0001', 'a
 """.replace("CURRENT_TIMESTAMP", f"'{STORE_NOW}'")      # the frozen store clock: a stored stamp is a real value in the record, never masked
 
 
-def _mask(value):
-    if isinstance(value, str):
-        return _CLOCK.sub("<clock>", value)
-    if isinstance(value, dict):
-        return {k: _mask(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_mask(v) for v in value]
-    return value
-
-
 def _plain(value):
-    return _mask(_plain_calendar(value))
+    return _plain_calendar(value)
+
+
+def _freeze_the_wall_clock() -> None:
+    """Every wall-clock read answers ``WALL_NOW`` until ``_restore``: ``datetime.datetime`` itself (a module that imports it
+    inside a call) and every name a loaded zoe-data module bound to it (``from datetime import datetime`` at the top, under any
+    alias), plus ``time.time``. ``now``/``utcnow``/``today`` return REAL datetimes, and ``isinstance`` against the frozen class
+    still accepts a real one, so nothing else about the values changes."""
+    import datetime as dt
+
+    real = dt.datetime
+    if isinstance(real, _FrozenMeta):
+        return
+
+    class Frozen(real, metaclass=_FrozenMeta):
+        @classmethod
+        def now(cls, tz=None):
+            return WALL_NOW.astimezone(tz) if tz else WALL_NOW.replace(tzinfo=None)
+
+        @classmethod
+        def utcnow(cls):
+            return WALL_NOW.replace(tzinfo=None)
+
+        @classmethod
+        def today(cls):
+            return WALL_NOW.replace(tzinfo=None)
+
+    _FrozenMeta.real = real
+    # the tree the code under record was LOADED from (an export of main when the fixture is made), and these scenario modules
+    trees = (str(Path(sys.modules["intent_router"].__file__).resolve().parent), str(Path(__file__).resolve().parent))
+    for module in list(sys.modules.values()):
+        if str(getattr(module, "__file__", None) or "").startswith(trees):
+            for name, value in list(vars(module).items()):
+                if value is real:
+                    _set(module, name, Frozen)
+    _set(dt, "datetime", Frozen)
+    _set(time, "time", lambda: WALL_NOW.timestamp())
+
+
+class _FrozenMeta(type):
+    real = datetime
+
+    def __instancecheck__(cls, obj):
+        return isinstance(obj, cls.real)
+
+    def __subclasscheck__(cls, sub):
+        return issubclass(sub, cls.real)
 
 
 class _Cur:
@@ -169,16 +212,16 @@ class World:
         _set(broadcaster, "broadcast", rec("broadcast", lambda channel, event, data, **k: [channel, event, data, k]))
         _set(mcp_server, "_notify_ui", rec("notify_ui"))
         _set(intent_router, "_notify_ui_channel", rec("notify_ui_channel"))
-        _set(write_receipts, "record", lambda *a, **k: log.append(["receipt", *_plain(a)]))
+        _set(write_receipts, "record", lambda *a, **k: log.append(["receipt", *_plain([list(a), k])]))
         _set(people, "require_feature_access", rec("feature", lambda _db, user, **k: [user.get("user_id"), k]))
-        _set(people, "_store_person_memory", rec("memory", lambda _db, user_id, person, action: [user_id, person.get("id"), action]))
+        _set(people, "_store_person_memory", rec("memory", lambda _db, user_id, person, action: [user_id, person, action]))  # the WHOLE contact: it is what the memory fact is written from
         _set(people, "_recalc_health", rec("health", lambda _db, person_id, user_id: [person_id, user_id]))
         _set(people, "_archive_person_mempalace", rec("archive", lambda person_id, user_id: [person_id, user_id]))
-        _set(contacts_conversation, "refresh_person_mirror", rec("mirror", lambda *a, **k: [list(a)]))
+        _set(contacts_conversation, "refresh_person_mirror", rec("mirror"))
         _set(skybridge_service, "_store_skybridge_memory_fact", rec("memory_fact", lambda text, **k: [text, k], result=True))
 
         async def show_people(intent, user_id, db):       # the read-back card (its own reads are Postgres-only): recorded, not run
-            log.append(["show_people", intent.query, user_id])
+            log.append(["show_people", _plain(dataclasses.asdict(intent)), user_id])
             return {"handled": True, "cards": []}
 
         _set(skybridge_service, "_resolve_people", show_people)
@@ -199,8 +242,8 @@ class World:
 
     def rows(self) -> dict:
         # EVERY column a contact has (phone, email and preferences among them: a write that changed one of those used to pass
-        # unseen), bar ``created_at``: the store stamps it from the real clock
-        people = [{k: v for k, v in dict(r).items() if v is not None and k != "created_at"}
+        # unseen), ``created_at`` too: the clock is frozen, so a stamp is a value like any other
+        people = [{k: v for k, v in dict(r).items() if v is not None}
                   for r in self.con.execute("SELECT * FROM people ORDER BY id")]
         edges = [{k: v for k, v in dict(r).items() if v is not None} for r in self.con.execute("SELECT * FROM person_relationships ORDER BY id")]
         return {"people": people, "person_relationships": edges}
@@ -208,6 +251,19 @@ class World:
 
 def _member(uid):
     return {"user_id": uid, "role": "user"}
+
+
+def _stamped(helper) -> dict:
+    """A helper that takes its CALLER's erase stamps (``stamps_at``: the contacts door's, taken before the caller read the
+    contact) is handed them by the scenario, which is that caller and has read nothing yet. On ``main`` no helper takes them, and
+    nothing is passed (nothing the door added is imported there)."""
+    import inspect
+
+    if "stamps_at" not in inspect.signature(helper).parameters:
+        return {}
+    import people_service
+
+    return {"stamps_at": people_service.stamps_now()}
 
 
 def scenarios() -> dict:
@@ -240,7 +296,7 @@ def scenarios() -> dict:
         return run
 
     async def said_rename(w):
-        return await w.router._rename_person_row(w.db, ANN, "p-ann-stub", "Plover Tansy", "neighbour")
+        return await w.router._rename_person_row(w.db, ANN, "p-ann-stub", "Plover Tansy", "neighbour", **_stamped(w.router._rename_person_row))
 
     def spoken_fact(about, who=ANN, **fields):
         async def run(w):
@@ -297,12 +353,12 @@ def scenarios() -> dict:
         return await w.sugg._execute_action(w.pg, "person_create", {"name": WORD}, ANN)
 
     async def corrected_pet(w):
-        return await w.fix._make_pet(w.db, ANN, "p-ann-family", "friend", "dog", "womble is a dog")
+        return await w.fix._make_pet(w.db, ANN, "p-ann-family", "friend", "dog", "womble is a dog", **_stamped(w.fix._make_pet))
 
     async def corrected_pet_raw(w):
         """The same correction holding a raw asyncpg connection (as the spoken-correction path can): here the $-form statement
         (``corrected_pet_pg``) is the one that runs, and its row is what the record keeps."""
-        return await w.fix._make_pet(w.pg, ANN, "p-ann-family", "friend", "dog", "womble is a dog")
+        return await w.fix._make_pet(w.pg, ANN, "p-ann-family", "friend", "dog", "womble is a dog", **_stamped(w.fix._make_pet))
 
     async def corrected_name(w):
         return await w.fix._rename_contact(ANN, "", "Quango Zorb", "Quango Tansy")
@@ -393,6 +449,7 @@ def run_all() -> dict:
         log: list = []
         try:
             world = World(log)
+            _freeze_the_wall_clock()
             try:
                 log.append(["returned", _plain(asyncio.run(call(world)))])
             except Exception as exc:  # noqa: BLE001 - a refusal is part of the record (an HTTP error by its words; any other by TYPE)
