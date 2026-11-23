@@ -5,7 +5,9 @@ Used twice: ``python3 tests/reminders_scenarios.py <a zoe-data tree>`` prints th
 export of ``main`` to make ``tests/fixtures/reminders_as_on_main.json``), and ``test_reminders_same_as_main.py`` runs the same
 scenarios in-process and compares. It imports nothing the one-door change added, so it runs unchanged on ``main``.
 
-Invented people and words only. The clock is frozen; ids made at random are masked.
+Invented people and words only. The clock is frozen; ids are counted in the order they are made (``uuid.uuid4``), so the
+record is the same on every run and an id read back is checked against the id written. The store is real (SQLite in memory,
+the live columns): every write is applied, and each scenario's record ends with every row it left (``DB.rows``).
 """
 from __future__ import annotations
 
@@ -13,13 +15,14 @@ import asyncio
 import contextlib
 import json
 import re
+import sqlite3
 import sys
+import uuid
 from datetime import datetime, timezone
 
 OWNER, OTHER = "member-ova", "member-adu"
 RID, WORD = "rem_bar_0001", "womble"
 FROZEN = datetime(2026, 6, 10, 4, 0, 0, 123456, tzinfo=timezone.utc)      # 12:00 in a +08:00 household
-_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 class _Clock(datetime):
@@ -33,8 +36,6 @@ class _Clock(datetime):
 
 
 def _mask(value):
-    if isinstance(value, str):
-        return _UUID.sub("<id>", value)
     if isinstance(value, dict):
         return {k: _mask(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -45,15 +46,19 @@ def _mask(value):
 
 
 class Row(dict):
-    """A row read by column name or by position (as both drivers' rows are)."""
+    """A row read by column name or by position (as the pool's rows are)."""
 
     def __getitem__(self, key):
         return list(self.values())[key] if isinstance(key, int) else dict.__getitem__(self, key)
 
 
 class _Cur:
-    def __init__(self, rows):
-        self.rows = [Row(r) for r in rows]
+    """What ``execute`` returns, as the pool's does: awaitable AND an async context manager, with the rows and ``rowcount``."""
+
+    def __init__(self, cur):
+        names = [d[0] for d in cur.description] if cur.description else []
+        self.rows = [Row(zip(names, r)) for r in cur.fetchall()] if names else []
+        self.rowcount = cur.rowcount
 
     async def fetchone(self):
         return self.rows[0] if self.rows else None
@@ -73,35 +78,76 @@ class _Cur:
         return False
 
 
+#: The tables a reminder entry point reads or writes, with the columns the live schema gives them (``alembic/versions/0001`` and
+#: ``0012``). The store's clock is frozen: a column default stands in for Postgres's ``DEFAULT NOW()`` with a fixed value, and
+#: ``NOW()`` in a statement reads ``<now()>``, so every stored value is a real value in the record.
+STORE_NOW = "2026-06-01 04:00:00"
+DDL = f"""
+CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member');
+CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT,
+    reminder_type TEXT DEFAULT 'one-time', category TEXT DEFAULT 'general', priority TEXT DEFAULT 'normal', due_date TEXT,
+    due_time TEXT, recurring_pattern TEXT, is_active INTEGER DEFAULT 1, acknowledged INTEGER DEFAULT 0, snoozed_until TEXT,
+    visibility TEXT NOT NULL DEFAULT 'personal', deleted INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT '{STORE_NOW}',
+    updated_at TEXT NOT NULL DEFAULT '{STORE_NOW}', schedule_generation INTEGER DEFAULT 0);
+CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT, message TEXT, data TEXT,
+    delivered INTEGER DEFAULT 0, action_taken TEXT, created_at TEXT NOT NULL DEFAULT '{STORE_NOW}');
+CREATE TABLE proactive_scheduled (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message TEXT NOT NULL, trigger_type TEXT DEFAULT 'scheduled',
+    send_at TEXT NOT NULL, apscheduler_job_id TEXT, fired INTEGER DEFAULT 0, item_id TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '{STORE_NOW}');
+CREATE TABLE open_loops (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, loop_text TEXT NOT NULL, created_at TEXT DEFAULT '{STORE_NOW}',
+    resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT);
+CREATE TABLE proactive_candidates (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, source_ref TEXT, expires_at TEXT);
+INSERT INTO users (id, name, role) VALUES ('{OWNER}', 'Member', 'user'), ('{OTHER}', 'Member', 'user');
+INSERT INTO open_loops (id, user_id, loop_text) VALUES ('loop_bar_0001', '{OWNER}', '{WORD}');
+INSERT INTO proactive_candidates (id, user_id, source_ref, expires_at) VALUES ('cand_loop_0001', '{OWNER}', 'open_loops:loop_bar_0001',
+    '2099-01-01T00:00:00Z');
+"""
+_CLOCK = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")      # a stamp the store takes from the REAL clock (CURRENT_TIMESTAMP)
+
+
 class DB:
-    """One reminder row. A read answers by the ownership filter in its own WHERE; nothing is applied (the record is the point)."""
+    """A real store: one SQLite database in memory holding one reminder row (and the tables around it). Every statement is
+    recorded with its values AND applied, as the pool applies it (it commits each statement: ``commit`` is a recorded no-op), so
+    reads answer from what earlier writes left and ``rows()`` is what the entry point left behind.
+
+    Replaces a fake that applied nothing and answered every read from the preset row: a change to what a write LEFT in
+    ``reminders`` (or to which row a read-back returned) with the same statement and values passed it."""
 
     def __init__(self, log, **row):
         self.log = log
+        self.con = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)
+        self.con.create_function("NOW", 0, lambda: "<now()>")
+        self.con.executescript(DDL)
         self.row = {"id": RID, "user_id": OWNER, "title": WORD, "description": None, "visibility": "personal",
                     "due_date": "2099-06-15", "due_time": "08:00", "recurring_pattern": None, "priority": "medium",
                     "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None, "schedule_generation": 3, **row}
+        cols = ", ".join(self.row)
+        self.con.execute(f"INSERT INTO reminders ({cols}) VALUES ({', '.join('?' * len(self.row))})", tuple(self.row.values()))
 
-    def execute(self, sql, params=()):
+    def execute(self, sql, *params):
+        # both shapes the pool takes: ``execute(sql, (a, b))`` and ``execute(sql, a, b)``
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = params[0]
         norm, p = " ".join(sql.split()), list(params)
         self.log.append(["sql", norm, _mask(p)])
-        if not norm.upper().startswith("SELECT"):
-            return _Cur([])
-        if "FROM users" in norm:
-            return _Cur([{"id": p[0], "role": "user", "name": "Member"}])
-        if "FROM reminders" not in norm:
-            return _Cur([])
-        where = norm.split("WHERE", 1)[1] if "WHERE" in norm else ""
-        if "visibility = 'family'" in where:
-            seen = self.row["visibility"] == "family" or self.row["user_id"] in p
-        elif "user_id" in where:
-            seen = self.row["user_id"] in p
-        else:
-            seen = True
-        return _Cur([dict(self.row)] if seen else [])
+        try:
+            return _Cur(self.con.execute(sql, tuple(_mask(v) if isinstance(v, datetime) else v for v in p)))
+        except sqlite3.Error as exc:     # in the record even when the caller swallows it (a statement this store cannot run)
+            self.log.append(["sql_error", type(exc).__name__])
+            raise
 
     async def commit(self):
         self.log.append(["commit"])
+
+    def rows(self) -> dict:
+        """Every row of every table an entry point may write, every column (bar a stamp taken from the real clock)."""
+        out = {}
+        for table in ("reminders", "notifications", "proactive_scheduled", "open_loops", "proactive_candidates"):
+            cur = self.con.execute(f"SELECT * FROM {table} ORDER BY id")
+            names = [d[0] for d in cur.description]
+            out[table] = [{k: _CLOCK.sub("<clock>", v) if isinstance(v, str) and k == "resolved_at" else v
+                           for k, v in zip(names, r)} for r in cur.fetchall()]
+        return out
 
 
 _UNDO: list = []
@@ -137,14 +183,17 @@ def _wire(log):
     _set(trig, "cancel_reminder_jobs", rec("cancel_jobs"))
     _set(trig, "cancel_reminder", rec("cancel_job"))
     _set(trig, "schedule_reminder", rec("schedule"))
-    _set(reminder_scan, "schedule_due_reminder", rec("schedule_due", lambda _db, row, **k: [dict(row).get("id") and "<row>", sorted(k)]))
-    _set(broadcaster, "broadcast", rec("broadcast", lambda channel, event, data, **k: [channel, event, k]))
+    # the row a job is scheduled FROM, every field (a stale or wrong row scheduled used to pass as "<row>"), and what is announced
+    _set(reminder_scan, "schedule_due_reminder", rec("schedule_due", lambda _db, row, **k: [dict(row), k]))
+    _set(broadcaster, "broadcast", rec("broadcast", lambda channel, event, data, **k: [channel, event, data, k]))
+    counted = iter(range(1, 10_000))
+    _set(uuid, "uuid4", lambda: uuid.UUID(int=next(counted)))
     _set(mcp_server, "_notify_ui", rec("notify_ui"))
     _set(os_shadow, "note_reminder_create", lambda *a, **k: log.append(["shadow", list(a), _mask(k)]))
     _set(write_receipts, "record", lambda *a, **k: log.append(["receipt", *_mask(a)]))
     for module in (rest, reminder_service, mcp_server):
         if hasattr(module, "require_feature_access"):
-            _set(module, "require_feature_access", rec("feature", lambda _db, _user, **k: [k]))
+            _set(module, "require_feature_access", rec("feature", lambda _db, user, **k: [k, user]))   # WHOSE role is checked
         if hasattr(module, "datetime"):
             _set(module, "datetime", _Clock)
     _set(reminder_scan, "datetime", _Clock)
@@ -165,7 +214,7 @@ def _wire(log):
 
     @contextlib.asynccontextmanager
     async def pg():
-        yield DB(log)
+        yield _DB_OF[0]             # the same store (a fresh preset row here would answer a read from nothing written)
 
     _set(mcp_server, "_pg_get_db", pg)
 
@@ -263,6 +312,10 @@ def scenarios():
         "rest_edit_form_resends_the_row": ({}, edit(title=WORD + " two", due_date="2099-06-15", due_time="08:00", is_active=False)),
         "rest_edit_resends_a_past_day": ({"due_date": "2026-06-01"}, edit(title=WORD + " two", due_date="2026-06-01")),
         "rest_edit_nothing": ({}, edit()),
+        # an edit of a snoozed reminder re-arms at the snooze (still ahead) or leaves it to the scan (already past): the row the
+        # edit READS BACK decides, so these need a store that holds what was written
+        "rest_edit_keeps_a_future_snooze": ({"snoozed_until": "2026-06-10T05:00:00Z"}, edit(title=WORD + " two")),
+        "rest_edit_with_a_past_snooze": ({"snoozed_until": "2026-06-10T03:00:00Z"}, edit(title=WORD + " two")),
         "rest_edit_family_row_by_another_member": ({"visibility": "family"}, edit(OTHER, title=WORD + " two", visibility="personal")),
         "rest_edit_private_row_by_another_member": ({}, edit(OTHER, title=WORD + " two")),
         "rest_edit_recurring_same_anchor": (weekly, edit(title=WORD + " two", due_date="2026-06-08")),
@@ -296,7 +349,9 @@ def scenarios():
         "maker_anticipation_leave": ({}, anticipation_leave),
         "maker_commitment_late": ({}, commitment_late),
         "maker_pendant_review": ({"user_id": OTHER}, pendant_review),      # no earlier row of this candidate: it is made
-        "maker_pendant_review_retry_finds_its_row": ({}, pendant_review),
+        # an earlier approval of the same candidate already made it (its description carries the candidate's ref): none is made
+        "maker_pendant_review_retry_finds_its_row": ({"description": "From your pendant on 2099-06-15 (you approved it; ref cand_bar)."},
+                                                     pendant_review),
         "maker_panel_card": ({}, panel_card),
         "maker_suggestion": ({}, suggestion),
     }
@@ -331,9 +386,12 @@ def run_one(name: str) -> list:
         # differently), and it is the fault, not its wording, that main and this branch must share
         detail = _mask(str(exc.detail)) if hasattr(exc, "detail") else type(exc).__name__
         log.append(["raised", getattr(exc, "status_code", None), detail])
+    try:
+        log.append(["rows", _mask(db.rows())])           # what the entry point LEFT, after it returned or refused
     finally:
         _restore()
         _DB_OF[0] = None
+        db.con.close()
     return json.loads(json.dumps(log, default=str))
 
 
