@@ -126,16 +126,18 @@ async def eligible(user_id: str, db=None) -> bool:
     return await is_adult(user_id, db=db)
 
 
-async def is_adult(user_id: str, db=None) -> bool:
+async def is_adult(user_id: str, db=None, *, quiet: bool = False) -> bool:
     """Is this member positively an adult? The ONE answer (the manner block and the intercom's adults-only drop-in both read it):
-    guests, unknown accounts, child roles / minor modes and every lookup failure (including the time budget) say no. No flag."""
+    guests, unknown accounts, child roles / minor modes and every lookup failure (including the time budget) say no. No flag.
+    ``quiet``: a failed lookup is not logged here (``home_opening`` logs closed codes only: no id, no traceback)."""
     uid = (user_id or "").strip()
     if not uid or is_guest(uid):
         return False
     try:
         return bool(await asyncio.wait_for(_account_is_adult(uid, db=db), timeout=LOOKUP_BUDGET_S))
     except Exception:  # noqa: BLE001 - includes the timeout: not knowing a member is an adult means no block
-        logger.warning("adult lookup failed for %s; treated as not an adult", uid, exc_info=True)
+        if not quiet:
+            logger.warning("adult lookup failed for %s; treated as not an adult", uid, exc_info=True)
         return False
 
 
