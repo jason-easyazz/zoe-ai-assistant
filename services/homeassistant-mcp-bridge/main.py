@@ -608,7 +608,15 @@ def _scene_state(target: Any) -> str:
             if "position" in str(key).lower() and (isinstance(value, bool) or not isinstance(value, (int, float)) or value != 0):
                 return ""
         target = target.get("state")
-    return target.strip().lower() if isinstance(target, str) else ""
+    state = target.strip().lower() if isinstance(target, str) else ""
+    return state if state in _SCENE_STATES else ""      # a fixed vocabulary only: a member's state can be free text
+
+
+# The only target states this endpoint repeats. Anything else (an input_text's words, a sensor reading) is returned as "".
+_SCENE_STATES = frozenset({
+    "on", "off", "open", "opening", "closed", "closing", "locked", "locking", "unlocked", "unlocking", "disarmed", "armed_home",
+    "armed_away", "armed_night", "armed_vacation", "armed_custom_bypass", "arming", "pending", "triggered", "playing", "paused",
+    "idle", "standby", "heat", "cool", "auto", "heat_cool", "dry", "fan_only", "home", "not_home", "unavailable", "unknown"})
 
 
 def _script_calls(steps: Any, depth: int = 0) -> List[Dict[str, str]]:
@@ -671,16 +679,19 @@ async def get_definition(entity_id: str):
         members = _entity_ids(attrs.get("entity_id")) if isinstance(attrs, dict) and "entity_id" in attrs else None
         if not members:
             raise _Unreadable("no_members")
+        if not attrs.get("id"):
+            # A scene written in YAML has no config this API can read. Its member list alone does not say what it sets them
+            # to, so it is unreadable (the contract: anything outside the UI config API is adult-only).
+            raise _Unreadable("no_config_id")
         states: Dict[str, str] = {}
-        if attrs.get("id"):      # a scene made in the UI: its configured target states. Without it the members alone are returned.
-            # A read that fails, times out or is not a 200 raises here and the whole scene is unreadable (never "members
-            # with unknown states": the config may name members the state does not).
-            config = await ha_bridge._make_request("GET", f"config/scene/config/{quote(str(attrs['id']), safe='')}")
-            entities = config.get("entities") if isinstance(config, dict) else None
-            if not isinstance(entities, dict):
-                raise _Unreadable("config_shape")
-            for member, target in entities.items():
-                states[_plain(member)] = _scene_state(target)
+        # A read that fails, times out or is not a 200 raises here and the whole scene is unreadable (never "members with
+        # unknown states": the config may name members the state does not).
+        config = await ha_bridge._make_request("GET", f"config/scene/config/{quote(str(attrs['id']), safe='')}")
+        entities = config.get("entities") if isinstance(config, dict) else None
+        if not isinstance(entities, dict):
+            raise _Unreadable("config_shape")
+        for member, target in entities.items():
+            states[_plain(member)] = _scene_state(target)
         return {"readable": True, "actions": [{"entity_id": m, "service": "", "state": states.get(m, "")}
                                               for m in sorted(set(members) | set(states))]}
     except _Unreadable as exc:

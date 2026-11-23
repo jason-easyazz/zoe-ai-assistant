@@ -261,8 +261,8 @@ HA = {
     "config/script/config/fires_event": {"sequence": [{"event": "let_them_in"}]},
     "config/script/config/odd_shape": {"sequence": "light.turn_on"},
 }
-BRIDGE_SAFE = ["scene.movie_time", "scene.leaving", "scene.yaml_lights", "script.goodnight"]
-BRIDGE_ADULT_ONLY = ["scene.arrive_home", "scene.yaml_lock", "scene.no_members", "scene.not_there", "script.let_in", "script.by_area",
+BRIDGE_SAFE = ["scene.movie_time", "scene.leaving", "script.goodnight"]
+BRIDGE_ADULT_ONLY = ["scene.arrive_home", "scene.yaml_lights", "scene.yaml_lock", "scene.no_members", "scene.not_there", "script.let_in", "script.by_area",
                      "script.by_device", "script.templated", "script.templated_service", "script.runs_scene", "script.fires_event",
                      "script.odd_shape", "script.not_there", "script.ha_is_down", "script.Bad-Id", "automation.morning"]
 
@@ -296,8 +296,8 @@ def real_bridge(house, monkeypatch):
 async def test_the_real_bridge_endpoint_reads_each_definition_and_zoe_decides(real_bridge, house):
     """The bridge's REAL ``get_definition`` (only Home Assistant is faked) feeding the real reader, classifier and route.
     Controls run: with the bridge treating a device action as a no-op ``script.by_device`` runs for the child; with its
-    area / device target test dropped ``script.by_area`` does; with the scene's members-only fallback answering state
-    ``locked`` ``scene.yaml_lock`` does."""
+    area / device target test dropped ``script.by_area`` does; with a scene that has no config id read from its member list
+    alone (the old behaviour) ``scene.yaml_lights`` does."""
     for entity in BRIDGE_SAFE:
         assert (await _route(KID, entity))["ok"] is True
     for entity in BRIDGE_ADULT_ONLY:
@@ -314,6 +314,21 @@ async def test_the_real_bridge_endpoint_reads_each_definition_and_zoe_decides(re
             ("light.turn_off", "light.porch")]]}
     texts = json.dumps([await real_bridge.get_definition(e) for e in BRIDGE_SAFE + BRIDGE_ADULT_ONLY])
     assert "Film night" not in texts and "Good night" not in texts and "Sleep well" not in texts and "brightness" not in texts
+
+
+async def test_a_scene_without_a_config_id_is_unreadable_and_free_text_states_are_never_repeated(real_bridge, monkeypatch):
+    """A YAML scene has no config the API can read: unreadable, whatever its members are. And a member's target state is
+    repeated only from a fixed vocabulary, so an input_text's words never leave the bridge.
+    Controls run: the ``no_config_id`` refusal removed -> the first assert fails; ``_scene_state`` returning any string ->
+    the last assert fails."""
+    for entity in ("scene.yaml_lights", "scene.yaml_lock"):
+        assert await real_bridge.get_definition(entity) == {"readable": False, "reason": "no_config_id"}
+    monkeypatch.setitem(MORE_HA, "states/scene.words", {"attributes": {"entity_id": ["input_text.note", "light.hall"], "id": "1700000000009"}})
+    monkeypatch.setitem(MORE_HA, "config/scene/config/1700000000009", {"entities": {"input_text.note": {"state": "womble at noon"},
+                                                                                   "light.hall": {"state": "ON "}}})
+    body = await real_bridge.get_definition("scene.words")
+    assert body == {"readable": True, "actions": [{"entity_id": "input_text.note", "service": "", "state": ""},
+                                                  {"entity_id": "light.hall", "service": "", "state": "on"}]}
 
 
 async def test_a_bridge_without_the_endpoint_makes_every_scene_adult_only_and_never_an_error(house, monkeypatch):
