@@ -94,8 +94,29 @@ def _is_field(node) -> bool:
     return isinstance(node, ast.Constant) and node.value in TIMER_FIELDS
 
 
-def _timer_names(fn) -> set:
-    """The names in one function that hold a timer: anything read or written by a timer field (``t["label"]``, ``t.get("label")``)."""
+def _targets(target) -> list:
+    """The plain names one assignment target binds (``a``, ``a, b``, ``(a, *b)``)."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [n for elt in target.elts for n in _targets(elt)]
+    if isinstance(target, ast.Starred):
+        return _targets(target.value)
+    return []
+
+
+def _root(value):
+    """The name an expression is read from: ``t`` for ``t``, ``t[1]``, ``t.copy`` ...; the store for ``_timers.find(x)[1]``."""
+    while isinstance(value, (ast.Subscript, ast.Attribute, ast.Call)):
+        value = value.func if isinstance(value, ast.Call) else value.value
+    return value.id if isinstance(value, ast.Name) else None
+
+
+def _timer_names(fn, store_names=frozenset()) -> set:
+    """The names in one function that hold a timer: anything read or written by a timer field (``t["label"]``, ``t.get("label")``),
+    anything the store hands out (``owner, t = _timers.find_by_id(i)``), and every ALIAS of those, followed to a fixed point
+    (``alias = t``, ``a: dict = t``, ``(a := t)``, ``for a in (t,)``): ``alias.update(changes)`` is a timer change wherever the
+    dict came from. (Review of #2688: an alias that no timer field was read through escaped.)"""
     names = set()
     for node in ast.walk(fn):
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and _is_field(node.slice):
@@ -103,7 +124,28 @@ def _timer_names(fn) -> set:
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) \
                 and node.func.attr == "get" and node.args and _is_field(node.args[0]):
             names.add(node.func.value.id)
-    return names
+    binds = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            binds += [(t, node.value) for t in node.targets]
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            binds.append((node.target, node.value))
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            binds.append((node.target, node.iter))
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            binds += [(i.optional_vars, i.context_expr) for i in node.items if i.optional_vars is not None]
+    sources = set(names) | set(store_names)
+    while True:
+        found = set()
+        for target, value in binds:
+            parts = value.elts if isinstance(value, (ast.Tuple, ast.List, ast.Set)) else [value]
+            if {_root(v) for v in parts} & sources:
+                found |= set(_targets(target))
+        found -= sources
+        if not found:
+            return names
+        names |= found
+        sources |= found
 
 
 def _dict_write(node, timers: set):
@@ -126,7 +168,8 @@ def _dict_write(node, timers: set):
 def timer_offences(source: str, *, is_store_module: bool) -> list:
     """Where this module changes a timer, or holds the store, outside ``_TimerStore``: ``(what, where)`` pairs."""
     tree = ast.parse(source)
-    timers_in = {fn.name: _timer_names(fn) for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    store_names = _store_names(tree)
+    timers_in = {fn.name: _timer_names(fn, store_names) for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))}
     inside = {id(n) for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef) and cls.name == STORE_CLASS for n in ast.walk(cls)}
     owner = {}
     for fn in ast.walk(tree):
@@ -185,6 +228,17 @@ def test_a_planted_timer_change_outside_the_store_is_caught():
                        ('t["label"]\n    t |= {"x": 1}', "t |="), ('t.__setitem__("announced", True)', ".__setitem__()")):
         planted = f"class _TimerStore:\n    def spoke(self, t):\n        t.update({{'announced': True}})\nasync def _ring_when_done(t, changes):\n    {body}\n"
         assert timer_offences(planted, is_store_module=True) == [(what, "_ring_when_done")], body
+    # ... and through an ALIAS (review of #2688, round 2: a name no timer field was read through escaped). Controls run: with
+    # ``_timer_names`` not following bindings (the fixed point removed) these escape; a planted ``owner, t =
+    # _timers.find_by_id(i); alias = t; alias.update(changes)`` in ``skybridge_service.py`` fails the scan of the real code.
+    for body in ('t = _timers.find_by_id(i)[1]\n    alias = t\n    alias.update(changes)',
+                 'owner, t = _timers.find_by_id(i)\n    alias = t\n    again = alias\n    again.update(changes)',
+                 'label = t["label"]\n    alias: dict = t\n    alias.update(changes)',
+                 'label = t["label"]\n    if (alias := t):\n        pass\n    other = alias\n    other.pop("announced")',
+                 'label = t["label"]\n    for alias in (t,):\n        alias.clear()'):
+        planted = ("class _TimerStore:\n    def spoke(self, t):\n        t.update({'announced': True})\n_timers = _TimerStore()\n"
+                   f"def edit(i, t, changes):\n    {body}\n")
+        assert [w for _, w in timer_offences(planted, is_store_module=True)] == ["edit"], body
     # a dict that is not a timer, and a read, are not offences
     assert not timer_offences("def f(d, t):\n    d.update({'x': 1})\n    d.pop('y')\n    d.clear()\n    return t.get('label'), t['label']\n",
                               is_store_module=True)
