@@ -32,6 +32,9 @@ import pytest
 import people_scenarios as scenarios
 
 pytestmark = pytest.mark.ci_safe
+# Stored stamps are REAL values in the record: the store's column defaults are the frozen ``STORE_NOW`` of calendar_scenarios (the
+# calendar recorder stopped masking stamps in review round 2), so a changed stored stamp fails the pin. Control run: the default
+# moved one second in people_scenarios.DDL -> this file fails. (A wall-clock stamp production code writes itself is still "<clock>".)
 ON_MAIN = json.loads((Path(__file__).parent / "fixtures" / "people_as_on_main.json").read_text("utf-8"))
 
 
