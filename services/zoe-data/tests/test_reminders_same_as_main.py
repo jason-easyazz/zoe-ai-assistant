@@ -1,14 +1,15 @@
 """Moving every reminder write into ``reminder_service`` changed NOTHING at any entry point (the three named fault fixes aside,
 which have their own tests in ``test_reminders_one_door.py``; and the brain's snooze tool, repaired since: ``FIXED_SINCE_MAIN``).
 
-``tests/fixtures/reminders_as_on_main.json`` is the record of ``main`` (5533e3b08, the commit this work starts from): for each
-entry point and action, every statement with its values, every scheduled-job touch, every announcement, the role check, and the
-result or refusal. It was made by running ``tests/reminders_scenarios.py`` against an export of that commit
-(``git archive origin/main services/zoe-data``), never by this branch's own code, so a change that alters this branch is caught
+``tests/fixtures/reminders_as_on_main.json`` is the record of ``main`` (c1a350458): for each entry point and action, every
+statement with its values, every scheduled-job touch (with the row it was scheduled from), every announcement (with what it
+carries), the role check, the result or refusal, and EVERY ROW the entry point left in ``reminders`` and the tables around it
+(the scenarios run on a real store that applies each write, so a read-back answers from what was written). It was made by running
+``tests/reminders_scenarios.py`` against an export of that commit, never by this branch's own code, so a change that alters this branch is caught
 even if it alters every caller alike. The same scenarios run here and must give the same record.
 
 Covered: the screen's REST create / edit / delete / snooze / done (own rows, a family row by another member, recurring rows, a
-form that re-sends the row, a re-sent past day); the brain's MCP create / update / delete / snooze; the spoken create. There is
+form that re-sends the row, a re-sent past day, an edit of a reminder snoozed to a time still ahead or already past); the brain's MCP create / update / delete / snooze; the spoken create. There is
 no MCP "done" tool, skybridge writes no reminder; the automatic makers (anticipation's leave-by offer, a late commitment, the
 pendant review, the panel's open-loop card, an accepted suggestion) are each driven through their own function, so a maker that
 changed the title, owner, day or anything else it hands the door changes its record. Every recorded entry point must also be
@@ -20,11 +21,17 @@ edit tool's value normalised -> ``tool_update``; the role check added to the del
 after the read-back in create -> ``rest_create``; for the automatic makers: the late commitment's title changed ->
 ``maker_commitment_late``; the leave-by reminder made ``family`` -> ``maker_anticipation_leave``; the pendant's description
 reworded -> ``maker_pendant_review``; the open-loop card's description reworded -> ``maker_panel_card``; an accepted suggestion
-made ``family`` -> ``maker_suggestion``; the after-commit re-read changed -> ``maker_suggestion``.
+made ``family`` -> ``maker_suggestion``; the after-commit re-read changed -> ``maker_suggestion``. For the store (the rows each
+entry point leaves): the store made to apply a different title than the one recorded (statement and values unchanged) ->
+``rest_edit_title``; the store made to apply no write at all (the old fake) -> ``rest_edit_title``; and two production
+plants the old fake could not see because every read-back returned its preset row: the re-arm's inactive guard dropped ->
+``rest_edit_form_resends_the_row``; an edit no longer re-arming a future snooze -> ``rest_edit_keeps_a_future_snooze``; the role
+check made for another member -> ``rest_edit_title``.
 """
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -102,7 +109,7 @@ def test_each_recorded_entry_point_is_driven_through_its_own_code(key):
 #: The ONE deliberate change this PR makes to a recorded entry point: an accepted suggestion's after-commit step reads the reminder
 #: AGAIN once the transaction has committed (a reminder forgotten or deleted since is not scheduled, broadcast or told to the
 #: shadow; ``test_reminders_one_door.py`` drives the row-gone case). Main's record plus exactly that read is the record here.
-RE_READ_AFTER_COMMIT = ["sql", "SELECT * FROM reminders WHERE id = ? AND user_id = ? AND deleted = 0", ["<id>", scenarios.OWNER]]
+RE_READ_AFTER_COMMIT = ["sql", "SELECT * FROM reminders WHERE id = ? AND user_id = ? AND deleted = 0", [str(uuid.UUID(int=1)), scenarios.OWNER]]
 CHANGED_HERE = {"maker_suggestion": RE_READ_AFTER_COMMIT}
 
 
@@ -117,6 +124,38 @@ def test_every_moved_entry_point_does_exactly_what_main_did(here, name):
         assert record == ON_MAIN[name]
         return
     assert here[name] == ON_MAIN[name]
+
+
+def _returned(record):
+    (entry,) = [e for e in record if e[0] in ("returned", "raised")]
+    return entry
+
+
+def _rows(record) -> dict:
+    assert record[-1][0] == "rows", record[-1][:1]            # recorded LAST: what the entry point left, once it has finished
+    return record[-1][1]
+
+
+def test_every_scenario_records_the_rows_it_left_and_the_store_applies_each_write(here):
+    """The record of every scenario ends with the rows it left, and those rows are what its writes made (not a preset row):
+    an edit's new title is in the row and in the read-back it returns; a create's row carries the id it returned; a delete
+    leaves the row marked deleted; the pendant retry makes nothing.
+    Controls run: the store made to apply a different title than the one recorded (``DB.execute`` changing ``womble two`` as it
+    binds it) fails ``rest_edit_title`` here and in the comparison with main; the store made to apply no write (non-SELECT
+    statements recorded but skipped) fails here."""
+    for name, record in here.items():
+        assert set(_rows(record)) == {"reminders", "notifications", "proactive_scheduled", "open_loops", "proactive_candidates"}, name
+    (edited,) = _rows(here["rest_edit_title"])["reminders"]
+    assert edited["title"] == scenarios.WORD + " two" and edited["updated_at"] == "<now()>" and edited["schedule_generation"] == 4
+    assert _returned(here["rest_edit_title"])[1]["title"] == scenarios.WORD + " two"
+    made = str(uuid.UUID(int=1))
+    assert _returned(here["rest_create"])[1]["id"] == made
+    assert [r["id"] for r in _rows(here["rest_create"])["reminders"]] == [made, scenarios.RID]
+    (gone,) = _rows(here["tool_delete"])["reminders"]
+    assert (gone["deleted"], gone["is_active"]) == (1, 0)
+    assert [r["id"] for r in _rows(here["maker_pendant_review_retry_finds_its_row"])["reminders"]] == [scenarios.RID]
+    (loop,) = _rows(here["maker_panel_card"])["open_loops"]
+    assert loop["resolved"] == 1
 
 
 def _writes(record) -> list:
@@ -139,13 +178,12 @@ def test_the_screens_snooze_sets_only_the_snooze_and_never_re_arms_a_done_remind
         assert sql == ("UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
                        "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?")
         assert params == ["2026-06-10T04:10:00.123456Z", scenarios.RID]
-    assert here["rest_snooze_a_done_reminder"][-1][1]["acknowledged"] is True
+    assert _returned(here["rest_snooze_a_done_reminder"])[1]["acknowledged"] is True
 
 
-#: The ONE place this record is no longer main's, on purpose (fix/reminder-tools-faults): on main the snooze TOOL raised
-#: ``UnboundLocalError`` after its first read and wrote nothing (``_execute_tool`` bound ``datetime`` locally in another arm). It
-#: now snoozes exactly as the screen does. These three scenarios were re-recorded from the fixed code; every other scenario in
-#: the fixture is still main's.
+#: The brain's snooze TOOL, repaired on main by #2687 (before it, it raised ``UnboundLocalError`` after its first read and wrote
+#: nothing: ``_execute_tool`` bound ``datetime`` locally in another arm). It now snoozes exactly as the screen does; the fixture,
+#: re-captured from c1a350458, records the repaired tool like every other scenario.
 FIXED_SINCE_MAIN = ("tool_snooze", "tool_snooze_another_members_row", "tool_snooze_default_minutes_a_done_reminder")
 
 
@@ -158,9 +196,14 @@ def test_the_snooze_tool_now_does_what_the_screens_snooze_does(here):
         assert sql == screen_sql and "due_date" not in sql and "acknowledged" not in sql
         assert params == [f"2026-06-10T04:{minutes}:00.123456Z", scenarios.RID]            # a UTC instant: no clock offset
         assert notice_sql.startswith("INSERT INTO notifications") and f"snoozed for {minutes} minutes" in notice[4]
-        assert ["feature", {"action": "snooze", "feature": "reminders"}] in here[name]     # the screen's role check, now here too
-        assert here[name][-1] == ["returned", {"id": scenarios.RID, "snoozed_until": None, "status": "snoozed"}]
-    assert here["tool_snooze_another_members_row"][-1] == ["returned", {"error": f"Reminder {scenarios.RID} not found"}]
+        assert ["feature", {"action": "snooze", "feature": "reminders"},                   # the screen's role check, now here too
+                {"role": "user", "user_id": scenarios.OWNER}] in here[name]
+        until = f"2026-06-10T04:{minutes}:00.123456Z"
+        assert _returned(here[name]) == ["returned", {"id": scenarios.RID, "snoozed_until": until, "status": "snoozed"}]
+        (row,) = _rows(here[name])["reminders"]
+        assert row["snoozed_until"] == until                                                # the snooze is IN the row
+    assert _returned(here["tool_snooze_another_members_row"]) == ["returned", {"error": f"Reminder {scenarios.RID} not found"}]
+    assert _rows(here["tool_snooze_another_members_row"])["reminders"][0]["snoozed_until"] is None
     assert _writes(here["tool_snooze_another_members_row"]) == []
 
 

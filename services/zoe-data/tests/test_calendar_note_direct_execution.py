@@ -181,6 +181,22 @@ async def test_calendar_create_genuine_failure_returns_none(monkeypatch):
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_a_calendar_door_that_cannot_be_imported_gives_mains_none_with_the_flag_off(monkeypatch):
+    """With ``ZOE_OS_CALENDAR`` off and ``calendar_service`` failing to import, the spoken create answers ``None`` (main's
+    generic handler) and raises nothing. It used to raise ``UnboundLocalError``: the refusal clause named ``EventRefused``,
+    which the failed import (inside the same ``try``) never bound. Control run: the separate import guard removed from
+    ``_execute_calendar_create_direct`` (the import back inside the write's ``try``) makes this raise ``UnboundLocalError``."""
+    import sys
+
+    from intent_router import _execute_calendar_create_direct
+
+    monkeypatch.delenv("ZOE_OS_CALENDAR", raising=False)
+    monkeypatch.setitem(sys.modules, "calendar_service", None)          # the import now raises ImportError
+    intent = Intent("calendar_create", {"title": "womble day", "date": "2099-07-10"})
+    assert await _execute_calendar_create_direct(intent, "member-ova") is None
+
+
 # --- note_create ------------------------------------------------------------
 
 
