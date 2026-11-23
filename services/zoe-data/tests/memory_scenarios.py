@@ -5,8 +5,11 @@ for that collection: it honours ``where``, keeps every row with its FULL metadat
 delete) with the whole metadata it carried, so a demoted status, authority, provenance or visibility shows in the record.
 
 A scenario is a short script against one fresh service: rows a MEMBER authored are stored first, then one writer acts. Its
-record is every collection write, every audit entry (action, actor, the status before and after), what the call returned or
-raised, and the rows as they stand at the end. Nothing here asserts: the record of ``main`` is the assertion.
+record is every collection write, every audit entry WHOLE (written by the service's REAL audit writer into a recording audit
+collection: the audited row's id, actor, action, user, reason and the full before and after), every erase mark the real
+``erase_watermark.record`` made with all it was given, what the call returned or raised, and the rows as they stand at the end
+(kept in the stored record and compared: a row changed without a recorded write is seen). Nothing here asserts: the record of
+``main`` is the assertion.
 
 Invented words and ids only.
 """
@@ -20,6 +23,9 @@ from typing import Any
 
 ANN, BEN = "member-ann", "member-ben"
 _STAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
+#: an epoch second inside a string (the audit writer stores before / after as JSON text: its ``added_ts`` is such a number)
+_TOMB = re.compile(r"delete_user:[0-9a-f]{16}")
+_EPOCH = re.compile(r"(?<![\w.])1\d{9}(?:\.\d+)?(?![\w.])")
 _UNDO: list = []
 #: stamps of WHICH BUILD of a derived classifier judged the row (a version, a digest of its word lists): they follow what the
 #: process has loaded, not what a writer did. The judgement itself (``sensitivity``, ``gate_t``) stays in the record.
@@ -105,9 +111,42 @@ class Col:
         return len(self.rows)
 
 
+class AuditCol(Col):
+    """The audit collection, written by the service's REAL audit writer (``MemoryService._append_audit``; nothing of it is
+    replaced). Each entry is recorded whole: its summary and metadata (the audited row's id, user, actor, action, reason, and the
+    before / after the writer stores as JSON text, decoded here so every field is compared), under a COUNTED id (the writer's
+    own is a random uuid). The rows keep exactly what the writer stored (its own readers and erasers read them)."""
+
+    def __init__(self, name: str, log: list):
+        super().__init__(name, log)
+        self._named: dict = {}
+
+    def upsert(self, ids, documents=None, metadatas=None, **kw):
+        named = [self._named.setdefault(i, f"audit-{len(self._named) + 1}") for i in ids]
+        mark = len(self.log)
+        super().upsert(named, documents, metadatas, **kw)
+        for entry in self.log[mark:]:
+            entry[3] = self._tombs(entry[3])
+            meta = {k: self._tombs(v) for k, v in entry[4].items()}
+            for key in ("before", "after"):
+                try:
+                    meta[key] = json.loads(meta[key])
+                except (KeyError, TypeError, ValueError):
+                    pass                                    # (absent, or cut at the writer's 4000 characters: kept as text)
+            entry[4] = meta
+
+    add = upsert
+
+    def _tombs(self, value):
+        """A forget's audit id (``delete_user:<hash of the clock>``) under a counted name, the same name wherever it recurs."""
+        if not isinstance(value, str):
+            return value
+        return _TOMB.sub(lambda m: self._named.setdefault(m.group(0), f"delete_user:<{len(self._named) + 1}>"), value)
+
+
 def _mask(value):
     if isinstance(value, str):
-        return _STAMP.sub("<t>", value)
+        return _EPOCH.sub("<t>", _STAMP.sub("<t>", value))
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, float):
@@ -220,22 +259,21 @@ class World:
 
         self.ms = memory_service
         self.log: list = []
-        self.col, self.audit = Col("rows", self.log), Col("audit", [])
+        self.col, self.audit = Col("rows", self.log), AuditCol("audit", self.log)
         self.svc = memory_service.MemoryService(data_dir="/nonexistent/zoe-memory-scenarios")
         self.svc._collection = lambda: self.col
-        self.svc._audit_collection = lambda: self.audit
-
-        async def audit(**kw):
-            b, a = kw.get("before") or {}, kw.get("after") or {}
-            self.log.append(["audit", kw.get("action"), kw.get("actor"), kw.get("user_id"), b.get("status"), a.get("status")])
+        self.svc._audit_collection = lambda: self.audit          # the REAL audit writer writes here (its entries: ``AuditCol``)
 
         async def opted_in(_uid):
             return False
 
-        async def marked(user_id, **kw):
-            self.log.append(["erase-mark", user_id, kw.get("actor")])
+        real_mark = memory_service._erase_watermark.record
 
-        self.svc._append_audit = audit
+        async def marked(user_id, **kw):
+            """The REAL erase mark (into the in-process store ``_fresh`` gives it), noted with everything it was given."""
+            self.log.append(["erase-mark", user_id, dict(kw)])
+            return await real_mark(user_id, **kw)
+
         self.svc._schedule_tick = lambda *a, **k: None      # access ticks (bookkeeping on every recall, written later) are not recorded
         # The sensitivity label of a new row is settled later by a background classifier whose answers this process caches:
         # whether a row carries the label's first or settled form depends on what ran before. Not a writer's doing: left out.
@@ -606,12 +644,13 @@ def run_all() -> dict:
 
 def pack(records: dict) -> dict:
     """The record as it is stored: each distinct entry once (a seeded row is the same entry in most scenarios), and per
-    scenario the list of entry numbers. The rows-at-the-end are left out: they are the last write of each id."""
+    scenario the list of entry numbers. The rows-at-the-end are KEPT: a row that changed with no write recorded for it (a
+    store mutated in place, a write the stand-in did not log) shows there."""
     entries: dict = {}
     names = {}
     for name in sorted(records):
         names[name] = [entries.setdefault(json.dumps(e, separators=(",", ":"), sort_keys=True), len(entries))
-                       for e in records[name] if e[0] != "row"]
+                       for e in records[name]]
     return {"entries": [json.loads(e) for e in entries], "scenarios": names}
 
 
