@@ -10,6 +10,9 @@ The four (all AUTOMATIC, all on ``main``): ``memory_digest.py`` writes rows back
 (``_upsert_rows``: one; ``_update_existing``: an update, or an upsert for a store with no update), and ``zoe_agent.py`` has a
 one-off migration (``migrate_mempalace_legacy_records``). They are faults on main to route through ``MemoryService`` later.
 
+Functions are keyed by QUALIFIED name (enclosing classes and functions, dotted), so a later function of the same bare name
+cannot replace an earlier one and hide its write.
+
 Negative control run: a ``col.update`` planted in ``memory_digest._live_ids`` fails
 ``test_only_the_memory_service_writes_the_collection`` (and a write planted in a module that has none fails it too).
 """
@@ -44,15 +47,27 @@ def _from_collection(node, names: set) -> bool:
 
 
 def _functions(tree):
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield node
+    """``(qualified name, node)`` for every function: its enclosing classes and functions joined by dots, so a method
+    ``A.save`` and a method ``B.save`` (or a nested ``outer.save``) are two entries, never one replacing the other."""
+    def walk(node, path):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                qual = f"{path}.{child.name}" if path else child.name
+                if not isinstance(child, ast.ClassDef):
+                    yield qual, child
+                yield from walk(child, qual)
+            else:
+                yield from walk(child, path)
+    yield from walk(tree, "")
 
 
 def collection_writes(source: str) -> Counter:
-    """``{function name: write calls on the collection}`` for one module's source."""
+    """``{qualified function name: write calls on the collection}`` for one module's source."""
     tree = ast.parse(source)
-    fns = {f.name: f for f in _functions(tree)}
+    fns = dict(_functions(tree))
+    by_bare: dict = {}
+    for qual, fn in fns.items():
+        by_bare.setdefault(fn.name, []).append(qual)
     # per function: the names that hold the collection. A parameter CALLED the collection is one (a write handed to an
     # executor through ``functools.partial`` reaches its helper with no call the scan could follow).
     holds: dict = {name: {a.arg for a in fn.args.args + fn.args.kwonlyargs if a.arg in COLLECTION_PARAMS} for name, fn in fns.items()}
@@ -69,18 +84,19 @@ def collection_writes(source: str) -> Counter:
                             holds[name].add(t.id)
                             changed = True
                 if isinstance(node, ast.Call):
-                    callee = fns.get(node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", ""))
-                    if callee is None:
-                        continue
-                    params = [a.arg for a in callee.args.args]
-                    if params[:1] == ["self"]:
-                        params = params[1:]
-                    passed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
-                    passed += [(k.arg, k.value) for k in node.keywords if k.arg]
-                    for param, value in passed:
-                        if _from_collection(value, holds[name]) and param not in holds[callee.name]:
-                            holds[callee.name].add(param)
-                            changed = True
+                    # a call names a function by its bare name: every function of that name may be the callee
+                    called = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+                    for callee_name in by_bare.get(called, ()):
+                        callee = fns[callee_name]
+                        params = [a.arg for a in callee.args.args]
+                        if params[:1] == ["self"]:
+                            params = params[1:]
+                        passed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
+                        passed += [(k.arg, k.value) for k in node.keywords if k.arg]
+                        for param, value in passed:
+                            if _from_collection(value, holds[name]) and param not in holds[callee_name]:
+                                holds[callee_name].add(param)
+                                changed = True
     found: Counter = Counter()
     for name, fn in fns.items():
         inner = {n for sub in ast.walk(fn) if sub is not fn and isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -144,10 +160,31 @@ def reads(svc):
     assert collection_writes(src) == Counter({"lease": 1, "alias": 1, "helper": 1, "chain": 1, "handed_on": 1, "by_name": 1})
 
 
+def test_a_later_function_of_the_same_name_does_not_hide_an_earlier_write():
+    """Two methods called ``save`` in two classes, and a nested ``save``: each is its own entry, so the earlier one's write
+    is still counted. Control run: with ``collection_writes`` keying functions by bare name (the old ``{f.name: f}``), the
+    first ``A.save`` write vanishes (the later write-free ``B.save`` replaces it) and this test fails."""
+    src = '''
+class A:
+    def save(self):
+        get_drawers_collection("x").delete(ids=[1])
+class B:
+    def save(self):
+        return None
+def outer():
+    def save():
+        get_drawers_collection("x").upsert(ids=[1])
+    save()
+def save():
+    return None
+'''
+    assert collection_writes(src) == Counter({"A.save": 1, "outer.save": 1})
+
+
 def test_the_memory_service_itself_is_seen_writing():
     """The scan is not blind to the one writer: it finds the service's own row writes."""
     found = collection_writes((SVC / "memory_service.py").read_text("utf-8"))
-    assert found["_write_row"] == 1 and found["_update_row"] >= 1 and sum(found.values()) >= 15
+    assert found["MemoryService._write_row"] == 1 and found["MemoryService._update_row"] >= 1 and sum(found.values()) >= 15
 
 
 # ---- every call of a mutating method, and who is acting there -------------------------------------------------------------------
@@ -170,6 +207,33 @@ def mutating_calls(source: str, rel: str) -> Counter:
     return found
 
 
+def service_calls(found: Counter, not_the_service: dict) -> dict:
+    """The calls left once each exempt site's EXACT count of other-store calls is taken off (never the whole site). An exempt
+    site with fewer calls than its count fails: the table must say what is there."""
+    for key, n in not_the_service.items():
+        assert found.get(key, 0) >= n, f"{key}: {found.get(key, 0)} calls, the exemption names {n}"
+    left = {k: n - not_the_service.get(k, 0) for k, n in found.items()}
+    return {k: n for k, n in left.items() if n}
+
+
+def test_an_exempt_site_does_not_hide_one_more_call():
+    """A ``MemoryService.delete_user()`` planted inside ``memory_service.delete_user`` (which also calls the struggle
+    detector's own ``delete_user``) is left over and must be in the table. Control run: with ``service_calls`` dropping the
+    whole exempt key (the old ``k not in NOT_THE_SERVICE``), the planted call vanishes and this test fails."""
+    src = '''
+class MemoryService:
+    async def delete_user(self, user_id, *, actor):
+        await struggle_detector.delete_user(user_id)
+        await get_memory_service().delete_user(user_id, actor=actor)
+'''
+    found = mutating_calls(src, "memory_service.py")
+    assert service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 1}) == {
+        ("memory_service.py", "delete_user", "delete_user"): 1}
+    assert service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 2}) == {}
+    with pytest.raises(AssertionError):                     # an exemption naming more calls than are there fails too
+        service_calls(found, {("memory_service.py", "delete_user", "delete_user"): 3})
+
+
 def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
     """``tests/memory_writers.py`` is the whole list: a new call site, or one more call in a listed function, fails until it is
     added WITH who is acting there. Control run: a second ``svc.ingest`` planted in ``routers/notes._store_note_memory`` fails."""
@@ -178,9 +242,7 @@ def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
     found: Counter = Counter()
     for rel, path in _modules():
         found.update(mutating_calls(path.read_text("utf-8"), rel))
-    service = {k: n for k, n in found.items() if k not in memory_writers.NOT_THE_SERVICE}
-    assert service == {k: n for k, (_who, n) in memory_writers.SITES.items()}
-    assert memory_writers.NOT_THE_SERVICE <= set(found)
+    assert service_calls(found, memory_writers.NOT_THE_SERVICE) == {k: n for k, (_who, n) in memory_writers.SITES.items()}
     assert {who for who, _n in memory_writers.SITES.values()} == {"member", "automatic", "passes_on"}
     assert len(memory_writers.MUTATING) == 13
 
