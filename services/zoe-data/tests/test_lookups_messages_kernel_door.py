@@ -168,7 +168,7 @@ def test_the_panel_with_nobody_identified_looks_up_as_the_panel(door):
 ENTRIES = {"routers/weather.py": {"_geocode": "WEATHER", "_fetch_openmeteo_current": "WEATHER", "_fetch_openmeteo_forecast": "WEATHER",
                                   "_fetch_owm_current": "WEATHER", "_fetch_owm_forecast": "WEATHER", "search_locations": "WEATHER"},
            "zoe_agent.py": {"_web_search_ddg": "WEB_SEARCH", "_web_browse": "WEB_FETCH", "_web_research": "WEB_SEARCH"},
-           "browser_broker.py": {"search_web": "WEB_SEARCH", "fetch_page_text": "WEB_FETCH"},
+           "browser_broker.py": {"search_web": "WEB_SEARCH", "fetch_page_text": "WEB_FETCH", "execute_text_extraction": "WEB_FETCH"},
            "research_evidence.py": {"fetch_web_fallback": "WEB_SEARCH", "fetch_web_fallback_results": "WEB_SEARCH"}}
 
 #: What counts as an outbound transport: a call into one of these (resolved through the module's own imports, aliases
@@ -179,6 +179,11 @@ TRANSPORT = ("httpx", "requests", "aiohttp", "urllib3", "urllib.request.urlopen"
              "smtplib", "agent_safety.guarded_urlopen", "web_search_provider.tavily_search_outcome",
              "web_search_provider.tavily_search_sync")
 TRANSPORT_METHODS = ("goto", "urlopen")
+#: Opening a browser sends nothing (the page's ``goto`` is the request).
+OPENERS = ("launch_context_async",)
+#: On a transport object opened under a local name, these calls are the requests (an HTTP client's verbs, a search client's).
+REQUEST_METHODS = ("get", "post", "put", "patch", "delete", "head", "request", "stream", "send", "text", "news", "images",
+                   "videos", "open")
 
 _LOCAL = "a service on the box or the house LAN, by its configured URL (not a lookup)"
 _MODEL = "the local model servers on the box (not a lookup)"
@@ -345,6 +350,8 @@ def _outbound(root: Path) -> tuple:
     import collections
 
     counts, where, sent = collections.Counter(), collections.defaultdict(list), collections.defaultdict(list)
+    requests, opened = collections.defaultdict(list), collections.defaultdict(set)
+    binders: set = set()
     for f in sorted(root.rglob("*.py")):
         rel = f.relative_to(root).as_posix()
         if rel.startswith("tests/"):
@@ -379,28 +386,65 @@ def _outbound(root: Path) -> tuple:
                 if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     visit(ch, ch.name if qual == "<module>" else f"{qual}.{ch.name}")
                     continue
+                # a transport CLIENT opened under a local name (``with httpx.AsyncClient() as client``, ``c = DDGS()``): opening it
+                # sends nothing; each REQUEST_METHODS call on that name is a request of its own. A transport FUNCTION bound the
+                # same way (``with guarded_urlopen(url) as resp``) is itself the request.
+                bound = [(i.context_expr, i.optional_vars) for i in ch.items] if isinstance(ch, (ast.With, ast.AsyncWith)) else \
+                    [(ch.value, ch.targets[0])] if isinstance(ch, ast.Assign) and len(ch.targets) == 1 else []
+                for value, target in bound:
+                    value = value.value if isinstance(value, ast.Await) else value
+                    if isinstance(value, ast.Call) and isinstance(target, ast.Name) and transport(dotted(value.func)) \
+                            and ast.unparse(value.func).rsplit(".", 1)[-1][:1].isupper():      # a client CLASS; a function sends
+                        opened[(rel, qual)].add(target.id)
+                        binders.add(id(value))
                 if isinstance(ch, ast.Call):
                     fn = ch.func
                     if transport(dotted(fn)) or (isinstance(fn, ast.Attribute) and fn.attr in TRANSPORT_METHODS) or \
                             (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id in clients):
                         counts[(rel, qual)] += 1
                         where[(rel, qual)].append((ch.lineno, ast.unparse(fn)))
+                        if id(ch) not in binders and not ast.unparse(fn).endswith(OPENERS):
+                            requests[(rel, qual)].append((ch.lineno, ast.unparse(ch)))
+                    elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id in opened[(rel, qual)] \
+                            and fn.attr in REQUEST_METHODS:
+                        requests[(rel, qual)].append((ch.lineno, ast.unparse(ch)))
                     if ast.unparse(fn) == "lookup_door.sent" and ch.args:
                         sent[(rel, qual)].append((ch.lineno, ast.unparse(ch.args[0]).rsplit(".", 1)[-1]))
                 visit(ch, qual)
 
         visit(tree, "<module>")
+    _outbound.requests = {k: sorted(v) for k, v in requests.items()}
     return dict(counts), where, sent
+
+
+def _unrecorded(requests: list, records: list) -> list:
+    """The requests with no record of their OWN: none on a line after the request and before the next request."""
+    lines = [line for line, _ in requests] + [10 ** 9]
+    return [requests[i] for i in range(len(requests)) if not any(lines[i] < r < lines[i + 1] for r in records)]
+
+
+#: Entry points that are routes whose caller nothing upstream notes (a bare ``get_current_user``): they note it themselves, FIRST.
+NOTES_ITS_CALLER = {("routers/weather.py", "search_locations")}
 
 
 def test_every_lookup_entry_point_checks_before_anything_leaves():
     """Each entry function's FIRST statement is ``lookup_door.check`` with its class (the off-roster refusal, which records
-    nothing). Control run: the check dropped from ``browser_broker.search_web`` fails."""
+    nothing); a route in ``NOTES_ITS_CALLER`` notes its caller first and checks second. The plan executor
+    (``browser_broker.build_cloak_executor._execute``, a nested function) is held to the same rule. Controls run: the check
+    dropped from ``browser_broker.search_web`` fails; dropped from ``execute_text_extraction`` fails; dropped from the plan
+    executor's ``_execute`` fails; ``_note_actor`` dropped from ``routers/weather.search_locations`` fails."""
+    broker = ast.parse((SVC / "browser_broker.py").read_text("utf-8"))
+    (build,) = [n for n in broker.body if isinstance(n, ast.FunctionDef) and n.name == "build_cloak_executor"]
+    (execute,) = [n for n in ast.walk(build) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_execute"]
+    assert ast.unparse(execute.body[0]) == "lookup_door.check(lookup_door.WEB_FETCH)"
     for rel, wanted in ENTRIES.items():
         tree = ast.parse((SVC / rel).read_text("utf-8"))
         for fn in tree.body:
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name in wanted:
                 body = fn.body[1:] if isinstance(fn.body[0], ast.Expr) and isinstance(getattr(fn.body[0], "value", None), ast.Constant) else fn.body
+                if (rel, fn.name) in NOTES_ITS_CALLER:      # a route nothing upstream notes the caller of: noted first, then checked
+                    assert ast.unparse(body[0]) == "panel_principal._note_actor(user)", (rel, fn.name)
+                    body = body[1:]
                 assert f"lookup_door.check(lookup_door.{wanted[fn.name]})" in ast.unparse(body[0]), (rel, fn.name)
                 wanted = {k: v for k, v in wanted.items() if k != fn.name}
         assert not wanted, (rel, wanted)
@@ -415,7 +459,10 @@ def test_every_outbound_sender_in_zoe_data_is_listed_and_every_lookup_records_af
     ``reminder_delivery.py``; a second ``httpx.AsyncClient`` in ``routers/weather._geocode`` (count 2 against 1);
     ``from httpx import AsyncClient as _C`` with a ``_C()`` call in ``change_notices.py``; the record in
     ``research_evidence._fetch_page_price`` dropped; the record in ``zoe_agent._web_research._visit_with_search`` dropped;
-    ``routers/weather._geocode``'s record moved above its request."""
+    ``routers/weather._geocode``'s record moved above its request; the Open-Meteo record dropped from
+    ``routers/weather.search_locations`` (the fallback branch: the OpenWeatherMap branch's record used to hide it); the second
+    record dropped from ``zoe_agent._web_research``; the ``weather_forecast`` tool's record dropped from
+    ``mcp_server._execute_tool``; ``OPENERS`` emptied (a browser launch counted as a request) fails every page lookup."""
     counts, where, sent = _outbound(SVC)
     assert counts == {k: n for k, (n, _) in SENDERS.items()}, (
         sorted(set(counts.items()) ^ {(k, n) for k, (n, _) in SENDERS.items()}))
@@ -426,6 +473,11 @@ def test_every_outbound_sender_in_zoe_data_is_listed_and_every_lookup_records_af
             records = sent.get(key, [])
             assert records and all(kind == what for _, kind in records), (key, records)
             assert min(line for line, _ in records) > first_send, (key, "recorded before it sent")
+            # EVERY request has a record of its own, after it and before the next request: a fallback branch that sends
+            # without recording is not hidden by the first branch's record
+            reqs = _outbound.requests.get(key, [])
+            assert reqs, (key, "no request found: the scan cannot see how this lookup sends")
+            assert not _unrecorded(reqs, [line for line, _ in records]), (key, _unrecorded(reqs, [line for line, _ in records]))
         elif what.startswith("via "):
             mod, fn = what[4:].rsplit(".", 1)
             calls = [c for _, c in where[key]]
@@ -435,6 +487,12 @@ def test_every_outbound_sender_in_zoe_data_is_listed_and_every_lookup_records_af
             assert not sent.get(key) or key == ("mcp_server.py", "_execute_tool"), key
     tool = sent[("mcp_server.py", "_execute_tool")]
     assert sorted(kind for _, kind in tool) == ["WEATHER", "WEATHER", "WEB_FETCH", "WEB_FETCH"]
+    # the dispatcher's four lookup requests (two to the weather service, two page loads), each with its own record before
+    # the dispatcher's next request of any kind
+    every_request = _outbound.requests[("mcp_server.py", "_execute_tool")]
+    lookups = [r for r in every_request if "open-meteo" in r[1] or ".goto(" in r[1]]
+    assert len(lookups) == 4, lookups
+    assert not [r for r in _unrecorded(every_request, [line for line, _ in tool]) if r in lookups]
     tools = (SVC / "mcp_server.py").read_text("utf-8")
     assert tools.count("lookup_door.check(lookup_door.WEATHER)") == 2 and tools.count("lookup_door.check(lookup_door.WEB_FETCH)") == 2
     assert tools.count("api.open-meteo.com") == 2
@@ -669,3 +727,84 @@ def test_zoes_own_notifications_never_reach_the_door_and_the_member_senders_do()
         assert 0 < text.index("message_door.ask(") < text.index(send), rel
     assert tuple(os_shadow.AREAS["messages"].verbs) == (message_door.PANEL, message_door.TELEGRAM, message_door.PUSH, message_door.EXTERNAL)
     assert tuple(os_shadow.AREAS["lookups"].verbs) == tuple(f"lookup.{k}" for k in lookup_door.KINDS)
+
+
+# ---- who a tool call acts for: that call's own caller, and nobody afterwards -------------------------------------------------------
+KID = "member-kip"
+
+
+def _noting(monkeypatch) -> list:
+    """Every lookup check records who is acting at that moment and refuses (so nothing is sent and no kernel is needed)."""
+    seen: list = []
+
+    def check(kind):
+        seen.append((kernel_door.acting() or (None,))[0])
+        raise lookup_door.LookupRefused("unknown_person")
+
+    monkeypatch.setattr(lookup_door, "check", check)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_each_tool_call_in_one_task_acts_for_its_own_caller_and_leaves_nobody_noted(door, monkeypatch):
+    """The stdio tool server answers call after call in ONE task. Each call that states its caller acts for THAT member at the
+    doors (lookups, music, home control), and when it returns nobody is noted: an adult's call followed by a child's must reach
+    the kernel as the child, never as the adult before them. A call with no context (the service's own dispatch, which noted the
+    turn's member) keeps that member, and it is still noted afterwards. A call that raises puts the actor back too.
+
+    Controls run: ``@_actor_for_this_call_only`` removed from ``mcp_server._execute_tool`` -> the adult is still noted after the
+    first call (and the child's call would act as the adult under the old ``is None`` rule); the rule put back to
+    ``if kernel_door.acting() is None`` alone -> a stated caller no longer replaces a member already noted; ``actor_scope``
+    not putting the actor back (its ``finally`` dropped) -> noted after the call."""
+    import mcp_server
+
+    seen = _noting(monkeypatch)
+    assert kernel_door.acting() is None
+    for who in (ANN, KID, ANN):
+        out = await mcp_server._execute_tool(None, "weather_current", {}, {"user_id": who, "source": "transport"})
+        assert out["status"] == "refused" and kernel_door.acting() is None, who
+    assert seen == [ANN, KID, ANN]
+    kernel_door.note_actor(ANN)                                                         # something left noted in this task ...
+    await mcp_server._execute_tool(None, "weather_current", {}, {"user_id": KID, "source": "transport"})
+    assert seen[-1] == KID and kernel_door.acting()[0] == ANN                           # ... never decides a stated caller's call
+    kernel_door.note_actor(KID)                                                         # the service's dispatch noted the turn's member
+    await mcp_server._execute_tool(None, "weather_current", {"_user_id": ANN})          # no context: the turn's member stands
+    assert seen[-1] == KID and kernel_door.acting()[0] == KID
+    kernel_door._ACTOR.set(None)
+    monkeypatch.setattr(lookup_door, "check", lambda kind: (_ for _ in ()).throw(RuntimeError("womble")))
+    with pytest.raises(RuntimeError):
+        await mcp_server._execute_tool(None, "weather_current", {}, {"user_id": ANN, "source": "transport"})
+    assert kernel_door.acting() is None
+
+
+@pytest.mark.asyncio
+async def test_the_plan_pipeline_checks_before_a_page_is_fetched(door, monkeypatch):
+    """``execute_text_extraction`` (the broker's plan / execute pipeline) refuses a caller known to be off the roster before a
+    plan is even made; it used to plan and navigate with no check. Control run: the check dropped from
+    ``browser_broker.execute_text_extraction`` -> the broker is reached. (The executor's own first statement is pinned in
+    ``test_every_lookup_entry_point_checks_before_anything_leaves``.)"""
+    import browser_broker
+
+    class Broker:
+        def plan_action(self, **kw):
+            raise AssertionError("a plan was made for a refused caller")
+
+    seen = _noting(monkeypatch)
+    kernel_door.note_actor(STRANGER)
+    with pytest.raises(lookup_door.LookupRefused):
+        await browser_broker.execute_text_extraction(Broker(), url="https://example.invalid/page", user_id=STRANGER, session_id="s")
+    assert seen == [STRANGER]
+
+
+@pytest.mark.asyncio
+async def test_a_place_search_is_its_signed_in_callers_lookup(door, monkeypatch):
+    """``GET /api/weather/location/search`` takes the signed-in caller and nothing upstream notes them: the route notes them
+    itself, first, so the lookup is theirs (refused for someone off the roster, recorded for a member) and not automatic.
+    Control run: ``panel_principal._note_actor(user)`` dropped from ``routers/weather.search_locations`` -> nobody is acting
+    at the check."""
+    from routers import weather
+
+    seen = _noting(monkeypatch)
+    with pytest.raises(lookup_door.LookupRefused):
+        await weather.search_locations(query="womble town", limit=3, user={"user_id": STRANGER})
+    assert seen == [STRANGER]

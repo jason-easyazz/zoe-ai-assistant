@@ -63,7 +63,6 @@ from zoe_os.alarm_door import ALARM_VERBS as ALARM_DOOR_VERBS, TIMER_VERBS as TI
 from zoe_os.calendar_door import VERBS as CALENDAR_DOOR_VERBS  # noqa: E402
 from zoe_os.notes_door import JOURNAL_VERBS as JOURNAL_DOOR_VERBS, NOTE_VERBS as NOTE_DOOR_VERBS  # noqa: E402
 from zoe_os.people_door import VERBS as PEOPLE_DOOR_VERBS  # noqa: E402
-from zoe_os import music_door  # noqa: E402
 from zoe_os.music_door import VERBS as MUSIC_DOOR_VERBS  # noqa: E402
 from zoe_os import home_door  # noqa: E402
 from zoe_os.memory_door import VERBS as MEMORY_DOOR_VERBS  # noqa: E402
@@ -377,7 +376,6 @@ def read_roster(state: Path) -> tuple[list, str]:
 def build(state: Path):
     """The kernel, its server and the credentials. Pure construction: nothing is served until ``serve``."""
     seen = roster_identity(state)        # BEFORE the read: a file replaced in between is simply read again at the first ask
-    home_door.levels = home_door.file_levels(state / home_door.LEVELS_FILE)     # each child's home-control level, beside the roster
     entries, roster_status = read_roster(state)
     people = roster_ids(entries)
     known = remember_people(state, people)
@@ -398,13 +396,12 @@ def build(state: Path):
         k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)    # recorded whatever their role, never consent
     srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people, seen=seen)
     srv.roster_status = roster_status
-    # music and home control act only for the CURRENT roster: a member taken off it stays in the kernel's people (forgettable)
-    # and must control nothing (``music_door.roster``; ``apply_roster`` replaces ``srv.roster`` on each re-read)
-    music_door.roster = lambda: srv.roster
     # Only the CURRENT roster acts at the door (``door.Area.former``; lists keeps main's rule): a member taken off people.json
     # stays in the kernel's people (forgettable) and changes nothing of anyone's. Per kernel: this server's roster, which
     # ``apply_roster`` replaces on each re-read.
     k.door.roster = lambda: srv.roster
+    # each child's home-control level, beside THIS roster: this kernel's reader (``Kernel.home``), never another daemon's
+    k.home.levels = home_door.file_levels(state / home_door.LEVELS_FILE)
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
