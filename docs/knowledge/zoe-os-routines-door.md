@@ -71,6 +71,14 @@ signed-out panel sees household ones) and `POST /api/routines/steps/act` (`done`
 A tap is a tick: it goes through `routines_store.act_tapped`, so every store rule and the door apply. A medicine line is
 ticked from the card only in its subject's own signed-in session. No panel UI is built.
 
+Who is asking: a member's own session, or the panel with nobody identified, PROVED by the request (`_at_the_panel`: the strict
+`registered` test of `panel_principal.is_panel_guest`; a device token never over the Cloudflare tunnel). A device token bound
+to a member is judged as the device, never as that member, and being a member's does not make it the panel. An auth outage is
+nobody's evidence: authentication's fail-closed 503 is the route's answer and a degraded principal is 403; only "no valid
+session" (401) reads as nobody identified. Pinned on the real path by
+`test_a_device_token_bound_to_a_member_is_never_the_member_and_is_the_panel_only_where_a_device_token_is` and
+`test_an_auth_outage_is_nobodys_evidence_even_at_a_registered_panel_address`.
+
 ## 6. Switch-on (owner steps)
 
 1. This change deployed and the kernel unit restarted on it.

@@ -5,9 +5,14 @@
 
 WHO:
   * a signed-in member's own session (never a device token, a panel principal or an auth outage): acts as the member, verified.
-  * the panel with nobody identified (``panel_principal.member_or_panel``): sees FAMILY routines only and taps as the household
-    (the fridge rule), never verified.
-  * anyone else: 403.
+  * the panel with nobody identified: sees FAMILY routines only and taps as the household (the fridge rule), never verified.
+    "The panel" is PROVED by the request, never by who a credential names (``_at_the_panel``): the strict ``registered`` test
+    of ``panel_principal.is_panel_guest`` (a device token not presented over the Cloudflare tunnel, the kiosk credential, a
+    registered panel address). A device token BOUND TO A MEMBER (``ZOE_DEVICE_TOKEN_BINDS_MEMBER=1``) is judged as the device it
+    is, by that same test: it is never the member, and being a member's does not make it the panel.
+  * anyone else: 403. An AUTH OUTAGE is nobody's evidence: a fail-closed 503 from authentication is the route's answer (it is
+    never turned into "nobody identified", which a registered panel address would then pass), and a degraded principal is 403.
+    Only "no valid session" (401) reads as nobody identified.
 
 Every rule that decides a tick (who may see, the fridge rule, a medicine line only for its verified subject, no double act) is
 in ``routines_store``; this module only says who is asking. A tap is ``routines_store.act_tapped``, so with
@@ -41,8 +46,10 @@ router = APIRouter(prefix="/api/routines", tags=["routines"], dependencies=[Depe
 async def _caller(request: Request) -> Optional[dict]:
     try:
         return await get_current_user(request)
-    except HTTPException:
-        return None
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise                        # an auth outage (503, fail closed), anything unexpected: the request fails as it is
+        return None                      # no valid session: nobody is identified (the panel, if the request proves it is one)
 
 
 @dataclass
@@ -56,11 +63,25 @@ def _own_session(u: dict) -> bool:
             and panel_principal.is_member(u) and not panel_principal.is_guest_id(u.get("user_id")))
 
 
+async def _at_the_panel(request: Request, u: dict) -> bool:
+    """Is this request, which is NOT a member's own session, demonstrably the wall panel? Whoever its credential names is set
+    aside: it is judged as an anonymous device carrying only its panel id. Never an auth-outage principal. Fails closed."""
+    try:
+        if u.get("auth_degraded"):
+            return False
+        device = {"user_id": "guest", "role": "guest"}
+        if u.get("panel_id"):
+            device["panel_id"] = u["panel_id"]
+        return bool(await panel_principal.is_panel_guest(request, device, None, mode="registered"))
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
+
+
 async def _who(request: Request, caller: Optional[dict] = Depends(_caller)) -> Who:
     u = caller or {}
     if _own_session(u):
         return Who(str(u["user_id"]), True)
-    if await panel_principal.member_or_panel(request, caller):
+    if await _at_the_panel(request, u):
         return Who(None, False)
     raise HTTPException(status_code=403, detail="Sign in, or use the wall panel")
 

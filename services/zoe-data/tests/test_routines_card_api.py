@@ -36,10 +36,11 @@ def api(store, monkeypatch):  # noqa: F811
     monkeypatch.setenv("ZOE_ROUTINES", "on")
     caller = {"user": None, "panel": False}
 
-    async def is_panel(request, user):
+    async def is_panel(request, user, db=None, *, mode=None):      # the panel's own test: only ever asked about an anonymous device
+        assert panel_principal.is_guest_id(user["user_id"]) and mode == "registered"
         return bool(caller["panel"])
 
-    monkeypatch.setattr(panel_principal, "member_or_panel", is_panel)
+    monkeypatch.setattr(panel_principal, "is_panel_guest", is_panel)
     app = FastAPI()
     app.include_router(rr.router)
     app.dependency_overrides[rr._caller] = lambda: caller["user"]
@@ -67,7 +68,7 @@ def _act(env, step, action="done"):
 
 def test_flag_off_every_route_is_404_before_anyone_is_identified(api, monkeypatch):
     """The gate runs FIRST: with the flag off neither route identifies anybody (the caller dependency, the real
-    ``get_current_user`` and the panel check are each recorded if called) and both answer 404. Controls run: with the gate
+    ``get_current_user`` and the panel test are each recorded if called) and both answer 404. Controls run: with the gate
     dependency dropped from the router the member's ``/today`` is 200; with the gate moved after the caller dependency
     (``dependencies=[Depends(_caller), Depends(_on)]``) the caller is recorded and this fails."""
     called: list = []
@@ -80,13 +81,13 @@ def test_flag_off_every_route_is_404_before_anyone_is_identified(api, monkeypatc
         called.append("get_current_user")
         return api.caller["user"]
 
-    async def panel(request, user):
-        called.append("member_or_panel")
+    async def panel(request, user, db=None, *, mode=None):
+        called.append("is_panel_guest")
         return False
 
     api.c.app.dependency_overrides[rr._caller] = caller
     monkeypatch.setattr(rr, "get_current_user", authenticate)
-    monkeypatch.setattr(panel_principal, "member_or_panel", panel)
+    monkeypatch.setattr(panel_principal, "is_panel_guest", panel)
     monkeypatch.setenv("ZOE_ROUTINES", "off")
     _member(api, SAM)
     assert api.c.get("/api/routines/today").status_code == 404
@@ -174,3 +175,84 @@ def test_the_module_holds_no_sql_and_is_mounted_behind_its_flag():
     assert "dependencies=[Depends(_on)]" in src
     main = (SVC / "main.py").read_text("utf-8")
     assert "from routers.routines import router as routines_router" in main and "app.include_router(routines_router)" in main
+
+
+# ---- WHO, on the real path: nothing below is stubbed above the registry read and the authenticator ---------------------------------
+@pytest.fixture
+def real(store, monkeypatch):  # noqa: F811
+    """The router with its REAL ``_caller``, ``_who`` and ``panel_principal`` tests. Only the two ends are set: what
+    ``get_current_user`` answers (or raises), and whether the request's address is a registered panel's."""
+    monkeypatch.setenv("ZOE_ROUTINES", "on")
+    monkeypatch.delenv("ZOE_PANEL_TOKEN_VIA_CF", raising=False)
+    state = {"auth": None, "registered": False}
+
+    async def authenticate(request):
+        if isinstance(state["auth"], Exception):
+            raise state["auth"]
+        return state["auth"]
+
+    async def registry(db, check, value):
+        return bool(state["registered"])
+
+    monkeypatch.setattr(rr, "get_current_user", authenticate)
+    monkeypatch.setattr(panel_principal, "_with_registry", registry)
+    app = FastAPI()
+    app.include_router(rr.router)
+    run(rs.create_routine(SAM, "Morning", "waking", steps=(("tablets", "medicine"), "stretch")))
+    run(rs.create_routine(ALEX, "Feed the dog", "dinner", visibility="family", steps=("feed the dog",)))
+    return type("Env", (), {"c": TestClient(app), "state": state})
+
+
+TUNNEL = {"cf-ray": "synthetic-ray"}
+BOUND_TOKEN = {"user_id": SAM, "role": "user", "device_token_role": "panel", "panel_id": "panel-qov"}
+
+
+def _seen(env, headers=None):
+    out = env.c.get("/api/routines/today", headers=headers or {})
+    return out.status_code, ({r["routine"]["name"] for r in out.json()["routines"]} if out.status_code == 200 else None)
+
+
+def test_a_device_token_bound_to_a_member_is_never_the_member_and_is_the_panel_only_where_a_device_token_is(real):
+    """``ZOE_DEVICE_TOKEN_BINDS_MEMBER=1`` gives a device token a member principal (``device_token_role`` + ``panel_id``). It is
+    not the member's own session, and being a member's must not make it the panel: it is judged as the device it is. Over the
+    Cloudflare tunnel it is 403 for the read and the tap (it used to read and change family routines as the household); where
+    a device token is the panel it sees what the bare panel sees, never the member's own routine. A member's own session is
+    untouched by any of it.
+
+    Controls run: ``_who`` calling ``panel_principal.member_or_panel(request, caller)`` again (the old line) -> the tunnel
+    request is 200; ``_at_the_panel`` judging the principal as it came (``device = dict(u)``) -> the bound token is refused
+    everywhere (not a guest id), failing the panel line."""
+    real.state["auth"] = dict(BOUND_TOKEN)
+    assert _seen(real, TUNNEL) == (403, None)
+    assert real.c.post("/api/routines/steps/act", json={"step": "any", "action": "done"}, headers=TUNNEL).status_code == 403
+    assert _seen(real) == (200, {"Feed the dog"})                                        # the panel: family only, not SAM's own
+    real.state["auth"] = {"user_id": "guest", "role": "guest", "panel_id": "panel-qov"}  # the same token, bound to nobody
+    assert _seen(real, TUNNEL) == (403, None) and _seen(real) == (200, {"Feed the dog"})
+    real.state["auth"] = {"user_id": SAM, "role": "user"}                                # SAM's own session, wherever it is
+    assert _seen(real, TUNNEL) == (200, {"Morning", "Feed the dog"})
+
+
+@pytest.mark.parametrize("registered", [True, False])
+def test_an_auth_outage_is_nobodys_evidence_even_at_a_registered_panel_address(real, registered):
+    """Authentication failing closed (503) is the route's answer. It used to be turned into "nobody identified", which a
+    request from a registered panel address then passed as the bare panel, reading and changing family routines during the
+    outage. A degraded principal (the outage with fail-closed off) is 403. Only "no valid session" (401) reads as nobody
+    identified: at a registered panel address that is the bare panel, anywhere else 403.
+
+    Controls run: ``_caller`` swallowing every ``HTTPException`` again (the old ``except HTTPException: return None``) -> the
+    503 case is 200 at the registered address and 403 elsewhere; the ``auth_degraded`` line dropped from ``_at_the_panel``
+    -> a degraded principal at a registered address is 200."""
+    from fastapi import HTTPException
+
+    real.state["registered"] = registered
+    real.state["auth"] = HTTPException(status_code=503, detail="auth unavailable")
+    assert _seen(real) == (503, None)
+    assert real.c.post("/api/routines/steps/act", json={"step": "any", "action": "done"}).status_code == 503
+    real.state["auth"] = {"user_id": "guest", "role": "guest", "auth_degraded": True}
+    assert _seen(real) == (403, None)
+    real.state["auth"] = {"user_id": SAM, "role": "user", "auth_degraded": True}
+    assert _seen(real) == (403, None)
+    real.state["auth"] = HTTPException(status_code=401, detail="Invalid or expired session")
+    assert _seen(real) == ((200, {"Feed the dog"}) if registered else (403, None))
+    real.state["auth"] = {"user_id": "guest", "role": "guest"}                           # no credentials at all
+    assert _seen(real) == ((200, {"Feed the dog"}) if registered else (403, None))
