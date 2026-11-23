@@ -11,7 +11,7 @@ THE VERB CARRIES THE CLASS OF THING AND WHAT IS DONE TO IT, both closed codes: `
     a child                              only the classes their LEVEL allows (below); else refuse adults_only
     a guest on the roster                as the shared panel
     the shared panel (nobody identified) everything EXCEPT opening: a lock or a cover that is not being closed -> adults_only
-    not on the roster                    refuse unknown_person
+    not on the roster                    refuse unknown_person (a member TAKEN OFF it too: never a guest; ``music_door.roster``)
 
 A CHILD'S LEVEL is a set of classes. It is stated per child, beside the roster (``home-levels.json``, read by ``levels``), as a
 level's name or as a plain list of classes; a child with nothing stated has ``DEFAULT_LEVEL``:
@@ -38,6 +38,7 @@ from typing import Callable
 
 from .capability import ADULT, CHILD
 from .door import ADULTS_ONLY, PANEL, PRIVATE, UNKNOWN_PERSON, Area
+from .music_door import on_roster
 from .spine import Decision
 
 CLASSES = ("light", "switch", "climate", "cover", "lock", "scene", "media", "other")
@@ -60,7 +61,8 @@ LEVELS_FILE = "home-levels.json"      # beside people.json, 0600: {"levels": {"<
 
 
 def file_levels(path) -> Callable[[], dict]:
-    """A reader of the levels file that follows the file with no restart (read again when its inode, size or time changes).
+    """A reader of the levels file that follows the file with no restart (read again when its inode, size, time or MODE
+    changes: a ``chmod`` changes none of the others, and a file opened to others must stop stating anything at once).
     A file that is missing, cannot be read, is not that shape, or that anyone but its owner can read or write, states NOTHING:
     every child then has the default level, never more."""
     import json
@@ -74,7 +76,7 @@ def file_levels(path) -> Callable[[], dict]:
         except OSError:
             seen[:] = [None, {}]
             return seen[1]
-        ident = (st.st_ino, st.st_size, st.st_mtime_ns)
+        ident = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_mode, st.st_uid)
         if ident != seen[0]:
             stated: dict = {}
             try:
@@ -109,9 +111,10 @@ def allowed_classes(stated) -> frozenset:
 
 def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner: str | None = None,
            visibility: str = PRIVATE) -> Decision:
-    """The whole permission table (module docstring), one rule per line. ``people`` is the kernel's roster."""
+    """The whole permission table (module docstring), one rule per line. ``people`` is the kernel's people; only those on the
+    CURRENT roster (``music_door.on_roster``) are anyone here."""
     panel = via == PANEL
-    who = None if panel else people.get(actor)
+    who = None if panel else on_roster(people, actor)
     if not panel and who is None:
         return Decision(False, UNKNOWN_PERSON)
     if who is not None and who.role == ADULT:                      # an adult: everything, a child's level included

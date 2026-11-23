@@ -50,7 +50,7 @@ class HomeRefused(kernel_door.Refused):
 
 # ── music: Music Assistant command -> verb ──────────────────────────────────────────────────────────────────────────────────
 _MUSIC_EXACT = {
-    "player_queues/pause": "music.stop", "player_queues/stop": "music.stop", "players/cmd/power": "music.stop",
+    "player_queues/pause": "music.stop", "player_queues/stop": "music.stop",
     "players/cmd/volume_down": "music.quieter", "players/cmd/volume_set": "music.quieter",      # a set level: direction unknown
     "players/cmd/volume_up": "music.louder",
     "player_queues/play": "music.play", "player_queues/play_pause": "music.play", "player_queues/next": "music.play",
@@ -71,6 +71,8 @@ def music_verb(command: str, args: dict) -> Optional[str]:
     of the two action families that is not listed is still an action: ``music.play`` (asked first), never silently unasked."""
     if command == "players/cmd/volume_mute":
         return "music.stop" if args.get("muted") else "music.louder"
+    if command == "players/cmd/power":                 # only switching a speaker OFF is a stop; on (or unsaid) is asked first
+        return "music.stop" if args.get("powered") is False else "music.play"
     if command in _MUSIC_EXACT:
         return _MUSIC_EXACT[command]
     if command.startswith("players/cmd/") or (command.startswith("player_queues/") and command not in ("player_queues/all", "player_queues/items")):

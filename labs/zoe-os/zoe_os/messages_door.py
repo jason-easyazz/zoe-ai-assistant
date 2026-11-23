@@ -1,6 +1,7 @@
 """The messages area of the door: a MEMBER asking Zoe to send something. The verb is the CHANNEL CLASS; the recipient is a
 member's id (``owner``) when the recipient is a known person, and is otherwise not named at all. NEVER the words of the
-message, a phone number, a chat id or an address: the wire has no field for them.
+message, a phone number, a chat id or an address: the wire has no field for them (this area has no target and no turn
+id; an ask that supplies either is rejected before anything is read or written, ``door.Area``).
 
 Zoe's OWN notifications (a reminder firing, an alarm, a proactive nudge, a system alert) are automatic: never asked, never
 recorded.
@@ -50,4 +51,4 @@ def decide(people: dict, verb: str, actor: str, *, via: str | None = None, owner
     return Decision(False, ADULTS_ONLY)
 
 
-AREA = Area("messages", VERBS, decide, target="message")
+AREA = Area("messages", VERBS, decide, target=None, turn=False)

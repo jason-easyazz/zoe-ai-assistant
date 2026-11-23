@@ -276,6 +276,49 @@ async def test_a_forget_that_did_not_happen_is_not_told(door):
     assert _asks(door, "memory.forget") == [] and w.col.rows[row.id][1]["status"] == "approved"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ids_of", ["none of the member's", "empty"])
+async def test_a_forget_that_removed_no_row_is_not_told(door, ids_of):
+    """``erase_rows`` answers ``{"rows_removed": 0}`` for an empty request and for ids none of which are the member's: no
+    forget happened, so the kernel is told nothing. Control run: with ``memory_door._made`` back to "anything but None /
+    False" (the old success check), both calls are told as forgets."""
+    w = scenarios.World()
+    other = await w.said(OTHER, user=BEN)                                           # another member's row
+    ids = [other.id] if ids_of != "empty" else []
+    out = await w.svc.erase_rows(ANN, ids, actor=ANN, acting=memory_actor.member(ANN))
+    assert out == {"rows_removed": 0} or out.get("rows_removed") == 0
+    await asyncio.sleep(0.3)
+    assert _asks(door, "memory.forget") == [] and other.id in w.col.rows
+    # and a forget that DID remove a row is told (the same call, the member's own row)
+    mine = await w.said(OLD)
+    await w.svc.erase_rows(ANN, [mine.id], actor=ANN, acting=memory_actor.member(ANN))
+    assert len(_wait(door, 1, "memory.forget")) == 1
+
+
+@pytest.mark.parametrize("flag,who", [("off", "member"), ("kernel", "automatic"), ("off", "automatic")])
+def test_erase_rows_reads_its_ids_exactly_as_main_does_off_the_door(door, monkeypatch, flag, who):
+    """With the door off, or for an automatic writer, ``erase_rows`` does not copy ``ids`` up front: an iterator is consumed
+    only where main consumes it (after the user check), so a call that fails that check leaves it untouched. Control run: with
+    the up-front ``ids = list(ids)`` back outside ``memory_door.on`` this fails (the iterator is drained before the refusal)."""
+    import memory_service
+
+    monkeypatch.setenv("ZOE_OS_MEMORY", flag)
+    os_shadow._reset_for_tests()
+    w = scenarios.World()
+    pulled: list = []
+
+    def ids():
+        for i in ("a1", "a2"):
+            pulled.append(i)
+            yield i
+
+    acting = memory_actor.member(ANN) if who == "member" else memory_actor.AUTOMATIC
+    with pytest.raises(memory_service.MemoryServiceError):
+        asyncio.run(w.svc.erase_rows("", ids(), actor="x", acting=acting))
+    scenarios._restore()
+    assert pulled == []
+
+
 # ---- automatic writers -----------------------------------------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_an_automatic_writer_is_neither_asked_nor_told(door):

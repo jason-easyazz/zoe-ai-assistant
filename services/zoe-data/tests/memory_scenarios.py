@@ -130,10 +130,25 @@ def _set(obj, name, value) -> None:
     setattr(obj, name, value)
 
 
+def _setenv(name: str, value: str) -> None:
+    """A flag for one scenario: set in the environment, restored (or removed) when the scenario ends."""
+    import os
+
+    _UNDO.append((os.environ, name, os.environ.get(name, _UNDO)))
+    os.environ[name] = value
+
+
 def _restore() -> None:
+    import os
+
     while _UNDO:
         obj, name, value = _UNDO.pop()
-        if value is _UNDO:
+        if obj is os.environ:
+            if value is _UNDO:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        elif value is _UNDO:
             delattr(obj, name)
         else:
             setattr(obj, name, value)
@@ -463,7 +478,10 @@ def _fresh(done: bool = False) -> None:
     import memory_forgotten
     import turn_forget
 
+    import memory_tombstones
+
     memory_forgotten.reset_state()
+    memory_tombstones.clear_all()        # a "forget <name>" leaves a 300 s in-process tombstone that would block the next row
     turn_forget.reset()
     for name in _STORES:
         mod = importlib.import_module(name)
