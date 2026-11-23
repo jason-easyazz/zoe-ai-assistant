@@ -4,8 +4,9 @@ Without this wrapper the node harness only runs when someone invokes it by hand,
 so re-introducing either defect would sail through CI:
 
   * the two stored-XSS sinks in chat.html (session titles derived server-side
-    from raw user message text, and user-authored reminder text) — note chat.html
-    carries TWO copies of displayNotifications and the harness asserts on both;
+    from raw user message text, and user-authored reminder text) — the harness
+    asserts on every displayNotifications it finds (one, since the duplicate
+    was removed 2026-11-14);
   * the sw.js routes that sent cross-origin no-cors scripts/styles through
     NetworkFirst, stripping all 9 of chat.html's CDN assets on every reload.
 
@@ -48,5 +49,6 @@ def test_chat_xss_and_sw_origin_guard():
         f"chat XSS / sw origin guard failed:\n{proc.stdout}\n{proc.stderr}"
     )
     assert "checks passed" in proc.stdout
-    # Both displayNotifications copies must actually have been exercised.
-    assert "displayNotifications #2 routes notification.message through escapeHtml" in proc.stdout
+    # The displayNotifications escape check must actually have been exercised.
+    assert "displayNotifications #1 routes notification.message through escapeHtml" in proc.stdout
+    assert "chat.html defines exactly one displayNotifications" in proc.stdout

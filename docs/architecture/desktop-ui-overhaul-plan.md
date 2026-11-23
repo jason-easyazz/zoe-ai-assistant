@@ -533,6 +533,27 @@ collections/tiles canvas, `/api/music/similar`.
   There is **nothing to "promote"** — the audit's run was ad-hoc and uncommitted. Every later wave gates on it.
 
 ### Wave 1 — Security + data-loss triage (single-finding PRs)
+
+**Status, re-checked against the code 2026-11-14: landed, bar the last two rows.** The line
+numbers in the bullets below are from July and no longer match; the pins are the record.
+
+| Item | State | Pinned by |
+|---|---|---|
+| XSS 3 (`auth.html` `?setup=`) | landed (DOM-built form, no `innerHTML`) | `dist/test_auth_no_demo_bypass.js` |
+| XSS 4-5 (`chat.html` session titles, reminder text) | landed | `dist/test_chat_xss_and_sw_origin.js` |
+| XSS 6, 8 (`notes.html`, `memories.html`) | landed (DOM-built, not escaped strings) | `dist/test_notes_memories_xss.js` |
+| XSS 7 (`journal-api.js`, local helper) | landed | `dist/test_journal_render_escaping.js` |
+| XSS 9 (`calendar.html`) + the metadata wipe + the two 404 reads | landed | `dist/test_calendar_metadata_and_xss.js` |
+| Four demo-bypass sites | landed | `dist/test_auth_no_demo_bypass.js` |
+| `const subscription`, orb logout listener | landed | `dist/test_desktop_wave3.js`, `dist/test_desktop_no_touch_links.js` |
+| Vendor chat's 9 CDN assets | landed, under `dist/lib/` (not `/js/lib/` + `/css/lib/`) | `test_ui_no_external_assets_scan.py` |
+| chat.html duplicate functions | **done 2026-11-14**: the second copies of the seven notification helpers and the weaker second `escapeAttr` (not in the July list) removed; `openMoreOverlay` / `closeMoreOverlay` / `updateTimeDate` kept | `dist/test_chat_single_definitions.js` |
+| Found while closing the wave | chat.html's `escapeHtml` does not escape `"` or `'`, and the generative-UI renderers put it inside attributes and inline handlers; its own PR | - |
+
+Not Wave 1, seen on the way: `renderActionCards` in chat.html interpolates card text raw, but no
+server code emits `action_cards` (dead renderer, a Wave 4 deletion); `index.html` still falls back
+to two invented profile tiles ("Admin", "User") when the profile list cannot be read (no session is
+minted, so not a bypass, but it shows people who do not exist).
 - XSS, per register items 3-9. **Define a local escape helper in each of `auth.html`,
   `memories.html`, `calendar.html`, and `journal-api.js`** — do not reach across files.
 - Duplicate-function cleanup in chat.html: delete **only `:7366-7443`** (the true duplicates).
