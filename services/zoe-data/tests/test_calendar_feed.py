@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import importlib.util
 import json
 import logging
@@ -451,6 +452,94 @@ def test_the_sync_guard_is_released_on_a_timeout_and_on_an_exception(db):
     assert not feed._syncing and sync(a, Feed(ics(*THREE))).counts["created"] == 3
 
 
+@needs_ics
+def test_overrides_are_stored_rows_linked_to_their_master_and_exdate_holds(db):
+    a = account()
+    master = vevent("series@example.test", "Weekly swim", "20261203T010000Z", "20261203T020000Z", rrule="FREQ=WEEKLY",
+                    exdate="20261210T010000Z")
+    moved = vevent("series@example.test", "Weekly swim (moved)", "20261218T030000Z", "20261218T040000Z",
+                   rid="20261217T010000Z")
+    f = Feed(ics(master))
+    sync(a, f)
+    f.body = ics(master, moved)
+    r = sync(a, f)
+    assert (r.counts.get("created"), r.counts.get("unchanged")) == (1, 1)
+    mid = eid(db, "Weekly swim")
+    assert events(db)["Weekly swim (moved)"][3] == mid                              # linked by series_id
+    assert json.loads(db.one("SELECT exdates FROM events WHERE id = ?", (mid,))) == ["2026-12-10T01:00:00Z"]
+
+    async def window():
+        async with db_compat.get_compat_db() as d:
+            return await calendar_read.events_in_window(d, "ann", "2026-12-01", "2026-12-31")
+    occ = [(o["date"], o["title"]) for o in run(window())]
+    assert ("2026-12-10", "Weekly swim") not in occ                                 # EXDATE
+    assert ("2026-12-17", "Weekly swim") not in occ and ("2026-12-18", "Weekly swim (moved)") in occ   # the override replaces
+
+
+@needs_ics
+def test_no_uid_is_skipped_and_a_duplicate_keeps_the_highest_sequence(db):
+    a = account()
+    f = Feed(ics(vevent(None, "No identity"), vevent("dup@example.test", "Older", seq=1),
+                 vevent("dup@example.test", "Newer", seq=2), vevent("dup@example.test", "Oldest", seq=0)))
+    r = sync(a, f)
+    assert r.counts["created"] == 1 and r.skipped == {"no_uid": 1, "duplicate": 2} and r.counts["skipped"] == 3
+    assert set(events(db)) == {"Newer"}
+
+
+@needs_ics
+def test_window_prune_and_unsupported_rules_are_counted(db):
+    a = account()
+    old = vevent("old@example.test", "Long ago", "20200101T010000Z", "20200101T020000Z")
+    odd = vevent("odd@example.test", "Odd yearly", "20260308T010000Z", "20260308T020000Z", rrule="FREQ=YEARLY;BYMONTH=3;BYDAY=2SU")
+    f = Feed(ics(THREE[0], old, odd))
+    r = sync(a, f)
+    assert r.skipped == {"out_of_window": 1} and r.counts["rrule_unsupported"] == 1 and "Odd yearly" in events(db)
+    assert db.rows("SELECT n_rrule_unsupported, n_skipped FROM sync_runs") == [(1, 1)]
+
+
+@needs_ics
+def test_an_event_moved_outside_the_window_never_keeps_its_old_time(db):
+    """No deletes yet: the stored copy is rewritten with the provider's new time, so no reader shows the stale one."""
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    f.body = ics(vevent("u-1@example.test", "Club practice", "20280601T010000Z", "20280601T020000Z", seq=1), *THREE[1:])
+    r = sync(a, f)
+    assert (r.counts.get("updated"), r.counts.get("absent"), r.skipped) == (1, 0, {"out_of_window": 1})
+    assert db.one("SELECT start_date FROM events WHERE external_uid = 'u-1@example.test'") == "2028-06-01"
+    assert "Club practice" not in {o["title"] for o in _december(db)}
+
+
+def _december(db):
+    async def window():
+        async with db_compat.get_compat_db() as d:
+            return await calendar_read.events_in_window(d, "ann", "2026-12-01", "2026-12-31")
+    return run(window())
+
+
+@needs_ics
+def test_moved_outside_the_window_negative_control(db, monkeypatch):
+    """Without carrying the out-of-window items, the stored copy keeps its December time and is still served."""
+    real = feed.plan
+    monkeypatch.setattr(feed, "plan", lambda parsed, outside=None, **kw: real(parsed, **kw))
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    f.body = ics(vevent("u-1@example.test", "Club practice", "20280601T010000Z", "20280601T020000Z", seq=1), *THREE[1:])
+    sync(a, f)
+    assert "Club practice" in {o["title"] for o in _december(db)}
+
+
+@needs_ics
+def test_an_attendee_who_is_a_member_is_linked(db):
+    run(mi.add("ben", "email", "Ben.Member@example.org"))
+    a = account()
+    sync(a, Feed(ics(vevent("m@example.test", "Planning", attendees=[("Ben", "ben.member@example.org"),
+                                                                       ("Visitor", "visitor@example.org")]))))
+    assert sorted(db.rows("SELECT email, member_user_id FROM event_attendees")) == [
+        ("ben.member@example.org", "ben"), ("visitor@example.org", None)]
+
+
 # -- the visibility clamp ---------------------------------------------------------------------------------------------------------
 
 @needs_ics
@@ -495,7 +584,121 @@ def test_subscription_is_a_read_only_provider_source():
     assert calendar_read.refusal(row) == "That one comes from a subscribed calendar; change it there."
 
 
+# -- the fence and the erase gate ----------------------------------------------------------------------------
+
+@needs_ics
+def test_a_disconnect_during_the_fetch_fences_the_run(db):
+    a = account()
+    f = Feed(ics(*THREE))
+    f.before = lambda: ca.disconnect(a)
+    r = sync(a, f)
+    assert r.outcome == "fenced" and events(db) == {}
+    assert db.rows("SELECT outcome FROM sync_runs") == [("fenced",)]
+
+
+@needs_ics
+def test_a_disconnect_between_batches_stops_the_rest(db, monkeypatch):
+    """BATCH=1: the calendar step and the first event commit; the disconnect lands before the second batch's fence check.
+    Negative control: the same run with no disconnect writes all three."""
+    monkeypatch.setattr(feed, "BATCH", 1)
+    a = account()
+    real, calls = feed._gated, []
+
+    async def gated(run_, step, **kw):
+        calls.append(1)
+        if len(calls) == 3:                                                        # after the calendar step and batch 1
+            await ca.disconnect(run_.account_id)
+        return await real(run_, step, **kw)
+    monkeypatch.setattr(feed, "_gated", gated)
+    r = sync(a, Feed(ics(*THREE)))
+    assert r.outcome == "fenced" and len(events(db)) == 1
+    monkeypatch.setattr(feed, "_gated", real)
+    b = account("ben", "other-subject")
+    assert sync(b, Feed(ics(*THREE))).counts["created"] == 3
+
+
+@needs_ics
+def test_fence_negative_control(db, monkeypatch):
+    """Without the generation check a batch already in flight writes after the disconnect."""
+    a = account()
+    f = Feed(ics(*THREE))
+    f.before = lambda: ca.disconnect(a)
+
+    async def always(*_):
+        return True
+    monkeypatch.setattr(ca, "still_current", always)
+    sync(a, f)
+    assert len(events(db)) == 3
+
+
 # -- the fetch seam ---------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status,cls,code", [
+    ("unauthorized", "auth", "revoked_link"), ("not_found", "auth", "http_404"), ("too_large", "quota", "too_large"),
+    ("network", "network", None), ("server_error", "provider", None), ("blocked", "config", "ssrf_blocked")])
+def test_fetch_failures_map_to_a_class_and_a_code(db, status, cls, code):
+    a = account()
+    r = sync(a, Feed(status=status))
+    assert (r.outcome, r.error_class, r.error_code) == ("error", cls, code)
+    assert db.rows("SELECT status, last_error_class, last_error_code FROM connected_accounts") == [("error", cls, code)]
+    assert db.rows("SELECT outcome, error_code, backoff_until FROM sync_runs") == [("error", code, "2026-12-01T00:30:00Z")]
+
+
+def test_a_429_waits_out_retry_after_and_failures_back_off(db):
+    r = sync(account(), Feed(status="rate_limited", retry_after_s=7200))
+    assert (r.error_class, r.backoff_until) == ("rate_limited", "2026-12-01T02:00:00Z")
+    assert [feed.backoff_seconds(n) for n in (1, 2, 3, 9)] == [1800, 3600, 7200, 21600]
+
+
+def test_a_feed_that_has_only_ever_failed_still_backs_off_further(db):
+    """No calendar row exists before the first success; the failure count comes from the run log, so it holds across a restart
+    (nothing in the process carries it)."""
+    a = account()
+    assert [sync(a, Feed(status="server_error")).backoff_until for _ in range(3)] == [
+        "2026-12-01T00:30:00Z", "2026-12-01T01:00:00Z", "2026-12-01T02:00:00Z"]
+    assert db.one("SELECT COUNT(*) FROM calendars") == 0
+
+
+def test_failure_count_negative_control(db, monkeypatch):
+    """Counting from the calendar row alone, a feed that never succeeded backs off 30 minutes every time."""
+    async def none(_account_id):
+        return 0
+    monkeypatch.setattr(feed, "_failures_since_success", none)
+    a = account()
+    assert {sync(a, Feed(status="server_error")).backoff_until for _ in range(3)} == {"2026-12-01T00:30:00Z"}
+
+
+@needs_ics
+def test_consecutive_failures_count_on_the_calendar_and_reset_on_success(db):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    f.status = "server_error"
+    sync(a, f)
+    r = sync(a, f)
+    assert db.one("SELECT consecutive_failures FROM calendars") == 2 and r.backoff_until == "2026-12-01T01:00:00Z"
+    f.status = "ok"
+    sync(a, f)
+    assert db.one("SELECT consecutive_failures FROM calendars") == 0
+
+
+def test_an_oversize_or_non_calendar_body_is_refused_before_any_parse(db, monkeypatch):
+    monkeypatch.setenv("ZOE_CALENDAR_FEED_MAX_BYTES", "64")
+    a = account()
+    r = sync(a, Feed(b"BEGIN:VCALENDAR\r\n" + b"X" * 200))
+    assert (r.error_class, r.error_code, r.n_bytes) == ("quota", "too_large", 217)
+    monkeypatch.delenv("ZOE_CALENDAR_FEED_MAX_BYTES")
+    r = sync(a, Feed(b"<!doctype html><html><body>Sign in</body></html>", content_type="text/html"))
+    assert (r.error_class, r.error_code) == ("provider", "not_calendar")
+    r = sync(a, Feed(b"BEGIN:VCALENDAR\r\n", content_type="text/html; charset=utf-8"))
+    assert r.error_code == "not_calendar" and events(db) == {}
+
+
+@needs_ics
+def test_a_malformed_calendar_is_a_parse_failure(db):
+    r = sync(account(), Feed(b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:not-a-date\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"))
+    assert (r.outcome, r.error_class, r.error_code) == ("error", "provider", "parse_failed")
+
 
 def test_off_does_nothing_and_shadow_writes_only_the_run(db):
     a = account()
@@ -514,6 +717,24 @@ def test_off_does_nothing_and_shadow_writes_only_the_run(db):
     r = sync(a, f, mode="shadow")                                                  # shadow counts against the stored rows ...
     assert (r.counts.get("updated"), r.counts.get("unchanged"), r.counts.get("created", 0)) == (1, 2, 0)
     assert "Club practice" in events(db) and db.one("SELECT sync_cursor FROM calendars") == cursor   # ... and writes nothing
+
+
+def test_a_sync_fetcher_runs_off_the_loop_and_a_bad_return_is_a_bug(db):
+    a = account()
+    seen = []
+
+    def blocking(req):
+        seen.append(req.account_id)
+        return feed.FetchResult("server_error")
+    assert sync(a, blocking).error_class == "provider" and seen == [a]
+    with pytest.raises(TypeError):
+        sync(a, lambda req: b"raw bytes are not a result")
+
+
+def test_is_due_honours_the_interval_and_the_backoff(monkeypatch):
+    monkeypatch.delenv("ZOE_CALENDAR_FEED_INTERVAL_MIN", raising=False)
+    assert feed.is_due(None, None, NOW) and not feed.is_due("2026-11-30T23:45:00Z", None, NOW)
+    assert feed.is_due("2026-11-30T23:30:00Z", None, NOW) and not feed.is_due(None, "2026-12-01T01:00:00Z", NOW)
 
 
 def _dump(d) -> str:
@@ -627,6 +848,113 @@ def test_fetch_bound_negative_control(db, monkeypatch):
         run(asyncio.wait_for(feed.sync_account(a, hang, run_mode="on", now=NOW, fetch_timeout_s=0.05), 0.3))
 
 
+def _stubborn(release, swallowed, outcome):
+    """An async fetcher that SWALLOWS its cancellation and keeps going until ``release`` is set, then ends with ``outcome``."""
+    async def fetch(req):
+        while True:
+            try:
+                await release.wait()
+                break
+            except asyncio.CancelledError:
+                swallowed.append(1)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    return fetch
+
+
+@needs_ics
+def test_a_fetcher_that_swallows_its_cancellation_is_abandoned_at_the_bound(db, caplog):
+    caplog.set_level(logging.DEBUG)
+    a, b = account(), account("ben", "ben-subject")
+
+    async def scenario():
+        release, swallowed = asyncio.Event(), []
+        try:
+            await steps(release, swallowed)
+        finally:
+            release.set()            # whatever failed above, the stubborn task ends, so the loop's teardown never waits on it
+            for _ in range(100):
+                if not feed._tasks:
+                    break
+                await asyncio.sleep(0.01)
+
+    async def steps(release, swallowed):
+        late = RuntimeError(f"late failure for {SENTINEL}")
+        t0 = time.monotonic()
+        r = await feed.sync_account(a, _stubborn(release, swallowed, late), run_mode="on", now=NOW, fetch_timeout_s=0.05)
+        assert (r.outcome, r.error_class, r.detail) == ("error", "network", "fetch_timeout") and time.monotonic() - t0 < 1
+        for _ in range(50):          # the store calls after the bound need not yield: let the abandoned task see its cancel
+            if swallowed:
+                break
+            await asyncio.sleep(0.01)
+        assert swallowed == [1] and a in feed._outstanding and list(feed._tasks.values()) == [a]   # abandoned, still running
+        calls = []
+        r = await feed.sync_account(a, lambda req: calls.append(1), run_mode="on", now=NOW)
+        assert (r.detail, calls) == ("fetch_outstanding", [])                                       # refused, fetcher not called
+        r = await feed.sync_account(b, Feed(ics(*THREE)), run_mode="on", now=NOW)                  # another feed still syncs
+        assert (r.outcome, r.counts["created"]) == ("ok", 3)
+        release.set()
+        for _ in range(100):
+            if a not in feed._outstanding:
+                break
+            await asyncio.sleep(0.01)
+        assert a not in feed._outstanding and not feed._tasks                                     # the task ended: released
+        r = await feed.sync_account(a, Feed(ics(*THREE)), run_mode="on", now=NOW)
+        assert r.counts["created"] == 3
+    run(scenario())
+    gc.collect()                                                    # an unretrieved task exception is reported on collection
+    text = _logged(caplog)
+    assert "never retrieved" not in text and SENTINEL not in text and "late failure" not in text
+
+
+def test_abandoned_fetches_are_bounded(db, monkeypatch):
+    monkeypatch.setattr(feed, "MAX_ABANDONED_FETCHES", 1)
+    a, b = account(), account("ben", "ben-subject")
+
+    async def scenario():
+        release = asyncio.Event()
+        try:
+            r = await feed.sync_account(a, _stubborn(release, [], feed.FetchResult("server_error")), run_mode="on", now=NOW,
+                                        fetch_timeout_s=0.05)
+            assert r.detail == "fetch_timeout"
+            calls = []
+            r = await feed.sync_account(b, lambda req: calls.append(1), run_mode="on", now=NOW)
+            assert (r.detail, calls) == ("fetch_capacity", [])                                     # at the bound: nothing starts
+        finally:
+            release.set()            # the stubborn task always ends: the loop's teardown never waits on it
+        for _ in range(100):
+            if not feed._tasks:
+                break
+            await asyncio.sleep(0.01)
+        r = await feed.sync_account(b, lambda req: feed.FetchResult("server_error"), run_mode="on", now=NOW)
+        assert (r.error_class, r.detail) == ("provider", None)                                      # below it again: it runs
+    run(scenario())
+
+
+def test_cancellation_swallowing_negative_control(db, monkeypatch):
+    """With the old ``wait_for`` bound, a fetcher that swallows its cancellation holds the sync far past the bound."""
+    async def wait_for_version(awaitable, timeout, account_id):
+        try:
+            return await asyncio.wait_for(awaitable, timeout)
+        except asyncio.TimeoutError:
+            raise feed.FetchTimeout() from None
+    monkeypatch.setattr(feed, "_bounded", wait_for_version)
+    a = account()
+
+    async def scenario():
+        release = asyncio.Event()
+        task = asyncio.ensure_future(feed.sync_account(a, _stubborn(release, [], feed.FetchResult("server_error")),
+                                                       run_mode="on", now=NOW, fetch_timeout_s=0.05))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            return not done
+        finally:
+            release.set()            # lets the held sync finish, so the loop's teardown never waits on it
+            await asyncio.wait({task}, timeout=2)
+    assert run(scenario()) is True                                                                  # still waiting at 10x the bound
+
+
 @needs_ics
 def test_an_oversized_body_is_refused_whatever_its_status_and_nothing_is_written(db, monkeypatch):
     body = ics(*THREE)
@@ -639,3 +967,36 @@ def test_an_oversized_body_is_refused_whatever_its_status_and_nothing_is_written
         assert db.one(f"SELECT COUNT(*) FROM {table}") == 0, table
     monkeypatch.setenv("ZOE_CALENDAR_FEED_MAX_BYTES", str(len(body)))             # negative control: at the cap it is accepted
     assert sync(a, Feed(body)).counts["created"] == 3
+
+
+# -- the log privacy sweep --------------------------------------------------------------------------------------------------------
+
+PLANTED = ("Quillon Marsh", "Tangerine Lane", "Velma Quist", "velma@example.org", "allergy clinic", "calendar.example",
+           "private-token-abc123")
+
+
+def _leaks(caplog):
+    return [m for m in (r.getMessage() for r in caplog.records) if any(p.lower() in m.lower() for p in PLANTED)]
+
+
+@needs_ics
+def test_no_title_place_person_address_or_body_reaches_a_log_line(db, caplog):
+    caplog.set_level(logging.DEBUG)
+    a = account()
+    planted = vevent("secret-uid@example.test", "Quillon Marsh allergy clinic", location="17 Tangerine Lane",
+                     attendees=[("Velma Quist", "velma@example.org")], description="Bring the private-token-abc123 letter")
+    f = Feed(ics(planted, *THREE))
+    sync(a, f)                                                                     # create
+    f.body = ics(planted.replace("SEQUENCE:0", "SEQUENCE:1"), *THREE)
+    sync(a, f)                                                                     # update
+    async def boom():
+        raise ConnectionError("GET https://calendar.example/private-token-abc123 failed for Quillon Marsh")
+    f.before = boom
+    sync(a, f)                                                                     # a fetcher error carrying a URL
+    f.before = None
+    sync(a, Feed(b"<html>Quillon Marsh</html>", content_type="text/html"))
+    assert any("CALENDAR_FEED" in r.getMessage() for r in caplog.records)
+    assert _leaks(caplog) == []
+    # negative control: the sweep sees a planted title when one IS logged
+    logging.getLogger("calendar_feed").info("CALENDAR_FEED title=%s", "Quillon Marsh allergy clinic")
+    assert _leaks(caplog)
