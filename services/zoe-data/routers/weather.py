@@ -12,6 +12,7 @@ Geocoding (location search):
 """
 import lookup_door
 import os
+import panel_principal
 import json
 import logging
 import time
@@ -678,6 +679,7 @@ async def update_default_location(payload: dict, user: dict = Depends(require_ad
 @router.get("/location/search", response_model=dict)
 async def search_locations(query: str = "", limit: int = 8, user: dict = Depends(get_current_user)):
     """Search locations. Uses OpenWeatherMap geocoding (if key set) or Open-Meteo geocoding."""
+    panel_principal._note_actor(user)      # a place typed by a signed-in caller is THEIR lookup (nothing else notes this request's caller)
     lookup_door.check(lookup_door.WEATHER)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     if not query or len(query) < 2:
         return {"results": []}

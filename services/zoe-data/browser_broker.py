@@ -843,6 +843,7 @@ async def execute_text_extraction(
     text_limit: int = 20_000,
 ) -> dict[str, Any]:
     """Run text extraction through the broker's normal plan/execute pipeline."""
+    lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     plan = broker.plan_action(
         action="extract_text",
         params={"url": url, "text_limit": text_limit},
@@ -867,6 +868,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
         return None
 
     async def _execute(plan: BrowserActionPlan) -> dict[str, Any]:
+        lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
         try:
             from cloakbrowser import launch_context_async  # type: ignore[import]
             action_log: list[dict] = []
