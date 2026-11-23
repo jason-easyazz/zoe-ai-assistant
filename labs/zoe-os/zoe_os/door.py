@@ -58,12 +58,18 @@ _ID = re.compile(r"[A-Za-z0-9._:@_-]{1,80}\Z")   # the id shapes Zoe uses: uuids
 @dataclass(frozen=True)
 class Area:
     """One area of the door. ``decide(people, verb, actor, *, via, owner, visibility) -> Decision`` is its whole permission table;
-    ``target`` is the record's key for the id of the thing changed, ``parts`` the key for the ids of its parts (None: it has none)."""
+    ``target`` is the record's key for the id of the thing changed, ``parts`` the key for the ids of its parts (None: it has none).
+
+    ``former``: who ACTS in this area. False (the default, every area but lists): only the CURRENT roster; a member taken off it
+    whom the kernel still holds a record for (kept so they can be forgotten) is nobody here, ``unknown_person``, exactly as a
+    stranger is. True: such a member still acts, with least access (``lists``: the rule main pinned for it before the other
+    areas existed, ``tests/test_roster_sync.py``; changing it is a household decision, not a refactor)."""
     name: str
     verbs: tuple
     decide: Callable
     target: str
     parts: str | None = None
+    former: bool = False
 
 
 def _id(value, *, optional: bool = True) -> str | None:
@@ -88,6 +94,10 @@ class Door:
 
     def __init__(self, spine, enforcer, areas) -> None:
         self.spine, self.enforcer = spine, enforcer
+        #: ``() -> the ids on the CURRENT roster``, or None: everyone in the kernel's people is on it. THIS kernel's own (never a
+        #: module global: two kernels in one process must not read each other's). The shadow daemon installs its own
+        #: (``build``): it keeps a member taken off people.json in the kernel's people while a record names them.
+        self.roster: Callable[[], frozenset] | None = None
         self.areas = {area.name: area for area in areas}
         self.verbs = {verb: area for area in areas for verb in area.verbs}
         if len(self.verbs) != sum(len(area.verbs) for area in areas):
@@ -114,7 +124,7 @@ class Door:
             known = via != PANEL and person in people and not stale
             manifest = self.enforcer.store.manifests.get(skill)
             verdict = Decision(False, NOT_IN_MANIFEST) if manifest is None or verb not in manifest.acts else \
-                spec.decide(people, verb, person, via=via, owner=owner, visibility=visibility)
+                spec.decide(self._acting(people, spec), verb, person, via=via, owner=owner, visibility=visibility)
             if verdict.allowed and owner is not None and owner not in people:
                 # an owner the kernel does not know is not a person it could later FORGET (and no erase mark could order a late
                 # ask against them): their id is never written. Not on the roster = refused, for an owner as for an actor.
@@ -139,6 +149,15 @@ class Door:
 
             record = self.spine._kernel_append(self._event(person if known else None, payload), open_ask)
             return {"ask": opened[0], "seq": record.seq}
+
+    def _acting(self, people: dict, spec: Area) -> dict:
+        """The people an area's table is decided from: the CURRENT roster only, unless the area says a former member still acts
+        (``Area.former``). Every area gets this from here, so no table can forget it. The people map itself (former members
+        kept) still answers "is this owner someone the kernel could forget" (``ask``) and whose record a refusal is."""
+        if spec.former or self.roster is None:
+            return people
+        current = self.roster()
+        return {member: person for member, person in people.items() if member in current}
 
     def report(self, skill: str, ask: int, outcome: str, *, stamps=None) -> dict:
         """Close one open ask of this skill's with what production says happened. Told, never verified: ``verified`` stays False.
