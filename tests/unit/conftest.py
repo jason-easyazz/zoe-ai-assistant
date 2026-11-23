@@ -35,6 +35,8 @@ import pytest
 os.environ["ZOE_OS_SHADOW_DIR"] = tempfile.mkdtemp(prefix="zoe-unit-os-shadow-")
 os.environ["ZOE_OS_LIST_SHADOW"] = "off"
 # shadow-pin-end
+# Never the live Home Assistant bridge: a test whose fake misses the sender must hit a dead port (see zoe-data tests/conftest.py).
+os.environ["ZOE_HA_BRIDGE_URL"] = "http://127.0.0.1:9"
 
 _ZOE_DATA = Path(__file__).resolve().parents[2] / "services" / "zoe-data"
 
