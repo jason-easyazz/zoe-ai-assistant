@@ -632,3 +632,46 @@ def test_nobody_but_a_door_puts_an_ask_to_the_kernel_and_the_service_never_impor
     assert offends("from labs.zoe_os import door\nimport zoe_os.wire\n") == ["labs.zoe_os", "zoe_os.wire"]
     for name in doors:                                          # ... and a door module itself never reaches into the lab
         assert [o for o in offends((SVC / name).read_text("utf-8")) if o.split(".")[0] in ("labs", "zoe_os")] == [], name
+
+
+# ---- an accepted anticipation offer, alarms door off -------------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_with_alarms_off_a_leave_by_offer_reports_its_reminder_as_the_write_returns(door, monkeypatch):
+    """``anticipation.answer`` holds door reports until its block ends ONLY while the alarms door is on (that is the alarms
+    work). With ``ZOE_OS_ALARMS`` off and this door on, a "yes" to a leave-by offer reports its reminder as the reminder write
+    returns, exactly as before alarms had a door. (Review of #2689: the reports were held whatever the alarms flag said.)
+    Control run: with ``answer`` entering ``kernel_door.reports_after()`` whatever the alarms flag, no report is seen inside."""
+    import anticipation
+
+    monkeypatch.delenv("ZOE_OS_ALARMS", raising=False)
+    offer = {"id": "sug-0001", "resolved": anticipation.OPEN, "kind": "leave", "expires": None,
+             "slots": {"start_date": "2099-06-16", "leave_time": "15:00", "label": WORD}}
+
+    async def own_row(conn, uid, row_id):
+        return dict(offer)
+
+    async def offered(conn, uid, slots):
+        return object()
+
+    async def done(*a, **k):
+        return True
+
+    async def users(conn, sql, params):
+        return [(KID, "user", "Kip")]
+
+    for name, fake in (("_own_row", own_row), ("_offered", offered), ("_set", done), ("_edge", done), ("_all", users)):
+        monkeypatch.setattr(anticipation, name, fake)
+    monkeypatch.setattr(anticipation, "_log_outcome", lambda *a, **k: None)
+    seen = {}
+    real = rs.create_reminder_record
+
+    async def create(*a, **k):
+        out = await real(*a, **k)
+        seen["inside"] = [o for _, o in _reports(door, 1, timeout=1.5)]
+        return out
+
+    monkeypatch.setattr(rs, "create_reminder_record", create)
+    reply = await anticipation.answer(KID, "sug-0001", True, db=DB(owner=KID), now=FROZEN)
+    assert reply.startswith("Done - I'll remind you to leave")
+    assert seen["inside"] == ["done"] and [o for _, o in _reports(door, 1)] == ["done"]
+    assert [a["verb"] for a in door.ops("door_ask")] == ["reminder.create"]
