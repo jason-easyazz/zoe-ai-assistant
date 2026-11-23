@@ -46,7 +46,7 @@ starlette==1.10.0
 # it moved, and the real-socket A/B that proved it: see requirements.txt (whose
 # 3.10 rollback lane deliberately stays on 0.49.0 — STEP_UP_DIVERGENCE).
 uvicorn[standard]==0.54.0
-pydantic==2.14.3
+pydantic==2.14.4
 aiosqlite==0.22.1
 asyncpg==0.32.0
 alembic==1.20.1
@@ -119,7 +119,7 @@ joblib==1.5.3
 APScheduler==3.11.3
 tzlocal==5.4.5
 pytz==2026.3
-SQLAlchemy==2.0.57
+SQLAlchemy==2.0.58
 pywebpush==2.5.0
 py-vapid==1.9.6
 # DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
@@ -136,7 +136,7 @@ psutil==7.2.2
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
-livekit==1.2.1
+livekit==1.3.0
 # `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
 # distribution (`livekit-protocol`) that `livekit` does not depend on; it only
 # ever arrived via the unused livekit-agents. CI already installs it by hand
