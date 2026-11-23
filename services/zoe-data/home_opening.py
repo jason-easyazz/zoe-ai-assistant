@@ -8,6 +8,10 @@ closing, locking or arming it - is sent to Home Assistant only for:
   * the panel while a VERIFIED VOICE SESSION is open on it (``voice_session.active_member``), and that member is an adult.
     WHICH panel a caller is comes from ``panel_principal.panel_of`` (device token, kiosk credential or registered address).
 
+A COMMAND THAT REACHES ENTITIES IT DOES NOT NAME is adult-only too (``reaches_unnamed``): the bridge passes a command's data
+to Home Assistant as it is, so an area, a device, a label or a floor in it, an id that is not one plain ``domain.object_id``
+(a comma list, ``all``, a template) and the generic ``homeassistant`` / ``group`` domains could all reach a lock unseen.
+
 RUNNING A SCENE, A SCRIPT OR AN AUTOMATION is the same question (``home_runnables``): one that unlocks or opens anything, one
 Zoe cannot read, and every automation run by hand, is adult-only; one that touches nothing of the kind is for anyone.
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import re
 from typing import Any, Mapping, Optional
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,12 @@ CLOSING = frozenset({"lock", "close", "close_cover", "close_cover_tilt", "close_
                      "alarm_arm_away", "alarm_arm_home", "alarm_arm_night", "alarm_arm_vacation", "alarm_arm_custom_bypass"})
 #: entities that RUN other things: what one does is read from Home Assistant (home_runnables.py)
 RUNNABLE_DOMAINS = frozenset({"scene", "script", "automation"})
+#: a command aimed at anything but plain entity ids reaches entities this check cannot name, so it is adult-only: an area, a
+#: device, a label or a floor in its data, an id that is not one ``domain.object_id`` (a comma list, ``all``, a template), and
+#: the generic ``homeassistant`` / ``group`` domains (their services act on whatever the data names or the group holds)
+SELECTOR_KEYS = frozenset({"area_id", "device_id", "label_id", "floor_id"})
+GENERIC_DOMAINS = frozenset({"homeassistant", "group"})
+_PLAIN_ID = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 #: the caller of THIS turn (chat, voice, the brain's dispatch), noted where the turn's home-control verdict is recorded
 _TURN: contextvars.ContextVar[Optional[Mapping[str, Any]]] = contextvars.ContextVar("zoe_home_opening_turn", default=None)
 
@@ -54,13 +65,30 @@ def _domains(entity_id: Any, data: Any) -> set:
     return {i.partition(".")[0].strip() for i in _ids(entity_id, data)}
 
 
+def _names_a_selector(value: Any, depth: int = 0) -> bool:
+    if isinstance(value, Mapping):
+        return depth > 8 or any(str(k).strip().lower() in SELECTOR_KEYS or _names_a_selector(v, depth + 1) for k, v in value.items())
+    return isinstance(value, (list, tuple, set)) and (depth > 8 or any(_names_a_selector(v, depth + 1) for v in value))
+
+
+def reaches_unnamed(entity_id: Any, data: Any = None) -> bool:
+    """Could this command reach entities it does not name one by one? (See ``SELECTOR_KEYS`` above.)"""
+    ids = _ids(entity_id, data)
+    return (_names_a_selector(data) or not all(_PLAIN_ID.match(i) for i in ids)
+            or bool({i.partition(".")[0] for i in ids} & GENERIC_DOMAINS))
+
+
 async def _runs_adult_only(runnable: list, action: Any) -> bool:
-    """Would this run a scene, script or automation that opens something or cannot be read? One read per entity, cached."""
+    """Would this run a scene, script or automation that opens something or cannot be read? One read per entity, cached,
+    and none after the first adult-only verdict."""
     import home_runnables
 
     if str(action or "").strip().lower() not in home_runnables.RUN_SERVICES:
         return True
-    return any([await home_runnables.verdict(i) != home_runnables.SAFE for i in runnable])
+    for i in runnable:
+        if await home_runnables.verdict(i) != home_runnables.SAFE:
+            return True
+    return False
 
 
 def opens(entity_id: Any, action: Any, data: Any = None) -> bool:
@@ -111,15 +139,16 @@ async def refused(entity_id: Any, action: Any, data: Any = None, *, user: Any = 
     and its caller may not. ``user``: the caller's record (with its
     ``request``, which says which panel it is), or (default) the caller of this turn. One log line, closed codes only: the lane, the domain and the service class, never a name or an id."""
     runnable = [i for i in _ids(entity_id, data) if i.partition(".")[0] in RUNNABLE_DOMAINS]
-    if not runnable and not opens(entity_id, action, data):
+    adult_only = opens(entity_id, action, data) or reaches_unnamed(entity_id, data)
+    if not runnable and not adult_only:
         return False      # an ordinary command: nothing is read, nobody is looked up
     turn = _TURN.get() if user == "turn" else None
     if user == "turn":
         user, request = (turn or {}).get("user"), (turn or {}).get("request")
     if await may_open(user, request, turn):
         return False
-    if not opens(entity_id, action, data) and not await _runs_adult_only(runnable, action):
+    if not adult_only and not await _runs_adult_only(runnable, action):
         return False      # a scene or script that touches no lock, alarm, cover or valve: anyone who may control the house
     logger.warning("HOME_OPENING refused via=%s domain=%s", via or "-",
-                   ",".join(sorted(_domains(entity_id, data) & (SECURE_DOMAINS | RUNNABLE_DOMAINS))))
+                   ",".join(sorted(_domains(entity_id, data) & (SECURE_DOMAINS | RUNNABLE_DOMAINS))) or "unnamed_target")
     return True

@@ -7,7 +7,11 @@ A ``scene.*`` or ``script.*`` is read from Home Assistant through the bridge's r
   * ``opens``      - it unlocks, opens or disarms one (any service or target state that is not lock / close / stop / arm);
   * ``unreadable`` - Zoe cannot tell: the read failed, timed out or was not found (a bridge without the endpoint answers 404),
     the body has a shape this reader does not know, a target or a service is templated, it calls another script, scene or
-    automation, it targets a group, or it calls a service that acts outside entities (a shell command, MQTT ...).
+    automation, it targets a group, or it calls a service this reader does not KNOW to act only on the entities it names
+    (a shell command, MQTT, an integration's own service, a call that names no entity at all ...).
+
+The reader is no stricter than the direct command rule in ``home_opening``: a call to a known domain on a named entity that
+is not a lock, an alarm panel, a cover or a valve is ``safe`` here because the same caller may send it directly.
 
 ``opens`` and ``unreadable`` are both ADULT-ONLY. An ``automation.*`` is always ``unreadable``: no reader is built for one.
 
@@ -30,8 +34,16 @@ SAFE, OPENS, UNREADABLE = "safe", "opens", "unreadable"
 #: the services that run one as it is defined. Any other service on one (apply, create, reload ...) is adult-only unread.
 RUN_SERVICES = frozenset({"turn_on", "turn_off", "toggle"})
 CLOSED_STATES = frozenset({"locked", "locking", "closed", "closing"})      # and every ``armed_*`` state of an alarm panel
-#: service domains that act outside Home Assistant's entities, so what they reach cannot be read from their targets
-OPAQUE_SERVICE_DOMAINS = frozenset({"shell_command", "python_script", "pyscript", "rest_command", "mqtt", "hassio"})
+#: the ONLY service domains a script's call is read for: each acts on the entity ids the call names and nothing else. Any
+#: other domain (shell_command, mqtt, rest_command, zha, zwave_js, an integration's own, one newer than this list) is unreadable.
+ENTITY_SERVICE_DOMAINS = SECURE_DOMAINS | frozenset({
+    "light", "switch", "fan", "media_player", "climate", "humidifier", "water_heater", "vacuum", "siren", "camera", "remote",
+    "lawn_mower", "button", "number", "select", "text", "timer", "counter", "input_boolean", "input_number", "input_select",
+    "input_text", "input_datetime", "input_button", "homeassistant"})
+#: the generic services that act on the named entities in their own domain; every other ``homeassistant.*`` is unreadable
+GENERIC_SERVICES = frozenset({"turn_on", "turn_off", "toggle", "update_entity"})
+#: service domains that reach no entity, so a call to one may name none
+NO_ENTITY_SERVICE_DOMAINS = frozenset({"notify", "tts", "persistent_notification"})
 TTL_S, UNREADABLE_TTL_S, READ_TIMEOUT_S, MAX_ENTRIES = 120.0, 20.0, 3.0, 512
 
 _CACHE: dict[str, tuple[str, float]] = {}
@@ -44,6 +56,17 @@ async def _read(entity_id: str) -> Any:
     async with httpx.AsyncClient(timeout=READ_TIMEOUT_S) as client:
         r = await client.get(f"{base}/definitions/{entity_id}")
         return r.json() if r.status_code == 200 else None
+
+
+def _reads_as_its_targets(service_domain: str, name: str, entity_domain: str) -> bool:
+    """Is this script call one whose whole effect is on the entity it names? Only then can its target decide the verdict."""
+    if not entity_domain:
+        return service_domain in NO_ENTITY_SERVICE_DOMAINS      # no entity named: an area in a field this never saw, or all of them
+    if service_domain in NO_ENTITY_SERVICE_DOMAINS:
+        return True
+    if service_domain == "homeassistant":      # the generic call runs the ENTITY's domain service: that domain must be known too
+        return name in GENERIC_SERVICES and entity_domain in ENTITY_SERVICE_DOMAINS - {"homeassistant"}
+    return service_domain in ENTITY_SERVICE_DOMAINS
 
 
 def classify(body: Any) -> str:
@@ -61,7 +84,9 @@ def classify(body: Any) -> str:
         service_domain, _, name = service.rpartition(".")
         if (entity and not dot) or (service and not service_domain) or not (entity or service):
             return UNREADABLE
-        if {entity_domain, service_domain} & (RUNNABLE_DOMAINS | OPAQUE_SERVICE_DOMAINS | {"group"}):
+        if {entity_domain, service_domain} & (RUNNABLE_DOMAINS | {"group"}):
+            return UNREADABLE
+        if service and not _reads_as_its_targets(service_domain, name, entity_domain):
             return UNREADABLE
         if {entity_domain, service_domain} & SECURE_DOMAINS:
             closing = name in CLOSING_SERVICES if service else (state in CLOSED_STATES or state.startswith("armed_"))

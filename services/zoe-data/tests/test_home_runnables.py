@@ -83,7 +83,7 @@ def reads(house, monkeypatch):
 
 def test_the_verdict_for_each_definition():
     """Control run: with ``unlocked`` added to ``CLOSED_STATES`` ``scene.arrive_home`` reads safe and this fails; with the
-    runnable / group / opaque line dropped from ``classify`` the chained script reads safe and this fails."""
+    runnable / group line dropped from ``classify`` the chained script reads safe and this fails."""
     assert [home_runnables.classify(DEFS[e]) for e in SAFE] == ["safe"] * len(SAFE)
     assert {e: home_runnables.classify(DEFS.get(e)) for e in ADULT_ONLY[:5]} == dict.fromkeys(ADULT_ONLY[:5], "opens")
     assert {home_runnables.classify(DEFS.get(e)) for e in ADULT_ONLY[5:]} == {"unreadable"}
@@ -277,6 +277,10 @@ def real_bridge(house, monkeypatch):
     async def home_assistant(method, endpoint, data=None):
         if endpoint.endswith("ha_is_down"):
             raise bridge.HTTPException(status_code=503, detail="Cannot connect to Home Assistant")
+        if endpoint in HA_FAILS:
+            raise bridge.HTTPException(status_code=HA_FAILS[endpoint], detail="Home Assistant request failed")
+        if endpoint in MORE_HA:
+            return MORE_HA[endpoint]
         if method != "GET" or endpoint not in HA:
             raise bridge.HTTPException(status_code=404, detail="Home Assistant request failed")
         return HA[endpoint]
@@ -347,3 +351,216 @@ async def test_a_bridge_without_the_endpoint_makes_every_scene_adult_only_and_ne
     answers["status"] = 200
     home_runnables._CACHE.clear()                                                                # the bridge was restarted
     assert (await _route(KID, "scene.movie_time"))["ok"] is True
+
+
+# ---- review fixes 2026-11-23: what the reader must not miss -----------------------------------------------------------------------
+def _script(*steps):
+    return {"sequence": list(steps)}
+
+
+def _ui_scene(number, entities, members=("light.hall",)):
+    return {"states/scene.s%d" % number: {"attributes": {"entity_id": list(members), "id": "17000000009%02d" % number}},
+            "config/scene/config/17000000009%02d" % number: {"entities": entities}}
+
+
+_GARAGE = {"action": "homeassistant.turn_on", "data": {"area_id": "garage"}}
+MORE_HA = {
+    # an area, a device, a label or a floor in ``data`` / ``service_data``: Home Assistant resolves it exactly as in ``target``
+    "config/script/config/area_in_data": _script(_GARAGE),
+    "config/script/config/area_in_service_data": _script(
+        {"service": "homeassistant.turn_on", "target": {"entity_id": "light.hall"}, "service_data": {"area_id": ["garage"]}}),
+    "config/script/config/device_in_data": _script({"action": "homeassistant.toggle", "data": {"device_id": "abc123"}}),
+    "config/script/config/label_in_data": _script({"action": "homeassistant.turn_on", "data": {"label_id": "doors"}}),
+    "config/script/config/floor_in_data": _script({"action": "homeassistant.turn_on", "data": {"floor_id": "ground"}}),
+    "config/script/config/templated_area": _script({"action": "homeassistant.turn_on", "data": {"area_id": "{{ where }}"}}),
+    "config/script/config/area_beside_an_entity": _script(
+        {"action": "homeassistant.turn_on", "data": {"entity_id": "light.hall", "area_id": "garage"}}),
+    "config/script/config/area_deep_in_data": _script(
+        {"action": "homeassistant.turn_on", "data": {"entity_id": "light.hall", "target": {"area_id": "garage"}}}),
+    "config/script/config/area_in_a_nest": _script({"choose": [{"conditions": [], "sequence": [
+        {"if": [], "then": [{"repeat": {"count": 1, "sequence": [{"parallel": [{"sequence": [_GARAGE]}]}]}}]}]}]}),
+    # both blocks are sent: the lock in the second one was never read
+    "config/script/config/lock_in_the_second_block": _script(
+        {"action": "homeassistant.turn_on", "data": {"entity_id": "light.hall"}, "service_data": {"entity_id": "lock.front_door"}}),
+    "config/script/config/two_names_for_a_call": _script({"action": "notify.send_message", "service": "lock.unlock"}),
+    "config/script/config/whole_data_templated": _script({"action": "homeassistant.turn_on", "data": "{{ what }}"}),
+    "config/script/config/whole_target_templated": _script({"action": "cover.open_cover", "target": "{{ what }}"}),
+    "config/script/config/service_template": _script({"service_template": "{{ what }}", "entity_id": "light.hall"}),
+    "config/script/config/data_template": _script(
+        {"service": "homeassistant.turn_on", "data_template": {"entity_id": "{{ which }}"}}),
+    "config/script/config/templated_in_a_list": _script({"action": "light.turn_on", "target": {"entity_id": ["light.hall", "{{ x }}"]}}),
+    "config/script/config/entity_all": _script({"action": "homeassistant.turn_off", "entity_id": "all"}),
+    "config/script/config/toggles_a_lock": _script({"action": "homeassistant.toggle", "target": {"entity_id": "lock.front_door"}}),
+    "config/script/config/runs_a_script_by_name": _script({"action": "script.let_in"}),
+    "config/script/config/turns_on_a_script": _script({"action": "script.turn_on", "target": {"entity_id": "script.let_in"}}),
+    "config/script/config/turns_on_a_scene": _script({"action": "scene.turn_on", "target": {"entity_id": "scene.arrive_home"}}),
+    "config/script/config/applies_a_scene": _script({"action": "scene.apply", "data": {"entities": {"lock.front_door": "unlocked"}}}),
+    "config/script/config/triggers_an_automation": _script({"action": "automation.trigger", "entity_id": "automation.morning"}),
+    "config/script/config/generic_on_an_automation": _script({"action": "homeassistant.turn_on", "entity_id": "automation.morning"}),
+    "config/script/config/a_group": _script({"action": "homeassistant.turn_on", "entity_id": "group.all_doors"}),
+    "config/script/config/names_no_entity": _script({"action": "homeassistant.turn_on"}),
+    "config/script/config/radio_command": _script({"action": "zha.issue_zigbee_cluster_command", "data": {"ieee": "00:11:22"}}),
+    "config/script/config/own_service": _script({"action": "womble.release", "target": {"entity_id": "light.hall"}}),
+    "config/script/config/generic_on_an_unknown_domain": _script({"action": "homeassistant.turn_on", "entity_id": "womble.gate"}),
+    "config/script/config/restarts": _script({"action": "homeassistant.restart"}),
+    "config/script/config/from_a_blueprint": {"use_blueprint": {"path": "womble/gate.yaml", "input": {"door": "lock.front_door"}}},
+    "config/script/config/waits_for_a_trigger": _script({"wait_for_trigger": [{"platform": "state", "entity_id": "light.hall"}]}),
+    # scenes: the config read is the only place a target state comes from
+    "states/scene.config_gone": {"attributes": {"entity_id": ["light.hall"], "id": "1700000000801"}},
+    "states/scene.config_slow": {"attributes": {"entity_id": ["light.hall"], "id": "1700000000802"}},
+    "states/scene.config_errors": {"attributes": {"entity_id": ["light.hall"], "id": "1700000000803"}},
+    "states/scene.config_denied": {"attributes": {"entity_id": ["light.hall"], "id": "1700000000804"}},
+    **_ui_scene(1, ["light.hall"]),                                                       # entities is not a mapping
+    **_ui_scene(2, None),
+    "states/scene.s3": {"attributes": {"entity_id": ["light.hall"], "id": "1700000000903"}},
+    "config/scene/config/1700000000903": {"name": "No entities key"},
+    "states/scene.s4": {"attributes": {"entity_id": ["light.hall"], "id": "1700000000904"}},
+    "config/scene/config/1700000000904": ["not", "a", "mapping"],
+    **_ui_scene(5, {"light.hall": {"state": "on"}, "cover.garage_door": {"state": "closed", "current_position": 100}}),
+    **_ui_scene(6, {"cover.blind": {"state": "closed", "current_tilt_position": "{{ 100 }}"}}),
+    **_ui_scene(7, {"light.hall": {"state": "on"}, "lock.front_door": {"state": "unlocked"}}),      # the state names no lock
+    **_ui_scene(8, {"cover.blind": {"state": "closed", "current_position": 0, "current_tilt_position": 0.0}}),
+}
+HA_FAILS = {"config/scene/config/1700000000801": 404, "config/scene/config/1700000000802": 408,
+            "config/scene/config/1700000000803": 500, "config/scene/config/1700000000804": 401}
+SELECTOR_SCRIPTS = ["script.area_in_data", "script.area_in_service_data", "script.device_in_data", "script.label_in_data",
+                    "script.floor_in_data", "script.templated_area", "script.area_beside_an_entity", "script.area_deep_in_data",
+                    "script.area_in_a_nest"]
+FAILED_SCENE_READS = ["scene.config_gone", "scene.config_slow", "scene.config_errors", "scene.config_denied", "scene.s1", "scene.s2",
+                      "scene.s3", "scene.s4"]
+#: read in full, and what they do opens something
+READ_AS_OPENING = ["script.lock_in_the_second_block", "script.toggles_a_lock", "scene.s5", "scene.s6", "scene.s7"]
+#: everything else an action can hold that reaches further than the entities it names
+OTHER_UNREADABLE = ["script.two_names_for_a_call", "script.whole_data_templated", "script.whole_target_templated",
+                    "script.service_template", "script.data_template", "script.templated_in_a_list", "script.entity_all",
+                    "script.runs_a_script_by_name", "script.turns_on_a_script", "script.turns_on_a_scene", "script.applies_a_scene",
+                    "script.triggers_an_automation", "script.generic_on_an_automation", "script.a_group", "script.names_no_entity",
+                    "script.radio_command", "script.own_service", "script.generic_on_an_unknown_domain", "script.restarts",
+                    "script.from_a_blueprint", "script.waits_for_a_trigger"]
+
+
+async def _verdicts(bridge, entities):
+    out = {}
+    for entity in entities:
+        home_runnables._CACHE.clear()
+        out[entity] = (await bridge.get_definition(entity)).get("readable"), await home_runnables.verdict(entity)
+    return out
+
+
+async def test_an_area_device_label_or_floor_anywhere_in_a_call_is_unreadable(real_bridge, house):
+    """Blocking finding 1: the reader looked for a selector in ``target`` only, so ``homeassistant.turn_on`` with
+    ``data: {area_id: garage}`` read as a call that names nothing and ran for a child. Fails on the old reader (all nine
+    read ``safe``). Control run: with the two ``_names_a_selector`` tests dropped from the bridge's ``_script_calls`` the three
+    that also name a light read safe and this fails (the six that name no entity are then still held by the classifier's
+    no-entity rule, the second lock on the same door; the bridge-alone test below fails for all nine)."""
+    assert await _verdicts(real_bridge, SELECTOR_SCRIPTS) == dict.fromkeys(SELECTOR_SCRIPTS, (False, "unreadable"))
+    for entity in SELECTOR_SCRIPTS:
+        with pytest.raises(HTTPException) as exc:
+            await _route(KID, entity)
+        assert exc.value.status_code == 403
+    assert house["sent"] == []
+
+
+async def test_the_bridge_alone_refuses_a_selector_in_data(real_bridge):
+    """The bridge's half of finding 1 with nothing behind it: the body it returns. Control run: with the two
+    ``_names_a_selector`` tests dropped from ``_script_calls`` every one of these is ``readable: true``."""
+    for entity in SELECTOR_SCRIPTS:
+        assert await real_bridge.get_definition(entity) == {"readable": False, "reason": "target_kind"}, entity
+
+
+async def test_a_scene_whose_config_cannot_be_read_is_unreadable(real_bridge, house):
+    """Blocking finding 2: a failed config read became "members with unknown states", so a scene whose reported members are
+    lights read as safe whatever its config holds. A 404, a timeout (the bridge's 408), a 500, a 401 and a body without an
+    ``entities`` mapping are all unreadable. Fails on the old reader (seven of the eight read ``safe``). Controls run: with the
+    config read wrapped in ``try / except HTTPException: config = {"entities": {}}`` the four failed reads are safe again;
+    with the ``config_shape`` refusal replaced by an empty mapping ``scene.s1`` to ``scene.s4`` read safe."""
+    assert await _verdicts(real_bridge, FAILED_SCENE_READS) == dict.fromkeys(FAILED_SCENE_READS, (False, "unreadable"))
+    reasons = {e: (await real_bridge.get_definition(e))["reason"] for e in FAILED_SCENE_READS}
+    assert [reasons[e] for e in FAILED_SCENE_READS[:4]] == ["home_assistant_404", "home_assistant_408", "home_assistant_500",
+                                                            "home_assistant_401"]
+    assert {reasons[e] for e in FAILED_SCENE_READS[4:]} == {"config_shape"}
+    with pytest.raises(HTTPException):
+        await _route(KID, "scene.config_gone")
+    assert house["sent"] == []
+
+
+async def test_what_else_a_definition_can_hold_is_read_or_is_unreadable(real_bridge, house):
+    """Everything else checked in review that reaches a lock, a cover, a valve or an alarm without naming it: a second data
+    block, two names for one call, a templated block / service / list entry, ``entity_id: all``, another script, scene or
+    automation however it is called, a group, a call that names no entity, an integration's own service, the generic call on
+    a domain this does not know, a blueprint, an unknown step; a scene that gives a "closed" cover a position, and a lock the
+    scene's state does not list. Old reader: ``lock_in_the_second_block``, ``two_names_for_a_call``, ``names_no_entity``,
+    ``radio_command``, ``own_service``, ``generic_on_an_unknown_domain``, ``restarts``, ``scene.s5`` and ``scene.s6`` read safe.
+    Controls run: with ``service_data``'s ids dropped from ``_script_calls`` the second-block lock reads safe; with
+    ``_scene_state`` ignoring positions ``scene.s5`` reads safe; with ``_reads_as_its_targets`` answering True the radio
+    command reads safe."""
+    assert await _verdicts(real_bridge, READ_AS_OPENING) == dict.fromkeys(READ_AS_OPENING, (True, "opens"))
+    got = await _verdicts(real_bridge, OTHER_UNREADABLE)
+    assert {e: v for e, (_, v) in got.items()} == dict.fromkeys(OTHER_UNREADABLE, "unreadable")
+    assert await _verdicts(real_bridge, ["scene.s8"]) == {"scene.s8": (True, "safe")}       # a closed blind at position 0
+    for entity in READ_AS_OPENING + OTHER_UNREADABLE:
+        with pytest.raises(HTTPException):
+            await _route(KID, entity)
+    assert (await _route(KID, "scene.s8"))["ok"] is True and [s[1] for s in house["sent"]] == ["scene.s8"]
+
+
+def test_a_call_this_reader_does_not_know_is_unreadable():
+    """The classifier alone, whatever bridge is behind it: a script call is read only when its service is KNOWN to act on
+    the entities it names. Control run: with ``_reads_as_its_targets`` answering True every one of these reads safe."""
+    unknown = [("", "homeassistant.turn_on"), ("", "light.turn_on"), ("", "cover.close_cover"), ("", "mqtt.publish"),
+               ("", "zha.issue_zigbee_cluster_command"), ("", "zwave_js.set_value"), ("light.hall", "womble.release"),
+               ("", "homeassistant.restart"), ("light.hall", "homeassistant.reload_all"), ("womble.gate", "homeassistant.turn_on"),
+               ("homeassistant.x", "homeassistant.turn_on"), ("", "conversation.process"), ("", "rest_command.gate")]
+    assert {(e, s): home_runnables.classify(_acts((e, s, ""))) for e, s in unknown} == dict.fromkeys(unknown, "unreadable")
+    known = [("light.hall", "homeassistant.turn_off"), ("", "notify.send_message"), ("", "tts.speak"), ("light.hall", "light.toggle"),
+             ("lock.front_door", "lock.lock"), ("input_boolean.away", "input_boolean.turn_on")]
+    assert {home_runnables.classify(_acts(k + ("",))) for k in known} == {"safe"}
+    assert home_runnables.classify(_acts(("lock.front_door", "homeassistant.toggle", ""))) == "opens"
+    assert home_runnables.classify(_acts(("cover.blind", "homeassistant.turn_off", ""))) == "opens"
+
+
+async def test_reading_stops_at_the_first_adult_only_target(reads, house):
+    """One command naming several runnables: nothing is read after the first adult-only verdict. Fails on the old code
+    (three reads). Control run: with ``_runs_adult_only`` back to ``any([... for i in runnable])`` this reads all three."""
+    params = {"entity_id": ["script.let_in", "scene.movie_time", "scene.arrive_home"]}
+    with pytest.raises(HTTPException):
+        await _route(KID, "scene.movie_time", "turn_on", params)
+    assert reads == ["scene.movie_time", "script.let_in"] and house["sent"] == []
+    assert await home_opening.refused("light.hall", "turn_on", {"entity_id": ["scene.leaving", "scene.movie_time"]}, user=KID) is False
+
+
+UNNAMED = [("scene.movie_time", {"area_id": "hall"}), ("script.goodnight", {"device_id": "abc123"}),
+           ("scene.movie_time", {"label_id": ["doors"]}), ("scene.movie_time", {"floor_id": "ground"}),
+           ("scene.movie_time", {"target": {"area_id": "hall"}}), ("light.kitchen_lamp", {"area_id": "garage"}),
+           ("homeassistant.anything", {"entity_id": "light.kitchen_lamp"}), ("group.all_doors", None),
+           ("light.kitchen_lamp", {"entity_id": "light.a, cover.garage_door"}), ("light.kitchen_lamp", {"entity_id": "all"}),
+           ("light.kitchen_lamp", {"entity_id": ["light.a", "{{ which }}"]}), ("light.kitchen_lamp", {"entity_id": {"a": 1}}),
+           ("scene.movie_time,scene.arrive_home", None)]
+
+
+@pytest.mark.parametrize("entity, params", UNNAMED)
+async def test_a_command_that_reaches_entities_it_does_not_name_is_adult_only(reads, house, entity, params):
+    """The same hole at the SENDERS: the bridge passes a command's data straight to Home Assistant, so a harmless scene run
+    with ``area_id`` in its params ran every scene in the area, and the generic ``homeassistant`` domain with a comma list
+    reached a cover. A selector anywhere in the data, an id that is not one plain ``domain.object_id``, and the generic
+    ``homeassistant`` / ``group`` domains are adult-only, at the route and at the brain's tool, and nothing is read for them.
+    Fails on the old code (every one was sent for the child). Control run: with ``reaches_unnamed`` answering False every
+    case is sent for the child."""
+    for caller in NOBODY:
+        with pytest.raises(HTTPException) as exc:
+            await _route(caller or {}, entity, "turn_on", params)
+        assert exc.value.status_code == 403 and exc.value.detail == home_opening.REFUSAL
+        home_opening.note_turn(caller)
+        assert (await zoe_agent._ha_control(entity, "turn_on", params)).get("status") == "refused"
+    assert house["sent"] == [] and reads == []
+    assert (await _route(MEMBER, entity, "turn_on", params))["ok"] is True and len(house["sent"]) == 1
+
+
+async def test_a_plain_command_with_ordinary_data_is_still_for_everyone(reads, house):
+    """The other side of the rule above: brightness, a temperature, a plain list of lights. Control run: with
+    ``reaches_unnamed`` answering True the child's lamp is refused."""
+    for params in (None, {}, {"brightness_pct": 80}, {"entity_id": ["light.a", "light.b"]}, {"entity_id": "LIGHT.A "},
+                   {"rgb_color": [255, 0, 0]}, {"value": 21}):
+        assert (await _route(KID, "light.kitchen_lamp", "turn_on", params))["ok"] is True
+    assert (await _route(KID, "climate.den", "set_temperature", {"temperature": 21.5}))["ok"] is True
+    assert reads == [] and len(house["sent"]) == 8

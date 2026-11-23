@@ -567,6 +567,7 @@ _STEP_NOISE = frozenset({"alias", "enabled", "continue_on_error", "metadata", "r
                          "while", "until", "for_each"})
 
 
+_SELECTOR_KEYS = frozenset({"area_id", "device_id", "label_id", "floor_id"})
 _DEFINITION_ID = re.compile(r"^(scene|script)\.[a-z0-9_]+$")
 
 
@@ -589,6 +590,27 @@ def _entity_ids(value: Any) -> List[str]:
     return [_plain(i) for i in items]
 
 
+def _names_a_selector(value: Any, depth: int = 0) -> bool:
+    """Does this call data name an area, a device, a label or a floor anywhere in it? Home Assistant resolves those to
+    entities this reader cannot see, in ``data`` and ``service_data`` exactly as in ``target``."""
+    if depth > 8:
+        raise _Unreadable("data_shape")
+    if isinstance(value, dict):
+        return any(str(k).strip().lower() in _SELECTOR_KEYS or _names_a_selector(v, depth + 1) for k, v in value.items())
+    return isinstance(value, list) and any(_names_a_selector(v, depth + 1) for v in value)
+
+
+def _scene_state(target: Any) -> str:
+    """The state a scene sets one member to, or "" when it is not known. A member given a position that is not 0 is not
+    known to be closed whatever its ``state`` says: Home Assistant moves a cover or a valve to the position."""
+    if isinstance(target, dict):
+        for key, value in target.items():
+            if "position" in str(key).lower() and (isinstance(value, bool) or not isinstance(value, (int, float)) or value != 0):
+                return ""
+        target = target.get("state")
+    return target.strip().lower() if isinstance(target, str) else ""
+
+
 def _script_calls(steps: Any, depth: int = 0) -> List[Dict[str, str]]:
     """Every service call in a script's sequence as {"service", "entity_id"} (entity_id "" when the call names none)."""
     if depth > 8 or not isinstance(steps, list):
@@ -598,15 +620,20 @@ def _script_calls(steps: Any, depth: int = 0) -> List[Dict[str, str]]:
         if not isinstance(step, dict):
             raise _Unreadable("step_shape")
         keys = set(step) - _STEP_NOISE
+        if "action" in step and "service" in step:
+            raise _Unreadable("call_shape")      # two names for one call: which one runs is not this reader's guess
         service = step.get("action", step.get("service"))
         if service is not None:
             if keys - {"action", "service", "target", "data", "entity_id", "service_data"}:
-                raise _Unreadable("call_shape")
-            target = step.get("target") or {}
-            data = step.get("data") or step.get("service_data") or {}
-            if not isinstance(target, dict) or not isinstance(data, dict) or set(target) - {"entity_id"}:
-                raise _Unreadable("target_kind")      # a device, an area, a label or a floor: which entities is not knowable here
-            ids = _entity_ids(target.get("entity_id")) + _entity_ids(step.get("entity_id")) + _entity_ids(data.get("entity_id"))
+                raise _Unreadable("call_shape")      # service_template, data_template, a call mixed with a block ...
+            target, data, service_data = (step.get(k) if step.get(k) is not None else {} for k in ("target", "data", "service_data"))
+            if not all(isinstance(block, dict) for block in (target, data, service_data)):
+                raise _Unreadable("target_kind")      # a whole block that is a template or a list
+            if set(target) - {"entity_id"} or _names_a_selector(data) or _names_a_selector(service_data):
+                raise _Unreadable("target_kind")      # a device, an area, a label or a floor, wherever it is written:
+            #                                           which entities that reaches is not knowable here
+            ids = (_entity_ids(target.get("entity_id")) + _entity_ids(step.get("entity_id"))
+                   + _entity_ids(data.get("entity_id")) + _entity_ids(service_data.get("entity_id")))
             calls += [{"service": _plain(service), "entity_id": e} for e in (ids or [""])]
         elif keys and keys <= _NO_OP_STEPS:
             continue
@@ -646,13 +673,14 @@ async def get_definition(entity_id: str):
             raise _Unreadable("no_members")
         states: Dict[str, str] = {}
         if attrs.get("id"):      # a scene made in the UI: its configured target states. Without it the members alone are returned.
-            try:
-                config = await ha_bridge._make_request("GET", f"config/scene/config/{quote(str(attrs['id']), safe='')}")
-            except HTTPException:
-                config = None      # not readable: every member is returned with an unknown target state
-            for member, target in (config.get("entities") or {}).items() if isinstance(config, dict) else ():
-                value = target.get("state") if isinstance(target, dict) else target
-                states[str(member).lower()] = value.strip().lower() if isinstance(value, str) else ""
+            # A read that fails, times out or is not a 200 raises here and the whole scene is unreadable (never "members
+            # with unknown states": the config may name members the state does not).
+            config = await ha_bridge._make_request("GET", f"config/scene/config/{quote(str(attrs['id']), safe='')}")
+            entities = config.get("entities") if isinstance(config, dict) else None
+            if not isinstance(entities, dict):
+                raise _Unreadable("config_shape")
+            for member, target in entities.items():
+                states[_plain(member)] = _scene_state(target)
         return {"readable": True, "actions": [{"entity_id": m, "service": "", "state": states.get(m, "")}
                                               for m in sorted(set(members) | set(states))]}
     except _Unreadable as exc:
