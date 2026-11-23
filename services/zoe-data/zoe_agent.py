@@ -1617,6 +1617,12 @@ async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> 
 
     if panel_principal.home_control_refused(f"agent ha_control {action}"):   # home control on a turn (2026-10-18)
         return {"error": panel_principal.HOME_CONTROL_REFUSAL}
+    import home_opening
+
+    # Unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. (The Zoe OS kernel's
+    # home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    if await home_opening.refused(entity_id, action, data, via="brain_tool"):
+        return {"error": home_opening.REFUSAL, "status": "refused"}
     body = {"entity_id": entity_id, "action": action, "data": data or {}}
     try:
         async with httpx.AsyncClient(timeout=_TOOL_TIMEOUT) as client:
