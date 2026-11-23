@@ -44,9 +44,16 @@ def _mask(value):
     return value
 
 
+class Row(dict):
+    """A row read by column name or by position (as both drivers' rows are)."""
+
+    def __getitem__(self, key):
+        return list(self.values())[key] if isinstance(key, int) else dict.__getitem__(self, key)
+
+
 class _Cur:
     def __init__(self, rows):
-        self.rows = rows
+        self.rows = [Row(r) for r in rows]
 
     async def fetchone(self):
         return self.rows[0] if self.rows else None
@@ -141,6 +148,15 @@ def _wire(log):
         if hasattr(module, "datetime"):
             _set(module, "datetime", _Clock)
     _set(reminder_scan, "datetime", _Clock)
+    import anticipation
+    import commitments
+    import omi_review_apply
+    import panel_review_cards
+    import pending_suggestions
+
+    for module in (anticipation, commitments, omi_review_apply, panel_review_cards, pending_suggestions):
+        if getattr(module, "datetime", None) is datetime:          # the class (a module that imports ``datetime`` the module keeps it)
+            _set(module, "datetime", _Clock)
 
     async def actor(db, name, args, ctx):
         return {"user_id": (ctx or {}).get("user_id", OWNER), "role": "user"}
@@ -152,7 +168,18 @@ def _wire(log):
         yield DB(log)
 
     _set(mcp_server, "_pg_get_db", pg)
+
+    @contextlib.asynccontextmanager
+    async def compat():
+        yield _DB_OF[0]
+
+    import db_compat
+
+    _set(db_compat, "get_compat_db", compat)     # the pendant review and the panel cards open their own handle: this one
     return rest, mcp_server
+
+
+_DB_OF: list = [None]
 
 
 def _user(who):
@@ -184,6 +211,45 @@ def scenarios():
         _set(intent_router, "_load_direct_execution_user", user)
         return await intent_router.execute_intent(
             intent_router.Intent("reminder_create", {"title": WORD, "date": "2099-06-16", "time": "15:00"}), OWNER)
+
+    async def anticipation_leave(rest, mcp, db):
+        """A "yes" to Zoe's offer of a leave-by reminder (``anticipation._do``, kind ``leave``)."""
+        import anticipation
+
+        offer = {"kind": "leave", "slots": {"start_date": "2099-06-16", "leave_time": "15:00", "label": WORD}}
+        return list(await anticipation._do(db, OWNER, offer, None, FROZEN))
+
+    async def commitment_late(rest, mcp, db):
+        """A promise that came due unkept (``commitments._make_reminder``): a reminder a minute out, its own job at +45 s."""
+        import commitments
+
+        return await commitments._make_reminder(db, OWNER, WORD, FROZEN)
+
+    async def pendant_review(rest, mcp, db):
+        """An approved pendant candidate (``omi_review_apply.write_reminder``), on the handle it opens itself."""
+        import omi_review_apply
+
+        candidate = {"id": "cand_bar_0001_womble", "day_local": "2099-06-15",
+                     "payload": {"title": WORD, "date": "2099-06-16", "time": "15:00"}}
+        return await omi_review_apply.write_reminder(OWNER, candidate, "panel")
+
+    async def panel_card(rest, mcp, db):
+        """"Remind me" on an open-loop card (``panel_review_cards.loop_to_reminder``), then the loop is closed."""
+        import panel_review_cards
+
+        return await panel_review_cards.loop_to_reminder(OWNER, {"id": "loop_bar_0001", "text": WORD}, "2099-06-16", "15:00")
+
+    async def suggestion(rest, mcp, db):
+        """An accepted reminder offer (``pending_suggestions._execute_action`` -> ``_create_suggested_reminder``), its
+        after-commit steps run as the accept route runs them once the transaction has committed."""
+        import pending_suggestions
+
+        after: list = []
+        made = await pending_suggestions._execute_action(
+            db, "reminder_create", {"title": WORD, "due_date": "2099-06-16", "due_time": "15:00"}, OWNER, after)
+        for later in after:
+            await later(db)
+        return [made, len(after)]
 
     weekly = {"recurring_pattern": "FREQ=WEEKLY;BYDAY=MO", "due_date": "2026-06-08"}
     return {
@@ -226,6 +292,13 @@ def scenarios():
         "tool_snooze_another_members_row": ({}, tool("reminder_snooze", OTHER, minutes=5)),
         # the spoken path
         "spoken_create": ({}, spoken),
+        # the automatic makers, each through its own function (the one that names the door)
+        "maker_anticipation_leave": ({}, anticipation_leave),
+        "maker_commitment_late": ({}, commitment_late),
+        "maker_pendant_review": ({"user_id": OTHER}, pendant_review),      # no earlier row of this candidate: it is made
+        "maker_pendant_review_retry_finds_its_row": ({}, pendant_review),
+        "maker_panel_card": ({}, panel_card),
+        "maker_suggestion": ({}, suggestion),
     }
 
 
@@ -241,26 +314,31 @@ def _isolated() -> None:
             raise RuntimeError(f"reminders scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
 
 
-def run_all() -> dict:
+def run_one(name: str) -> list:
+    """One scenario's record (from reset state)."""
     _isolated()
-    out = {}
-    for name, (row, call) in scenarios().items():
-        log: list = []
-        rest, mcp = _wire(log)
-        db = DB(log, **row)
-        try:
-            result = asyncio.run(call(rest, mcp, db))
-            log.append(["returned", _mask(json.loads(json.dumps(result, default=str)))])
-        except Exception as exc:  # noqa: BLE001 - a refusal is part of the record
-            # an HTTP error is recorded with its detail (the door's own words); any other exception by its TYPE only: the
-            # interpreter's message for the same fault differs between Python versions (3.10 and 3.12 word UnboundLocalError
-            # differently), and it is the fault, not its wording, that main and this branch must share
-            detail = _mask(str(exc.detail)) if hasattr(exc, "detail") else type(exc).__name__
-            log.append(["raised", getattr(exc, "status_code", None), detail])
-        finally:
-            _restore()
-        out[name] = json.loads(json.dumps(log, default=str))
-    return out
+    row, call = scenarios()[name]
+    log: list = []
+    rest, mcp = _wire(log)
+    db = DB(log, **row)
+    _DB_OF[0] = db
+    try:
+        result = asyncio.run(call(rest, mcp, db))
+        log.append(["returned", _mask(json.loads(json.dumps(result, default=str)))])
+    except Exception as exc:  # noqa: BLE001 - a refusal is part of the record
+        # an HTTP error is recorded with its detail (the door's own words); any other exception by its TYPE only: the
+        # interpreter's message for the same fault differs between Python versions (3.10 and 3.12 word UnboundLocalError
+        # differently), and it is the fault, not its wording, that main and this branch must share
+        detail = _mask(str(exc.detail)) if hasattr(exc, "detail") else type(exc).__name__
+        log.append(["raised", getattr(exc, "status_code", None), detail])
+    finally:
+        _restore()
+        _DB_OF[0] = None
+    return json.loads(json.dumps(log, default=str))
+
+
+def run_all() -> dict:
+    return {name: run_one(name) for name in scenarios()}
 
 
 if __name__ == "__main__":
