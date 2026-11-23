@@ -20,7 +20,12 @@ from urllib.parse import urlsplit
 
 from calendar_scenarios import _plain, _restore, _set
 
-ANN = "ann-0001"
+ANN = "ann-0001"                 # an ADULT by the (faked) account record: unlocking or opening is hers to ask (home_opening.py)
+KIP = "member-kip"               # a child
+GUEST = {"user_id": "guest", "role": "guest"}
+PANEL = "panel-demo-0001"
+BARE_PANEL = {**GUEST, "panel_id": PANEL}      # the shared panel with nobody identified
+GARAGE = {"entity_id": "cover.garage_door", "state": "closed", "attributes": {"friendly_name": "Garage door"}}
 PLAYERS = [
     {"player_id": "ply0001", "display_name": "Kitchen speaker", "name": "Kitchen speaker", "available": True, "powered": True,
      "state": "playing", "volume_level": 40, "type": "player", "active_source": "ply0001", "group_childs": [], "can_group_with": [],
@@ -72,7 +77,18 @@ class World:
         self.log, self.ha_post, self.ma_status, self.fail = log, (200, {"message": "Successfully executed"}), 200, ""
         self.ma_silent = False                 # True: Music Assistant has no speakers playing (music then goes through the house)
         self.ma_answers = dict(MA_ANSWERS)     # Music Assistant's answer per command (a scenario can add or change one)
+        self.ha_answers = dict(HA_ANSWERS)     # the bridge's answer per read path (a scenario can change one)
+        self.adults = {ANN}                    # who the account record says is an adult
+        self.voice_sessions: dict = {}         # panel id -> the member whose verified voice session is open on it
         world = self
+        import manner_block
+        import voice_session
+
+        async def account_is_adult(user_id, db=None):
+            return user_id in world.adults
+
+        _set(manner_block, "_account_is_adult", account_is_adult)      # no account store here: the record is the world's
+        _set(voice_session, "active_member", lambda panel: world.voice_sessions.get(panel))
 
         class Client:
             def __init__(self, *a, **k) -> None:
@@ -107,7 +123,7 @@ class World:
             return _Response(self.ma_status, self.ma_answers.get(command))
         if method == "POST":
             return _Response(*self.ha_post)
-        return _Response(200, HA_ANSWERS.get(parts.path, {}))
+        return _Response(200, self.ha_answers.get(parts.path, {}))
 
 
 def _quiet(module, *names):
@@ -152,11 +168,41 @@ def scenarios() -> dict:
             return await music_intent(name, **slots)(w)
         return run
 
-    def home(**payload):
+    def home(who=None, session=None, **payload):
         async def run(w):
             from routers import ha_control
 
-            return await ha_control.ha_control(ha_control.HAControlPayload(**payload), caller={"user_id": ANN, "role": "user"})
+            w.voice_sessions.update(session or {})
+            return await ha_control.ha_control(ha_control.HAControlPayload(**payload), caller=dict(who or {"user_id": ANN, "role": "user"}))
+        return run
+
+    def on_a_turn_of(who, call):
+        """Run ``call`` as a chat / voice turn of ``who`` (a caller record, or None for no turn at all): the turn's entry point
+        notes its caller for the opening rule (``home_opening.note_turn``). Put back afterwards, so nothing leaks to the next."""
+        async def run(w):
+            import home_opening
+
+            token = home_opening._TURN.set(None)
+            try:
+                if who is not None:
+                    home_opening.note_turn(dict(who))
+                return await call(w)
+            finally:
+                home_opening._TURN.reset(token)
+        return run
+
+    def with_a_garage_door_listed(call):
+        """The worst case for a spoken command: a bridge that lists a garage door among the switches."""
+        async def run(w):
+            w.ha_answers["/switches"] = {"switches": [*HA_ANSWERS["/switches"]["switches"], GARAGE]}
+            return await call(w)
+        return run
+
+    def helper_set(entity_id, on):
+        async def run(w):
+            import smart_home_service
+
+            return await smart_home_service.set_device(entity_id, on)
         return run
 
     def home_down(status=None, fail="", **payload):
@@ -183,6 +229,9 @@ def scenarios() -> dict:
 
             return await zoe_agent._ha_control(entity_id, action, data)
         return run
+
+    adult, child = {"user_id": ANN, "role": "user"}, {"user_id": KIP, "role": "user"}
+    said_garage = with_a_garage_door_listed(said_home("turn_on", "garage door"))
 
     async def tool_home_offline(w):
         w.fail = "/devices/control"
@@ -236,8 +285,19 @@ def scenarios() -> dict:
         "home_screen_off": home(entity_id="light.hall_lamp", action="off"),
         "home_screen_toggle_a_switch": home(entity_id="switch.kettle_plug", action="toggle"),
         "home_screen_scene": home(domain="scene", service="turn_on", entity_id="scene.movie_time"),
+        # HOME: unlocking or opening (home_opening.py). Each exists BOTH ways: by an actor main allows (an adult member; the
+        # panel while an adult's verified voice session is open on it), where the SEND is pinned, and by one main refuses (the
+        # bare panel, a guest, a child, no turn at all), where the REFUSAL is pinned and nothing is sent.
         "home_screen_open_a_cover": home(entity_id="cover.garage_door", action="open"),
+        "home_screen_open_a_cover_bare_panel": home(who=BARE_PANEL, entity_id="cover.garage_door", action="open"),
         "home_screen_unlock": home(entity_id="lock.front_door", action="unlock"),
+        "home_screen_unlock_guest": home(who=GUEST, entity_id="lock.front_door", action="unlock"),
+        "home_screen_unlock_child": home(who=child, entity_id="lock.front_door", action="unlock"),
+        "home_screen_unlock_bare_panel": home(who=BARE_PANEL, entity_id="lock.front_door", action="unlock"),
+        "home_screen_unlock_panel_adult_voice_session": home(who=BARE_PANEL, session={PANEL: ANN}, entity_id="lock.front_door", action="unlock"),
+        "home_screen_unlock_panel_child_voice_session": home(who=BARE_PANEL, session={PANEL: KIP}, entity_id="lock.front_door", action="unlock"),
+        "home_screen_lock_bare_panel": home(who=BARE_PANEL, entity_id="lock.front_door", action="lock"),      # locking: anyone
+        "home_screen_close_a_cover_guest": home(who=GUEST, entity_id="cover.garage_door", action="close"),    # closing: anyone
         "home_screen_media_pause": home(entity_id="media_player.lounge", action="pause"),
         "home_screen_no_entity": home(action="turn_on"),
         "home_screen_bridge_refuses": home_down(status=500, entity_id="light.kitchen_lamp", action="turn_on"),
@@ -249,7 +309,18 @@ def scenarios() -> dict:
         "home_spoken_scene": said_home("activate_scene", "movie time"),
         "home_spoken_nothing_matches": said_home("turn_on", "nothing like it"),
         "home_tool_turn_on": tool_home("light.kitchen_lamp", "turn_on", {"brightness_pct": 50}),
-        "home_tool_unlock": tool_home("lock.front_door", "unlock"),
+        "home_tool_unlock": on_a_turn_of(adult, tool_home("lock.front_door", "unlock")),
+        "home_tool_unlock_bare_panel": on_a_turn_of(BARE_PANEL, tool_home("lock.front_door", "unlock")),
+        "home_tool_unlock_child": on_a_turn_of(child, tool_home("lock.front_door", "unlock")),
+        "home_tool_unlock_no_turn": on_a_turn_of(None, tool_home("lock.front_door", "unlock")),
+        "home_tool_lock_guest": on_a_turn_of(GUEST, tool_home("lock.front_door", "lock")),
+        "home_spoken_open_a_cover": on_a_turn_of(adult, said_garage),
+        "home_spoken_open_a_cover_guest": on_a_turn_of(GUEST, said_garage),
+        "home_spoken_open_a_cover_no_turn": on_a_turn_of(None, said_garage),
+        # the device helper under the spoken path (its own backstop; the resolver's refusal comes first when it is reached)
+        "home_helper_open_a_cover": on_a_turn_of(adult, helper_set("cover.garage_door", True)),
+        "home_helper_open_a_cover_bare_panel": on_a_turn_of(BARE_PANEL, helper_set("cover.garage_door", True)),
+        "home_helper_lamp_guest": on_a_turn_of(GUEST, helper_set("light.kitchen_lamp", True)),
         "home_tool_bridge_offline": tool_home_offline,
     }
 
