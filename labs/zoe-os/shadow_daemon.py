@@ -395,6 +395,10 @@ def build(state: Path):
     # music and home control act only for the CURRENT roster: a member taken off it stays in the kernel's people (forgettable)
     # and must control nothing (``music_door.roster``; ``apply_roster`` replaces ``srv.roster`` on each re-read)
     music_door.roster = lambda: srv.roster
+    # Only the CURRENT roster acts at the door (``door.Area.former``; lists keeps main's rule): a member taken off people.json
+    # stays in the kernel's people (forgettable) and changes nothing of anyone's. Per kernel: this server's roster, which
+    # ``apply_roster`` replaces on each re-read.
+    k.door.roster = lambda: srv.roster
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
