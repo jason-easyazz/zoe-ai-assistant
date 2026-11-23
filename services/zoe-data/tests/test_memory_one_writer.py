@@ -377,3 +377,106 @@ def test_a_mutating_method_refuses_a_call_that_does_not_say_who_is_acting():
         asyncio.run(memory_service.MemoryService.review.unwrapped(svc, "row0001", decision="edit", actor="a", acting="member-ann"))
     assert memory_actor.check(memory_actor.AUTOMATIC) is memory_actor.AUTOMATIC
     assert memory_actor.check(memory_actor.Member("member-ann")).user_id == "member-ann"
+
+
+# ---- the tracked Python OUTSIDE the service that calls it (maintenance / performance scripts, labs) --------------------------------
+REPO = SVC.parents[1]
+#: how a caller outside the service names the automatic actor (a script imports from the zoe-data path at run time)
+AUTOMATIC_SPELLINGS = {"memory_actor.AUTOMATIC", "__import__('memory_actor').AUTOMATIC"}
+#: the same method names on something that is NOT the memory service, by exact site WITH A COUNT: (file, function, method) -> calls
+SCRIPTS_NOT_THE_SERVICE = {
+    ("scripts/perf/zmb/arms/zma.py", "ingest", "ingest"): 2,          # the Z0 arm's own ingest (self.z0.ingest)
+    ("scripts/perf/zmb/bakeoff_measure.py", "start", "ingest"): 1,    # a benchmark arm's ingest (self.arm.ingest)
+    ("scripts/perf/zmb/bakeoff_measure.py", "finish", "ingest"): 1,
+    ("scripts/perf/zmb/bakeoff_measure.py", "phase_latency", "ingest"): 1,
+}
+#: the files outside the service whose calls are checked (the scan must not go quiet: a file that stops being found fails)
+SERVICE_CALLERS_OUTSIDE = {
+    "labs/memory-claims-lab/run_baseline.py", "scripts/maintenance/forget_command_rows_audit.py",
+    "scripts/maintenance/guest_memory_report.py", "scripts/maintenance/identity_memory_audit.py",
+    "scripts/maintenance/memory_prompt_packet_measure.py", "scripts/maintenance/mempalace_baseline.py",
+    "scripts/maintenance/restore_memories_from_export.py", "scripts/perf/recall_gate_replay.py", "scripts/perf/zmb/arms/z0.py",
+}
+
+
+def _tracked_python_outside_the_service():
+    """``(repo-relative path, source)`` of every tracked Python file outside ``services/zoe-data`` that names the memory service
+    (tests aside: their calls default to automatic in the test configuration). ``git ls-files`` when there is a checkout, else
+    every ``.py`` under ``scripts/``, ``labs/`` and ``tools/``."""
+    import re
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "--", "*.py"], cwd=REPO, capture_output=True, check=True, timeout=30)
+        files = [f for f in out.stdout.decode("utf-8").split("\0") if f]
+    except Exception:  # noqa: BLE001 - no git (a sold box): the same directories, read from disk
+        files = [p.relative_to(REPO).as_posix() for top in ("scripts", "labs", "tools") for p in sorted((REPO / top).rglob("*.py"))]
+    for rel in sorted(files):
+        parts = rel.split("/")
+        if rel.startswith("services/zoe-data/") or "tests" in parts or parts[-1].startswith("test_") or parts[-1] == "conftest.py" \
+                or ".venv" in parts or "node_modules" in parts:
+            continue
+        path = REPO / rel
+        if not path.is_file():
+            continue
+        text = path.read_text("utf-8", errors="replace")
+        if re.search(r"\bmemory_service\b|get_memory_service|MemoryService", text):
+            yield rel, text
+
+
+def script_acting_faults(source: str, rel: str) -> Counter:
+    """``{(file, function, method): calls}`` of the mutating calls in a caller outside the service that do not say they are
+    AUTOMATIC (no ``acting=``, or anything else passed: nothing a script does is a member asking)."""
+    import memory_writers
+
+    faults: Counter = Counter()
+
+    def walk(node, fn):
+        for child in ast.iter_child_nodes(node):
+            inner = fn
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner = child.name if not fn else f"{fn}.{child.name}"
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr in memory_writers.MUTATING:
+                given = next((ast.unparse(k.value) for k in child.keywords if k.arg == "acting"), None)
+                if given not in AUTOMATIC_SPELLINGS:
+                    faults[(rel, fn, child.func.attr)] += 1
+            walk(child, inner)
+
+    walk(ast.parse(source), "")
+    return faults
+
+
+def test_every_call_outside_the_service_says_it_is_automatic():
+    """The maintenance and performance scripts and the labs that call the memory service pass ``memory_actor.AUTOMATIC`` on
+    every mutating call (the service refuses a call that does not say; a script passing a member would be a script acting as
+    a person). Other-store calls of the same names are exempt by exact site and count. Control runs: ``acting=`` dropped from
+    ``scripts/maintenance/guest_memory_report.py``'s ``erase_rows`` fails this; the same call passing
+    ``memory_actor.member(owner)`` fails it; ``acting=`` dropped from the lab's ``ingest`` (``labs/memory-claims-lab``) fails it;
+    ``SERVICE_CALLERS_OUTSIDE`` losing a file (the scan gone quiet) fails it."""
+    faults: Counter = Counter()
+    callers = set()
+    for rel, text in _tracked_python_outside_the_service():
+        import memory_writers
+
+        if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in memory_writers.MUTATING
+               for n in ast.walk(ast.parse(text))):
+            callers.add(rel)
+        faults.update(script_acting_faults(text, rel))
+    for key, n in SCRIPTS_NOT_THE_SERVICE.items():
+        assert faults.get(key, 0) >= n, f"{key}: {faults.get(key, 0)} calls, the exemption names {n}"
+        faults[key] -= n
+    assert {k: n for k, n in faults.items() if n} == {}
+    assert callers - {k[0] for k in SCRIPTS_NOT_THE_SERVICE} == SERVICE_CALLERS_OUTSIDE
+
+
+def test_the_outside_scan_sees_a_missing_or_wrong_actor():
+    src = '''
+async def ok(svc):
+    await svc.erase_rows("u", ["a"], actor="x", acting=__import__("memory_actor").AUTOMATIC)
+    await svc.ingest("t", user_id="u", acting=memory_actor.AUTOMATIC)
+async def missing(svc):
+    await svc.erase_rows("u", ["a"], actor="x")
+async def member(svc):
+    await svc.review("r", decision="archive", actor="x", acting=memory_actor.member("u"))
+'''
+    assert script_acting_faults(src, "s.py") == Counter({("s.py", "missing", "erase_rows"): 1, ("s.py", "member", "review"): 1})
