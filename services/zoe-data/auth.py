@@ -496,6 +496,8 @@ async def resolve_acting_user(request: Request) -> dict:
                 "role": "user",
                 "username": override,
                 "permissions": [],
+                # Not a sign-in: a trusted caller ASSERTS this id (speaker_verdict.typed_verdict gives such a turn no verdict).
+                "internal_override": True,
             }
         if _is_internal_request(request):
             logger.warning(
