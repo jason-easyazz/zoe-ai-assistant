@@ -8,12 +8,15 @@ from __future__ import annotations
 from memory_scenarios import ANN, BEN, NEW, OLD, OTHER, World, _set, _setenv
 
 
-async def _entry(w: World, awaitable):
+async def _entry(w: World, awaitable, keep: bool = True):
+    """Run one entry point; what it returned or raised goes in the record (``keep=False``: the caller records the return itself)."""
     try:
         out = await awaitable
     except Exception as exc:  # noqa: BLE001 - what the entry point raised is part of the record
         w.log.append(["entry-raised", type(exc).__name__, str(exc)[:120]])
         return None
+    if not keep:
+        return out
     if hasattr(out, "status_code") and hasattr(out, "body"):     # an HTTP response object: its status and body, not its address
         w.log.append(["entry-returned", {"status_code": out.status_code, "body": bytes(out.body).decode("utf-8", "replace")}])
         return out
