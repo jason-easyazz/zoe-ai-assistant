@@ -632,6 +632,16 @@ async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime, asked_as: 
     raise ValueError(f"unknown offer kind {kind!r}")
 
 
+def _alarm_reports_held():
+    """With the ALARMS door on, a Zoe OS door reached from ``answer`` (the alarm, or the reminder, a "yes" makes) reports only once
+    its block has ended. With it off, nothing is held: every other door reports as it did before alarms had a door (a reminder's
+    report goes out as its write returns). One flag read."""
+    import kernel_door
+    import os_shadow
+
+    return kernel_door.reports_after() if os_shadow.area_on("alarms") else contextlib.nullcontext()
+
+
 async def answer(user_id: str, suggestion_id: str, accept: bool, *, now: Optional[datetime] = None, db: Any = None) -> str:
     """Act on a yes / record a no. Always returns what to say; never claims a write that did not land."""
     uid = (user_id or "").strip()
@@ -643,11 +653,9 @@ async def answer(user_id: str, suggestion_id: str, accept: bool, *, now: Optiona
     # who a Zoe OS alarms ask is from, made BEFORE the offer is read below: its erase stamps must not be newer than those reads
     asked_as = _alarms_door.Viewer(user_id=uid)
     try:
-        import kernel_door
-
-        # a Zoe OS door reached from here (the alarm or the reminder a "yes" makes) reports only once this block has ended:
-        # never while the connection, or a transaction a caller holds on it, could still undo the row. Doors off: a flag read.
-        async with kernel_door.reports_after(), _conn(db) as conn:
+        # alarms door on: a Zoe OS door reached from here (the alarm or the reminder a "yes" makes) reports only once this block
+        # has ended, never while the connection, or a transaction a caller holds on it, could still undo the row
+        async with _alarm_reports_held(), _conn(db) as conn:
             r = await _own_row(conn, uid, suggestion_id)
             if r is None or r["resolved"] != OPEN:
                 return STALE
