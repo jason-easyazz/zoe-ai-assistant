@@ -1,18 +1,22 @@
 """Routines: ONE module writes the four tables, and nothing its entry points do has changed against ``main``.
 
-``tests/fixtures/routines_as_on_main.json`` is the record of ``main`` (b2bbe84ca), made by running
-``tests/routines_scenarios.py`` against an export of that commit under its own test configuration, never by this branch's
-code: for each scenario, what every call returned or refused and the four tables as they stand at the end, every column
-of every row (read from the schema, not listed). The same
-scenarios run here and must give the same record.
+``tests/fixtures/routines_as_on_main.json`` is the record of ``main`` (c1a350458), made by running
+``tests/routines_scenarios.py`` against an export of that commit under its own test configuration (HOME and every store path
+in a scratch directory), never by this branch's code: for each scenario, AFTER EVERY CALL, what it returned or refused, the four
+tables (every column of every row, read from the schema, not listed), what the routines modules logged, and after a spoken
+turn the walk state. The clocks and the minted ids are frozen, nothing is masked. The same scenarios run here and must give the
+same record.
 
-Covered (36): creating a routine (own, for a child by an adult, family, a guest, a family routine with a medicine line);
+Covered (49): creating a routine (own, for a child by an adult, family, a guest, a family routine with a medicine line);
 adding a template step and a one-off as the subject, another member, the child subject of a routine an adult set up, the adult
 creator, a family member, a guest, for a past day; tapping done / skip / snooze / undo as the subject, another member, the
 child, the adult creator, the bare panel on a family and on a personal routine, a medicine line unverified, verified and by
-someone else; the said tick (the one step just named, then nothing named, then another member); a member erase; and the
-conversation tier's walk ("what's next?", "done", "skip", "yep"), a bare "yep", a one-off against a timed reminder, another
-member.
+someone else; the said tick (the one step just named, then nothing named, then another member); the readers as each viewer; a
+member erase, an entity erase directly and through the forget cascade's own routines step; and the conversation tier, every
+path through its own code: the walk ("what's next?", "done", "skip", "yep"), "start my ... routine" (and with nothing left),
+the spoken undo, "I'm off" with one take-with line and with several, a medicine line by voice unverified and verified, "what's
+left?" / "later" / "stop", a walk another tier ended, chat, the shadow mode, a bare "yep", a one-off against a timed reminder,
+another member.
 
 The one-writer scan is over every module of the service, its ``scripts/`` and ``alembic/`` included, and the repository's
 ``scripts/``, no file or directory exempt: a statement that writes ``routines``, ``routine_steps``, ``routine_days`` or
@@ -22,7 +26,14 @@ exact count).
 Negative controls run (each broke the code, saw the named test fail, restored): a medicine line ticked unverified ->
 ``tap_medicine_unverified_refused``; the family fridge rule dropped -> ``tap_family_by_the_panel``; a one-off allowed for a
 past day -> ``one_off_past_day_refused``; the said tick's refusal code changed -> ``said_with_nothing_named``; an ``UPDATE
-routine_day_steps`` planted in ``routines_tier.py`` -> the one-writer test.
+routine_day_steps`` planted in ``routines_tier.py`` -> the one-writer test. Round 3 (each through the tier's own code): ``_start``'s
+reply words -> ``tier_start_done_then_spoken_undo``; ``_start`` reading tomorrow's day copy -> ``tier_start_when_all_done``;
+``_leaving`` taking every kind of line, and ``_speak_many`` naming a line without ``note_named`` -> ``tier_leaving_one_line``;
+the spoken undo's reply -> ``tier_start_done_then_spoken_undo``; the unverified medicine reply not re-naming the line ->
+``tier_medicine_spoken``; chat no longer counted as verified -> ``tier_chat_walk``; ``turn_begins`` never closing the walk ->
+``tier_walk_ends_when_another_tier_answers``; the walk entry's clock moved (in-memory state only, same reply) and a store log
+event renamed -> ``tier_walk``; the shadow claim inverted for "start" -> ``tier_shadow_writes_nothing``; a guest shown a personal
+routine -> ``readers_by_viewer``.
 """
 from __future__ import annotations
 
@@ -43,6 +54,20 @@ DOOR = "routines_store.py"
 
 #: what the scenarios REACHED in ``routines_store`` while ``here`` ran them: {writing function: {(module, function) that called it}}
 REACHED: dict = {}
+_OWNERS: dict = {}
+
+
+def _owner(path: Path, line: int) -> str:
+    """The OUTERMOST function (or method) of the module holding ``line``: the name ``door_callers.entry_points`` gives a call site,
+    so a call made from a closure (the forget cascade's ``routines_`` inside ``_clear``) is matched to its site."""
+    import ast
+
+    import door_callers
+
+    if path not in _OWNERS:
+        tree = ast.parse(path.read_text("utf-8"))
+        _OWNERS[path] = [(fn.lineno, fn.end_lineno, name) for name, fn in door_callers._top_functions(tree)]
+    return next((name.split(".")[-1] for a, b, name in _OWNERS[path] if a <= line <= b), "<module>")
 
 
 def store_writers() -> set:
@@ -68,11 +93,12 @@ def here():
 
         def spy(*a, _real=real, _name=name, **k):
             frame = sys._getframe(1)
+            path = Path(frame.f_code.co_filename).resolve()
             try:
-                where = Path(frame.f_code.co_filename).resolve().relative_to(ROOT).as_posix()
+                where = path.relative_to(ROOT).as_posix()
             except ValueError:
                 where = "<elsewhere>"
-            REACHED.setdefault(_name, set()).add((where, frame.f_code.co_name))
+            REACHED.setdefault(_name, set()).add((where, _owner(path, frame.f_lineno) if where != "<elsewhere>" else frame.f_code.co_name))
             return _real(*a, **k)
 
         setattr(routines_store, name, functools.wraps(real)(spy))
@@ -83,17 +109,14 @@ def here():
             setattr(routines_store, name, real)
 
 
-_TIER = "routines_tier.py"
 #: every (module, function, writing function of ``routines_store``) the CODE holds that the scenarios RUN through that function
-#: is found by the spy; these are the ones they do NOT run, each with why. Exact, so the list cannot grow unseen.
-_ERASER = "an eraser's call: the store function itself is recorded (forget_user / erase_entity_own_routines_only), the eraser around it is not"
-_TIER_GAP = "A TIER PATH WITH NO SCENARIO YET (found in review by reading the code; the store function it calls is recorded)"
+#: is found by the spy; these are the ones they do NOT run, each with why. Exact, so the list cannot grow unseen. Every tier path
+#: and the forget cascade's routines step ARE run (each through its own code); only the whole-member erase and the card's API are not.
+_DELETE_USER = ("the whole-member erase (MemoryService.delete_user) runs some thirty stores before this one and needs the memory "
+                "service's own database: its routines call is the store's forget_user, recorded by the forget_user scenario")
 _CARD_API = "the card's API, new with this PR: main has no such route to compare with; pinned by tests/test_routines_card_api.py"
 SITES_NOT_RUN = {
-    ("memory_service.py", "delete_user", "forget_user"): _ERASER,
-    ("memory_forget_cascade.py", "_clear", "erase_entity"): _ERASER,
-    (_TIER, "_bare", "note_named"): _TIER_GAP, (_TIER, "_bare", "undo_said"): _TIER_GAP, (_TIER, "_leaving", "day_copy"): _TIER_GAP,
-    (_TIER, "_speak_many", "note_named"): _TIER_GAP, (_TIER, "_start", "day_copy"): _TIER_GAP, (_TIER, "_start", "note_named"): _TIER_GAP,
+    ("memory_service.py", "delete_user", "forget_user"): _DELETE_USER,
     ("routers/routines.py", "act", "act_tapped"): _CARD_API, ("routers/routines.py", "today", "day_copy"): _CARD_API,
 }
 
@@ -103,12 +126,17 @@ def test_the_fixture_covers_every_scenario(here):
     from its code; every public one is reached by a scenario (``undo_said`` and ``erase_entity`` were not: each now has one).
     Every function elsewhere that names one is either run by a scenario (the spy saw that function make the call) or listed in
     ``SITES_NOT_RUN`` with its reason; a new caller fails here until a scenario runs it or it is listed.
+    The tier's call sites are no longer exempt: each is RUN by a scenario through the tier's own code (``_start``, ``_leaving``,
+    ``_speak_many``, the spoken undo and the unverified re-name in ``_bare``), and so is the forget cascade's routines step; a
+    call made from a closure is matched to the outermost function holding it, as ``door_callers`` names the site.
     Controls run: a new writing function ``async def sneak(): await _delete_routines(None, [])`` in ``routines_store.py`` fails
     this naming it (never reached); a new ``async def sneak(): await routines_store.undo_said("s", "m", verified=True)`` in
-    ``routines_tier.py`` fails it as a caller neither run nor listed."""
+    ``routines_tier.py`` fails it as a caller neither run nor listed; the spy keyed on the calling frame's own name again (no
+    outermost-function mapping) fails it with the cascade's ``_clear`` site not run; the cascade's ``want("routines")`` misspelt
+    (its routines step never runs) fails it the same way."""
     import door_callers
 
-    assert set(ON_MAIN) == set(scenarios.scenarios()) and len(ON_MAIN) >= 38
+    assert set(ON_MAIN) == set(scenarios.scenarios()) and len(ON_MAIN) >= 49
     writers = store_writers()
     public = {w for w in writers if not w.startswith("_")}
     assert len(public) >= 10 and sorted(public - set(REACHED)) == []
@@ -117,12 +145,25 @@ def test_the_fixture_covers_every_scenario(here):
     not_run = {site for site in sites if (site[0], site[1]) not in REACHED.get(site[2], set())}
     assert not_run == set(SITES_NOT_RUN), {"not run, not listed": sorted(not_run - set(SITES_NOT_RUN)),
                                            "listed, but run or gone": sorted(set(SITES_NOT_RUN) - not_run)}
-    assert len(sites - not_run) >= 6                               # ... and the tier's main paths ARE run
+    assert len(sites - not_run) >= 13                              # ... and the tier's paths and the cascade's step ARE run
+    tier = {site for site in sites if site[0] == "routines_tier.py"}
+    assert len(tier) >= 12 and not tier & not_run                  # every call site of the tier, by execution
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))
 def test_every_routines_entry_point_does_exactly_what_it_did_on_main(here, name):
     assert here[name] == ON_MAIN[name]
+
+
+def _end(record: list, table: str) -> list:
+    """The rows of ``table`` at the end of a scenario (``[table, *row]``)."""
+    ends = [e for e in record if e[0] == "rows at the end"]
+    assert len(ends) == 1
+    return [row for row in ends[0][1] if row[0] == table]
+
+
+def _replies(record: list) -> list:
+    return [e[2] for e in record if e[0] == "say"]
 
 
 def test_the_record_shows_the_rows_and_the_refusals_not_only_the_replies(here):
@@ -131,17 +172,60 @@ def test_the_record_shows_the_rows_and_the_refusals_not_only_the_replies(here):
     tier's record holds Zoe's words. Controls run: the snooze length written changed (``SNOOZE_MIN`` 15 -> 16) ->
     ``tap_snooze_subject`` and ``tap_done_undo_snooze_done`` fail; the one-off's ``created_via`` written as ``"spoken"`` instead
     of ``"voice"`` -> ``tier_one_off_and_timed_reminder`` fails (neither column was recorded before)."""
-    done = [e for e in here["tap_medicine_verified"] if e[0] == "routine_day_steps"][0]
+    done = [e for e in _end(here["tap_medicine_verified"], "routine_day_steps")][0]
     assert done[5:14] == ["take the tablets", "medicine", 1, "done", None, "tapped", scenarios.ALEX, 1, 0]
-    snoozed = [e for e in here["tap_snooze_subject"] if e[0] == "routine_day_steps"][0]       # every column: snooze_until ...
+    snoozed = _end(here["tap_snooze_subject"], "routine_day_steps")[0]                        # every column: snooze_until ...
     assert snoozed[8:10] == ["snoozed", "2026-11-12T07:45:00+00:00"]
-    one_off = [e for e in here["tier_one_off_and_timed_reminder"] if e[0] == "routine_day_steps"][0]   # ... and created_via
-    assert one_off[4] == "one_off" and one_off[15] == "voice" and len(one_off) == 1 + 17
-    assert ["tap", "refused", "unverified", 403] in here["tap_medicine_unverified_refused"] or \
-        any(e[:3] == ["tap", "refused", "unverified"] for e in here["tap_medicine_unverified_refused"])
+    one_off = [e for e in _end(here["tier_one_off_and_timed_reminder"], "routine_day_steps") if e[4] == "one_off"][0]  # ... created_via
+    assert one_off[15] == "voice" and len(one_off) == 1 + 17
+    assert ["tap", "refused", "unverified", 403] in here["tap_medicine_unverified_refused"]
     assert any(e[:3] == ["tap", "refused", "not_found"] for e in here["tap_other_refused"])
-    assert [e[2] for e in here["tier_walk"] if e[0] == "say"][:2] == ["Next: brush teeth.", "Ticked. Next: pack the bag."]
-    assert not [e for e in here["forget_user"] if e[0] == "routines" and scenarios.ALEX in e]
+    assert _replies(here["tier_walk"])[:2] == ["Next: brush teeth.", "Ticked. Next: pack the bag."]
+    kept = _end(here["forget_user"], "routines")
+    assert kept and all(row[1:].count(scenarios.ALEX) == 0 for row in kept)                 # Riley's stays, with no trace of Alex
+
+
+def test_rows_are_recorded_after_every_call_not_only_at_the_end(here):
+    """Every call of every scenario is followed by the four tables as they then stood (finding: in ``done -> undo -> snooze ->
+    done`` a wrong value written by the undo was overwritten before the only record). Control run: the undo writing
+    ``actor_user_id = NULL`` (``None if _guest(actor) else actor`` -> ``None``) only on the undo -> ``tap_done_undo_snooze_done``
+    fails although the end state is the same."""
+    for name, record in here.items():
+        calls = sum(1 for e in record if e[0] in ("say", "day_copy") or (len(e) > 1 and e[1] in ("returned", "refused")))
+        assert calls and sum(1 for e in record if e[0] == "rows") >= calls, name
+    steps = here["tap_done_undo_snooze_done"]
+    after = [steps[i + 1] for i, e in enumerate(steps) if e[0] == "tap"]
+    assert len(after) == 4 and all(e[0] == "rows" and e[1] != "unchanged" for e in after)
+    undone = [row for row in after[1][1] if row[0] == "routine_day_steps"][0]
+    assert undone[8] == "pending" and undone[11] == scenarios.ALEX             # the undo's own row, before the snooze overwrote it
+
+
+def test_no_scenario_stops_short_or_fails_inside_the_tier(here):
+    """A fixture captured on a broken path would pin the breakage: every scenario reaches its end (no "no day copy"), nothing the
+    routines modules logged is a warning or an error (the tier swallows its exceptions: its failure is only a log line), and each
+    tier path answered the way its scenario says (so main's record is of the path, not of a step-aside). Control run: ``_summary``
+    raising inside the tier (swallowed, logged as a warning) fails this."""
+    for name, record in here.items():
+        assert ["no day copy"] not in record, name
+        assert not [e for e in record if e[0] == "logged" and e[2] not in ("INFO", "DEBUG")], name
+    assert _replies(here["tier_start_done_then_spoken_undo"]) == [
+        "Morning: 2 things. First, brush teeth.", "Ticked. Next: pack the bag.", "OK, it's back on the list: brush teeth.", None, None,
+        "Morning: 2 things. First, brush teeth."]
+    assert _replies(here["tier_start_when_all_done"]) == ["That's your morning routine done."]
+    assert _replies(here["tier_leaving_one_line"])[1:] == ["Before you go: take the drill.", "Ticked. Next: brush teeth."]
+    assert _replies(here["tier_leaving_several_lines"])[2:] == ["Before you go: take the drill and pack the umbrella.",
+                                                                "Which one: take the drill or pack the umbrella?", None]
+    medicine = _replies(here["tier_medicine_spoken"])
+    assert medicine[1].startswith("I can only tick take the tablets") and medicine[2] == "Ticked. Next: pack the bag."
+    assert _replies(here["tier_whats_left_snooze_stop"])[0].startswith("3 things left") and "OK." in _replies(here["tier_whats_left_snooze_stop"])
+    assert _replies(here["tier_walk_ends_when_another_tier_answers"]) == ["Next: brush teeth.", None]
+    assert _replies(here["tier_chat_walk"])[:2] == ["Next: brush teeth.", "Ticked. Next: pack the bag."]
+    assert set(_replies(here["tier_shadow_writes_nothing"])) == {None}
+    assert any("shadow would=next" in e[3] for e in here["tier_shadow_writes_nothing"] if e[0] == "logged")
+    cascade = here["erase_entity_by_the_forget_cascade"]
+    own = [row[4] for row in _end(cascade, "routine_steps") if row[2] == "<id1>"]              # Alex's routine (its first id)
+    assert ["cascade failed", []] in cascade and own == ["pack the bag"]                     # "teeth" went from Alex's routine only
+    assert [row for row in _end(cascade, "routine_steps") if row[2] != "<id1>" and "brush teeth" in row]
 
 
 REPO = ROOT.parents[1]
