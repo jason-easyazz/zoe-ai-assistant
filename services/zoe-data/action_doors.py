@@ -12,6 +12,9 @@ THREE KINDS OF COMMAND, by the closed verb it maps to (never by a device's or a 
             neither delay nor refuse them (``os_shadow.record_door``).
   * SECURE  anything that could open the house: a lock or a cover, and any act but closing it. ALWAYS ASKED FIRST, and a
             kernel that is down or slow means NO (``HomeRefused("unavailable")``). The one place "kernel down" refuses.
+            The door does NOT replace the service's own adults-only check (``home_opening.refused``, on whatever this flag
+            says): each sender runs that check first, and a command it refuses is never sent and never reaches this door.
+            Both must agree before anything that opens the house is sent.
   * the rest  asked first; a refusal is final; kernel down or slow = the command proceeds, logged ``not_checked``.
 
 Only ids and closed codes cross: the verb, the acting member's id (or the panel), the speaker's or entity's id. Never a name.
@@ -95,15 +98,26 @@ SECURE_CLASSES = ("lock", "cover")
 def home_verb(path: str, body: dict) -> tuple[str, str]:
     """``(verb, entity id)`` of a bridge command. The class is the entity id's DOMAIN (the part before the dot), the act is the
     service asked for; anything this does not know is ``other`` / ``set`` (asked first, and ``set`` on a lock or cover is
-    treated as opening it)."""
+    treated as opening it). A service's own target (``data.entity_id``, one id or several) overrides the path's, so a command
+    that names a lock or a cover THERE is asked about as that lock or cover (as ``home_opening.opens`` reads it): never as the
+    lamp in the path, which a kernel that is down would let through. Never raises."""
     import home_control
 
     if path == home_control.SCENE:
         return "scene.on", str(body.get("scene_id") or "")
     entity = str(body.get("entity_id") or "")
-    cls = _CLASS_OF.get(entity.partition(".")[0], "other")
-    act = _ACT_OF.get(str(body.get("action") or ""), "set")
+    cls = _class_of(entity)
+    data = body.get("data")
+    extra = data.get("entity_id") if isinstance(data, dict) else None
+    for other in (extra if isinstance(extra, (list, tuple, set)) else [extra]):
+        if other and _class_of(str(other)) in SECURE_CLASSES and cls not in SECURE_CLASSES:
+            entity, cls = str(other), _class_of(str(other))
+    act = _ACT_OF.get(str(body.get("action") or "").strip().lower(), "set")
     return f"{cls}.{act}", entity
+
+
+def _class_of(entity_id: str) -> str:
+    return _CLASS_OF.get(entity_id.partition(".")[0].strip().lower(), "other")
 
 
 def home_secure(verb: str) -> bool:

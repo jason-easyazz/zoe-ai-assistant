@@ -49,10 +49,28 @@ a child speaking at the panel is held to the panel's rule, not their own level: 
 
 "Kernel down means NO" is true ONLY for the secure kind. It is the one place in Zoe where an unreachable kernel refuses.
 
+**The service's own adults-only check stays on, whatever the flag says.** Since #2715 zoe-data itself sends a command that
+unlocks or opens only for an adult member, or for the panel while an adult's verified voice session is open on it
+(`home_opening.py`): the bare panel, a guest and a child are refused. The home door does not replace that check. Each sender
+runs it first and the door (in `home_control.send`) is asked only for a command it let through, so with `ZOE_OS_HOME=kernel`
+BOTH must agree before anything that opens the house is sent:
+
+| The service's check | The kernel | Result |
+|---|---|---|
+| refuses | not asked, and told nothing (the command never reaches the door) | not sent; the service's sentence is said |
+| allows | refuses | not sent; the kernel's sentence is said |
+| allows | down, old or slow | not sent ("I can't check who may open that right now") |
+| allows | allows | sent, and the outcome is reported |
+
+So a child's level that lists `cover` or `lock` does not open anything by itself: the service's check still refuses a child.
+A typed Skybridge command is not a chat or voice turn for that check, so today it refuses an opening command there for
+everyone; the kernel is not asked. A command that names a lock or a cover as its service target (`data.entity_id`) is asked
+about as that lock or cover, not as the entity in the path. Scenes are not covered by the service's check yet (#2716).
+
 How a refusal reaches the person: the screen gets 403 with a plain sentence; a spoken turn says it; the brain's tool returns
 an error result with `status: refused`. A refused music play does not fall back to a house speaker.
 
-**Flag off is main exactly:** a flag read; no kernel call; all 45 scenarios send what main sent. With the doors on and the
+**Flag off is main exactly:** a flag read; no kernel call; all 68 scenarios send what main sent. With the doors on and the
 kernel allowing, the outbound calls are the same.
 
 ## 3. Music: who may [code; `labs/zoe-os/zoe_os/music_door.py`]
