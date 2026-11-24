@@ -66,6 +66,8 @@ from zoe_os.people_door import VERBS as PEOPLE_DOOR_VERBS  # noqa: E402
 from zoe_os.music_door import VERBS as MUSIC_DOOR_VERBS  # noqa: E402
 from zoe_os import home_door  # noqa: E402
 from zoe_os.memory_door import VERBS as MEMORY_DOOR_VERBS  # noqa: E402
+from zoe_os.lookups_door import VERBS as LOOKUP_DOOR_VERBS  # noqa: E402
+from zoe_os.messages_door import VERBS as MESSAGE_DOOR_VERBS  # noqa: E402
 from zoe_os.remind_door import VERBS as REMINDER_DOOR_VERBS  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os import shadow_state  # noqa: E402
@@ -81,7 +83,7 @@ ACTS = (*BRAIN["acts"], "list.remove")       # the acts every roster member is g
 #: ``calendar_door.py``): a ceiling for ``list_ask`` / ``door_ask``, decided by role, granted to nobody
 SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS, *REMINDER_DOOR_VERBS, *ALARM_DOOR_VERBS, *TIMER_DOOR_VERBS,
                                    *CALENDAR_DOOR_VERBS, *NOTE_DOOR_VERBS, *JOURNAL_DOOR_VERBS, *PEOPLE_DOOR_VERBS, *MUSIC_DOOR_VERBS, *home_door.VERBS,
-                                   *MEMORY_DOOR_VERBS]}
+                                   *MEMORY_DOOR_VERBS, *LOOKUP_DOOR_VERBS, *MESSAGE_DOOR_VERBS]}
 
 
 def register_list_remove(kernel, lists: Lists) -> None:
