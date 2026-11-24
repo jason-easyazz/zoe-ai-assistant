@@ -9,7 +9,7 @@ from .attention import Attention
 from .capability import Enforcer, Grant, GrantStore, Person
 from .events import Event, Kind, Visibility
 from .explain import Explainer
-from . import alarm_door, calendar_door, lists, notes_door, remind_door
+from . import alarm_door, calendar_door, lists, notes_door, people_door, remind_door
 from .door import Door
 from .provenance import subject_of
 from .retention import POLICY, Retention
@@ -62,7 +62,8 @@ class Kernel:
         self.recovered = self.actions.recover()     # intents a dead kernel left open: uncertain
         # the one door: decides and records a change to something production holds (a list, a reminder); holds none of it
         self.door = Door(self.spine, self.enforcer, (lists.AREA, remind_door.AREA, alarm_door.ALARMS, alarm_door.TIMERS,
-                                                     calendar_door.AREA, notes_door.NOTES, notes_door.JOURNAL))
+                                                     calendar_door.AREA, notes_door.NOTES, notes_door.JOURNAL,
+                                                     people_door.AREA))
         self.lists = lists.ListDoor(self.door)
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
