@@ -210,28 +210,31 @@ def test_every_stamp_is_a_real_value(here):
     """No stamp is masked (review of #2698 round 3: every ISO stamp in values and rows was ``<clock>``, so an entry point that
     wrote a wrong or changed stamp still matched). The spoken rename, a correction, the offer upgrade and the relationship writes
     each carry the frozen wall clock in the values they write and in the rows they leave; the contact's ``created_at`` is kept.
-    The fakes record what production hands them whole: the memory hook gets the entire contact, the mirror its keywords too.
+    The fakes record what production hands them whole: the memory hook gets the entire contact, the mirror its arguments exactly.
+    Every assertion reads ``here``, the record THIS code makes now (review of #2698 round 4: they read the frozen ``ON_MAIN``, so a
+    changed stamp or hook argument left this test passing); the fixture is only checked for a leftover mask.
 
-    Controls run (each passed under the old mask or the old fakes, fails now): the spoken rename's stamp written without
-    microseconds (``intent_router._rename_person_row``) -> ``said_rename``; ``corrected_name``'s stamp a year off
-    (``correction_apply``) -> ``corrected_name``; the offer upgrade's stamp without microseconds (``pending_suggestions``) ->
-    ``offer_accepted_upgrades_a_one_name_stub``; ``people_graph.now_iso`` one second off -> ``screen_relation_notes_edited``;
-    the screen create handing the memory hook its contact without notes -> ``screen_create``; the spoken rename handing the
-    mirror an extra keyword -> ``said_rename``."""
+    Controls run, each against the production code with ONLY this test selected (each failed it, restored):
+    ``intent_router._rename_person_row``'s stamp written without microseconds -> fails (``said_rename``);
+    ``correction_apply``'s ``corrected_name`` stamp a year off -> fails; ``correction_apply._make_pet``'s stamp without
+    microseconds -> fails (``corrected_to_a_pet``); ``pending_suggestions``'s offer-upgrade stamp without microseconds -> fails;
+    ``people_graph.now_iso`` one second off -> fails (the relationship writes); the screen create handing the memory hook its
+    contact without notes -> fails; the screen create's memory hook call dropped -> fails; the spoken rename handing the mirror a
+    lower-cased name -> fails; the spoken rename handing the mirror an extra keyword -> fails."""
     from people_scenarios import WALL_NOW
 
     assert "<clock>" not in json.dumps(ON_MAIN) and "<clock>" not in json.dumps(here)
     iso, zulu = WALL_NOW.isoformat(), WALL_NOW.replace(tzinfo=None).isoformat() + "Z"
 
     def written(name):
-        return [v for e in ON_MAIN[name] if e[0] in ("sql", "pg") and e[1].startswith(("UPDATE", "INSERT")) for v in e[2]]
+        return [v for e in here[name] if e[0] in ("sql", "pg") and e[1].startswith(("UPDATE", "INSERT")) for v in e[2]]
 
     assert iso in written("said_rename") and iso in written("offer_accepted_upgrades_a_one_name_stub")
     assert zulu in written("corrected_name") and zulu in written("corrected_to_a_pet")
     for name in ("screen_relation_notes_edited", "screen_relation_retyped", "screen_relation_removed", "screen_relation_with_a_new_stub"):
         assert zulu in written(name), name
-    rows = {r["id"]: r for r in ON_MAIN["said_rename"][-1][1]["people"]}
+    rows = {r["id"]: r for r in here["said_rename"][-1][1]["people"]}
     assert rows["p-ann-stub"]["updated_at"] == iso and rows["p-ann-stub"]["created_at"] == scenarios.STORE_NOW
-    memory = [e for e in ON_MAIN["screen_create"] if e[0] == "memory"]
+    memory = [e for e in here["screen_create"] if e[0] == "memory"]
     assert len(memory) == 1 and memory[0][2]["notes"] == "likes wombles"
-    assert [e for e in ON_MAIN["said_rename"] if e[0] == "mirror"] == [["mirror", [scenarios.ANN, "p-ann-stub", "Plover Tansy", "neighbour"], {}]]
+    assert [e for e in here["said_rename"] if e[0] == "mirror"] == [["mirror", [scenarios.ANN, "p-ann-stub", "Plover Tansy", "neighbour"], {}]]
