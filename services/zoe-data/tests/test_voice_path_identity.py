@@ -99,8 +99,13 @@ def bridge(monkeypatch):
     import zoe_agent
 
     calls: list = []
+    import home_control
+
     monkeypatch.setattr(smart_home_service, "httpx", _fake_httpx(calls))
     monkeypatch.setattr(zoe_agent, "httpx", _fake_httpx(calls))
+    # every command leaves through the one sender (``home_control.send``) and it has its own ``httpx``: without this the
+    # commands of this rig went to whatever bridge the environment names, and two tests failed
+    monkeypatch.setattr(home_control, "httpx", _fake_httpx(calls))
     return calls
 
 
