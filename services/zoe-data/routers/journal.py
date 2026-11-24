@@ -166,6 +166,7 @@ async def create_entry(
     db=Depends(get_db),
 ):
     """Create a new journal entry. visibility always 'personal'."""
+    stamps_at = journal_service.stamps_now()      # the Zoe OS journal door: stamped before anything is awaited
     await require_feature_access(db, user, feature="journal", action="create")
     user_id = user["user_id"]
     entry_id = str(uuid.uuid4())
@@ -175,7 +176,7 @@ async def create_entry(
     await journal_service.create_entry_record(
         db, entry_id=entry_id, user_id=user_id, title=payload.title, content=payload.content, mood=payload.mood,
         mood_score=payload.mood_score, tags_json=tags_json, weather=payload.weather, location=payload.location,
-        photos_json=photos_json, privacy_level=payload.privacy_level)
+        photos_json=photos_json, privacy_level=payload.privacy_level, actor=user_id, stamps_at=stamps_at)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM journal_entries WHERE id = ?", [entry_id])
@@ -351,6 +352,7 @@ async def update_entry(
     db=Depends(get_db),
 ):
     """Update an existing journal entry."""
+    stamps_at = journal_service.stamps_now()      # the Zoe OS journal door: stamped before the entry (and so whose it is) is read
     await require_feature_access(db, user, feature="journal", action="update")
     user_id = user["user_id"]
     cursor = await db.execute(
@@ -377,7 +379,8 @@ async def update_entry(
 
     updates.append("updated_at = NOW()")
     params.append(entry_id)
-    await journal_service.update_entry_record(db, entry_id=entry_id, updates=updates, params=params)
+    await journal_service.update_entry_record(db, entry_id=entry_id, updates=updates, params=params, actor=user_id,
+                                              owner=dict(row)["user_id"], stamps_at=stamps_at)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM journal_entries WHERE id = ?", [entry_id])
@@ -397,6 +400,7 @@ async def delete_entry(
     db=Depends(get_db),
 ):
     """Soft delete a journal entry."""
+    stamps_at = journal_service.stamps_now()      # the Zoe OS journal door: stamped before the entry (and so whose it is) is read
     await require_feature_access(db, user, feature="journal", action="delete")
     user_id = user["user_id"]
     cursor = await db.execute(
@@ -407,7 +411,7 @@ async def delete_entry(
     if row is None:
         raise HTTPException(status_code=404, detail="Entry not found")
 
-    await journal_service.delete_entry_record(db, entry_id=entry_id)
+    await journal_service.delete_entry_record(db, entry_id=entry_id, actor=user_id, owner=dict(row)["user_id"], stamps_at=stamps_at)
     await db.commit()
 
     await broadcaster.broadcast("journal", "entry_deleted", {"id": entry_id}, user_id=user_id)

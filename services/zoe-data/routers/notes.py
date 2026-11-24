@@ -123,13 +123,15 @@ async def create_note(
     db=Depends(get_db),
 ):
     """Create a new note."""
+    stamps_at = note_service.stamps_now()      # the Zoe OS notes door: stamped before anything is awaited
     await require_feature_access(db, user, feature="notes", action="create")
     user_id = user["user_id"]
     note_id = str(uuid.uuid4())
     tags_json = json.dumps(payload.tags) if payload.tags else None
 
     await note_service.create_note_record(db, note_id=note_id, user_id=user_id, title=payload.title, content=payload.content,
-                                          category=payload.category, tags_json=tags_json, visibility=payload.visibility)
+                                          category=payload.category, tags_json=tags_json, visibility=payload.visibility,
+                                          actor=user_id, stamps_at=stamps_at)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM notes WHERE id = ?", [note_id])
@@ -173,6 +175,7 @@ async def update_note(
     db=Depends(get_db),
 ):
     """Update an existing note."""
+    stamps_at = note_service.stamps_now()      # the Zoe OS notes door: stamped before the note (and so whose it is) is read
     await require_feature_access(db, user, feature="notes", action="update")
     user_id = user["user_id"]
     # Fetch via visibility filter so the note is found even when family-visible,
@@ -203,7 +206,9 @@ async def update_note(
 
     updates.append("updated_at = NOW()")
     params.append(note_id)
-    await note_service.update_note_record(db, note_id=note_id, updates=updates, params=params)
+    stored = dict(row)
+    await note_service.update_note_record(db, note_id=note_id, updates=updates, params=params, actor=user_id,
+                                          owner=stored["user_id"], visibility=stored.get("visibility"), stamps_at=stamps_at)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM notes WHERE id = ?", [note_id])
@@ -234,6 +239,7 @@ async def delete_note(
     db=Depends(get_db),
 ):
     """Soft delete a note."""
+    stamps_at = note_service.stamps_now()      # the Zoe OS notes door: stamped before the note (and so whose it is) is read
     await require_feature_access(db, user, feature="notes", action="delete")
     user_id = user["user_id"]
     cursor = await db.execute(
@@ -246,7 +252,9 @@ async def delete_note(
     if dict(row)["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Not authorised to delete this note")
 
-    await note_service.delete_note_record(db, note_id=note_id)
+    stored = dict(row)
+    await note_service.delete_note_record(db, note_id=note_id, actor=user_id, owner=stored["user_id"],
+                                          visibility=stored.get("visibility"), stamps_at=stamps_at)
     await db.commit()
 
     await broadcaster.broadcast("notes", "note_deleted", {"id": note_id}, user_id=user_id)

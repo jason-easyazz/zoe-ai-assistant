@@ -569,6 +569,83 @@ def test_the_calendar_door_client_and_the_real_kernel_agree_on_verbs_codes_and_t
         stop(proc)
 
 
+# ---- the notes and journal doors (ZOE_OS_NOTES / ZOE_OS_JOURNAL = kernel) against the real kernel -----------------------------------------
+def test_the_notes_and_journal_doors_and_the_real_kernel_agree_on_verbs_codes_and_the_decision(state, monkeypatch):
+    """``note_service`` and ``journal_service`` ask the REAL daemon: an author's own note and an adult's change to a child's
+    household note are allowed and closed ``done``; an adult's change to a child's PRIVATE note and to a child's JOURNAL, a
+    child's change to an adult's household note, a guest session and a stranger are refused with the kernel's own code and
+    nothing is written. The kernel's file holds ids only. Control run: with the two areas left out of the kernel's areas
+    (``Kernel.__init__``) every ask is ``not_checked reason=protocol`` and this fails at the first refusal."""
+    import journal_service as js
+    import note_service as ns
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import notes_door
+    finally:
+        sys.path.remove(str(LAB))
+    assert tuple(os_shadow.AREAS["notes"].verbs) == tuple(notes_door.NOTE_VERBS) and notes_door.NOTES.name == "notes"
+    assert tuple(os_shadow.AREAS["journal"].verbs) == tuple(notes_door.JOURNAL_VERBS) and notes_door.JOURNAL.name == "journal"
+    kid, nid, word = "member-kid", "note_bar_0001", "womble"
+
+    class DB:
+        def __init__(self):
+            self.writes = []
+
+        async def execute(self, sql, params=()):
+            self.writes.append(sql.split()[0])
+
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": OTHER, "role": "adult"},
+                         {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_NOTES", "kernel")
+        monkeypatch.setenv("ZOE_OS_JOURNAL", "kernel")
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 2.0)      # a cold subprocess on a busy box; the deadline has its own test
+
+        async def note(db, who, owner, visibility):
+            await ns.update_note_record(db, note_id=nid, updates=["title = ?"], params=[word, nid], actor=who, owner=owner,
+                                        visibility=visibility, stamps_at=ns.stamps_now())
+
+        async def entry(db, who, owner):
+            await js.delete_entry_record(db, entry_id=nid, actor=who, owner=owner, stamps_at=js.stamps_now())
+
+        async def run():
+            ok = DB()
+            await note(ok, kid, kid, "personal")                           # the author
+            await note(ok, OTHER, kid, "family")                           # an adult, a child's household note
+            await entry(ok, kid, kid)                                      # the writer
+            out = []
+            for call, kind in ((lambda db: note(db, OTHER, kid, "personal"), ns.NoteRefused),
+                               (lambda db: note(db, kid, MEMBER, "family"), ns.NoteRefused),
+                               (lambda db: note(db, "guest", "guest", "personal"), ns.NoteRefused),
+                               (lambda db: note(db, "member-nobody", "member-nobody", "personal"), ns.NoteRefused),
+                               (lambda db: entry(db, MEMBER, kid), js.JournalRefused),
+                               (lambda db: entry(db, "member-nobody", "member-nobody"), js.JournalRefused)):
+                db = DB()
+                with pytest.raises(kind) as exc:
+                    await call(db)
+                out.append((exc.value.reason, db.writes))
+            return ok.writes, out
+
+        assert asyncio.run(run()) == (["UPDATE"] * 3, [("not_owner", []), ("adults_only", []), ("not_owner", []), ("unknown_person", []),
+                                                       ("not_owner", []), ("unknown_person", [])])
+        end = time.monotonic() + 10
+        rows: list = []
+        while time.monotonic() < end and len(rows) < 3:
+            with closing(kernel_db(state)) as con:
+                rows = con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%\"done\"%'").fetchall()
+            time.sleep(0.05)
+        assert len(rows) == 3                                    # the three allowed changes were reported and closed
+        with closing(kernel_db(state)) as con:
+            kept = [json.loads(p) for (p,) in con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%allowed%'")]
+        assert sorted(p["action"] for p in kept) == ["journal.delete", "note.edit", "note.edit"]
+        assert all((p.get("note") or p.get("entry")) == nid for p in kept)
+        assert holds(state, word) == [] and holds(state, "member-nobody") == [] and holds(state, "guest") == []
+    finally:
+        stop(proc)
+
+
 @needs_forget
 def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
     """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:

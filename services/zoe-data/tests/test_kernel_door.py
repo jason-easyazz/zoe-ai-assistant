@@ -177,8 +177,11 @@ def test_one_handler_turns_every_areas_refusal_into_a_403_with_its_own_sentence(
 _AREA_STAMPS = {"lists": lambda: __import__("list_service").stamps_now(),
                 "reminders": lambda: __import__("reminder_service").stamps_now(),
                 "calendar": lambda: __import__("calendar_service").stamps_now(),
+                "notes": lambda: __import__("note_service").stamps_now(),
+                "journal": lambda: __import__("journal_service").stamps_now(),
                 "alarms": lambda: __import__("alarms").Viewer(user_id="member-ova").stamps_at}
-_FLAG = {"lists": "ZOE_OS_LISTS", "reminders": "ZOE_OS_REMINDERS", "calendar": "ZOE_OS_CALENDAR", "alarms": "ZOE_OS_ALARMS"}
+_FLAG = {"lists": "ZOE_OS_LISTS", "reminders": "ZOE_OS_REMINDERS", "calendar": "ZOE_OS_CALENDAR", "alarms": "ZOE_OS_ALARMS",
+         "notes": "ZOE_OS_NOTES", "journal": "ZOE_OS_JOURNAL"}
 
 
 @pytest.mark.parametrize("area", sorted(_AREA_STAMPS))
@@ -228,4 +231,4 @@ def test_a_snapshot_shared_by_two_doors_is_taken_when_either_is_on_and_no_caller
     assert not offenders, offenders
     assert bare("import kernel_door\ndef f():\n    a = kernel_door.stamps_now()\n    b = kernel_door.stamps_now('lists')\n") == [3]
     tools = (root / "mcp_server.py").read_text("utf-8")
-    assert 'stamps_at = kernel_door.stamps_now("reminders", "calendar")' in tools
+    assert 'stamps_at = kernel_door.stamps_now("reminders", "calendar", "notes", "journal")' in tools

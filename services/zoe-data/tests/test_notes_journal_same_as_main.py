@@ -1,6 +1,6 @@
 """Notes and the journal each have ONE door, and nothing about what any entry point does has changed against ``main``.
 
-``tests/fixtures/notes_journal_as_on_main.json`` is the record of ``main`` (re-captured from b2bbe84ca): for each entry point and action, every
+``tests/fixtures/notes_journal_as_on_main.json`` is the record of ``main`` (re-captured from c1a350458): for each entry point and action, every
 statement with its values (reads too), every commit, hook, memory mirror, broadcast and receipt, the result or refusal, and the
 rows both tables hold afterwards, every column with its stored stamps (the store clock is frozen, nothing is masked). It was made by running ``tests/notes_journal_scenarios.py`` against an export of that commit
 (``git archive origin/main services/zoe-data``), never by this branch's own code. The same scenarios run here and must give the
@@ -9,19 +9,23 @@ same record. This is also the "before the door" record the kernel-door tests com
 Covered. NOTES: the screen's create (personal, for the house), edit, patch and delete (the author, another member on a household
 and on a private note, a missing note); the brain's ``note_create`` / ``note_update`` / ``note_delete``; the spoken note; an
 accepted suggestion. JOURNAL: the screen's create, edit and delete (the writer, another member); the brain's
-``journal_create_entry``; the spoken entry.
+``journal_create_entry``; the spoken entry. An accepted suggestion is also run through ``execute_suggestion``, the owner
+of its transaction (the offer read, the note, the offer resolved, and the commit, each recorded; and the offer accepted by
+someone it is not for), with ``pending_suggestions`` among the rows.
 
 Negative controls run (each broke the code, saw the named scenario fail, restored): ``updated_at = NOW()`` dropped from
 ``note_service.delete_note_record`` -> ``note_rest_delete``; ``AND user_id=?`` dropped from ``tool_update_note_record`` ->
 ``note_tool_update``; ``"personal"`` made ``"family"`` in ``said_note_record`` -> ``note_spoken_create``; an extra read added
 to ``suggested_note_record`` -> ``note_suggestion_accepted``; ``'personal'`` made ``'family'`` in
 ``journal_service.create_entry_record`` -> ``journal_rest_create``; ``mood`` and ``title`` swapped in ``said_entry_record`` ->
-``journal_spoken_create``; the ``notes.created_at`` default moved one second (a stored stamp the recorder once masked) -> every
+``journal_spoken_create``; ``AND user_id = $2`` dropped from the statement resolving an offer in
+``pending_suggestions.execute_suggestion`` -> ``note_suggestion_accepted_through_the_accept``; the ``notes.created_at`` default moved one second (a stored stamp the recorder once masked) -> every
 scenario.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -48,7 +52,8 @@ NOTES_RECORDED = {
     (*_TOOLS, "tool_update_note_record"): ("note_tool_update", "note_tool_update_another_members_household_note"),
     (*_TOOLS, "tool_delete_note_record"): ("note_tool_delete", "note_tool_delete_another_members_note"),
     (_ROUTER, "_execute_note_create_direct", "said_note_record"): ("note_spoken_create",),
-    (*_OFFER, "suggested_note_record"): ("note_suggestion_accepted", "note_suggestion_accepted_with_a_description_only"),
+    (*_OFFER, "suggested_note_record"): ("note_suggestion_accepted", "note_suggestion_accepted_with_a_description_only",
+                                          "note_suggestion_accepted_through_the_accept"),
 }
 JOURNAL_RECORDED = {
     ("routers/journal.py", "create_entry", "create_entry_record"): ("journal_rest_create",),
@@ -77,6 +82,66 @@ def test_the_fixture_covers_every_scenario_and_every_entry_point():
         writers = door_callers.door_functions(door, door_callers.direct_sql_writers(door, sql_scan.write_pattern(table)))
         assert len(writers) >= at_least, module
         door_callers.check_coverage(door_callers.entry_points(root, module, writers), recorded, {}, set(ON_MAIN))
+
+
+def test_every_listed_scenario_runs_the_entry_point_it_is_listed_for():
+    """The coverage test above checks NAMES: that each entry point has scenarios. This checks that each scenario RUNS it. Every
+    door function is wrapped; running a scenario records which ``(module, top-level function)`` called it (the calling frame,
+    outside the two door modules). A scenario whose record on main holds a write of ``notes`` / ``journal_entries`` must
+    have made exactly the call it is listed for; one whose main record writes nothing (main stopped it first: another member,
+    a missing row, nothing to change) and every scenario listed nowhere must reach no door; and every listed entry point is
+    reached by at least one of its scenarios. Control run: with ``note_tool_create`` and
+    ``note_spoken_create`` swapped between their two entries of ``NOTES_RECORDED``, the coverage test still passes and this
+    fails. Planted below: a listing whose scenario runs another entry point is not seen as run."""
+    import ast
+    import sys
+
+    import journal_service
+    import note_service
+
+    root = Path(__file__).resolve().parents[1]
+    door_files = {str((root / f"{m}.py").resolve()) for m in ("note_service", "journal_service")}
+    tops: dict = {}
+
+    def top(path: Path, line: int) -> str:
+        if path not in tops:
+            body = ast.parse(path.read_text("utf-8")).body
+            tops[path] = [(n.lineno, n.end_lineno, n.name) for n in body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        return next((name for first, last, name in tops[path] if first <= line <= last), "<module>")
+
+    ran: list = []
+
+    def spy(original, door_fn):
+        def call(*a, **k):
+            caller = sys._getframe(1)
+            path = Path(caller.f_code.co_filename).resolve()
+            if str(path) not in door_files:
+                ran.append((path.relative_to(root).as_posix(), top(path, caller.f_lineno), door_fn))
+            return original(*a, **k)
+        return call
+
+    mp = pytest.MonkeyPatch()
+    try:
+        for module, recorded in ((note_service, NOTES_RECORDED), (journal_service, JOURNAL_RECORDED)):
+            for door_fn in {key[2] for key in recorded}:
+                mp.setattr(module, door_fn, spy(getattr(module, door_fn), door_fn))
+        seen = {}
+        for name in scenarios.scenarios():
+            ran.clear()
+            scenarios.run_one(name)
+            seen[name] = set(ran)
+    finally:
+        mp.undo()
+    listed = {**NOTES_RECORDED, **JOURNAL_RECORDED}
+    writes = {name: any(e[0] in ("sql", "pg") and re.match(r"(INSERT INTO|UPDATE) (notes|journal_entries)\b", e[1]) for e in log)
+              for name, log in ON_MAIN.items()}
+    want = dict.fromkeys(seen, set())
+    for key, names in listed.items():
+        for name in names:
+            want[name] = {key} if writes[name] else set()
+    assert {name: sorted(got) for name, got in seen.items()} == {name: sorted(w) for name, w in want.items()}
+    assert set().union(*seen.values()) == set(listed)                  # every listed entry point is reached by a scenario of its own
+    assert ("routers/notes.py", "create_note", "create_note_record") not in seen["note_tool_create"]     # planted: a wrong listing
 
 
 @pytest.mark.parametrize("name", sorted(ON_MAIN))

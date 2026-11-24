@@ -8,7 +8,10 @@ kernel-door change added (the recording handles are ``calendar_scenarios``'), so
 
 WHERE THEY LIVE. ``notes`` (``user_id`` = the author; ``visibility`` personal or family) and ``journal_entries`` (``user_id`` =
 the writer; always personal). Here: one SQLite file with both tables in the 0001 shape, reached through the pooled ``?`` handle
-(the screen, the brain's tools, the spoken path) and a raw asyncpg-shaped connection (an accepted suggestion).
+(the screen, the brain's tools, the spoken path) and a raw asyncpg-shaped connection (an accepted suggestion). An accepted
+suggestion is run twice: its action alone (``_execute_action``, on a connection that commits each statement) and through
+``execute_suggestion``, which owns the transaction: on ``_Tx``, whose statements wait for the transaction's end and whose
+begin, commit and rollback are recorded. ``pending_suggestions`` holds the offers, in the minimal shape that path reads.
 
 Invented people and words only. Ids are counted, not random, so the record is the same on every run.
 """
@@ -43,11 +46,66 @@ INSERT INTO notes (id, user_id, title, content, visibility) VALUES
     ('note-bob', 'bob-0002', 'plover', 'fed', 'personal');
 INSERT INTO journal_entries (id, user_id, title, content) VALUES
     ('entry-ann', 'ann-0001', 'gribble', 'snark'), ('entry-bob', 'bob-0002', 'plover', 'fed');
+CREATE TABLE pending_suggestions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action_type TEXT NOT NULL, pre_filled_slots TEXT,
+    resolved INTEGER NOT NULL DEFAULT 0);
+INSERT INTO pending_suggestions (id, user_id, action_type, pre_filled_slots) VALUES
+    ('sugg-ann', 'ann-0001', 'note_create', '{{"title": "womble", "content": "bring the womble"}}');
 """
+TABLES = ("notes", "journal_entries", "pending_suggestions")
+
+
+class _Tx(_Raw):
+    """The accepted suggestion's own connection (``execute_suggestion`` acquires it and opens ``transaction()`` on it): outside
+    a transaction each statement commits; inside one nothing commits until the block ends, then ``commit`` (or, when the block
+    raised, ``rollback``) is recorded and applied. ``ended`` says how the last transaction ended."""
+
+    def __init__(self, con, log) -> None:
+        super().__init__(con, log)
+        self.depth, self.ended = 0, None
+
+    async def execute(self, sql, *args):
+        if not self.depth:
+            return await super().execute(sql, *args)
+        cur = self._run(sql, args)
+        verb = sql.split()[0].upper()
+        return f"INSERT 0 {cur.rowcount}" if verb == "INSERT" else f"{verb} {cur.rowcount}"
+
+    def transaction(self):
+        @contextlib.asynccontextmanager
+        async def block():
+            self.depth += 1
+            self.log.append(["pg_begin"])
+            try:
+                yield
+            except BaseException:
+                self.depth -= 1
+                self.con.rollback()
+                self.ended = "rolled_back"
+                self.log.append(["pg_rollback"])
+                raise
+            self.depth -= 1
+            self.con.commit()
+            self.ended = "committed"
+            self.log.append(["pg_commit"])
+        return block()
+
+
+class _TxPool:
+    """``get_pool()`` for ``execute_suggestion``: ``acquire()`` hands out the world's one ``_Tx``."""
+
+    def __init__(self, world) -> None:
+        self.world = world
+
+    def acquire(self):
+        @contextlib.asynccontextmanager
+        async def held():
+            yield self.world.tx
+        return held()
 
 
 class World:
     def __init__(self, log: list) -> None:
+        import anticipation
         import database
         import intent_router
         import mcp_server
@@ -64,7 +122,7 @@ class World:
         self.con.create_function("NOW", 0, lambda: "<now()>")
         self.con.executescript(DDL)
         self.con.commit()
-        self.db, self.pg = _Pooled(self.con, log), _Raw(self.con, log)
+        self.db, self.pg, self.tx = _Pooled(self.con, log), _Raw(self.con, log), _Tx(self.con, log)
 
         def rec(name, pick=lambda *a, **k: [list(a), k]):
             async def fake(*a, **k):
@@ -73,6 +131,8 @@ class World:
 
         counted = iter(range(1, 10_000))
         _set(uuid, "uuid4", lambda: uuid.UUID(int=next(counted)))
+        _set(pending_suggestions, "get_pool", lambda: _TxPool(self))
+        _set(anticipation, "mode", lambda: "off")                                # an offer of the anticipation lane is not in here
         _set(broadcaster, "broadcast", rec("broadcast", lambda channel, event, data, **k: [channel, event, data, k]))
         _set(mcp_server, "_notify_ui", rec("notify_ui"))
         _set(intent_router, "_notify_ui_channel", rec("notify_ui_channel"))
@@ -97,7 +157,7 @@ class World:
 
     def rows(self) -> dict:
         return {table: [{k: v for k, v in dict(r).items() if v is not None}
-                        for r in self.con.execute(f"SELECT * FROM {table} ORDER BY id")] for table in ("notes", "journal_entries")}
+                        for r in self.con.execute(f"SELECT * FROM {table} ORDER BY id")] for table in TABLES}
 
 
 def _member(uid):
@@ -140,6 +200,11 @@ def scenarios() -> dict:
             return await w.sugg._execute_action(w.pg, "note_create", slots, who)
         return run
 
+    def accepted(suggestion_id, who=ANN):
+        async def run(w):
+            return await w.sugg.execute_suggestion(suggestion_id, who)
+        return run
+
     return {
         # notes: the screen
         "note_rest_create": note("create_note", title=WORD, content="bring the womble", tags=["a", "b"]),
@@ -164,6 +229,8 @@ def scenarios() -> dict:
         "note_spoken_create_no_content": said("note", title=WORD),
         "note_suggestion_accepted": suggestion(title=WORD, content="bring the womble"),
         "note_suggestion_accepted_with_a_description_only": suggestion(description=WORD),
+        "note_suggestion_accepted_through_the_accept": accepted("sugg-ann"),
+        "note_suggestion_accepted_by_another_member": accepted("sugg-ann", who=BOB),
         # the journal: the screen, the brain's tool, the spoken path
         "journal_rest_create": entry("create_entry", title=WORD, content="a day of wombles", mood="calm", mood_score=7, tags=["a"],
                                      photos=["p1"]),
@@ -190,23 +257,27 @@ def _isolated() -> None:
             raise RuntimeError(f"notes and journal scenarios need the test configuration ({var} is not isolated): import tests/conftest.py first")
 
 
+def run_one(name: str, call=None) -> list:
+    """The record of one scenario, in a world of its own."""
+    _isolated()
+    call = call or scenarios()[name]
+    log: list = []
+    try:
+        world = World(log)
+        try:
+            log.append(["returned", _plain(asyncio.run(call(world)))])
+        except Exception as exc:  # noqa: BLE001 - a refusal is part of the record (an HTTP error by its words; any other by TYPE)
+            log.append(["raised", getattr(exc, "status_code", None), str(getattr(exc, "detail", None) or type(exc).__name__)])
+        log.append(["rows", _plain(world.rows())])
+        world.con.close()
+    finally:
+        _restore()
+    return log
+
+
 def run_all() -> dict:
     _isolated()
-    out = {}
-    for name, call in scenarios().items():
-        log: list = []
-        try:
-            world = World(log)
-            try:
-                log.append(["returned", _plain(asyncio.run(call(world)))])
-            except Exception as exc:  # noqa: BLE001 - a refusal is part of the record (an HTTP error by its words; any other by TYPE)
-                log.append(["raised", getattr(exc, "status_code", None), str(getattr(exc, "detail", None) or type(exc).__name__)])
-            log.append(["rows", _plain(world.rows())])
-            world.con.close()
-        finally:
-            _restore()
-        out[name] = log
-    return out
+    return {name: run_one(name, call) for name, call in scenarios().items()}
 
 
 if __name__ == "__main__":

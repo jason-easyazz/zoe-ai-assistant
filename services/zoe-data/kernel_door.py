@@ -79,6 +79,27 @@ def stamps_now(*areas: str) -> Optional[dict]:
     return os_shadow.stamp_snapshot() if on else None
 
 
+async def gate(area: str, verb: str, *, actor: Optional[str], target: str, owner: object, household: bool,
+               stamps_at: Optional[dict], refused: type) -> Optional[Decision]:
+    """The ask at an area's door, for a door whose caller says who is acting and whose the thing is. None with the area's flag
+    off (``stamps_at`` is None when every door is off; else ONE more flag read). Raises ``refused(reason)`` (the area's own
+    ``Refused``) on a kernel refusal; a kernel that is down or slow is ``not_checked`` and the change proceeds. A caller with
+    nobody identified asks as the shared panel; an owner that is not a person (the household's own marker) is not named."""
+    if stamps_at is None or not os_shadow.area_on(area):
+        return None
+    if not actor:
+        os_shadow.door_unchecked(verb, "no_actor", area)
+        return None
+    panel = is_panel(actor)
+    whose = str(owner or "")
+    decision, reason, ask, stamps = await os_shadow.ask_door(
+        area, verb, "" if panel else str(actor), panel=panel, target=str(target),
+        owner=None if (not whose or is_panel(whose)) else whose, household=household, stamps_at=stamps_at)
+    if decision == "refuse":
+        raise refused(reason)
+    return Decision(decision, reason, ask, stamps=stamps, area=area)
+
+
 def report(decision: Optional[Decision], outcome: str) -> None:
     """Close an allowed ask with ``done`` | ``failed`` (once). A no-op for anything that was not an allowed ask."""
     if decision is not None and decision.decision == "allow" and not decision.reported:
