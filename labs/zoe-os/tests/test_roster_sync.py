@@ -380,9 +380,14 @@ def _door(srv, area: str, verb: str, person: str, *, owner: str, target: str = "
 
 def test_a_member_taken_off_the_roster_but_kept_for_forgetting_changes_nobodys_reminder(built):
     """A member taken off people.json whom the kernel still holds a record for stays in its people (so the record can be
-    forgotten). At the door they are NOBODY: not their own reminder, not the household's, not another member's; a current
-    member can still deal with what they left, they can still be forgotten, and put back on the file they act again. Lists
-    alone keeps main's rule (``Area.former``): there they still act with least access.
+    forgotten). At the door they are NOBODY: not their own reminder, not the household's, not another member's. And what they
+    left is NOBODY'S to change: an adult's edit or delete of a reminder they own is ``unknown_person`` too, household or
+    private (review round 4: the owner was checked against the people map, so an adult could edit or delete it). They can
+    still be forgotten (a forget never asks the door), and put back on the file they act, and own, again. Lists alone keeps
+    main's rule (``Area.former``): there they still act with least access, and a list of theirs can still be changed.
+
+    Control run (round 4): ``owner not in acting`` put back to ``owner not in people`` in ``Door.ask`` -> the adult's delete
+    of the former member's reminder is ``ok``.
 
     Controls run: ``k.door.roster = lambda: srv.roster`` removed from ``shadow_daemon.build`` -> the first refusal below is
     ``ok`` (the people map counted as the roster); ``Door._acting`` returning ``people`` whatever the area says -> the same;
@@ -395,10 +400,16 @@ def test_a_member_taken_off_the_roster_but_kept_for_forgetting_changes_nobodys_r
     for owner, visibility in ((KID, "private"), (KID, "household"), (OWNER, "household")):
         for verb in ("reminder.create", "reminder.edit", "reminder.delete"):
             assert _door(srv, "reminders", verb, KID, owner=owner, visibility=visibility) == "unknown_person", (verb, owner)
-    assert _door(srv, "reminders", "reminder.delete", OWNER, owner=KID) == "ok"       # what they left can still be dealt with
+    refusals = k.spine.refusals
+    for verb in ("reminder.create", "reminder.edit", "reminder.delete"):              # what they left: nobody's to change
+        assert _door(srv, "reminders", verb, OWNER, owner=KID, visibility="household") == "unknown_person", verb
+        assert _door(srv, "reminders", verb, OWNER, owner=KID, visibility="private") in ("unknown_person", "not_owner"), verb
+    assert k.spine.refusals == refusals + 6                                           # each one a recorded refusal, not an error
     assert _door(srv, "lists", "item.add", KID, owner=OWNER, target="list-qov") == "ok"                  # lists: main's rule, kept
+    assert _door(srv, "lists", "item.add", OWNER, owner=KID, target="list-qov") == "ok"                  # ... for an owner too
     write(state, [{"id": OWNER, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])
     assert _door(srv, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "ok"      # back on the roster
+    assert _door(srv, "reminders", "reminder.delete", OWNER, owner=KID) == "ok"       # ... and theirs can be changed again
     write(state, [{"id": OWNER, "role": "adult"}])
     assert _door(srv, "reminders", "reminder.create", KID, owner=KID, visibility="private") == "unknown_person"
     assert k.spine.forget(KID, actor=KID).count >= 1                                  # and they can still be forgotten

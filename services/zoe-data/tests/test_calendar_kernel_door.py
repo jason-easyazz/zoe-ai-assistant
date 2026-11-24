@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import json
 import logging
 import shutil
@@ -317,24 +318,104 @@ async def test_a_write_that_raises_is_reported_failed(door):
     assert [r["outcome"] for r in _wait(door, "door_report", 1)] == ["failed"]
 
 
-@pytest.mark.parametrize("ends", ["commits", "rolls_back"])
+class _Tx(scenarios._Raw):
+    """The accepted suggestion's own connection (``execute_suggestion`` acquires it and opens ``transaction()`` on it): outside
+    a transaction each statement commits; inside one nothing commits until the block ends, then it commits (or, when the
+    block raised, rolls back). ``depth`` says whether a transaction is open, ``ended`` how the last one ended."""
+
+    def __init__(self, con, log) -> None:
+        super().__init__(con, log)
+        self.depth, self.ended = 0, None
+
+    async def execute(self, sql, *args):
+        if not self.depth:
+            return await super().execute(sql, *args)
+        cur = self._run(sql, args)
+        verb = sql.split()[0].upper()
+        return f"INSERT 0 {cur.rowcount}" if verb == "INSERT" else f"{verb} {cur.rowcount}"
+
+    def transaction(self):
+        @contextlib.asynccontextmanager
+        async def block():
+            self.depth += 1
+            try:
+                yield
+            except BaseException:
+                self.depth -= 1
+                self.con.rollback()
+                self.ended = "rolled_back"
+                raise
+            self.depth -= 1
+            self.con.commit()
+            self.ended = "committed"
+        return block()
+
+
+_OFFER = ("CREATE TABLE pending_suggestions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action_type TEXT NOT NULL,"
+          " pre_filled_slots TEXT, resolved INTEGER NOT NULL DEFAULT 0)")
+
+
+@pytest.mark.parametrize("ends", ["commits", "rolls_back", "refused"])
 @pytest.mark.asyncio
-async def test_an_accepted_suggestion_is_reported_only_once_its_transaction_has_ended(door, ends):
-    """The suggestion's event is written inside the suggestion's own transaction (``execute_suggestion`` holds the reports):
-    the kernel hears nothing while the row could still be undone. Control run: with ``kernel_door.wrote`` ignoring the held
-    block (reporting at once), the report is seen before the block ends."""
+async def test_an_accepted_suggestion_is_reported_only_once_its_transaction_has_ended(door, monkeypatch, ends):
+    """Driven through ``pending_suggestions.execute_suggestion``, the owner of the transaction (``_Tx``: nothing commits until
+    the block ends). Commits: the kernel hears ``done`` only once the commit has happened, and the offer is resolved. Rolls
+    back (the statement resolving the offer fails, after the event's insert): the kernel never hears ``done``, only
+    ``failed``, and neither the event nor the resolution is left. Refused: nothing is reported, no event, the offer is still
+    pending. Controls run (``~/.zoe/agent-tools/stack-round4/calnotes/controls_2692.json``): with ``reports =
+    contextlib.nullcontext()`` in ``execute_suggestion`` (the hold removed), commits sees ``done`` while the transaction is
+    still open and rolls back sees ``done``; with the hold entered INSIDE the transaction (``async with conn.transaction(),
+    reports:``) commits sees ``done`` before the commit. The old shape of this test (calling ``_execute_action`` under a hold
+    of its own) passed with the hold removed from ``execute_suggestion``: that hole was planted against it and not caught."""
+    import anticipation
+    import pending_suggestions
+
     w = _world()
-    try:
-        async with kernel_door.reports_after():
-            out = await w.sugg._execute_action(w.pg, "calendar_create", {"title": WORD, "start_date": DAY}, ANN)
-            assert out["event_id"] and len(_wait(door, "door_ask", 1)) == 1
-            await asyncio.sleep(0.05)
-            assert door.ops("door_report") == []
-            if ends == "rolls_back":
-                raise RuntimeError("the transaction failed")
-    except RuntimeError:
-        pass
-    assert [r["outcome"] for r in _wait(door, "door_report", 1)] == ["done" if ends == "commits" else "failed"]
+    w.con.execute(_OFFER)
+    w.con.execute("INSERT INTO pending_suggestions (id, user_id, action_type, pre_filled_slots) VALUES (?, ?, ?, ?)",
+                  ("sugg-ann", ANN, "calendar_create", json.dumps({"title": WORD, "start_date": DAY})))
+    w.con.commit()
+
+    class Failing(_Tx):
+        def _run(self, sql, args):
+            if ends == "rolls_back" and sql.startswith("UPDATE pending_suggestions"):
+                raise RuntimeError("store down")
+            return super()._run(sql, args)
+
+    tx = Failing(w.con, w.log)
+
+    class Pool:
+        def acquire(self):
+            @contextlib.asynccontextmanager
+            async def held():
+                yield tx
+            return held()
+
+    monkeypatch.setattr(pending_suggestions, "get_pool", lambda: Pool())
+    monkeypatch.setattr(anticipation, "mode", lambda: "off")             # an offer of the anticipation lane is not in here
+
+    def offer():
+        return [dict(r) for r in w.con.execute("SELECT * FROM pending_suggestions")]
+
+    before, offered = _events(w), offer()
+    if ends == "refused":
+        door.door = "refuse:not_owner"
+    heard = []
+    real = os_shadow.report_door
+    monkeypatch.setattr(os_shadow, "report_door", lambda area, ask, outcome, stamps=None: (
+        heard.append((area, outcome, tx.depth, tx.ended)), real(area, ask, outcome, stamps)))
+    out = await pending_suggestions.execute_suggestion("sugg-ann", ANN)
+    assert [a["verb"] for a in _wait(door, "door_ask", 1)] == ["event.create"]
+    if ends == "commits":
+        assert out["ok"] is True and out["action"] == "calendar_create" and out["result"]["title"] == WORD
+        assert heard == [("calendar", "done", 0, "committed")]
+        assert sorted(_events(w)) == sorted([*before, out["result"]["event_id"]])
+        assert offer() == [{**offered[0], "resolved": 1}]
+    else:
+        assert out["ok"] is False and tx.ended == "rolled_back" and _events(w) == before and offer() == offered
+        assert heard == ([("calendar", "failed", 0, "rolled_back")] if ends == "rolls_back" else [])
+    await asyncio.sleep(0.05)
+    assert [r["outcome"] for r in door.ops("door_report")] == {"commits": ["done"], "rolls_back": ["failed"], "refused": []}[ends]
 
 
 # ---- ordered against a forget ---------------------------------------------------------------------------------------------------------

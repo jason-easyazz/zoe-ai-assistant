@@ -1263,7 +1263,8 @@ def callers(kernel, monkeypatch):
                 return await memory_space.guardian_forget(MEMBER, "r1", actor="adult", svc=svc) == "forgotten", None
             if caller == "unwrite":
                 return await omi_review_apply.unwrite(MEMBER, [{"kind": "person_fact", "written_ref": "memory:r1"}]) == 1, None
-            await mc._forget_locked(None, SimpleNamespace(user_id="adult"), MEMBER, "r1", svc=svc)
+            await mc._forget_locked(None, SimpleNamespace(user_id="adult"), MEMBER, "r1", svc=svc,
+                                   acting=mc.memory_actor.member("adult"))
             return True, None
         except (os_shadow.ShadowForgetUnavailable, _StoreError) as exc:
             return False, exc
