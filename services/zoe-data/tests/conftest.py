@@ -88,6 +88,9 @@ os.environ["ZOE_OMI_REPASS_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "omi-repass"
 # file. Pinned before any import (the module starts its worker at import when the flag is on: pinned off here too); each test then gets
 # its own empty directory (``_os_shadow_private_state``) and a guard fails any test that leaves the client on a real state dir.
 # UNCONDITIONAL (never setdefault): an inherited value - the live dir, or an empty one that falls back to it - must not survive.
+# The Home Assistant bridge: a test whose fake misses the sender must hit a dead address, never the live bridge on this box
+# (a stray run once posted a real device command). UNCONDITIONAL, before any import: several modules read it at import.
+os.environ["ZOE_HA_BRIDGE_URL"] = "http://127.0.0.1:9"
 # shadow-pin-start
 os.environ["ZOE_OS_SHADOW_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "os-shadow")
 os.environ["ZOE_OS_LIST_SHADOW"] = "off"

@@ -20,22 +20,20 @@ in anyone else's. Not on the roster = unknown = refused (least access).
     household            anyone on the roster                 allow                  allow                  allow
     household            the shared panel                     allow                  refuse not_owner       refuse not_owner
     any                  not on the roster (a former member too)  refuse unknown_person (all verbs)
-    in the book of a FORMER member (off the roster, still kept for forgetting): the rows above, as for any member's book
-    in the book of a person the kernel does not know at all: refuse unknown_person (all verbs, whoever asks; ``door.py``;
-    never written)
+    in the book of a person who is not on the roster (a FORMER member, still kept for forgetting, too): refuse unknown_person
+    (all verbs, whoever asks; ``door.py``; a person the kernel does not know at all is never written)
 
 Reading the table. This is TODAY'S rule, kept as it is: a household contact is the whole house's, so anyone in the house may add
 one, change it or delete it; a private contact is its owner's alone, from adults too; a child or a guest never changes another
 member's private contact. The shared panel, with nobody identified, may add a household contact and nothing else. READING is
 not asked and is recorded nowhere. A contact whose owner or visibility was not told is treated as someone else's private one.
 
-A FORMER MEMBER'S BOOK (decided here, review of #2699): the door accepts an OWNER who is in the kernel's people map but off the
-roster, so what a member left behind can still be dealt with, and it can still be forgotten. That gives nobody anything the
-table forbids: the former member themself acts nowhere (above), so no owner row ever matches them; their PRIVATE contacts stay
-theirs alone, refused ``not_owner`` to every current member and the panel; their HOUSEHOLD contacts are the house's, which a
-current member may already add, change or delete in ANY member's book, so dealing with them is that same row (and the owner's
-switch applies to them as to any). Treating the book as unknown instead would leave those household contacts frozen until a
-forget, with nothing protected by it. Once forgotten, the owner is someone the kernel does not know: refused, never written.
+A FORMER MEMBER'S BOOK (review round 4, replacing what the review of #2699 decided here): NOBODY'S to change. The shared door
+checks the owner of a contact against the CURRENT roster, as it does who acts (``door.Door.ask``), for every area alike: a
+member taken off the roster owns nothing a current member, or the panel, may add to, change or delete, household or private.
+What they left is removed by forgetting them (a forget never asks this door), or is changed again once they are back on the
+roster. One rule for every book, rather than a household contact that could be changed while a household reminder, event or
+note of the same former member could not.
 
 ONE LINE TO SWITCH, a household choice for the owner: ``HOUSEHOLD_CHANGE_ADULTS_ONLY``. Set, a household contact can still be
 added by anyone but is changed or deleted only by its owner or an adult (a child's or a guest's change is ``adults_only``).
