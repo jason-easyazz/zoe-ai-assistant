@@ -1,3 +1,4 @@
+import os
 import asyncio
 import inspect
 
@@ -98,7 +99,7 @@ async def test_music_success_strings_and_ha_side_effects_are_unchanged(intent, e
     result = await intent_router._execute_music_intent(intent, "jason")
 
     assert result == expected
-    assert _FakeAsyncClient.posts[0]["url"] == "http://127.0.0.1:8007/devices/control"
+    assert _FakeAsyncClient.posts[0]["url"] == os.environ["ZOE_HA_BRIDGE_URL"] + "/devices/control"
     assert _FakeAsyncClient.posts[0]["json"]["action"] == expected_action
 
 

@@ -1,8 +1,10 @@
 """Every ENTRY POINT of the lists door does, with the lists flag off, exactly what it did on ``main``: each statement with its
 values, each read with its arguments, every announcement, the reply, and the list and item rows its writes leave.
 
-``tests/fixtures/lists_entry_points_as_on_main.json`` is the record of ``main`` (b2bbe84ca, the commit this work starts from),
-made by running ``tests/lists_entry_scenarios.py`` against an export of that commit, never by this branch's code. The door
+``tests/fixtures/lists_entry_points_as_on_main.json`` is the record of ``main`` (75046b677, the main this branch last merged; its
+lists code is byte-identical to b2bbe84ca, where this work started), made by running ``tests/lists_entry_scenarios.py`` against an
+export of that commit, never by this branch's code. Each random id is recorded as ``<id-n>`` (numbered by first appearance), so a
+new row's links to other new rows are pinned, not only its columns. The door
 functions themselves are pinned against the code before the door asked the kernel by ``test_lists_kernel_door.py``; this pins what
 each CALLER hands them (the REST routes, the brain's tools, the spoken executors, skybridge, the background makers), so an entry
 point that changes a name, a visibility or the list it picks fails here.
@@ -16,7 +18,9 @@ Negative controls run (each broke the code, saw the named test fail, restored): 
 packing list made ``family`` -> ``anticipation_packing``; the brain's add tool given a default quantity -> ``tool_add_item``;
 the spoken add's replay window set to 0 -> ``spoken_add``; a planted ``async def sneak(db): await delete_list_record(...)`` in
 ``routers/lists.py`` -> the coverage test, naming it; ``spoken_rename`` pointed at the skybridge rename -> the reach test for
-``intent_router.py:_execute_list_rename_direct``.
+``intent_router.py:_execute_list_rename_direct``. Distinct-id controls (holes the old single ``<id>`` mask could not see): the
+packing list's last item put on a fresh list id instead of the new packing list -> ``anticipation_packing``; skybridge's second
+new item reported under the first item's id -> ``skybridge_add`` (the old mask passed this one, run 2026-11-24).
 """
 from __future__ import annotations
 
