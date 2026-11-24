@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import NamedTuple, Optional
+import people_service
 
 logger = logging.getLogger(__name__)
 
@@ -425,10 +426,8 @@ async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: st
     changed = 0
     rel = "pet" if kind == "pet" else f"pet {kind}"
     now = datetime.utcnow().isoformat() + "Z"
-    if current_rel.strip().lower() != rel and await _exec(
-        db,
-        "UPDATE people SET relationship=$1, updated_at=$2 WHERE id=$3 AND user_id=$4",
-        "UPDATE people SET relationship=?, updated_at=? WHERE id=? AND user_id=?",
+    if current_rel.strip().lower() != rel and await people_service.write_contact_either(
+        db, "corrected_pet_pg", "corrected_pet",
         (rel, now, person_id, user_id),
     ):
         changed += 1
@@ -692,8 +691,7 @@ async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
             if len(rows) != 1:
                 return "none"
             pid = str(rows[0]["id"])
-            await db.execute("UPDATE people SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-                             (new, datetime.utcnow().isoformat() + "Z", pid, user_id))
+            await people_service.write_contact(db, "corrected_name", (new, datetime.utcnow().isoformat() + "Z", pid, user_id))
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("correction_apply: contact rename FAILED user=%s person=%s (%s): the note changed, the contact did not",

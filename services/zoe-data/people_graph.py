@@ -441,6 +441,15 @@ async def insert_edge(db, *, user_id: str, edge_id: str, person_a_id: str, perso
     return (getattr(cur, "rowcount", 1) or 0) > 0
 
 
+async def set_edge_notes(db, user_id: str, edge_id: str, notes, *, now: str):
+    """The screen's edit of a CURRENT edge's notes (the caller holds the pair's lock). Returns the handle's cursor: the caller
+    reads its rowcount (an edge a type change replaced first matches nothing)."""
+    return await db.execute(
+        "UPDATE person_relationships SET notes = ?, updated_at = ? WHERE id = ? AND user_id = ? AND valid_to IS NULL",
+        (notes, now, edge_id, user_id),
+    )
+
+
 async def replace_current_edge(db, user_id: str, person_a: str, person_b: str, spec: EdgeSpec, *,
                                expect_old_id: Any = ANY, close_reason: str = "superseded",
                                now: Optional[str] = None) -> EdgeChange:
